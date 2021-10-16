@@ -1,0 +1,5 @@
+# general requirements go here
+pyqtgraph
+pooch
+xarray
+dask

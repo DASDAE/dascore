@@ -1,0 +1,126 @@
+# Python package
+# Create and test a Python package on multiple Python versions.
+# Add steps that analyze code, save the dist with the build record, publish to a PyPI-compatible index, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/python
+
+trigger:
+- master
+name: $(Date:yyyyMMdd)$(Rev:.r)
+
+variables:
+  env_name: testenv
+  conda_args: --yes --quiet --name $(env_name)
+  conda_packages: pytest obspy pandas xarray pytables
+
+jobs:
+
+- job: 'Ubuntu'
+  pool:
+    vmImage: 'ubuntu-latest'
+  strategy:
+    matrix:
+      Python36:
+        python.version: '3.6'
+      Python37:
+        python.version: '3.7'
+
+  steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '$(python.version)'
+    displayName: 'Use Python $(python.version)'
+
+  - bash: echo "##vso[task.prependpath]$CONDA/bin"
+    displayName: Add conda to PATH
+
+  - bash: sudo chown -R $USER $CONDA
+    displayName: Take ownership of conda installation
+
+  - bash: |
+      conda config --set always_yes yes --set changeps1 no
+      conda config --add channels conda-forge
+      conda update -q conda
+      conda create $(conda_args) python=$(python.version) $(conda_packages)
+      source activate $(env_name)
+      pip install -r tests/requirements.txt
+      pip install -e .
+    displayName: Create Anaconda environment
+
+  - bash: |
+      source activate $(env_name)
+      pytest --cov obsplus && pytest --nbval docs/
+    displayName: pytest
+
+
+- job: 'macOS'
+  pool:
+    vmImage: 'macos-10.14'
+  strategy:
+    matrix:
+      Python36:
+        python.version: '3.6'
+      Python37:
+        python.version: '3.7'
+
+  steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '$(python.version)'
+    displayName: 'Use Python $(python.version)'
+
+  - bash: echo "##vso[task.prependpath]$CONDA/bin"
+    displayName: Add conda to PATH
+
+  - bash: sudo chown -R $USER $CONDA
+    displayName: Take ownership of conda installation
+
+  - bash: |
+      conda config --set always_yes yes --set changeps1 no
+      conda config --add channels conda-forge
+      conda update -q conda
+      conda create $(conda_args) python=$(python.version) $(conda_packages)
+      source activate $(env_name)
+      pip install -r tests/requirements.txt
+      pip install -e .
+    displayName: Create Anaconda environment
+
+  - bash: |
+      source activate $(env_name)
+      pytest --cov obsplus && pytest --nbval docs/
+    displayName: pytest
+
+#
+#- job: 'windows'
+#  pool:
+#    vmImage: 'windows-2019'
+#  strategy:
+#    matrix:
+#      Python36:
+#        python.version: '3.6'
+#      Python37:
+#        python.version: '3.7'
+#
+#  steps:
+#  - task: UsePythonVersion@0
+#    inputs:
+#      versionSpec: '$(python.version)'
+#    displayName: 'Use Python $(python.version)'
+#
+#  - powershell: Write-Host "##vso[task.prependpath]$env:CONDA\Scripts"
+#    displayName: Add conda to PATH
+#
+#  - script: |
+#      conda config --set always_yes yes --set changeps1 no
+#      conda config --add channels conda-forge
+#      conda update -q conda
+#      conda create $(conda_args) python=$(python.version) $(conda_packages)
+#      call activate $(env_name)
+#      pip install -r tests/requirements.txt
+#      pip install -e .
+#    displayName: Create Anaconda environment
+#
+#  - script: |
+#      call activate $(env_name)
+#      pytest --cov obsplus && pytest --nbval docs/
+#    displayName: pytest
+
