@@ -3,7 +3,7 @@ Tests configuration for vizualization tests.
 """
 import pytest
 
-from dfs.viz import WorkBench
+from dfs.workbench import WorkBench
 
 
 @pytest.fixture(scope="session")

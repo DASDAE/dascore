@@ -9,7 +9,6 @@ import sys
 from os.path import join, exists, isdir
 from pathlib import Path
 
-
 from setuptools import setup
 
 PACKAGE_NAME = "dfs"
@@ -73,6 +72,19 @@ else:
     extra_req_dict = None
 
 
+ENTRY_POINTS = {
+    "dfs.plugin.read": [
+        "TERRA15 = dfs.io.terra15.core;_read_terra15",
+    ],
+    "dfs.plugin.is_format": [
+        "TERRA15 = dfs.io.terra15.core:_is_terra15",
+    ],
+    "dfs.plugin.scan": [
+        "TERRA15 = dfs.io.terra15.core:_scan_terra15",
+    ],
+    "dfs.plugin.write": [],
+}
+
 setup(
     name=PACKAGE_NAME,
     version=__version__,
@@ -87,6 +99,7 @@ setup(
     license="GNU Lesser General Public License v3.0 or later (LGPLv3.0+)",
     zip_safe=False,
     keywords="seismology",
+    entry_points=ENTRY_POINTS,
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",

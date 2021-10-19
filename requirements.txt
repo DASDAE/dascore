@@ -1,5 +1,7 @@
 # general requirements go here
 pyqtgraph
+pytables
 pooch
 xarray
 dask
+rich

@@ -5,17 +5,23 @@ from pathlib import Path
 
 import pytest
 
-from dfs.io import read_terra15
+from dfs.io import _read_terra15
 from dfs.utils.downloader import fetch
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
 
 
 @pytest.fixture(scope="session")
-def terra15_das():
-    path = fetch("terra15_v2_das_1_trimmed.hdf5")
-    assert path.exists()
-    return read_terra15(path)
+def terra_15_path():
+    """Return the path to the example terra15 file."""
+    out = fetch("terra15_v2_das_1_trimmed.hdf5")
+    assert out.exists()
+    return out
+
+
+@pytest.fixture(scope="session")
+def terra15_das(terra_15_path):
+    return _read_terra15(terra_15_path)
 
 
 def pytest_addoption(parser):

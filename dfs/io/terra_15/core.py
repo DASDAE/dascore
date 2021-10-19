@@ -11,7 +11,7 @@ from dfs.utils.time import to_datetime64, to_timedelta64
 from dfs.core import create_das_array, DataArray
 
 
-def is_version_two(root):
+def _is_version_two(root):
     """Return True if the hdf5 file is version 2."""
     frame_groups = ["frame_id", "posix_frame_time", "gps_frame_time"]
     try:
@@ -19,6 +19,22 @@ def is_version_two(root):
     except (KeyError, tb.NoSuchNodeError):
         return False
     return True
+
+
+def _is_terra15(path: Union[str, Path]) -> bool:
+    """
+    Return True if file contains terra15 data else False.
+
+    Parameters
+    ----------
+    path
+        A path to the file which may contain terra15 data.
+    """
+    try:
+        with tb.open_file(path, "r") as fi:
+            return _is_version_two(fi.root)
+    except (tb.HDF5ExtError, OSError, IndexError, KeyError, tb.NoSuchNodeError) as e:
+        return False
 
 
 def _get_node_attrs(node):
@@ -38,10 +54,20 @@ def _get_node_attrs(node):
     return out
 
 
-def read_terra15(
+def _scan_terra15(
     path: Union[str, Path],
-    starttime=None,
-    endtime=None,
+) -> dict:
+    """
+    Scan a terra15 file, return summary information about the file's contents.
+    """
+
+
+def _read_terra15(
+    path: Union[str, Path],
+    start_time=None,
+    end_time=None,
+    start_distance=None,
+    end_distance=None,
     format="velocity",
 ) -> DataArray:
     """
@@ -50,19 +76,21 @@ def read_terra15(
     See
     """
     with tb.open_file(path) as fi:
-        assert is_version_two(fi.root)
+        assert _is_version_two(fi.root)
         data_node = fi.root["velocity"]["data"]
         data = data_node.read()
         time_stamps = fi.root["velocity"]["gps_time"].read()
         time = to_datetime64(time_stamps)
         channel_number = np.arange(data.shape[1])
         attrs = _get_node_attrs(data_node)
+        distance = attrs["sample_length"] * channel_number
         out = create_das_array(
             data,
             time=time,
-            channel=channel_number,
+            distance=distance,
             attrs=attrs,
-            sample_lenth=attrs['sample_length'],
-            sample_time=attrs['sample_time'],
+            sample_lenth=attrs["sample_length"],
+            sample_time=attrs["sample_time"],
+            datatype="velocity",
         )
         return out

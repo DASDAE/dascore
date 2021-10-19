@@ -1,7 +1,7 @@
 """
 Utilties for vizualizations
 """
-from dfs.viz import get_app
+from dfs.workbench import get_app
 
 
 class QTBase:

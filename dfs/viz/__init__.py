@@ -1,7 +1,5 @@
 """
-Visualization module.
-"""
-from pathlib import Path
+Module for static visualizations and figure generation.
 
-from .app import get_app
-from dfs.viz.workbench import WorkBench, BenchTool
+For interactive visualizations see :module:`dfs.workbench`
+"""

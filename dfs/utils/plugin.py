@@ -45,15 +45,9 @@ class PluginManager(MutableMapping):
         self.loaded_eps.pop(key, None)
 
 
-def test_func(x):
-    """function for testing plugin system"""
-    return x
-
-
 # ----------------- load plugins
 
-SVD_COMPRESSION_FUNCS = PluginManager("detex.svd_compression")
-CLUSTER_FUNCS = PluginManager("detex.cluster")
-CUTOFF_FUNCS = PluginManager("detex.cutoff")
-DISTANCE_FUNCS = PluginManager("detex.distance")
-TEST_FUNCS = PluginManager("detex.plugin_test")
+READ_PLUGINS = PluginManager("dfs.plugin.read")
+IS_FORMAT_PLUGINS = PluginManager("dfs.plugin.is_format")
+SCAN_PLUGGINS = PluginManager("dfs.plugin.scan")
+WRITE_PLUGGINS = PluginManager("dfs.plugin.write")

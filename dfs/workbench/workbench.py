@@ -6,8 +6,8 @@ from typing import Optional
 import xarray as xr
 import pyqtgraph as pg
 
-from dfs.viz.qcompat import qg, qc, qw
-from dfs.viz.utils import ShowOnCall, QTBase
+from dfs.workbench.qcompat import qg, qc, qw
+from dfs.workbench.utils import ShowOnCall, QTBase
 from dfs.utils.downloader import fetch
 from .app import get_app
 from pyqtgraph.dockarea import DockArea
@@ -20,14 +20,15 @@ class WorkBench(qw.QMainWindow, ShowOnCall, QTBase):
         """Initializer."""
         get_app()  # ensure app is created before creating widgets
         super().__init__(parent)
-        self._size_window()
+        self._prep_window()
+        # self.model =
         # create menus
         self._menus = {}  # dict containing dict of menus
         self._create_menus()
         self._dock_area = DockArea()
         self.setCentralWidget(self._dock_area)
 
-    def _size_window(self):
+    def _prep_window(self):
         hammer_path = fetch("hammer_icon")
         self.setWindowIcon(qg.QIcon(str(hammer_path)))
         self.setMinimumSize(500, 700)
@@ -38,6 +39,9 @@ class WorkBench(qw.QMainWindow, ShowOnCall, QTBase):
         """Create the menus."""
         self._menu_bar = self.menuBar()
         self._menu_bar.setMinimumHeight(30)
+        font = self._menu_bar.font()
+        font.setPointSize(14)
+        self._menu_bar.setFont(font)
         self._create_file_menu()
         self._menus["tools"] = qw.QMenu("&Tools", self)
 
@@ -47,6 +51,9 @@ class WorkBench(qw.QMainWindow, ShowOnCall, QTBase):
     def _create_file_menu(self):
         """Create the options under the file menu."""
         file_menu = qw.QMenu("&File", self)
+        font = file_menu.font()
+        font.setPointSize(14)
+        file_menu.setFont(font)
         action = qw.QAction("&Quit", file_menu)
         file_menu.addAction(action)
         action.triggered.connect(self.close)

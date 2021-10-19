@@ -1,6 +1,7 @@
 """
 Tests for creating/registering accessors.
 """
+from dfs.core import trim_by_time
 
 
 class TestDFSBasics:
@@ -8,6 +9,8 @@ class TestDFSBasics:
 
     def test_namespace_exists(self, terra15_das):
         """Just ensure namespace returns accessor."""
-        assert hasattr(terra15_das, 'dfs'), 'accessor not registered'
+        assert hasattr(terra15_das, "dfs"), "accessor not registered"
         acc = terra15_das.dfs
-        breakpoint()
+        name = trim_by_time.__name__
+        out = getattr(acc, name)
+        assert callable(out)

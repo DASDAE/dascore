@@ -10,8 +10,8 @@ DFS_METHODS = defaultdict(dict)  # a dict for storing dtx attributes
 
 
 def register_method(
-        attr_name:Optional[Union[str, callable]]=None,
-        namespace="dfs",
+    attr_name: Optional[Union[str, callable]] = None,
+    namespace="dfs",
 ):
     """
     Register a function as a specific type of accessor.
@@ -28,11 +28,13 @@ def register_method(
             das - distributed acoustic data
             dss - distributed strain data
     """
+
     def decorator(func):
-        DFS_METHODS[namespace][attr_name] = func
+        if attr_name is None:
+            name = func.__name__
+        else:
+            name = attr_name
+        DFS_METHODS[namespace][name] = func
         return func
 
     return decorator
-
-
-import dfs.utils.accessor  # NOQA this needs to be at the end of the file.

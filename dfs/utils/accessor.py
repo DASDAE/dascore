@@ -9,28 +9,11 @@ import xarray as xr
 from dfs.utils import DFS_METHODS
 
 
-def register_func(
-    func_type: Literal["dfs", "dts", "das", "dss"],
-):
-    """
-    Register a function as a specific type of accessor.
-
-    Parameters
-    ----------
-    func_type
-        The type of data expected. Options are:
-        dfs - generic distributed fiber sensing data
-        dts - distributed temperature sensing data
-        das - distributed acoustic data
-        dss - distributed strain data
-    """
-
-
 def _wrap_accessor_func(func):
     """
-    Decorator to bind a function to the data_array contained by DetexAccessor.
+    Decorator to bind a function to the data_array contained by Accessor.
 
-    wrap a function that takes a data array as the first argument,
+    Wrap a function that takes a data array as the first argument,
     bind the data array to first argument, update docs string and return
     """
 
@@ -39,56 +22,79 @@ def _wrap_accessor_func(func):
         out = func(self._obj, *args, **kwargs)
         return out
 
-    new_func.__doc__ = func.__doc__  # set doc string
     return new_func
 
 
 def _add_wrapped_methods(cls):
     """add the methods marked with the dtx decorator to class def"""
-    for name, func in DFS_METHODS.items():
+    namesapce = getattr(cls, "_namespace", None)
+    sub_dict = DFS_METHODS.get(namesapce, {})
+    for name, func in sub_dict.items():
         setattr(cls, name, _wrap_accessor_func(func))
     return cls
 
 
+class _BaseAccessor:
+    """
+    Accessor class for DFS.
+    """
+
+    _namespace = ""
+    _accessors = {}
+
+    def __init_subclass__(cls, **kwargs):
+        cls._accessors[cls.__name__] = cls
+
+    def __init__(self, xarray_object):
+        self._obj = xarray_object
+
+    def __getattr__(self, item):
+        sub_dict = DFS_METHODS.get(self._namespace, {})
+        if item not in sub_dict:
+            msg = f"{self} has no attribute {item}"
+            raise AttributeError(msg)
+        # if the item is found, bind it as an instance and return.
+        if item in sub_dict:
+            new_func = _wrap_accessor_func(sub_dict[item])
+            setattr(self.__class__, item, new_func)
+        return getattr(self, item)
+
+
 @xr.register_dataarray_accessor("dfs")
 @_add_wrapped_methods
-class DistributedFiberAccessor:
+class DistributedFiberAccessor(_BaseAccessor):
     """
     Class for registering distributed fiber methods.
     """
 
-    def __init__(self, xarray_object):
-        self._obj = xarray_object
+    _namespace = "dfs"
 
 
 @xr.register_dataarray_accessor("das")
 @_add_wrapped_methods
-class AcousticAccessor:
+class AcousticAccessor(_BaseAccessor):
     """
     Class for registering attributes specific to distributed acoustic sensing.
     """
 
-    def __init__(self, xarray_object):
-        self._obj = xarray_object
+    _namespace = "das"
 
 
 @xr.register_dataarray_accessor("dts")
 @_add_wrapped_methods
-class TemperatureAccessor:
+class TemperatureAccessor(_BaseAccessor):
     """
     Class for registering attributes specific to distributed temperature sensing.
     """
 
-    def __init__(self, xarray_object):
-        self._obj = xarray_object
+    _namespace = "dts"
 
 
 @xr.register_dataarray_accessor("dss")
 @_add_wrapped_methods
-class StrainAccessor:
+class StrainAccessor(_BaseAccessor):
     """
     Class for registering attributes specific to distributed strain sensing.
     """
 
-    def __init__(self, xarray_object):
-        self._obj = xarray_object
+    _namespace = "das"
