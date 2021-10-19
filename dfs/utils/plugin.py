@@ -9,7 +9,7 @@ import pkg_resources
 class PluginManager(MutableMapping):
     """
     A simple dict like structure for storing and loading references to
-    plugins
+    plugins.
     """
 
     def __len__(self):
@@ -17,7 +17,7 @@ class PluginManager(MutableMapping):
 
     def __iter__(self):
         for eps in list(self.eps.keys()):
-            yield self[eps]
+            yield eps
 
     def __init__(self, entry_point: str):
         self.entry_point = entry_point
@@ -43,11 +43,3 @@ class PluginManager(MutableMapping):
     def __delitem__(self, key):
         self.eps.pop(key, None)
         self.loaded_eps.pop(key, None)
-
-
-# ----------------- load plugins
-
-READ_PLUGINS = PluginManager("dfs.plugin.read")
-IS_FORMAT_PLUGINS = PluginManager("dfs.plugin.is_format")
-SCAN_PLUGGINS = PluginManager("dfs.plugin.scan")
-WRITE_PLUGGINS = PluginManager("dfs.plugin.write")

@@ -8,7 +8,7 @@ import tables as tb
 import numpy as np
 
 from dfs.utils.time import to_datetime64, to_timedelta64
-from dfs.core import create_das_array, DataArray
+from dfs.core import create_das_array, DataArray, Stream
 
 
 def _is_version_two(root):
@@ -21,9 +21,9 @@ def _is_version_two(root):
     return True
 
 
-def _is_terra15(path: Union[str, Path]) -> bool:
+def _is_terra15_v2(path: Union[str, Path]) -> bool:
     """
-    Return True if file contains terra15 data else False.
+    Return True if file contains terra15 version 2 data else False.
 
     Parameters
     ----------
@@ -54,22 +54,22 @@ def _get_node_attrs(node):
     return out
 
 
-def _scan_terra15(
+def _scan_terra15_v2(
     path: Union[str, Path],
 ) -> dict:
     """
-    Scan a terra15 file, return summary information about the file's contents.
+    Scan a terra15 v2 file, return summary information about the file's contents.
     """
 
 
-def _read_terra15(
+def _read_terra15_v2(
     path: Union[str, Path],
     start_time=None,
     end_time=None,
     start_distance=None,
     end_distance=None,
     format="velocity",
-) -> DataArray:
+) -> Stream:
     """
     Read a terra15 file, return a DataArray.
 
@@ -93,4 +93,4 @@ def _read_terra15(
             sample_time=attrs["sample_time"],
             datatype="velocity",
         )
-        return out
+        return Stream([out])

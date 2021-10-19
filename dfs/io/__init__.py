@@ -1,4 +1,4 @@
 """
 Modules for reading and writing fiber data.
 """
-from dfs.io.terra_15.core import _read_terra15
+from dfs.io.terra15.ver2 import _read_terra15_v2

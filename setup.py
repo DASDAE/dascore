@@ -74,13 +74,13 @@ else:
 
 ENTRY_POINTS = {
     "dfs.plugin.read": [
-        "TERRA15 = dfs.io.terra15.core;_read_terra15",
+        "TERRA15_V2 = dfs.io.terra15.ver2:_read_terra15_v2",
     ],
     "dfs.plugin.is_format": [
-        "TERRA15 = dfs.io.terra15.core:_is_terra15",
+        "TERRA15_V2 = dfs.io.terra15.ver2:_is_terra15_v2",
     ],
     "dfs.plugin.scan": [
-        "TERRA15 = dfs.io.terra15.core:_scan_terra15",
+        "TERRA15_V2 = dfs.io.terra15.ver2:_scan_terra15_v2",
     ],
     "dfs.plugin.write": [],
 }

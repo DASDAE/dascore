@@ -7,26 +7,27 @@ import xarray as xr
 import numpy as np
 
 from dfs.constants import REQUIRED_DAS_ATTRS
-from dfs.io.terra_15.core import _is_terra15
+from dfs.io.terra15.ver2 import _is_terra15_v2
 from dfs.utils.downloader import fetch
+from dfs.core import Stream
 
 
 class TestReadTerra15:
     """Tests for reading the terra15 format."""
 
-    def test_type(self, terra15_das):
+    def test_type(self, terra15_das_array):
         """Ensure the expected type is returned."""
-        assert isinstance(terra15_das, xr.DataArray)
+        assert isinstance(terra15_das_array, xr.DataArray)
 
-    def test_attributes(self, terra15_das):
+    def test_attributes(self, terra15_das_array):
         """Ensure the expected attrs exist in array."""
-        attrs = terra15_das.attrs
+        attrs = terra15_das_array.attrs
         expected_attrs = {"dT", "dx", "nx", "nT", "recorder_id"}
         assert set(expected_attrs).issubset(set(attrs))
 
-    def test_has_required_attrs(self, terra15_das):
+    def test_has_required_attrs(self, terra15_das_array):
         """ "Ensure the required das attrs are found"""
-        assert set(REQUIRED_DAS_ATTRS).issubset(set(terra15_das.attrs))
+        assert set(REQUIRED_DAS_ATTRS).issubset(set(terra15_das_array.attrs))
 
 
 class TestIsTerra15:
@@ -47,21 +48,17 @@ class TestIsTerra15:
     def test_version_2(self):
         """Ensure version two is recognized."""
         path = fetch("terra15_v2_das_1_trimmed.hdf5")
-        assert _is_terra15(path)
+        assert _is_terra15_v2(path)
 
-    def test_not_terra15_not_df5(self, tmp_path):
+    def test_not_terra15_not_df5(self, dummy_text_file):
         """Test for not even a hdf5 file."""
-        parent = tmp_path / "sub"
-        parent.mkdir()
-        path = parent / "hello.txt"
-        path.write_text("Clearly not a hdf5 file. Or is it?")
-        assert not _is_terra15(path)
-        assert not _is_terra15(tmp_path)
+        assert not _is_terra15_v2(dummy_text_file)
+        assert not _is_terra15_v2(dummy_text_file.parent)
 
     def test_hdf5file_not_terra15(self, generic_hdf5):
         """Assert that the generic hdf5 file is not a terra15."""
-        _is_terra15(generic_hdf5)
-        assert not _is_terra15(generic_hdf5)
+        _is_terra15_v2(generic_hdf5)
+        assert not _is_terra15_v2(generic_hdf5)
 
 
 class TestScanTerra15:

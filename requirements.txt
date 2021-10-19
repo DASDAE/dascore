@@ -1,6 +1,6 @@
 # general requirements go here
 pyqtgraph
-pytables
+tables
 pooch
 xarray
 dask
