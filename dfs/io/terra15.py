@@ -5,11 +5,10 @@ from typing import Union
 from pathlib import Path
 
 import tables as tb
-import xarray as xr
 import numpy as np
 
 from dfs.utils.time import to_datetime64, to_timedelta64
-from dfs.core import create_array
+from dfs.core import create_das_array, DataArray
 
 
 def is_version_two(root):
@@ -34,8 +33,8 @@ def _get_node_attrs(node):
     ]
     out = {x: getattr(attrs, x) for x in public_attrs}
     # add required DAS data
-    out["sampling_length"] = out["dx"]
-    out["sampling_time"] = to_timedelta64(out["dT"])
+    out["sample_length"] = out["dx"]
+    out["sample_time"] = to_timedelta64(out["dT"])
     return out
 
 
@@ -44,7 +43,7 @@ def read_terra15(
     starttime=None,
     endtime=None,
     format="velocity",
-) -> xr.DataArray:
+) -> DataArray:
     """
     Read a terra15 file, return a DataArray.
 
@@ -58,4 +57,12 @@ def read_terra15(
         time = to_datetime64(time_stamps)
         channel_number = np.arange(data.shape[1])
         attrs = _get_node_attrs(data_node)
-        return create_array(data, time=time, channel=channel_number, attrs=attrs)
+        out = create_das_array(
+            data,
+            time=time,
+            channel=channel_number,
+            attrs=attrs,
+            sample_lenth=attrs['sample_length'],
+            sample_time=attrs['sample_time'],
+        )
+        return out
