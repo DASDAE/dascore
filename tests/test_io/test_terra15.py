@@ -63,3 +63,4 @@ class TestIsTerra15:
 
 class TestScanTerra15:
     """Tests for scanning terra15 file."""
+

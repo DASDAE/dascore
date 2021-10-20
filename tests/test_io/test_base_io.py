@@ -27,3 +27,13 @@ class TestRead:
         assert isinstance(out, dfs.Stream)
         assert len(out) == 1
         assert out[0].equals(terra15_das_array)
+
+
+class TestScan:
+    """Tests for scanning fiber files."""
+    @pytest.fixture()
+    def expected_summary(self, terra15_das_array):
+        """Return the expected summary from the terra15_das_array."""
+
+    def test_scan_terra15(self, terra15_path):
+        """"""

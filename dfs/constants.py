@@ -11,6 +11,11 @@ DATA_VERSION = "0.0.0"
 # Types DFS can convert into time representations
 timeable_types = Union[int, float, str]
 
+# Expected Keys in the Summary Dictionaries
+SUMMARY_KEYS = (
+    'format', 'min_time', 'max_time', 'min_distance', 'max_distance',
+)
+
 # expected fiber attributes
 REQUIRED_FIBER_DIMS = ("time", "distance")
 

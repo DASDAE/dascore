@@ -47,8 +47,12 @@ def read(
     )
 
 
-def scan(*args, **kwargs):
-    pass
+def scan(path: Union[Path, str], format=None) -> dict:
+    """Scan a file, return the summary dictionary."""
+    if format is None:
+        format = get_format(path)
+    func = SCAN_PLUGGINS[format]
+    return func(path)
 
 
 def get_format(path: Union[str, Path]) -> str:
