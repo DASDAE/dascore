@@ -5,4 +5,5 @@ from xarray import DataArray, Dataset
 
 from .constructor import create_das_array
 from .trim import trim_by_time, trim_by_distance
+from .trace import Trace2D
 from .stream import Stream

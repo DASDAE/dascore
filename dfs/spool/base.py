@@ -52,7 +52,7 @@ class _Bank(ABC):
     _read_func: callable  # function for reading datatype
     # required dtypes for input to storage layer
     _dtypes_input: Mapping = MapProxy({})
-    # required dtypes for output from bank
+    # required dtypes for output from spool
     _dtypes_output: Mapping = MapProxy({})
     # the index cache (can greatly reduce IO efforts)
     _index_cache: Optional[_IndexCache] = None
@@ -76,7 +76,7 @@ class _Bank(ABC):
     @property
     def last_updated(self) -> Optional[np.datetime64]:
         """
-        Get the last time (UTC) that the bank was updated.
+        Get the last time (UTC) that the spool was updated.
         """
         return to_datetime64(self.last_updated_timestamp)
 
@@ -139,7 +139,7 @@ class _Bank(ABC):
 
     def _warn_on_newer_version(self):
         """
-        Issue a warning if the bank was created by a newer version of obsplus.
+        Issue a warning if the spool was created by a newer version of obsplus.
 
         If this is the case, there is no guarantee it will work.
         """
@@ -149,7 +149,7 @@ class _Bank(ABC):
             bank_version = get_version_tuple(version)
             if bank_version > obsplus_version:
                 msg = (
-                    f"The bank was created with a newer version of ObsPlus ("
+                    f"The spool was created with a newer version of ObsPlus ("
                     f"{version}), you are running ({obsplus.__last_version__}),"
                     f"You may encounter problems, consider updating ObsPlus."
                 )
@@ -213,13 +213,13 @@ class _Bank(ABC):
         """
         Ensure the bank_path exists else raise an BankDoesNotExistError.
 
-        If create is True, simply create the bank.
+        If create is True, simply create the spool.
         """
         path = Path(self.bank_path)
         if create:
             path.mkdir(parents=True, exist_ok=True)
         if not path.is_dir():
-            msg = f"{path} is not a directory, cant read bank"
+            msg = f"{path} is not a directory, cant read spool"
             raise BankDoesNotExistError(msg)
 
     def get_progress_bar(self, bar=None) -> Optional[ProgressBar]:
@@ -254,7 +254,7 @@ class _Bank(ABC):
 
     def clear_cache(self):
         """
-        Clear the index cache if the bank is using one.
+        Clear the index cache if the spool is using one.
         """
         if self._index_cache is not None:
             self._index_cache.clear_cache()
@@ -265,7 +265,7 @@ class _Bank(ABC):
         Return the max number of workers allowed by the executor.
 
         If the Executor has no attribute `_max_workers` use the number of
-        CPUs instead. If there is no executor assigned to bank instance
+        CPUs instead. If there is no executor assigned to spool instance
         return 1.
         """
         executor = getattr(self, "executor", None)
@@ -290,7 +290,7 @@ class _Bank(ABC):
         path: Optional[Union[str, Path]] = None,
     ) -> BankType:
         """
-        Create an example bank which is safe to modify.
+        Create an example spool which is safe to modify.
 
         Copies relevant files from a dataset to a specified path, or a
         temporary directory if None is specified.
@@ -303,7 +303,7 @@ class _Bank(ABC):
             The path to which the dataset files will be copied. If None
             just create a temporary directory.
         """
-        # determine which directory in the dataset this bank needs
+        # determine which directory in the dataset this spool needs
         data_types = {
             obsplus.EventBank: "event_path",
             obsplus.StationBank: "station_path",
@@ -317,7 +317,7 @@ class _Bank(ABC):
         return cls(destination)
 
     def __repr__(self):
-        """Return the class name with bank path."""
+        """Return the class name with spool path."""
         name = type(self).__name__
         return f"{name}(base_path={self.bank_path})"
 

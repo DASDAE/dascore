@@ -1,7 +1,7 @@
 """
 A module for handling dfs' plugins.
 """
-from collections import MutableMapping
+from collections.abc import MutableMapping
 
 import pkg_resources
 

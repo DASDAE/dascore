@@ -3,12 +3,19 @@ pytest configuration for dfs
 """
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from dfs.core import Trace2D, Stream
 from dfs.io import _read_terra15_v2
 from dfs.utils.downloader import fetch
+from dfs.utils.misc import register_func
+
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
+
+STREAM_FIXTURES = []
+ARRAY_FIXTURES = []
 
 
 @pytest.fixture(scope="session")
@@ -20,21 +27,45 @@ def terra15_path():
 
 
 @pytest.fixture()
-def terra15_das_stream(terra15_path):
+@register_func(STREAM_FIXTURES)
+def terra15_das_stream(terra15_path) -> Stream:
     """Return the stream of Terra15 Das Array"""
     return _read_terra15_v2(terra15_path)
 
 
 @pytest.fixture(scope="session")
-def terra15_das_array(terra15_path):
+@register_func(ARRAY_FIXTURES)
+def terra15_das_array(terra15_path) -> Trace2D:
     """Read the terra15 data, return contained DataArray"""
     return _read_terra15_v2(terra15_path)[0]
 
 
-@pytest.fixture(scope='class')
+@pytest.fixture(scope="session")
+def random_das_dict():
+    """A dict of all the components for making a DAS array."""
+    rand = np.random.RandomState(13)
+    array = rand.random(size=(300, 2_000))
+    attrs = dict(dx=1, dt=1 / 250.0, category="DAS", id="test_data1")
+    out = dict(
+        data=array,
+        time=np.arange(array.shape[1]) * attrs["dt"],
+        distance=np.arange(array.shape[0]) * attrs["dx"],
+        attrs=attrs,
+    )
+    return out
+
+
+@pytest.fixture(scope="session")
+@register_func(ARRAY_FIXTURES)
+def random_das_array(random_das_dict) -> Trace2D:
+    """Init a random array."""
+    return Trace2D(**random_das_dict)
+
+
+@pytest.fixture(scope="class")
 def dummy_text_file(tmp_path_factory):
     """Return a text file with silliness in it."""
-    parent = tmp_path_factory.mktemp('dummy')
+    parent = tmp_path_factory.mktemp("dummy")
     path = parent / "hello.txt"
     path.write_text("Clearly not a hdf5 file. Or is it?")
     return path

@@ -179,7 +179,7 @@ class _IndexCache:
             # replace "None" with None
             ic = self.bank.index_str
             raw_index.loc[:, ic] = raw_index.loc[:, ic].replace(["None"], [None])
-            # convert data types used by bank back to those seen by user
+            # convert data types used by spool back to those seen by user
             index = raw_index.astype(dict(self.bank._dtypes_output))
             self._set_cache(index, starttime, endtime, kwargs)
         else:

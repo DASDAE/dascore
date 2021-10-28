@@ -6,11 +6,13 @@ import pytest
 
 from dfs.exceptions import UnknownFiberFormat
 
+
 class TestGetFormat:
     """Tests to ensure formats can be retreived."""
+
     def test_terra_15(self, terra15_path):
         out = dfs.get_format(terra15_path)
-        assert out.upper() == 'TERRA15_V2'
+        assert out.upper() == "TERRA15_V2"
 
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
@@ -31,9 +33,9 @@ class TestRead:
 
 class TestScan:
     """Tests for scanning fiber files."""
-    @pytest.fixture()
-    def expected_summary(self, terra15_das_array):
-        """Return the expected summary from the terra15_das_array."""
 
     def test_scan_terra15(self, terra15_path):
-        """"""
+        """Ensure terra15 format can be automatically determined."""
+        out = dfs.scan(terra15_path)
+        assert isinstance(out, list)
+        assert len(out)

@@ -3,7 +3,7 @@ A module for storing streams of fiber data.
 """
 from collections import UserList
 from typing import Sequence, Union
-from dfs.core import DataArray
+from dfs.core import DataArray, Trace2D
 
 
 class Stream(UserList):
@@ -11,7 +11,11 @@ class Stream(UserList):
     A stream of fiber data.
     """
 
-    def __init__(self, data: Union[DataArray, Sequence[DataArray]]):
-        if isinstance(data, DataArray):
+    def __init__(self, data: Union[Trace2D, Sequence[Trace2D]]):
+        if isinstance(data, Trace2D):
             data = [data]
-        self.data: Sequence[DataArray] = data
+        self._data: Sequence[Trace2D] = data
+
+    @property
+    def data(self):
+        return self._data

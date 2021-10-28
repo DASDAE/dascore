@@ -5,3 +5,4 @@ pooch
 xarray
 dask
 rich
+scipy

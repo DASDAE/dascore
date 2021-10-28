@@ -1,14 +1,15 @@
 """
 IO module for reading Terra15 DAS data.
 """
-from typing import Union
+from typing import Union, List
+
 from pathlib import Path
 
 import tables as tb
 import numpy as np
 
 from dfs.utils.time import to_datetime64, to_timedelta64
-from dfs.core import create_das_array, DataArray, Stream
+from dfs.core import create_das_array, DataArray, Stream, Trace2D
 
 
 def _is_version_two(root):
@@ -48,18 +49,31 @@ def _get_node_attrs(node):
         and x not in hdf5_attrs  # exclude hdf attrs not specific to terra15
     ]
     out = {x: getattr(attrs, x) for x in public_attrs}
-    # add required DAS data
-    out["sample_length"] = out["dx"]
-    out["sample_time"] = to_timedelta64(out["dT"])
     return out
 
 
 def _scan_terra15_v2(
     path: Union[str, Path],
-) -> dict:
+) -> List[dict]:
     """
     Scan a terra15 v2 file, return summary information about the file's contents.
     """
+    with tb.open_file(path) as fi:
+        data_node = fi.root["velocity"]["data"]
+        # data = data_node.read()
+        time_stamps = fi.root["velocity"]["gps_time"].read()
+        data_shape = data_node.shape
+        attrs = _get_node_attrs(data_node)
+        out = dict(
+            time=(to_datetime64(time_stamps.min()), to_datetime64(time_stamps.max())),
+            distance=(0, data_shape[1] * attrs["dx"]),
+            id=attrs["recorder_id"],
+            nt=attrs.pop("nT"),
+            dt=attrs.pop("dT"),
+            category="das",
+            data_type="velocity",
+        )
+        return [out]
 
 
 def _read_terra15_v2(
@@ -76,21 +90,23 @@ def _read_terra15_v2(
     See
     """
     with tb.open_file(path) as fi:
-        assert _is_version_two(fi.root)
         data_node = fi.root["velocity"]["data"]
         data = data_node.read()
         time_stamps = fi.root["velocity"]["gps_time"].read()
         time = to_datetime64(time_stamps)
         channel_number = np.arange(data.shape[1])
         attrs = _get_node_attrs(data_node)
-        distance = attrs["sample_length"] * channel_number
-        out = create_das_array(
-            data,
-            time=time,
-            distance=distance,
-            attrs=attrs,
-            sample_lenth=attrs["sample_length"],
-            sample_time=attrs["sample_time"],
-            datatype="velocity",
-        )
-        return Stream([out])
+        distance = attrs["dx"] * channel_number
+        trace2d = Trace2D(data=data, time=time, distance=distance, attrs=attrs)
+        return Stream([trace2d])
+
+        # out = create_das_array(
+        #     data,
+        #     time=time,
+        #     distance=distance,
+        #     attrs=attrs,
+        #     sample_lenth=attrs["sample_length"],
+        #     sample_time=attrs["sample_time"],
+        #     datatype="velocity",
+        # )
+        # return Stream([out])

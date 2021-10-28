@@ -90,7 +90,7 @@ class WaveBank(_Bank):
         example : {seedid}.{time}
     cache_size : int
         The number of queries to store. Avoids having to read the index of
-        the bank multiple times for queries involving the same start and end
+        the spool multiple times for queries involving the same start and end
         times.
     format : str
         The expected format for the waveform files. Any format supported by
@@ -113,14 +113,14 @@ class WaveBank(_Bank):
     >>> # init a WaveBank and index the files.
     >>> wbank = obsplus.WaveBank(waveform_path).update_index()
 
-    >>> # --- Retrieve a stream objects from the bank.
+    >>> # --- Retrieve a stream objects from the spool.
     >>> # Load all Z component data (dont do this for large datasets!)
     >>> st = wbank.get_waveforms(channel='*Z')
     >>> assert isinstance(st, obspy.Stream) and len(st) == 1
 
     >>> # --- Read the index used by WaveBank as a DataFrame.
     >>> df = wbank.read_index()
-    >>> assert len(df) == 3, 'there should be 3 traces in the bank.'
+    >>> assert len(df) == 3, 'there should be 3 traces in the spool.'
 
     >>> # --- Get availability of archive as dataframe
     >>> avail = wbank.get_availability_df()
@@ -138,7 +138,7 @@ class WaveBank(_Bank):
     ...     out.append(st)
     >>> assert len(out) == 6
 
-    >>> # --- Put a new stream and into the bank
+    >>> # --- Put a new stream and into the spool
     >>> # get an event from another dataset, keep track of its id
     >>> ds = obsplus.load_dataset('bingham_test')
     >>> query_kwargs = dict (station='NOQ', channel='*Z')
@@ -227,7 +227,7 @@ class WaveBank(_Bank):
         self, bar: Optional = None, paths: Optional[bank_subpaths_type] = None
     ) -> "WaveBank":
         """
-        Iterate files in bank and add any modified since last update to index.
+        Iterate files in spool and add any modified since last update to index.
 
         Parameters
         ----------
@@ -280,7 +280,7 @@ class WaveBank(_Bank):
 
     def _prep_write_df(self, df):
         """Prepare the dataframe to put it into the HDF5 store."""
-        # ensure the bank path is not in the path column
+        # ensure the spool path is not in the path column
         assert "path" in set(df.columns), f"{df} has no path column"
         df["path"] = _remove_base_path(df["path"], self.bank_path)
         dtype = WAVEFORM_DTYPES_INPUT
@@ -295,7 +295,7 @@ class WaveBank(_Bank):
 
     def _ensure_meta_table_exists(self):
         """
-        If the bank path exists ensure it has a meta table, if not create it.
+        If the spool path exists ensure it has a meta table, if not create it.
         """
         if not Path(self.index_path).exists():
             return
@@ -328,7 +328,7 @@ class WaveBank(_Bank):
         self.ensure_bank_path_exists()
         if not self.index_path.exists():
             self.update_index()
-        # if no file was created (dealing with empty bank) return empty index
+        # if no file was created (dealing with empty spool) return empty index
         if not self.index_path.exists():
             return pd.DataFrame(columns=self.index_columns)
         # grab index from cache
@@ -461,7 +461,7 @@ class WaveBank(_Bank):
         {get_waveforms_params}
 
         """
-        # get total number of seconds bank spans for each seed id
+        # get total number of seconds spool spans for each seed id
         avail = self.get_availability_df(*args, **kwargs)
         avail["duration"] = avail["endtime"] - avail["starttime"]
         # get total duration of gaps by seed id
@@ -528,7 +528,7 @@ class WaveBank(_Bank):
         endtime: Optional[utc_able_type] = None,
     ) -> Stream:
         """
-        Get waveforms from the bank.
+        Get waveforms from the spool.
 
         Parameters
         ----------
@@ -613,12 +613,12 @@ class WaveBank(_Bank):
         self, stream: Union[obspy.Stream, obspy.Trace], name=None, update_index=True
     ):
         """
-        Add the waveforms in a waveforms to the bank.
+        Add the waveforms in a waveforms to the spool.
 
         Parameters
         ----------
         stream
-            An obspy waveforms object to add to the bank
+            An obspy waveforms object to add to the spool
         name
             Name of file, if None it will be determined based on contents
         update_index

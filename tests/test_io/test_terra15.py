@@ -7,9 +7,8 @@ import xarray as xr
 import numpy as np
 
 from dfs.constants import REQUIRED_DAS_ATTRS
-from dfs.io.terra15.ver2 import _is_terra15_v2
+from dfs.io.terra15.ver2 import _is_terra15_v2, _scan_terra15_v2
 from dfs.utils.downloader import fetch
-from dfs.core import Stream
 
 
 class TestReadTerra15:
@@ -64,3 +63,9 @@ class TestIsTerra15:
 class TestScanTerra15:
     """Tests for scanning terra15 file."""
 
+    def test_scanning(self, terra15_das_array, terra15_path):
+        """Tests for getting summary info from terra15 data."""
+        out = _scan_terra15_v2(terra15_path)
+        assert isinstance(out, list)
+        assert len(out) == 1
+        assert isinstance(out[0], dict)

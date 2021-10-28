@@ -7,7 +7,6 @@ from typing import Union, Optional
 from pathlib import Path
 
 import numpy as np
-import xarray as xr
 
 from dfs import Stream
 from dfs.utils.plugin import PluginManager
@@ -23,13 +22,13 @@ WRITE_PLUGGINS = PluginManager("dfs.plugin.write")
 
 
 def read(
-        path: Union[str, Path],
-        format: Optional[str] = None,
-        start_time: Optional[np.datetime64] = None,
-        end_time: Optional[np.datetime64] = None,
-        start_distance: Optional[float] = None,
-        end_distance: Optional[float] = None,
-        **kwargs,
+    path: Union[str, Path],
+    format: Optional[str] = None,
+    start_time: Optional[np.datetime64] = None,
+    end_time: Optional[np.datetime64] = None,
+    start_distance: Optional[float] = None,
+    end_distance: Optional[float] = None,
+    **kwargs,
 ) -> Stream:
     """
     Read a fiber file.
@@ -43,7 +42,7 @@ def read(
         end_time=end_time,
         start_distance=start_distance,
         end_distance=end_distance,
-        **kwargs
+        **kwargs,
     )
 
 
@@ -66,7 +65,7 @@ def get_format(path: Union[str, Path]) -> str:
 
     Raises
     ------
-    dfs.exceptions.UknownFiberFormat - Could not determine the fiber format.
+    dfs.exceptions.UnknownFiberFormat - Could not determine the fiber format.
     """
     for name, func in IS_FORMAT_PLUGINS.items():
         if func(path):
