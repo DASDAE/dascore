@@ -3,12 +3,12 @@ Tests for reading terra15 file formats.
 """
 import pytest
 import tables as tb
-import xarray as xr
 import numpy as np
 
-from dfs.constants import REQUIRED_DAS_ATTRS
-from dfs.io.terra15.ver2 import _is_terra15_v2, _scan_terra15_v2
-from dfs.utils.downloader import fetch
+import fios
+from fios.constants import REQUIRED_DAS_ATTRS
+from fios.io.terra15.ver2 import _is_terra15_v2, _scan_terra15_v2
+from fios.utils.downloader import fetch
 
 
 class TestReadTerra15:
@@ -16,7 +16,7 @@ class TestReadTerra15:
 
     def test_type(self, terra15_das_array):
         """Ensure the expected type is returned."""
-        assert isinstance(terra15_das_array, xr.DataArray)
+        assert isinstance(terra15_das_array, fios.Trace2D)
 
     def test_attributes(self, terra15_das_array):
         """Ensure the expected attrs exist in array."""

@@ -1,15 +1,15 @@
 """
-pytest configuration for dfs
+pytest configuration for fios
 """
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from dfs.core import Trace2D, Stream
-from dfs.io import _read_terra15_v2
-from dfs.utils.downloader import fetch
-from dfs.utils.misc import register_func
+from fios.core import Trace2D, Stream
+from fios.io import _read_terra15_v2
+from fios.utils.downloader import fetch
+from fios.utils.misc import register_func
 
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
@@ -41,25 +41,12 @@ def terra15_das_array(terra15_path) -> Trace2D:
 
 
 @pytest.fixture(scope="session")
-def random_das_dict():
-    """A dict of all the components for making a DAS array."""
-    rand = np.random.RandomState(13)
-    array = rand.random(size=(300, 2_000))
-    attrs = dict(dx=1, dt=1 / 250.0, category="DAS", id="test_data1")
-    out = dict(
-        data=array,
-        time=np.arange(array.shape[1]) * attrs["dt"],
-        distance=np.arange(array.shape[0]) * attrs["dx"],
-        attrs=attrs,
-    )
-    return out
-
-
-@pytest.fixture(scope="session")
 @register_func(ARRAY_FIXTURES)
-def random_das_array(random_das_dict) -> Trace2D:
+def random_das_array() -> Trace2D:
     """Init a random array."""
-    return Trace2D(**random_das_dict)
+    from fios.examples import get_example_trace
+
+    return get_example_trace("random_das")
 
 
 @pytest.fixture(scope="class")

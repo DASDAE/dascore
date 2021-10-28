@@ -5,7 +5,7 @@ from collections.abc import Mapping
 
 import pytest
 
-from dfs.utils.mapping import FrozenDict
+from fios.utils.mapping import FrozenDict
 
 
 @pytest.fixture(scope="session")
@@ -47,7 +47,7 @@ class TestFrozenDict:
         assert isinstance(out, FrozenDict)
 
     def test_cant_add_keys(self, frozen_dict):
-        """Ensure keys can't be added to the dict. """
+        """Ensure keys can't be added to the dict."""
         with pytest.raises(TypeError, match="not support item assignment"):
             frozen_dict["bob"] = 1
 

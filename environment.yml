@@ -1,0 +1,17 @@
+name: fios
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pytest
+  - pip
+  - pandas
+  - numba
+  - pyqtgraph
+  - pooch>=1.2
+  - xarray
+  - pre-commit
+  - pytables
+  - matplotlib
+

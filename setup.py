@@ -1,5 +1,5 @@
 """
-Setup script for dfs
+Setup script for fios
 """
 """
 Setup script for mopy.
@@ -11,7 +11,7 @@ from pathlib import Path
 
 from setuptools import setup
 
-PACKAGE_NAME = "dfs"
+PACKAGE_NAME = "fios"
 
 # define python versions
 
@@ -73,16 +73,16 @@ else:
 
 
 ENTRY_POINTS = {
-    "dfs.plugin.read": [
-        "TERRA15_V2 = dfs.io.terra15.ver2:_read_terra15_v2",
+    "fios.plugin.read": [
+        "TERRA15_V2 = fios.io.terra15.ver2:_read_terra15_v2",
     ],
-    "dfs.plugin.is_format": [
-        "TERRA15_V2 = dfs.io.terra15.ver2:_is_terra15_v2",
+    "fios.plugin.is_format": [
+        "TERRA15_V2 = fios.io.terra15.ver2:_is_terra15_v2",
     ],
-    "dfs.plugin.scan": [
-        "TERRA15_V2 = dfs.io.terra15.ver2:_scan_terra15_v2",
+    "fios.plugin.scan": [
+        "TERRA15_V2 = fios.io.terra15.ver2:_scan_terra15_v2",
     ],
-    "dfs.plugin.write": [],
+    "fios.plugin.write": [],
 }
 
 setup(
@@ -92,7 +92,7 @@ setup(
     long_description=readme,
     author="Derrick Chambers",
     author_email="djachambeador@gmail.com",
-    url="https://bitbucket.org/smrd/dfs",
+    url="https://bitbucket.org/smrd/fios",
     packages=find_packages(PACKAGE_NAME),
     package_dir={PACKAGE_NAME: PACKAGE_NAME},
     include_package_data=True,

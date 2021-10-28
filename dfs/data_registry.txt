@@ -1,3 +1,0 @@
-# A registry of data/hashes used by dfs
-terra15_v2_das_1_trimmed.hdf5 7c2f68e6a2da2a1253163bac8e8081e69e3392578e0f9117dcd97648d62ca10b https://github.com/d-chambers/dfs_data/raw/master/das/terra15_v2_das_1_trimmed.hdf5
-hammer_icon 12246a2de8d76c219e96da6841856e1b12d82e1fd448e01a1cca9c3b55500ffc https://github.com/d-chambers/dfs_data/raw/master/icons/hammer.png

@@ -3,7 +3,7 @@ Tests for time variables.
 """
 import numpy as np
 
-from dfs.utils.time import to_datetime64, to_timedelta64
+from fios.utils.time import to_datetime64, to_timedelta64
 
 
 class TestFloatToDateTime:
