@@ -35,15 +35,23 @@ def array_to_datetime64(array: np.array) -> np.datetime64:
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
     array = np.array(array)
-    # just check first element to determine type.
-    if np.isreal(array[0]):  # dealing with numerical data
+    # dealing with an array of datetime64 already
+    if np.issubdtype(array.dtype, np.datetime64):
+        out = array
+    # just check first element to determine type.  # TODO replace with dtype check
+    elif np.isreal(array[0]):  # dealing with numerical data
         # separate seconds and factions, assume ns precision
         int_sec = array.astype(np.int64).astype("datetime64[s]")
         frac_sec = array % 1.0
         ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
         out = int_sec.astype("datetime64[ns]") + ns
+
     elif isinstance(array[0], str):
         out = array.astype("datetime64[ns]")
+    else:  # already
+        msg = f"{array.dtype} not supported"
+        raise NotImplementedError(msg)
+
     return out
 
 
@@ -71,6 +79,8 @@ def array_to_timedelta64(array: np.array) -> np.datetime64:
     """
     # just check first element to determine type.
     array = np.array(array)
+    if np.issubdtype(array.dtype, np.timedelta64):
+        return array
     assert np.isreal(array[0])
     # separate seconds and factions, convert fractions to ns precision
     seconds = array.astype(np.int64).astype("timedelta64[s]")

@@ -30,8 +30,10 @@ DEFAULT_ATTRS = {
     "dx": np.NaN,
     "data_type": "",
     "category": "",
-    "time_range": (np.NaN, np.NaN),
-    "distance_range": (np.NaN, np.NaN),
+    "time_min": np.NaN,
+    "time_max": np.NaN,
+    "distance_min": np.NaN,
+    "distance_max": np.NaN,
     "id": "",
 }
 

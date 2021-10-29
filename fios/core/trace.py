@@ -1,38 +1,67 @@
 """
 A 2D trace object.
 """
-from typing import Optional, Mapping
+from typing import Optional, Mapping, Tuple, Union
 
 import numpy as np
+import pandas as pd
 from numpy.typing import ArrayLike
+from xarray import DataArray
 
 from fios.constants import DEFAULT_ATTRS
 from fios.exceptions import IncompatibleCoords, MissingDimensions
 from fios.utils.mapping import FrozenDict
+from fios.utils.time import to_datetime64, to_timedelta64
 
 
-def _get_attrs(attr=None):
+def _get_attrs(attr=None, coords=None):
     """Get the attribute dict, add required keys if not yet defined."""
     out = {} if attr is None else dict(attr)
-    # add default values
-    for missing in set(DEFAULT_ATTRS) - set(attr):
+    # Update time and distance range if they are in coords
+    # this needs to change if we use timedelta64 here
+    if coords is not None and 'time' in coords:
+        time = getattr(coords['time'], 'values', coords['time'])
+        out['time_min'] = time.min()
+        out['time_max'] = time.max()
+    if coords is not None and 'distance' in coords:
+        dist = getattr(coords['distance'], 'values', coords['distance'])
+        out['distance_min'] = dist.min()
+        out['distance_max'] = dist.max()
+    # add default values if they are not in out or attrs yet
+    for missing in (set(DEFAULT_ATTRS) - set(attr)) - set(out):
         out[missing] = DEFAULT_ATTRS[missing]
     return FrozenDict(out)
 
 
-def _get_coords(data, coords):
-    """Get and validate coordinates from data."""
-    out = {}
-    for expected_len, (name, array) in zip(data.shape, coords.items()):
-        if not expected_len == len(array):
-            coord_shape = {i: len(v) for i, v in coords.items()}
-            msg = (
-                f"array of shape {array.shape} is not compatible with "
-                f"coordinate shapes: {coord_shape}"
-            )
-            raise IncompatibleCoords(msg)
-        out[name] = array
-    return out
+def _condition_coords(coords):
+    """
+    Condition the coordinates before using them.
+
+    This is mainly to enforce common time conventions
+    """
+
+    if coords is None or (time := coords.get('time')) is None:
+        return coords
+    # make sure we have an array, not xarray thing
+    time = getattr(time, 'values', time)
+    coords['time'] = pd.to_datetime(to_datetime64(time))
+    return coords
+
+
+def _time_to_absolute(time, attrs):
+    """Convert time to absolute time for slicing."""
+    if isinstance(time, slice):
+        raise NotImplementedError('Time dimension doesnt yet support slicing.')
+    starttime = attrs['time_min']  # get reference time for trace
+    start = time[0]
+    if isinstance(start, (float, np.timedelta64, int)):
+        start = starttime + to_timedelta64(start)
+    stop = time[1]
+    if isinstance(stop, (float, np.timedelta64, int)):
+        stop = starttime + to_timedelta64(stop)
+    if start is not None and stop is not None:
+        assert start <= stop, 'start time must be less than stop time'
+    return slice(start, stop)
 
 
 class Trace2D:
@@ -42,14 +71,19 @@ class Trace2D:
 
     def __init__(
         self,
-        data: ArrayLike,
-        coords: Mapping[str, ArrayLike],
+        data: Union[ArrayLike, DataArray]=None,
+        coords: Mapping[str, ArrayLike]=None,
+        dims: Tuple[str] = None,
         attrs: Optional[Mapping] = None,
     ):
-        self._data = data
-        self.coords = _get_coords(data, coords)
-        self.dims = list(self.coords)
-        self._attrs = _get_attrs(attrs)
+        if isinstance(data, DataArray):
+            self._data_array = data
+            return
+        coords = _condition_coords(coords)
+        dims = dims if dims is not None else list(coords)
+        attrs = _get_attrs(attrs, coords)
+        self._data_array = DataArray(data=data, dims=dims, coords=coords,
+                                     attrs=attrs)
 
     def __eq__(self, other):
         """
@@ -117,44 +151,52 @@ class Trace2D:
 
         Examples
         --------
-        > from fios.examples import get_example_trace
-        > tr = get_example_trace()
+        >>> # select meters 50 to 300
+        >>> import numpy as np
+        >>> from fios.examples import get_example_trace
+        >>> tr = get_example_trace()
+        >>> new = tr.select(distance=(50,300))
         """
-        if not len(kwargs):
-            return self
-        assert len(kwargs) <= 1, "only one dim supported for now"
-        dim = list(kwargs)[0]
-        vals = kwargs[dim]
-        coord = self.coords[dim]
-        start = vals[0] if vals[0] is not None else coord.min()
-        stop = vals[1] if vals[1] is not None else coord.max()
-        missing_dimension = set(kwargs) - set(self.coords)
-        if missing_dimension:
-            msg = f"Trace does to have dimension(s): {missing_dimension}"
-            raise MissingDimensions(msg)
-        index1 = np.searchsorted(coord, start, side="left")
-        index2 = np.searchsorted(coord, stop, side="right")
-        # create new coords and slice arrays
-        coords = dict(self.coords)
-        coords[dim] = coords[dim][slice(index1, index2)]
-        # slice np array
-        slices = [slice(None)] * len(self.data.shape)
-        dim_ind = self.dims.index(dim)
-        slices[dim_ind] = slice(index1, index2)
-        data = self.data[tuple(slices)]
-
-        return self.new(data=data, coords=coords)
+        # do special thing for time, else just use DataArray select
+        if 'time' in kwargs:
+            kwargs['time'] = _time_to_absolute(kwargs['time'], self.attrs)
+            pass
+        # convert tuples into slices
+        kwargs = {
+            i: slice(v[0], v[1]) if isinstance(v, tuple) else v
+            for i, v in kwargs.items()
+        }
+        new = self._data_array.sel(**kwargs)
+        new.attrs = _get_attrs(new.attrs, new.coords)
+        return self.__class__(new)
 
     @property
     def iloc(self):
-        """Return an Ilocator for selecting based on index, not values."""
+        """Return an index locator for selecting based on index, not values."""
 
     @property
     def data(self):
         """Return the data array."""
-        return self._data
+        return self._data_array.data
+
+    @property
+    def coords(self):
+        """Return the data array."""
+        return self._data_array.coords
+
+    @property
+    def dims(self):
+        """Return the data array."""
+        return self._data_array.coords
 
     @property
     def attrs(self):
         """Return the attributes of the trace."""
-        return self._attrs
+        return self._data_array.attrs
+
+    def __str__(self):
+        xarray_str = str(self._data_array)
+        class_name = self.__class__.__name__
+        return xarray_str.replace('xarray.DataArray', f'fios.{class_name}')
+
+    __repr__ = __str__

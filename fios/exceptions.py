@@ -13,3 +13,7 @@ class IncompatibleCoords(ValueError):
 
 class MissingDimensions(ValueError):
     """Raised when trying to filter an trace on non-existent dimensions."""
+
+
+class InvalidTimeRange(ValueError):
+    """Raised when an invalid time range is encountered."""
