@@ -1,15 +1,14 @@
 """
 IO module for reading Terra15 DAS data.
 """
+from pathlib import Path
 from typing import Union, List
 
-from pathlib import Path
-
-import tables as tb
 import numpy as np
+import tables as tb
 
-from fios.utils.time import to_datetime64, to_timedelta64
-from fios.core import create_das_array, DataArray, Stream, Trace2D
+from fios.core import Stream, Trace2D
+from fios.utils.time import to_datetime64
 
 
 def _is_version_two(root):

@@ -15,7 +15,7 @@ from pyqtgraph.dockarea import DockArea
 class WorkBench(qw.QMainWindow, ShowOnCall, QTBase):
     """Main Window."""
 
-    def __init__(self, data: Optional[xr.DataArray] = None, parent=None):
+    def __init__(self, data=None, parent=None):
         """Initializer."""
         get_app()  # ensure app is created before creating widgets
         super().__init__(parent)
