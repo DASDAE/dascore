@@ -3,7 +3,6 @@ Main window for WorkBench.
 """
 from typing import Optional
 
-import xarray as xr
 import pyqtgraph as pg
 
 from fios.workbench.qcompat import qg, qc, qw

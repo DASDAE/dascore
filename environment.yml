@@ -14,4 +14,6 @@ dependencies:
   - pre-commit
   - pytables
   - matplotlib
+  - rich
+  - scipy
 
