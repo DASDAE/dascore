@@ -220,7 +220,7 @@ latex_elements = {
 # (source start file, target name, title, author, documentclass
 # [howto/manual]).
 latex_documents = [
-    ("index", "dfs.tex", u"dfs Documentation", u"Derrick Chambers", "manual"),
+    ("index", "dfs.tex", u"dfs Documentation", u"Derrick Chambers", "manual")
 ]
 
 # The name of an image file (relative to this directory) to place at
@@ -268,7 +268,7 @@ texinfo_documents = [
         "dfs",
         "One line description of project.",
         "Miscellaneous",
-    ),
+    )
 ]
 
 # Documents to append as an appendix to all manuals.

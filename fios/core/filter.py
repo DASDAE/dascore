@@ -3,7 +3,7 @@ Implements time and space filters.
 """
 from typing import Optional, Literal
 
-from fios.core import DataArray, Dataset
+from fios.core import DataArray
 from fios.utils import register_method
 
 

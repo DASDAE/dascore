@@ -73,7 +73,3 @@ def get_format(path: Union[str, Path]) -> str:
     else:
         msg = f"Could not determine file format of {path}"
         raise UnknownFiberFormat(msg)
-
-
-def write(*args, **kwargs):
-    pass

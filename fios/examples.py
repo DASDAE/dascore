@@ -25,9 +25,5 @@ def _random_trace():
         distance=np.arange(array.shape[0]) * attrs["dx"],
         time=np.arange(array.shape[1]) * attrs["dt"],
     )
-    out = dict(
-        data=array,
-        coords=coords,
-        attrs=attrs,
-    )
+    out = dict(data=array, coords=coords, attrs=attrs)
     return fios.Trace2D(**out)

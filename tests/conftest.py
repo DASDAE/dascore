@@ -3,14 +3,12 @@ pytest configuration for fios
 """
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from fios.core import Trace2D, Stream
 from fios.io import _read_terra15_v2
 from fios.utils.downloader import fetch
 from fios.utils.misc import register_func
-
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
 

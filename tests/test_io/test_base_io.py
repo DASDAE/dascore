@@ -8,9 +8,10 @@ from fios.exceptions import UnknownFiberFormat
 
 
 class TestGetFormat:
-    """Tests to ensure formats can be retreived."""
+    """Tests to ensure formats can be retrieved."""
 
     def test_terra_15(self, terra15_path):
+        """Ensure terra15 v2 can be read"""
         out = fios.get_format(terra15_path)
         assert out.upper() == "TERRA15_V2"
 

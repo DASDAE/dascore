@@ -4,9 +4,11 @@ Simple module for handling Qt global app.
 import sys
 from pathlib import Path
 
+from .qcompat import qw
+
+
 APP = {}
 icon_path = Path(__file__).parent / "icons"
-from .qcompat import qw
 
 
 def get_app():

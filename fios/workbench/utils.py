@@ -1,5 +1,5 @@
 """
-Utilties for vizualizations
+Utilties for visualizations
 """
 from fios.workbench import get_app
 
@@ -11,7 +11,12 @@ class QTBase:
 
 
 class ShowOnCall:
+    """
+    A qt subclass which calls the show method with __call__
+    """
+
     def __call__(self, show=True, exec=True):
+        """Show the class's content."""
         try:
             app = get_app()
             if show:
@@ -27,4 +32,5 @@ class ShowOnCall:
                 from PyQt5.Qt import pyqtRemoveInputHook, pyqtRestoreInputHook
 
                 pyqtRemoveInputHook()
-                breakpoint()
+                breakpoint()  # NOQA
+                pyqtRestoreInputHook()

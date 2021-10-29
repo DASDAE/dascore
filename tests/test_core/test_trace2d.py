@@ -1,8 +1,6 @@
 """
 Tests for Trace2D object.
 """
-import numpy as np
-
 from fios.core import Trace2D
 
 
@@ -10,7 +8,7 @@ class TestInit:
     """Tests for init'ing Trace2D"""
 
     def test_init_from_array(self, random_das_array):
-        """"""
+        """Ensure a trace can be created from raw components; array, coords, attrs"""
         assert isinstance(random_das_array, Trace2D)
 
 

@@ -1,15 +1,13 @@
 """
 Main window for WorkBench.
 """
-from typing import Optional
 
-import pyqtgraph as pg
-
-from fios.workbench.qcompat import qg, qc, qw
-from fios.workbench.utils import ShowOnCall, QTBase
-from fios.utils.downloader import fetch
-from .app import get_app
 from pyqtgraph.dockarea import DockArea
+
+from fios.utils.downloader import fetch
+from fios.workbench.qcompat import qg, qw
+from fios.workbench.utils import ShowOnCall, QTBase
+from .app import get_app
 
 
 class WorkBench(qw.QMainWindow, ShowOnCall, QTBase):
@@ -84,11 +82,6 @@ class BenchTool:
         """Return the data model."""
 
 
-class Time:
-    pass
-
-
 if __name__ == "__main__":
     win = WorkBench()
     win()
-    breakpoint()

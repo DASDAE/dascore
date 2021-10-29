@@ -3,7 +3,7 @@ A module for storing streams of fiber data.
 """
 from collections import UserList
 from typing import Sequence, Union
-from fios.core import DataArray, Trace2D
+from fios.core import Trace2D
 
 
 class Stream(UserList):
@@ -15,7 +15,3 @@ class Stream(UserList):
         if isinstance(data, Trace2D):
             data = [data]
         self._data: Sequence[Trace2D] = data
-
-    @property
-    def data(self):
-        return self._data

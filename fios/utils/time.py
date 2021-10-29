@@ -4,7 +4,6 @@ Utility for working with time.
 from typing import Union
 from functools import singledispatch
 import numpy as np
-import numpy.typing as npt
 
 
 @singledispatch

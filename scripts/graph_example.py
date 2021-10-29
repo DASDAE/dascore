@@ -1,5 +1,6 @@
 """
-Terra15 Treble: This example demonstrates how to plot the temporal waveform of at a certain range of distances, real-time.
+Terra15 Treble: This example demonstrates how to plot the temporal waveform
+of at a certain range of distances, real-time.
 """
 import pyqtgraph as pg
 import numpy as np
@@ -9,7 +10,7 @@ import numpy as np
 treble_address = "tcp://10.0.0.215:48000"
 
 app = pg.mkQApp()
-client = acq_client.acq_Client()
+client = 1  # acq_client.acq_Client()
 client.connect_to_server(treble_address)
 
 plot1 = pg.PlotWidget()
@@ -54,6 +55,7 @@ ptr = 0
 
 
 def update():
+    """Update """
     global curve, data, ptr, plot1, kwargs
     data, metadata = client.fetch_data_product(
         frame_list,
@@ -67,15 +69,13 @@ def update():
     if ptr == 0:
         plot1.enableAutoRange(
             "xy", False
-        )  ## stop auto-scaling after the first data set is plotted
+        )  # stop auto-scaling after the first data set is plotted
     ptr += 1
 
 
 timer = pg.Qt.QtCore.QTimer()
 timer.timeout.connect(update)
-timer.start(
-    160
-)  # 160ms, as that's the smallest frame size: no point in trying to grab information quicker than this.
+timer.start(160)  # 160ms, as that's the smallest frame size
 
 if __name__ == "__main__":
     try:
@@ -84,5 +84,5 @@ if __name__ == "__main__":
         )  # this is helpful if running with PyCharm, in "run with console" mode
 
         enable_gui("qt5")
-    except:
+    except Exception:
         pg.exec()

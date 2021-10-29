@@ -1,30 +1,19 @@
 """
 Utils for banks
 """
-import contextlib
 import os
 import re
 import time
-import warnings
-from typing import Optional, Sequence, List
+from typing import Sequence
 
-import pandas as pd
 import numpy as np
-from tables.exceptions import ClosedNodeError
-
-from obsplus.constants import (
-    NSLC,
-    WAVEFORM_STRUCTURE,
-    WAVEFORM_NAME_STRUCTURE,
-    SMALLDT64,
-    LARGEDT64,
-    READ_HDF5_KWARGS,
-)
+import pandas as pd
+from obsplus.constants import SMALLDT64, LARGEDT64, READ_HDF5_KWARGS
 from obsplus.exceptions import UnsupportedKeyword
 from obsplus.utils.geodetics import map_longitudes
-from obsplus.utils.misc import READ_DICT, _get_path
 from obsplus.utils.mseed import summarize_mseed
 from obsplus.utils.time import to_datetime64, _dict_times_to_ns
+from tables.exceptions import ClosedNodeError
 
 # functions for summarizing the various formats
 summarizing_functions = dict(mseed=summarize_mseed)
@@ -53,31 +42,6 @@ def _get_time_values(time1, time2=None):
     return out
 
 
-def summarize_generic_stream(path, format=None) -> List[dict]:
-    """
-    Return summary information for a stream stored on disk.
-
-    Parameters
-    ----------
-    path
-        The path to the stream.
-    format
-        The format code, as used by obspy.
-    """
-    st = _try_read_stream(path, format=format) or _try_read_stream(path) or []
-    out = []
-    for tr in st:
-        summary = {
-            "starttime": tr.stats.starttime._ns,
-            "endtime": tr.stats.endtime._ns,
-            "sampling_period": int(tr.stats.delta * 1_000_000_000),
-            "path": path,
-        }
-        summary.update(dict((x, c) for x, c in zip(NSLC, tr.id.split("."))))
-        out.append(summary)
-    return out
-
-
 def _summarize_wave_file(path, format, summarizer=None):
     """
     Summarize waveform files for indexing.
@@ -91,42 +55,6 @@ def _summarize_wave_file(path, format, summarizer=None):
         except Exception:
             pass
     return summarize_generic_stream(path, format)
-
-
-def _summarize_trace(
-    trace: obspy.Trace,
-    path: Optional[str] = None,
-    name: Optional[str] = None,
-    path_struct: Optional[str] = None,
-    name_struct: Optional[str] = None,
-) -> dict:
-    """
-    Function to extract info from traces for indexing.
-
-    Parameters
-    ----------
-    trace
-        The trace object
-    path
-        Other Parameters to the file
-    name
-        Name of the file
-    path_struct
-        directory structure to create
-    name_struct
-        structure of the file name if name is not used.
-    """
-    assert hasattr(trace, "stats"), "only a trace object is accepted"
-    out = {"seedid": trace.id, "ext": WAVEFORM_EXT}
-    t1, t2 = trace.stats.starttime, trace.stats.endtime
-    out.update(_get_time_values(t1, t2))
-    out.update(dict((x, c) for x, c in zip(NSLC, trace.id.split("."))))
-
-    path_struct = path_struct if path_struct is not None else WAVEFORM_STRUCTURE
-    name_struct = name_struct or WAVEFORM_NAME_STRUCTURE
-
-    out.update(_get_path(out, path, name, path_struct, name_struct))
-    return out
 
 
 def _remove_base_path(series: pd.Series, base="") -> pd.Series:
@@ -261,22 +189,6 @@ class _IndexCache:
         else:
             self._current_index += 1
         return self.cache.index[self._current_index]
-
-
-@contextlib.contextmanager
-def sql_connection(path, **kwargs):
-    """
-    A simple context manager for a sqlite connection.
-
-    Parameters
-    ----------
-    path
-        A path to the sqlite database.
-    """
-    con = sqlite3.connect(str(path), **kwargs)
-    with con:
-        yield con
-    con.close()  # this is needed on windows but not linux, weird...
 
 
 def _get_kernel_query(starttime: int, endtime: int, buffer: int):
@@ -433,21 +345,3 @@ def _drop_rows(table_name, con, columns=None, **kwargs):
     """Drop indicies in table"""
     sql = _make_sql_command("delete", table_name, columns=columns, **kwargs)
     con.execute(sql)
-
-
-def _try_read_stream(stream_path, format=None, **kwargs):
-    """Try to read a waveforms from file, if raises return None"""
-    read = READ_DICT.get(format, obspy.read)
-    stt = None
-    try:
-        stt = read(stream_path, **kwargs)
-    except Exception:
-        try:
-            stt = obspy.read(stream_path, **kwargs)
-        except Exception:
-            warnings.warn("obspy failed to read %s" % stream_path, UserWarning)
-        else:
-            msg = f"{stream_path} was read but is not of format {format}"
-            warnings.warn(msg, UserWarning)
-    finally:
-        return stt if stt else None

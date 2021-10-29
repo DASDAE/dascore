@@ -33,7 +33,7 @@ def _is_terra15_v2(path: Union[str, Path]) -> bool:
     try:
         with tb.open_file(path, "r") as fi:
             return _is_version_two(fi.root)
-    except (tb.HDF5ExtError, OSError, IndexError, KeyError, tb.NoSuchNodeError) as e:
+    except (tb.HDF5ExtError, OSError, IndexError, KeyError, tb.NoSuchNodeError):
         return False
 
 
@@ -51,9 +51,7 @@ def _get_node_attrs(node):
     return out
 
 
-def _scan_terra15_v2(
-    path: Union[str, Path],
-) -> List[dict]:
+def _scan_terra15_v2(path: Union[str, Path]) -> List[dict]:
     """
     Scan a terra15 v2 file, return summary information about the file's contents.
     """

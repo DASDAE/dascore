@@ -9,10 +9,7 @@ from .time import to_datetime64
 DFS_METHODS = defaultdict(dict)  # a dict for storing dtx attributes
 
 
-def register_method(
-    attr_name: Optional[Union[str, callable]] = None,
-    namespace="fios",
-):
+def register_method(attr_name: Optional[Union[str, callable]] = None, namespace="fios"):
     """
     Register a function as a specific type of accessor.
 

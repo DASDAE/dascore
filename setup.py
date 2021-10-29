@@ -73,15 +73,9 @@ else:
 
 
 ENTRY_POINTS = {
-    "fios.plugin.read": [
-        "TERRA15_V2 = fios.io.terra15.ver2:_read_terra15_v2",
-    ],
-    "fios.plugin.is_format": [
-        "TERRA15_V2 = fios.io.terra15.ver2:_is_terra15_v2",
-    ],
-    "fios.plugin.scan": [
-        "TERRA15_V2 = fios.io.terra15.ver2:_scan_terra15_v2",
-    ],
+    "fios.plugin.read": ["TERRA15_V2 = fios.io.terra15.ver2:_read_terra15_v2"],
+    "fios.plugin.is_format": ["TERRA15_V2 = fios.io.terra15.ver2:_is_terra15_v2"],
+    "fios.plugin.scan": ["TERRA15_V2 = fios.io.terra15.ver2:_scan_terra15_v2"],
     "fios.plugin.write": [],
 }
 

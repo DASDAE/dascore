@@ -38,6 +38,4 @@ Quickstart
 Features
 --------
 
-* TODO A bit more detail, probably link to the docs here. 
-
-
+* TODO A bit more detail, probably link to the docs here.

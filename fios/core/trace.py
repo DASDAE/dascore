@@ -1,14 +1,14 @@
 """
 A 2D trace object.
 """
-from typing import Union, Optional, Mapping
+from typing import Optional, Mapping
 
 import numpy as np
 from numpy.typing import ArrayLike
 
-from fios.utils.mapping import FrozenDict
 from fios.constants import DEFAULT_ATTRS
 from fios.exceptions import IncompatibleCoords, MissingDimensions
+from fios.utils.mapping import FrozenDict
 
 
 def _get_attrs(attr=None):
@@ -151,8 +151,10 @@ class Trace2D:
 
     @property
     def data(self):
+        """Return the data array."""
         return self._data
 
     @property
     def attrs(self):
+        """Return the attributes of the trace."""
         return self._attrs
