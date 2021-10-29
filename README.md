@@ -1,8 +1,10 @@
 ===============================
-dfs
+FIOS
 ===============================
 
-Distributed Fiber Sensing library
+(Fi)ber (O)ptic (Sensing)
+
+A prototype for the core functionality of the DASDAE efforts.
 
 Quickstart
 ---------
