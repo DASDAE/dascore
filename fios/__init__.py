@@ -9,4 +9,5 @@ from fios.io.base import read, scan, get_format
 
 # set xarray settings
 from xarray import set_options
+
 set_options(keep_attrs=True)
