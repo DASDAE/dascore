@@ -12,6 +12,7 @@ from fios.constants import DEFAULT_ATTRS
 from fios.exceptions import IncompatibleCoords, MissingDimensions
 from fios.utils.mapping import FrozenDict
 from fios.utils.time import to_datetime64, to_timedelta64
+from fios.viz.core import TraceViz
 
 
 def _get_attrs(attr=None, coords=None):
@@ -194,9 +195,16 @@ class Trace2D:
         """Return the attributes of the trace."""
         return self._data_array.attrs
 
+    @property
+    def viz(self) -> TraceViz:
+        """Return a TraceViz instance bound to this Trace"""
+        return TraceViz(self)
+
     def __str__(self):
         xarray_str = str(self._data_array)
         class_name = self.__class__.__name__
         return xarray_str.replace('xarray.DataArray', f'fios.{class_name}')
 
     __repr__ = __str__
+
+

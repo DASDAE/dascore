@@ -1,7 +1,8 @@
 """
 Misc Utilities.
 """
-
+import contextlib
+import functools
 from typing import Union, Optional
 
 
@@ -29,3 +30,17 @@ def register_func(list_or_dict: Union[list, dict], key: Optional[str] = None):
         return func
 
     return wrapper
+
+
+def pass_through_method(attr_name: str):
+    """Decorator for binding method to an attribute rather than self."""
+
+    def _wrap(func):
+
+        @functools.wraps(func)
+        def _func(self, *args, **kwargs):
+            obj = getattr(self, attr_name)
+            return func(obj, *args, **kwargs)
+        return _func
+
+    return _wrap
