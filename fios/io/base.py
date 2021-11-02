@@ -3,15 +3,14 @@ Base functionality for reading, writting, determining file formats, and scanning
 Das Data.
 """
 
-from typing import Union, Optional
 from pathlib import Path
+from typing import Optional, Union
 
 import numpy as np
 
 from fios import Stream
-from fios.utils.plugin import PluginManager
 from fios.exceptions import UnknownFiberFormat
-
+from fios.utils.plugin import PluginManager
 
 # ----------------- load plugins
 

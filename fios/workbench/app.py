@@ -6,7 +6,6 @@ from pathlib import Path
 
 from .qcompat import qw
 
-
 APP = {}
 icon_path = Path(__file__).parent / "icons"
 

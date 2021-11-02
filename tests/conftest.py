@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fios.core import Trace2D, Stream
+from fios.core import Patch, Stream
 from fios.io import _read_terra15_v2
 from fios.utils.downloader import fetch
 from fios.utils.misc import register_func
@@ -33,14 +33,14 @@ def terra15_das_stream(terra15_path) -> Stream:
 
 @pytest.fixture(scope="session")
 @register_func(ARRAY_FIXTURES)
-def terra15_das_array(terra15_path) -> Trace2D:
+def terra15_das_array(terra15_path) -> Patch:
     """Read the terra15 data, return contained DataArray"""
     return _read_terra15_v2(terra15_path)[0]
 
 
 @pytest.fixture(scope="session")
 @register_func(ARRAY_FIXTURES)
-def random_das_array() -> Trace2D:
+def random_patch() -> Patch:
     """Init a random array."""
     from fios.examples import get_example_trace
 

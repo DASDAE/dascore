@@ -6,7 +6,6 @@ import numpy as np
 import fios
 from fios.utils.misc import register_func
 
-
 EXAMPLE_TRACES = {}
 
 
@@ -26,4 +25,4 @@ def _random_trace():
         time=np.arange(array.shape[1]) * attrs["dt"],
     )
     out = dict(data=array, coords=coords, attrs=attrs)
-    return fios.Trace2D(**out)
+    return fios.Patch(**out)

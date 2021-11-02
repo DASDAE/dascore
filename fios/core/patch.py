@@ -1,7 +1,7 @@
 """
 A 2D trace object.
 """
-from typing import Optional, Mapping, Tuple, Union
+from typing import Mapping, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -9,7 +9,6 @@ from numpy.typing import ArrayLike
 from xarray import DataArray
 
 from fios.constants import DEFAULT_ATTRS
-from fios.exceptions import IncompatibleCoords, MissingDimensions
 from fios.utils.mapping import FrozenDict
 from fios.utils.time import to_datetime64, to_timedelta64
 from fios.viz.core import TraceViz
@@ -17,15 +16,26 @@ from fios.viz.core import TraceViz
 
 class Coords:
     """A wrapper around xarray coords for a bit more intuitive access."""
+
     def __init__(self, coords):
-        self.coords = coords
+        self._coords = coords
 
     def __getitem__(self, item):
         """Return the raw numpy array."""
-
+        out = self._coords[item]
+        return getattr(out, "values", out)
 
     def __str__(self):
-        return str(self.coords)
+        return str(self._coords)
+
+    __repr__ = __str__
+
+    def get(self, item):
+        """Return item or None if not in coord. Same as dict.get"""
+        return self._coords.get(item)
+
+    def __iter__(self):
+        return self._coords.__iter__()
 
 
 def _get_attrs(attr=None, coords=None):
@@ -33,14 +43,14 @@ def _get_attrs(attr=None, coords=None):
     out = {} if attr is None else dict(attr)
     # Update time and distance range if they are in coords
     # this needs to change if we use timedelta64 here
-    if coords is not None and 'time' in coords:
-        time = getattr(coords['time'], 'values', coords['time'])
-        out['time_min'] = time.min()
-        out['time_max'] = time.max()
-    if coords is not None and 'distance' in coords:
-        dist = getattr(coords['distance'], 'values', coords['distance'])
-        out['distance_min'] = dist.min()
-        out['distance_max'] = dist.max()
+    if coords is not None and "time" in coords:
+        time = getattr(coords["time"], "values", coords["time"])
+        out["time_min"] = time.min()
+        out["time_max"] = time.max()
+    if coords is not None and "distance" in coords:
+        dist = getattr(coords["distance"], "values", coords["distance"])
+        out["distance_min"] = dist.min()
+        out["distance_max"] = dist.max()
     # add default values if they are not in out or attrs yet
     for missing in (set(DEFAULT_ATTRS) - set(attr)) - set(out):
         out[missing] = DEFAULT_ATTRS[missing]
@@ -54,19 +64,18 @@ def _condition_coords(coords):
     This is mainly to enforce common time conventions
     """
 
-    if coords is None or (time := coords.get('time')) is None:
+    if coords is None or (time := coords.get("time")) is None:
         return coords
-    # make sure we have an array, not xarray thing
-    time = getattr(time, 'values', time)
-    coords['time'] = pd.to_datetime(to_datetime64(time))
+    if not np.issubdtype(time.dtype, np.datetime64):
+        coords["time"] = pd.to_datetime(to_datetime64(time))
     return coords
 
 
 def _time_to_absolute(time, attrs):
     """Convert time to absolute time for slicing."""
     if isinstance(time, slice):
-        raise NotImplementedError('Time dimension doesnt yet support slicing.')
-    starttime = attrs['time_min']  # get reference time for trace
+        raise NotImplementedError("Time dimension doesnt yet support slicing.")
+    starttime = attrs["time_min"]  # get reference time for trace
     start = time[0]
     if isinstance(start, (float, np.timedelta64, int)):
         start = starttime + to_timedelta64(start)
@@ -74,19 +83,19 @@ def _time_to_absolute(time, attrs):
     if isinstance(stop, (float, np.timedelta64, int)):
         stop = starttime + to_timedelta64(stop)
     if start is not None and stop is not None:
-        assert start <= stop, 'start time must be less than stop time'
+        assert start <= stop, "start time must be less than stop time"
     return slice(start, stop)
 
 
-class Trace2D:
+class Patch:
     """
     A Class for storing and accessing 2D fiber data.
     """
 
     def __init__(
         self,
-        data: Union[ArrayLike, DataArray]=None,
-        coords: Mapping[str, ArrayLike]=None,
+        data: Union[ArrayLike, DataArray] = None,
+        coords: Mapping[str, ArrayLike] = None,
         dims: Tuple[str] = None,
         attrs: Optional[Mapping] = None,
     ):
@@ -96,8 +105,7 @@ class Trace2D:
         coords = _condition_coords(coords)
         dims = dims if dims is not None else list(coords)
         attrs = _get_attrs(attrs, coords)
-        self._data_array = DataArray(data=data, dims=dims, coords=coords,
-                                     attrs=attrs)
+        self._data_array = DataArray(data=data, dims=dims, coords=coords, attrs=attrs)
 
     def __eq__(self, other):
         """
@@ -113,7 +121,7 @@ class Trace2D:
         """
         return self.equals(other)
 
-    def equals(self, other: "Trace2D", only_required_attrs=True) -> bool:
+    def equals(self, other: "Patch", only_required_attrs=True) -> bool:
         """
         Determine if the current trace equals the other trace.
 
@@ -139,11 +147,12 @@ class Trace2D:
         Return a copy of the trace with data, coords, or attrs updated.
         """
         data = data if data is not None else self.data
-        coords = coords if coords is not None else self.coords
         attrs = attrs if attrs is not None else self.attrs
+        if coords is None:
+            coords = getattr(self.coords, "_coords", self.coords)
         return self.__class__(data=data, coords=coords, attrs=attrs)
 
-    def update_attrs(self, **kwargs) -> "Trace2D":
+    def update_attrs(self, **kwargs) -> "Patch":
         """
         Update attrs and return a new trace2D.
         """
@@ -172,8 +181,8 @@ class Trace2D:
         >>> new = tr.select(distance=(50,300))
         """
         # do special thing for time, else just use DataArray select
-        if 'time' in kwargs:
-            kwargs['time'] = _time_to_absolute(kwargs['time'], self.attrs)
+        if "time" in kwargs:
+            kwargs["time"] = _time_to_absolute(kwargs["time"], self.attrs)
             pass
         # convert tuples into slices
         kwargs = {
@@ -196,12 +205,12 @@ class Trace2D:
     @property
     def coords(self):
         """Return the data array."""
-        return self._data_array.coords
+        return Coords(self._data_array.coords)
 
     @property
     def dims(self):
         """Return the data array."""
-        return self._data_array.coords
+        return self._data_array.dims
 
     @property
     def attrs(self):
@@ -216,8 +225,6 @@ class Trace2D:
     def __str__(self):
         xarray_str = str(self._data_array)
         class_name = self.__class__.__name__
-        return xarray_str.replace('xarray.DataArray', f'fios.{class_name}')
+        return xarray_str.replace("xarray.DataArray", f"fios.{class_name}")
 
     __repr__ = __str__
-
-

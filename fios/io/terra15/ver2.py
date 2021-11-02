@@ -2,12 +2,12 @@
 IO module for reading Terra15 DAS data.
 """
 from pathlib import Path
-from typing import Union, List
+from typing import List, Union
 
 import numpy as np
 import tables as tb
 
-from fios.core import Stream, Trace2D
+from fios.core import Patch, Stream
 from fios.utils.time import to_datetime64
 
 
@@ -95,7 +95,7 @@ def _read_terra15_v2(
         attrs = _get_node_attrs(data_node)
         distance = attrs["dx"] * channel_number
         coords = {"time": time, "distance": distance}
-        trace2d = Trace2D(data=data, coords=coords, attrs=attrs)
+        trace2d = Patch(data=data, coords=coords, attrs=attrs)
         return Stream([trace2d])
 
         # out = create_das_array(

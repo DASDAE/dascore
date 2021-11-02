@@ -1,9 +1,9 @@
 """
 Test for basic IO and related functions.
 """
-import fios
 import pytest
 
+import fios
 from fios.exceptions import UnknownFiberFormat
 
 

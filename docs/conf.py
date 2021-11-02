@@ -14,7 +14,7 @@
 # serve to show the default.
 
 import sys
-from os.path import dirname, abspath
+from os.path import abspath, dirname
 
 # If extensions (or modules to document with autodoc) are in another
 # directory, add these directories to sys.path here. If the directory is

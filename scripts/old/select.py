@@ -23,17 +23,17 @@ def select(self, **kwargs):
     assert len(kwargs) <= 1, "only one dim supported for now"
     dim = list(kwargs)[0]
     vals = kwargs[dim]
-    coord = self.coords[dim]
+    coord = self._coords[dim]
     start = vals[0] if vals[0] is not None else coord.min()
     stop = vals[1] if vals[1] is not None else coord.max()
-    missing_dimension = set(kwargs) - set(self.coords)
+    missing_dimension = set(kwargs) - set(self._coords)
     if missing_dimension:
         msg = f"Trace does to have dimension(s): {missing_dimension}"
         raise MissingDimensions(msg)
     index1 = np.searchsorted(coord, start, side="left")
     index2 = np.searchsorted(coord, stop, side="right")
     # create new coords and slice arrays
-    coords = dict(self.coords)
+    coords = dict(self._coords)
     coords[dim] = coords[dim][slice(index1, index2)]
     # slice np array
     slices = [slice(None)] * len(self.data.shape)

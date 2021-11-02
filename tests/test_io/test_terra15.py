@@ -1,9 +1,9 @@
 """
 Tests for reading terra15 file formats.
 """
+import numpy as np
 import pytest
 import tables as tb
-import numpy as np
 
 import fios
 from fios.constants import REQUIRED_DAS_ATTRS
@@ -16,7 +16,7 @@ class TestReadTerra15:
 
     def test_type(self, terra15_das_array):
         """Ensure the expected type is returned."""
-        assert isinstance(terra15_das_array, fios.Trace2D)
+        assert isinstance(terra15_das_array, fios.Patch)
 
     def test_attributes(self, terra15_das_array):
         """Ensure the expected attrs exist in array."""

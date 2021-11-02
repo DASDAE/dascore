@@ -1,5 +1,5 @@
 """
 Core routines and functionality for processing distributed fiber data.
 """
-from .trace import Trace2D
+from .patch import Patch  # noqa
 from .stream import Stream

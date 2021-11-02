@@ -6,7 +6,7 @@ Setup script for mopy.
 """
 import glob
 import sys
-from os.path import join, exists, isdir
+from os.path import exists, isdir, join
 from pathlib import Path
 
 from setuptools import setup

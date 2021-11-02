@@ -6,7 +6,8 @@ from pyqtgraph.dockarea import DockArea
 
 from fios.utils.downloader import fetch
 from fios.workbench.qcompat import qg, qw
-from fios.workbench.utils import ShowOnCall, QTBase
+from fios.workbench.utils import QTBase, ShowOnCall
+
 from .app import get_app
 
 

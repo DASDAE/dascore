@@ -8,11 +8,11 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from obsplus.constants import SMALLDT64, LARGEDT64, READ_HDF5_KWARGS
+from obsplus.constants import LARGEDT64, READ_HDF5_KWARGS, SMALLDT64
 from obsplus.exceptions import UnsupportedKeyword
 from obsplus.utils.geodetics import map_longitudes
 from obsplus.utils.mseed import summarize_mseed
-from obsplus.utils.time import to_datetime64, _dict_times_to_ns
+from obsplus.utils.time import _dict_times_to_ns, to_datetime64
 from tables.exceptions import ClosedNodeError
 
 # functions for summarizing the various formats
@@ -40,21 +40,6 @@ def _get_time_values(time1, time2=None):
         out["endtime"] = time2.timestamp
     out["time"] = str(utc1).replace(":", "-").split(".")[0]
     return out
-
-
-def _summarize_wave_file(path, format, summarizer=None):
-    """
-    Summarize waveform files for indexing.
-
-    Note: this function is a bit ugly, but it gets called *a lot* so be sure
-    to profile before refactoring.
-    """
-    if summarizer is not None:
-        try:
-            return summarizer(path)
-        except Exception:
-            pass
-    return summarize_generic_stream(path, format)
 
 
 def _remove_base_path(series: pd.Series, base="") -> pd.Series:

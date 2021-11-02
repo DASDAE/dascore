@@ -1,8 +1,9 @@
 """
 Utility for working with time.
 """
-from typing import Union
 from functools import singledispatch
+from typing import Union
+
 import numpy as np
 
 

@@ -4,22 +4,22 @@ import shutil
 import tempfile
 import warnings
 from abc import ABC, abstractmethod
-from pathlib import Path
 from inspect import isclass
+from pathlib import Path
 from types import MappingProxyType as MapProxy
-from typing import Optional, TypeVar, Mapping, Iterable, Union
+from typing import Iterable, Mapping, Optional, TypeVar, Union
 
 import numpy as np
-import pandas as pd
-from pandas.io.sql import DatabaseError
-
 import obsplus
+import pandas as pd
 from obsplus.constants import CPU_COUNT, bank_subpaths_type
 from obsplus.exceptions import BankDoesNotExistError
 from obsplus.interfaces import ProgressBar
 from obsplus.utils.bank import _IndexCache
-from obsplus.utils.misc import get_progressbar, iter_files, iterate, get_version_tuple
+from obsplus.utils.misc import (get_progressbar, get_version_tuple, iter_files,
+                                iterate)
 from obsplus.utils.time import to_datetime64
+from pandas.io.sql import DatabaseError
 
 BankType = TypeVar("BankType", bound="_Bank")
 
