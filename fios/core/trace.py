@@ -15,6 +15,19 @@ from fios.utils.time import to_datetime64, to_timedelta64
 from fios.viz.core import TraceViz
 
 
+class Coords:
+    """A wrapper around xarray coords for a bit more intuitive access."""
+    def __init__(self, coords):
+        self.coords = coords
+
+    def __getitem__(self, item):
+        """Return the raw numpy array."""
+
+
+    def __str__(self):
+        return str(self.coords)
+
+
 def _get_attrs(attr=None, coords=None):
     """Get the attribute dict, add required keys if not yet defined."""
     out = {} if attr is None else dict(attr)
