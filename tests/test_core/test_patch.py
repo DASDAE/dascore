@@ -89,3 +89,23 @@ class TestSelect:
         expected_start = np.datetime64("1970-01-01T00:00:01")
         assert tr1.attrs["time_min"] <= expected_start
         assert tr1.data.shape < shape
+
+
+class TestTranspose:
+    """Tests for switching dimensions."""
+
+    def test_simple_transpose(self, random_patch):
+        """Just check dims and data shape are reversed."""
+        dims = random_patch.dims
+        dims_r = tuple(reversed(dims))
+        pa1 = random_patch
+        pa2 = pa1.transpose(*dims_r)
+        assert pa2.dims == dims_r
+        assert list(pa2.data.shape) == list(reversed(pa1.data.shape))
+
+
+class TestUpdateAttrs:
+    """Tests for updating the attrs."""
+
+    def test_update_start_time(self, random_patch):
+        """ "Updating starttime should also update endtime"""

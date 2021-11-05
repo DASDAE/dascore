@@ -1,5 +1,5 @@
 """Constants used throughout obsplus."""
-from typing import Union
+from typing import TypedDict, Union
 
 import numpy as np
 
@@ -24,6 +24,21 @@ MININT64 = np.iinfo(np.int64).min
 # The largest value an int64 can rep
 MAXINT64 = np.iinfo(np.int64).max
 
+
+class PatchSummaryDict(TypedDict):
+    """The expected minimum attributes for a Patch attrs."""
+
+    dt: np.timedelta64
+    dx: float
+    data_type: str
+    category: str
+    time_min: np.datetime64
+    time_max: np.datetime64
+    distance_min: float
+    distance_max: float
+    instrument_id: str
+
+
 # The expected attributes for the Trace2D
 DEFAULT_ATTRS = {
     "dt": np.NaN,
@@ -34,7 +49,7 @@ DEFAULT_ATTRS = {
     "time_max": np.NaN,
     "distance_min": np.NaN,
     "distance_max": np.NaN,
-    "id": "",
+    "instrument_id": "",
 }
 
 # Large and small np.datetime64[ns] (used when defaults are needed)

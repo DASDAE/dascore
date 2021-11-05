@@ -1,5 +1,6 @@
 """Old select method without xarray."""
 
+
 def select(self, **kwargs):
     """
     Return a subset of the trace based on query parameters.

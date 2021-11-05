@@ -2,13 +2,15 @@
 Base functionality for reading, writting, determining file formats, and scanning
 Das Data.
 """
-
+import itertools
 from pathlib import Path
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import numpy as np
 
+import fios
 from fios import Stream
+from fios.constants import DEFAULT_ATTRS, PatchSummaryDict
 from fios.exceptions import UnknownFiberFormat
 from fios.utils.plugin import PluginManager
 
@@ -45,12 +47,28 @@ def read(
     )
 
 
-def scan(path: Union[Path, str], format=None) -> dict:
+def _scan_patch(patch) -> PatchSummaryDict:
+    """Scan the patch, return summary information."""
+    attrs = patch.attrs
+    out = {i: attrs.get(i, DEFAULT_ATTRS[i]) for i in DEFAULT_ATTRS}
+    return out
+
+
+def scan(
+    path_or_obj: Union[Path, str, "fios.Patch", "fios.Stream"],
+    format=None,
+) -> List[PatchSummaryDict]:
     """Scan a file, return the summary dictionary."""
+    # handle summarize loaded objects
+    if isinstance(path_or_obj, (fios.Stream)):
+        return list(itertools.chain(*[scan(pa) for pa in path_or_obj]))
+    elif isinstance(path_or_obj, fios.Patch):
+        return [_scan_patch(path_or_obj)]
+    # dispatch to file format handlers
     if format is None:
-        format = get_format(path)
+        format = get_format(path_or_obj)
     func = SCAN_PLUGGINS[format]
-    return func(path)
+    return func(path_or_obj)
 
 
 def get_format(path: Union[str, Path]) -> str:

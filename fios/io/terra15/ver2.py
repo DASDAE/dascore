@@ -57,13 +57,22 @@ def _scan_terra15_v2(path: Union[str, Path]) -> List[dict]:
     """
     with tb.open_file(path) as fi:
         data_node = fi.root["velocity"]["data"]
-        # data = data_node.read()
-        time_stamps = fi.root["velocity"]["gps_time"].read()
+        time = fi.root["velocity"]["gps_time"]
+        t1 = time[0]
+        t2 = time[-1]
+        # this happens when acquisition stops mid block
+        if t2 == 0.0:  # need to read whole array and find las non-zero block
+            time_array = time.read()
+            no_zero = time_array[time_array > 0.0]
+            t2 = no_zero[-1]
+
         data_shape = data_node.shape
         attrs = _get_node_attrs(data_node)
         out = dict(
-            time=(to_datetime64(time_stamps.min()), to_datetime64(time_stamps.max())),
-            distance=(0, data_shape[1] * attrs["dx"]),
+            time_min=to_datetime64(t1),
+            time_max=to_datetime64(t2),
+            distance_min=0,
+            distance_max=data_shape[1] * attrs["dx"],
             id=attrs["recorder_id"],
             nt=attrs.pop("nT"),
             dt=attrs.pop("dT"),
@@ -91,12 +100,17 @@ def _read_terra15_v2(
         data = data_node.read()
         time_stamps = fi.root["velocity"]["gps_time"].read()
         time = to_datetime64(time_stamps)
+        # determine if any empty blocks are in this dataset and remove if so.
+        if time_stamps[-1] == 0:
+            max_time_ind = np.argmax(time_stamps > 0)
+            time = time[:max_time_ind]
+            data = data[:max_time_ind, :]
         channel_number = np.arange(data.shape[1])
         attrs = _get_node_attrs(data_node)
         distance = attrs["dx"] * channel_number
         coords = {"time": time, "distance": distance}
-        trace2d = Patch(data=data, coords=coords, attrs=attrs)
-        return Stream([trace2d])
+        patch = Patch(data=data, coords=coords, attrs=attrs)
+        return Stream([patch])
 
         # out = create_das_array(
         #     data,

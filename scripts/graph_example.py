@@ -55,7 +55,7 @@ ptr = 0
 
 
 def update():
-    """Update """
+    """Update"""
     global curve, data, ptr, plot1, kwargs
     data, metadata = client.fetch_data_product(
         frame_list,

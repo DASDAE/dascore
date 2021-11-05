@@ -9,33 +9,13 @@ from numpy.typing import ArrayLike
 from xarray import DataArray
 
 from fios.constants import DEFAULT_ATTRS
+from fios.proc.filter import pass_filter, stop_filter
+from fios.proc.resample import decimate, detrend
 from fios.utils.mapping import FrozenDict
 from fios.utils.time import to_datetime64, to_timedelta64
 from fios.viz.core import TraceViz
 
-
-class Coords:
-    """A wrapper around xarray coords for a bit more intuitive access."""
-
-    def __init__(self, coords):
-        self._coords = coords
-
-    def __getitem__(self, item):
-        """Return the raw numpy array."""
-        out = self._coords[item]
-        return getattr(out, "values", out)
-
-    def __str__(self):
-        return str(self._coords)
-
-    __repr__ = __str__
-
-    def get(self, item):
-        """Return item or None if not in coord. Same as dict.get"""
-        return self._coords.get(item)
-
-    def __iter__(self):
-        return self._coords.__iter__()
+from .coords import Coords
 
 
 def _get_attrs(attr=None, coords=None):
@@ -193,6 +173,17 @@ class Patch:
         new.attrs = _get_attrs(new.attrs, new.coords)
         return self.__class__(new)
 
+    def transpose(self, *dims: str):
+        """
+        Transpose the data array to any dimension order desired.
+
+        Parameters
+        ----------
+        *dims
+            Dimension names which define the new data axis order.
+        """
+        return self.__class__(self._data_array.transpose(*dims))
+
     @property
     def iloc(self):
         """Return an index locator for selecting based on index, not values."""
@@ -208,7 +199,7 @@ class Patch:
         return Coords(self._data_array.coords)
 
     @property
-    def dims(self):
+    def dims(self) -> Tuple[str, ...]:
         """Return the data array."""
         return self._data_array.dims
 
@@ -226,5 +217,12 @@ class Patch:
         xarray_str = str(self._data_array)
         class_name = self.__class__.__name__
         return xarray_str.replace("xarray.DataArray", f"fios.{class_name}")
+
+    # add patch processing methods.
+
+    decimate = decimate
+    pass_filter = pass_filter
+    stop_filter = stop_filter
+    detrend = detrend
 
     __repr__ = __str__
