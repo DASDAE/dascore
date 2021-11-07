@@ -6,8 +6,16 @@ import warnings
 
 import numpy as np
 from scipy.fftpack import hilbert
-from scipy.signal import (cheb2ord, cheby2, convolve, get_window, iirfilter,
-                          remez, sosfilt, zpk2sos)
+from scipy.signal import (
+    cheb2ord,
+    cheby2,
+    convolve,
+    get_window,
+    iirfilter,
+    remez,
+    sosfilt,
+    zpk2sos,
+)
 
 import fios
 

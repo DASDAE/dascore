@@ -10,7 +10,7 @@ import numpy as np
 
 import fios
 from fios import Stream
-from fios.constants import DEFAULT_ATTRS, PatchSummaryDict
+from fios.constants import DEFAULT_PATCH_ATTRS, PatchSummaryDict
 from fios.exceptions import UnknownFiberFormat
 from fios.utils.plugin import PluginManager
 
@@ -50,7 +50,7 @@ def read(
 def _scan_patch(patch) -> PatchSummaryDict:
     """Scan the patch, return summary information."""
     attrs = patch.attrs
-    out = {i: attrs.get(i, DEFAULT_ATTRS[i]) for i in DEFAULT_ATTRS}
+    out = {i: attrs.get(i, DEFAULT_PATCH_ATTRS[i]) for i in DEFAULT_PATCH_ATTRS}
     return out
 
 

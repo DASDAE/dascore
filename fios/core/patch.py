@@ -1,14 +1,14 @@
 """
 A 2D trace object.
 """
-from typing import Mapping, Optional, Tuple, Union
+from typing import Mapping, Optional, Tuple, Union, TypeVar
 
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
 from xarray import DataArray
 
-from fios.constants import DEFAULT_ATTRS
+from fios.constants import DEFAULT_PATCH_ATTRS, PatchType
 from fios.proc.filter import pass_filter, stop_filter
 from fios.proc.resample import decimate, detrend
 from fios.utils.mapping import FrozenDict
@@ -32,8 +32,9 @@ def _get_attrs(attr=None, coords=None):
         out["distance_min"] = dist.min()
         out["distance_max"] = dist.max()
     # add default values if they are not in out or attrs yet
-    for missing in (set(DEFAULT_ATTRS) - set(attr)) - set(out):
-        out[missing] = DEFAULT_ATTRS[missing]
+    for missing in (set(DEFAULT_PATCH_ATTRS) - set(attr)) - set(out):
+        value = DEFAULT_PATCH_ATTRS[missing]
+        out[missing] = value if not callable(value) else value()
     return FrozenDict(out)
 
 
@@ -85,6 +86,9 @@ class Patch:
         coords = _condition_coords(coords)
         dims = dims if dims is not None else list(coords)
         attrs = _get_attrs(attrs, coords)
+        # get xarray coords from custom coords object
+        if isinstance(coords, Coords):
+            coords = coords._coords
         self._data_array = DataArray(data=data, dims=dims, coords=coords, attrs=attrs)
 
     def __eq__(self, other):
@@ -101,7 +105,7 @@ class Patch:
         """
         return self.equals(other)
 
-    def equals(self, other: "Patch", only_required_attrs=True) -> bool:
+    def equals(self, other: PatchType, only_required_attrs=True) -> bool:
         """
         Determine if the current trace equals the other trace.
 
@@ -114,15 +118,15 @@ class Patch:
         """
 
         if only_required_attrs:
-            attrs1 = {k: v for k, v in self.attrs.items() if k in DEFAULT_ATTRS}
-            attrs2 = {k: v for k, v in other.attrs.items() if k in DEFAULT_ATTRS}
+            attrs1 = {k: v for k, v in self.attrs.items() if k in DEFAULT_PATCH_ATTRS}
+            attrs2 = {k: v for k, v in other.attrs.items() if k in DEFAULT_PATCH_ATTRS}
         else:
             attrs1, attrs2 = dict(self.attrs), dict(other.attrs)
         if attrs1 != attrs2:
             return False
         return np.equal(self.data, other.data).all()
 
-    def new(self, data=None, coords=None, attrs=None):
+    def new(self: PatchType, data=None, coords=None, attrs=None) -> PatchType:
         """
         Return a copy of the trace with data, coords, or attrs updated.
         """
@@ -132,15 +136,20 @@ class Patch:
             coords = getattr(self.coords, "_coords", self.coords)
         return self.__class__(data=data, coords=coords, attrs=attrs)
 
-    def update_attrs(self, **kwargs) -> "Patch":
+    def update_attrs(self: PatchType, **attrs) -> PatchType:
         """
-        Update attrs and return a new trace2D.
-        """
-        attrs = dict(self._attrs)
-        attrs.update(**kwargs)
-        return self.__class__(self.data, coords=self.coords, attrs=attrs)
+        Update attrs and return a new trace2D
 
-    def select(self, **kwargs):
+        Parameters
+        ----------
+        **attrs
+            attrs to add/update.
+        """
+        new_attrs = dict(self.attrs)
+        new_attrs.update(**attrs)
+        return self.__class__(self.data, coords=self.coords, attrs=new_attrs)
+
+    def select(self: PatchType, **kwargs) -> PatchType:
         """
         Return a subset of the trace based on query parameters.
 
@@ -156,8 +165,8 @@ class Patch:
         --------
         >>> # select meters 50 to 300
         >>> import numpy as np
-        >>> from fios.examples import get_example_trace
-        >>> tr = get_example_trace()
+        >>> from fios.examples import get_example_patch
+        >>> tr = get_example_patch()
         >>> new = tr.select(distance=(50,300))
         """
         # do special thing for time, else just use DataArray select
@@ -173,7 +182,7 @@ class Patch:
         new.attrs = _get_attrs(new.attrs, new.coords)
         return self.__class__(new)
 
-    def transpose(self, *dims: str):
+    def transpose(self: PatchType, *dims: str) -> PatchType:
         """
         Transpose the data array to any dimension order desired.
 
@@ -183,6 +192,26 @@ class Patch:
             Dimension names which define the new data axis order.
         """
         return self.__class__(self._data_array.transpose(*dims))
+
+    def rename(self: PatchType, **names) -> PatchType:
+        """
+        Rename coordinate or dimensions of Patch.
+
+        Parameters
+        ----------
+        **names
+            The mapping from old names to new names
+
+        Examples
+        --------
+        >>> from fios.examples import get_example_patch
+        >>> pa = get_example_patch()
+        >>> # rename dim "distance" to "fragrance"
+        >>> pa2 = pa.rename(distance='fragrance')
+        >>> assert 'fragrance' in pa2.dims
+        """
+        new_data_array = self._data_array.rename(**names)
+        return self.__class__(new_data_array)
 
     @property
     def iloc(self):
@@ -204,9 +233,9 @@ class Patch:
         return self._data_array.dims
 
     @property
-    def attrs(self):
+    def attrs(self) -> FrozenDict:
         """Return the attributes of the trace."""
-        return self._data_array.attrs
+        return FrozenDict(self._data_array.attrs)
 
     @property
     def viz(self) -> TraceViz:

@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from fios.core import Patch
+from fios.constants import DEFAULT_PATCH_ATTRS
 
 
 class TestInit:
@@ -22,6 +23,11 @@ class TestInit:
         ]
         for attr in expected_filled_in:
             assert not pd.isnull(attrs[attr])
+
+    def test_had_default_attrs(self, patch):
+        """Test that all patches used in the test suite have default attrs."""
+        attr_set = set(patch.attrs)
+        assert attr_set.issubset(set(patch.attrs))
 
 
 class TestEquals:
@@ -106,6 +112,11 @@ class TestTranspose:
 
 class TestUpdateAttrs:
     """Tests for updating the attrs."""
+
+    def test_add_attr(self, random_patch):
+        """Tests for adding an attribute."""
+        new = random_patch.update_attrs(bob=1)
+        assert "bob" in new.attrs and new.attrs["bob"] == 1
 
     def test_update_start_time(self, random_patch):
         """ "Updating starttime should also update endtime"""

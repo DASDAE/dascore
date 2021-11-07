@@ -15,8 +15,8 @@ def select(self, **kwargs):
 
     Examples
     --------
-    >>> from fios.examples import get_example_trace
-    >>> tr = get_example_trace()
+    >>> from fios.examples import get_example_patch
+    >>> tr = get_example_patch()
     >>> new = tr.select(distance=(50,300))
     """
     if not len(kwargs):

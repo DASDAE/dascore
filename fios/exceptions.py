@@ -7,12 +7,16 @@ class UnknownFiberFormat(IOError):
     """Raised when the format of an elledged fiber file is not recognized."""
 
 
-class IncompatibleCoords(ValueError):
-    """Raised when coordinates are not compatible with the data."""
+class PatchCoordError(ValueError):
+    """Raised when something is wrong with a Patch's coordinates."""
 
 
-class MissingDimensions(ValueError):
-    """Raised when trying to filter an trace on non-existent dimensions."""
+class PatchDimError(ValueError):
+    """Raised when something is wrong with a Patch's dimension."""
+
+
+class PatchAttributeError(ValueError):
+    """Raised when something is wrong with a Patch's attributes."""
 
 
 class InvalidTimeRange(ValueError):

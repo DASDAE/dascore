@@ -1,7 +1,12 @@
 """Constants used throughout obsplus."""
-from typing import TypedDict, Union
+from typing import TypedDict, Union, TypeVar
 
 import numpy as np
+
+import fios
+
+PatchType = TypeVar("PatchType", bound="fios.Patch")
+
 
 # Bump this to force re-downloading of all data file
 DATA_VERSION = "0.0.0"
@@ -40,7 +45,7 @@ class PatchSummaryDict(TypedDict):
 
 
 # The expected attributes for the Trace2D
-DEFAULT_ATTRS = {
+DEFAULT_PATCH_ATTRS = {
     "dt": np.NaN,
     "dx": np.NaN,
     "data_type": "",
@@ -50,6 +55,8 @@ DEFAULT_ATTRS = {
     "distance_min": np.NaN,
     "distance_max": np.NaN,
     "instrument_id": "",
+    "deployment_id": "",
+    "history": lambda: [],
 }
 
 # Large and small np.datetime64[ns] (used when defaults are needed)

@@ -13,7 +13,7 @@ from fios.utils.misc import register_func
 test_data_path = Path(__file__).parent.absolute() / "test_data"
 
 STREAM_FIXTURES = []
-ARRAY_FIXTURES = []
+PATCH_FIXTURES = []
 
 
 @pytest.fixture(scope="session")
@@ -32,19 +32,25 @@ def terra15_das_stream(terra15_path) -> Stream:
 
 
 @pytest.fixture(scope="session")
-@register_func(ARRAY_FIXTURES)
+@register_func(PATCH_FIXTURES)
 def terra15_das_array(terra15_path) -> Patch:
     """Read the terra15 data, return contained DataArray"""
     return _read_terra15_v2(terra15_path)[0]
 
 
 @pytest.fixture(scope="session")
-@register_func(ARRAY_FIXTURES)
+@register_func(PATCH_FIXTURES)
 def random_patch() -> Patch:
     """Init a random array."""
-    from fios.examples import get_example_trace
+    from fios.examples import get_example_patch
 
-    return get_example_trace("random_das")
+    return get_example_patch("random_das")
+
+
+@pytest.fixture(scope="session", params=PATCH_FIXTURES)
+def patch(request):
+    """A meta-fixtures for collecting all patches used in testing."""
+    return request.getfixturevalue(request.param)
 
 
 @pytest.fixture(scope="class")
