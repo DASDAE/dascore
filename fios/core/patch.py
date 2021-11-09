@@ -1,40 +1,49 @@
 """
 A 2D trace object.
 """
-from typing import Mapping, Optional, Tuple, Union, TypeVar
+from typing import Mapping, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
 from xarray import DataArray
 
-from fios.constants import DEFAULT_PATCH_ATTRS, PatchType
+from fios.constants import DEFAULT_PATCH_ATTRS, PatchType, COMPARE_ATTRS
 from fios.proc.filter import pass_filter, stop_filter
 from fios.proc.resample import decimate, detrend
 from fios.utils.mapping import FrozenDict
 from fios.utils.time import to_datetime64, to_timedelta64
+from fios.utils.patch import get_relative_deltas
 from fios.viz.core import TraceViz
 
 from .coords import Coords
 
 
-def _get_attrs(attr=None, coords=None):
+def _get_attrs(attr=None, coords=None, kwargs=None):
     """Get the attribute dict, add required keys if not yet defined."""
     out = {} if attr is None else dict(attr)
-    # Update time and distance range if they are in coords
-    # this needs to change if we use timedelta64 here
-    if coords is not None and "time" in coords:
-        time = getattr(coords["time"], "values", coords["time"])
-        out["time_min"] = time.min()
-        out["time_max"] = time.max()
-    if coords is not None and "distance" in coords:
-        dist = getattr(coords["distance"], "values", coords["distance"])
-        out["distance_min"] = dist.min()
-        out["distance_max"] = dist.max()
     # add default values if they are not in out or attrs yet
     for missing in (set(DEFAULT_PATCH_ATTRS) - set(attr)) - set(out):
         value = DEFAULT_PATCH_ATTRS[missing]
         out[missing] = value if not callable(value) else value()
+    # Update time and distance range if they are in coords
+    if coords is not None and "time" in coords:
+        time = getattr(coords["time"], "values", coords["time"])
+        # set absolute values from time array
+        if np.issubdtype(time.dtype, np.datetime64) and len(time) > 0:
+            out["time_min"] = time.min()
+            out["time_max"] = time.max()
+        elif len(time) > 0:  # update coords to be in timedelta64 and update endtime
+            time = to_timedelta64(time)
+            if not pd.isnull(out["time_min"]):
+                out["time_max"] = time.max() + out["time_min"]
+            coords["time"] = to_timedelta64(time)
+
+    if coords is not None and "distance" in coords:
+        dist = getattr(coords["distance"], "values", coords["distance"])
+        out["distance_min"] = dist.min()
+        out["distance_max"] = dist.max()
+
     return FrozenDict(out)
 
 
@@ -47,25 +56,13 @@ def _condition_coords(coords):
 
     if coords is None or (time := coords.get("time")) is None:
         return coords
-    if not np.issubdtype(time.dtype, np.datetime64):
-        coords["time"] = pd.to_datetime(to_datetime64(time))
+    # Convert datetime arrays into time deltas assuming first element is start
+    if np.issubdtype(time.dtype, np.datetime64):
+        time = coords["time"] - coords["time"][0]
+    if not np.issubdtype(time.dtype, np.timedelta64):
+        time = pd.to_timedelta(to_timedelta64(time))
+    coords["time"] = time
     return coords
-
-
-def _time_to_absolute(time, attrs):
-    """Convert time to absolute time for slicing."""
-    if isinstance(time, slice):
-        raise NotImplementedError("Time dimension doesnt yet support slicing.")
-    starttime = attrs["time_min"]  # get reference time for trace
-    start = time[0]
-    if isinstance(start, (float, np.timedelta64, int)):
-        start = starttime + to_timedelta64(start)
-    stop = time[1]
-    if isinstance(stop, (float, np.timedelta64, int)):
-        stop = starttime + to_timedelta64(stop)
-    if start is not None and stop is not None:
-        assert start <= stop, "start time must be less than stop time"
-    return slice(start, stop)
 
 
 class Patch:
@@ -83,9 +80,9 @@ class Patch:
         if isinstance(data, DataArray):
             self._data_array = data
             return
+        attrs = _get_attrs(attrs, coords)
         coords = _condition_coords(coords)
         dims = dims if dims is not None else list(coords)
-        attrs = _get_attrs(attrs, coords)
         # get xarray coords from custom coords object
         if isinstance(coords, Coords):
             coords = coords._coords
@@ -118,8 +115,8 @@ class Patch:
         """
 
         if only_required_attrs:
-            attrs1 = {k: v for k, v in self.attrs.items() if k in DEFAULT_PATCH_ATTRS}
-            attrs2 = {k: v for k, v in other.attrs.items() if k in DEFAULT_PATCH_ATTRS}
+            attrs1 = {k: v for k, v in self.attrs.items() if k in COMPARE_ATTRS}
+            attrs2 = {k: v for k, v in other.attrs.items() if k in COMPARE_ATTRS}
         else:
             attrs1, attrs2 = dict(self.attrs), dict(other.attrs)
         if attrs1 != attrs2:
@@ -138,7 +135,7 @@ class Patch:
 
     def update_attrs(self: PatchType, **attrs) -> PatchType:
         """
-        Update attrs and return a new trace2D
+        Update attrs and return a new Patch.
 
         Parameters
         ----------
@@ -169,17 +166,24 @@ class Patch:
         >>> tr = get_example_patch()
         >>> new = tr.select(distance=(50,300))
         """
+        new_attrs = dict(self.attrs)
         # do special thing for time, else just use DataArray select
         if "time" in kwargs:
-            kwargs["time"] = _time_to_absolute(kwargs["time"], self.attrs)
-            pass
+            tmin = self._data_array.attrs["time_min"]
+            tmax = self._data_array.attrs["time_max"]
+            time = get_relative_deltas(kwargs["time"], tmin, tmax)
+            if time.start is not None:
+                new_attrs['time_min'] = tmin + time.start
+            if time.stop is not None:
+                new_attrs['time_max'] = tmin + time.stop
+            kwargs['time'] = time
         # convert tuples into slices
         kwargs = {
             i: slice(v[0], v[1]) if isinstance(v, tuple) else v
             for i, v in kwargs.items()
         }
         new = self._data_array.sel(**kwargs)
-        new.attrs = _get_attrs(new.attrs, new.coords)
+        new.attrs = _get_attrs(new_attrs, new.coords, kwargs)
         return self.__class__(new)
 
     def transpose(self: PatchType, *dims: str) -> PatchType:

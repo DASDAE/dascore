@@ -1,19 +1,90 @@
 """
 Utilities for working with the Patch class.
 """
-from typing import Any, Dict, Tuple, Union, Sequence
+import functools
+import inspect
+from typing import (
+    Any,
+    Dict,
+    Tuple,
+    Sequence,
+    Literal,
+    Union,
+    Mapping,
+    Callable,
+    Optional,
+)
+
+import numpy as np
+import pandas as pd
 
 from fios.constants import PatchType
+from fios.utils.time import to_datetime64, to_timedelta64
 from fios.exceptions import PatchDimError, PatchAttributeError
+
 
 attr_type = Union[Dict[str, Any], str, Sequence[str], None]
 
 
-import functools
-import inspect
-from typing import Union, Mapping, Callable, Optional
+def get_relative_deltas(
+    time: tuple,
+    start: Optional[np.datetime64] = None,
+    stop: Optional[np.datetime64] = None,
+) -> slice:
+    """
+    Convert input to time deltas relative to a known start and stop.
 
-from typing_extensions import Literal
+    Parameters
+    ----------
+    time
+        An array of datetime strings, datetime64 objects, int, or floats
+    start
+    stop
+    """
+
+    def _get_ref_time(val, start, stop):
+        """Convert time to time delta based on ref"""
+        if val is None:
+            return None
+        if isinstance(val, (float, int, np.int64, np.float64, np.timedelta64)):
+            if np.abs(val) == val:  # positive number
+                return to_timedelta64(val)
+            else:
+                end_time = stop + to_timedelta64(val)
+                return end_time - start
+        else:
+            if pd.isnull(start):
+                msg = f"Cannot use absolute times when start time is not defined."
+                raise ValueError(msg)
+            dt = to_datetime64(val)
+            return to_timedelta64(dt - start)
+
+    if isinstance(time, slice):
+        raise NotImplementedError("Time dimension doesnt yet support slicing.")
+
+    t1 = _get_ref_time(time[0], start, stop)
+    t2 = _get_ref_time(time[1], start, stop)
+
+    # make sure select window is not degenerate
+    if t1 is not None and t2 is not None:
+        assert start <= stop, "start time must be less than stop time"
+    return slice(t1, t2)
+
+
+def _shallow_copy(patch: PatchType) -> PatchType:
+    """
+    Shallow copy patch so data array, attrs, and history can be changed.
+
+    Note
+    ----
+    This is an internal function because Patch should not be immutable with
+    the public APIs.
+    """
+    dar = patch._data_array.copy(deep=False)  # dont copy data and such
+    attrs = dict(dar.attrs)
+    attrs["history"] = list(attrs.get("history", []))
+    dar.attrs = attrs
+    return patch.__class__(dar)
 
 
 def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
@@ -21,16 +92,17 @@ def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
     Get a str rep of the function and input args.
     """
     callargs = inspect.getcallargs(func, patch, *args, **kwargs)
-    callargs.pop("patch")
+    callargs.pop("patch", None)
+    callargs.pop("self", None)
     kwargs_ = callargs.pop("kwargs", {})
     arguments = []
     arguments += [f"{k}={repr(v)}" for k, v in callargs.items() if v is not None]
     arguments += [f"{k}={repr(v)}" for k, v in kwargs_.items() if v is not None]
     arguments.sort()
-    out = f"{func.__name__}::"
+    out = f"{func.__name__}("
     if arguments:
-        out += f"{':'.join(arguments)}"
-    return out
+        out += f"{','.join(arguments)}"
+    return out + ")"
 
 
 def _get_history_str(patch: PatchType, func, *args, _history="full", **kwargs) -> str:
@@ -156,6 +228,7 @@ def patch_function(
             out: PatchType = func(patch, *args, **kwargs)
             # attach history string. Consider something a bit less hacky.
             if hist_str:
+                out = _shallow_copy(out)
                 out._data_array.attrs["history"].append(hist_str)
             return out
 

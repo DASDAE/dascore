@@ -50,13 +50,26 @@ DEFAULT_PATCH_ATTRS = {
     "dx": np.NaN,
     "data_type": "",
     "category": "",
-    "time_min": np.NaN,
-    "time_max": np.NaN,
+    "time_min": np.datetime64("NaT"),
+    "time_max": np.datetime64("NaT"),
     "distance_min": np.NaN,
     "distance_max": np.NaN,
     "instrument_id": "",
     "deployment_id": "",
     "history": lambda: [],
+}
+
+# A set of attributes which are used in Patch equality checks.
+COMPARE_ATTRS = {
+    "dt",
+    "dx",
+    "data_type",
+    "category" "time_min",
+    "time_max",
+    "distance_min",
+    "distance_max",
+    "instrument_id",
+    "deployment_id",
 }
 
 # Large and small np.datetime64[ns] (used when defaults are needed)

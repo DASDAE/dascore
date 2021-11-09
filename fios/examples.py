@@ -19,7 +19,8 @@ def _random_patch():
     """Generate a random DAS Patch"""
     rand = np.random.RandomState(13)
     array = rand.random(size=(300, 2_000))
-    attrs = dict(dx=1, dt=1 / 250.0, category="DAS", id="test_data1")
+    t1 = np.datetime64("2017-09-18")
+    attrs = dict(dx=1, dt=1 / 250.0, category="DAS", id="test_data1", time_min=t1)
     coords = dict(
         distance=np.arange(array.shape[0]) * attrs["dx"],
         time=np.arange(array.shape[1]) * attrs["dt"],

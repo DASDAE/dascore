@@ -6,8 +6,8 @@ import numpy as np
 from fios.utils.time import to_datetime64, to_timedelta64
 
 
-class TestFloatToDateTime:
-    """Tests for converting floats to datetime."""
+class TestToDateTime64:
+    """Tests for converting things to datetime64."""
 
     date_strs = ["1970-01-01", "2020-01-03T05:22:11.123123345", "2017-09-18T01"]
 
@@ -47,6 +47,12 @@ class TestFloatToDateTime:
         for el, datestr in zip(out, self.date_strs):
             assert datestr in str(el)
 
+    def test_datetime64(self):
+        """A datetitme64 should remain thus and equal."""
+        dt = to_datetime64("2020-01-01")
+        out = to_datetime64(dt)
+        assert dt == out
+
 
 class TestToTimeDelta:
     """Tests for creating timedeltas"""
@@ -63,8 +69,15 @@ class TestToTimeDelta:
         out = to_timedelta64(ar)
         assert np.all(out == expected)
 
-    def test_timedelta64(self):
+    def test_timedelta64_array(self):
         """Ensure passing timedelta array works."""
         expected = np.array([1 * 10 ** 9, 1, 1 * 10 ** 6], "timedelta64")
         out = to_timedelta64(expected)
         assert np.equal(out, expected).all()
+
+    def test_timedetla64(self):
+        """Test for passing a time delta."""
+        td = to_timedelta64(123)
+        out = np.timedelta64(123, "s")
+        out2 = to_timedelta64(out)
+        assert out == td == out2

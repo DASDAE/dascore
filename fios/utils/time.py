@@ -2,7 +2,7 @@
 Utility for working with time.
 """
 from functools import singledispatch
-from typing import Union
+from typing import Union, Optional
 
 import numpy as np
 
@@ -56,6 +56,12 @@ def array_to_datetime64(array: np.array) -> np.datetime64:
     return out
 
 
+@to_datetime64.register(np.datetime64)
+def _pass_datetime(datetime):
+    """simply return the datetime"""
+    return datetime
+
+
 @singledispatch
 def to_timedelta64(obj: Union[float, np.array, str]):
     """Convert"""
@@ -89,3 +95,9 @@ def array_to_timedelta64(array: np.array) -> np.datetime64:
     ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
     out = seconds + ns
     return out
+
+
+@to_timedelta64.register(np.timedelta64)
+def pass_time_delta(time_delta):
+    """simply return the time delta."""
+    return to_timedelta64(time_delta / np.timedelta64(1, "s"))
