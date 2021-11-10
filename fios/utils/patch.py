@@ -2,6 +2,7 @@
 Utilities for working with the Patch class.
 """
 import collections
+import copy
 import functools
 import inspect
 from typing import (
@@ -259,9 +260,9 @@ class _AttrsCoordsMixer:
         self._set_default_attrs()
         self._condition_coords()
         # infer any attr values from coordinates
-        self.sync_attrs_to_coords(self._missing_attr_keys)
+        self._update_attrs_from_coords(self._missing_attr_keys)
 
-    def update_coords(self, **kwargs):
+    def update_attrs(self, **kwargs):
         """
         Update a coordinate.
 
@@ -322,12 +323,11 @@ class _AttrsCoordsMixer:
     def copied_coords(self):
         """Make a copy of the coords before mutating."""
         coords = self.coords
-        if isinstance(coords, Coords):
+        if isinstance(coords, Coords):  # unpack coordinates
             coords = coords._coords
-        elif isinstance(coords, dict):
-            coords = dict(coords)
-        elif hasattr(coords, 'copy'):
-            coords = self.coords.copy()
+        # TODO I don't like having this deep copy but shallow still caused
+        # mutations so I will leave it for now.
+        coords = copy.deepcopy(coords)
         self.coords = coords
         return coords
 
@@ -347,16 +347,27 @@ class _AttrsCoordsMixer:
             out[key] = value if not callable(value) else value()
         self.attrs = out
 
-    def sync_attrs_to_coords(self, fill_keys=None):
+    # --- Coordinate bits
+
+    def _update_attrs_from_coords(self, fill_keys=None):
         """Fill in missing attributes that can be inferred."""
-        fill_keys = fill_keys if fill_keys is not None else set(self.attrs)
+        fill_keys = fill_keys if fill_keys else set(self.attrs)
         # iterate each dimension, fill in missing values with data from coords
         for dim in self.dims:
             array = self.coords[dim]
+            # make sure its not an xarray thing
+            array = getattr(array, 'values', array)
             if f"{dim}_min" in fill_keys:
                 self.copied_attrs[f"{dim}_min"] = np.min(array)
             if f"{dim}_max" in fill_keys:
                 self.copied_attrs[f"{dim}_max"] = np.max(array)
+
+    def update_coords(self, **kwargs):
+        """Update the coordinates based on kwarg inputs."""
+        for key, value in kwargs.items():
+            self.copied_coords[key] = value
+        self._condition_coords()
+        self._update_attrs_from_coords()
 
     def _condition_coords(self):
         """

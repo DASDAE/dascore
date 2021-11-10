@@ -96,11 +96,11 @@ class TestSelect:
         Ensure distance can be used to filter trace.
         """
         dmin, dmax = 100, 200
-        tr = random_patch.select(distance=(dmin, dmax))
-        assert tr.data.shape < random_patch.data.shape
+        pa = random_patch.select(distance=(dmin, dmax))
+        assert pa.data.shape < random_patch.data.shape
         # the attrs should have updated as well
-        assert tr.attrs["distance_min"] >= 100
-        assert tr.attrs["distance_max"] <= 200
+        assert pa.attrs["distance_min"] >= 100
+        assert pa.attrs["distance_max"] <= 200
 
     def test_select_by_absolute_time(self, random_patch):
         """
@@ -126,9 +126,18 @@ class TestSelect:
     def test_select_by_positive_float(self, random_patch):
         """Floats in time dim should usable to reference start of the trace."""
         shape = random_patch.data.shape
+        t1 = random_patch.attrs['time_min']
         pa1 = random_patch.select(time=(1, None))
-        expected_start = np.datetime64("1970-01-01T00:00:01")
+        expected_start = t1 + to_timedelta64(1)
         assert pa1.attrs["time_min"] <= expected_start
+        assert pa1.data.shape < shape
+
+    def test_select_by_negative_float(self, random_patch):
+        """Ensure negative floats reference end of trace."""
+        shape = random_patch.data.shape
+        pa1 = random_patch.select(time=(None, -2))
+        expected_end = random_patch.attrs['time_max'] - to_timedelta64(2)
+        assert pa1.attrs["time_max"] >= expected_end
         assert pa1.data.shape < shape
 
 
@@ -161,4 +170,8 @@ class TestUpdateAttrs:
         assert random_patch.attrs == old_attrs
 
     def test_update_starttime(self, random_patch):
-        """Ensure updating the attrs doesn't modify original."""
+        """Ensure coords are updated with attrs."""
+        t1 = np.datetime64('2000-01-01')
+        pa = random_patch.update_attrs(time_min=t1)
+        assert pa.attrs['time_min'] == t1
+        assert pa.coords['time'].min() == t1

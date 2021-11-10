@@ -12,7 +12,7 @@ from fios.constants import DEFAULT_PATCH_ATTRS, PatchType, COMPARE_ATTRS
 from fios.proc.filter import pass_filter, stop_filter
 from fios.proc.resample import decimate, detrend
 from fios.utils.mapping import FrozenDict
-from fios.utils.time import to_datetime64, to_timedelta64
+from fios.utils.time import to_datetime64, to_timedelta64, get_select_time
 from fios.utils.patch import _AttrsCoordsMixer, Coords
 from fios.viz.core import TraceViz
 
@@ -95,9 +95,11 @@ class Patch:
         **attrs
             attrs to add/update.
         """
-        new_attrs = dict(self.attrs)
-        new_attrs.update(**attrs)
-        return self.__class__(self.data, coords=self.coords, attrs=new_attrs)
+        dar = self._data_array
+        mixer = _AttrsCoordsMixer(dar.attrs, dar.coords, dar.dims)
+        mixer.update_attrs(**attrs)
+        attrs, coords = mixer()
+        return self.__class__(self.data, coords=coords, attrs=attrs)
 
     def select(self: PatchType, **kwargs) -> PatchType:
         """
@@ -124,20 +126,19 @@ class Patch:
         if "time" in kwargs:
             tmin = self._data_array.attrs["time_min"]
             tmax = self._data_array.attrs["time_max"]
-            time = get_relative_deltas(kwargs["time"], tmin, tmax)
-            if time.start is not None:
-                new_attrs['time_min'] = tmin + time.start
-            if time.stop is not None:
-                new_attrs['time_max'] = tmin + time.stop
-            kwargs['time'] = time
+            times = tuple(
+                get_select_time(x, tmin, tmax) if x is not None else x
+                for x in kwargs['time']
+            )
+            kwargs['time'] = times
         # convert tuples into slices
         kwargs = {
             i: slice(v[0], v[1]) if isinstance(v, tuple) else v
             for i, v in kwargs.items()
         }
         new = self._data_array.sel(**kwargs)
-        new.attrs = _get_attrs(new_attrs, new.coords, kwargs)
-        return self.__class__(new)
+        attrs, coords = _AttrsCoordsMixer(new.attrs, new.coords, new.dims)()
+        return self.__class__(new.data, attrs=attrs, coords=coords, dims=self.dims)
 
     def transpose(self: PatchType, *dims: str) -> PatchType:
         """

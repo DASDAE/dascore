@@ -66,7 +66,6 @@ class TestScanTerra15:
     def test_scanning(self, terra15_das_array, terra15_path):
         """Tests for getting summary info from terra15 data."""
         out = _scan_terra15_v2(terra15_path)
-        breakpoint()
         assert isinstance(out, list)
         assert len(out) == 1
         assert isinstance(out[0], dict)

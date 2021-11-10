@@ -24,7 +24,6 @@ class TestMerge:
         """A stream with two patches adjacent in time."""
         pa1 = random_patch
         dt = to_timedelta64(pa1.attrs["dt"])
-        breakpoint()
 
         # pa2 = pa1.update_attrs(starttime=)
 

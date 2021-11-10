@@ -1,10 +1,16 @@
 """
 Utility for working with time.
 """
+
+from datetime import datetime
 from functools import singledispatch
 from typing import Union, Optional
 
+
 import numpy as np
+import pandas as pd
+
+from fios.exceptions import TimeError
 
 
 @singledispatch
@@ -65,6 +71,8 @@ def _pass_datetime(datetime):
 @singledispatch
 def to_timedelta64(obj: Union[float, np.array, str]):
     """Convert"""
+    if pd.isnull(obj):
+        return np.datetime64('NaT')
     msg = f"type {type(obj)} is not yet supported"
     raise NotImplementedError(msg)
 
@@ -101,3 +109,43 @@ def array_to_timedelta64(array: np.array) -> np.datetime64:
 def pass_time_delta(time_delta):
     """simply return the time delta."""
     return to_timedelta64(time_delta / np.timedelta64(1, "s"))
+
+
+def get_select_time(
+        time: Union[float, int, np.datetime64, np.timedelta64, str, datetime],
+        time_min: Optional[np.datetime64] = None,
+        time_max: Optional[np.datetime64] = None,
+) -> np.datetime64:
+    """
+    Applies logic for select time.
+
+    Parameters
+    ----------
+    time
+        The input time argument. Can either be:
+            * An absolute time expressed as a datetime64 or datettime object.
+            * A relative time expressed as a float, int, or time delta.
+              Positive relative times reference time_min, negative reference
+              time_max.
+
+    time_min
+        The reference start time (used for relative times).
+    time_max
+        The reference end tiem (used for relative times).
+
+    """
+    if pd.isnull(time):
+        return np.datetime64('NaT')
+    if isinstance(time, (str, datetime, np.datetime64)):
+        return to_datetime64(time)
+    else:
+        dt = to_timedelta64(time)
+        relative_to = time_min if dt > 0 else time_max
+        if pd.isnull(relative_to):
+            msg = 'Cannot use relative times when reference times are null'
+            raise TimeError(msg)
+        return relative_to + dt
+
+
+
+
