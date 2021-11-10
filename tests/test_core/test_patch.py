@@ -7,7 +7,6 @@ import pytest
 
 from fios.core import Patch
 from fios.utils.time import to_timedelta64
-from fios.constants import DEFAULT_PATCH_ATTRS
 
 
 class TestInit:
@@ -35,31 +34,26 @@ class TestInit:
         """
         patch = random_dt_coord
         assert patch.attrs["time_min"] == self.time1
-        tds = patch.coords["time"]
-        assert np.issubdtype(tds.dtype, np.timedelta64)
 
     def test_end_time_inferred_from_dt64_coords(self, random_dt_coord):
         """
         Ensure the time_min and time_max attrs can be inferred from coord time.
         """
         patch = random_dt_coord
-        dt_max = patch.coords["time"].max()
-        t1 = patch.attrs["time_min"]
-        assert patch.attrs["time_max"] == t1 + dt_max
-        tds = patch.coords["time"]
-        assert np.issubdtype(tds.dtype, np.timedelta64)
+        time = patch.coords['time'].max()
+        assert patch.attrs["time_max"] == time
 
     def test_init_from_array(self, random_patch):
         """Ensure a trace can be created from raw components; array, coords, attrs"""
         assert isinstance(random_patch, Patch)
 
     def test_max_time_populated(self, random_patch):
-        """Ensure the endtime is populated when not explicitly given."""
+        """Ensure the time_max is populated when not explicitly given."""
         end_time = random_patch.attrs["time_max"]
         assert not pd.isnull(end_time)
 
     def test_min_max_populated(self, random_patch):
-        """The min/max values of the distance attrss should have been populated."""
+        """The min/max values of the distance attrs should have been populated."""
         attrs = random_patch.attrs
         expected_filled_in = [x for x in attrs if x.startswith("distance")]
         for attr in expected_filled_in:
@@ -124,7 +118,6 @@ class TestSelect:
         assert pa2.attrs["time_min"] >= t1
         assert pa2.data.shape < shape
 
-        breakpoint()
         tr3 = random_patch.select(time=(t1, t2))
         assert tr3.attrs["time_min"] >= t1
         assert tr3.attrs["time_max"] <= t2

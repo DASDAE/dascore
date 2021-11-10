@@ -6,7 +6,7 @@ import numpy as np
 
 import fios
 from fios.utils.time import to_timedelta64
-from fios.utils.patch import get_relative_deltas
+from fios.utils.patch import _AttrsCoordsMixer
 from fios.exceptions import PatchDimError, PatchAttributeError
 
 
@@ -98,48 +98,46 @@ class TestHistory:
         assert first_history == last_history
 
 
-class TestGetRelativeDeltas:
-    """Tests for getting times relative to start/stop."""
+class TestAttrsCoordsMixer:
+    """Tests for handling complex interaction between attrs and coords."""
 
-    t1 = np.datetime64("2020-01-01")
-    t2 = np.datetime64("2021-01-01")
+    @pytest.fixture()
+    def attrs(self, random_patch):
+        """return an attrs from a patch"""
+        return random_patch.attrs
 
-    def test_positive_numbers(self):
-        """Tsets for using raw numbers to indicate relative times."""
-        out = get_relative_deltas((1, 2), self.t1, self.t2)
-        tds = to_timedelta64([1, 2])
-        expected = slice(tds[0], tds[1])
-        assert str(expected) == str(out)
+    @pytest.fixture()
+    def coords(self, random_patch):
+        """return an attrs from a patch"""
+        return random_patch.coords
 
-    def test_null(self):
-        """Tsets for using raw numbers to indicate relative times."""
-        out = get_relative_deltas((1, None), self.t1, self.t2)
-        expected = slice(to_timedelta64(1), None)
-        assert str(expected) == str(out)
+    @pytest.fixture()
+    def mixer(self, attrs, coords, random_patch):
+        """Return a mixer instance."""
+        return _AttrsCoordsMixer(attrs, coords, random_patch.dims)
 
-    def test_negative_numbers(self):
-        """Negative number should reference end of window."""
-        # single endeded test
-        out = get_relative_deltas((-1, None), self.t1, self.t2)
-        expected_dt = (self.t2 - to_timedelta64(1)) - self.t1
-        assert str(out) == str(slice(expected_dt, None, None))
-        # double ended test
-        out = get_relative_deltas((-2, -1), self.t1, self.t2)
-        expected_1 = (self.t2 - to_timedelta64(2)) - self.t1
-        expected_2 = (self.t2 - to_timedelta64(1)) - self.t1
-        assert str(out) == str(slice(expected_1, expected_2, None))
+    def test_starttime_updates_endtime(self, mixer, attrs):
+        """Ensure the end time gets updated when setting time_min """
+        t1 = attrs['time_min']
+        t_new = t1 + np.timedelta64(10_000_000, 's')
+        mixer.update_coords(time_min=t_new)
+        attr, coords = mixer()
+        assert attr['time_min'] == t_new
+        # make sure time min was updated in coords
+        time = coords['time']
+        assert np.min(time) == t_new
 
-    def test_datetime64(self):
-        """Ensure datetime64 works."""
-        dt1 = np.datetime64("2020-01-01T00:00:02")
-        dt2 = np.datetime64("2020-01-01T00:00:04")
-        out = get_relative_deltas((dt1, dt2), self.t1, self.t2)
-        expected_1 = to_timedelta64(2)
-        expected_2 = to_timedelta64(4)
-        assert str(slice(expected_1, expected_2)) == str(out)
-
-    def test_no_time_raises_on_time_index(self):
-        """Ensure when no time is given a ValueError is raised."""
-        d1 = np.datetime64("2020-01-01")
-        with pytest.raises(ValueError):
-            get_relative_deltas((None, d1), None, None)
+    def test_endtime_updates_starttime(self, mixer, attrs):
+        """Ensure the start time gets updated whwn setting time_max."""
+        tdist1 = attrs['time_max'] - attrs['time_min']
+        t2 = attrs['time_max']
+        t_new = t2 - np.timedelta64(10_000_000, 's')
+        mixer.update_coords(time_max=t_new)
+        attr, coords = mixer()
+        assert attr['time_max'] == t_new
+        # make sure time min was updated in coords
+        time = coords['time']
+        assert np.max(time) == t_new
+        # ensure distance between start/end is the same
+        tdist2 = attr['time_max'] - attr['time_min']
+        assert tdist2 == tdist1

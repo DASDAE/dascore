@@ -1,6 +1,7 @@
 """
 Utilities for working with the Patch class.
 """
+import collections
 import functools
 import inspect
 from typing import (
@@ -18,57 +19,48 @@ from typing import (
 import numpy as np
 import pandas as pd
 
-from fios.constants import PatchType
+from fios.constants import PatchType, DEFAULT_PATCH_ATTRS
 from fios.utils.time import to_datetime64, to_timedelta64
 from fios.exceptions import PatchDimError, PatchAttributeError
-
+from fios.utils.misc import append_func
+from fios.utils.mapping import FrozenDict
 
 attr_type = Union[Dict[str, Any], str, Sequence[str], None]
 
 
-def get_relative_deltas(
-    time: tuple,
-    start: Optional[np.datetime64] = None,
-    stop: Optional[np.datetime64] = None,
-) -> slice:
-    """
-    Convert input to time deltas relative to a known start and stop.
+class Coords:
+    """A wrapper around xarray coords for a bit more intuitive access."""
 
-    Parameters
-    ----------
-    time
-        An array of datetime strings, datetime64 objects, int, or floats
-    start
-    stop
-    """
+    def __init__(self, coords):
+        self._coords = coords
 
-    def _get_ref_time(val, start, stop):
-        """Convert time to time delta based on ref"""
-        if val is None:
-            return None
-        if isinstance(val, (float, int, np.int64, np.float64, np.timedelta64)):
-            if np.abs(val) == val:  # positive number
-                return to_timedelta64(val)
-            else:
-                end_time = stop + to_timedelta64(val)
-                return end_time - start
-        else:
-            if pd.isnull(start):
-                msg = f"Cannot use absolute times when start time is not defined."
-                raise ValueError(msg)
-            dt = to_datetime64(val)
-            return to_timedelta64(dt - start)
+    def __getitem__(self, item):
+        """Return the raw numpy array."""
+        out = self._coords[item]
+        return getattr(out, "values", out)
 
-    if isinstance(time, slice):
-        raise NotImplementedError("Time dimension doesnt yet support slicing.")
+    def __str__(self):
+        return str(self._coords)
 
-    t1 = _get_ref_time(time[0], start, stop)
-    t2 = _get_ref_time(time[1], start, stop)
+    __repr__ = __str__
 
-    # make sure select window is not degenerate
-    if t1 is not None and t2 is not None:
-        assert start <= stop, "start time must be less than stop time"
-    return slice(t1, t2)
+    def get(self, item):
+        """Return item or None if not in coord. Same as dict.get"""
+        return self._coords.get(item)
+
+    def __iter__(self):
+        return self._coords.__iter__()
+
+    @property
+    def timedelta64(self):
+        """Return time deltas of time dimension."""
+        time = self._coords['time']
+        return time - time[0]
+
+    @property
+    def datetime64(self):
+        """Return datetime64 of time dimension."""
+        return self._coords['time']
 
 
 def _shallow_copy(patch: PatchType) -> PatchType:
@@ -132,7 +124,7 @@ def _get_history_str(patch: PatchType, func, *args, _history="full", **kwargs) -
 
 
 def check_patch_dims(
-    patch: PatchType, required_dims: Optional[Tuple[str, ...]]
+        patch: PatchType, required_dims: Optional[Tuple[str, ...]]
 ) -> PatchType:
     """
     Check if a patch object has required dimensions, else raise PatchDimError.
@@ -184,9 +176,9 @@ def check_patch_attrs(patch: PatchType, required_attrs: attr_type) -> PatchType:
 
 
 def patch_function(
-    required_dims: Optional[Union[Tuple[str, ...], Callable]] = None,
-    required_attrs: attr_type = None,
-    history: Literal["full", "method_name", None] = "full",
+        required_dims: Optional[Union[Tuple[str, ...], Callable]] = None,
+        required_attrs: attr_type = None,
+        history: Literal["full", "method_name", None] = "full",
 ):
     """
     Decorator to mark a function as a patch method.
@@ -238,3 +230,146 @@ def patch_function(
         return patch_function()(required_dims)
 
     return _wrapper
+
+
+def copy_attrs(attrs) -> dict:
+    """Make a copy of the attributes dict so it can be mutated."""
+    out = dict(attrs)
+    if 'history' in out:
+        out['history'] = list(out['history'])
+    return out
+
+
+class _AttrsCoordsMixer:
+    """Class for handling complex interactions between attrs and coords."""
+    # a dict of {key: List[func]} for special handling of set attrs.
+    set_attr_funcs = collections.defaultdict(list)
+    # a dict of {key: func} for special handling of missing attributes.
+    missing_attr_funcs = {}
+    _missing_attr_keys = frozenset()
+
+    def __init__(self, attrs, coords, dims):
+        """Init with attrs and coords"""
+        self.attrs = attrs
+        self.coords = coords
+        self.dims = dims
+        self._original_attrs = attrs
+        self._original_coords = coords
+        # fill missing values with default or implicit values
+        self._set_default_attrs()
+        self._condition_coords()
+        # infer any attr values from coordinates
+        self.sync_attrs_to_coords(self._missing_attr_keys)
+
+    def update_coords(self, **kwargs):
+        """
+        Update a coordinate.
+
+        Parameters
+        ----------
+        **kwargs
+            The coordinates to update.
+        """
+        for key, value in kwargs.items():
+            attr = self.copied_attrs
+            attr[key] = value
+            # apply special processing for this key
+            if key in self.set_attr_funcs:
+                for func in self.set_attr_funcs[key]:
+                    func(self)
+
+    @append_func(set_attr_funcs['time_min'])
+    def _update_time_max_from_time_min(self):
+        """Update end time based on new start time."""
+        td = self._original_attrs['time_max'] - self._original_attrs['time_min']
+        if not pd.isnull(td):
+            attrs = self.copied_attrs
+            attrs['time_max'] = self.attrs['time_min'] + td
+
+    @append_func(set_attr_funcs['time_min'])
+    def _update_coords_time_min(self):
+        """Update coordinate time for new starttime"""
+        time = self.coords.get('time', None)
+        time_min = self.attrs['time_min']
+        if time is not None and np.min(time) != time_min:
+            td = time - time[0]
+            self.copied_coords['time'] = time_min + td
+
+    @append_func(set_attr_funcs['time_max'])
+    def _update_time_min_from_time_max(self):
+        """Update start time based on new end time."""
+        td = self._original_attrs['time_max'] - self._original_attrs['time_min']
+        if not pd.isnull(td):
+            attrs = self.copied_attrs
+            attrs['time_min'] = self.attrs['time_max'] - td
+
+    @append_func(set_attr_funcs['time_max'])
+    def _update_coords_time_max(self):
+        """Update coordinate time for new starttime"""
+        time = self.coords.get('time', None)
+        time_max = self.attrs['time_max']
+        if time is not None and np.max(time) != time_max:
+            td = time - time[-1]
+            self.copied_coords['time'] = time_max + td
+
+    @functools.cached_property
+    def copied_attrs(self):
+        """Make a copy of the attrs before mutating."""
+        self.attrs = copy_attrs(self.attrs)
+        return self.attrs
+
+    @functools.cached_property
+    def copied_coords(self):
+        """Make a copy of the coords before mutating."""
+        coords = self.coords
+        if isinstance(coords, Coords):
+            coords = coords._coords
+        elif isinstance(coords, dict):
+            coords = dict(coords)
+        elif hasattr(coords, 'copy'):
+            coords = self.coords.copy()
+        self.coords = coords
+        return coords
+
+    def __call__(self, *args, **kwargs):
+        return self.attrs, self.coords
+
+    def _set_default_attrs(self):
+        """Get the attribute dict, add required keys if not yet defined."""
+        # add default values if they are not in out or attrs yet
+        missing = (set(DEFAULT_PATCH_ATTRS) - set(self.attrs))
+        if not missing:
+            return
+        self._missing_attr_keys = missing
+        out = copy_attrs(self.attrs)
+        for key in missing:
+            value = DEFAULT_PATCH_ATTRS[key]
+            out[key] = value if not callable(value) else value()
+        self.attrs = out
+
+    def sync_attrs_to_coords(self, fill_keys=None):
+        """Fill in missing attributes that can be inferred."""
+        fill_keys = fill_keys if fill_keys is not None else set(self.attrs)
+        # iterate each dimension, fill in missing values with data from coords
+        for dim in self.dims:
+            array = self.coords[dim]
+            if f"{dim}_min" in fill_keys:
+                self.copied_attrs[f"{dim}_min"] = np.min(array)
+            if f"{dim}_max" in fill_keys:
+                self.copied_attrs[f"{dim}_max"] = np.max(array)
+
+    def _condition_coords(self):
+        """
+        Condition the coordinates before using them.
+
+        This is mainly to enforce common time conventions
+        """
+        coords = self.coords
+        if coords is None or (time := coords.get("time")) is None:
+            return
+        start_time = self.attrs['time_min'] or np.datetime64('1970-01-01')
+        # Convert non-datetime into time deltas
+        if not np.issubdtype(time.dtype, np.datetime64):
+            td = to_timedelta64(time)
+            time = start_time + td
+        self.copied_coords["time"] = time

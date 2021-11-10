@@ -31,6 +31,14 @@ def register_func(list_or_dict: Union[list, dict], key: Optional[str] = None):
     return wrapper
 
 
+def append_func(some_list):
+    """Decorator to append a function to a list."""
+    def _func(func):
+        some_list.append(func)
+        return func
+    return _func
+
+
 def pass_through_method(attr_name: str):
     """Decorator for binding method to an attribute rather than self."""
 

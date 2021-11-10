@@ -13,56 +13,9 @@ from fios.proc.filter import pass_filter, stop_filter
 from fios.proc.resample import decimate, detrend
 from fios.utils.mapping import FrozenDict
 from fios.utils.time import to_datetime64, to_timedelta64
-from fios.utils.patch import get_relative_deltas
+from fios.utils.patch import _AttrsCoordsMixer, Coords
 from fios.viz.core import TraceViz
 
-from .coords import Coords
-
-
-def _get_attrs(attr=None, coords=None, kwargs=None):
-    """Get the attribute dict, add required keys if not yet defined."""
-    out = {} if attr is None else dict(attr)
-    # add default values if they are not in out or attrs yet
-    for missing in (set(DEFAULT_PATCH_ATTRS) - set(attr)) - set(out):
-        value = DEFAULT_PATCH_ATTRS[missing]
-        out[missing] = value if not callable(value) else value()
-    # Update time and distance range if they are in coords
-    if coords is not None and "time" in coords:
-        time = getattr(coords["time"], "values", coords["time"])
-        # set absolute values from time array
-        if np.issubdtype(time.dtype, np.datetime64) and len(time) > 0:
-            out["time_min"] = time.min()
-            out["time_max"] = time.max()
-        elif len(time) > 0:  # update coords to be in timedelta64 and update endtime
-            time = to_timedelta64(time)
-            if not pd.isnull(out["time_min"]):
-                out["time_max"] = time.max() + out["time_min"]
-            coords["time"] = to_timedelta64(time)
-
-    if coords is not None and "distance" in coords:
-        dist = getattr(coords["distance"], "values", coords["distance"])
-        out["distance_min"] = dist.min()
-        out["distance_max"] = dist.max()
-
-    return FrozenDict(out)
-
-
-def _condition_coords(coords):
-    """
-    Condition the coordinates before using them.
-
-    This is mainly to enforce common time conventions
-    """
-
-    if coords is None or (time := coords.get("time")) is None:
-        return coords
-    # Convert datetime arrays into time deltas assuming first element is start
-    if np.issubdtype(time.dtype, np.datetime64):
-        time = coords["time"] - coords["time"][0]
-    if not np.issubdtype(time.dtype, np.timedelta64):
-        time = pd.to_timedelta(to_timedelta64(time))
-    coords["time"] = time
-    return coords
 
 
 class Patch:
@@ -80,9 +33,9 @@ class Patch:
         if isinstance(data, DataArray):
             self._data_array = data
             return
-        attrs = _get_attrs(attrs, coords)
-        coords = _condition_coords(coords)
         dims = dims if dims is not None else list(coords)
+        mixer = _AttrsCoordsMixer(attrs, coords, dims)
+        attrs, coords = mixer()
         # get xarray coords from custom coords object
         if isinstance(coords, Coords):
             coords = coords._coords
