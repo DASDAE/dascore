@@ -1,13 +1,13 @@
 """
 Test patch utilities.
 """
-import pytest
 import numpy as np
+import pytest
 
 import fios
-from fios.utils.time import to_timedelta64
+from fios.exceptions import PatchAttributeError, PatchDimError
 from fios.utils.patch import _AttrsCoordsMixer
-from fios.exceptions import PatchDimError, PatchAttributeError
+from fios.utils.time import to_timedelta64
 
 
 @fios.patch_function(required_dims=("time", "distance"))
@@ -118,52 +118,52 @@ class TestAttrsCoordsMixer:
 
     def test_original_attrs_unchanged(self, mixer, attrs):
         """ensure the original attrs dont change."""
-        t1 = attrs['time_min']
-        td = np.timedelta64(1, 's')
+        t1 = attrs["time_min"]
+        td = np.timedelta64(1, "s")
         mixer.update_attrs(time_min=t1 + td)
         new_attr, _ = mixer()
         assert new_attr is not attrs
-        assert attrs['time_min'] + td == new_attr['time_min']
+        assert attrs["time_min"] + td == new_attr["time_min"]
 
     def test_original_coords_unchanged(self, mixer, coords, attrs):
         """ensure the original coords dont change."""
-        t1 = attrs['time_min']
-        td = np.timedelta64(10, 's')
+        t1 = attrs["time_min"]
+        td = np.timedelta64(10, "s")
         mixer.update_attrs(time_min=t1 + td)
         _, new_coords = mixer()
         assert new_coords is not coords
-        np.all(np.equal(coords['time'] + td, new_coords['time']))
+        np.all(np.equal(coords["time"] + td, new_coords["time"]))
 
     def test_coords_unchanged(self, coords, attrs, random_patch):
         """ensure the original coords dont change."""
         # this was added to track down some mutation issues
-        assert coords['time'].min() == attrs['time_min']
+        assert coords["time"].min() == attrs["time_min"]
 
     def test_starttime_updates_endtime(self, mixer, attrs, coords):
-        """Ensure the end time gets updated when setting time_min """
-        t1 = attrs['time_min']
-        t_new = t1 + np.timedelta64(10_000_000, 's')
+        """Ensure the end time gets updated when setting time_min"""
+        t1 = attrs["time_min"]
+        t_new = t1 + np.timedelta64(10_000_000, "s")
         mixer.update_attrs(time_min=t_new)
         attr, coords = mixer()
-        assert attr['time_min'] == t_new
+        assert attr["time_min"] == t_new
         # make sure time min was updated in coords
-        time = coords['time']
+        time = coords["time"]
         assert np.min(time) == t_new
 
     def test_endtime_updates_starttime(self, mixer, attrs):
         """Ensure the start time gets updated whwn setting time_max."""
 
-        tdist1 = attrs['time_max'] - attrs['time_min']
-        t2 = attrs['time_max']
-        t_new = t2 - np.timedelta64(10_000_000, 's')
+        tdist1 = attrs["time_max"] - attrs["time_min"]
+        t2 = attrs["time_max"]
+        t_new = t2 - np.timedelta64(10_000_000, "s")
         mixer.update_attrs(time_max=t_new)
         attr, coords = mixer()
-        assert attr['time_max'] == t_new
+        assert attr["time_max"] == t_new
         # make sure time min was updated in coords
-        time = coords['time']
+        time = coords["time"]
         assert np.max(time) == t_new
         # ensure distance between start/end is the same
-        tdist2 = attr['time_max'] - attr['time_min']
+        tdist2 = attr["time_max"] - attr["time_min"]
         assert tdist2 == tdist1
 
     def test_coords_updates_times_and_distance(self, mixer, coords, attrs):
@@ -171,23 +171,21 @@ class TestAttrsCoordsMixer:
         Ensure updating coords also updates attributes in attrs.
         """
 
-        td = np.timedelta64(10, 's')
+        td = np.timedelta64(10, "s")
         dx = 10
         new_coords_kwarg = {
-            'time': coords['time'] + td,
-            'distance': coords['distance'] + dx,
+            "time": coords["time"] + td,
+            "distance": coords["distance"] + dx,
         }
 
         mixer.update_coords(**new_coords_kwarg)
         new_attrs, new_coords = mixer()
         # first ensure coords actually updated
-        assert np.all(new_coords['time'] == new_coords_kwarg['time'])
-        assert np.all(new_coords['distance'] == new_coords_kwarg['distance'])
+        assert np.all(new_coords["time"] == new_coords_kwarg["time"])
+        assert np.all(new_coords["distance"] == new_coords_kwarg["distance"])
         # check attrs time are updated
-        assert attrs['time_min'] + td == new_attrs['time_min']
-        assert attrs['time_max'] + td == new_attrs['time_max']
+        assert attrs["time_min"] + td == new_attrs["time_min"]
+        assert attrs["time_max"] + td == new_attrs["time_max"]
         # check distance
-        assert attrs['distance_min'] + dx == new_attrs['distance_min']
-        assert attrs['distance_max'] + dx == new_attrs['distance_max']
-
-
+        assert attrs["distance_min"] + dx == new_attrs["distance_min"]
+        assert attrs["distance_max"] + dx == new_attrs["distance_max"]

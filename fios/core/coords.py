@@ -1,5 +1,3 @@
 """
 Module managing named coordinates.
 """
-
-

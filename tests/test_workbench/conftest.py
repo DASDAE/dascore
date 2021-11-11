@@ -7,6 +7,6 @@ import fios
 
 
 @pytest.fixture(scope="session")
-def das_work_bench(terra15_das_array):
+def das_work_bench(terra15_das_patch):
     """Return an instance of WorkBench w/ terra15 DAS."""
-    return fios.workbench.WorkBench(terra15_das_array)
+    return fios.workbench.WorkBench(terra15_das_patch)

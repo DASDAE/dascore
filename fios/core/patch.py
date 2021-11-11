@@ -1,27 +1,28 @@
 """
 A 2D trace object.
 """
+from functools import cached_property
 from typing import Mapping, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd
 from numpy.typing import ArrayLike
 from xarray import DataArray
 
-from fios.constants import DEFAULT_PATCH_ATTRS, PatchType, COMPARE_ATTRS
-from fios.proc.filter import pass_filter, stop_filter
-from fios.proc.resample import decimate, detrend
+from fios.constants import COMPARE_ATTRS, PatchType
+from fios.proc import ProcessingPatchNamespace
+from fios.transform import TransformPatchNameSpace
 from fios.utils.mapping import FrozenDict
-from fios.utils.time import to_datetime64, to_timedelta64, get_select_time
-from fios.utils.patch import _AttrsCoordsMixer, Coords
-from fios.viz.core import TraceViz
-
+from fios.utils.patch import Coords, _AttrsCoordsMixer
+from fios.utils.time import get_select_time
+from fios.viz import VizPatchNameSpace
 
 
 class Patch:
     """
     A Class for storing and accessing 2D fiber data.
     """
+
+    # --- Dunder methods
 
     def __init__(
         self,
@@ -54,6 +55,13 @@ class Patch:
 
         """
         return self.equals(other)
+
+    def __str__(self):
+        xarray_str = str(self._data_array)
+        class_name = self.__class__.__name__
+        return xarray_str.replace("xarray.DataArray", f"fios.{class_name}")
+
+    __repr__ = __str__
 
     def equals(self, other: PatchType, only_required_attrs=True) -> bool:
         """
@@ -128,9 +136,9 @@ class Patch:
             tmax = self._data_array.attrs["time_max"]
             times = tuple(
                 get_select_time(x, tmin, tmax) if x is not None else x
-                for x in kwargs['time']
+                for x in kwargs["time"]
             )
-            kwargs['time'] = times
+            kwargs["time"] = times
         # convert tuples into slices
         kwargs = {
             i: slice(v[0], v[1]) if isinstance(v, tuple) else v
@@ -195,21 +203,19 @@ class Patch:
         """Return the attributes of the trace."""
         return FrozenDict(self._data_array.attrs)
 
-    @property
-    def viz(self) -> TraceViz:
-        """Return a TraceViz instance bound to this Trace"""
-        return TraceViz(self)
+    # --- Method Namespaces
 
-    def __str__(self):
-        xarray_str = str(self._data_array)
-        class_name = self.__class__.__name__
-        return xarray_str.replace("xarray.DataArray", f"fios.{class_name}")
+    @cached_property
+    def viz(self) -> VizPatchNameSpace:
+        """The visualization namespace."""
+        return VizPatchNameSpace(self)
 
-    # add patch processing methods.
+    @cached_property
+    def tran(self) -> TransformPatchNameSpace:
+        """The transformation namespace."""
+        return TransformPatchNameSpace(self)
 
-    decimate = decimate
-    pass_filter = pass_filter
-    stop_filter = stop_filter
-    detrend = detrend
-
-    __repr__ = __str__
+    @cached_property
+    def proc(self) -> ProcessingPatchNamespace:
+        """The transformation namespace."""
+        return ProcessingPatchNamespace(self)

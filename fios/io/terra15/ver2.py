@@ -8,7 +8,7 @@ import numpy as np
 import tables as tb
 
 from fios.core import Patch, Stream
-from fios.utils.time import to_datetime64
+from fios.utils.time import to_datetime64, to_timedelta64
 
 
 def _is_version_two(root):
@@ -107,6 +107,9 @@ def _read_terra15_v2(
             data = data[:max_time_ind, :]
         channel_number = np.arange(data.shape[1])
         attrs = _get_node_attrs(data_node)
+        attrs["data_type"] = "velocity"
+        attrs["data_category"] = "DAS"
+        attrs["dt"] = to_timedelta64(attrs["dT"])
         distance = attrs["dx"] * channel_number
         coords = {"time": time, "distance": distance}
         patch = Patch(data=data, coords=coords, attrs=attrs)

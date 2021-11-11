@@ -24,12 +24,12 @@ class TestGetFormat:
 class TestRead:
     """Basic tests for reading files."""
 
-    def test_read_terra15(self, terra15_path, terra15_das_array):
+    def test_read_terra15(self, terra15_path, terra15_das_patch):
         """Ensure terra15 can be read."""
         out = fios.read(terra15_path)
         assert isinstance(out, fios.Stream)
         assert len(out) == 1
-        assert out[0].equals(terra15_das_array)
+        assert out[0].equals(terra15_das_patch)
 
 
 class TestScan:
@@ -37,6 +37,6 @@ class TestScan:
 
     def test_scan_terra15(self, terra15_path):
         """Ensure terra15 format can be automatically determined."""
-        out = fios.scan(terra15_path)
+        out = fios.scan_file(terra15_path)
         assert isinstance(out, list)
         assert len(out)

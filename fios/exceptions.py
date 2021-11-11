@@ -1,6 +1,8 @@
 """
 Custom fios exceptions.
 """
+
+
 class FiosError(Exception):
     """Base class for FIOS errors."""
 
@@ -10,7 +12,7 @@ class UnknownFiberFormat(IOError, FiosError):
 
 
 class PatchError(FiosError):
-    """Parent class for more specific Patch Errors. """
+    """Parent class for more specific Patch Errors."""
 
 
 class PatchCoordError(ValueError, PatchError):
@@ -31,5 +33,3 @@ class TimeError(ValueError, FiosError):
 
 class InvalidTimeRange(TimeError):
     """Raised when an invalid time range is encountered."""
-
-

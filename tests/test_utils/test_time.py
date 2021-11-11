@@ -5,7 +5,7 @@ import functools
 
 import numpy as np
 
-from fios.utils.time import to_datetime64, to_timedelta64, get_select_time
+from fios.utils.time import get_select_time, to_datetime64, to_timedelta64
 
 
 class TestToDateTime64:
@@ -85,22 +85,23 @@ class TestToTimeDelta:
         assert out == td == out2
 
 
-class TestGetSelectTime():
+class TestGetSelectTime:
     """Tests for getting select time(s)."""
-    t1 = np.datetime64('2020-01-03')
-    t2 = np.datetime64('2020-01-04')
+
+    t1 = np.datetime64("2020-01-03")
+    t2 = np.datetime64("2020-01-04")
     func = functools.partial(get_select_time, time_min=t1, time_max=t2)
 
     def test_datetime64(self):
         """Test for returning a datetime 64."""
         assert get_select_time(self.t1) == self.t1
         assert get_select_time(self.t2) == self.t2
-        time = self.t1 + np.timedelta64(100, 's')
+        time = self.t1 + np.timedelta64(100, "s")
         assert get_select_time(time) == time
 
     def test_string(self):
         """Tests for passing time as a string"""
-        tstr = '2020-01-03T01'
+        tstr = "2020-01-03T01"
         out = self.func(tstr)
         assert out == np.datetime64(tstr)
 
@@ -123,8 +124,3 @@ class TestGetSelectTime():
         out = self.func(-1.0)
         expected = self.t2 - to_timedelta64(1)
         assert out == expected
-
-
-
-
-

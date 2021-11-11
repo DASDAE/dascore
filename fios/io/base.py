@@ -2,15 +2,15 @@
 Base functionality for reading, writting, determining file formats, and scanning
 Das Data.
 """
-import itertools
+import os.path
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Sequence, Union
 
 import numpy as np
 
 import fios
-from fios import Stream
-from fios.constants import DEFAULT_PATCH_ATTRS, PatchSummaryDict
+from fios.constants import (DEFAULT_PATCH_ATTRS, PatchSummaryDict, PatchType,
+                            StreamType)
 from fios.exceptions import UnknownFiberFormat
 from fios.utils.plugin import PluginManager
 
@@ -30,7 +30,7 @@ def read(
     start_distance: Optional[float] = None,
     end_distance: Optional[float] = None,
     **kwargs,
-) -> Stream:
+) -> StreamType:
     """
     Read a fiber file.
     """
@@ -47,23 +47,32 @@ def read(
     )
 
 
-def _scan_patch(patch) -> PatchSummaryDict:
-    """Scan the patch, return summary information."""
-    attrs = patch.attrs
-    out = {i: attrs.get(i, DEFAULT_PATCH_ATTRS[i]) for i in DEFAULT_PATCH_ATTRS}
+def scan_patches(
+    patch: Union[PatchType, Sequence[PatchType]]
+) -> List[PatchSummaryDict]:
+    """
+    Scan a sequence of patches and return a list of summary dicts.
+
+    Parameters
+    ----------
+    patch
+        A single patch or a sequence of patches.
+    """
+    if isinstance(patch, fios.Patch):
+        patch = [patch]  # make sure we have an iterable
+    out = []
+    for pa in patch:
+        attrs = pa.attrs
+        summary = {i: attrs.get(i, DEFAULT_PATCH_ATTRS[i]) for i in DEFAULT_PATCH_ATTRS}
+        out.append(summary)
     return out
 
 
-def scan(
+def scan_file(
     path_or_obj: Union[Path, str, "fios.Patch", "fios.Stream"],
     format=None,
 ) -> List[PatchSummaryDict]:
     """Scan a file, return the summary dictionary."""
-    # handle summarize loaded objects
-    if isinstance(path_or_obj, (fios.Stream)):
-        return list(itertools.chain(*[scan(pa) for pa in path_or_obj]))
-    elif isinstance(path_or_obj, fios.Patch):
-        return [_scan_patch(path_or_obj)]
     # dispatch to file format handlers
     if format is None:
         format = get_format(path_or_obj)
@@ -84,6 +93,8 @@ def get_format(path: Union[str, Path]) -> str:
     ------
     fios.exceptions.UnknownFiberFormat - Could not determine the fiber format.
     """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path} does not exist.")
     for name, func in IS_FORMAT_PLUGINS.items():
         if func(path):
             return name

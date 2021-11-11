@@ -14,19 +14,19 @@ from fios.utils.downloader import fetch
 class TestReadTerra15:
     """Tests for reading the terra15 format."""
 
-    def test_type(self, terra15_das_array):
+    def test_type(self, terra15_das_patch):
         """Ensure the expected type is returned."""
-        assert isinstance(terra15_das_array, fios.Patch)
+        assert isinstance(terra15_das_patch, fios.Patch)
 
-    def test_attributes(self, terra15_das_array):
+    def test_attributes(self, terra15_das_patch):
         """Ensure the expected attrs exist in array."""
-        attrs = terra15_das_array.attrs
+        attrs = terra15_das_patch.attrs
         expected_attrs = {"dT", "dx", "nx", "nT", "recorder_id"}
         assert set(expected_attrs).issubset(set(attrs))
 
-    def test_has_required_attrs(self, terra15_das_array):
+    def test_has_required_attrs(self, terra15_das_patch):
         """ "Ensure the required das attrs are found"""
-        assert set(REQUIRED_DAS_ATTRS).issubset(set(terra15_das_array.attrs))
+        assert set(REQUIRED_DAS_ATTRS).issubset(set(terra15_das_patch.attrs))
 
 
 class TestIsTerra15:
@@ -63,7 +63,7 @@ class TestIsTerra15:
 class TestScanTerra15:
     """Tests for scanning terra15 file."""
 
-    def test_scanning(self, terra15_das_array, terra15_path):
+    def test_scanning(self, terra15_das_patch, terra15_path):
         """Tests for getting summary info from terra15 data."""
         out = _scan_terra15_v2(terra15_path)
         assert isinstance(out, list)

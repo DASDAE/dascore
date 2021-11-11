@@ -1,11 +1,12 @@
 """Constants used throughout obsplus."""
-from typing import TypedDict, Union, TypeVar
+from typing import TypedDict, TypeVar, Union
 
 import numpy as np
 
 import fios
 
 PatchType = TypeVar("PatchType", bound="fios.Patch")
+StreamType = TypeVar("StreamType", bound="fios.Stream")
 
 
 # Bump this to force re-downloading of all data file
@@ -54,6 +55,8 @@ DEFAULT_PATCH_ATTRS = {
     "time_max": np.datetime64("NaT"),
     "distance_min": np.NaN,
     "distance_max": np.NaN,
+    "network": "",
+    "station": "",
     "instrument_id": "",
     "deployment_id": "",
     "history": lambda: [],

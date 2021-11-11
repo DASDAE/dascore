@@ -1,10 +1,15 @@
 """
 Tests for Trace2D object.
 """
+import gc
+import sys
+import weakref
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import fios
 from fios.core import Patch
 from fios.utils.time import to_timedelta64
 
@@ -40,7 +45,7 @@ class TestInit:
         Ensure the time_min and time_max attrs can be inferred from coord time.
         """
         patch = random_dt_coord
-        time = patch.coords['time'].max()
+        time = patch.coords["time"].max()
         assert patch.attrs["time_max"] == time
 
     def test_init_from_array(self, random_patch):
@@ -58,6 +63,20 @@ class TestInit:
         expected_filled_in = [x for x in attrs if x.startswith("distance")]
         for attr in expected_filled_in:
             assert not pd.isnull(attrs[attr])
+
+    def test_dt_is_datetime64(self, random_patch):
+        """Ensure dt gets changed into timedelta64."""
+        dt = random_patch.attrs["dt"]
+        assert isinstance(dt, np.timedelta64)
+        # test dt from update_attrs
+        new = random_patch.update_attrs(dt=10)
+        assert new.attrs["dt"] == to_timedelta64(10)
+        # test dt in new Patch
+        attrs = dict(random_patch.attrs)
+        attrs["dt"] = to_timedelta64(10)
+        coords = random_patch.coords
+        new = fios.Patch(data=random_patch.data, attrs=attrs, coords=coords)
+        assert new.attrs["dt"] == to_timedelta64(10)
 
     def test_had_default_attrs(self, patch):
         """Test that all patches used in the test suite have default attrs."""
@@ -107,7 +126,7 @@ class TestSelect:
         Ensure the data can be sub-selected using absolute time.
         """
         shape = random_patch.data.shape
-        t1 = random_patch.attrs['time_min'] + np.timedelta64(1, 's')
+        t1 = random_patch.attrs["time_min"] + np.timedelta64(1, "s")
         t2 = t1 + np.timedelta64(3, "s")
 
         pa1 = random_patch.select(time=(None, t1))
@@ -126,7 +145,7 @@ class TestSelect:
     def test_select_by_positive_float(self, random_patch):
         """Floats in time dim should usable to reference start of the trace."""
         shape = random_patch.data.shape
-        t1 = random_patch.attrs['time_min']
+        t1 = random_patch.attrs["time_min"]
         pa1 = random_patch.select(time=(1, None))
         expected_start = t1 + to_timedelta64(1)
         assert pa1.attrs["time_min"] <= expected_start
@@ -136,7 +155,7 @@ class TestSelect:
         """Ensure negative floats reference end of trace."""
         shape = random_patch.data.shape
         pa1 = random_patch.select(time=(None, -2))
-        expected_end = random_patch.attrs['time_max'] - to_timedelta64(2)
+        expected_end = random_patch.attrs["time_max"] - to_timedelta64(2)
         assert pa1.attrs["time_max"] >= expected_end
         assert pa1.data.shape < shape
 
@@ -171,7 +190,7 @@ class TestUpdateAttrs:
 
     def test_update_starttime(self, random_patch):
         """Ensure coords are updated with attrs."""
-        t1 = np.datetime64('2000-01-01')
+        t1 = np.datetime64("2000-01-01")
         pa = random_patch.update_attrs(time_min=t1)
-        assert pa.attrs['time_min'] == t1
-        assert pa.coords['time'].min() == t1
+        assert pa.attrs["time_min"] == t1
+        assert pa.coords["time"].min() == t1

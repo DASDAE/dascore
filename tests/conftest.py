@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from fios.core import Patch, Stream
-from fios.io import _read_terra15_v2
+from fios.io.terra15.ver2 import _read_terra15_v2
 from fios.utils.downloader import fetch
 from fios.utils.misc import register_func
 
@@ -33,7 +33,7 @@ def terra15_das_stream(terra15_path) -> Stream:
 
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
-def terra15_das_array(terra15_path) -> Patch:
+def terra15_das_patch(terra15_path) -> Patch:
     """Read the terra15 data, return contained DataArray"""
     return _read_terra15_v2(terra15_path)[0]
 
@@ -45,6 +45,15 @@ def random_patch() -> Patch:
     from fios.examples import get_example_patch
 
     return get_example_patch("random_das")
+
+
+@pytest.fixture(scope="session")
+@register_func(STREAM_FIXTURES)
+def random_stream() -> Stream:
+    """Init a random array."""
+    from fios.examples import get_example_stream
+
+    return get_example_stream("random_das")
 
 
 @pytest.fixture(scope="session", params=PATCH_FIXTURES)
