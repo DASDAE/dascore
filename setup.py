@@ -1,9 +1,11 @@
 """
 Setup script for fios
 """
-"""
-Setup script for mopy.
-"""
+from setuptools import setup
+
+if __name__ == "__main__":
+    setup()
+
 import glob
 import sys
 from os.path import exists, isdir, join

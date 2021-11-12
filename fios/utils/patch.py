@@ -360,6 +360,9 @@ class _AttrsCoordsMixer:
                 self.copied_attrs[f"{dim}_min"] = np.min(array)
             if f"{dim}_max" in fill_keys:
                 self.copied_attrs[f"{dim}_max"] = np.max(array)
+        # add dims column
+        if not len(self.attrs['dims']):
+            self.copied_attrs['dims'] = ','.join(self.dims)
 
     def update_coords(self, **kwargs):
         """Update the coordinates based on kwarg inputs."""

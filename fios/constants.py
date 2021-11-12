@@ -33,7 +33,6 @@ MAXINT64 = np.iinfo(np.int64).max
 
 class PatchSummaryDict(TypedDict):
     """The expected minimum attributes for a Patch attrs."""
-
     dt: np.timedelta64
     dx: float
     data_type: str
@@ -43,6 +42,7 @@ class PatchSummaryDict(TypedDict):
     distance_min: float
     distance_max: float
     instrument_id: str
+    dims: str
 
 
 # The expected attributes for the Trace2D
@@ -58,8 +58,8 @@ DEFAULT_PATCH_ATTRS = {
     "network": "",
     "station": "",
     "instrument_id": "",
-    "deployment_id": "",
     "history": lambda: [],
+    'dims': '',
 }
 
 # A set of attributes which are used in Patch equality checks.
@@ -72,7 +72,6 @@ COMPARE_ATTRS = {
     "distance_min",
     "distance_max",
     "instrument_id",
-    "deployment_id",
 }
 
 # Large and small np.datetime64[ns] (used when defaults are needed)

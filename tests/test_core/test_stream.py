@@ -8,9 +8,21 @@ from fios.utils.time import to_timedelta64
 
 
 @pytest.fixture()
-def adjacent_stream(random_patch):
-    """Create a stream with several patches close together in time."""
-    t1 = random_patch.attrs["time_min"]
+def adjacent_stream_no_overlap(random_patch):
+    """
+    Create a stream with several patches within one time sample but not
+    overlapping.
+    """
+    pa1 = random_patch
+    t2 = random_patch.attrs['time_max']
+    dt = random_patch.attrs['dt']
+
+    pa2 = random_patch.update_attrs(time_min=t2 + dt)
+    t3 = pa1.attrs['time_max']
+
+    pa3 = pa2.update_attrs(time_min=t3 + dt)
+
+    return fios.Stream([pa2, pa1, pa3])
 
 
 class TestStreamIterableness:
@@ -36,13 +48,11 @@ class TestStreamIterableness:
 class TestMerge:
     """Tests for merging patches together."""
 
-    @pytest.fixture()
-    def adjacent_stream(self, random_patch):
-        """A stream with two patches adjacent in time."""
-        pa1 = random_patch
-        dt = to_timedelta64(pa1.attrs["dt"])
-
-        # pa2 = pa1.update_attrs(starttime=)
-
-    def test_adjacent_merge(self, adjacent_stream):
+    def test_adjacent_merge_no_overlap(self, adjacent_stream_no_overlap):
         """Test that the adjacent patches get merged."""
+        st = adjacent_stream_no_overlap
+        st_len = len(st)
+        merged_st = st.merge()
+        merged_len = len(merged_st)
+        assert merged_len < st_len
+        assert merged_len == 1
