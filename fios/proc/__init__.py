@@ -5,7 +5,8 @@ from fios.utils.misc import MethodNameSpace
 
 from .decimate import decimate
 from .detrend import detrend
-from .filter import pass_filter
+
+# from .filter import pass_filter
 
 
 class ProcessingPatchNamespace(MethodNameSpace):
@@ -13,4 +14,4 @@ class ProcessingPatchNamespace(MethodNameSpace):
 
     decimate = decimate
     detrend = detrend
-    pass_filter = pass_filter
+    # pass_filter = pass_filter

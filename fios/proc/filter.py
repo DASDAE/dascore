@@ -73,4 +73,3 @@ Module for filtering patches.
 #
 #
 # def stop_filter(patch: "fios.Patch") -> "fios.Patch":
-#     """"""

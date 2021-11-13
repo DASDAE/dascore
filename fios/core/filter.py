@@ -3,17 +3,17 @@ Implements time and space filters.
 """
 from typing import Literal, Optional
 
-from fios.core import DataArray
+from fios.constants import PatchType
 from fios.utils import register_method
 
 
 @register_method()
 def bandpass(
-    data_array: DataArray,
+    data_array: PatchType,
     dim: Literal["time", "distance"] = "time",
     start: Optional[float] = None,
     stop: Optional[float] = None,
-) -> DataArray:
+) -> PatchType:
     """
     Apply a filter along the time dimension.
 
@@ -25,11 +25,11 @@ def bandpass(
 
 @register_method()
 def bandstop(
-    data_array: DataArray,
+    data_array: PatchType,
     dim: Literal["time", "distance"] = "time",
     start: Optional[float] = None,
     stop: Optional[float] = None,
-) -> DataArray:
+) -> PatchType:
     """
     Apply a filter along the time dimension.
 
