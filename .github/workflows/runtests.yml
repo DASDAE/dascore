@@ -39,10 +39,13 @@ jobs:
 #          activate-environment: test
 #          environment-file: .github/test_conda_env.yml
 #          condarc-file: .github/test_condarc.yml
+
+#      default mocos python is 2.7 (https://github.com/actions/setup-python/issues/132)
       - if: runner.os == 'macOS'
         name: Fix Python PATH on macOS
         run: |
           tee -a ~/.profile <<<'export PATH="$pythonLocation/bin:$PATH"'
+          source ~/.bashrc
 
       - name: install fios
         shell: bash -l {0}
