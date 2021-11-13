@@ -47,7 +47,7 @@ jobs:
       - name: install fios
         shell: bash -l {0}
         run: |
-          python -m pip -e install .[test]
+          python -m pip install -e .[test]
 
 #      - name: fix pywin
 #        if: matrix.os == 'windows-latest'

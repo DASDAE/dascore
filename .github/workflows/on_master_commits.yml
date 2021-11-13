@@ -24,7 +24,7 @@ jobs:
       - name: install fios
         shell: bash -l {0}
         run: |
-          pip install -e .[test]
+          python -m pip install -e .[test]
 
       - name: run test suite
         shell: bash -l {0}
