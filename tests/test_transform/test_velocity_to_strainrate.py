@@ -12,6 +12,7 @@ class TestStrainRateConversion:
 
     @pytest.fixture()
     def patch_strain_rate_default(self, terra15_das_patch):
+        """Return the default terra15 converted to strain rate."""
         return terra15_das_patch.tran.velocity_to_strain_rate()
 
     def test_attrs(self, patch_strain_rate_default):

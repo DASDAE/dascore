@@ -3,8 +3,6 @@ from typing import TypedDict, TypeVar, Union
 
 import numpy as np
 
-import fios
-
 PatchType = TypeVar("PatchType", bound="fios.Patch")
 StreamType = TypeVar("StreamType", bound="fios.Stream")
 
@@ -22,7 +20,7 @@ SUMMARY_KEYS = ("format", "min_time", "max_time", "min_distance", "max_distance"
 REQUIRED_FIBER_DIMS = ("time", "distance")
 
 # expected DAS attributes
-REQUIRED_DAS_ATTRS = ("dt", "dx")
+REQUIRED_DAS_ATTRS = ("d_time", "d_distance")
 
 # The smallest value an int64 can rep. (used as NaT by datetime64)
 MININT64 = np.iinfo(np.int64).min
@@ -33,8 +31,9 @@ MAXINT64 = np.iinfo(np.int64).max
 
 class PatchSummaryDict(TypedDict):
     """The expected minimum attributes for a Patch attrs."""
-    dt: np.timedelta64
-    dx: float
+
+    d_time: np.timedelta64
+    d_distance: float
     data_type: str
     category: str
     time_min: np.datetime64
@@ -47,8 +46,8 @@ class PatchSummaryDict(TypedDict):
 
 # The expected attributes for the Trace2D
 DEFAULT_PATCH_ATTRS = {
-    "dt": np.NaN,
-    "dx": np.NaN,
+    "d_time": np.NaN,
+    "d_distance": np.NaN,
     "data_type": "",
     "category": "",
     "time_min": np.datetime64("NaT"),
@@ -59,13 +58,13 @@ DEFAULT_PATCH_ATTRS = {
     "station": "",
     "instrument_id": "",
     "history": lambda: [],
-    'dims': '',
+    "dims": "",
 }
 
 # A set of attributes which are used in Patch equality checks.
 COMPARE_ATTRS = {
-    "dt",
-    "dx",
+    "d_time",
+    "d_distance",
     "data_type",
     "category" "time_min",
     "time_max",
@@ -77,3 +76,6 @@ COMPARE_ATTRS = {
 # Large and small np.datetime64[ns] (used when defaults are needed)
 SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
+
+# Required shared attributes to merge patches together
+PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "category")

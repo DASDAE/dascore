@@ -15,24 +15,44 @@ import obspy
 import pandas as pd
 import tables
 from obsplus.bank.core import _Bank
-from obsplus.constants import (EMPTYTD64, WAVEFORM_DTYPES,
-                               WAVEFORM_DTYPES_INPUT, WAVEFORM_NAME_STRUCTURE,
-                               WAVEFORM_STRUCTURE, availability_type,
-                               bank_subpaths_type, bar_parameter_description,
-                               bulk_waveform_arg_type,
-                               get_waveforms_parameters, paths_description,
-                               utc_able_type, utc_time_type)
-from obsplus.utils.bank import (_IndexCache, _remove_base_path,
-                                _summarize_trace, _summarize_wave_file,
-                                _try_read_stream, summarizing_functions)
+from obsplus.constants import (
+    EMPTYTD64,
+    WAVEFORM_DTYPES,
+    WAVEFORM_DTYPES_INPUT,
+    WAVEFORM_NAME_STRUCTURE,
+    WAVEFORM_STRUCTURE,
+    availability_type,
+    bank_subpaths_type,
+    bar_parameter_description,
+    bulk_waveform_arg_type,
+    get_waveforms_parameters,
+    paths_description,
+    utc_able_type,
+    utc_time_type,
+)
+from obsplus.utils.bank import (
+    _IndexCache,
+    _remove_base_path,
+    _summarize_trace,
+    _summarize_wave_file,
+    _try_read_stream,
+    summarizing_functions,
+)
 from obsplus.utils.docs import compose_docstring
 from obsplus.utils.misc import replace_null_nlsc_codes
-from obsplus.utils.pd import (cast_dtypes, convert_bytestrings, filter_index,
-                              get_seed_id_series, order_columns)
-from obsplus.utils.time import (make_time_chunks, to_datetime64,
-                                to_timedelta64, to_utc)
-from obsplus.utils.waveforms import (_filter_index_to_bulk,
-                                     get_waveform_bulk_df, merge_traces)
+from obsplus.utils.pd import (
+    cast_dtypes,
+    convert_bytestrings,
+    filter_index,
+    get_seed_id_series,
+    order_columns,
+)
+from obsplus.utils.time import make_time_chunks, to_datetime64, to_timedelta64, to_utc
+from obsplus.utils.waveforms import (
+    _filter_index_to_bulk,
+    get_waveform_bulk_df,
+    merge_traces,
+)
 from obspy import Stream, UTCDateTime
 
 # No idea why but this needs to be here to avoid problems with pandas

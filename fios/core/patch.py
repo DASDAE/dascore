@@ -129,7 +129,6 @@ class Patch:
         >>> tr = get_example_patch()
         >>> new = tr.select(distance=(50,300))
         """
-        new_attrs = dict(self.attrs)
         # do special thing for time, else just use DataArray select
         if "time" in kwargs:
             tmin = self._data_array.attrs["time_min"]

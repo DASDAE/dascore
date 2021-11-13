@@ -1,9 +1,6 @@
 """
 Tests for Trace2D object.
 """
-import gc
-import sys
-import weakref
 
 import numpy as np
 import pandas as pd
@@ -24,8 +21,8 @@ class TestInit:
         """Create a random trace with a datetime coord"""
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 200))
-        attrs = dict(dx=1, dt=1 / 250.0, category="DAS", id="test_data1")
-        time_deltas = to_timedelta64(np.arange(array.shape[1]) * attrs["dt"])
+        attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
+        time_deltas = to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
         coords = dict(
             distance=np.arange(array.shape[0]) * attrs["dx"],
             time=self.time1 + time_deltas,
@@ -66,17 +63,17 @@ class TestInit:
 
     def test_dt_is_datetime64(self, random_patch):
         """Ensure dt gets changed into timedelta64."""
-        dt = random_patch.attrs["dt"]
-        assert isinstance(dt, np.timedelta64)
-        # test dt from update_attrs
-        new = random_patch.update_attrs(dt=10)
-        assert new.attrs["dt"] == to_timedelta64(10)
-        # test dt in new Patch
+        d_time = random_patch.attrs["d_time"]
+        assert isinstance(d_time, np.timedelta64)
+        # test d_time from update_attrs
+        new = random_patch.update_attrs(d_time=10)
+        assert new.attrs["d_time"] == to_timedelta64(10)
+        # test d_time in new Patch
         attrs = dict(random_patch.attrs)
-        attrs["dt"] = to_timedelta64(10)
+        attrs["d_time"] = to_timedelta64(10)
         coords = random_patch.coords
         new = fios.Patch(data=random_patch.data, attrs=attrs, coords=coords)
-        assert new.attrs["dt"] == to_timedelta64(10)
+        assert new.attrs["d_time"] == to_timedelta64(10)
 
     def test_had_default_attrs(self, patch):
         """Test that all patches used in the test suite have default attrs."""

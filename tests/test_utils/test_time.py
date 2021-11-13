@@ -42,7 +42,7 @@ class TestToDateTime64:
         for el, datestr in zip(out, self.date_strs):
             assert datestr in str(el)
 
-    def test_datetime64(self):
+    def test_datetime64_array(self):
         """Tests for inputting datetime64."""
         array = to_datetime64(self.date_strs)
         out = to_datetime64(array)
@@ -51,9 +51,9 @@ class TestToDateTime64:
 
     def test_datetime64(self):
         """A datetitme64 should remain thus and equal."""
-        dt = to_datetime64("2020-01-01")
-        out = to_datetime64(dt)
-        assert dt == out
+        d_time = to_datetime64("2020-01-01")
+        out = to_datetime64(d_time)
+        assert d_time == out
 
 
 class TestToTimeDelta:

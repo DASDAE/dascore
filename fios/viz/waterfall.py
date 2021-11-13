@@ -6,7 +6,6 @@ from typing import Optional, Sequence, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib import colors
 from matplotlib import dates as mdates
 
 import fios

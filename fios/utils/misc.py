@@ -51,6 +51,8 @@ class _NameSpaceMeta(type):
 
 
 class MethodNameSpace(metaclass=_NameSpaceMeta):
+    """A namespace for class methods."""
+
     def __init__(self, obj):
         self._obj = obj
 

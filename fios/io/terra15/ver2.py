@@ -48,6 +48,12 @@ def _get_node_attrs(node):
         and x not in hdf5_attrs  # exclude hdf attrs not specific to terra15
     ]
     out = {x: getattr(attrs, x) for x in public_attrs}
+    # add extra columns
+    out["data_type"] = "velocity"
+    out["data_category"] = "DAS"
+    out["d_time"] = to_timedelta64(out["dT"])
+    out["d_distance"] = out["dx"]
+
     return out
 
 
@@ -72,7 +78,7 @@ def _scan_terra15_v2(path: Union[str, Path]) -> List[dict]:
             time_min=to_datetime64(t1),
             time_max=to_datetime64(t2),
             distance_min=0,
-            distance_max=data_shape[1] * attrs["dx"],
+            distance_max=data_shape[1] * attrs["d_distance"],
             id=attrs["recorder_id"],
             nt=attrs.pop("nT"),
             dt=attrs.pop("dT"),
@@ -107,10 +113,7 @@ def _read_terra15_v2(
             data = data[:max_time_ind, :]
         channel_number = np.arange(data.shape[1])
         attrs = _get_node_attrs(data_node)
-        attrs["data_type"] = "velocity"
-        attrs["data_category"] = "DAS"
-        attrs["dt"] = to_timedelta64(attrs["dT"])
-        distance = attrs["dx"] * channel_number
+        distance = attrs["d_distance"] * channel_number
         coords = {"time": time, "distance": distance}
         patch = Patch(data=data, coords=coords, attrs=attrs)
         return Stream([patch])

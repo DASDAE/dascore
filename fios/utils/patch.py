@@ -5,15 +5,33 @@ import collections
 import copy
 import functools
 import inspect
-from typing import (Any, Callable, Dict, Literal, Mapping, Optional, Sequence,
-                    Tuple, Union)
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 
-from fios.constants import DEFAULT_PATCH_ATTRS, PatchType
+import fios
+from fios.constants import (
+    DEFAULT_PATCH_ATTRS,
+    PATCH_MERGE_ATTRS,
+    PatchSummaryDict,
+    PatchType,
+    StreamType,
+)
 from fios.exceptions import PatchAttributeError, PatchDimError
-from fios.utils.mapping import FrozenDict
+from fios.utils.docs import compose_docstring, format_dtypes
 from fios.utils.misc import append_func
 from fios.utils.time import to_datetime64, to_timedelta64
 
@@ -189,7 +207,7 @@ def patch_function(
             None - Function call is not recorded in history attribute.
 
     Examples
-    -------
+    --------
     1. A patch method which requires dimensions (time, distance)
     >>> @fios.patch_function(dims=('time', 'distance'))
     >>> def do_something(patch):
@@ -242,7 +260,7 @@ class _AttrsCoordsMixer:
     _missing_attr_keys = frozenset()
     # a dict of {attr: (expected_type, func)}
     _expected_types = dict(
-        dt=(np.timedelta64, to_timedelta64),
+        d_time=(np.timedelta64, to_timedelta64),
         time_min=(np.datetime64, to_datetime64),
         time_max=(np.datetime64, to_datetime64),
     )
@@ -361,8 +379,8 @@ class _AttrsCoordsMixer:
             if f"{dim}_max" in fill_keys:
                 self.copied_attrs[f"{dim}_max"] = np.max(array)
         # add dims column
-        if not len(self.attrs['dims']):
-            self.copied_attrs['dims'] = ','.join(self.dims)
+        if not len(self.attrs["dims"]):
+            self.copied_attrs["dims"] = ",".join(self.dims)
 
     def update_coords(self, **kwargs):
         """Update the coordinates based on kwarg inputs."""
@@ -393,3 +411,128 @@ class _AttrsCoordsMixer:
             val = self.attrs[key]
             if not isinstance(val, expected_type):
                 self.copied_attrs[key] = func(val)
+
+
+@compose_docstring(fields=format_dtypes(PatchSummaryDict.__annotations__))
+def patches_to_df(patches: Union[Sequence[PatchType], StreamType]) -> pd.DataFrame:
+    """
+    Return a dataframe
+
+    Parameters
+    ----------
+    patches
+        A sequence of :class:`fios.Patch`
+
+    Returns
+    -------
+    A dataframe with the following fields:
+        {fields}
+    plus a field called 'patch' which contains a reference to each patch.
+    """
+    if isinstance(patches, fios.Stream):
+        df = patches._df
+    else:
+        df = pd.DataFrame(scan_patches(patches))
+        df["patch"] = patches
+    return df
+
+
+def merge_patches(
+    patches: Union[Sequence[PatchType], pd.DataFrame, StreamType],
+    dim: str = "time",
+    fill: Literal["first"] = "first",
+    check_history: bool = True,
+) -> Sequence[PatchType]:
+    """
+    Merge all compatible patches in stream together.
+
+    Parameters
+    ----------
+    patches
+        A sequence of patches to merge (if compatible)
+    dim
+        The dimension along which to merge
+    fill
+        Specifies handling of overlaps in data currently only first is supported.
+            first - just use values from first (earliest) patch.
+    check_history
+        If True, only merge patches with common history. This will, for
+        example, prevent merging filtered and unfiltered data together.
+
+    """
+
+    def _get_sorted_df_sort_group_names(patches):
+        """Return the sorted dataframe."""
+        group_names = list(PATCH_MERGE_ATTRS) + [d_name]
+        sort_names = group_names + [min_name, max_name]
+        if check_history:
+            sort_names += ["history"]
+            patches = patches.assign(history=lambda x: x["history"].apply(str))
+        return patches.sort_values(sort_names), sort_names, group_names
+
+    def _merge_compatible_patches(patch_df):
+        """perform merging after patch compatibility has been confirmed."""
+        has_overlap = patch_df["_dist_to_previous"] <= to_timedelta64(0)
+        overlap_start = patch_df[min_name] - patch_df["_dist_to_previous"]
+
+        dars = [x._data_array for x in patch_df["patch"]]
+        dars = [
+            _trim_or_fill(x, start) if needs_action else x
+            for x, start, needs_action in zip(dars, overlap_start, has_overlap)
+        ]
+        dar = xr.concat(dars, dim=dim)
+        dar.attrs[min_name] = np.NaN
+        dar.attrs[max_name] = np.NaN
+        return fios.Patch(dar.data, coords=dar.coords, attrs=dar.attrs)
+
+    def _trim_or_fill(dar, new_start):
+        """Trim or fill data array."""
+        return dar.loc[{dim: dar.coords[dim] > new_start}]
+
+    # get a dataframe
+    if not isinstance(patches, pd.DataFrame):
+        patches = patches_to_df(patches)
+    assert dim in {"time", "distance"}, "merge must be on time/distance for now"
+    out = []  # list of merged patches
+    min_name, max_name, d_name = f"{dim}_min", f"{dim}_max", f"d_{dim}"
+    # get sorted dataframe and group/sort column names
+    df, sorted_names, group_names = _get_sorted_df_sort_group_names(patches)
+    # get a boolean if each row is compatible with previous for merging
+    gn = ~(df[group_names] == df.shift()[group_names]).all(axis=1)
+    group_numbers = gn.astype(bool).cumsum()
+    for _, sub_df in df.groupby(group_numbers):
+        # get boolean indicating if patch overlaps with previous
+        start, end, dist = sub_df[min_name], sub_df[max_name], sub_df[d_name]
+        # get the dist between each patch
+        dist_to_previous = start - end.shift()
+        no_merge = ~(dist_to_previous <= dist)
+        sub_df["_dist_to_previous"] = dist_to_previous
+        # determine if each patch should be merged with the previous one
+        for _, merge_patch_df in sub_df.groupby(no_merge.astype(int).cumsum()):
+            out.append(_merge_compatible_patches(merge_patch_df))
+    return out
+
+
+@compose_docstring(fields=format_dtypes(PatchSummaryDict.__annotations__))
+def scan_patches(
+    patch: Union[PatchType, Sequence[PatchType]]
+) -> List[PatchSummaryDict]:
+    """
+    Scan a sequence of patches and return a list of summary dicts.
+
+    The summary dicts have the following fields:
+        {fields}
+
+    Parameters
+    ----------
+    patch
+        A single patch or a sequence of patches.
+    """
+    if isinstance(patch, fios.Patch):
+        patch = [patch]  # make sure we have an iterable
+    out = []
+    for pa in patch:
+        attrs = pa.attrs
+        summary = {i: attrs.get(i, DEFAULT_PATCH_ATTRS[i]) for i in DEFAULT_PATCH_ATTRS}
+        out.append(summary)
+    return out

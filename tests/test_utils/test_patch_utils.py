@@ -6,8 +6,7 @@ import pytest
 
 import fios
 from fios.exceptions import PatchAttributeError, PatchDimError
-from fios.utils.patch import _AttrsCoordsMixer
-from fios.utils.time import to_timedelta64
+from fios.utils.patch import _AttrsCoordsMixer, merge_patches
 
 
 @fios.patch_function(required_dims=("time", "distance"))
@@ -18,11 +17,13 @@ def time_dist_func(patch):
 
 @fios.patch_function(required_attrs=("bob",))
 def require_bob(patch):
+    """Require bob attribute"""
     return patch
 
 
 @fios.patch_function(required_attrs={"bob": "what about?"})
 def require_bob_value(patch):
+    """Require bob attribute with specific value."""
     return patch
 
 
@@ -189,3 +190,58 @@ class TestAttrsCoordsMixer:
         # check distance
         assert attrs["distance_min"] + dx == new_attrs["distance_min"]
         assert attrs["distance_max"] + dx == new_attrs["distance_max"]
+
+
+class TestMergePatches:
+    """Tests for merging patches together."""
+
+    @pytest.fixture()
+    def desperate_stream_no_overlap(self, random_patch) -> fios.Stream:
+        """
+        Create streams that do not overlap at all
+        """
+        pa1 = random_patch
+        t2 = random_patch.attrs["time_max"]
+        d_time = random_patch.attrs["d_time"] * 1_000
+        pa2 = random_patch.update_attrs(time_min=t2 + d_time)
+        t3 = pa2.attrs["time_max"]
+        pa3 = pa2.update_attrs(time_min=t3 + d_time)
+        return fios.Stream([pa2, pa1, pa3])
+
+    @pytest.fixture()
+    def stream_complete_overlap(self, random_patch) -> fios.Stream:
+        """
+        Create a stream which overlaps each other completely.
+        """
+        return fios.Stream([random_patch, random_patch])
+
+    def test_merge_adjacent(self, adjacent_stream_no_overlap):
+        """Test simple merge of patches."""
+        len_1 = len(adjacent_stream_no_overlap)
+        out_stream = merge_patches(adjacent_stream_no_overlap)
+        assert len(out_stream) < len_1
+        assert len(out_stream) == 1
+        out_patch = out_stream[0]
+        # make sure coords are consistent with attrs
+        assert out_patch.attrs["time_max"] == out_patch.coords["time"].max()
+        assert out_patch.attrs["time_min"] == out_patch.coords["time"].min()
+        # ensure the spacing is still uniform
+        time = out_patch.coords["time"]
+        spacing = time[1:] - time[:-1]
+        unique_spacing = np.unique(spacing)
+        assert len(unique_spacing) == 1
+        assert unique_spacing[0] == out_patch.attrs["d_time"]
+
+    def test_no_overlap(self, desperate_stream_no_overlap):
+        """streams with no overlap should not be merged."""
+        len_1 = len(desperate_stream_no_overlap)
+        out = merge_patches(desperate_stream_no_overlap)
+        assert len_1 == len(out)
+
+    def test_complete_overlap(self, stream_complete_overlap, random_patch):
+        """Ensure complete overlap results in NaN when fill==NaN."""
+        out = merge_patches(stream_complete_overlap)
+        assert len(out) == 1
+        pa = out[0]
+        data = pa.data
+        assert data.shape == random_patch.data.shape

@@ -32,12 +32,12 @@ def velocity_to_strain_rate(
     """
     assert gauge_multiple == 1, "only supporting 1 for now."
     axis = patch.dims.index("distance")
-    dx = patch.attrs["dx"]
-    differ = findiff.FinDiff(axis, dx, order)
+    d_distance = patch.attrs["d_distance"]
+    differ = findiff.FinDiff(axis, d_distance, order)
     new = differ(patch.data)
     attrs = dict(patch.attrs)
     attrs["data_type"] = "strain_rate"
-    attrs["gauge_length"] = dx * gauge_multiple
+    attrs["gauge_length"] = d_distance * gauge_multiple
     return patch.new(data=new, attrs=attrs)
 
 

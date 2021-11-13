@@ -1,28 +1,8 @@
 """
 Test for stream functions.
 """
-import pytest
 
 import fios
-from fios.utils.time import to_timedelta64
-
-
-@pytest.fixture()
-def adjacent_stream_no_overlap(random_patch):
-    """
-    Create a stream with several patches within one time sample but not
-    overlapping.
-    """
-    pa1 = random_patch
-    t2 = random_patch.attrs['time_max']
-    dt = random_patch.attrs['dt']
-
-    pa2 = random_patch.update_attrs(time_min=t2 + dt)
-    t3 = pa1.attrs['time_max']
-
-    pa3 = pa2.update_attrs(time_min=t3 + dt)
-
-    return fios.Stream([pa2, pa1, pa3])
 
 
 class TestStreamIterableness:

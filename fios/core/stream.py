@@ -1,24 +1,23 @@
 """
 A module for storing streams of fiber data.
 """
-from collections import UserList
 from typing import Sequence, Union
 
 import pandas as pd
 
 import fios
 from fios.constants import PatchType
-from fios.io.base import scan_patches
+from fios.utils.patch import merge_patches, scan_patches
 
 
 class Stream:
     """
     A stream of fiber data.
     """
-    # a tuple of attrs that must be compatible for patches to be merged
-    _merge_attrs = ('network', 'station', 'dims', 'data_type', 'category')
-    # tuple of attributes to remove from table
 
+    # a tuple of attrs that must be compatible for patches to be merged
+    _merge_attrs = ("network", "station", "dims", "data_type", "category")
+    # tuple of attributes to remove from table
 
     def __init__(self, data: Union[PatchType, Sequence[PatchType]]):
         self._df = self._get_patch_table(data)
@@ -43,7 +42,7 @@ class Stream:
         df["patch"] = patch_iterable
         return df
 
-    def merge(self, dim='time'):
+    def merge(self, dim="time"):
         """
         Merge all compatible patches in stream together.
 
@@ -52,10 +51,5 @@ class Stream:
         dimension along which to try to merge.
 
         """
-        min_name, max_name = f"{dim}_min", f"{dim}_max"
-        sort_names = list(self._merge_attrs) + [min_name, max_name]
-        # make a shallow copy for shorting, merging
-        df = self._df.sort_values(sort_names)
-        # first get groups of compatible traces
-        breakpoint()
-
+        new_patches = merge_patches(self._df, dim=dim)
+        return self.__class__(new_patches)

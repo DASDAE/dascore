@@ -138,9 +138,9 @@ def get_select_time(
     if isinstance(time, (str, datetime, np.datetime64)):
         return to_datetime64(time)
     else:
-        dt = to_timedelta64(time)
-        relative_to = time_min if dt > 0 else time_max
+        d_time = to_timedelta64(time)
+        relative_to = time_min if d_time > 0 else time_max
         if pd.isnull(relative_to):
             msg = "Cannot use relative times when reference times are null"
             raise TimeError(msg)
-        return relative_to + dt
+        return relative_to + d_time

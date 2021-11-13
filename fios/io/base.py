@@ -4,13 +4,12 @@ Das Data.
 """
 import os.path
 from pathlib import Path
-from typing import List, Optional, Sequence, Union
+from typing import List, Optional, Union
 
 import numpy as np
 
 import fios
-from fios.constants import (DEFAULT_PATCH_ATTRS, PatchSummaryDict, PatchType,
-                            StreamType)
+from fios.constants import PatchSummaryDict, StreamType
 from fios.exceptions import UnknownFiberFormat
 from fios.utils.plugin import PluginManager
 
@@ -45,27 +44,6 @@ def read(
         end_distance=end_distance,
         **kwargs,
     )
-
-
-def scan_patches(
-    patch: Union[PatchType, Sequence[PatchType]]
-) -> List[PatchSummaryDict]:
-    """
-    Scan a sequence of patches and return a list of summary dicts.
-
-    Parameters
-    ----------
-    patch
-        A single patch or a sequence of patches.
-    """
-    if isinstance(patch, fios.Patch):
-        patch = [patch]  # make sure we have an iterable
-    out = []
-    for pa in patch:
-        attrs = pa.attrs
-        summary = {i: attrs.get(i, DEFAULT_PATCH_ATTRS[i]) for i in DEFAULT_PATCH_ATTRS}
-        out.append(summary)
-    return out
 
 
 def scan_file(
