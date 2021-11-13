@@ -41,6 +41,11 @@ jobs:
 #          condarc-file: .github/test_condarc.yml
 
 #      default mocos python is 2.7 (https://github.com/actions/setup-python/issues/132)
+      - uses: actions/setup-python@v2
+        with:
+         python-version: ${{ matrix.python-version }}
+#         architecture: 'x64' # optional x64 or x86. Defaults to x64 if not specified
+
       - if: runner.os == 'macOS'
         name: Fix Python PATH on macOS
         run: |
