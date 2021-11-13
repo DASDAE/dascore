@@ -39,6 +39,10 @@ jobs:
 #          activate-environment: test
 #          environment-file: .github/test_conda_env.yml
 #          condarc-file: .github/test_condarc.yml
+      - if: runner.os == 'macOS'
+        name: Fix Python PATH on macOS
+        run: |
+          tee -a ~/.profile <<<'export PATH="$pythonLocation/bin:$PATH"'
 
       - name: install fios
         shell: bash -l {0}
