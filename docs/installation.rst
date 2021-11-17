@@ -11,7 +11,7 @@ Clone the repository:
 
 .. code-block:: console
 
-    $ git clone git://github.com/smrd/dfs
+    $ git clone git://github.com/dasdae/fios
 
 
 Once you have a copy of the source, you can install it with:

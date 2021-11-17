@@ -1,14 +1,25 @@
-Welcome to dfs's documentation!
-======================================
+fios
+====
 
-Contents:
+[fi]ber [o]ptic [s]ensing library
 
-.. toctree::
-   :maxdepth: 2
+`Introduction <notebooks/intro.ipynb>`_
 
-   readme
-   installation
-   usage
+`Installation <notebooks/installation.ipynb>`_
+
+`Code <https://github.com/dasdae/fios>`_
+
+`Contributing <notebooks/contributing.ipynb>`_
+
+`Support Bug Reporting <notebooks/support.ipynb>`_
+
+`Full API Documentation <api/fios.rst>`_
+
+:ref:`genindex`
+
+:ref:`modindex`
+
+:ref:`search`
 
 
 Indices and tables

@@ -215,6 +215,19 @@ class TestMergePatches:
         """
         return fios.Stream([random_patch, random_patch])
 
+    @pytest.fixture()
+    def stream_slight_gap(self, random_patch) -> fios.Stream:
+        """
+        Create a stream which has a 1.1 * dt gap.
+        """
+        pa1 = random_patch
+        t2 = random_patch.attrs["time_max"]
+        dt = random_patch.attrs["d_time"]
+        pa2 = random_patch.update_attrs(time_min=t2 + dt * 1.1)
+        t3 = pa2.attrs["time_max"]
+        pa3 = pa2.update_attrs(time_min=t3 + dt * 1.1)
+        return fios.Stream([pa2, pa1, pa3])
+
     def test_merge_adjacent(self, adjacent_stream_no_overlap):
         """Test simple merge of patches."""
         len_1 = len(adjacent_stream_no_overlap)
@@ -239,9 +252,14 @@ class TestMergePatches:
         assert len_1 == len(out)
 
     def test_complete_overlap(self, stream_complete_overlap, random_patch):
-        """Ensure complete overlap results in NaN when fill==NaN."""
+        """Ensure complete overlap results in dropped data for overlap section."""
         out = merge_patches(stream_complete_overlap)
         assert len(out) == 1
         pa = out[0]
         data = pa.data
         assert data.shape == random_patch.data.shape
+
+    def test_slight_gap(self, stream_slight_gap):
+        """Ensure gaps slightly more than 1 time interval still work."""
+        out = stream_slight_gap.merge()
+        assert len(out) == 1
