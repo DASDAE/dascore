@@ -1,6 +1,8 @@
 """
 Module for applying decimation to Patches.
 """
+import xarray as xr
+
 import fios
 from fios.constants import PatchType
 from fios.utils.patch import patch_function
@@ -26,4 +28,7 @@ def decimate(
         raise NotImplementedError("working on it")
     kwargs = {dim: slice(None, None, factor)}
     out = patch._data_array.sel(**kwargs)
-    return fios.Patch(out)
+    # need to create a new xarray so the old, probably large, numpy array
+    # gets gc'ed, otherwise it stays in memory.
+    new = xr.DataArray(data=out.data.copy(), coords=out.coords, attrs=out.attrs)
+    return fios.Patch(new)

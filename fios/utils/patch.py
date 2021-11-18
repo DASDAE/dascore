@@ -267,7 +267,7 @@ class _AttrsCoordsMixer:
 
     def __init__(self, attrs, coords, dims):
         """Init with attrs and coords"""
-        self.attrs = attrs
+        self.attrs = attrs if attrs is not None else {}
         self.coords = coords
         self.dims = dims
         self._original_attrs = attrs
@@ -398,7 +398,9 @@ class _AttrsCoordsMixer:
         coords = self.coords
         if coords is None or (time := coords.get("time")) is None:
             return
-        start_time = self.attrs["time_min"] or np.datetime64("1970-01-01")
+        start_time = self.attrs["time_min"]
+        if pd.isnull(start_time):
+            start_time = to_datetime64(0)
         # Convert non-datetime into time deltas
         if not np.issubdtype(time.dtype, np.datetime64):
             td = to_timedelta64(time)

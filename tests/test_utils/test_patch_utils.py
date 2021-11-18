@@ -1,7 +1,9 @@
 """
 Test patch utilities.
 """
+
 import numpy as np
+import pandas as pd
 import pytest
 
 import fios
@@ -171,7 +173,6 @@ class TestAttrsCoordsMixer:
         """
         Ensure updating coords also updates attributes in attrs.
         """
-
         td = np.timedelta64(10, "s")
         dx = 10
         new_coords_kwarg = {
@@ -190,6 +191,17 @@ class TestAttrsCoordsMixer:
         # check distance
         assert attrs["distance_min"] + dx == new_attrs["distance_min"]
         assert attrs["distance_max"] + dx == new_attrs["distance_max"]
+
+    def test_relative_time_coord_no_absolute_time(self):
+        """Ensure a time axis is still obtained with relative time and no start"""
+        coords = dict(
+            time=np.arange(10) * 0.1,
+            distance=np.arange(10) * 10,
+        )
+        attrs = {}
+        mixer = _AttrsCoordsMixer(attrs, coords, ("time", "distance"))
+        new_attrs, new_coords = mixer()
+        assert not np.any(pd.isnull(new_coords["time"]))
 
 
 class TestMergePatches:

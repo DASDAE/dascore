@@ -1,6 +1,7 @@
 """
 Tests for Trace2D object.
 """
+import weakref
 
 import numpy as np
 import pandas as pd
@@ -9,6 +10,19 @@ import pytest
 import fios
 from fios.core import Patch
 from fios.utils.time import to_timedelta64
+
+
+def get_simple_patch() -> Patch:
+    """
+    Return a small simple array for memory testing.
+
+    Note: This cant be a fixture as pytest holds a reference.
+    """
+    pa = Patch(
+        data=np.random.random((100, 100)),
+        coords={"time": np.arange(100) * 0.01, "distance": np.arange(100) * 0.2},
+    )
+    return pa
 
 
 class TestInit:
@@ -79,6 +93,19 @@ class TestInit:
         """Test that all patches used in the test suite have default attrs."""
         attr_set = set(patch.attrs)
         assert attr_set.issubset(set(patch.attrs))
+
+    def test_no_attrs(self):
+        """Ensure a patch with no attrs can be created."""
+        pa = Patch(
+            data=np.random.random((100, 100)),
+            coords={"time": np.random.random(100), "distance": np.random.random(100)},
+        )
+        assert isinstance(pa, Patch)
+
+    def test_seconds_as_coords_time_no_dt(self):
+        """Ensure seconds passed as coordinates with no attrs still works."""
+        ar = get_simple_patch()
+        assert not np.any(pd.isnull(ar.coords["time"]))
 
 
 class TestEquals:
@@ -191,3 +218,33 @@ class TestUpdateAttrs:
         pa = random_patch.update_attrs(time_min=t1)
         assert pa.attrs["time_min"] == t1
         assert pa.coords["time"].min() == t1
+
+
+class TestReleaseMemory:
+    """Ensure memory is released when the patch is deleted."""
+
+    def test_single_patch(self):
+        """
+        Ensure a single patch is gc'ed when it leaves scope.
+        """
+        simple_array = get_simple_patch()
+        wr = weakref.ref(simple_array.data)
+        # delete pa and ensure the array was collected.
+        del simple_array
+        assert wr() is None
+
+    def test_decimated_patch(self):
+        """
+        Ensure a process which changes the array lets the first array get gc'ed.
+
+        This is very important since the main reason to decimate is to preserve
+        memory.
+        """
+        simple_array = get_simple_patch()
+        from fios.proc import decimate
+
+        new = decimate(simple_array, 10, lowpass=False)
+        wr = weakref.ref(simple_array.data)
+        del simple_array
+        assert isinstance(new, Patch)
+        assert wr() is None
