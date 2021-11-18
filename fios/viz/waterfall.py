@@ -94,7 +94,8 @@ def waterfall(
     # scale colorbar
     if scale is not None:
         scale = np.array(scale) * np.ones(2)
-        im.set_clim(np.array([data.min() * scale[0], data.max() * scale[1]]))
+        scale_val = np.max([np.abs(data.min()), np.abs(data.max())])
+        im.set_clim(np.array([-scale_val * scale[0], scale_val * scale[1]]))
     for dim, x in zip(dims_r, ["x", "y"]):
         getattr(ax, f"set_{x}label")(str(dim).capitalize())
     if "time" in dims_r:

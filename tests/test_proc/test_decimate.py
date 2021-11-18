@@ -22,3 +22,16 @@ class TestDecimate:
         assert np.isclose(len_ratio, 2.0)
         dt_ratio = np.round(new_dt[0] / old_dt[0])
         assert np.isclose(dt_ratio, 2.0)
+
+    def test_update_time_max(self, random_patch):
+        """Ensure the time_max is updated after decimation."""
+        out = random_patch.proc.decimate(10, lowpass=False)
+        assert out.attrs["time_max"] == out.coords["time"].max()
+
+    def test_update_delta_dim(self, random_patch):
+        """
+        Since decimate changes the spacing of dimension this should be updated.
+        """
+        dt1 = random_patch.attrs["d_time"]
+        out = random_patch.proc.decimate(10, lowpass=False)
+        assert out.attrs["d_time"] == dt1 * 10

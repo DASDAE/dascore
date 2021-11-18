@@ -81,7 +81,11 @@ def terra15_das_stream(terra15_path) -> Stream:
 @register_func(PATCH_FIXTURES)
 def terra15_das_patch(terra15_path) -> Patch:
     """Read the terra15 data, return contained DataArray"""
-    return _read_terra15_v2(terra15_path)[0]
+    out = _read_terra15_v2(terra15_path)[0]
+    attr_time = out.attrs["time_max"]
+    coord_time = out.coords["time"].max()
+    assert attr_time == coord_time
+    return out
 
 
 @pytest.fixture(scope="session")

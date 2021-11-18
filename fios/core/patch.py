@@ -1,7 +1,6 @@
 """
 A 2D trace object.
 """
-from functools import cached_property
 from typing import Mapping, Optional, Tuple, Union
 
 import numpy as np
@@ -9,11 +8,10 @@ from numpy.typing import ArrayLike
 from xarray import DataArray
 
 from fios.constants import COMPARE_ATTRS, PatchType
-from fios.proc import ProcessingPatchNamespace
+from fios.proc import ProcessingPatchNamespace, select
 from fios.transform import TransformPatchNameSpace
 from fios.utils.mapping import FrozenDict
 from fios.utils.patch import Coords, _AttrsCoordsMixer
-from fios.utils.time import get_select_time
 from fios.viz import VizPatchNameSpace
 
 
@@ -109,44 +107,6 @@ class Patch:
         attrs, coords = mixer()
         return self.__class__(self.data, coords=coords, attrs=attrs)
 
-    def select(self: PatchType, **kwargs) -> PatchType:
-        """
-        Return a subset of the trace based on query parameters.
-
-        Any dimension of the data can be passed as key, and the values
-        should either be a Slice or a tuple of (min, max) for that
-        dimension.
-
-        The time dimension is handled specially in that either floats,
-        datetime64 or datetime objects can be used to specify relative
-        or absolute times, respectively.
-
-        Examples
-        --------
-        >>> # select meters 50 to 300
-        >>> import numpy as np
-        >>> from fios.examples import get_example_patch
-        >>> tr = get_example_patch()
-        >>> new = tr.select(distance=(50,300))
-        """
-        # do special thing for time, else just use DataArray select
-        if "time" in kwargs:
-            tmin = self._data_array.attrs["time_min"]
-            tmax = self._data_array.attrs["time_max"]
-            times = tuple(
-                get_select_time(x, tmin, tmax) if x is not None else x
-                for x in kwargs["time"]
-            )
-            kwargs["time"] = times
-        # convert tuples into slices
-        kwargs = {
-            i: slice(v[0], v[1]) if isinstance(v, tuple) else v
-            for i, v in kwargs.items()
-        }
-        new = self._data_array.sel(**kwargs)
-        attrs, coords = _AttrsCoordsMixer(new.attrs, new.coords, new.dims)()
-        return self.__class__(new.data, attrs=attrs, coords=coords, dims=self.dims)
-
     def transpose(self: PatchType, *dims: str) -> PatchType:
         """
         Transpose the data array to any dimension order desired.
@@ -202,19 +162,23 @@ class Patch:
         """Return the attributes of the trace."""
         return FrozenDict(self._data_array.attrs)
 
-    # --- Method Namespaces
+    select = select
 
-    @cached_property
+    # --- Method Namespaces
+    # Note: these can't be cached_property (from functools) or references
+    # to self stick around too long.
+
+    @property
     def viz(self) -> VizPatchNameSpace:
         """The visualization namespace."""
         return VizPatchNameSpace(self)
 
-    @cached_property
+    @property
     def tran(self) -> TransformPatchNameSpace:
         """The transformation namespace."""
         return TransformPatchNameSpace(self)
 
-    @cached_property
+    @property
     def proc(self) -> ProcessingPatchNamespace:
         """The transformation namespace."""
         return ProcessingPatchNamespace(self)

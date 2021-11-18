@@ -117,14 +117,3 @@ def _read_terra15_v2(
         coords = {"time": time, "distance": distance}
         patch = Patch(data=data, coords=coords, attrs=attrs)
         return Stream([patch])
-
-        # out = create_das_array(
-        #     data,
-        #     time=time,
-        #     distance=distance,
-        #     attrs=attrs,
-        #     sample_lenth=attrs["sample_length"],
-        #     sample_time=attrs["sample_time"],
-        #     datatype="velocity",
-        # )
-        # return Stream([out])
