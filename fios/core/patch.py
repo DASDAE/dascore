@@ -7,8 +7,8 @@ import numpy as np
 from numpy.typing import ArrayLike
 from xarray import DataArray
 
+import fios.proc
 from fios.constants import COMPARE_ATTRS, PatchType
-from fios.proc import ProcessingPatchNamespace, select
 from fios.transform import TransformPatchNameSpace
 from fios.utils.mapping import FrozenDict
 from fios.utils.patch import Coords, _AttrsCoordsMixer
@@ -162,7 +162,13 @@ class Patch:
         """Return the attributes of the trace."""
         return FrozenDict(self._data_array.attrs)
 
-    select = select
+    # --- processing funcs
+
+    select = fios.proc.select
+    decimate = fios.proc.decimate
+    detrend = fios.proc.detrend
+    pass_filter = fios.proc.pass_filter
+    stop_filter = fios.proc.stop_filter
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
@@ -177,8 +183,3 @@ class Patch:
     def tran(self) -> TransformPatchNameSpace:
         """The transformation namespace."""
         return TransformPatchNameSpace(self)
-
-    @property
-    def proc(self) -> ProcessingPatchNamespace:
-        """The transformation namespace."""
-        return ProcessingPatchNamespace(self)

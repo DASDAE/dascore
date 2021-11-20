@@ -3,17 +3,9 @@ Module to Patch Processing.
 """
 from fios.utils.misc import MethodNameSpace
 
+from .select import select
 from .decimate import decimate
 from .detrend import detrend
-from .select import select
+from .filter import pass_filter, stop_filter
 
 # from .filter import pass_filter
-
-
-class ProcessingPatchNamespace(MethodNameSpace):
-    """Processing name space."""
-
-    decimate = decimate
-    detrend = detrend
-    select = select
-    # pass_filter = pass_filter

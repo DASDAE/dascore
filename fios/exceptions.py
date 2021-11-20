@@ -33,3 +33,7 @@ class TimeError(ValueError, FiosError):
 
 class InvalidTimeRange(TimeError):
     """Raised when an invalid time range is encountered."""
+
+
+class FilterValueError(ValueError, FiosError):
+    """Raise when something goes wrong with filtering or filter inputs."""

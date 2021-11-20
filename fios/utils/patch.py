@@ -219,6 +219,12 @@ def patch_function(
     ... def do_another_thing(patch):
     ...     ...  # raise PatchAttributeError if patch doesn't have attribute
     ...     # called "data_type" or its values is not equal to "DAS".
+
+    Notes
+    -----
+    The original function can still be accessed with the .func attribute.
+    This may be useful for avoiding calling the patch_func machinery
+    multiple times from within another patch function.
     """
 
     def _wrapper(func):
@@ -233,6 +239,8 @@ def patch_function(
                 out = _shallow_copy(out)
                 out._data_array.attrs["history"].append(hist_str)
             return out
+
+        _func.func = func  # attach original function
 
         return _func
 

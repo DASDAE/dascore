@@ -8,6 +8,7 @@ from fios.utils.patch import patch_function
 from fios.core.patch import Patch
 from fios.core.stream import Stream
 from fios.io.base import get_format, read, scan_file
+from fios.examples import get_example_stream, get_example_patch
 from fios.version import __version__
 
 # keep attrs on xarray DataArray

@@ -82,6 +82,14 @@ class TestPatchFunction:
         with pytest.raises(PatchAttributeError, match="lightening"):
             require_bob_value(pa2)
 
+    def test_access_original_function(self, random_patch):
+        """Ensure the original function is still accessible."""
+        hist1 = ",".join(random_patch.attrs["history"])
+        # this calls the original function so it should bypass history logging
+        out = require_bob.func(random_patch)
+        hist2 = ",".join(out.attrs["history"])
+        assert hist1 == hist2
+
 
 class TestHistory:
     """Tests for tracking patch processing history."""

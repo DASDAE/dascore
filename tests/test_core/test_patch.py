@@ -188,7 +188,7 @@ class TestReleaseMemory:
         memory.
         """
         patch = get_simple_patch()
-        new = patch.proc.decimate(10, lowpass=False)
+        new = patch.decimate(10)
         wr = weakref.ref(patch.data)
         del patch
         assert isinstance(new, Patch)
@@ -199,7 +199,7 @@ class TestReleaseMemory:
         A similar test to ensure select releases old memory.
         """
         patch = get_simple_patch()
-        new = patch.proc.select(time=[0.1, 10], copy=True)
+        new = patch.select(time=[0.1, 10], copy=True)
         wr = weakref.ref(patch.data)
         del patch
         assert isinstance(new, Patch)

@@ -14,7 +14,7 @@ class TestDecimate:
         old_time = p1.coords["time"]
         old_dt = old_time[1:] - old_time[:-1]
         # apply decimation,
-        pa2 = random_patch.proc.decimate(2, lowpass=False)
+        pa2 = random_patch.decimate(2)
         new_time = pa2.coords["time"]
         new_dt = new_time[1:] - new_time[:-1]
         # ensure distance between time samples and shapes have changed
@@ -25,7 +25,7 @@ class TestDecimate:
 
     def test_update_time_max(self, random_patch):
         """Ensure the time_max is updated after decimation."""
-        out = random_patch.proc.decimate(10, lowpass=False)
+        out = random_patch.decimate(10)
         assert out.attrs["time_max"] == out.coords["time"].max()
 
     def test_update_delta_dim(self, random_patch):
@@ -33,5 +33,5 @@ class TestDecimate:
         Since decimate changes the spacing of dimension this should be updated.
         """
         dt1 = random_patch.attrs["d_time"]
-        out = random_patch.proc.decimate(10, lowpass=False)
+        out = random_patch.decimate(10)
         assert out.attrs["d_time"] == dt1 * 10

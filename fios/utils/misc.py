@@ -88,3 +88,10 @@ def pass_through_method(attr_name: str):
         return _func
 
     return _wrap
+
+
+def update_coords(coords, dims, **kwargs) -> dict:
+    """Update coordinates."""
+    out = {x: coords[x] for x in dims}
+    out.update(**kwargs)
+    return out
