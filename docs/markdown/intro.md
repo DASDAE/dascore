@@ -21,6 +21,7 @@ Next, we simply read it into a [Stream](#Stream) object then get the first (and 
 
 ```python
 # get a fiber file
+import fios
 from fios.utils.downloader import fetch
 path = fetch("terra15_v2_das_1_trimmed.hdf5")  # path to a datafile
 
@@ -76,9 +77,8 @@ out = (
 
 ## Visualization
 
-.. plot::
 ```python
 import fios
 pa = fios.get_example_patch()
-pa.viz.waterfall(show=True)
+pa.viz.waterfall()
 ```
