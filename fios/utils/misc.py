@@ -62,8 +62,6 @@ class MethodNameSpace(metaclass=_NameSpaceMeta):
             if callable(val):  # passes to _NameSpaceMeta settattr
                 setattr(cls, key, val)
 
-    #
-
 
 def _pass_through_method(func):
     """Decorator for marking functions as methods on namedspace parent class."""
@@ -74,24 +72,3 @@ def _pass_through_method(func):
         return func(obj, *args, **kwargs)
 
     return _func
-
-
-def pass_through_method(attr_name: str):
-    """Decorator for binding method to an attribute rather than self."""
-
-    def _wrap(func):
-        @functools.wraps(func)
-        def _func(self, *args, **kwargs):
-            obj = getattr(self, attr_name)
-            return func(obj, *args, **kwargs)
-
-        return _func
-
-    return _wrap
-
-
-def update_coords(coords, dims, **kwargs) -> dict:
-    """Update coordinates."""
-    out = {x: coords[x] for x in dims}
-    out.update(**kwargs)
-    return out

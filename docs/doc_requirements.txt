@@ -4,3 +4,4 @@ ipykernel
 numpydoc
 sphinx_autodoc_typehints
 nbsphinx
+myst-parser

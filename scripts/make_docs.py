@@ -31,19 +31,7 @@ def make_docs(doc_path=DOC_PATH, timeout=3000) -> str:
     # clean out all the old docs
     clean_docs()
     # execute all the notebooks
-    cmd = (
-        f"jupyter nbconvert --to notebook --execute --inplace "
-        f"--ExecutePreprocessor.timeout={timeout}"
-    )
-    breakpoint()
     doc_path = Path(doc_path)
-    for note_book_path in doc_path.rglob("*.ipynb"):
-        # skip all ipython notebooks
-        if "ipynb_checkpoints" in str(note_book_path):
-            continue
-        result = run(cmd + f" {note_book_path}", shell=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"failed to run {note_book_path}")
     # run auto api-doc
     run("sphinx-apidoc ../fios -e -M -o api", cwd=doc_path, shell=True)
     run("make html", cwd=doc_path, shell=True, check=True)

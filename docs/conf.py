@@ -54,13 +54,14 @@ extensions = [
     "IPython.sphinxext.ipython_console_highlighting",
     "numpydoc",
     "nbsphinx",
+    "recommonmark",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
 
 # The suffix of source filenames.
-source_suffix = ".rst"
+source_suffix = [".rst", ".md"]
 
 # The encoding of source files.
 # source_encoding = 'utf-8-sig'
@@ -98,6 +99,10 @@ exclude_patterns = ["_build"]
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
 # default_role = None
+
+source_parsers = {
+    ".md": "recommonmark.parser.CommonMarkParser",
+}
 
 # If true, '()' will be appended to :func: etc. cross-reference text.
 # add_function_parentheses = True
@@ -217,7 +222,7 @@ latex_elements = {
 }
 
 # Grouping the document tree into LaTeX files. List of tuples
-# (source start file, target name, title, author, documentclass
+# (source start file, target name, title, author, document class
 # [howto/manual]).
 latex_documents = [
     ("index", "fios.tex", u"fios Documentation", u"Derrick Chambers", "manual")

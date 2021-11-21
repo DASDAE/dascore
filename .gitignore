@@ -65,9 +65,14 @@ target/
 .idea
 
 # Ipython stuff
+# Dont commit ipython notebooks, just use md.
 .ipynb_checkpoints
+*.ipynb
 
 # linux/osx garbage
 *~
 *.swp
 .DS_store*
+
+# docs
+docs/api/*

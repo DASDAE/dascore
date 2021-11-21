@@ -14,6 +14,5 @@ Submodules
 
    fios.core.conversions
    fios.core.coords
-   fios.core.filter
    fios.core.patch
    fios.core.stream

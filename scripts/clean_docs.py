@@ -3,7 +3,6 @@ Script to cleanup documentation.
 """
 import shutil
 from pathlib import Path
-from subprocess import run
 
 import typer
 
@@ -20,14 +19,6 @@ def clean_docs():
     # clear API documentation
     if api_path.exists():
         shutil.rmtree(api_path)
-    # execute all the notebooks
-    for note_book_path in doc_path.rglob("*.ipynb"):
-        if "ipynb_checkpoints" in str(note_book_path):
-            continue
-        # result = run(cmd + f" {note_book_path}", shell=True)
-        # if result.returncode != 0:
-        #     msg = f"failed to execute {note_book_path}!"
-        #     raise RuntimeError(msg)
 
 
 if __name__ == "__main__":

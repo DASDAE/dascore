@@ -17,3 +17,4 @@ Submodules
    fios.proc.filter
    fios.proc.finitediff
    fios.proc.resample
+   fios.proc.select
