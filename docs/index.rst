@@ -1,7 +1,7 @@
-fios
+FIOS
 ====
 
-[fi]ber [o]ptic [s]ensing library
+A python [fi]ber [o]ptic [s]ensing library
 
 `Introduction <markdown/intro.md>`_
 

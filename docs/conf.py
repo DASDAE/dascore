@@ -56,7 +56,7 @@ extensions = [
     "sphinx_autodoc_typehints",
     "IPython.sphinxext.ipython_console_highlighting",
     "numpydoc",
-    "recommonmark",
+    "nbsphinx",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -293,3 +293,8 @@ texinfo_documents = [
 autodoc_default_flags = ["members"]
 autosummary_generate = True
 nbsphinx_timeout = 600
+
+
+nbsphinx_custom_formats = {
+    ".md": ["jupytext.reads", {"fmt": "Rmd"}],
+}

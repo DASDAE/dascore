@@ -168,7 +168,6 @@ class Patch:
     decimate = fios.proc.decimate
     detrend = fios.proc.detrend
     pass_filter = fios.proc.pass_filter
-    stop_filter = fios.proc.stop_filter
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
