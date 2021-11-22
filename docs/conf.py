@@ -298,3 +298,8 @@ nbsphinx_timeout = 600
 nbsphinx_custom_formats = {
     ".md": ["jupytext.reads", {"fmt": "Rmd"}],
 }
+
+nbsphinx_execute_arguments = [
+    "--InlineBackend.figure_formats={'svg', 'pdf'}",
+    "--InlineBackend.rc={'figure.dpi': 96}",
+]

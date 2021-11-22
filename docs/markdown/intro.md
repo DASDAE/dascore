@@ -80,5 +80,5 @@ out = (
 ```python
 import fios
 pa = fios.get_example_patch()
-pa.viz.waterfall()
+pa.viz.waterfall(show=True)
 ```

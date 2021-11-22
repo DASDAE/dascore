@@ -10,7 +10,6 @@ A python library for (Fi)ber (O)ptic (S)ensing
 [![Connda](https://img.shields.io/conda/dn/conda-forge/fios?label=conda%20downloads)](https://github.com/conda-forge/fios-feedstock)
 
 
-
 [Documentation](https://dasdae.github.io/fios/)
 
-> **WARNING**: Fios under heavy development and not yet ready for public use,
+> **WARNING**: Fios is very new and not yet ready for public (non-development) use,
