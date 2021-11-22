@@ -42,6 +42,7 @@ jobs:
         with:
           miniconda-version: 'latest'
           python-version: 3.9
+          channels: conda-forge
 
       - name: install fios with docbuild reqs
         shell: bash -l {0}
