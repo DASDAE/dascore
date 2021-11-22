@@ -41,7 +41,8 @@ jobs:
         uses: conda-incubator/setup-miniconda@v2
         with:
           miniconda-version: 'latest'
-          python-version: 3.9
+          python-version: 3.8
+          channels: conda-forge
 
       - name: install fios with docbuild reqs
         shell: bash -l {0}
