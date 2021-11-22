@@ -37,9 +37,20 @@ jobs:
     steps:
       - uses: actions/checkout@v1
 
+      - name: Setup conda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          miniconda-version: 'latest'
+          python-version: ${{ matrix.python-version }}
+          activate-environment: fios
+          environment-file: environment.yml
+          condarc-file: .github/test_condarc.yml
+
+
       - name: install fios with docbuild reqs
         shell: bash -l {0}
         run: |
+          conda install sphinx, pandoc, nbsphinx
           python -m pip install -e .[docs]
 
       - name: build docs
