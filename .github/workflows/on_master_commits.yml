@@ -47,7 +47,7 @@ jobs:
       - name: install fios with docbuild reqs
         shell: bash -l {0}
         run: |
-          conda install -c conda-forge sphinx, pandoc, nbsphinx
+          conda install -c conda-forge pandoc
           python -m pip install -e .[docs]
 
       - name: build docs

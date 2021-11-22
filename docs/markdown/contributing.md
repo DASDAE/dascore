@@ -78,16 +78,19 @@ You can also check coverage
 pytest tests --cov fios --cov-report term-missing
 ```
 
-## Contributing to the documentation
+## Writing Tests
 
-The documentation is primarily done in markdown but easily converted to jupyter notebooks using
-[jupytext](https://github.com/mwouts/jupytext). Feel free to make changes to the markdown then
-build with the following steps:
+Tests should go into the Tests/ folder, which mirrors the structure of the main package.
+
+In general, tests should be grouped together in classes. Fixtures go as close as
+possible to the test(s) that need them, going from class, module, and conftest fixtures.
+Checkout the pytest documentation for a [review on fixtures](https://docs.pytest.org/en/6.2.x/fixture.html)
+(and why to use them).
 
 ## Building the documentation
 
 The documentation can be built using the script called "make_docs.py" in the scripts directory. If you have followed the instructions above all the required dependencies should be installed.
-You will also need to install pandoc using conda or your OS' package manager.
+You will also need to install `pandoc` using conda or the [offical installation](https://pandoc.org/installing.html).
 
 <!--pytest-codeblocks:skip-->
 ```bash
@@ -95,6 +98,13 @@ python scripts/make_docs.py
 ```
 
 The docs can then be accessed by double-clicking on the newly created html index at docs/_build/html/index.html.
+
+
+## Contributing to the documentation
+
+The documentation is primarily done in markdown but easily converted to jupyter notebooks using
+[jupytext](https://github.com/mwouts/jupytext). Feel free to make changes to the markdown then
+build with the following steps:
 
 
 ## General guidelines
