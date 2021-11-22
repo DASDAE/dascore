@@ -56,7 +56,6 @@ extensions = [
     "sphinx_autodoc_typehints",
     "IPython.sphinxext.ipython_console_highlighting",
     "numpydoc",
-    "nbsphinx",
     "recommonmark",
 ]
 
