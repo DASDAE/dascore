@@ -46,14 +46,14 @@ jobs:
     steps:
       - uses: actions/checkout@v1
 
+      - name: install fios with docbuild reqs
+        shell: bash -l {0}
+        run: |
+          python -m pip install -e .[docs]
+
       - uses: ammaraskar/sphinx-action@master
         with:
           docs-folder: "docs/"
-
-      - name: install fios
-        shell: bash -l {0}
-        run: |
-          python -m pip install -e .[test,docs]
 
       - name: Commit documentation changes
         run: |
