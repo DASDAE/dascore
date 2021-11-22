@@ -55,7 +55,9 @@ jobs:
             git clone git@github.com:dasdae/fios --branch gh-pages --single-branch gh-pages
             cd gh-pages
             git reset --soft `git rev-list --max-parents=0 HEAD | tail -n 1`
+            mv .git ../temp_git
             rm -rf .
+            mv ../temp_git .git
             cp -r ../docs/_build/html/* .
             git config --local user.email "action@github.com"
             git config --local user.name "GitHub Action"
