@@ -51,9 +51,10 @@ jobs:
         run: |
           python -m pip install -e .[docs]
 
-      - uses: ammaraskar/sphinx-action@master
-        with:
-          docs-folder: "docs/"
+      - name: build docs
+        shell: bash -l {0}
+        run: |
+          python scripts/make_docs.py
 
       - name: Commit documentation changes
         run: |
@@ -70,6 +71,7 @@ jobs:
             # as there is no need to keep doc history in git.
             git add .
             git commit -m "Update documentation" -a || true
+
       - name: Push changes
         uses: ad-m/github-push-action@master
         with:
