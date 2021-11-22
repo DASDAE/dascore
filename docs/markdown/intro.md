@@ -58,7 +58,7 @@ coords = dict(
     distance=np.arange(array.shape[0]) * attrs["d_distance"],
     time=np.arange(array.shape[1]) * attrs["d_time"],
 )
-pa = fios.Patch(data=array, coords=coords)
+pa = fios.Patch(data=array, coords=coords, attrs=attrs)
 ```
 
 ## Processing
