@@ -18,9 +18,11 @@ def get_simple_patch() -> Patch:
 
     Note: This cant be a fixture as pytest holds a reference.
     """
+    attrs = {"d_time": 1}
     pa = Patch(
         data=np.random.random((100, 100)),
         coords={"time": np.arange(100) * 0.01, "distance": np.arange(100) * 0.2},
+        attrs=attrs,
     )
     return pa
 
