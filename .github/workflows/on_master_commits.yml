@@ -42,12 +42,11 @@ jobs:
         with:
           miniconda-version: 'latest'
           python-version: 3.9
-          channels: conda-forge
 
       - name: install fios with docbuild reqs
         shell: bash -l {0}
         run: |
-          conda -c conda-forge install sphinx, pandoc, nbsphinx
+          conda install -c conda-forge sphinx, pandoc, nbsphinx
           python -m pip install -e .[docs]
 
       - name: build docs

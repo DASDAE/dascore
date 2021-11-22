@@ -2,8 +2,7 @@
 
 # Contributing
 
-Contributions to fios are welcomed and appreciated. Before proceeding please be aware of our [code of conduct](https://github.com/CDCgov/template/blob/master/code-of-conduct.md).
-
+Contributions to fios are welcomed and appreciated. Before proceeding please be aware of our [code of conduct]().
 
 ## Getting setup
 
@@ -40,14 +39,14 @@ conda env create -f environment.yml
 conda activate fios
 ```
 
-### 4. Install fiosin development mode
+### 4. Install fios in development mode
 
 <!--pytest-codeblocks:skip-->
 ```bash
 pip install -e .[test,docs]
 ```
 
-### 5. Setup precommit hooks
+### 5. Setup pre-commit hooks
 
 fios uses several [pre-commit](https://pre-commit.com/) hooks to ensure the code stays tidy. Please install and use them!
 
@@ -82,12 +81,13 @@ pytest tests --cov fios --cov-report term-missing
 ## Contributing to the documentation
 
 The documentation is primarily done in markdown but easily converted to jupyter notebooks using
-[jupytext](https://github.com/mwouts/jupytext).
-
+[jupytext](https://github.com/mwouts/jupytext). Feel free to make changes to the markdown then
+build with the following steps:
 
 ## Building the documentation
 
 The documentation can be built using the script called "make_docs.py" in the scripts directory. If you have followed the instructions above all the required dependencies should be installed.
+You will also need to install pandoc using conda or your OS' package manager.
 
 <!--pytest-codeblocks:skip-->
 ```bash
