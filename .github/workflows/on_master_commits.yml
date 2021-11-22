@@ -41,11 +41,7 @@ jobs:
         uses: conda-incubator/setup-miniconda@v2
         with:
           miniconda-version: 'latest'
-          python-version: ${{ matrix.python-version }}
-          activate-environment: fios
-          environment-file: environment.yml
-          condarc-file: .github/test_condarc.yml
-
+          python-version: 3.9
 
       - name: install fios with docbuild reqs
         shell: bash -l {0}
