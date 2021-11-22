@@ -106,7 +106,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     Examples
     --------
     >>> import fios
-    ... pa = fios.get_example_patch()
+    >>> pa = fios.get_example_patch()
     1. Apply bandpass filter along time axis from 1 to 100 Hz
     >>> bandpassed = pa.proc.pass_filter(time=(1, 100))
     2. Apply lowpass filter along distance axis for wavelengths less than 1000m
@@ -141,17 +141,19 @@ def stop_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     Examples
     --------
     >>> import fios
-    ... pa = fios.get_example_patch()
-    1. Apply bandpass filter along time axis from 1 to 100 Hz
-    >>> bandpassed = pa.proc.pass_filter(time=(1, 100))
-    2. Apply lowpass filter along distance axis for wavelengths less than 1000m
-    >>> lowpassed = pa.proc.pass_filter(distance=(None, 100))
+    >>> pa = fios.get_example_patch()
+
+    >>>  # 1. Apply bandpass filter along time axis from 1 to 100 Hz
+    >>> bandpassed = pa.pass_filter(time=(1, 100))
+
+    >>>  # 2. Apply lowpass filter along distance axis for wavelengths less than 1000m
+    >>> lowpassed = pa.pass_filter(distance=(None, 1/100))
     """
     dim, filt_min, filt_max = _check_filter_kwargs(kwargs)
     axis = patch.dims.index(dim)
     sr = _get_sampling_rate(patch, dim)
     # get niquest and low/high in terms of niquest
-    sos = _get_sos(sr, filt_min, filt_max)
+    sos = _get_sos(sr, filt_min, filt_max, corners)
     out = sosfilt(sos, patch.data, axis=axis)
     if zerophase:
         out = sosfilt(sos, out[::-1])[::-1]
