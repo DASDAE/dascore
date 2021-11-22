@@ -50,6 +50,11 @@ jobs:
         with:
           docs-folder: "docs/"
 
+      - name: install fios
+        shell: bash -l {0}
+        run: |
+          python -m pip install -e .[test,docs]
+
       - name: Commit documentation changes
         run: |
             git clone git@github.com:dasdae/fios --branch gh-pages --single-branch gh-pages
