@@ -1,3 +1,7 @@
+env:
+  URL: ${{ https://github.com/dasdae/fios }}
+
+
 name: calculate coverage
 on:
   push:
@@ -41,43 +45,32 @@ jobs:
           yml: ./codecov.yml
           fail_ci_if_error: true
 
+  update_master_docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
 
-#  update_gh_pages:
-#    # Build new documentation for latest
-#    runs-on: ubuntu-latest
-#
-#    steps:
-#      - uses: actions/checkout@v1
-#
-#      - name: Setup conda
-#        uses: conda-incubator/setup-miniconda@v2
-#        with:
-#          miniconda-version: 'latest'
-#          python-version: 3.7
-#          activate-environment: test
-#          environment-file: .github/test_conda_env.yml
-#          condarc-file: .github/test_condarc.yml
-#
-#      - name: install obsplus
-#        shell: bash -l {0}
-#        run: |
-#          pip install -e .[dev]
-#
-#      - name: git config
-#        shell: bash -l {0}
-#        run: |
-#          git config --global user.email "donotemailme@example.com"
-#          git config --global user.name "GithubActions"
-#
-#      - name: build docs
-#        shell: bash -l {0}
-#        run: |
-#          python scripts/stage_docs.py --remove-dirty
-#
-#      - name: push
-#        uses: ad-m/github-push-action@master
-#        with:
-#          github_token: ${{ secrets.GITHUB_TOKEN }}
-#          branch: gh-pages
-#          force: true
-#          directory: ../obsplus_documentation
+      - uses: ammaraskar/sphinx-action@master
+        with:
+          docs-folder: "docs/"
+
+      - name: Commit documentation changes
+        run: |
+            git clone ${{ env.CONFIG_PATH }} --branch gh-pages --single-branch gh-pages
+            cd gh-pages
+            git reset --soft `git rev-list --max-parents=0 HEAD | tail -n 1`
+            rm -rf .
+            cp -r ../docs/_build/html/* .
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            # This command will reset the gh pages branch to first commit
+            # as there is no need to keep doc history in git.
+            git add .
+            git commit -m "Update documentation" -a || true
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          branch: gh-pages
+          directory: gh-pages
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          force: true

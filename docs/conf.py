@@ -13,8 +13,11 @@
 # All configuration values have a default; values that are commented out
 # serve to show the default.
 
+import datetime
 import sys
 from os.path import abspath, dirname
+
+year = datetime.datetime.now().year
 
 # If extensions (or modules to document with autodoc) are in another
 # directory, add these directories to sys.path here. If the directory is
@@ -71,7 +74,7 @@ master_doc = "index"
 
 # General information about the project.
 project = u"fios"
-copyright = u"2021, Derrick Chambers"
+copyright = u"{s}, DASDAE Development Team" % year
 
 # The version info for the project you're documenting, acts as replacement
 # for |version| and |release|, also used in various other places throughout
@@ -130,7 +133,7 @@ pygments_style = "sphinx"
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = "default"
+html_theme = "bizstyle"
 
 # Theme options are theme-specific and customize the look and feel of a
 # theme further.  For a list of options available for each theme, see the

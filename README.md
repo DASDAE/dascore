@@ -1,10 +1,6 @@
-===============================
-FIOS
-===============================
+# FIOS
 
-(Fi)ber (O)ptic (S)ensing
-
-A prototype for the core functionality of the DASDAE core package.
+A python library for (Fi)ber (O)ptic (S)ensing
 
 
 Installation
