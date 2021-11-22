@@ -47,7 +47,7 @@ jobs:
       - name: install fios with docbuild reqs
         shell: bash -l {0}
         run: |
-          conda install sphinx, pandoc, nbsphinx
+          conda -c conda-forge install sphinx, pandoc, nbsphinx
           python -m pip install -e .[docs]
 
       - name: build docs
@@ -56,6 +56,7 @@ jobs:
           python scripts/make_docs.py
 
       - name: Commit documentation changes
+        shell: bash -l {0}
         run: |
             git clone https://github.com/dasdae/fios --branch gh-pages --single-branch gh-pages
             cd gh-pages
