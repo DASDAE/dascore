@@ -1,8 +1,4 @@
-env:
-  URL: ${{ https://github.com/dasdae/fios }}
-
-
-name: calculate coverage
+name: on_master_commit
 on:
   push:
     branches:
@@ -56,7 +52,7 @@ jobs:
 
       - name: Commit documentation changes
         run: |
-            git clone ${{ env.CONFIG_PATH }} --branch gh-pages --single-branch gh-pages
+            git clone git@github.com:dasdae/fios --branch gh-pages --single-branch gh-pages
             cd gh-pages
             git reset --soft `git rev-list --max-parents=0 HEAD | tail -n 1`
             rm -rf .
