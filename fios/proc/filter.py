@@ -107,41 +107,6 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     --------
     >>> import fios
     >>> pa = fios.get_example_patch()
-    1. Apply bandpass filter along time axis from 1 to 100 Hz
-    >>> bandpassed = pa.proc.pass_filter(time=(1, 100))
-    2. Apply lowpass filter along distance axis for wavelengths less than 1000m
-    >>> lowpassed = pa.proc.pass_filter(distance=(None, 100))
-    """
-    dim, filt_min, filt_max = _check_filter_kwargs(kwargs)
-    axis = patch.dims.index(dim)
-    sr = _get_sampling_rate(patch, dim)
-    # get niquest and low/high in terms of niquest
-    sos = _get_sos(sr, filt_min, filt_max, corners)
-    out = sosfilt(sos, patch.data, axis=axis)
-    if zerophase:
-        out = sosfilt(sos, out[::-1])[::-1]
-    return fios.Patch(data=out, coords=patch.coords, attrs=patch.attrs)
-
-
-@patch_function()
-def stop_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchType:
-    """
-    Apply a Butterworth band stop filter or (highpass, or lowpass).
-
-    Parameters
-    ----------
-    corners
-        The number of corners for the filter.
-    zerophase
-        If True, apply the filter twice.
-    **kwargs
-        Used to specify the dimension and frequency, wavenumber, or equivalent
-        limits.
-
-    Examples
-    --------
-    >>> import fios
-    >>> pa = fios.get_example_patch()
 
     >>>  # 1. Apply bandpass filter along time axis from 1 to 100 Hz
     >>> bandpassed = pa.pass_filter(time=(1, 100))
@@ -158,6 +123,35 @@ def stop_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     if zerophase:
         out = sosfilt(sos, out[::-1])[::-1]
     return fios.Patch(data=out, coords=patch.coords, attrs=patch.attrs)
+
+
+#
+# @patch_function()
+# def stop_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchType:
+#     """
+#     Apply a Butterworth band stop filter or (highpass, or lowpass).
+#
+#     Parameters
+#     ----------
+#     corners
+#         The number of corners for the filter.
+#     zerophase
+#         If True, apply the filter twice.
+#     **kwargs
+#         Used to specify the dimension and frequency, wavenumber, or equivalent
+#         limits.
+#
+#
+#     """
+#     dim, filt_min, filt_max = _check_filter_kwargs(kwargs)
+#     axis = patch.dims.index(dim)
+#     sr = _get_sampling_rate(patch, dim)
+#     # get niquest and low/high in terms of niquest
+#     sos = _get_sos(sr, filt_min, filt_max, corners)
+#     out = sosfilt(sos, patch.data, axis=axis)
+#     if zerophase:
+#         out = sosfilt(sos, out[::-1])[::-1]
+#     return fios.Patch(data=out, coords=patch.coords, attrs=patch.attrs)
 
 
 def _lowpass_cheby_2(data, freq, df, maxorder=12, axis=0):
