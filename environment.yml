@@ -1,0 +1,15 @@
+name: dascore
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - pytest
+  - pip
+  - pandas
+  - pooch>=1.2
+  - xarray
+  - pre-commit
+  - pytables
+  - matplotlib
+  - scipy
+  - findiff

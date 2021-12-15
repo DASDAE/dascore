@@ -1,0 +1,3 @@
+# A registry of data/hashes used by dascore
+terra15_das_1_trimmed.hdf5 18e08792c1cd08c9afd18334e17e21787be0b646151b39802541ee11a516976a https://github.com/dasdae/test_data/raw/master/das/terra15_das_1_trimmed.hdf5
+terra15_das_unfinished.hdf5 087e98cb228d9be369783998ef96c5221fdd3d9aaa9da1e4f45c56effe771222 https://github.com/dasdae/test_data/raw/master/das/terra15_das_unfinished.hdf5
