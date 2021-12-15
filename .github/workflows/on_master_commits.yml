@@ -23,13 +23,12 @@ jobs:
           pytest -s --cov dascore --cov-report=xml
 
       - name: upload coverage
-        uses: codecov/codecov-action@v1
+        uses: codecov/codecov-action@v2
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage.xml
           flags: unittests
-          name: codecov-umbrella
-          yml: ./codecov.yml
+          name: master_tests
           fail_ci_if_error: true
 
   update_master_docs:
