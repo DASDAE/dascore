@@ -23,7 +23,7 @@ Next, we simply read it into a [Stream](#Stream) object then get the first (and 
 # get a fiber file
 import dascore
 from dascore.utils.downloader import fetch
-path = fetch("terra15_v2_das_1_trimmed.hdf5")  # path to a datafile
+path = fetch("terra15_das_1_trimmed.hdf5")  # path to a datafile
 
 pa = dascore.read(path)[0]
 ```
