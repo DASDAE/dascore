@@ -13,6 +13,7 @@ from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.patch import Coords, _AttrsCoordsMixer
+from dascore.utils.saveload import save_pickle
 from dascore.viz import VizPatchNameSpace
 
 
@@ -30,16 +31,17 @@ class Patch:
         dims: Tuple[str] = None,
         attrs: Optional[Mapping] = None,
     ):
-        if isinstance(data, DataArray):
-            self._data_array = data
-            return
-        dims = dims if dims is not None else list(coords)
-        mixer = _AttrsCoordsMixer(attrs, coords, dims)
-        attrs, coords = mixer()
-        # get xarray coords from custom coords object
-        if isinstance(coords, Coords):
-            coords = coords._coords
-        self._data_array = DataArray(data=data, dims=dims, coords=coords, attrs=attrs)
+        if data is not None:  # be able to create empty patch instance to load file
+            if isinstance(data, DataArray):
+                self._data_array = data
+                return
+            dims = dims if dims is not None else list(coords)
+            mixer = _AttrsCoordsMixer(attrs, coords, dims)
+            attrs, coords = mixer()
+            # get xarray coords from custom coords object
+            if isinstance(coords, Coords):
+                coords = coords._coords
+            self._data_array = DataArray(data=data, dims=dims, coords=coords, attrs=attrs)
 
     def __eq__(self, other):
         """
@@ -146,6 +148,11 @@ class Patch:
     pass_filter = dascore.proc.pass_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
+
+    # --- io funcs
+
+    save_pickle = dascore.utils.save_pickle
+    load_pickle = dascore.utils.load_pickle
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
