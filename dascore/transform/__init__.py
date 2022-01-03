@@ -3,9 +3,10 @@ A module for applying transformation to Patches.
 """
 
 from dascore.utils.misc import MethodNameSpace
-from .strain import velocity_to_strain_rate
-from .spectro import spectrogram
+
 from .fft import rfft
+from .spectro import spectrogram
+from .strain import velocity_to_strain_rate
 
 
 class TransformPatchNameSpace(MethodNameSpace):

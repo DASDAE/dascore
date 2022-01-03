@@ -5,8 +5,8 @@ For interactive visualizations see :module:`dascore.workbench`
 """
 from dascore.utils.misc import MethodNameSpace
 
-from .waterfall import waterfall
 from .spectrogram import spectrogram
+from .waterfall import waterfall
 
 
 class VizPatchNameSpace(MethodNameSpace):
