@@ -6,7 +6,6 @@ A quickstart for dascore, a python library for fiber-optic sensing.
 A section of contiguous (or nearly so) fiber data is called a Patch. These can be generated in a few ways:
 
 
-
 1. Load an example patch (for simple demonstrations)
 
 ```python
@@ -23,7 +22,7 @@ Next, we simply read it into a [Stream](#Stream) object then get the first (and 
 # get a fiber file
 import dascore
 from dascore.utils.downloader import fetch
-path = fetch("terra15_v2_das_1_trimmed.hdf5")  # path to a datafile
+path = fetch("terra15_das_1_trimmed.hdf5")  # path to a datafile
 
 pa = dascore.read(path)[0]
 ```
