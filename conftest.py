@@ -61,6 +61,14 @@ def pytest_collection_modifyitems(config, items):
 
 # --- Test fixtures
 
+def pytest_sessionstart(session):
+    """
+    Ensure a non visual backend is used so plots don't pop up.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+
 
 @pytest.fixture(scope="session")
 def terra15_das_example_path():

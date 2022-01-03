@@ -20,9 +20,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-#        os: [ubuntu-latest, macos-latest, windows-latest]
-        os: [ macos-latest ]
-
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.9']
 
     steps:
@@ -54,14 +52,11 @@ jobs:
         run: |
           pytest -s --cov dascore --cov-append --cov-report=xml
 
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
         run: |
-          pytest --doctest-modules
+          pytest dascore --doctest-modules
 
       # Runs the documentation notebooks
       - name: test notebook docs
