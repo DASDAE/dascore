@@ -98,7 +98,6 @@ def get_slice(array, cond=Optional[tuple]) -> slice:
     >>> import numpy as np
     >>> ar = np.arange(100)
     >>> array_slice = get_slice(ar, cond=(1, 10))
-    slice(1, 11, None)
     """
     if cond is None:
         return slice(None, None)
