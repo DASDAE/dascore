@@ -13,7 +13,6 @@ from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.patch import Coords, _AttrsCoordsMixer
-from dascore.utils.saveload import save_pickle
 from dascore.viz import VizPatchNameSpace
 
 
@@ -41,7 +40,9 @@ class Patch:
             # get xarray coords from custom coords object
             if isinstance(coords, Coords):
                 coords = coords._coords
-            self._data_array = DataArray(data=data, dims=dims, coords=coords, attrs=attrs)
+            self._data_array = DataArray(
+                data=data, dims=dims, coords=coords, attrs=attrs
+            )
 
     def __eq__(self, other):
         """

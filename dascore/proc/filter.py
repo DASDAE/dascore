@@ -9,7 +9,7 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from scipy.signal import cheb2ord, cheby2, iirfilter, sosfilt, zpk2sos, sosfiltfilt
+from scipy.signal import cheb2ord, cheby2, iirfilter, sosfilt, sosfiltfilt, zpk2sos
 
 import dascore
 from dascore import patch_function

@@ -53,6 +53,7 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     attrs, coords = _AttrsCoordsMixer(new.attrs, new.coords, new.dims)()
     return patch.__class__(data, attrs=attrs, coords=coords, dims=patch.dims)
 
+
 @patch_function()
 def sel(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     """
@@ -64,6 +65,7 @@ def sel(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     data = new.data if not copy else new.data.copy()
     attrs, coords = _AttrsCoordsMixer(new.attrs, new.coords, new.dims)()
     return patch.__class__(data, attrs=attrs, coords=coords, dims=patch.dims)
+
 
 @patch_function()
 def isel(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
