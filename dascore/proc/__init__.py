@@ -1,9 +1,9 @@
 """
 Module to Patch Processing.
 """
-from .select import select, sel, isel
+from .aggregate import aggregate
+from .basic import abs, rename, squeeze, transpose
 from .decimate import decimate
 from .detrend import detrend
 from .filter import pass_filter
-from .aggregate import aggregate
-from .basic import abs, squeeze, transpose, rename
+from .select import isel, sel, select
