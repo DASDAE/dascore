@@ -12,9 +12,9 @@ import pandas as pd
 from scipy.signal import cheb2ord, cheby2, iirfilter, sosfilt, zpk2sos
 
 import dascore
-from dascore import patch_function
 from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
+from dascore.utils.patch import patch_function
 
 
 def _check_filter_kwargs(kwargs):
