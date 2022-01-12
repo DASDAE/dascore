@@ -140,8 +140,6 @@ class Patch:
     # --- processing funcs
 
     select = dascore.proc.select
-    sel = dascore.proc.sel
-    isel = dascore.proc.isel
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     pass_filter = dascore.proc.pass_filter
