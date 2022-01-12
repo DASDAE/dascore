@@ -33,6 +33,7 @@ class Patch:
         if isinstance(data, DataArray):
             self._data_array = data
             return
+        coords = {} if coords is None else coords
         dims = dims if dims is not None else list(coords)
         mixer = _AttrsCoordsMixer(attrs, coords, dims)
         attrs, coords = mixer()
@@ -144,6 +145,11 @@ class Patch:
     pass_filter = dascore.proc.pass_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
+
+    # --- io funcs
+
+    save_pickle = dascore.utils.save_pickle
+    load_pickle = dascore.utils.load_pickle
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references

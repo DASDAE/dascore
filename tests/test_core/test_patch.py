@@ -110,6 +110,29 @@ class TestInit:
         assert not np.any(pd.isnull(ar.coords["time"]))
 
 
+class TestEmptyPatch:
+    """Tests for empty patch objects."""
+
+    def test_empty_patch_str(self):
+        """An empty patch should have both a str and repr of nonzero length."""
+        patch = Patch()
+        assert len(str(patch))
+        assert len(repr(patch))
+
+    def test_has_attrs(self):
+        """An empty test patch should have attrs with null(ish) values."""
+        patch = Patch()
+        attrs = patch.attrs
+        assert len(attrs)
+        # Check that default values exist but are null (of appropriate dtype)
+        names = ["time", "distance"]
+        fields = ["d_{x}", "{x}_min", "{x}_max"]
+        for name in names:
+            for field in fields:
+                value = attrs[field.format(x=name)]
+                assert pd.isnull(value)
+
+
 class TestEquals:
     """Tests for checking equality."""
 

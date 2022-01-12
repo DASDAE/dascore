@@ -9,7 +9,7 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from scipy.signal import cheb2ord, cheby2, iirfilter, sosfilt, zpk2sos
+from scipy.signal import cheb2ord, cheby2, iirfilter, sosfilt, sosfiltfilt, zpk2sos
 
 import dascore
 from dascore.constants import PatchType
@@ -119,9 +119,10 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     sr = _get_sampling_rate(patch, dim)
     # get niquest and low/high in terms of niquest
     sos = _get_sos(sr, filt_min, filt_max, corners)
-    out = sosfilt(sos, patch.data, axis=axis)
     if zerophase:
-        out = sosfilt(sos, out[::-1])[::-1]
+        out = sosfiltfilt(sos, patch.data, axis=axis)
+    else:
+        out = sosfilt(sos, patch.data, axis=axis)
     return dascore.Patch(data=out, coords=patch.coords, attrs=patch.attrs)
 
 
