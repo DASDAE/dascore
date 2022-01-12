@@ -1,3 +1,1 @@
-# Need this so that line endings are not different from windows to Linux/OSX
-# see: https://stackoverflow.com/a/30757723/3645626
-* text=auto
+* text=auto eol=lf
