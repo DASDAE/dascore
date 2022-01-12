@@ -25,7 +25,7 @@ def _get_version_str(hdf_fi) -> str:
     return file_version
 
 
-def _is_terra15(path: Union[str, Path]) -> tuple[str, str]:
+def _is_terra15(path: Union[str, Path]) -> Union[tuple[str, str], bool]:
     """
     Return True if file contains terra15 version 2 data else False.
 

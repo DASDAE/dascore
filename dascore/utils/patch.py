@@ -275,6 +275,8 @@ class _AttrsCoordsMixer:
 
     def __init__(self, attrs, coords, dims):
         """Init with attrs and coords"""
+        if not dims and coords:
+            dims = list(coords)
         self.attrs = attrs if attrs is not None else {}
         self.coords = coords
         self.dims = dims
@@ -383,9 +385,11 @@ class _AttrsCoordsMixer:
             # make sure its not an xarray thing
             array = getattr(array, "values", array)
             if f"{dim}_min" in fill_keys:
-                self.copied_attrs[f"{dim}_min"] = np.min(array)
+                minval = np.min(array) if len(array) else np.NaN
+                self.copied_attrs[f"{dim}_min"] = minval
             if f"{dim}_max" in fill_keys:
-                self.copied_attrs[f"{dim}_max"] = np.max(array)
+                maxval = np.max(array) if len(array) else np.NaN
+                self.copied_attrs[f"{dim}_max"] = maxval
         # add dims column
         if not len(self.attrs["dims"]):
             self.copied_attrs["dims"] = ",".join(self.dims)

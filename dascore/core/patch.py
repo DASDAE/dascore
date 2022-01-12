@@ -30,19 +30,17 @@ class Patch:
         dims: Tuple[str] = None,
         attrs: Optional[Mapping] = None,
     ):
-        if data is not None:  # be able to create empty patch instance to load file
-            if isinstance(data, DataArray):
-                self._data_array = data
-                return
-            dims = dims if dims is not None else list(coords)
-            mixer = _AttrsCoordsMixer(attrs, coords, dims)
-            attrs, coords = mixer()
-            # get xarray coords from custom coords object
-            if isinstance(coords, Coords):
-                coords = coords._coords
-            self._data_array = DataArray(
-                data=data, dims=dims, coords=coords, attrs=attrs
-            )
+        if isinstance(data, DataArray):
+            self._data_array = data
+            return
+        coords = {} if coords is None else coords
+        dims = dims if dims is not None else list(coords)
+        mixer = _AttrsCoordsMixer(attrs, coords, dims)
+        attrs, coords = mixer()
+        # get xarray coords from custom coords object
+        if isinstance(coords, Coords):
+            coords = coords._coords
+        self._data_array = DataArray(data=data, dims=dims, coords=coords, attrs=attrs)
 
     def __eq__(self, other):
         """

@@ -18,7 +18,7 @@ timeable_types = Union[int, float, str, np.datetime64, pd.Timestamp]
 SUMMARY_KEYS = ("format", "min_time", "max_time", "min_distance", "max_distance")
 
 # expected fiber attributes
-REQUIRED_FIBER_DIMS = ("time", "distance")
+DEFAULT_DIMS = ("time", "distance")
 
 # expected DAS attributes
 REQUIRED_DAS_ATTRS = ("d_time", "d_distance")
