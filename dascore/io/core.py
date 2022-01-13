@@ -12,10 +12,11 @@ import pkg_resources
 import dascore
 from dascore.constants import PatchSummaryDict, StreamType, timeable_types
 from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
+from dascore.utils.docs import compose_docstring
 
 # ------------- Protocol for File Format support
 
-_FORMATTERS = {}  # a dict of formatters
+_IO_INSTANCES = {}  # a dict of formatters
 _LOADED_ENTRY_POINTS = {}  # entry points loaded for formatters
 
 
@@ -24,9 +25,9 @@ for ep in pkg_resources.iter_entry_points(group="my_ep_group_id"):
     _LOADED_ENTRY_POINTS[ep.name] = {ep.load()}
 
 
-def _register_formatter(formatter):
+def _register_fiber_io(formatter):
     """Register a new formatter."""
-    _FORMATTERS[formatter.name.upper()] = formatter
+    _IO_INSTANCES[formatter.name.upper()] = formatter
 
 
 class FiberIO(ABC):
@@ -92,7 +93,7 @@ class FiberIO(ABC):
             raise InvalidFileFormatter(msg)
         # register formatter
         instance = cls()
-        _register_formatter(instance)
+        _register_fiber_io(instance)
 
 
 def read(
@@ -105,25 +106,53 @@ def read(
 ) -> StreamType:
     """
     Read a fiber file.
+
+    Parameters
+    ----------
+    path
+        A path to the file to read.
+    format
+        A string indicating the file format. If not provided dascore will
+        try to estimate the format.
+    version
+        An optional string indicating the format version.
+    time
+        An optional tuple of time ranges.
+    distance
+        An optional tuple of distances.
+    *kwargs
+        All kwargs are passed to the format-specific read functions.
     """
     if format is None:
         format = get_format(path)[0].upper()
-    formatter = _FORMATTERS[format.upper()]
+    formatter = _IO_INSTANCES[format.upper()]
     return formatter.read(path, version=version, time=time, distance=distance, **kwargs)
 
 
+@compose_docstring(fields=list(PatchSummaryDict.__annotations__))
 def scan_file(
-    path_or_obj: Union[
-        Path,
-        str,
-    ],
-    format=None,
+    path: Union[Path, str],
+    format: Optional[str] = None,
 ) -> List[PatchSummaryDict]:
-    """Scan a file, return the summary dictionary."""
+    """
+    Scan a file, return the summary dictionary.
+
+    Parameters
+    ----------
+    path
+        The path the to file to scan
+    format
+        Format of the file. If not provided DASCore will try to determine it.
+
+    Notes
+    -----
+    The summary dictionaries contain the following fields:
+        {fields}
+    """
     # dispatch to file format handlers
     if format is None:
-        format = get_format(path_or_obj)[0]
-    return _FORMATTERS[format].scan(path_or_obj)
+        format = get_format(path)[0]
+    return _IO_INSTANCES[format].scan(path)
 
 
 def get_format(path: Union[str, Path]) -> (str, str):
@@ -143,16 +172,16 @@ def get_format(path: Union[str, Path]) -> (str, str):
     ------
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
 
-
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"{path} does not exist.")
-    for name, formatter in _FORMATTERS.items():
+    for name, formatter in _IO_INSTANCES.items():
         try:
             format = formatter.get_format(path)
         except Exception:  # NOQA
             continue
-        return format
+        if format:
+            return format
     else:
         msg = f"Could not determine file format of {path}"
         raise UnknownFiberFormat(msg)
@@ -174,7 +203,7 @@ def write(patch_or_stream, path: Union[str, Path], format: str, **kwargs):
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
 
     """
-    formatter = _FORMATTERS[format.upper()]
+    formatter = _IO_INSTANCES[format.upper()]
     if not isinstance(patch_or_stream, dascore.Stream):
         patch_or_stream = dascore.Stream([patch_or_stream])
     formatter.write(patch_or_stream, path, **kwargs)

@@ -5,7 +5,7 @@ import pickle
 
 import pytest
 
-from dascore.io.pickle.core import _is_pickle
+from dascore.io.pickle.core import PickleIO
 
 
 @pytest.fixture(scope="session")
@@ -22,6 +22,7 @@ class TestIsPickle:
 
     def test_detect_file(self, pickle_patch_path):
         """Simple test on output of is pickle."""
-        out = _is_pickle(pickle_patch_path)
+        parser = PickleIO()
+        out = parser.get_format(pickle_patch_path)
         assert out
         assert out[0] == "PICKLE"

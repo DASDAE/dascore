@@ -4,7 +4,7 @@ Test for basic IO and related functions.
 import pytest
 
 import dascore
-from dascore.exceptions import InvalidFileFormatter
+from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
 from dascore.io.core import FiberIO
 
 
@@ -50,7 +50,8 @@ class TestGetFormat:
 
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
-        assert not dascore.get_format(dummy_text_file)
+        with pytest.raises(UnknownFiberFormat):
+            dascore.get_format(dummy_text_file)
 
 
 class TestRead:
