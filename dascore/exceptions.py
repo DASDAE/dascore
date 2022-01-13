@@ -3,15 +3,19 @@ Custom dascore exceptions.
 """
 
 
-class FiosError(Exception):
+class DASCoreError(Exception):
     """Base class for dascore errors."""
 
 
-class UnknownFiberFormat(IOError, FiosError):
-    """Raised when the format of an elledged fiber file is not recognized."""
+class InvalidFileFormatter(ValueError, DASCoreError):
+    """Raised when an invalid file formatter is defined or used."""
 
 
-class PatchError(FiosError):
+class UnknownFiberFormat(IOError, DASCoreError):
+    """Raised when the format of an alleged fiber file is not recognized."""
+
+
+class PatchError(DASCoreError):
     """Parent class for more specific Patch Errors."""
 
 
@@ -27,7 +31,7 @@ class PatchAttributeError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's attributes."""
 
 
-class TimeError(ValueError, FiosError):
+class TimeError(ValueError, DASCoreError):
     """Raised when something is wrong with a time value"""
 
 
@@ -35,5 +39,5 @@ class InvalidTimeRange(TimeError):
     """Raised when an invalid time range is encountered."""
 
 
-class FilterValueError(ValueError, FiosError):
+class FilterValueError(ValueError, DASCoreError):
     """Raise when something goes wrong with filtering or filter inputs."""

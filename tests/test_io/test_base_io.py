@@ -4,7 +4,39 @@ Test for basic IO and related functions.
 import pytest
 
 import dascore
-from dascore.exceptions import UnknownFiberFormat
+from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
+from dascore.io.core import FiberIO
+
+
+class TestFormatter:
+    """Tests for adding file supports through Formatter"""
+
+    # the methods a formatter can implement.
+
+    class FormatterWithName(FiberIO):
+        """A formatter with a file name."""
+
+        name = "_test_format"
+
+    def test_empty_formatter_raises(self):
+        """An empty formatter can't exist; it at least needs a name."""
+
+        with pytest.raises(InvalidFileFormatter):
+
+            class empty_formatter(FiberIO):
+                """formatter with no name"""
+
+    def test_empty_formatter_undefined_methods(self, random_patch):
+        """Ensure a Not Implemented error is raised for FormatterWithName"""
+        instance = self.FormatterWithName()
+        with pytest.raises(NotImplementedError):
+            instance.read("empty_path")
+        with pytest.raises(NotImplementedError):
+            instance.write(random_patch, "empty_path")
+        with pytest.raises(NotImplementedError):
+            instance.get_format("empty_path")
+        with pytest.raises(NotImplementedError):
+            instance.scan("bad_path")
 
 
 class TestGetFormat:
@@ -19,7 +51,7 @@ class TestGetFormat:
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
         with pytest.raises(UnknownFiberFormat):
-            assert dascore.get_format(dummy_text_file)
+            dascore.get_format(dummy_text_file)
 
 
 class TestRead:

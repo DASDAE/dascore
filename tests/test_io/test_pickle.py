@@ -1,19 +1,17 @@
 """
 Tests for reading/writing pickles.
 """
-import pickle
-
 import pytest
 
-from dascore.io.pickle.core import _is_pickle
+import dascore
+from dascore.io.pickle.core import PickleIO
 
 
 @pytest.fixture(scope="session")
 def pickle_patch_path(tmp_path_factory, random_patch):
     """Pickle a patch and return the path."""
     path = tmp_path_factory.mktemp("pickle_test") / "test.pkl"
-    with path.open("wb") as fi:
-        pickle.dump(random_patch, fi)
+    random_patch.io.write(path, "pickle")
     return path
 
 
@@ -22,6 +20,15 @@ class TestIsPickle:
 
     def test_detect_file(self, pickle_patch_path):
         """Simple test on output of is pickle."""
-        out = _is_pickle(pickle_patch_path)
+        parser = PickleIO()
+        out = parser.get_format(pickle_patch_path)
         assert out
         assert out[0] == "PICKLE"
+
+    def test_read_pickle(self, pickle_patch_path, random_patch):
+        """Ensure a pickle file can be read."""
+        out = dascore.read(pickle_patch_path)
+        assert isinstance(out, dascore.Stream)
+        assert len(out) == 1
+        assert isinstance(out[0], dascore.Patch)
+        assert random_patch == out[0]
