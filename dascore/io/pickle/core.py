@@ -19,6 +19,8 @@ class PickleIO(FiberIO):
     compatibility issues.
     """
 
+    name = "PICKLE"
+
     def _header_is_dascore(self, byte_stream):
         """Return True if the first few bytes mention dascore classes."""
         is_stream = b"dascore.core.stream" in byte_stream

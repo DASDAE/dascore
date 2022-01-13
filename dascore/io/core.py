@@ -4,6 +4,7 @@ Das Data.
 """
 import os.path
 from abc import ABC
+from functools import cache
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -21,8 +22,11 @@ _LOADED_ENTRY_POINTS = {}  # entry points loaded for formatters
 
 
 # load entry points (Maybe cache this somehow for faster startup?)
-for ep in pkg_resources.iter_entry_points(group="my_ep_group_id"):
-    _LOADED_ENTRY_POINTS[ep.name] = {ep.load()}
+@cache
+def load_fiber_io_from_plugins():
+    """A function to load all the IO into memory."""
+    for ep in pkg_resources.iter_entry_points(group="dascore.plugin.fiber_io"):
+        _LOADED_ENTRY_POINTS[ep.name] = {ep.load()}
 
 
 def _register_fiber_io(formatter):
