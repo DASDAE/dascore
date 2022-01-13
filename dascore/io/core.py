@@ -1,37 +1,21 @@
 """
-Base functionality for reading, writting, determining file formats, and scanning
+Base functionality for reading, writing, determining file formats, and scanning
 Das Data.
 """
 import os.path
 from abc import ABC
-from functools import cache
 from pathlib import Path
 from typing import List, Optional, Union
-
-import pkg_resources
 
 import dascore
 from dascore.constants import PatchSummaryDict, StreamType, timeable_types
 from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
+from dascore.utils.plugin import FiberIOManager
 
 # ------------- Protocol for File Format support
 
-_IO_INSTANCES = {}  # a dict of formatters
-_LOADED_ENTRY_POINTS = {}  # entry points loaded for formatters
-
-
-# load entry points (Maybe cache this somehow for faster startup?)
-@cache
-def load_fiber_io_from_plugins():
-    """A function to load all the IO into memory."""
-    for ep in pkg_resources.iter_entry_points(group="dascore.plugin.fiber_io"):
-        _LOADED_ENTRY_POINTS[ep.name] = {ep.load()}
-
-
-def _register_fiber_io(formatter):
-    """Register a new formatter."""
-    _IO_INSTANCES[formatter.name.upper()] = formatter
+_IO_INSTANCES = FiberIOManager("dascore.plugin.fiber_io")
 
 
 class FiberIO(ABC):
@@ -96,8 +80,7 @@ class FiberIO(ABC):
             msg = "You must specify the file format with the name field."
             raise InvalidFileFormatter(msg)
         # register formatter
-        instance = cls()
-        _register_fiber_io(instance)
+        _IO_INSTANCES[cls.name.upper()] = cls()
 
 
 def read(
