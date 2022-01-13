@@ -45,7 +45,7 @@ class PatchSummaryDict(TypedDict):
     dims: str
 
 
-# The expected attributes for the Trace2D
+# The expected attributes for the Patch
 DEFAULT_PATCH_ATTRS = {
     "d_time": np.NaN,
     "d_distance": np.NaN,
@@ -64,6 +64,9 @@ DEFAULT_PATCH_ATTRS = {
     "history": lambda: [],
     "dims": "",
 }
+
+# Methods FileFormatter needs to support
+FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
 
 # A set of attributes which are used in Patch equality checks.
 COMPARE_ATTRS = {

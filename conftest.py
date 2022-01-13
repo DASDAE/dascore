@@ -7,7 +7,7 @@ import pytest
 
 import dascore
 from dascore.core import Patch, Stream
-from dascore.io.terra15.core import _read_terra15
+from dascore.io.core import read
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 
@@ -83,7 +83,7 @@ def terra15_das_example_path():
 @register_func(STREAM_FIXTURES)
 def terra15_das_stream(terra15_das_example_path) -> Stream:
     """Return the stream of Terra15 Das Array"""
-    return _read_terra15(terra15_das_example_path)
+    return read(terra15_das_example_path, format="terra15")
 
 
 @pytest.fixture(scope="session")
@@ -99,7 +99,7 @@ def terra15_das_unfinished_path() -> Path:
 @register_func(PATCH_FIXTURES)
 def terra15_das_patch(terra15_das_example_path) -> Patch:
     """Read the terra15 data, return contained DataArray"""
-    out = _read_terra15(terra15_das_example_path)[0]
+    out = read(terra15_das_example_path, "terra15")[0]
     attr_time = out.attrs["time_max"]
     coord_time = out.coords["time"].max()
     assert attr_time == coord_time
