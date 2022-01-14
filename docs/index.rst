@@ -1,19 +1,24 @@
-DasCore
-====
+DASCore
+=======
 
 A python library for working with distributed fiber optic sensing data.
 
-`Introduction <markdown/intro.md>`_
+.. toctree::
+   :maxdepth: 1
 
-`Installation <markdown/installation.md>`_
+   Introduction<markdown/intro.md>
 
-`Code <https://github.com/dasdae/dascore>`_
+   Installation<markdown/installation.md>
 
-`Contributing <markdown/contributing.md>`_
+   Code<https://github.com/dasdae/dascore>
 
-`Support Bug Reporting <markdown/support.md>`_
+   Contributing<markdown/contributing.md>
 
-`Full API Documentation <api/dascore.rst>`_
+   Support Bug Reporting<markdown/support.md>
+
+   Full API Documentation<api/dascore.rst>
+
+   Module API<api/modules.rst>
 
 :ref:`genindex`
 

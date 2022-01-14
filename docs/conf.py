@@ -17,6 +17,8 @@ import datetime
 import sys
 from os.path import abspath, dirname
 
+import maisie_sphinx_theme
+
 year = datetime.datetime.now().year
 
 # If extensions (or modules to document with autodoc) are in another
@@ -54,9 +56,13 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.autosummary",
     "sphinx_autodoc_typehints",
-    "IPython.sphinxext.ipython_console_highlighting",
+    # "IPython.sphinxext.ipython_console_highlighting",
     "numpydoc",
-    "nbsphinx",
+    # "nbsphinx",
+    # "myst_parser",
+    "myst_nb",
+    "matplotlib.sphinxext.mathmpl",
+    "matplotlib.sphinxext.plot_directive",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -120,6 +126,9 @@ source_parsers = {
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = "sphinx"
 
+html_static_path = ["_static"]
+html_logo = "_static/logo.png"
+
 # A list of ignored prefixes for module index sorting.
 # modindex_common_prefix = []
 
@@ -132,7 +141,7 @@ pygments_style = "sphinx"
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = "nature"
+html_theme = "alabaster"
 
 # Theme options are theme-specific and customize the look and feel of a
 # theme further.  For a list of options available for each theme, see the
@@ -141,6 +150,7 @@ html_theme = "nature"
 
 # Add any paths that contain custom themes here, relative to this directory.
 # html_theme_path = []
+
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
@@ -174,7 +184,15 @@ html_static_path = ["_static"]
 # html_use_smartypants = True
 
 # Custom sidebar templates, maps document names to template names.
-# html_sidebars = {}
+html_sidebars = {
+    "**": [
+        "about.html",
+        "navigation.html",
+        "relations.html",
+        "searchbox.html",
+        "donate.html",
+    ]
+}
 
 # Additional templates that should be rendered to pages, maps page names
 # to template names.
@@ -209,7 +227,7 @@ html_static_path = ["_static"]
 # html_file_suffix = None
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = "fiossdoc"
+htmlhelp_basename = "DASCore"
 
 
 # -- Options for LaTeX output ------------------------------------------
