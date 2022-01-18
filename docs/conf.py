@@ -63,7 +63,14 @@ extensions = [
     "myst_nb",
     "matplotlib.sphinxext.mathmpl",
     "matplotlib.sphinxext.plot_directive",
+    # 'sphinx_automodapi.automodapi',
+    # 'sphinx_automodapi.smart_resolver',
+    # 'autoclasstoc',
+    # 'autoapi.extension',
+    "sphinx_automodapi.automodapi",
+    "sphinx_automodapi.smart_resolver",
 ]
+
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -78,8 +85,8 @@ source_suffix = [".rst", ".md"]
 master_doc = "index"
 
 # General information about the project.
-project = u"dascore"
-copyright = u"%s, DASDAE Development Team" % year
+project = "DASCore"
+copyright = "%s, DASDAE Development Team" % year
 
 # The version info for the project you're documenting, acts as replacement
 # for |version| and |release|, also used in various other places throughout
@@ -141,7 +148,7 @@ html_logo = "_static/logo.png"
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = "alabaster"
+# html_theme = "default"
 
 # Theme options are theme-specific and customize the look and feel of a
 # theme further.  For a list of options available for each theme, see the
@@ -245,7 +252,7 @@ latex_elements = {
 # (source start file, target name, title, author, document class
 # [howto/manual]).
 latex_documents = [
-    ("index", "dascore.tex", u"dascore Documentation", u"Derrick Chambers", "manual")
+    ("index", "dascore.tex", "DASCore Documentation", "Derrick Chambers", "manual")
 ]
 
 # The name of an image file (relative to this directory) to place at
@@ -273,7 +280,15 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [("index", "dascore", u"dascore Documentation", [u"Derrick Chambers"], 1)]
+man_pages = [
+    (
+        "index",
+        f"DASCore_{dascore.__version__}",
+        "DASCore Documentation",
+        ["Derrick Chambers"],
+        1,
+    )
+]
 
 # If true, show URL addresses after external links.
 # man_show_urls = False
@@ -287,12 +302,11 @@ man_pages = [("index", "dascore", u"dascore Documentation", [u"Derrick Chambers"
 texinfo_documents = [
     (
         "index",
-        "dascore",
-        u"dascore Documentation",
-        u"Derrick Chambers",
-        "dascore",
-        "One line description of project.",
-        "Miscellaneous",
+        f"DASCore_{dascore.__version__}",
+        "DASCore Documentation",
+        "Derrick Chambers",
+        "DASCore",
+        "A library for working with DFOS data.",
     )
 ]
 
@@ -308,7 +322,7 @@ texinfo_documents = [
 # If true, do not generate a @detailmenu in the "Top" node's menu.
 # texinfo_no_detailmenu = False
 
-autodoc_default_flags = ["members"]
+# autodoc_default_flags = ["members"]
 autosummary_generate = True
 nbsphinx_timeout = 600
 
@@ -321,3 +335,15 @@ nbsphinx_execute_arguments = [
     "--InlineBackend.figure_formats={'svg', 'pdf'}",
     "--InlineBackend.rc={'figure.dpi': 96}",
 ]
+
+# dont squash too much documentation in one place
+numpydoc_show_class_members = False
+
+# Edit on github path
+github_url = "https://github.com/dasdae/dascore"
+
+
+# auto api settings
+autoapi_type = "python"
+autoapi_dirs = ["../dascore"]
+autodoc_typehints = "description"

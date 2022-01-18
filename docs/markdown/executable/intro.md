@@ -11,7 +11,7 @@ kernelspec:
 ---
 # Quickstart
 
-A quickstart for dascore, a python library for fiber-optic sensing.
+A quickstart for DASCore, a python library for fiber-optic sensing.
 
 ## Patch
 A section of contiguous (or nearly so) fiber data is called a Patch. These can be generated in a few ways:

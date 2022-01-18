@@ -1,3 +1,0 @@
-"""
-Module managing named coordinates.
-"""

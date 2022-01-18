@@ -61,22 +61,28 @@ jobs:
         run: |
           python scripts/make_docs.py
 
-      - name: Commit documentation changes
-        shell: bash -l {0}
-        run: |
-            git clone https://github.com/dasdae/dascore --branch gh-pages --single-branch gh-pages
-            cd gh-pages
-            git reset --soft `git rev-list --max-parents=0 HEAD | tail -n 1`
-            mv .git ../temp_git
-            rm -rf ./*
-            mv ../temp_git .git
-            cp -r ../docs/_build/html/* .
-            git config --local user.email "action@github.com"
-            git config --local user.name "GitHub Action"
-            # This command will reset the gh pages branch to first commit
-            # as there is no need to keep doc history in git.
-            git add .
-            git commit -m "Update documentation" -a || true
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs/build/html
+
+#      - name: Commit documentation changes
+#        shell: bash -l {0}
+#        run: |
+#            git clone https://github.com/dasdae/dascore --branch gh-pages --single-branch gh-pages
+#            cd gh-pages
+#            git reset --soft `git rev-list --max-parents=0 HEAD | tail -n 1`
+#            mv .git ../temp_git
+#            rm -rf ./*
+#            mv ../temp_git .git
+#            cp -r ../docs/_build/html/* .
+#            git config --local user.email "action@github.com"
+#            git config --local user.name "GitHub Action"
+#            # This command will reset the gh pages branch to first commit
+#            # as there is no need to keep doc history in git.
+#            git add .
+#            git commit -m "Update documentation" -a || true
 
       - name: Push changes
         uses: ad-m/github-push-action@master
