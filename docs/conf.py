@@ -17,6 +17,8 @@ import datetime
 import sys
 from os.path import abspath, dirname
 
+import maisie_sphinx_theme
+
 year = datetime.datetime.now().year
 
 # If extensions (or modules to document with autodoc) are in another
@@ -54,10 +56,21 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.autosummary",
     "sphinx_autodoc_typehints",
-    "IPython.sphinxext.ipython_console_highlighting",
+    # "IPython.sphinxext.ipython_console_highlighting",
     "numpydoc",
-    "nbsphinx",
+    # "nbsphinx",
+    # "myst_parser",
+    "myst_nb",
+    "matplotlib.sphinxext.mathmpl",
+    "matplotlib.sphinxext.plot_directive",
+    # 'sphinx_automodapi.automodapi',
+    # 'sphinx_automodapi.smart_resolver',
+    # 'autoclasstoc',
+    # 'autoapi.extension',
+    "sphinx_automodapi.automodapi",
+    "sphinx_automodapi.smart_resolver",
 ]
+
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -72,8 +85,8 @@ source_suffix = [".rst", ".md"]
 master_doc = "index"
 
 # General information about the project.
-project = u"dascore"
-copyright = u"%s, DASDAE Development Team" % year
+project = "DASCore"
+copyright = f"{year}, DASDAE Development Team"
 
 # The version info for the project you're documenting, acts as replacement
 # for |version| and |release|, also used in various other places throughout
@@ -120,6 +133,9 @@ source_parsers = {
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = "sphinx"
 
+html_static_path = ["_static"]
+html_logo = "_static/logo.png"
+
 # A list of ignored prefixes for module index sorting.
 # modindex_common_prefix = []
 
@@ -132,15 +148,45 @@ pygments_style = "sphinx"
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = "nature"
+html_theme = "alabaster"
 
 # Theme options are theme-specific and customize the look and feel of a
 # theme further.  For a list of options available for each theme, see the
 # documentation.
-# html_theme_options = {}
+# html_theme_options = {
+#     'show_powered_by': False,
+#     'fixed_sidebar': False,
+#     # 'page_width': 'auto',
+#     # 'body_max_width': 'auto',
+#     'font_size': 150,
+# }
+html_theme_options = {
+    "page_width": "80%",
+    "body_max_width": "100%",
+    "github_user": "DASDAE",
+    "github_repo": "dascore",
+    "github_button": False,
+    "github_banner": True,
+    "fixed_sidebar": False,
+    "show_powered_by": False,
+    # 'extra_nav_links': dict(
+    #     [
+    #         ('Falcon Home', 'https://falconframework.org/'),
+    #         ('Falcon Wiki', 'https://github.com/falconry/falcon/wiki'),
+    #         ('GitHub Project', 'https://github.com/falconry/falcon'),
+    #         ('Get Help', '/community/help.html'),
+    #         (
+    #             'Support Falcon',
+    #             'https://falconframework.org/#sectionSupportFalconDevelopment',
+    #         ),
+    #     ]
+    # ),
+}
+
 
 # Add any paths that contain custom themes here, relative to this directory.
 # html_theme_path = []
+
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
@@ -174,7 +220,15 @@ html_static_path = ["_static"]
 # html_use_smartypants = True
 
 # Custom sidebar templates, maps document names to template names.
-# html_sidebars = {}
+html_sidebars = {
+    "**": [
+        "about.html",
+        "navigation.html",
+        "relations.html",
+        "searchbox.html",
+        "donate.html",
+    ]
+}
 
 # Additional templates that should be rendered to pages, maps page names
 # to template names.
@@ -190,7 +244,7 @@ html_static_path = ["_static"]
 # html_split_index = False
 
 # If true, links to the reST sources are added to the pages.
-# html_show_sourcelink = True
+html_show_sourcelink = False
 
 # If true, "Created using Sphinx" is shown in the HTML footer.
 # Default is True.
@@ -198,7 +252,7 @@ html_static_path = ["_static"]
 
 # If true, "(C) Copyright ..." is shown in the HTML footer.
 # Default is True.
-# html_show_copyright = True
+html_show_copyright = True
 
 # If true, an OpenSearch description file will be output, and all pages
 # will contain a <link> tag referring to it.  The value of this option
@@ -209,7 +263,7 @@ html_static_path = ["_static"]
 # html_file_suffix = None
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = "fiossdoc"
+htmlhelp_basename = "DASCore"
 
 
 # -- Options for LaTeX output ------------------------------------------
@@ -227,7 +281,7 @@ latex_elements = {
 # (source start file, target name, title, author, document class
 # [howto/manual]).
 latex_documents = [
-    ("index", "dascore.tex", u"dascore Documentation", u"Derrick Chambers", "manual")
+    ("index", "dascore.tex", "DASCore Documentation", "Derrick Chambers", "manual")
 ]
 
 # The name of an image file (relative to this directory) to place at
@@ -255,7 +309,15 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [("index", "dascore", u"dascore Documentation", [u"Derrick Chambers"], 1)]
+man_pages = [
+    (
+        "index",
+        f"DASCore_{dascore.__version__}",
+        "DASCore Documentation",
+        ["Derrick Chambers"],
+        1,
+    )
+]
 
 # If true, show URL addresses after external links.
 # man_show_urls = False
@@ -269,12 +331,11 @@ man_pages = [("index", "dascore", u"dascore Documentation", [u"Derrick Chambers"
 texinfo_documents = [
     (
         "index",
-        "dascore",
-        u"dascore Documentation",
-        u"Derrick Chambers",
-        "dascore",
-        "One line description of project.",
-        "Miscellaneous",
+        f"DASCore_{dascore.__version__}",
+        "DASCore Documentation",
+        "Derrick Chambers",
+        "DASCore",
+        "A library for working with DFOS data.",
     )
 ]
 
@@ -290,7 +351,7 @@ texinfo_documents = [
 # If true, do not generate a @detailmenu in the "Top" node's menu.
 # texinfo_no_detailmenu = False
 
-autodoc_default_flags = ["members"]
+# autodoc_default_flags = ["members"]
 autosummary_generate = True
 nbsphinx_timeout = 600
 
@@ -303,3 +364,15 @@ nbsphinx_execute_arguments = [
     "--InlineBackend.figure_formats={'svg', 'pdf'}",
     "--InlineBackend.rc={'figure.dpi': 96}",
 ]
+
+# dont squash too much documentation in one place
+numpydoc_show_class_members = False
+
+# Edit on github path
+github_url = "https://github.com/dasdae/dascore"
+
+
+# auto api settings
+autoapi_type = "python"
+autoapi_dirs = ["../dascore"]
+autodoc_typehints = "description"

@@ -1,6 +1,6 @@
 # Installation
 
-dascore can be installed with pip:
+DASCore can be installed with pip:
 
 <!--pytest-codeblocks:skip-->
 ```bash

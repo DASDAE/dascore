@@ -1,19 +1,30 @@
+---
+jupytext:
+  formats: md:myst
+  text_representation:
+    extension: .md
+    format_name: myst
+kernelspec:
+  display_name: Python 3
+  language: python
+  name: python3
+---
 # Quickstart
 
-A quickstart for dascore, a python library for fiber-optic sensing.
+A quickstart for DASCore, a python library for fiber-optic sensing.
 
 ## Patch
 A section of contiguous (or nearly so) fiber data is called a Patch. These can be generated in a few ways:
 
 
-1. Load an example patch (for simple demonstrations)
+### 1. Load an example patch (for simple demonstrations)
 
 ```python
 import dascore
 pa = dascore.get_example_patch()
 ```
 
-2. Load a file
+### 2. Load a file
 
 We first download an example fiber file (you need an internet connection).
 Next, we simply read it into a [Stream](#Stream) object then get the first (and only) patch.
@@ -27,7 +38,7 @@ path = fetch("terra15_das_1_trimmed.hdf5")  # path to a datafile
 pa = dascore.read(path)[0]
 ```
 
-3. Create from Arrays
+### 3. Create from Arrays
 
 Patches can also be created from numpy arrays and dictionaries. You need to specify:
 
@@ -58,6 +69,7 @@ coords = dict(
     time=np.arange(array.shape[1]) * attrs["d_time"],
 )
 pa = dascore.Patch(data=array, coords=coords, attrs=attrs)
+print(pa)
 ```
 
 ## Processing
@@ -76,7 +88,7 @@ out = (
 
 ## Visualization
 
-```python
+```{code-cell}
 import dascore
 pa = dascore.get_example_patch()
 pa.viz.waterfall(show=True)
