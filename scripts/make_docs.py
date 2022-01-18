@@ -33,7 +33,7 @@ def make_docs(doc_path=DOC_PATH, timeout=3000) -> str:
     # execute all the notebooks
     doc_path = Path(doc_path)
     # run auto api-doc
-    run("sphinx-apidoc ../dascore -e -M -o api -t _templates/autosummary", cwd=doc_path, shell=True)
+    run("sphinx-apidoc ../dascore -e -M -o api -t _templates/autosummary", cwd=doc_path, shell=True, check=True)
     run("make html", cwd=doc_path, shell=True, check=True)
     # ensure html directory was created, return path to it.
     expected_path: Path = doc_path / "_build" / "html"

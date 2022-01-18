@@ -86,7 +86,7 @@ master_doc = "index"
 
 # General information about the project.
 project = "DASCore"
-copyright = "%s, DASDAE Development Team" % year
+copyright = f"{year}, DASDAE Development Team"
 
 # The version info for the project you're documenting, acts as replacement
 # for |version| and |release|, also used in various other places throughout
@@ -148,12 +148,41 @@ html_logo = "_static/logo.png"
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-# html_theme = "default"
+html_theme = "alabaster"
 
 # Theme options are theme-specific and customize the look and feel of a
 # theme further.  For a list of options available for each theme, see the
 # documentation.
-# html_theme_options = {}
+# html_theme_options = {
+#     'show_powered_by': False,
+#     'fixed_sidebar': False,
+#     # 'page_width': 'auto',
+#     # 'body_max_width': 'auto',
+#     'font_size': 150,
+# }
+html_theme_options = {
+    "page_width": "80%",
+    "body_max_width": "100%",
+    "github_user": "DASDAE",
+    "github_repo": "dascore",
+    "github_button": False,
+    "github_banner": True,
+    "fixed_sidebar": False,
+    "show_powered_by": False,
+    # 'extra_nav_links': dict(
+    #     [
+    #         ('Falcon Home', 'https://falconframework.org/'),
+    #         ('Falcon Wiki', 'https://github.com/falconry/falcon/wiki'),
+    #         ('GitHub Project', 'https://github.com/falconry/falcon'),
+    #         ('Get Help', '/community/help.html'),
+    #         (
+    #             'Support Falcon',
+    #             'https://falconframework.org/#sectionSupportFalconDevelopment',
+    #         ),
+    #     ]
+    # ),
+}
+
 
 # Add any paths that contain custom themes here, relative to this directory.
 # html_theme_path = []
@@ -215,7 +244,7 @@ html_sidebars = {
 # html_split_index = False
 
 # If true, links to the reST sources are added to the pages.
-# html_show_sourcelink = True
+html_show_sourcelink = False
 
 # If true, "Created using Sphinx" is shown in the HTML footer.
 # Default is True.
@@ -223,7 +252,7 @@ html_sidebars = {
 
 # If true, "(C) Copyright ..." is shown in the HTML footer.
 # Default is True.
-# html_show_copyright = True
+html_show_copyright = True
 
 # If true, an OpenSearch description file will be output, and all pages
 # will contain a <link> tag referring to it.  The value of this option
