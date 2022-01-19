@@ -17,8 +17,6 @@ import datetime
 import sys
 from os.path import abspath, dirname
 
-import maisie_sphinx_theme
-
 year = datetime.datetime.now().year
 
 # If extensions (or modules to document with autodoc) are in another
