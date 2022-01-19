@@ -19,10 +19,10 @@ A python library for working with distributed fiber optic sensing data.
    Contributing<markdown/contributing/contributing.md>
 
 
-   Support Bug Reporting<markdown/support.md>
+   Support<markdown/support.md>
 
 
-   Full API Documentation<api/modules.rst>
+   API Documentation<api/modules.rst>
 
 
 

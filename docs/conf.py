@@ -65,8 +65,8 @@ extensions = [
     # 'sphinx_automodapi.smart_resolver',
     # 'autoclasstoc',
     # 'autoapi.extension',
-    "sphinx_automodapi.automodapi",
-    "sphinx_automodapi.smart_resolver",
+    # "sphinx_automodapi.automodapi",
+    # "sphinx_automodapi.smart_resolver",
 ]
 
 
