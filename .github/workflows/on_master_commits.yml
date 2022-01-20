@@ -65,7 +65,7 @@ jobs:
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs/build/html
+          publish_dir: ./docs/_build/html
 
 #      - name: Commit documentation changes
 #        shell: bash -l {0}
