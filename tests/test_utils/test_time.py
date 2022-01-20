@@ -6,7 +6,13 @@ import functools
 import numpy as np
 import pandas as pd
 
-from dascore.utils.time import get_select_time, to_datetime64, to_timedelta64
+from dascore.utils.time import (
+    get_select_time,
+    is_datetime64,
+    to_datetime64,
+    to_number,
+    to_timedelta64,
+)
 
 
 class TestToDateTime64:
@@ -137,3 +143,64 @@ class TestGetSelectTime:
         out = self.func(-1.0)
         expected = self.t2 - to_timedelta64(1)
         assert out == expected
+
+
+class TestToNumber:
+    """Tests for converting time-like types to ints, or passing through reals"""
+
+    def test_timedelta64(self):
+        """Ensure a timedelta64 returns the ns"""
+        out = to_number(np.timedelta64(1, "s"))
+        assert out == 1_000_000_000
+
+    def test_datetime64(self):
+        """Ensure int ns is returned for datetime64."""
+        out = to_number(to_datetime64("1970-01-01") + np.timedelta64(1, "ns"))
+        assert out == 1
+
+    def test_timedelta64_array(self):
+        """Ensure int ns is returned for datetime64."""
+        array = to_datetime64(["2017-01-01", "1970-01-01", "1999-01-01"])
+        out = to_number(array)
+        assert np.issubdtype(out.dtype, np.int64)
+
+    def test_timedelta_array(self):
+        """Ensure a timedelta array works."""
+        array = to_timedelta64([1, 1_000_000, 20])
+        out = to_number(array)
+        assert np.issubdtype(out.dtype, np.int64)
+
+    def test_nullish_returns_nan(self):
+        """Ensure a timedelta array works."""
+        assert to_number(None) is np.NaN
+        assert to_number(pd.NaT) is np.NaN
+
+    def test_number_unchanged(self):
+        """Ensure a number is passed through unchanged."""
+        assert to_number(10) == 10
+        assert to_number(10.1) == 10.1
+
+    def test_numeric_array_unchanged(self):
+        """Ensure numeric arrays are not changed."""
+        array = np.array([10, 12, 20])
+        assert np.all(to_number(array) == array)
+        array = np.array([12.3, 13.2, 12.2])
+        assert np.all(to_number(array) == array)
+
+
+class TestIsDateTime:
+    """Ensure is_datetime64 detects datetimes."""
+
+    def test_not_datetime(self):
+        """Simple tests for things that aren't datetimes."""
+        assert not is_datetime64(None)
+        assert not is_datetime64(float)
+        assert not is_datetime64(10)
+        assert not is_datetime64(42.12)
+        assert not is_datetime64(np.timedelta64(10, "s"))
+
+    def test_is_datetime(self):
+        """Things that should return True"""
+        assert is_datetime64(np.datetime64("1970-01-01"))
+        array = to_datetime64(["1990-01-01", "2010-01-01T12:23:22"])
+        assert is_datetime64(array)

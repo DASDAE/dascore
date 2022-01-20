@@ -155,3 +155,72 @@ def get_select_time(
             msg = "Cannot use relative times when reference times are null"
             raise TimeError(msg)
         return relative_to + d_time
+
+
+@singledispatch
+def to_number(obj: Union[timeable_types, np.array]) -> np.array:
+    """
+    Ensure a scalar or array is a number.
+
+    If the input values represents a time or a time-delta, convert it to a
+    an int representing ns.
+    """
+    msg = f"type {type(obj)} is not yet supported"
+    raise NotImplementedError(msg)
+
+
+@to_number.register(float)
+@to_number.register(int)
+def float_to_datetime(num: Union[float, int]) -> Union[float, int]:
+    """Convert a float to a single datetime"""
+    return num
+
+
+@to_number.register(np.ndarray)
+@to_number.register(list)
+@to_number.register(tuple)
+def array_to_number(array: np.array) -> np.array:
+    """
+    Convert an array of floating point timestamps to an array of np.datatime64.
+    """
+    array = np.array(array)
+    if not len(array):
+        return array
+    # dealing with an array of datetime64 or empty array
+    is_dt = np.issubdtype(array.dtype, np.datetime64)
+    is_td = np.issubdtype(array.dtype, np.timedelta64)
+    if is_td or is_dt:
+        new = to_datetime64(array) if is_dt else to_timedelta64(array)
+        array = new.astype(np.int64)
+    return array
+
+
+@to_number.register(np.datetime64)
+@to_number.register(datetime)
+@to_number.register(pd.Timestamp)
+def _pass_datetime(datetime):
+    """simply return the datetime"""
+    return to_number([to_datetime64(datetime)])[0]
+
+
+@to_number.register(type(None))
+@to_number.register(type(pd.NaT))
+@to_number.register(type(pd.NA))
+def _return_number_null(null):
+    """Convert non to NaT"""
+    return np.NaN
+
+
+@to_number.register(np.timedelta64)
+def _pandas_timestamp(time_delta: np.timedelta64):
+    return to_number([to_timedelta64(time_delta)])[0]
+
+
+def is_datetime64(obj) -> bool:
+    """Return True if object is a timedelta object or array of such."""
+    if isinstance(obj, np.datetime64):
+        return True
+    if isinstance(obj, (np.ndarray, list, tuple)):
+        if np.issubdtype(np.array(obj).dtype, np.datetime64):
+            return True
+    return False

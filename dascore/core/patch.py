@@ -145,6 +145,9 @@ class Patch:
     pass_filter = dascore.proc.pass_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
+    resample = dascore.proc.resample
+    iresample = dascore.proc.iresample
+    interpolate = dascore.proc.interpolate
 
     # --- io funcs
 
