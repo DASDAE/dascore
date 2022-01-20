@@ -171,7 +171,7 @@ def to_number(obj: Union[timeable_types, np.array]) -> np.array:
 
 @to_number.register(float)
 @to_number.register(int)
-def float_to_datetime(num: Union[float, int]) -> Union[float, int]:
+def float_to_num(num: Union[float, int]) -> Union[float, int]:
     """Convert a float to a single datetime"""
     return num
 
@@ -198,7 +198,7 @@ def array_to_number(array: np.array) -> np.array:
 @to_number.register(np.datetime64)
 @to_number.register(datetime)
 @to_number.register(pd.Timestamp)
-def _pass_datetime(datetime):
+def _time_to_num(datetime):
     """simply return the datetime"""
     return to_number([to_datetime64(datetime)])[0]
 
@@ -212,7 +212,7 @@ def _return_number_null(null):
 
 
 @to_number.register(np.timedelta64)
-def _pandas_timestamp(time_delta: np.timedelta64):
+def _pandas_timestamp_to_num(time_delta: np.timedelta64):
     return to_number([to_timedelta64(time_delta)])[0]
 
 

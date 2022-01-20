@@ -15,6 +15,10 @@ class UnknownFiberFormat(IOError, DASCoreError):
     """Raised when the format of an alleged fiber file is not recognized."""
 
 
+class ParameterError(ValueError, DASCoreError):
+    """Raised when something is wrong with an input parameter."""
+
+
 class PatchError(DASCoreError):
     """Parent class for more specific Patch Errors."""
 

@@ -1,6 +1,8 @@
 """
 Module for applying decimation to Patches.
 """
+from typing import Union
+
 import numpy as np
 
 import dascore
@@ -8,9 +10,9 @@ import dascore.compat as compat
 from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
 from dascore.proc.filter import _get_sampling_rate, _lowpass_cheby_2
-from dascore.utils.misc import all_close, get_dim_value_from_kwargs
-from dascore.utils.patch import patch_function
-from dascore.utils.time import is_datetime64, to_number
+from dascore.utils.misc import check_evenly_sampled, get_dim_value_from_kwargs
+from dascore.utils.patch import get_start_stop_step, patch_function
+from dascore.utils.time import to_number
 
 
 @patch_function()
@@ -66,7 +68,9 @@ def decimate(
 
 
 @patch_function()
-def interpolate(patch: PatchType, kind: str = "linear", **kwargs) -> PatchType:
+def interpolate(
+    patch: PatchType, kind: Union[str, int] = "linear", **kwargs
+) -> PatchType:
     """
     Set coordinates of patch along a dimension using interpolation.
 
@@ -76,6 +80,12 @@ def interpolate(patch: PatchType, kind: str = "linear", **kwargs) -> PatchType:
         The patch object to which interpolation is applied.
     kind
         The type of interpolation. See Notes for more details.
+        If a string, the following are supported:
+            linear - linear interpolation between a pair of points.
+            nearest - use the nearest sample for interpolation.
+        If an int, it specifies the order of spline to use. EG 1 is a linear
+            spline, 2 is quadratic, 3 is cubic, etc.
+
     **kwargs
         Used to specify dimension and interpolation values.
 
@@ -87,24 +97,17 @@ def interpolate(patch: PatchType, kind: str = "linear", **kwargs) -> PatchType:
     Values for interpolation must be evenly-spaced.
     """
     dim, axis, samples = get_dim_value_from_kwargs(patch, kwargs)
-    is_time = is_datetime64()
-
     # ensure samples are evenly sampled
-    diff = np.diff(samples)
-    if not all_close(diff, np.mean(diff)):
-        unique_diffs = np.unique(diff)
-        msg = (
-            "Interpolate requires evenly sampled data. The values you passed "
-            f"have the following unique differences: {unique_diffs}"
-        )
-        raise FilterValueError(msg)
-
-    coord = patch.coords[dim]
-    func = compat.interp1d(coord, patch.data, axis=axis, kind=kind)
-    out = func(samples)
+    check_evenly_sampled(samples)
+    # we need to make sure only real numbers are used, interp1d doesn't support
+    # datetime64 yet.
+    coord_num = to_number(patch.coords[dim])
+    samples_num = to_number(samples)
+    func = compat.interp1d(coord_num, patch.data, axis=axis, kind=kind)
+    out = func(samples_num)
     # update attributes
     new_attrs = dict(patch.attrs)
-    new_attrs[f"d_{dim}"] = np.median(diff)
+    new_attrs[f"d_{dim}"] = np.median(np.diff(samples))
     new_attrs[f"min_{dim}"] = np.min(samples)
     new_attrs[f"max_{dim}"] = np.max(samples)
     # update coordinates
@@ -115,61 +118,66 @@ def interpolate(patch: PatchType, kind: str = "linear", **kwargs) -> PatchType:
 
 
 @patch_function()
-def resample(patch: PatchType, method, window=None, **kwargs) -> PatchType:
+def resample(
+    patch: PatchType, window=None, interp_kind="linear", **kwargs
+) -> PatchType:
     """
-    Resample a patch along a single dimension using Fourier Method.
+    Resample along a single dimension using Fourier Method and interpolation.
 
     The dimension which should be resampled is passed as kwargs. The key
-    is the
+    is the dimension name and the value is the new sampling period.
 
-    Unlike :func: `dascore.proc.iresample` this function requires a
-    sampling_period.
+    Since Fourier methods only support adding or removing an integer number
+    of frequency bins, the exact desired sampling rate is often not achievable
+    with resampling alone. If the fourier resampling doesn't produce the exact
+    an interpolation (see :func:`dascore.proc.interpolate`) is used to achieve
+    the desired sampling rate.
 
     Parameters
-    ---------
+    ----------
     patch
         The patch to resample.
-    method
-        Indicates the resampling method. Must be one of the following:
-            'interpolation' - `scipy.ndimage.zoom()`
-            'poly' - `scipy.signal.resample_poly()`
-            'fft' - `scipy.signal.resample()`
     window
         The Fourier-domain window that tapers the Fourier spectrum. See
         :func:`scipy.signal.resample` for details. Only used if method == 'fft'.
+    interp_kind
+        The interpolation type if output of fourier resampling doesn't produce
+        exactly the right sampling rate.
     **kwargs
         keyword arguments to specify
 
     Notes
     -----
-    Normally uses scipy.signal.resample
+    Unlike :func: `dascore.proc.iresample` this function requires a
+    sampling_period.
+
+    Often the resulting Patch will be slightly shorter than the input Patch.
 
     Examples
     --------
+    # resample a patch along time dimension to 10 ms
     import dascore as dc
     patch = dc.get_example_patch()
     new = patch.resample(time=np.timedelta64(10, 'ms'))
 
     See Also
     --------
-    iresample: :func: `~dascore.proc.resmaple.isample`
     decimate: :func: `~dascore.proc.resample.decimate`
+    interpolate :func: `~dascore.proc.resample.interpolate`
+    iresample: :func: `~dascore.proc.resmaple.isample`
     """
-    dim, axis, val = get_dim_value_from_kwargs(patch, kwargs)
-    d_dim = patch.attrs[f"d_{dim}"]
+    dim, axis, new_d_dim = get_dim_value_from_kwargs(patch, kwargs)
+    d_dim = patch.attrs[f"d_{dim}"]  # current sampling rate
     # dim_range = int(compat.floor((dim_stop - dim_start) / val))
-    sig_len = patch.data.shape[axis]
-    new_len = int(np.round(sig_len * (val / d_dim)))
-    # since new_len is rounded find the actual sampling rate
-    # actual_ds =
-    # Resample
-    out = _resample_data(patch.data, new_len, axis, method)
-    new_attrs = dict(patch.attrs)
-    new_attrs[f"d_{dim}"] = val
-    new_coords = {x: patch.coords[x] for x in patch.dims}
-    new_coords[dim] = np.arange(out.shape[axis]) * val
-    kwargs = dict(data=out, attrs=new_attrs, dims=patch.dims, coords=new_coords)
-    return patch.__class__(**kwargs)
+    current_sig_len = patch.data.shape[axis]
+    new_len = current_sig_len * (d_dim / new_d_dim)
+    out = iresample.func(patch, window=window, **{dim: int(np.round(new_len))})
+    # Interpolate if new sampling rate is not very close to desired sampling rate.
+    if not np.isclose(new_len, np.round(new_len)):
+        start, stop, step = get_start_stop_step(out, dim)
+        new_coord = np.arange(start, stop, new_d_dim)
+        out = interpolate(out, kind=interp_kind, **{dim: new_coord})
+    return out
 
 
 @patch_function()
@@ -181,7 +189,7 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
     number of samples for the selected dimension.
 
     Parameters
-    ---------
+    ----------
     patch
         The patch to resample.
     window
@@ -205,31 +213,17 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
     iresample: :func: `~dascore.proc.resmaple.isample`
     decimate: :func: `~dascore.proc.resample.decimate`
     """
-    dim, axis, val = get_dim_value_from_kwargs(patch, kwargs)
-    out = compat.resample(patch.data, val, axis=axis, window=window)
-    new_d_dim = patch.attrs[f"d_{dim}"] * (patch.data.shape[axis] / val)
-    new_attrs = dict(patch.attrs)
-    new_attrs[f"d_{dim}"] = new_d_dim
+    dim, axis, new_length = get_dim_value_from_kwargs(patch, kwargs)
+    coord = patch.coords[dim]
+    out, new_coord = compat.resample(
+        patch.data, new_length, t=coord, axis=axis, window=window
+    )
+    # update coordinates
     new_coords = {x: patch.coords[x] for x in patch.dims}
-    new_coords[dim] = np.arange(out.shape[axis]) * new_d_dim
+    new_coords[dim] = new_coord
+    # update attributes
+    new_attrs = dict(patch.attrs)
+    new_attrs[f"d_{dim}"] = new_coord[1] - new_coord[0]
+    new_attrs[f"{dim}_max"] = np.max(new_coord)
     patch_inputs = dict(data=out, attrs=new_attrs, dims=patch.dims, coords=new_coords)
     return patch.__class__(**patch_inputs)
-
-
-def _resample_data(data, desired_length, axis, method):
-    """Resample data to desired length"""
-    if method.lower() == "fft":
-        out = compat.resample(data, desired_length, axis=axis)
-    elif method.lower() == "poly":
-        out = compat.resample_poly(data, desired_length, data.size[axis])
-    elif method.lower() == "interpolation":
-        zoom_factors = [
-            1 if i != axis else desired_length / data.shape[axis]
-            for i in range(len(data.shape))
-        ]
-        out = compat.zoom(data, zoom_factors)
-    else:
-        msg = f"Method {method} is not a supported resampling method."
-        raise NotImplementedError(msg)
-
-    return out
