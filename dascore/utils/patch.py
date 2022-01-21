@@ -551,3 +551,14 @@ def scan_patches(
         summary = {i: attrs.get(i, DEFAULT_PATCH_ATTRS[i]) for i in DEFAULT_PATCH_ATTRS}
         out.append(summary)
     return out
+
+
+def get_start_stop_step(patch: PatchType, dim):
+    """
+    Convenience method for getting start, stop, step for a given dimension.
+    """
+    assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"
+    start = patch.attrs[f"{dim}_min"]
+    end = patch.attrs[f"{dim}_max"]
+    step = patch.attrs[f"d_{dim}"]
+    return start, end, step
