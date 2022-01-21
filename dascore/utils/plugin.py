@@ -37,7 +37,11 @@ class FiberIOManager(MutableMapping):
                 self.loaded_eps[item] = self.eps[item]()()
             return self.loaded_eps[item]
         else:
-            msg = f"File format {item} is unknown to DASCore."
+            known_formats = set(self.loaded_eps) | set(self.eps)
+            msg = (
+                f"File format {item} is unknown to DASCore. Known formats "
+                f"are: [{', '.join(sorted(known_formats))}]"
+            )
             raise UnknownFiberFormat(msg)
 
     def __setitem__(self, key, value):

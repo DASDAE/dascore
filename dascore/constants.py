@@ -43,13 +43,14 @@ class PatchSummaryDict(TypedDict):
     distance_max: float
     instrument_id: str
     dims: str
+    tag: str
 
 
 # The expected attributes for the Patch
 DEFAULT_PATCH_ATTRS = {
     "d_time": np.NaN,
     "d_distance": np.NaN,
-    "data_type": "",
+    "data_type": "DAS",
     "data_units": "",
     "category": "",
     "time_min": np.datetime64("NaT"),
@@ -63,6 +64,7 @@ DEFAULT_PATCH_ATTRS = {
     "instrument_id": "",
     "history": lambda: [],
     "dims": "",
+    "tag": "",
 }
 
 # Methods FileFormatter needs to support
