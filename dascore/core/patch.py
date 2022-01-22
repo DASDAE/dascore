@@ -4,11 +4,12 @@ A 2D trace object.
 from typing import Mapping, Optional, Tuple, Union
 
 import numpy as np
+import pandas as pd
 from numpy.typing import ArrayLike
 from xarray import DataArray
 
 import dascore.proc
-from dascore.constants import COMPARE_ATTRS, PatchType
+from dascore.constants import DEFAULT_PATCH_ATTRS, PatchType
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.mapping import FrozenDict
@@ -63,7 +64,7 @@ class Patch:
 
     __repr__ = __str__
 
-    def equals(self, other: PatchType, only_required_attrs=True) -> bool:
+    def equals(patch, other: PatchType, only_required_attrs=True) -> bool:
         """
         Determine if the current trace equals the other trace.
 
@@ -76,13 +77,31 @@ class Patch:
         """
 
         if only_required_attrs:
-            attrs1 = {k: v for k, v in self.attrs.items() if k in COMPARE_ATTRS}
-            attrs2 = {k: v for k, v in other.attrs.items() if k in COMPARE_ATTRS}
+            attrs1 = {x: patch.attrs.get(x, None) for x in DEFAULT_PATCH_ATTRS}
+            attrs2 = {x: other.attrs.get(x, None) for x in DEFAULT_PATCH_ATTRS}
         else:
-            attrs1, attrs2 = dict(self.attrs), dict(other.attrs)
-        if attrs1 != attrs2:
+            attrs1, attrs2 = dict(patch.attrs), dict(other.attrs)
+        if set(attrs1) != set(attrs2):  # attrs don't have same keys; not equal
             return False
-        return np.equal(self.data, other.data).all()
+        if attrs1 != attrs2:
+            # see if some of the values are NaNs, these should be counted equal
+            not_equal = {
+                x
+                for x in attrs1
+                if attrs1[x] != attrs2[x]
+                and not (pd.isnull(attrs1[x]) and pd.isnull(attrs2[x]))
+            }
+            if not_equal:
+                return False
+        # check coords
+        coord1 = {x: patch.coords[x] for x in patch.coords}
+        coord2 = {x: other.coords[x] for x in other.coords}
+        if not set(coord2) == set(coord1):
+            return False
+        for name in coord1:
+            if not np.all(coord1[name] == coord2[name]):
+                return False
+        return np.equal(patch.data, other.data).all()
 
     def new(self: PatchType, data=None, coords=None, attrs=None) -> PatchType:
         """

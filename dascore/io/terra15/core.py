@@ -26,7 +26,7 @@ class Terra15Formatter(FiberIO):
     Support for Terra15 data format.
     """
 
-    name = "terra15"
+    name = "TERRA15"
     preferred_extensions = ("hdf5", "hf")
 
     def get_format(self, path: Union[str, Path]) -> Union[tuple[str, str], bool]:

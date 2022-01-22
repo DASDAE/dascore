@@ -69,6 +69,7 @@ def _pass_datetime(datetime):
 
 
 @to_datetime64.register(type(None))
+@to_datetime64.register(type(pd.NaT))
 def _return_NaT(datetime):
     """Convert non to NaT"""
     return np.datetime64("NaT")
