@@ -73,12 +73,14 @@ class Patch:
         other
             A Trace2D object
         only_required_attrs
-            If True, only compare required attributes.
+            If True, only compare required attributes. This helps avoid issues
+            with comparing histories or custom attrs of patches, for example.
         """
 
         if only_required_attrs:
-            attrs1 = {x: patch.attrs.get(x, None) for x in DEFAULT_PATCH_ATTRS}
-            attrs2 = {x: other.attrs.get(x, None) for x in DEFAULT_PATCH_ATTRS}
+            attrs_to_compare = set(DEFAULT_PATCH_ATTRS) - {"history"}
+            attrs1 = {x: patch.attrs.get(x, None) for x in attrs_to_compare}
+            attrs2 = {x: other.attrs.get(x, None) for x in attrs_to_compare}
         else:
             attrs1, attrs2 = dict(patch.attrs), dict(other.attrs)
         if set(attrs1) != set(attrs2):  # attrs don't have same keys; not equal

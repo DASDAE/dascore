@@ -3,6 +3,7 @@ Tests for DASDAE format.
 """
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -78,3 +79,19 @@ class TestReadDasdae:
         stream = dc.read(written_dasscore_empty)
         assert len(stream) == 1
         assert stream[0].equals(dc.Patch())
+
+    def test_datetimes(self, tmp_path_factory, random_patch):
+        """Ensure the datetimes in the attrs come back as datetimes"""
+        # create a patch with a custom dt attribute.
+        path = tmp_path_factory.mktemp("dasdae_dt_saes") / "rt.h5"
+        dt = np.datetime64("2010-09-12")
+        patch = random_patch.update_attrs(custom_dt=dt)
+        patch.io.write(path, "dasdae")
+        patch_2 = dc.read(path)[0]
+        # make sure custom tag with dt comes back from read.
+        assert patch_2.attrs["custom_dt"] == dt
+        # test coords are still dt64
+        assert np.issubdtype(patch_2.coords["time"].dtype, np.datetime64)
+        # test attrs
+        for name in ("time_min", "time_max"):
+            assert isinstance(patch_2.attrs[name], np.datetime64)
