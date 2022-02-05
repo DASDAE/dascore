@@ -19,6 +19,8 @@ from dascore.viz import VizPatchNameSpace
 class Patch:
     """
     A Class for storing and accessing 2D fiber data.
+
+    And a bit more info.
     """
 
     # --- Dunder methods
