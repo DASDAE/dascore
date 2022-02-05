@@ -15,6 +15,22 @@ from dascore.io.dasdae.utils import _read_patch, _save_patch, _write_meta
 class DASDAEIO(FiberIO):
     """
     Provides IO support for the DASDAE format.
+
+    DASDAE format is loosely based on the Adaptable Seismic Data Format (ASDF)
+    which uses hdf5. The hdf5 structure looks like the following:
+
+    /root
+    /root.attrs
+        __format__ = "DASDAE"
+        __DASDAE_version__ = 'x.y.z'  # version str
+    /root/waveforms/
+        DAS__{net}__{sta}__{tag}__{start}__{end}
+            data   # patch data array
+            data.attrs
+            _coords_{coord_name}  # each coordinate array is saved here
+        DAS__{net}__{sta}__{tag}__{start}__{end}.attrs
+            _attrs_{attr_nme}  # each patch attribute
+            _dims  # a str of 'dim1, dim2, dim3'
     """
 
     name = "DASDAE"
