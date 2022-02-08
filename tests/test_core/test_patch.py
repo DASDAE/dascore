@@ -146,14 +146,58 @@ class TestEquals:
         new = random_patch.new(data=new_data)
         assert not new.equals(random_patch)
 
+    def test_coords_named_differently(self, random_patch):
+        """Ensure if the coords are not equal neither are the arrays."""
+        dims = random_patch.dims
+        new_coords = {x: random_patch.coords[x] for x in random_patch.coords}
+        new_coords["bob"] = new_coords.pop(dims[-1])
+        patch_2 = random_patch.new(coords=new_coords)
+        assert not patch_2.equals(random_patch)
+
     def test_coords_not_equal(self, random_patch):
-        """Ensure if the coords are not equal neither is the array."""
+        """Ensure if the coords are not equal neither are the arrays."""
+        new_coords = {x: random_patch.coords[x] for x in random_patch.coords}
+        new_coords["distance"] = new_coords["distance"] + 10
+        patch_2 = random_patch.new(coords=new_coords)
+        assert not patch_2.equals(random_patch)
 
     def test_attrs_not_equal(self, random_patch):
         """Ensure if the attributes are not equal the arrays are not equal"""
+        attrs = dict(random_patch.attrs)
+        attrs["d_time"] = attrs["d_time"] - np.timedelta64(10, "s")
+        patch2 = random_patch.new(attrs=attrs)
+        assert not patch2.equals(random_patch)
 
-    def test_non_default_attrs(self, random_patch):
-        """Ensure non default attrs don't effect equality unless specified."""
+    def test_one_null_value_in_attrs(self, random_patch):
+        """ "Ensure setting a value to null in attrs still works."""
+        attrs = dict(random_patch.attrs)
+        attrs["label"] = None
+        patch2 = random_patch.new(attrs=attrs)
+        patch2.equals(random_patch)
+        assert not patch2.equals(random_patch)
+
+    def test_extra_attrs(self, random_patch):
+        """
+        Ensure extra attrs in one patch still eval equal unless only_required
+        is used.
+        """
+        attrs = dict(random_patch.attrs)
+        attrs["new_label"] = "fun4eva"
+        patch2 = random_patch.new(attrs=attrs)
+        # they should be equal
+        assert patch2.equals(random_patch)
+        # until extra labels are allowed
+        assert not patch2.equals(random_patch, only_required_attrs=False)
+
+    def test_both_attrs_nan(self, random_patch):
+        """If Both Attrs are some type of NaN the patches should be equal."""
+        attrs1 = dict(random_patch.attrs)
+        attrs1["label"] = np.NaN
+        patch1 = random_patch.new(attrs=attrs1)
+        attrs2 = dict(attrs1)
+        attrs2["label"] = None
+        patch2 = random_patch.new(attrs=attrs2)
+        assert patch1.equals(patch2)
 
 
 class TestTranspose:

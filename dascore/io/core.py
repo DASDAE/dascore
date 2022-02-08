@@ -61,7 +61,7 @@ class FiberIO(ABC):
         msg = f"FileFormatter: {self.name} has no write method"
         raise NotImplementedError(msg)
 
-    def get_format(self, path) -> tuple[str, str]:
+    def get_format(self, path) -> Union[tuple[str, str], bool]:
         """
         Return a tuple of (format_name, version_numbers).
 
