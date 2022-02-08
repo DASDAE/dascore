@@ -1,5 +1,5 @@
 """
-Experimental Support for the DASDAE format.
+Support for the DASDAE format.
 
 Note
 ----
