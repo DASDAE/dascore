@@ -173,11 +173,6 @@ class Patch:
     iresample = dascore.proc.iresample
     interpolate = dascore.proc.interpolate
 
-    # --- io funcs
-
-    save_pickle = dascore.utils.save_pickle
-    load_pickle = dascore.utils.load_pickle
-
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
     # to self stick around and keep large arrays in memory.
