@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 import dascore
-from dascore.constants import PatchSummaryDict, StreamType, timeable_types
+from dascore.constants import PatchSummaryDict, SpoolType, timeable_types
 from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
 from dascore.utils.plugin import FiberIOManager
@@ -29,7 +29,7 @@ class FiberIO(ABC):
     name: str = ""
     preferred_extensions: tuple[str] = ()
 
-    def read(self, path, **kwargs) -> StreamType:
+    def read(self, path, **kwargs) -> SpoolType:
         """
         Load data from a path.
 
@@ -54,7 +54,7 @@ class FiberIO(ABC):
         out = [{x: pa.attrs[x] for x in expected_keys} for pa in stream]
         return out
 
-    def write(self, stream: StreamType, path: Union[str, Path]):
+    def write(self, stream: SpoolType, path: Union[str, Path]):
         """
         Write the file to disk
         """
@@ -90,7 +90,7 @@ def read(
     time: Optional[tuple[Optional[timeable_types], Optional[timeable_types]]] = None,
     distance: Optional[tuple[Optional[float], Optional[float]]] = None,
     **kwargs,
-) -> StreamType:
+) -> SpoolType:
     """
     Read a fiber file.
 
@@ -191,6 +191,6 @@ def write(patch_or_stream, path: Union[str, Path], format: str, **kwargs):
 
     """
     formatter = _IO_INSTANCES[format.upper()]
-    if not isinstance(patch_or_stream, dascore.Stream):
-        patch_or_stream = dascore.Stream([patch_or_stream])
+    if not isinstance(patch_or_stream, dascore.Spool):
+        patch_or_stream = dascore.Spool([patch_or_stream])
     formatter.write(patch_or_stream, path, **kwargs)

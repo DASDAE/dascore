@@ -1,16 +1,49 @@
 """
 A module for storing streams of fiber data.
 """
+import abc
 from typing import Sequence, Union
 
 import pandas as pd
 
 import dascore
-from dascore.constants import PatchType
+from dascore.constants import PatchType, SpoolType
 from dascore.utils.patch import merge_patches, scan_patches
 
 
-class Stream:
+class BaseSpool(abc.ABC):
+    """
+    Spool Abstract Base Class (ABC) for defining Spool interface.
+    """
+
+    @abc.abstractmethod
+    def __getitem__(self, item: int) -> PatchType:
+        """Returns a patch from the spool."""
+
+    @abc.abstractmethod
+    def __iter__(self) -> PatchType:
+        """Iterate through the Patches in the spool."""
+
+    def update(self: SpoolType) -> SpoolType:
+        """
+        Updates the contents of the spool and returns a spool.
+        """
+        return self
+
+    @abc.abstractmethod
+    def chunk(self: SpoolType, **kwargs) -> SpoolType:
+        """
+        Chunk the data in the spool along specified dimensions.
+        """
+
+    @abc.abstractmethod
+    def select(self: SpoolType, **kwargs) -> SpoolType:
+        """
+        Select only part of the data.
+        """
+
+
+class Spool:
     """
     A stream of fiber data.
     """

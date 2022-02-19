@@ -7,7 +7,7 @@ from typing import Union
 import tables
 
 import dascore as dc
-from dascore.constants import StreamType
+from dascore.constants import SpoolType
 from dascore.io.core import FiberIO
 from dascore.io.dasdae.utils import _read_patch, _save_patch, _write_meta
 
@@ -57,7 +57,7 @@ class DASDAEIO(FiberIO):
                 return (self.name, dasdae_version)
             return False
 
-    def read(self, path, **kwargs) -> StreamType:
+    def read(self, path, **kwargs) -> SpoolType:
         """
         Read a dascore file.
         """
@@ -66,7 +66,7 @@ class DASDAEIO(FiberIO):
             try:
                 waveform_group = fi.root["/waveforms"]
             except KeyError:
-                return dc.Stream([])
+                return dc.Spool([])
             for patch_group in waveform_group:
                 patches.append(_read_patch(patch_group, **kwargs))
-        return dc.Stream(patches)
+        return dc.Spool(patches)

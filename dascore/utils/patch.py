@@ -28,7 +28,7 @@ from dascore.constants import (
     PATCH_MERGE_ATTRS,
     PatchSummaryDict,
     PatchType,
-    StreamType,
+    SpoolType,
 )
 from dascore.exceptions import PatchAttributeError, PatchDimError
 from dascore.utils.docs import compose_docstring, format_dtypes
@@ -428,7 +428,7 @@ class _AttrsCoordsMixer:
 
 
 @compose_docstring(fields=format_dtypes(PatchSummaryDict.__annotations__))
-def patches_to_df(patches: Union[Sequence[PatchType], StreamType]) -> pd.DataFrame:
+def patches_to_df(patches: Union[Sequence[PatchType], SpoolType]) -> pd.DataFrame:
     """
     Return a dataframe
 
@@ -443,7 +443,7 @@ def patches_to_df(patches: Union[Sequence[PatchType], StreamType]) -> pd.DataFra
         {fields}
     plus a field called 'patch' which contains a reference to each patch.
     """
-    if isinstance(patches, dascore.Stream):
+    if isinstance(patches, dascore.Spool):
         df = patches._df
     else:
         df = pd.DataFrame(scan_patches(patches))
@@ -452,7 +452,7 @@ def patches_to_df(patches: Union[Sequence[PatchType], StreamType]) -> pd.DataFra
 
 
 def merge_patches(
-    patches: Union[Sequence[PatchType], pd.DataFrame, StreamType],
+    patches: Union[Sequence[PatchType], pd.DataFrame, SpoolType],
     dim: str = "time",
     check_history: bool = True,
     tolerance: float = 1.5,

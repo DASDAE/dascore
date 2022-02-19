@@ -60,7 +60,7 @@ class TestRead:
     def test_read_terra15(self, terra15_das_example_path, terra15_das_patch):
         """Ensure terra15 can be read."""
         out = dascore.read(terra15_das_example_path)
-        assert isinstance(out, dascore.Stream)
+        assert isinstance(out, dascore.Spool)
         assert len(out) == 1
         assert out[0].equals(terra15_das_patch)
 

@@ -46,4 +46,4 @@ def _random_patch():
 def _random_stream():
     """Generate a random DAS Patch"""
     out = _random_patch()
-    return dascore.Stream([out])
+    return dascore.Spool([out])

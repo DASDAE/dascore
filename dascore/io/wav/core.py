@@ -8,7 +8,7 @@ from typing import Union
 import numpy as np
 from scipy.io.wavfile import write
 
-from dascore.constants import PatchType, StreamType
+from dascore.constants import PatchType, SpoolType
 from dascore.io.core import FiberIO
 from dascore.utils.docs import compose_docstring
 from dascore.utils.patch import patch_function
@@ -38,7 +38,7 @@ class WavIO(FiberIO):
     name = "WAV"
 
     @compose_docstring(doc=write_docstring)
-    def write(self, stream: StreamType, path: Union[str, Path]):
+    def write(self, stream: SpoolType, path: Union[str, Path]):
         """
         {doc}
         """

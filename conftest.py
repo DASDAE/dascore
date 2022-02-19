@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import dascore
-from dascore.core import Patch, Stream
+from dascore.core import Patch, Spool
 from dascore.io.core import read
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
@@ -81,7 +81,7 @@ def terra15_das_example_path():
 
 @pytest.fixture()
 @register_func(STREAM_FIXTURES)
-def terra15_das_stream(terra15_das_example_path) -> Stream:
+def terra15_das_stream(terra15_das_example_path) -> Spool:
     """Return the stream of Terra15 Das Array"""
     return read(terra15_das_example_path, format="terra15")
 
@@ -117,7 +117,7 @@ def random_patch() -> Patch:
 
 @pytest.fixture(scope="session")
 @register_func(STREAM_FIXTURES)
-def random_stream() -> Stream:
+def random_stream() -> Spool:
     """Init a random array."""
     from dascore.examples import get_example_stream
 
@@ -140,7 +140,7 @@ def dummy_text_file(tmp_path_factory):
 
 
 @pytest.fixture()
-def adjacent_stream_no_overlap(random_patch) -> dascore.Stream:
+def adjacent_stream_no_overlap(random_patch) -> dascore.Spool:
     """
     Create a stream with several patches within one time sample but not
     overlapping.
@@ -158,4 +158,4 @@ def adjacent_stream_no_overlap(random_patch) -> dascore.Stream:
     actual_time = pa3.coords["time"].max() - pa1.coords["time"].min()
     assert expected_time == actual_time
 
-    return dascore.Stream([pa2, pa1, pa3])
+    return dascore.Spool([pa2, pa1, pa3])
