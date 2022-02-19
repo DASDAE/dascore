@@ -120,7 +120,7 @@ class WaveBank(_Bank):
     >>> # --- Retrieve a stream objects from the spool.
     >>> # Load all Z component data (dont do this for large datasets!)
     >>> st = wbank.get_waveforms(channel='*Z')
-    >>> assert isinstance(st, obspy.Spool) and len(st) == 1
+    >>> assert isinstance(st, obspy.MemorySpool) and len(st) == 1
 
     >>> # --- Read the index used by WaveBank as a DataFrame.
     >>> df = wbank.read_index()
@@ -506,7 +506,7 @@ class WaveBank(_Bank):
         """
         df = get_waveform_bulk_df(bulk)
         if not len(df):
-            return obspy.Spool()
+            return obspy.MemorySpool()
         # get index and filter to temporal extents of request.
         t_min, t_max = df["starttime"].min(), df["endtime"].max()
         if index is not None:
@@ -519,7 +519,7 @@ class WaveBank(_Bank):
         for utime in unique_times:
             sub = _filter_index_to_bulk(utime, ind, df)
             traces += self._index2stream(sub, utime[0], utime[1], merge=False).traces
-        return merge_traces(obspy.Spool(traces=traces), inplace=True)
+        return merge_traces(obspy.MemorySpool(traces=traces), inplace=True)
 
     @compose_docstring(get_waveforms_params=get_waveforms_parameters)
     def get_waveforms(
@@ -614,7 +614,10 @@ class WaveBank(_Bank):
     # ----------------------- deposit waveforms methods
 
     def put_waveforms(
-        self, stream: Union[obspy.Spool, obspy.Trace], name=None, update_index=True
+        self,
+        stream: Union[obspy.MemorySpool, obspy.Trace],
+        name=None,
+        update_index=True,
     ):
         """
         Add the waveforms in a waveforms to the spool.
@@ -648,7 +651,7 @@ class WaveBank(_Bank):
         for path, tr_list in st_dic.items():
             # make the parent directories if they dont exist
             path.parent.mkdir(exist_ok=True, parents=True)
-            stream = obspy.Spool(traces=tr_list).split()
+            stream = obspy.MemorySpool(traces=tr_list).split()
             # load the waveforms if the file already exists
             if path.exists():
                 st_existing = obspy.read(str(path))
@@ -673,7 +676,7 @@ class WaveBank(_Bank):
         # iterate the files to read and try to load into waveforms
         kwargs = dict(format=self.format, starttime=starttime, endtime=endtime)
         func = partial(_try_read_stream, **kwargs)
-        stt = obspy.Spool()
+        stt = obspy.MemorySpool()
         chunksize = (len(files) // self._max_workers) or 1
         for st in self._map(func, files, chunksize=chunksize):
             if st is not None:
@@ -690,7 +693,7 @@ class WaveBank(_Bank):
 
     def _prep_output_stream(
         self, st, starttime=None, endtime=None, merge=True
-    ) -> obspy.Spool:
+    ) -> obspy.MemorySpool:
         """
         Prepare waveforms object for output by trimming to desired times,
         merging channels, and attaching responses.

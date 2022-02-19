@@ -215,7 +215,7 @@ class TestMergePatches:
     """Tests for merging patches together."""
 
     @pytest.fixture()
-    def desperate_stream_no_overlap(self, random_patch) -> dascore.Spool:
+    def desperate_stream_no_overlap(self, random_patch) -> dascore.MemorySpool:
         """
         Create streams that do not overlap at all
         """
@@ -225,17 +225,17 @@ class TestMergePatches:
         pa2 = random_patch.update_attrs(time_min=t2 + d_time)
         t3 = pa2.attrs["time_max"]
         pa3 = pa2.update_attrs(time_min=t3 + d_time)
-        return dascore.Spool([pa2, pa1, pa3])
+        return dascore.MemorySpool([pa2, pa1, pa3])
 
     @pytest.fixture()
-    def stream_complete_overlap(self, random_patch) -> dascore.Spool:
+    def stream_complete_overlap(self, random_patch) -> dascore.MemorySpool:
         """
         Create a stream which overlaps each other completely.
         """
-        return dascore.Spool([random_patch, random_patch])
+        return dascore.MemorySpool([random_patch, random_patch])
 
     @pytest.fixture()
-    def stream_slight_gap(self, random_patch) -> dascore.Spool:
+    def stream_slight_gap(self, random_patch) -> dascore.MemorySpool:
         """
         Create a stream which has a 1.1 * dt gap.
         """
@@ -245,7 +245,7 @@ class TestMergePatches:
         pa2 = random_patch.update_attrs(time_min=t2 + dt * 1.1)
         t3 = pa2.attrs["time_max"]
         pa3 = pa2.update_attrs(time_min=t3 + dt * 1.1)
-        return dascore.Spool([pa2, pa1, pa3])
+        return dascore.MemorySpool([pa2, pa1, pa3])
 
     def test_merge_adjacent(self, adjacent_stream_no_overlap):
         """Test simple merge of patches."""

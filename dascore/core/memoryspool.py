@@ -42,14 +42,18 @@ class BaseSpool(abc.ABC):
         Select only part of the data.
         """
 
+    def get_contents(self: SpoolType) -> pd.DataFrame:
+        """Get the contents from the data"""
 
-class Spool:
+
+class MemorySpool(BaseSpool):
     """
-    A stream of fiber data.
+    A Spool for storing patches in memory.
     """
 
     # a tuple of attrs that must be compatible for patches to be merged
     _merge_attrs = ("network", "station", "dims", "data_type", "category")
+
     # tuple of attributes to remove from table
 
     def __init__(self, data: Union[PatchType, Sequence[PatchType]]):
@@ -64,6 +68,9 @@ class Spool:
     def __iter__(self):
         patches = self._df["patch"].values
         return iter(patches)
+
+    def chunk(self, **kwargs):
+        """chunk the contents of the spool."""
 
     def _get_patch_table(self, patch_iterable: Sequence[PatchType]) -> pd.DataFrame:
         """
@@ -86,3 +93,6 @@ class Spool:
         """
         new_patches = merge_patches(self._df, dim=dim)
         return self.__class__(new_patches)
+
+    def select(self):
+        """Sub-select certain dimensions for Spool"""

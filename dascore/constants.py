@@ -6,7 +6,7 @@ import pandas as pd
 
 PatchType = TypeVar("PatchType", bound="dascore.Patch")
 
-SpoolType = TypeVar("StreamType", bound="dascore.Stream")
+SpoolType = TypeVar("SpoolType", bound="dascore.Spool")
 
 # Bump this to force re-downloading of all data file
 DATA_VERSION = "0.0.0"

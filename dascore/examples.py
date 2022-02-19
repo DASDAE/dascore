@@ -16,7 +16,7 @@ def get_example_patch(example_name="random_das"):
     return EXAMPLE_PATCHES[example_name]()
 
 
-def get_example_stream(example_name="random_das"):
+def get_example_spool(example_name="random_das"):
     """Load an example Patch."""
     return EXAMPLE_STREAMS[example_name]()
 
@@ -46,4 +46,4 @@ def _random_patch():
 def _random_stream():
     """Generate a random DAS Patch"""
     out = _random_patch()
-    return dascore.Spool([out])
+    return dascore.MemorySpool([out])

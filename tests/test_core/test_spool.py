@@ -5,22 +5,22 @@ Test for stream functions.
 import dascore
 
 
-class TestStreamIterableness:
-    """Tests for indexing/iterating Streams"""
+class TestSpoolIterableness:
+    """Tests for indexing/iterating Spools"""
 
-    def test_len(self, random_stream):
+    def test_len(self, random_spool):
         """Ensure the stream has a length"""
-        assert len(random_stream) == 1
+        assert len(random_spool) == 1
 
-    def test_index(self, random_stream):
+    def test_index(self, random_spool):
         """Ensure the stream can be indexed."""
-        assert isinstance(random_stream[0], dascore.Patch)
+        assert isinstance(random_spool[0], dascore.Patch)
 
-    def test_list_o_patches(self, random_stream):
+    def test_list_o_patches(self, random_spool):
         """Ensure random_string can be iterated"""
-        for pa in random_stream:
+        for pa in random_spool:
             assert isinstance(pa, dascore.Patch)
-        patch_list = list(random_stream)
+        patch_list = list(random_spool)
         for pa in patch_list:
             assert isinstance(pa, dascore.Patch)
 

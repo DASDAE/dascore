@@ -99,7 +99,7 @@ def get_slice(array, cond=Optional[tuple]) -> slice:
     Examples
     --------
     >>> import numpy as np
-    >>> ar = np.arange(100)
+    >>> ar = np.get_intervals(100)
     >>> array_slice = get_slice(ar, cond=(1, 10))
     """
     if cond is None:

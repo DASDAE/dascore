@@ -191,6 +191,6 @@ def write(patch_or_stream, path: Union[str, Path], format: str, **kwargs):
 
     """
     formatter = _IO_INSTANCES[format.upper()]
-    if not isinstance(patch_or_stream, dascore.Spool):
-        patch_or_stream = dascore.Spool([patch_or_stream])
+    if not isinstance(patch_or_stream, dascore.MemorySpool):
+        patch_or_stream = dascore.MemorySpool([patch_or_stream])
     formatter.write(patch_or_stream, path, **kwargs)

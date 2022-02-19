@@ -8,7 +8,7 @@ import numpy as np
 import tables as tb
 
 from dascore.constants import PatchSummaryDict, timeable_types
-from dascore.core import Patch, Spool
+from dascore.core import MemorySpool, Patch
 from dascore.io.core import FiberIO
 from dascore.utils.time import to_datetime64
 
@@ -75,7 +75,7 @@ class Terra15Formatter(FiberIO):
         time: Optional[tuple[timeable_types, timeable_types]] = None,
         distance: Optional[tuple[float, float]] = None,
         **kwargs
-    ) -> Spool:
+    ) -> MemorySpool:
         """
         Read a terra15 file, return a DataArray.
 
@@ -103,4 +103,4 @@ class Terra15Formatter(FiberIO):
             attrs["distance_max"] = dar.max()
             # get slices of data and read
             patch = Patch(data=data, coords=_coords, attrs=attrs)
-            return Spool([patch])
+            return MemorySpool([patch])

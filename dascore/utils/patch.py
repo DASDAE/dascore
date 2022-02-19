@@ -443,7 +443,7 @@ def patches_to_df(patches: Union[Sequence[PatchType], SpoolType]) -> pd.DataFram
         {fields}
     plus a field called 'patch' which contains a reference to each patch.
     """
-    if isinstance(patches, dascore.Spool):
+    if isinstance(patches, dascore.MemorySpool):
         df = patches._df
     else:
         df = pd.DataFrame(scan_patches(patches))

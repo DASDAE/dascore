@@ -66,7 +66,7 @@ class DASDAEIO(FiberIO):
             try:
                 waveform_group = fi.root["/waveforms"]
             except KeyError:
-                return dc.Spool([])
+                return dc.MemorySpool([])
             for patch_group in waveform_group:
                 patches.append(_read_patch(patch_group, **kwargs))
-        return dc.Spool(patches)
+        return dc.MemorySpool(patches)
