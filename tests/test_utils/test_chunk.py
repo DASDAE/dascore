@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from dascore.utils.chunk import chunk, get_intervals
+from dascore.utils.time import to_timedelta64
 
 STARTTIME = np.datetime64("2020-01-03")
 ENDTIME = STARTTIME + np.timedelta64(60, "s")
@@ -120,3 +121,20 @@ class TestBasicChunk:
         df2 = out[out["d_time"] == dt[1]]
         time_min = df2.iloc[0]["time_min"]
         assert time_min.minute == 1
+
+    def test_keep_leftovers(self, contiguous_df):
+        """Ensure leftovers show up in df."""
+        out = chunk(contiguous_df, overlap=None, keep_leftover=True, time=28)
+        assert len(out) == 3
+        assert out["time_max"].max() == contiguous_df["time_max"].max()
+
+    def test_overlap(self, contiguous_df):
+        """Ensure overlapping segments work."""
+        over = to_timedelta64(10)
+        out = chunk(contiguous_df, overlap=over, time=20)
+        expected = over - contiguous_df["d_time"].iloc[0]
+        olap = out.shift()["time_max"] - out["time_min"]
+        assert np.all(pd.isnull(olap) | (olap == expected))
+        # now ensure floats work for overlap param
+        out2 = chunk(contiguous_df, overlap=10, time=20)
+        assert out.equals(out2)

@@ -16,6 +16,7 @@ def get_intervals(
     length,
     overlap=None,
     step=None,
+    keep_leftover=False,
 ):
     """
     Create a range of values with optional overlaps.
@@ -27,13 +28,15 @@ def get_intervals(
     stop
         The end of the interval.
     length
-        The length of the segements.
+        The length of the segments.
     overlap
         The overlap of the start of each interval with the end
         of the previous interval.
     step
         If not None, subtract step (the sampling interval) from the end
         values so that the intervals do not overlap by one sample.
+    keep_leftover
+        If True, keep the segments which are smaller than chunksize.
 
     Returns
     -------
@@ -53,7 +56,10 @@ def get_intervals(
     starts = reference[:-1]
     # trim end to not surpass stop
     if ends[-1] > stop:
-        ends, starts = ends[:-1], starts[:-1]
+        if not keep_leftover:
+            ends, starts = ends[:-1], starts[:-1]
+        else:
+            ends[-1] = stop
     return np.stack([starts, ends]).T
 
 
@@ -86,7 +92,8 @@ def _get_duration_overlap(duration, start, step, overlap=None):
     # cast step to time delta if start is datetime
     if is_datetime64(start):
         step = to_timedelta64(step)
-    over = overlap if overlap is not None else (step * 0).iloc[0]
+        overlap = to_timedelta64(overlap)
+    over = overlap if not pd.isnull(overlap) else (step * 0).iloc[0]
     return duration, over
 
 
@@ -109,6 +116,7 @@ def chunk(
     df: pd.DataFrame,
     overlap: Optional[timeable_types] = None,
     group_columns: Optional[Collection[str]] = None,
+    keep_leftover=False,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -123,6 +131,9 @@ def chunk(
         be used for inducing gaps.
     group_columns
         A sequence of column names which should be used for sorting groups.
+    keep_leftover
+        If True, keep segments which are shorter than chunk size (at end of
+        contiguous blocks)
     **kwargs
         Used to specify the dimensions to chunk. The name of the kwarg
         should be a column
@@ -153,6 +164,7 @@ def chunk(
             dur,
             overlap=overlap,
             step=step.iloc[0],
+            keep_leftover=keep_leftover,
         )
         out.append(_create_df(current_df, name, new_start_stop))
     return pd.concat(out, axis=0).reset_index(drop=True)

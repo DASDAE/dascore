@@ -26,7 +26,11 @@ class TestSpoolIterableness:
 
 
 class TestMerge:
-    """Tests for merging patches together."""
+    """
+    Tests for merging patches together.
+    Note: This doesn't need to be tested very well since the work here is done
+    by utils.patch.merge
+    """
 
     def test_adjacent_merge_no_overlap(self, adjacent_stream_no_overlap):
         """Test that the adjacent patches get merged."""
