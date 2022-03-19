@@ -1,4 +1,5 @@
 """Constants used throughout obsplus."""
+from pathlib import Path
 from typing import TypedDict, TypeVar, Union
 
 import numpy as np
@@ -29,18 +30,21 @@ MININT64 = np.iinfo(np.int64).min
 # The largest value an int64 can rep
 MAXINT64 = np.iinfo(np.int64).max
 
+# types used to represent paths
+path_types = Union[str, Path]
+
 
 class PatchSummaryDict(TypedDict):
     """The expected minimum attributes for a Patch attrs."""
 
-    d_time: np.timedelta64
-    d_distance: float
     data_type: str
     category: str
     time_min: np.datetime64
     time_max: np.datetime64
+    d_time: np.timedelta64
     distance_min: float
     distance_max: float
+    d_distance: float
     instrument_id: str
     dims: str
     tag: str

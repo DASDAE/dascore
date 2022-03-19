@@ -45,3 +45,7 @@ class InvalidTimeRange(TimeError):
 
 class FilterValueError(ValueError, DASCoreError):
     """Raise when something goes wrong with filtering or filter inputs."""
+
+
+class UnsupportedKeyword(TypeError, DASCoreError):
+    """Raised when dascore encounters an unexpected keyword."""

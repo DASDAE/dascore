@@ -2,7 +2,8 @@
 Misc Utilities.
 """
 import functools
-from typing import Optional, Union
+import os
+from typing import Iterable, Optional, Union
 
 import numpy as np
 import numpy.typing as nt
@@ -183,3 +184,46 @@ def check_evenly_sampled(array: nt.ArrayLike):
             f"have the following unique differences: {unique_diffs}"
         )
         raise ParameterError(msg)
+
+
+def iter_files(
+    paths: Union[str, Iterable[str]],
+    ext: Optional[str] = None,
+    mtime: Optional[float] = None,
+    skip_hidden: bool = True,
+) -> Iterable[str]:
+    """
+    Use os.scan dir to iter files, optionally only for those with given
+    extension (ext) or modified times after mtime
+
+    Parameters
+    ----------
+    paths
+        The path to the base directory to traverse. Can also use a collection
+        of paths.
+    ext : str or None
+        The extensions to map.
+    mtime : int or float
+        Time stamp indicating the minimum mtime.
+    skip_hidden : bool
+        If True skip files or folders (they begin with a '.')
+
+    Yields
+    ------
+    Paths, as strings, meeting requirements.
+    """
+    try:  # a single path was passed
+        for entry in os.scandir(paths):
+            if entry.is_file() and (ext is None or entry.name.endswith(ext)):
+                if mtime is None or entry.stat().st_mtime >= mtime:
+                    if entry.name[0] != "." or not skip_hidden:
+                        yield entry.path
+            elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
+                yield from iter_files(
+                    entry.path, ext=ext, mtime=mtime, skip_hidden=skip_hidden
+                )
+    except TypeError:  # multiple paths were passed
+        for path in paths:
+            yield from iter_files(path, ext, mtime, skip_hidden)
+    except NotADirectoryError:  # a file path was passed, just return it
+        yield paths
