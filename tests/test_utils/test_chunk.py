@@ -14,10 +14,23 @@ ENDTIME = STARTTIME + np.timedelta64(60, "s")
 @pytest.fixture()
 def contiguous_df():
     """Create a contiguous dataframe with time and distance dimensions."""
-    time = get_intervals(STARTTIME, ENDTIME, step=np.timedelta64(10, "s"))
+    # get time, adjust starttime to be one time step after end time
+    time = get_intervals(STARTTIME, ENDTIME, length=np.timedelta64(10, "s"))
+    dt = np.timedelta64(10, "ms")
     df = pd.DataFrame(time, columns=["time_min", "time_max"])
     df["distance_min"], df["distance_max"] = 0, 10
+    df["d_time"] = dt
+    df["d_distance"] = 1
     return df
+
+
+@pytest.fixture()
+def contiguous_sr_spaced_df(contiguous_df):
+    """separate df by one sample rate."""
+    sr = contiguous_df.loc[:, "d_time"]
+    out = contiguous_df.copy()
+    out.loc[:, "time_max"] = out.loc[:, "time_max"] - sr
+    return out
 
 
 class TestArange:
@@ -64,11 +77,46 @@ class TestArange:
 class TestBasicChunk:
     """Test basic DF chunking."""
 
+    @pytest.fixture()
+    def df_different_sample_rates(self, contiguous_df):
+        """Tests for a df which does have overlaps but different sampling rates."""
+        df1 = contiguous_df.copy()
+        df2 = contiguous_df.copy()
+        time_span = df1["time_max"].max() - df1["time_min"].min()
+        df2["time_min"] += time_span
+        df2["time_max"] += time_span
+        df2["d_time"] = df1["d_time"] * 2
+        out = pd.concat([df1, df2], axis=0).reset_index(drop=True)
+        return out
+
     def test_rechunk_contiguous(self, contiguous_df):
         """Test rechunking with no gaps."""
         time_interval = (contiguous_df["time_max"] - contiguous_df["time_min"]).max()
         new_time_interval = time_interval / 2
-        _ = chunk(contiguous_df, time=new_time_interval)
-        # assert len(out) == 2 * len(contiguous_df)
-        # new_interval = (contiguous_df['time_max'] - contiguous_df['time_min']).max()
-        # assert new_interval == new_time_interval
+        out = chunk(contiguous_df, time=new_time_interval)
+        assert len(out) == 2 * len(contiguous_df)
+        d_time = out["d_time"].iloc[0]
+        new_interval = (out["time_max"] - out["time_min"] + d_time).max()
+        assert new_interval == new_time_interval
+
+    def test_rechunk_contiguous_with_sr_separation(self, contiguous_sr_spaced_df):
+        """Ensure it still works on data seperated by one sample"""
+        df = contiguous_sr_spaced_df
+        sr = df["d_time"]
+        time_interval = (sr + df["time_max"] - df["time_min"]).max()
+        new_time_interval = time_interval / 2
+        out = chunk(df, time=new_time_interval)
+        assert len(out) == 2 * len(df)
+        new_interval = (out["time_max"] - out["time_min"]).max()
+        assert new_interval == (new_time_interval - sr.iloc[0])
+
+    def test_rechunk_different_sr(self, df_different_sample_rates):
+        """Ensure segments with different sample rates don't get combined."""
+        df = df_different_sample_rates
+        out = chunk(df, overlap=None, time=23)
+        dt = np.sort(np.unique(out["d_time"]))
+        assert len(dt) == 2, "both dt should remain"
+        # the second part of the df should start at the one minute mark
+        df2 = out[out["d_time"] == dt[1]]
+        time_min = df2.iloc[0]["time_min"]
+        assert time_min.minute == 1

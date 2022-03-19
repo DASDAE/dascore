@@ -117,6 +117,13 @@ class TestToTimeDelta:
         out2 = to_timedelta64(out)
         assert out == td == out2
 
+    def test_pandas_time_delta(self):
+        """Ensure pandas timedelta still works"""
+        expected = np.timedelta64(1, "s")
+        ptd = pd.Timedelta(1, "s")
+        out = to_timedelta64(ptd)
+        assert expected == out
+
 
 class TestGetSelectTime:
     """Tests for getting select time(s)."""
@@ -230,3 +237,11 @@ class TestIsDateTime:
         assert is_datetime64(np.datetime64("1970-01-01"))
         array = to_datetime64(["1990-01-01", "2010-01-01T12:23:22"])
         assert is_datetime64(array)
+
+    def test_datetime_series(
+        self,
+    ):
+        """is_datettime should work with a pandas series."""
+        array = to_datetime64(["1990-01-01", "2010-01-01T12:23:22"])
+        ser = pd.Series(array)
+        assert is_datetime64(ser)

@@ -116,10 +116,24 @@ def array_to_timedelta64(array: np.array) -> np.datetime64:
     return out
 
 
+@to_timedelta64.register(pd.Series)
+def series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
+    """
+    Convert a series to a series of timedelta64.
+    """
+    return pd.to_timedelta(ser)
+
+
 @to_timedelta64.register(np.timedelta64)
 def pass_time_delta(time_delta):
     """simply return the time delta."""
     return to_timedelta64(time_delta / np.timedelta64(1, "s"))
+
+
+@to_timedelta64.register(pd.Timedelta)
+def unpack_pandas_time_delta(time_delta: pd.Timedelta):
+    """simply return the time delta."""
+    return time_delta.to_numpy()
 
 
 def get_select_time(
@@ -221,7 +235,9 @@ def is_datetime64(obj) -> bool:
     """Return True if object is a timedelta object or array of such."""
     if isinstance(obj, np.datetime64):
         return True
-    if isinstance(obj, (np.ndarray, list, tuple)):
+    if isinstance(obj, (np.ndarray, list, tuple, pd.Series)):
         if np.issubdtype(np.array(obj).dtype, np.datetime64):
             return True
+    if isinstance(obj, pd.Timestamp):
+        return True
     return False
