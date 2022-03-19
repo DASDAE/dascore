@@ -69,7 +69,7 @@ DEFAULT_PATCH_ATTRS = {
     "history": lambda: [],
     "dims": "",
     "tag": "",
-    "label": "",
+    # "label": "",
 }
 
 # Methods FileFormatter needs to support

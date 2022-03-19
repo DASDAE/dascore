@@ -14,6 +14,7 @@ from dascore.utils.misc import (
     check_evenly_sampled,
     get_slice,
     iter_files,
+    iterate,
 )
 
 
@@ -236,3 +237,19 @@ class TestIterFiles:
         out2 = list(iter_files(dir_with_hidden_dir, skip_hidden=False))
         has_hidden_by_parent = ["hidden_by_parent" in x for x in out2]
         assert sum(has_hidden_by_parent) == 1
+
+
+class TestIterate:
+    """Test case for iterate."""
+
+    def test_none(self):
+        """None should return an empty tuple"""
+        assert iterate(None) == tuple()
+
+    def test_object(self):
+        """A single object should be returned in a tuple"""
+        assert iterate(1) == (1,)
+
+    def test_str(self):
+        """A single string object should be returned as a tuple"""
+        assert iterate("hey") == ("hey",)

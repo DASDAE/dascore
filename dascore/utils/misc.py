@@ -227,3 +227,18 @@ def iter_files(
             yield from iter_files(path, ext, mtime, skip_hidden)
     except NotADirectoryError:  # a file path was passed, just return it
         yield paths
+
+
+def iterate(obj):
+    """
+    Return an iterable from any object.
+
+    If a string, do not iterate characters, return str in tuple.
+
+    *This is how iteration *should* work in python.
+    """
+    if obj is None:
+        return ()
+    if isinstance(obj, str):
+        return (obj,)
+    return obj if isinstance(obj, Iterable) else (obj,)

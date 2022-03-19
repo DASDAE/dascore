@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 import dascore
-from dascore.constants import PatchSummaryDict, SpoolType, timeable_types
+from dascore.constants import SpoolType, timeable_types
+from dascore.core.schema import PatchSummary
 from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
 from dascore.utils.plugin import FiberIOManager
@@ -34,24 +35,30 @@ class FiberIO(ABC):
         Load data from a path.
 
         *kwargs should include support for selecting expected dimensions. For
-        example, distance=(100, 200) would only read data which distance from
+        example, distance=(100, 200) would only read data with distance from
         100 to 200.
         """
         msg = f"FileFormatter: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, path) -> List[PatchSummaryDict]:
+    def scan(self, path) -> List[PatchSummary]:
         """
         Returns a list of summary info for patches contained in file.
         """
         # default scan method reads in the file and returns required attributes
+        # however, this can be very slow, so each parser should implement scan
+        # when possible.
         try:
             stream = self.read(path)
         except NotImplementedError:
             msg = f"FileFormatter: {self.name} has no scan method"
             raise NotImplementedError(msg)
-        expected_keys = sorted(list(PatchSummaryDict.__annotations__))
-        out = [{x: pa.attrs[x] for x in expected_keys} for pa in stream]
+        expected_keys = sorted(list(PatchSummary.__annotations__))
+        out = []
+        for pa in stream:
+            info = {x: pa.attrs[x] for x in expected_keys}
+            info["format"] = self.name
+            out.append(info)
         return out
 
     def write(self, stream: SpoolType, path: Union[str, Path]):
@@ -116,11 +123,11 @@ def read(
     return formatter.read(path, version=version, time=time, distance=distance, **kwargs)
 
 
-@compose_docstring(fields=list(PatchSummaryDict.__annotations__))
-def scan_file(
+@compose_docstring(fields=list(PatchSummary.__annotations__))
+def scan(
     path: Union[Path, str],
     format: Optional[str] = None,
-) -> List[PatchSummaryDict]:
+) -> List[PatchSummary]:
     """
     Scan a file, return the summary dictionary.
 
@@ -139,7 +146,8 @@ def scan_file(
     # dispatch to file format handlers
     if format is None:
         format = get_format(path)[0]
-    return _IO_INSTANCES[format].scan(path)
+    out = _IO_INSTANCES[format].scan(path)
+    return [PatchSummary.parse_obj(x) for x in out]
 
 
 def get_format(path: Union[str, Path]) -> (str, str):

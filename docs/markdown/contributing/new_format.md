@@ -109,6 +109,7 @@ https://github.com/dasdae/test_data/raw/master/das/jingle_test_file.jgl
 Then your test file might look like this:
 
 contents of tests/test_io/test_jingle.py
+
 ```python
 
 import pytest
@@ -116,8 +117,10 @@ import pytest
 import dascore
 from dascore.utils.downloader import fetch
 
+
 class TestJingleIO:
     """Tests for jingle IO format."""
+
     @pytest.fixture(scope='class')
     def jingle_file_path(self):
         """Return the path to the test jingle file."""
@@ -150,7 +153,7 @@ class TestJingleIO:
 
     def test_scan(self, jingle_file_path):
         """Tests for scanning a jingle file"""
-        scan = dascore.scan_file(jingle_file_path)
+        scan = dascore.scan(jingle_file_path)
         assert len(scan) == 1
 
     def test_is_format(self, jingle_file_path):

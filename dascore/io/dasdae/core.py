@@ -17,7 +17,7 @@ class DASDAEIO(FiberIO):
     Provides IO support for the DASDAE format.
 
     DASDAE format is loosely based on the Adaptable Seismic Data Format (ASDF)
-    which uses hdf5. The hdf5 structure looks like the following:
+    which uses hdf5. The hdf5 structure is the following:
 
     /root
     /root.attrs

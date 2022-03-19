@@ -70,6 +70,6 @@ class TestScan:
 
     def test_scan_terra15(self, terra15_das_example_path):
         """Ensure terra15 format can be automatically determined."""
-        out = dascore.scan_file(terra15_das_example_path)
+        out = dascore.scan(terra15_das_example_path)
         assert isinstance(out, list)
         assert len(out)
