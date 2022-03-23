@@ -12,7 +12,7 @@ from dascore.exceptions import FilterValueError
 from dascore.proc.filter import _get_sampling_rate, _lowpass_cheby_2
 from dascore.utils.misc import check_evenly_sampled, get_dim_value_from_kwargs
 from dascore.utils.patch import get_start_stop_step, patch_function
-from dascore.utils.time import to_number
+from dascore.utils.time import to_number, to_timedelta64
 
 
 @patch_function()
@@ -168,6 +168,9 @@ def resample(
     """
     dim, axis, new_d_dim = get_dim_value_from_kwargs(patch, kwargs)
     d_dim = patch.attrs[f"d_{dim}"]  # current sampling rate
+    # nasty hack so that ints/floats get converted to seconds.
+    if isinstance(d_dim, np.timedelta64):
+        new_d_dim = to_timedelta64(new_d_dim)
     # dim_range = int(compat.floor((dim_stop - dim_start) / val))
     current_sig_len = patch.data.shape[axis]
     new_len = current_sig_len * (d_dim / new_d_dim)
