@@ -3,5 +3,6 @@ pyqtgraph
 tables
 pooch
 xarray
+pydantic
 rich
 scipy
