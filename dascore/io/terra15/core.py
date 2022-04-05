@@ -57,8 +57,16 @@ class Terra15Formatter(FiberIO):
             out = _get_default_attrs(data_node.attrs, root_attrs)
             # add time
             time = fi.root[data_type]["gps_time"]
-            out["time_min"] = to_datetime64(np.min(time))
-            out["time_max"] = to_datetime64(np.max(time))
+            # first try fast path by tacking first/last of time
+            tmin, tmax = time[0], time[-1]
+            # This doesn't work if an incomplete datablock exists at the end of
+            # the file. In this case we need to read/filter time array (slower).
+            if tmin > tmax:
+                time = time[:]
+                time_filtered = time[time > 0]
+                tmin, tmax = np.min(time_filtered), np.max(time_filtered)
+            out["time_min"] = tmin
+            out["time_max"] = tmax
             return [out]
 
     def read(

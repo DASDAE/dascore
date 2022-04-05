@@ -86,13 +86,13 @@ class TestToTimeDelta:
     def test_float_array(self):
         """Ensure an array of flaots can be converted to ns timedelta"""
         ar = [1.0, 0.000000001, 0.001]
-        expected = np.array([1 * 10 ** 9, 1, 1 * 10 ** 6], "timedelta64")
+        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64")
         out = to_timedelta64(ar)
         assert np.all(out == expected)
 
     def test_timedelta64_array(self):
         """Ensure passing timedelta array works."""
-        expected = np.array([1 * 10 ** 9, 1, 1 * 10 ** 6], "timedelta64")
+        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64")
         out = to_timedelta64(expected)
         assert np.equal(out, expected).all()
 
