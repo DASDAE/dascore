@@ -114,11 +114,26 @@ class TestResample:
                 assert len1 == len2
 
     def test_upsample_time(self, random_patch):
-        """Test decreasing the temporal sampling rate"""
+        """Test increasing the temporal sampling rate"""
         current_dt = random_patch.attrs["d_time"]
         axis = random_patch.dims.index("time")
         new_dt = current_dt / 2
         new = random_patch.resample(time=new_dt)
+        assert new_dt == new.attrs["d_time"]
+        assert np.all(np.diff(new.coords["time"]) == new_dt)
+        shape1, shape2 = random_patch.data.shape, new.data.shape
+        for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
+            if ax == axis:  # Only resampled axis should have changed len
+                assert len1 < len2
+            else:
+                assert len1 == len2
+
+    def test_upsample_time_float(self, random_patch):
+        """Test int as time sampling rate."""
+        current_dt = random_patch.attrs["d_time"]
+        axis = random_patch.dims.index("time")
+        new_dt = current_dt / 2
+        new = random_patch.resample(time=new_dt / np.timedelta64(1, "s"))
         assert new_dt == new.attrs["d_time"]
         assert np.all(np.diff(new.coords["time"]) == new_dt)
         shape1, shape2 = random_patch.data.shape, new.data.shape
