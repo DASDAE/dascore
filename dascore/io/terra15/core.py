@@ -65,8 +65,8 @@ class Terra15Formatter(FiberIO):
                 time = time[:]
                 time_filtered = time[time > 0]
                 tmin, tmax = np.min(time_filtered), np.max(time_filtered)
-            out["time_min"] = tmin
-            out["time_max"] = tmax
+            out["time_min"] = to_datetime64(tmin)
+            out["time_max"] = to_datetime64(tmax)
             return [out]
 
     def read(
