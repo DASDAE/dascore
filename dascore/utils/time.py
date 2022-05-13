@@ -65,7 +65,7 @@ def array_to_datetime64(array: np.array) -> np.datetime64:
 @to_datetime64.register(np.datetime64)
 def _pass_datetime(datetime):
     """simply return the datetime"""
-    return datetime
+    return np.datetime64(datetime, "ns")
 
 
 @to_datetime64.register(type(None))
