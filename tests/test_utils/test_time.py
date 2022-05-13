@@ -208,7 +208,7 @@ class TestToNumber:
             np.datetime64("2011-01-01", "ms"),
             np.datetime64("2011-01-01", "ns"),
         ]
-        expected = np.datetime64("2011-01-01", "ns").astype(int)
+        expected = np.datetime64("2011-01-01", "ns").astype(np.int64)
         for dt in datetimes:
             out = to_number(dt)
             assert out == expected
