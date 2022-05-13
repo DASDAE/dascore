@@ -74,6 +74,20 @@ class TestToDateTime64:
         out = to_datetime64(ts)
         assert out == expected
 
+    def test_non_ns_datetime64(self):
+        """Tests that a non-nano second datatime gets converted to one."""
+        datetimes = [
+            np.datetime64("2011-01-01", "s"),
+            np.datetime64("2011-01-01", "ms"),
+            np.datetime64("2011-01-01", "ns"),
+        ]
+        expected = np.datetime64("2011-01-01", "ns")
+        for dt in datetimes:
+            out = to_datetime64(dt)
+            assert out == expected
+            # check string rep to ensure precision matches
+            assert str(out) == str(expected)
+
 
 class TestToTimeDelta:
     """Tests for creating timedeltas"""
@@ -186,6 +200,18 @@ class TestToNumber:
         assert np.all(to_number(array) == array)
         array = np.array([12.3, 13.2, 12.2])
         assert np.all(to_number(array) == array)
+
+    def test_non_ns_datetime64(self):
+        """Tests that a non-nano second datatime gets converted to one."""
+        datetimes = [
+            np.datetime64("2011-01-01", "s"),
+            np.datetime64("2011-01-01", "ms"),
+            np.datetime64("2011-01-01", "ns"),
+        ]
+        expected = np.datetime64("2011-01-01", "ns").astype(np.int64)
+        for dt in datetimes:
+            out = to_number(dt)
+            assert out == expected
 
 
 class TestIsDateTime:
