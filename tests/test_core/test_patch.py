@@ -169,9 +169,11 @@ class TestEquals:
         assert not patch2.equals(random_patch)
 
     def test_one_null_value_in_attrs(self, random_patch):
-        """ "Ensure setting a value to null in attrs still works."""
+        """
+        Ensure setting a value to null in attrs doesn't eval to equal.
+        """
         attrs = dict(random_patch.attrs)
-        attrs["label"] = None
+        attrs["tag"] = None
         patch2 = random_patch.new(attrs=attrs)
         patch2.equals(random_patch)
         assert not patch2.equals(random_patch)
