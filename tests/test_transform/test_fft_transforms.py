@@ -2,6 +2,7 @@
 Tests for fft style transforms.
 """
 
+import numpy as np
 import pytest
 
 from dascore.transform.fft import rfft
@@ -21,3 +22,8 @@ class TestRfft:
         dims = rfft_patch.dims
         start_freq = [x.startswith("frequency") for x in dims]
         assert any(start_freq)
+
+    def test_abs_rrft(self, rfft_patch):
+        """Ensure abs works with rfft to get amplitude spectra."""
+        out = rfft_patch.abs()
+        assert np.allclose(out.data, np.abs(rfft_patch.data))
