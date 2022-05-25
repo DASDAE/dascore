@@ -58,9 +58,10 @@ def waterfall(
         The format for the time axis.
     scale
         If not None, controls the saturation level of the colorbar.
-        Values can either be a float, to set upper and lower limit the same,
-        or a length 2 tuple specifying different upper and lower limits.
-        See `scale_type` for controlling how values are scaled.
+        Values can either be a float, to set upper and lower limit to the same
+        value centered around the mean of the data, or a length 2 tuple
+        specifying upper and lower limits. See `scale_type` for controlling how
+        values are scaled.
     scale_type
         Controls the type of scaling specified by `scale` parameter. Options
         are:
