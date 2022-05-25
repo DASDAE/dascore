@@ -34,8 +34,8 @@ def contiguous_sr_spaced_df(contiguous_df):
     return out
 
 
-class TestArange:
-    """Tests for custom arange function."""
+class TestArrange:
+    """Tests for custom arrange function."""
 
     def test_numbers_no_overlap(self):
         """Ensure simple ints with no overlap work."""
@@ -94,7 +94,7 @@ class TestBasicChunk:
         """Test rechunking with no gaps."""
         time_interval = (contiguous_df["time_max"] - contiguous_df["time_min"]).max()
         new_time_interval = time_interval / 2
-        out = chunk(contiguous_df, time=new_time_interval)
+        out = chunk(contiguous_df, time=new_time_interval)[0]
         assert len(out) == 2 * len(contiguous_df)
         d_time = out["d_time"].iloc[0]
         new_interval = (out["time_max"] - out["time_min"] + d_time).max()
@@ -106,7 +106,7 @@ class TestBasicChunk:
         sr = df["d_time"]
         time_interval = (sr + df["time_max"] - df["time_min"]).max()
         new_time_interval = time_interval / 2
-        out = chunk(df, time=new_time_interval)
+        out = chunk(df, time=new_time_interval)[0]
         assert len(out) == 2 * len(df)
         new_interval = (out["time_max"] - out["time_min"]).max()
         assert new_interval == (new_time_interval - sr.iloc[0])
@@ -114,7 +114,7 @@ class TestBasicChunk:
     def test_rechunk_different_sr(self, df_different_sample_rates):
         """Ensure segments with different sample rates don't get combined."""
         df = df_different_sample_rates
-        out = chunk(df, overlap=None, time=23)
+        out = chunk(df, overlap=None, time=23)[0]
         dt = np.sort(np.unique(out["d_time"]))
         assert len(dt) == 2, "both dt should remain"
         # the second part of the df should start at the one minute mark
@@ -124,17 +124,17 @@ class TestBasicChunk:
 
     def test_keep_leftovers(self, contiguous_df):
         """Ensure leftovers show up in df."""
-        out = chunk(contiguous_df, overlap=None, keep_leftover=True, time=28)
+        out = chunk(contiguous_df, overlap=None, keep_leftover=True, time=28)[0]
         assert len(out) == 3
         assert out["time_max"].max() == contiguous_df["time_max"].max()
 
     def test_overlap(self, contiguous_df):
         """Ensure overlapping segments work."""
         over = to_timedelta64(10)
-        out = chunk(contiguous_df, overlap=over, time=20)
+        out = chunk(contiguous_df, overlap=over, time=20)[0]
         expected = over - contiguous_df["d_time"].iloc[0]
         olap = out.shift()["time_max"] - out["time_min"]
         assert np.all(pd.isnull(olap) | (olap == expected))
         # now ensure floats work for overlap param
-        out2 = chunk(contiguous_df, overlap=10, time=20)
+        out2 = chunk(contiguous_df, overlap=10, time=20)[0]
         assert out.equals(out2)

@@ -1,7 +1,7 @@
 """
 Utilities for chunking dataframes.
 """
-from typing import Collection, Optional
+from typing import Collection, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -97,13 +97,10 @@ def _get_duration_overlap(duration, start, step, overlap=None):
     return duration, over
 
 
-def _get_df_dropped_columns(df, name):
-    """Drop columns related to name."""
-
-
-def _create_df(df, name, start_stop):
+def _create_df(df, name, start_stop, index_count=0):
     """Reconstruct the dataframe."""
-    out = pd.DataFrame(start_stop, columns=[f"{name}_min", f"{name}_max"])
+    index = np.arange(index_count, index_count + len(start_stop))
+    out = pd.DataFrame(start_stop, columns=[f"{name}_min", f"{name}_max"], index=index)
     merger = df.drop(columns=out.columns)
     for col in merger:
         vals = merger[col].unique()
@@ -112,15 +109,43 @@ def _create_df(df, name, start_stop):
     return out
 
 
+def _create_connecting_df(current_df, sub_new_df, name):
+    """
+    Create a connecting dataframe which contains instructions to make
+    the new dataframe out of the old one.
+    """
+    min_name, max_name = f"{name}_min", f"{name}_max"
+    c_start, c_stop = current_df[min_name], current_df[max_name]
+    new_start, new_stop = sub_new_df[min_name], sub_new_df[max_name]
+    out = []
+    # TODO need to think more about this, a naive implementation for now
+    for start, stop, ind in zip(new_start.values, new_stop.values, new_stop.index):
+        too_late = c_start > stop
+        too_early = c_stop < start
+        in_range = ~(too_early | too_late)
+        assert in_range.sum() > 0, "no original data source found!"
+        sub_df = current_df[in_range]
+        sub_df.loc[sub_df[min_name] < start, min_name] = start
+        sub_df.loc[sub_df[max_name] > stop, max_name] = stop
+        sub_df["original_index"] = sub_df.index.values
+        sub_df["new_index"] = ind
+        out.append(sub_df)
+    df = pd.concat(out, axis=0).reset_index(drop=True)
+    return df
+
+
 def chunk(
     df: pd.DataFrame,
     overlap: Optional[timeable_types] = None,
     group_columns: Optional[Collection[str]] = None,
     keep_leftover=False,
     **kwargs,
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Chunk a datafarme based on columns of the dataframe for one column.
+    Chunk a dataframe into new contiguous segments.
+
+    The dataframe must have column names {key}_max, {key}_min, and d_{key}
+    where {key} is the key used in the kwargs.
 
     Parameters
     ----------
@@ -135,8 +160,13 @@ def chunk(
         If True, keep segments which are shorter than chunk size (at end of
         contiguous blocks)
     **kwargs
-        Used to specify the dimensions to chunk. The name of the kwarg
-        should be a column
+        Used to specify the dimensions to chunk.
+
+    Returns
+    -------
+    A tuple of intermediate dataframe and output dataframe. The intermediate
+    dataframe provides instructions on how to form chunked dataframe from first
+    dataframe.
     """
     assert len(kwargs) == 1, "Chunking must be for a single variable"
     name = list(kwargs)[0]
@@ -153,7 +183,8 @@ def chunk(
     group_mins = start.groupby(group).min()
     group_maxs = stop.groupby(group).max()
     # split/group dataframe into new chunks by iterating over each group.
-    out = []
+    new_dfs = []
+    connecting_dfs = []
     for gnum in group.unique():
         start, stop = group_mins[gnum], group_maxs[gnum]
         current_df = df.loc[group[group == gnum].index]
@@ -166,5 +197,14 @@ def chunk(
             step=step.iloc[0],
             keep_leftover=keep_leftover,
         )
-        out.append(_create_df(current_df, name, new_start_stop))
-    return pd.concat(out, axis=0).reset_index(drop=True)
+        # create the newly chunked dataframe
+        sub_new_df = _create_df(current_df, name, new_start_stop, len(new_dfs))
+        # and dataframe connecting it to original dataframe
+        sub_connecting_df = _create_connecting_df(
+            current_df,
+            sub_new_df,
+            name,
+        )
+        new_dfs.append(sub_new_df)
+        connecting_dfs.append(sub_connecting_df)
+    return pd.concat(new_dfs, axis=0), pd.concat(connecting_dfs, axis=0)
