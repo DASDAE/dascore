@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 class TestWaterfall:
     """Tests for waterfall plot"""
 
-    def test_returns_figures(self, random_patch):
+    def test_returns_axes(self, random_patch):
         """Call waterfall plot, return"""
         # modify patch to include line at start
         data = random_patch.data
@@ -26,3 +26,11 @@ class TestWaterfall:
         assert ax_scalar is not None
         seq_scalar = random_patch.viz.waterfall(scale=[0.1, 0.3])
         assert seq_scalar is not None
+
+    def test_colorbar_absolute_scale(self, random_patch):
+        """Tests for absolute scaling of colorbar."""
+        patch = random_patch.new(data=random_patch.data * 100 - 50)
+        ax1 = patch.viz.waterfall(scale_type="absolute", scale=(-50, 50))
+        assert ax1 is not None
+        ax2 = patch.viz.waterfall(scale_type="absolute", scale=10)
+        assert ax2 is not None
