@@ -1,12 +1,12 @@
 """
 Utilities for chunking dataframes.
 """
-from typing import Collection, Optional, Tuple
+from typing import Collection, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
-from dascore.constants import timeable_types
+from dascore.constants import timeable_types, numeric_types
 from dascore.utils.time import is_datetime64, to_timedelta64
 
 
@@ -16,7 +16,7 @@ def get_intervals(
     length,
     overlap=None,
     step=None,
-    keep_leftover=False,
+    keep_partials=False,
 ):
     """
     Create a range of values with optional overlaps.
@@ -35,7 +35,7 @@ def get_intervals(
     step
         If not None, subtract step (the sampling interval) from the end
         values so that the intervals do not overlap by one sample.
-    keep_leftover
+    keep_partials
         If True, keep the segments which are smaller than chunksize.
 
     Returns
@@ -56,7 +56,7 @@ def get_intervals(
     starts = reference[:-1]
     # trim end to not surpass stop
     if ends[-1] > stop:
-        if not keep_leftover:
+        if not keep_partials:
             ends, starts = ends[:-1], starts[:-1]
         else:
             ends[-1] = stop
@@ -127,8 +127,8 @@ def _create_connecting_df(current_df, sub_new_df, name):
         sub_df = current_df[in_range]
         sub_df.loc[sub_df[min_name] < start, min_name] = start
         sub_df.loc[sub_df[max_name] > stop, max_name] = stop
-        sub_df["original_index"] = sub_df.index.values
-        sub_df["new_index"] = ind
+        sub_df.loc[:, "original_index"] = sub_df.index.values
+        sub_df.loc[:, "new_index"] = ind
         out.append(sub_df)
     df = pd.concat(out, axis=0).reset_index(drop=True)
     return df
@@ -136,9 +136,10 @@ def _create_connecting_df(current_df, sub_new_df, name):
 
 def chunk(
     df: pd.DataFrame,
-    overlap: Optional[timeable_types] = None,
+    overlap: Optional[Union[timeable_types, numeric_types]] = None,
     group_columns: Optional[Collection[str]] = None,
-    keep_leftover=False,
+    keep_partial=False,
+    tolerance=1.5,
     **kwargs,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -156,9 +157,13 @@ def chunk(
         be used for inducing gaps.
     group_columns
         A sequence of column names which should be used for sorting groups.
-    keep_leftover
+    keep_partial
         If True, keep segments which are shorter than chunk size (at end of
         contiguous blocks)
+    tolerance
+        The upper limit of a gap to tolerate in terms of the sampling
+        along the desired dimension. E.G., the default value means entities
+        with gaps <= 1.5 * d_{name} will be merged.
     **kwargs
         Used to specify the dimensions to chunk.
 
@@ -195,7 +200,7 @@ def chunk(
             dur,
             overlap=overlap,
             step=step.iloc[0],
-            keep_leftover=keep_leftover,
+            keep_partials=keep_partial,
         )
         # create the newly chunked dataframe
         sub_new_df = _create_df(current_df, name, new_start_stop, len(new_dfs))

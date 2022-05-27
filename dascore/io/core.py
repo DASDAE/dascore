@@ -9,7 +9,7 @@ from typing import List, Optional, Union
 
 import dascore
 from dascore.constants import SpoolType, timeable_types
-from dascore.core.schema import PatchSummary
+from dascore.core.schema import PatchFileSummary, PatchSummary
 from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
 from dascore.utils.plugin import FiberIOManager
@@ -41,7 +41,7 @@ class FiberIO(ABC):
         msg = f"FileFormatter: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, path) -> List[PatchSummary]:
+    def scan(self, path) -> List[PatchFileSummary]:
         """
         Returns a list of summary info for patches contained in file.
         """
@@ -49,16 +49,16 @@ class FiberIO(ABC):
         # however, this can be very slow, so each parser should implement scan
         # when possible.
         try:
-            stream = self.read(path)
+            spool = self.read(path)
         except NotImplementedError:
-            msg = f"FileFormatter: {self.name} has no scan method"
+            msg = f"FileFormatter: {self.name} has no scan or read method"
             raise NotImplementedError(msg)
-        expected_keys = sorted(list(PatchSummary.__annotations__))
         out = []
-        for pa in stream:
-            info = {x: pa.attrs[x] for x in expected_keys}
-            info["format"] = self.name
-            out.append(info)
+        for pa in spool:
+            info = dict(pa.attrs)
+            info["file_format"] = self.name
+            info["path"] = str(path)
+            out.append(PatchFileSummary.parse_obj(info))
         return out
 
     def write(self, stream: SpoolType, path: Union[str, Path]):
@@ -123,11 +123,11 @@ def read(
     return formatter.read(path, version=version, time=time, distance=distance, **kwargs)
 
 
-@compose_docstring(fields=list(PatchSummary.__annotations__))
+@compose_docstring(fields=list(PatchFileSummary.__annotations__))
 def scan(
     path: Union[Path, str],
     format: Optional[str] = None,
-) -> List[PatchSummary]:
+) -> List[PatchFileSummary]:
     """
     Scan a file, return the summary dictionary.
 
@@ -147,7 +147,7 @@ def scan(
     if format is None:
         format = get_format(path)[0]
     out = _IO_INSTANCES[format].scan(path)
-    return [PatchSummary.parse_obj(x) for x in out]
+    return out
 
 
 def get_format(path: Union[str, Path]) -> (str, str):

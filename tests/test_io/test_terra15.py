@@ -7,6 +7,7 @@ import tables as tb
 
 import dascore
 from dascore.constants import REQUIRED_DAS_ATTRS
+from dascore.core.schema import PatchFileSummary
 from dascore.io.terra15.core import Terra15Formatter
 
 
@@ -90,7 +91,7 @@ class TestScanTerra15:
         out = parser.scan(terra15_das_example_path)
         assert isinstance(out, list)
         assert len(out) == 1
-        assert isinstance(out[0], dict)
+        assert isinstance(out[0], PatchFileSummary)
 
 
 class TestTerra15Unfinished:

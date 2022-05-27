@@ -24,12 +24,12 @@ import xarray as xr
 
 import dascore
 from dascore.constants import (
-    DEFAULT_PATCH_ATTRS,
     PATCH_MERGE_ATTRS,
-    PatchSummaryDict,
+    DEFAULT_PATCH_ATTRS,
     PatchType,
     SpoolType,
 )
+from dascore.core.schema import PatchSummaryWithHistory
 from dascore.exceptions import PatchAttributeError, PatchDimError
 from dascore.utils.docs import compose_docstring, format_dtypes
 from dascore.utils.misc import append_func
@@ -427,7 +427,7 @@ class _AttrsCoordsMixer:
                 self.copied_attrs[key] = func(val)
 
 
-@compose_docstring(fields=format_dtypes(PatchSummaryDict.__annotations__))
+@compose_docstring(fields=PatchSummaryWithHistory.__annotations__)
 def patches_to_df(patches: Union[Sequence[PatchType], SpoolType]) -> pd.DataFrame:
     """
     Return a dataframe
@@ -481,7 +481,7 @@ def merge_patches(
         sort_names = group_names + [min_name, max_name]
         if check_history:
             sort_names += ["history"]
-            patches = patches.assign(history=lambda x: x["history"].apply(str))
+            patches = patches.assign(history=lambda x: x.get("history", "").apply(str))
         return patches.sort_values(sort_names), sort_names, group_names
 
     def _merge_compatible_patches(patch_df):
@@ -528,10 +528,10 @@ def merge_patches(
     return out
 
 
-@compose_docstring(fields=format_dtypes(PatchSummaryDict.__annotations__))
+@compose_docstring(fields=format_dtypes(PatchSummaryWithHistory.__annotations__))
 def scan_patches(
     patch: Union[PatchType, Sequence[PatchType]]
-) -> List[PatchSummaryDict]:
+) -> List[PatchSummaryWithHistory]:
     """
     Scan a sequence of patches and return a list of summary dicts.
 
@@ -549,7 +549,7 @@ def scan_patches(
     for pa in patch:
         attrs = pa.attrs
         summary = {i: attrs.get(i, DEFAULT_PATCH_ATTRS[i]) for i in DEFAULT_PATCH_ATTRS}
-        out.append(summary)
+        out.append(PatchSummaryWithHistory.parse_obj(summary).dict())
     return out
 
 

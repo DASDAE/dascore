@@ -86,7 +86,12 @@ def _get_attrs(patch_group):
     attrs = [x for x in patch_group._v_attrs._f_list() if x.startswith("_attrs_")]
     for attr_name in attrs:
         key = attr_name.replace("_attrs_", "")
-        out[key] = patch_group._v_attrs[attr_name]
+        val = patch_group._v_attrs[attr_name]
+        # need to unpack one value arrays
+        if isinstance(val, np.ndarray) and not val.shape:
+            val = np.array([val])[0]
+        out[key] = val
+        #
     return out
 
 

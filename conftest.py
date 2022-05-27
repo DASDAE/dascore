@@ -140,7 +140,7 @@ def dummy_text_file(tmp_path_factory):
 
 
 @pytest.fixture()
-def adjacent_stream_no_overlap(random_patch) -> dascore.MemorySpool:
+def adjacent_spool_no_overlap(random_patch) -> dascore.MemorySpool:
     """
     Create a stream with several patches within one time sample but not
     overlapping.

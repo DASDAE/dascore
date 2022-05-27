@@ -52,9 +52,9 @@ class TestMerge:
     by utils.patch.merge
     """
 
-    def test_adjacent_merge_no_overlap(self, adjacent_stream_no_overlap):
+    def test_adjacent_merge_no_overlap(self, adjacent_spool_no_overlap):
         """Test that the adjacent patches get merged."""
-        st = adjacent_stream_no_overlap
+        st = adjacent_spool_no_overlap
         st_len = len(st)
         merged_st = st.merge()
         merged_len = len(merged_st)

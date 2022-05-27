@@ -2,7 +2,7 @@
 
 import textwrap
 
-from dascore.constants import PatchSummaryDict
+from dascore.core.schema import PatchSummary
 from dascore.utils.docs import compose_docstring, format_dtypes
 
 
@@ -11,7 +11,7 @@ class TestFormatDtypes:
 
     def test_formatting(self):
         """Test for formatting StationDtypes."""
-        out = format_dtypes(PatchSummaryDict.__annotations__)
+        out = format_dtypes(PatchSummary.__annotations__)
         assert isinstance(out, str)
 
 

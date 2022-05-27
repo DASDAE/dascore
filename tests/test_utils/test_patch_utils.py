@@ -215,7 +215,7 @@ class TestMergePatches:
     """Tests for merging patches together."""
 
     @pytest.fixture()
-    def desperate_stream_no_overlap(self, random_patch) -> dascore.MemorySpool:
+    def desperate_spool_no_overlap(self, random_patch) -> dascore.MemorySpool:
         """
         Create streams that do not overlap at all
         """
@@ -228,14 +228,14 @@ class TestMergePatches:
         return dascore.MemorySpool([pa2, pa1, pa3])
 
     @pytest.fixture()
-    def stream_complete_overlap(self, random_patch) -> dascore.MemorySpool:
+    def spool_complete_overlap(self, random_patch) -> dascore.MemorySpool:
         """
         Create a stream which overlaps each other completely.
         """
         return dascore.MemorySpool([random_patch, random_patch])
 
     @pytest.fixture()
-    def stream_slight_gap(self, random_patch) -> dascore.MemorySpool:
+    def spool_slight_gap(self, random_patch) -> dascore.MemorySpool:
         """
         Create a stream which has a 1.1 * dt gap.
         """
@@ -247,10 +247,10 @@ class TestMergePatches:
         pa3 = pa2.update_attrs(time_min=t3 + dt * 1.1)
         return dascore.MemorySpool([pa2, pa1, pa3])
 
-    def test_merge_adjacent(self, adjacent_stream_no_overlap):
+    def test_merge_adjacent(self, adjacent_spool_no_overlap):
         """Test simple merge of patches."""
-        len_1 = len(adjacent_stream_no_overlap)
-        out_stream = merge_patches(adjacent_stream_no_overlap)
+        len_1 = len(adjacent_spool_no_overlap)
+        out_stream = merge_patches(adjacent_spool_no_overlap)
         assert len(out_stream) < len_1
         assert len(out_stream) == 1
         out_patch = out_stream[0]
@@ -264,21 +264,21 @@ class TestMergePatches:
         assert len(unique_spacing) == 1
         assert unique_spacing[0] == out_patch.attrs["d_time"]
 
-    def test_no_overlap(self, desperate_stream_no_overlap):
+    def test_no_overlap(self, desperate_spool_no_overlap):
         """streams with no overlap should not be merged."""
-        len_1 = len(desperate_stream_no_overlap)
-        out = merge_patches(desperate_stream_no_overlap)
+        len_1 = len(desperate_spool_no_overlap)
+        out = merge_patches(desperate_spool_no_overlap)
         assert len_1 == len(out)
 
-    def test_complete_overlap(self, stream_complete_overlap, random_patch):
+    def test_complete_overlap(self, spool_complete_overlap, random_patch):
         """Ensure complete overlap results in dropped data for overlap section."""
-        out = merge_patches(stream_complete_overlap)
+        out = merge_patches(spool_complete_overlap)
         assert len(out) == 1
         pa = out[0]
         data = pa.data
         assert data.shape == random_patch.data.shape
 
-    def test_slight_gap(self, stream_slight_gap):
+    def test_slight_gap(self, spool_slight_gap):
         """Ensure gaps slightly more than 1 time interval still work."""
-        out = stream_slight_gap.merge()
+        out = spool_slight_gap.merge()
         assert len(out) == 1

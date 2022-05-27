@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from dascore.utils.pd import filter_df
+from dascore.utils.time import to_datetime64
 
 
 class TestFilterDfBasic:
@@ -85,13 +86,20 @@ class TestFilterDfAdvanced:
     @pytest.fixture
     def example_df(self):
         """create a simple df for testing. Example from Chris Albon."""
+        time = to_datetime64("2020-01-03")
+        time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
+        time_max = time_min + np.timedelta64(10, "m")
         raw_data = {
             "first_name": ["Jason", "Molly", "Tina", "Jake", "Amy"],
             "last_name": ["Miller", "Jacobson", "Ali", "Milner", "Cooze"],
             "bp_min": [100, 120, 110, 85, 125],
             "bp_max": [110, 145, 121, 99, 165],
+            "time_min": time_min,
+            "time_max": time_max,
+            "d_time": [np.timedelta64(1, "s") for _ in range(5)],
         }
-        return pd.DataFrame(raw_data, columns=list(raw_data))
+        out = pd.DataFrame(raw_data, columns=list(raw_data))
+        return out
 
     def test_col(self, example_df):
         """Test column names that end with max"""
@@ -110,3 +118,15 @@ class TestFilterDfAdvanced:
         min_too_big = example_df["bp_min"] > val[1]
         in_range = ~(max_too_small | min_too_big)
         assert all(out == in_range)
+
+    def test_time_query_all_open(self, example_df):
+        """Test for open time interval"""
+        out = filter_df(example_df, time=(None, None))
+        assert out.all()
+
+    def test_time_query_one_open(self, example_df):
+        """Test for open time interval"""
+        tmax = to_datetime64(example_df["time_max"].max() - np.timedelta64(1, "ns"))
+        out = filter_df(example_df, time=(tmax, None))
+        # just the last row should have been selected
+        assert out.iloc[-1] and out.astype(int).sum() == 1

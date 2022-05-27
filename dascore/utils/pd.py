@@ -2,12 +2,15 @@
 Pandas utilities.
 """
 import fnmatch
+import os
 from collections import defaultdict
 from functools import cache
 from typing import Collection
 
 import numpy as np
 import pandas as pd
+
+from dascore.utils.time import to_timedelta64, to_datetime64
 
 
 @cache
@@ -16,11 +19,24 @@ def get_regex(seed_str):
     return fnmatch.translate(seed_str)  # translate to re
 
 
+def _remove_base_path(series: pd.Series, base="") -> pd.Series:
+    """
+    Ensure paths stored in column name use unix style paths and have base
+    path removed.
+    """
+    if series.empty:
+        return series
+    unix_paths = series.str.replace(os.sep, "/")
+    unix_base_path = str(base).replace(os.sep, "/")
+    return unix_paths.str.replace(unix_base_path, "")
+
+
 def _get_min_max(kwargs, df):
     """
     Get a dict of {column_name: Optional[min_val], Optional[max_val]}.
 
-    Pop keys out of kwargs once they are in the return dict.
+    Handles {column}_max, column_{min} type queries. Pop keys out of kwargs
+    once they are in the return dict.
     """
     out = defaultdict(lambda: [None, None])
     col_set = set(df.columns)
@@ -123,6 +139,26 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
     return bool_index
 
 
+def _convert_times(df, some_dict):
+    """Convert query values to datetime/timedelta values."""
+    if not some_dict:
+        return some_dict
+    # convert queries related to datetime into datetime64
+    datetime_cols = set(df.select_dtypes(include=np.datetime64).columns)
+    non_min_max_cols = {x.replace("_min", "") for x in datetime_cols}
+    datetime_keys = (datetime_cols & set(some_dict)) | (
+        non_min_max_cols & set(some_dict)
+    )
+    for key in datetime_keys:
+        some_dict[key] = to_datetime64(some_dict[key])
+    # convert queries related to time delta into timedelta64
+    timedelta_cols = set(df.select_dtypes(include=np.timedelta64).columns)
+    timedelta_keys = timedelta_cols & set(some_dict)
+    for key in timedelta_keys:
+        some_dict[key] = to_timedelta64(some_dict[key])
+    return some_dict
+
+
 def filter_df(df: pd.DataFrame, **kwargs) -> np.array:
     """
     Determine if each row of the index meets some filter requirements.
@@ -144,9 +180,8 @@ def filter_df(df: pd.DataFrame, **kwargs) -> np.array:
     A boolean array of the same len as df indicating if each row meets the
     requirements.
     """
-
-    min_max_query = _get_min_max(kwargs, df)
-    multicolumn_range_query = _add_range_query(kwargs, df)
+    min_max_query = _convert_times(df, _get_min_max(kwargs, df))
+    multicolumn_range_query = _convert_times(df, _add_range_query(kwargs, df))
     equality_query, collection_query = _get_flat_and_collection_queries(kwargs)
     # get a blank index of True for filters
     bool_index = np.ones(len(df), dtype=bool)

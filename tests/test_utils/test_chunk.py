@@ -124,7 +124,7 @@ class TestBasicChunk:
 
     def test_keep_leftovers(self, contiguous_df):
         """Ensure leftovers show up in df."""
-        out = chunk(contiguous_df, overlap=None, keep_leftover=True, time=28)[0]
+        out = chunk(contiguous_df, overlap=None, keep_partial=True, time=28)[0]
         assert len(out) == 3
         assert out["time_max"].max() == contiguous_df["time_max"].max()
 
@@ -138,3 +138,17 @@ class TestBasicChunk:
         # now ensure floats work for overlap param
         out2 = chunk(contiguous_df, overlap=10, time=20)[0]
         assert out.equals(out2)
+
+
+class TestInstructionDF:
+    """Sanity checks on intermediary df"""
+
+    def test_indices(self, contiguous_df):
+        """Ensure the input/output index belong to input/output df."""
+        out, instruction = chunk(contiguous_df, overlap=0, time=10)
+        assert set(instruction["original_index"]).issubset(set(contiguous_df.index))
+        assert set(instruction["new_index"]).issubset(set(out.index))
+
+
+class TestChunkToMerge:
+    """Test chunk can be used to merge entities."""

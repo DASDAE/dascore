@@ -5,6 +5,7 @@ import functools
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from dascore.utils.time import (
     get_select_time,
@@ -88,9 +89,40 @@ class TestToDateTime64:
             # check string rep to ensure precision matches
             assert str(out) == str(expected)
 
+    def test_array_with_all_nan(self):
+        """Tests for NaN in array."""
+        array = np.array([None, None])
+        out = to_datetime64(array)
+        assert pd.isnull(out).all()
+
+    def test_array_with_one_nan(self):
+        """Tests for NaN in array."""
+        array = np.array([None, 1.2])
+        out = to_datetime64(array)
+        assert pd.isnull(out[0]) and not pd.isnull(out[1])
+
+    def test_one_nan_one_timestamp(self):
+        """Ensure (None, TimeStamp) works."""
+        array = (None, pd.Timestamp("2020-01-01"))
+        out = to_datetime64(array)
+        assert len(out) == 2
+        assert pd.isnull(out[0])
+        assert out[1] == array[1]
+
 
 class TestToTimeDelta:
     """Tests for creating timedeltas"""
+
+    @pytest.fixture(
+        params=(
+            np.timedelta64(1, "ns"),
+            np.timedelta64(10, "s"),
+            np.timedelta64(63, "ms"),
+        )
+    )
+    def timedelta64(self, request):
+        """Return the parametrized timedeltas"""
+        return request.param
 
     def test_single_float(self):
         """Ensure a single float is converted to timedelta"""
@@ -123,6 +155,23 @@ class TestToTimeDelta:
         ptd = pd.Timedelta(1, "s")
         out = to_timedelta64(ptd)
         assert expected == out
+
+    def test_str_roundtrip(self, timedelta64):
+        """Ensure the output of str(timedelta64) is valid input."""
+        obj_str = str(timedelta64)
+        assert timedelta64 == to_timedelta64(obj_str)
+
+    def test_array_with_all_nan(self):
+        """Tests for NaN in array."""
+        array = np.array([None, None])
+        out = to_timedelta64(array)
+        assert pd.isnull(out).all()
+
+    def test_array_with_one_nan(self):
+        """Tests for NaN in array."""
+        array = np.array([None, 1.2])
+        out = to_timedelta64(array)
+        assert pd.isnull(out[0]) and not pd.isnull(out[1])
 
 
 class TestGetSelectTime:

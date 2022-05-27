@@ -1,6 +1,8 @@
 """
 Pydantic schemas.
 """
+from typing import Union, Sequence
+from pathlib import Path
 
 import numpy as np
 from pydantic import BaseModel
@@ -10,9 +12,9 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 
 class SimpleValidator:
     """
-    A custom class for getting simply validation behavior in pydantic.
+    A custom class for getting simple validation behavior in pydantic.
 
-    Simply subclass, then define function to be used as validator.
+    Subclass, then define function to be used as validator. func
     """
 
     @classmethod
@@ -28,7 +30,7 @@ class SimpleValidator:
     @classmethod
     def validate(cls, v):
         """Simply call func."""
-        cls.func(v)
+        return cls.func(v)
 
 
 class DateTime64(SimpleValidator):
@@ -46,6 +48,12 @@ class TimeDelta64(SimpleValidator):
 class PatchSummary(BaseModel):
     """The expected minimum attributes for a Patch attrs."""
 
+    class Config:
+        json_encoders = {
+            np.datetime64: lambda x: str(x),
+            np.timedelta64: lambda x: str(x),
+        }
+
     data_type: str = ""
     category: str = ""
     time_min: DateTime64 = np.datetime64("NaT")
@@ -57,3 +65,16 @@ class PatchSummary(BaseModel):
     instrument_id: str = ""
     dims: str = tuple()
     tag: str = ""
+    station: str = ""
+    network: str = ""
+
+
+class PatchSummaryWithHistory(PatchSummary):
+    history: Union[str, Sequence[str]] = ""
+
+
+class PatchFileSummary(PatchSummary):
+    """The expected minimum attributes for a Patch/spool file."""
+
+    file_format: str = ""
+    path: Union[str, Path] = ""

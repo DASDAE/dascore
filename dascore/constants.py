@@ -15,6 +15,9 @@ DATA_VERSION = "0.0.0"
 # Types dascore can convert into time representations
 timeable_types = Union[int, float, str, np.datetime64, pd.Timestamp]
 
+# Number types
+numeric_types = Union[int, float]
+
 # Expected Keys in the Summary Dictionaries
 SUMMARY_KEYS = ("format", "min_time", "max_time", "min_distance", "max_distance")
 
@@ -32,22 +35,6 @@ MAXINT64 = np.iinfo(np.int64).max
 
 # types used to represent paths
 path_types = Union[str, Path]
-
-
-class PatchSummaryDict(TypedDict):
-    """The expected minimum attributes for a Patch attrs."""
-
-    data_type: str
-    category: str
-    time_min: np.datetime64
-    time_max: np.datetime64
-    d_time: np.timedelta64
-    distance_min: float
-    distance_max: float
-    d_distance: float
-    instrument_id: str
-    dims: str
-    tag: str
 
 
 # The expected attributes for the Patch
@@ -92,3 +79,21 @@ LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 
 # Required shared attributes to merge patches together
 PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "category")
+
+
+# A map from the unit name to the code used in numpy.timedelta64
+NUMPY_TIME_UNIT_MAPPPING = {
+    "hour": "h",
+    "minute": "m",
+    "second": "s",
+    "millisecond": "ms",
+    "microsecond": "us",
+    "nanosecond": "ns",
+    "picosecond": "ps",
+    "femtosecond": "fs",
+    "attosecond": "as",
+    "year": "Y",
+    "month": "M",
+    "week": "W",
+    "day": "D",
+}
