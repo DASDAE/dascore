@@ -64,7 +64,7 @@ def pytest_collection_modifyitems(config, items):
 
 def pytest_sessionstart(session):
     """
-    Ensure a non visual backend is used so plots don't pop up.
+    Ensure a non-visual backend is used so plots don't pop up.
     """
     import matplotlib
 

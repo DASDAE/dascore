@@ -1,12 +1,12 @@
 """
 Module for waterfall plotting.
 """
-from typing import Optional, Sequence, Union
+from typing import Literal, Optional, Sequence, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-import dascore
+from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _add_time_axis_label,
@@ -17,13 +17,31 @@ from dascore.utils.plotting import (
 )
 
 
+def _set_scale(im, scale, scale_type, patch):
+    """Set the scale of the color bar based on scale and scale_type."""
+    # check scale paramters
+    assert scale_type in {"absolute", "relative"}
+    assert isinstance(scale, (float, int)) or len(scale) == 2
+    # make sure we have a len two array
+    data = patch.data
+    modifier = 1
+    if scale_type == "relative":
+        modifier = 0.5 * (data.max() - data.min())
+        # only one scale parameter provided, center around mean
+    if isinstance(scale, float):
+        mean = patch.data.mean()
+        scale = np.array([mean - scale * modifier, mean + scale * modifier])
+    im.set_clim(scale)
+
+
 @patch_function()
 def waterfall(
-    patch: "dascore.Patch",
+    patch: PatchType,
     ax: Optional[plt.Axes] = None,
     cmap="bwr",
     timefmt="%H:%M:%S",
     scale: Optional[Union[float, Sequence[float]]] = None,
+    scale_type: Literal["relative", "absolute"] = "relative",
     colorbar=True,
     show=False,
 ) -> plt.Figure:
@@ -39,7 +57,16 @@ def waterfall(
     timefmt
         The format for the time axis.
     scale
-        If not None, a tuple of fractions of min/max to scale colorbar.
+        If not None, controls the saturation level of the colorbar.
+        Values can either be a float, to set upper and lower limit to the same
+        value centered around the mean of the data, or a length 2 tuple
+        specifying upper and lower limits. See `scale_type` for controlling how
+        values are scaled.
+    scale_type
+        Controls the type of scaling specified by `scale` parameter. Options
+        are:
+            relative - scale based on half the dynamic range in patch
+            absolute - scale based on absolute values provided to `scale`
     colorbar
         If True, show the color bar.
     show
@@ -56,9 +83,7 @@ def waterfall(
     im = ax.imshow(data, extent=extents, aspect="auto", cmap=cmap, origin="lower")
     # scale colorbar
     if scale is not None:
-        scale = np.array(scale) * np.ones(2)
-        scale_val = np.max([np.abs(data.min()), np.abs(data.max())])
-        im.set_clim(np.array([-scale_val * scale[0], scale_val * scale[1]]))
+        _set_scale(im, scale, scale_type, patch)
     for dim, x in zip(dims_r, ["x", "y"]):
         getattr(ax, f"set_{x}label")(str(dim).capitalize())
     if "time" in dims_r:
