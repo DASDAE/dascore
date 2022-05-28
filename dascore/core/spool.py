@@ -2,17 +2,18 @@
 A module for storing streams of fiber data.
 """
 import abc
-from typing import Optional, Sequence, Union
-from typing_extensions import Self
+from typing import Mapping, Optional, Sequence, Union
 
 import pandas as pd
+from typing_extensions import Self
 
 import dascore
-from dascore.constants import PatchType, SpoolType, timeable_types, numeric_types
+from dascore.constants import PatchType, SpoolType, numeric_types, timeable_types
+from dascore.utils.chunk import chunk
 from dascore.utils.docs import compose_docstring
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.patch import merge_patches, scan_patches
 from dascore.utils.pd import filter_df
-from dascore.utils.chunk import chunk
 
 
 class BaseSpool(abc.ABC):
@@ -83,6 +84,8 @@ class DataFrameSpool(BaseSpool):
     _source_df: Optional[pd.DataFrame] = None
     # A dataframe of instructions for going from source_df to df
     _instruction_df: Optional[pd.DataFrame] = None
+    # kwargs for filtering contents
+    _select_kwargs: Optional[Mapping] = FrozenDict()
 
     def __getitem__(self, item):
         return self.load_patch(self._df.iloc[0])
@@ -91,8 +94,9 @@ class DataFrameSpool(BaseSpool):
         return len(self._df)
 
     def __iter__(self):
-        for ind in range(len(self._df)):
-            yield self.load_patch(self._df.iloc[ind])
+        df = self._df
+        for ind in range(len(df)):
+            yield self.load_patch(df.iloc[ind])
 
     @abc.abstractmethod
     def _extract_patch_from_row(self, row) -> PatchType:
@@ -122,23 +126,32 @@ class DataFrameSpool(BaseSpool):
         return self.new_from_df(out, source_df=df, instruction_df=instructions)
 
     @classmethod
-    def new_from_df(cls, df, source_df=None, instruction_df=None):
+    def new_from_df(cls, df, source_df=None, instruction_df=None, select_kwargs=None):
         """Create a new instance from dataframes."""
         new = cls()
         new._df = df
         new._source_df = source_df if source_df is not None else df
         new._instruction_df = instruction_df
+        if select_kwargs is not None:
+            new._select_kwargs = select_kwargs
         return new
 
     def select(self, **kwargs) -> Self:
         """Sub-select certain dimensions for Spool"""
+        out = self.new_from_df(
+            self._df,
+            source_df=self._source_df,
+            instruction_df=self._instruction_df,
+            select_kwargs=kwargs,
+        )
+        return out
 
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
-    def get_contents(self, **kwargs) -> pd.DataFrame:
+    def get_contents(self) -> pd.DataFrame:
         """
         {doc}
         """
-        return self._df[filter_df(self._df, **kwargs)]
+        return self._df[filter_df(self._df, **self._select_kwargs)]
 
 
 class MemorySpool(DataFrameSpool):
@@ -151,8 +164,9 @@ class MemorySpool(DataFrameSpool):
 
     # tuple of attributes to remove from table
 
-    def __init__(self, data: Union[PatchType, Sequence[PatchType]]):
-        self._df = self._get_patch_table(data)
+    def __init__(self, data: Optional[Union[PatchType, Sequence[PatchType]]] = None):
+        if data is not None:
+            self._df = self._get_patch_table(data)
 
     @compose_docstring(doc=BaseSpool.chunk.__doc__)
     def chunk(

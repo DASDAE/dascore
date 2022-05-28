@@ -6,28 +6,27 @@ The spool uses a simple hdf5 index for keeping track of files.
 import os
 import time
 import warnings
-from concurrent.futures import Executor
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
 from typing import Mapping, Optional, Union
-from typing_extensions import Self
 
 import numpy as np
 import pandas as pd
 from packaging.version import parse as get_version
 from tables.exceptions import ClosedNodeError
+from typing_extensions import Self
 
 import dascore as dc
-from dascore.core.spool import DataFrameSpool
-from dascore.core.schema import PatchFileSummary
 from dascore.constants import LARGEDT64, SMALLDT64, path_types
+from dascore.core.schema import PatchFileSummary
+from dascore.core.spool import DataFrameSpool
 from dascore.exceptions import UnsupportedKeyword
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iter_files, iterate
+from dascore.utils.pd import _remove_base_path, filter_df, update_ranges_with_kwargs
 from dascore.utils.progress import track_index_update
 from dascore.utils.time import to_datetime64, to_number, to_timedelta64
-from dascore.utils.pd import _remove_base_path, filter_df
 
 # supported read_hdf5 kwargs
 READ_HDF5_KWARGS = frozenset(
@@ -233,23 +232,22 @@ class FileSpool(DataFrameSpool):
     def __init__(
         self,
         base_path: Union[str, Path, Self] = ".",
-        cache_size: int = 5,
-        executor: Optional[Executor] = None,
-        file_format=None,
+        file_format: Optional[str] = None,
+        select_kwargs: Optional[dict] = None,
     ):
         if isinstance(base_path, self.__class__):
             self.__dict__.update(base_path.__dict__)
             return
         self.file_format = file_format
         self.spool_path = Path(base_path).absolute()
-        self.executor = executor
         # initialize cache
-        self._index_cache = _TimeIndexCache(self, cache_size=cache_size)
+        self._index_cache = _TimeIndexCache(self)
         # enforce min version or warn on newer version
         self._enforce_min_version()
         self._warn_on_newer_version()
+        self._select_kwargs = select_kwargs if select_kwargs is not None else {}
 
-    def get_contents(self, **kwargs) -> pd.DataFrame:
+    def get_contents(self) -> pd.DataFrame:
         """
         Return a dataframe of the contents of the data files.
 
@@ -261,20 +259,36 @@ class FileSpool(DataFrameSpool):
         """
         self.ensure_bank_path_exists()
         if not self.index_path.exists():
-            self.update()
+            self = self.update()
         # if no file was created (dealing with empty bank) return empty index
         if not self.index_path.exists():
             return pd.DataFrame(columns=self._index_columns)
         # grab index from cache
-        time_min, time_max = kwargs.get("time", (None, None))
-        index = self._index_cache(buffer=self.buffer, **kwargs)
+        index = self._index_cache(buffer=self.buffer)
         # filter and return
-        filt = filter_df(index, **kwargs)
-        return index[filt]
+        filt = filter_df(index, **self._select_kwargs)
+        out = index[filt]
+        return update_ranges_with_kwargs(out, **self._select_kwargs)
+
+    def select(self, **kwargs) -> Self:
+        """Sub-select certain dimensions for Spool"""
+        out = self.__class__(
+            base_path=self.spool_path,
+            file_format=self.file_format,
+            select_kwargs=kwargs,
+        )
+        return out
+
+    @property
+    def _df(self):
+        """Return get_contents."""
+        return self.get_contents()
 
     def update(self) -> Self:
         """
         Updates the contents of the spool and returns a spool.
+
+        Resets any previous selection.
         """
         self._enforce_min_version()  # delete index if schema has changed
         update_time = time.time()
@@ -292,7 +306,7 @@ class FileSpool(DataFrameSpool):
         return self
 
     def _get_file_iterator(self, paths: Optional[path_types] = None, only_new=True):
-        """Return an iterator of potential unindexed files."""
+        """Return an iterator of potential un-indexed files."""
         # get mtime, subtract a bit to avoid odd bugs
         mtime = None
         # getting last updated might need the db so only call once.
@@ -311,8 +325,17 @@ class FileSpool(DataFrameSpool):
         # return file iterator
         return iter_files(paths, ext=self.ext, mtime=mtime)
 
+    def __iter__(self):
+        # get dataframe, add absolute path and iterate
+        df = self._df.copy(deep=False)
+        df["path"] = str(self.spool_path) + df["path"]
+        for ind in range(len(df)):
+            yield self.load_patch(df.iloc[ind])
+
     def _extract_patch_from_row(self, row) -> Self:
         """Given a row from the managed dataframe, return a patch."""
+        patch = dc.read(**dict(row))[0]
+        return patch
 
     @property
     def last_updated_timestamp(self) -> Optional[float]:
@@ -342,7 +365,7 @@ class FileSpool(DataFrameSpool):
 
     def _enforce_min_version(self):
         """
-        Check version of obsplus used to create index and delete index if the
+        Check version of dascore used to create index and delete index if the
         minimum version requirement is not met.
         """
         version = self._version_or_none
@@ -359,15 +382,15 @@ class FileSpool(DataFrameSpool):
 
     def _warn_on_newer_version(self):
         """
-        Issue a warning if the bank was created by a newer version of obsplus.
+        Issue a warning if the bank was created by a newer version of dascore.
 
         If this is the case, there is no guarantee it will work.
         """
         version = self._version_or_none
         if version is not None:
-            obsplus_version = get_version(dc.__last_version__)
+            dascore_version = get_version(dc.__last_version__)
             bank_version = get_version(version)
-            if bank_version > obsplus_version:
+            if bank_version > dascore_version:
                 msg = (
                     f"The bank was created with a newer version of dc ("
                     f"{version}), you are running ({dc.__last_version__}),"
@@ -402,7 +425,7 @@ class FileSpool(DataFrameSpool):
 
     @property
     def _index_version(self) -> str:
-        """Get the version of obsplus used to create the index."""
+        """Get the version of dascore used to create the index."""
         return self._read_metadata()["dascore_version"].iloc[0]
 
     @property
@@ -451,7 +474,7 @@ class FileSpool(DataFrameSpool):
         meta = dict(
             path_structure=self.path_structure,
             name_structure=self.name_structure,
-            obsplus_version=dc.__last_version__,
+            dascore_version=dc.__last_version__,
         )
         return pd.DataFrame(meta, index=[0])
 

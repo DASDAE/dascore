@@ -24,8 +24,8 @@ import xarray as xr
 
 import dascore
 from dascore.constants import (
-    PATCH_MERGE_ATTRS,
     DEFAULT_PATCH_ATTRS,
+    PATCH_MERGE_ATTRS,
     PatchType,
     SpoolType,
 )

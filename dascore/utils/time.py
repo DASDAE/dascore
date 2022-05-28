@@ -9,7 +9,7 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 
-from dascore.constants import timeable_types, NUMPY_TIME_UNIT_MAPPPING
+from dascore.constants import NUMPY_TIME_UNIT_MAPPPING, timeable_types
 from dascore.exceptions import TimeError
 
 
@@ -249,12 +249,7 @@ def _return_number_null(null):
 
 
 @to_number.register(np.timedelta64)
-def _pandas_timestamp_to_num(time_delta: np.timedelta64):
-    return to_number([to_timedelta64(time_delta)])[0]
-
-
-@to_number.register(np.timedelta64)
-def _pandas_timestamp_to_num(time_delta: np.timedelta64):
+def _time_detal_to_number(time_delta: np.timedelta64):
     return to_number([to_timedelta64(time_delta)])[0]
 
 

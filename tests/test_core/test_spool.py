@@ -40,7 +40,7 @@ class TestGetContents:
         """Ensure the dataframe can be filtered."""
         full_df = random_spool.get_contents()
         new_max = full_df["time_min"].max() - to_timedelta64(1)
-        sub = random_spool.get_contents(time=(None, new_max))
+        sub = random_spool.select(time=(None, new_max)).get_contents()
         assert len(sub) == (len(full_df) - 1)
         assert (sub["time_min"] < new_max).all()
 

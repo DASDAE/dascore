@@ -9,7 +9,7 @@ from typing import List, Optional, Union
 
 import dascore
 from dascore.constants import SpoolType, timeable_types
-from dascore.core.schema import PatchFileSummary, PatchSummary
+from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
 from dascore.utils.plugin import FiberIOManager

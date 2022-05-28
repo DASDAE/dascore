@@ -1,8 +1,8 @@
 """
 Pydantic schemas.
 """
-from typing import Union, Sequence
 from pathlib import Path
+from typing import Sequence, Union
 
 import numpy as np
 from pydantic import BaseModel
@@ -49,6 +49,8 @@ class PatchSummary(BaseModel):
     """The expected minimum attributes for a Patch attrs."""
 
     class Config:
+        """Configuration for Patch Summary"""
+
         json_encoders = {
             np.datetime64: lambda x: str(x),
             np.timedelta64: lambda x: str(x),
@@ -70,6 +72,8 @@ class PatchSummary(BaseModel):
 
 
 class PatchSummaryWithHistory(PatchSummary):
+    """Patch summary which includes history."""
+
     history: Union[str, Sequence[str]] = ""
 
 

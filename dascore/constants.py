@@ -1,6 +1,6 @@
 """Constants used throughout obsplus."""
 from pathlib import Path
-from typing import TypedDict, TypeVar, Union
+from typing import TypeVar, Union
 
 import numpy as np
 import pandas as pd

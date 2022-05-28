@@ -4,7 +4,6 @@ Simple interface for progress markers.
 
 from rich.progress import track
 
-
 track_index_update = track
 
 

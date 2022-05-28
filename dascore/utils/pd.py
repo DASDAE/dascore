@@ -10,7 +10,7 @@ from typing import Collection
 import numpy as np
 import pandas as pd
 
-from dascore.utils.time import to_timedelta64, to_datetime64
+from dascore.utils.time import to_datetime64, to_timedelta64
 
 
 @cache
@@ -194,3 +194,9 @@ def filter_df(df: pd.DataFrame, **kwargs) -> np.array:
     # filter based on ranges
     bool_index = _filter_multicolumn_range(multicolumn_range_query, df, bool_index)
     return bool_index
+
+
+def update_ranges_with_kwargs(df, **kwargs):
+    """Update ranges of each row based on kwargs."""
+    # dim, val = get_dim_value_from_kwargs()
+    # breakpoint()

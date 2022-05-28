@@ -6,7 +6,7 @@ from typing import Collection, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from dascore.constants import timeable_types, numeric_types
+from dascore.constants import numeric_types, timeable_types
 from dascore.utils.time import is_datetime64, to_timedelta64
 
 

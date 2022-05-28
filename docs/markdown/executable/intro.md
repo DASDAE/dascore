@@ -129,8 +129,7 @@ Spools of any type have a few main methods:
 
 ## get_contents
 
-If supported, returns a dataframe listing contents. The normal way of filtering
-based on kwargs applies.
+If supported, returns a dataframe listing contents.
 
 ```{code-cell}
 import dascore
@@ -147,13 +146,13 @@ reflect subset of the original data requested by the select operation.
 ```{code-cell}
 import dascore
 spool = dascore.get_example_spool()
-# select a spool with 
+# select a spool with
 subspool = spool.select(time=('2020-01-03T00:00:09', None)
 ```
 
 ## chunk
 
-Chunk controls how data grouped together in patches. It can be used to
+Chunk controls how data are grouped together in patches. It can be used to
 merge contiguous patches together, specify size of patches for processing,
 etc.
 
@@ -163,11 +162,14 @@ spool = dascore.get_example_spool()
 # chunk spool for 3600 second increments with 10 second overlaps
 # and keep any segements that are partials
 subspool = spool.chunk(time=3600, overlap=10, keep_partials=True)
+
+# merge all contiguous segments along time dimension
+merged_spool = spool.chunk(time=None)
 ```
 
 ## iterate
 
-Patches are extracted from the spool through simple iteration or indexing:
+Patches are extracted from the spool via simple iteration or indexing:
 
 ```{code-cell}
 import dascore
@@ -177,5 +179,6 @@ patch = spool[0]  # extract first patch
 # iterate patchs
 for patch in spool:
     print(patch)
+# extract a range of patches into new spool
+new_spool = spool[1:]
 ```
-
