@@ -56,7 +56,7 @@ class FiberIO(ABC):
         out = []
         for pa in spool:
             info = dict(pa.attrs)
-            info["file_format"] = self.name
+            info["format"] = self.name
             info["path"] = str(path)
             out.append(PatchFileSummary.parse_obj(info))
         return out
@@ -182,7 +182,7 @@ def get_format(path: Union[str, Path]) -> (str, str):
         raise UnknownFiberFormat(msg)
 
 
-def write(patch_or_stream, path: Union[str, Path], format: str, **kwargs):
+def write(patch_or_spool, path: Union[str, Path], format: str, **kwargs):
     """
     Write a Patch or Stream to disk.
 
@@ -199,6 +199,6 @@ def write(patch_or_stream, path: Union[str, Path], format: str, **kwargs):
 
     """
     formatter = _IO_INSTANCES[format.upper()]
-    if not isinstance(patch_or_stream, dascore.MemorySpool):
-        patch_or_stream = dascore.MemorySpool([patch_or_stream])
-    formatter.write(patch_or_stream, path, **kwargs)
+    if not isinstance(patch_or_spool, dascore.MemorySpool):
+        patch_or_spool = dascore.MemorySpool([patch_or_spool])
+    formatter.write(patch_or_spool, path, **kwargs)

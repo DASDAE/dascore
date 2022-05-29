@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dascore.utils.chunk import chunk, get_intervals
+from dascore.utils.chunk import ChunkManager, get_intervals
 from dascore.utils.time import to_timedelta64
 
 STARTTIME = np.datetime64("2020-01-03")
@@ -94,7 +94,8 @@ class TestBasicChunk:
         """Test rechunking with no gaps."""
         time_interval = (contiguous_df["time_max"] - contiguous_df["time_min"]).max()
         new_time_interval = time_interval / 2
-        out = chunk(contiguous_df, time=new_time_interval)[0]
+        chunker = ChunkManager(time=new_time_interval)
+        out = chunker.chunk(contiguous_df)
         assert len(out) == 2 * len(contiguous_df)
         d_time = out["d_time"].iloc[0]
         new_interval = (out["time_max"] - out["time_min"] + d_time).max()
@@ -106,7 +107,8 @@ class TestBasicChunk:
         sr = df["d_time"]
         time_interval = (sr + df["time_max"] - df["time_min"]).max()
         new_time_interval = time_interval / 2
-        out = chunk(df, time=new_time_interval)[0]
+        chunker = ChunkManager(time=new_time_interval)
+        out = chunker.chunk(df)
         assert len(out) == 2 * len(df)
         new_interval = (out["time_max"] - out["time_min"]).max()
         assert new_interval == (new_time_interval - sr.iloc[0])
@@ -114,7 +116,8 @@ class TestBasicChunk:
     def test_rechunk_different_sr(self, df_different_sample_rates):
         """Ensure segments with different sample rates don't get combined."""
         df = df_different_sample_rates
-        out = chunk(df, overlap=None, time=23)[0]
+        chunker = ChunkManager(overlap=None, time=23)
+        out = chunker.chunk(df)
         dt = np.sort(np.unique(out["d_time"]))
         assert len(dt) == 2, "both dt should remain"
         # the second part of the df should start at the one minute mark
@@ -124,19 +127,22 @@ class TestBasicChunk:
 
     def test_keep_leftovers(self, contiguous_df):
         """Ensure leftovers show up in df."""
-        out = chunk(contiguous_df, overlap=None, keep_partial=True, time=28)[0]
+        chunker = ChunkManager(overlap=None, keep_partial=True, time=28)
+        out = chunker.chunk(contiguous_df)
         assert len(out) == 3
         assert out["time_max"].max() == contiguous_df["time_max"].max()
 
     def test_overlap(self, contiguous_df):
         """Ensure overlapping segments work."""
         over = to_timedelta64(10)
-        out = chunk(contiguous_df, overlap=over, time=20)[0]
+        chunker1 = ChunkManager(overlap=over, time=20)
+        out = chunker1.chunk(contiguous_df)
         expected = over - contiguous_df["d_time"].iloc[0]
         olap = out.shift()["time_max"] - out["time_min"]
         assert np.all(pd.isnull(olap) | (olap == expected))
         # now ensure floats work for overlap param
-        out2 = chunk(contiguous_df, overlap=10, time=20)[0]
+        chunker2 = ChunkManager(overlap=10, time=20)
+        out2 = chunker2.chunk(contiguous_df)
         assert out.equals(out2)
 
 
@@ -145,7 +151,9 @@ class TestInstructionDF:
 
     def test_indices(self, contiguous_df):
         """Ensure the input/output index belong to input/output df."""
-        out, instruction = chunk(contiguous_df, overlap=0, time=10)
+        chunker = ChunkManager(overlap=0, time=10)
+        out = chunker.chunk(contiguous_df)
+        instruction = chunker.get_instruction_df(contiguous_df, out)
         assert set(instruction["original_index"]).issubset(set(contiguous_df.index))
         assert set(instruction["new_index"]).issubset(set(out.index))
 

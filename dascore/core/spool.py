@@ -9,11 +9,11 @@ from typing_extensions import Self
 
 import dascore
 from dascore.constants import PatchType, SpoolType, numeric_types, timeable_types
-from dascore.utils.chunk import chunk
+from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.patch import merge_patches, scan_patches
-from dascore.utils.pd import filter_df
+from dascore.utils.pd import _convert_min_max_in_kwargs, filter_df
 
 
 class BaseSpool(abc.ABC):
@@ -88,26 +88,31 @@ class DataFrameSpool(BaseSpool):
     _select_kwargs: Optional[Mapping] = FrozenDict()
 
     def __getitem__(self, item):
-        return self.load_patch(self._df.iloc[0])
+        return self._load_patch(self._df.iloc[0])
 
     def __len__(self):
         return len(self._df)
 
     def __iter__(self):
         df = self._df
-        for ind in range(len(df)):
-            yield self.load_patch(df.iloc[ind])
+        df_dict_list = self._df_to_dict_list(df)
+        for patch_kwargs in df_dict_list:
+            # convert kwargs to format understood by parser
+            kwargs = _convert_min_max_in_kwargs(patch_kwargs, df)
+            yield self._load_patch(kwargs)
+
+    def _df_to_dict_list(self, df):
+        """
+        Convert the dataframe to a list of dicts for iteration.
+
+        This is significantly faster than iterating rows.
+        """
+        df_dict_list = list(df.T.to_dict().values())
+        return df_dict_list
 
     @abc.abstractmethod
-    def _extract_patch_from_row(self, row) -> PatchType:
+    def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-
-    def load_patch(self, row):
-        """
-        Load a patch from a row of the dataframe.
-        """
-        patch = self._extract_patch_from_row(row)
-        return patch
 
     @compose_docstring(doc=BaseSpool.chunk.__doc__)
     def chunk(
@@ -120,9 +125,9 @@ class DataFrameSpool(BaseSpool):
         {doc}
         """
         df = self._df
-        out, instructions = chunk(
-            df, overlap=overlap, keep_partial=keep_partial, **kwargs
-        )
+        chunker = ChunkManager(overlap=overlap, keep_partial=keep_partial, **kwargs)
+        out = chunker.chunk(df)
+        instructions = chunker.get_instruction_df(df, out)
         return self.new_from_df(out, source_df=df, instruction_df=instructions)
 
     @classmethod
@@ -201,6 +206,6 @@ class MemorySpool(DataFrameSpool):
         new_patches = merge_patches(self._df, dim=dim)
         return self.__class__(new_patches)
 
-    def _extract_patch_from_row(self, row):
+    def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory"""
-        return row["patch"]
+        return kwargs["patch"]

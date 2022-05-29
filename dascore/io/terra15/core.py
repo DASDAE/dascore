@@ -69,7 +69,7 @@ class Terra15Formatter(FiberIO):
             out["time_min"] = to_datetime64(tmin)
             out["time_max"] = to_datetime64(tmax)
             out["path"] = path
-            out["file_format"] = self.name
+            out["format"] = self.name
             return [PatchFileSummary.parse_obj(out)]
 
     def read(

@@ -51,8 +51,8 @@ def basic_spool_directory(tmp_path_factory, terra15_das_example_path, random_pat
 @register_func(FILE_SPOOLS)
 def basic_file_spool(basic_spool_directory):
     """Return a DAS bank on basic_bank_directory."""
-    out = dc.FileSpool(basic_spool_directory).update()
-    return out
+    out = dc.FileSpool(basic_spool_directory)
+    return out.update()
 
 
 class TestFileSpool:

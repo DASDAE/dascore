@@ -3,8 +3,27 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dascore.utils.pd import filter_df
+from dascore.utils.pd import adjust_segments, filter_df
 from dascore.utils.time import to_datetime64
+
+
+@pytest.fixture
+def example_df_2():
+    """create a simple df for testing. Example from Chris Albon."""
+    time = to_datetime64("2020-01-03")
+    time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
+    time_max = time_min + np.timedelta64(10, "m")
+    raw_data = {
+        "first_name": ["Jason", "Molly", "Tina", "Jake", "Amy"],
+        "last_name": ["Miller", "Jacobson", "Ali", "Milner", "Cooze"],
+        "bp_min": [100, 120, 110, 85, 125],
+        "bp_max": [110, 145, 121, 99, 165],
+        "time_min": time_min,
+        "time_max": time_max,
+        "d_time": [np.timedelta64(1, "s") for _ in range(5)],
+    }
+    out = pd.DataFrame(raw_data, columns=list(raw_data))
+    return out
 
 
 class TestFilterDfBasic:
@@ -83,50 +102,45 @@ class TestFilterDfBasic:
 class TestFilterDfAdvanced:
     """Tests for advanced filtering of dataframes."""
 
-    @pytest.fixture
-    def example_df(self):
-        """create a simple df for testing. Example from Chris Albon."""
-        time = to_datetime64("2020-01-03")
-        time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
-        time_max = time_min + np.timedelta64(10, "m")
-        raw_data = {
-            "first_name": ["Jason", "Molly", "Tina", "Jake", "Amy"],
-            "last_name": ["Miller", "Jacobson", "Ali", "Milner", "Cooze"],
-            "bp_min": [100, 120, 110, 85, 125],
-            "bp_max": [110, 145, 121, 99, 165],
-            "time_min": time_min,
-            "time_max": time_max,
-            "d_time": [np.timedelta64(1, "s") for _ in range(5)],
-        }
-        out = pd.DataFrame(raw_data, columns=list(raw_data))
-        return out
-
-    def test_col(self, example_df):
+    def test_col(self, example_df_2):
         """Test column names that end with max"""
         vals = [100, 125]
-        out = filter_df(example_df, bp_min=vals)
-        assert np.all(out == example_df["bp_min"].isin(vals))
+        out = filter_df(example_df_2, bp_min=vals)
+        assert np.all(out == example_df_2["bp_min"].isin(vals))
 
-    def test_min_max_range_based_on_column(self, example_df):
+    def test_min_max_range_based_on_column(self, example_df_2):
         """
         Using just bp, we should be able to specify range which spans
         two columns.
         """
         val = (100, 120)
-        out = filter_df(example_df, bp=val)
-        max_too_small = example_df["bp_max"] < val[0]
-        min_too_big = example_df["bp_min"] > val[1]
+        out = filter_df(example_df_2, bp=val)
+        max_too_small = example_df_2["bp_max"] < val[0]
+        min_too_big = example_df_2["bp_min"] > val[1]
         in_range = ~(max_too_small | min_too_big)
         assert all(out == in_range)
 
-    def test_time_query_all_open(self, example_df):
+    def test_time_query_all_open(self, example_df_2):
         """Test for open time interval"""
-        out = filter_df(example_df, time=(None, None))
+        out = filter_df(example_df_2, time=(None, None))
         assert out.all()
 
-    def test_time_query_one_open(self, example_df):
+    def test_time_query_one_open(self, example_df_2):
         """Test for open time interval"""
-        tmax = to_datetime64(example_df["time_max"].max() - np.timedelta64(1, "ns"))
-        out = filter_df(example_df, time=(tmax, None))
+        tmax = to_datetime64(example_df_2["time_max"].max() - np.timedelta64(1, "ns"))
+        out = filter_df(example_df_2, time=(tmax, None))
         # just the last row should have been selected
         assert out.iloc[-1] and out.astype(int).sum() == 1
+
+
+class TestAdjustSegments:
+    """Tests for adjusting segments of dataframes."""
+
+    def test_limits_changed(self, example_df_2):
+        """Ensure limits of segments are changed when intersected by query."""
+        df = example_df_2
+        new_min = df["time_min"].min() + np.timedelta64(1, "s")
+        new_max = df["time_max"].max() - np.timedelta64(1, "s")
+        new = adjust_segments(df, time=(new_min, new_max))
+        assert np.all(new["time_min"] >= new_min)
+        assert np.all(new["time_max"] <= new_max)

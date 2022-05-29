@@ -24,7 +24,7 @@ from dascore.core.spool import DataFrameSpool
 from dascore.exceptions import UnsupportedKeyword
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iter_files, iterate
-from dascore.utils.pd import _remove_base_path, filter_df, update_ranges_with_kwargs
+from dascore.utils.pd import _remove_base_path, adjust_segments
 from dascore.utils.progress import track_index_update
 from dascore.utils.time import to_datetime64, to_number, to_timedelta64
 
@@ -97,7 +97,7 @@ class _TimeIndexCache:
 
     @staticmethod
     def _get_times(time_min, time_max):
-        """Return starttimes and endtimes."""
+        """Return time_min and time_max."""
         # get defaults if starttime or endtime is none
         time_min = None if pd.isnull(time_min) else time_min
         time_max = None if pd.isnull(time_max) else time_max
@@ -105,7 +105,7 @@ class _TimeIndexCache:
         time_max = to_datetime64(time_max or LARGEDT64)
         if time_min is not None and time_max is not None:
             if time_min > time_max:
-                msg = "starttime cannot be greater than endtime."
+                msg = "time_min cannot be greater than time_max."
                 raise ValueError(msg)
         return time_min, time_max
 
@@ -207,7 +207,7 @@ class FileSpool(DataFrameSpool):
     # string column sizes in hdf5 table
     _min_itemsize = {
         "path": 79,
-        "file_format": 15,
+        "format": 15,
         "tag": 8,
         "network": 8,
         "station": 8,
@@ -232,13 +232,13 @@ class FileSpool(DataFrameSpool):
     def __init__(
         self,
         base_path: Union[str, Path, Self] = ".",
-        file_format: Optional[str] = None,
+        format: Optional[str] = None,
         select_kwargs: Optional[dict] = None,
     ):
         if isinstance(base_path, self.__class__):
             self.__dict__.update(base_path.__dict__)
             return
-        self.file_format = file_format
+        self._format = format
         self.spool_path = Path(base_path).absolute()
         # initialize cache
         self._index_cache = _TimeIndexCache(self)
@@ -266,15 +266,14 @@ class FileSpool(DataFrameSpool):
         # grab index from cache
         index = self._index_cache(buffer=self.buffer)
         # filter and return
-        filt = filter_df(index, **self._select_kwargs)
-        out = index[filt]
-        return update_ranges_with_kwargs(out, **self._select_kwargs)
+        out = adjust_segments(index, **self._select_kwargs)
+        return out
 
     def select(self, **kwargs) -> Self:
         """Sub-select certain dimensions for Spool"""
         out = self.__class__(
             base_path=self.spool_path,
-            file_format=self.file_format,
+            format=self._format,
             select_kwargs=kwargs,
         )
         return out
@@ -296,7 +295,6 @@ class FileSpool(DataFrameSpool):
         smooth_iterator = track_index_update(
             new_files, f"Indexing {self.spool_path.name}"
         )
-
         data_list = [y.dict() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
         if not df.empty:
@@ -325,16 +323,19 @@ class FileSpool(DataFrameSpool):
         # return file iterator
         return iter_files(paths, ext=self.ext, mtime=mtime)
 
-    def __iter__(self):
-        # get dataframe, add absolute path and iterate
-        df = self._df.copy(deep=False)
-        df["path"] = str(self.spool_path) + df["path"]
-        for ind in range(len(df)):
-            yield self.load_patch(df.iloc[ind])
+    def _df_to_dict_list(self, df):
+        """
+        Convert the dataframe to a list of dicts for iteration.
 
-    def _extract_patch_from_row(self, row) -> Self:
+        This is significantly faster than iterating rows.
+        """
+        df = df.copy(deep=False).replace("", None)
+        df["path"] = str(self.spool_path) + df["path"]
+        return super()._df_to_dict_list(df)
+
+    def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-        patch = dc.read(**dict(row))[0]
+        patch = dc.read(**kwargs)[0]
         return patch
 
     @property

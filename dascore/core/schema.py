@@ -80,5 +80,5 @@ class PatchSummaryWithHistory(PatchSummary):
 class PatchFileSummary(PatchSummary):
     """The expected minimum attributes for a Patch/spool file."""
 
-    file_format: str = ""
+    format: str = ""
     path: Union[str, Path] = ""

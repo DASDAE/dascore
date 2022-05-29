@@ -5,7 +5,7 @@ import fnmatch
 import os
 from collections import defaultdict
 from functools import cache
-from typing import Collection
+from typing import Collection, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -31,7 +31,7 @@ def _remove_base_path(series: pd.Series, base="") -> pd.Series:
     return unix_paths.str.replace(unix_base_path, "")
 
 
-def _get_min_max(kwargs, df):
+def _get_min_max_query(kwargs, df):
     """
     Get a dict of {column_name: Optional[min_val], Optional[max_val]}.
 
@@ -159,6 +159,90 @@ def _convert_times(df, some_dict):
     return some_dict
 
 
+def get_interval_columns(df, name):
+    """Return a series of start, stop, step for columns."""
+    names = f"{name}_min", f"{name}_max", f"d_{name}"
+    missing_cols = set(names) - set(df.columns)
+    if missing_cols:
+        msg = f"Dataframe is missing {missing_cols} to chunk on {name}"
+        raise KeyError(msg)
+    return df[names[0]], df[names[1]], df[names[2]]
+
+
+def get_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
+    """
+    Find the slice keyword arguments, return name and slice.
+
+    Will also convert slice values based on dtypes in dataframe, eg
+    time=(1, 10) will convert to
+    time=(np.timedelta64(1, 's'), np.timedelta64(10, 's')) provided columns
+    'time_min' and 'time_max' are datetime columns.
+    """
+
+    def _get_slice(value):
+        """Ensure the value can rep. a slice."""
+        if not isinstance(value, (slice, Sequence)) or not len(value) in {2, 3}:
+            msg = "A 2 length sequence or slice is required."
+            raise ValueError(msg)
+        if not isinstance(value, slice):
+            value = slice(*value)
+        return value
+
+    def _maybe_convert_dtype(sli, name, df):
+        """Convert dtypes of slice if needed."""
+        datetime_cols = set(df.select_dtypes(include=np.datetime64).columns)
+        if {f"{name}_min", f"{name}_max"}.issubset(datetime_cols):
+            sli = slice(
+                to_datetime64(sli.start) if sli.start is not None else None,
+                to_datetime64(sli.stop) if sli.stop is not None else None,
+                to_timedelta64(sli.step) if sli.step is not None else None,
+            )
+        return sli
+
+    # find keys which correspond to column ranges
+    col_set = set(df.columns)
+    valid_minmax_kwargs = {
+        x
+        for x in kwargs
+        if {f"{x}_min", f"{x}_max"}.issubset(col_set) and x not in col_set
+    }
+    # ensure exactly one column is found
+    if not len(valid_minmax_kwargs) == 1:
+        msg = "Exactly one "
+        raise ValueError(msg)
+    name = list(valid_minmax_kwargs)[0]
+    out_slice = _maybe_convert_dtype(_get_slice(kwargs[name]), name, df)
+    return name, out_slice
+
+
+def adjust_segments(df, **kwargs):
+    """
+    Filter a dataframe and adjust its limits.
+
+    Parameters
+    ----------
+    df
+        The input dataframe
+    kwargs
+        The keyword arguments for filtering.
+    """
+    # apply filtering
+    out = df[filter_df(df, **kwargs)]
+    # find slice kwargs, get series corresponding to interval columns
+    try:
+        name, qs = get_slice_from_kwargs(out, kwargs)
+    except ValueError:  # no slices
+        return out
+    start, stop, step = get_interval_columns(out, name)
+    min_val = qs.start if qs.start is not None else start.min()
+    max_val = qs.stop if qs.stop is not None else stop.max()
+    too_small = start < min_val
+    too_large = stop > max_val
+    out.loc[too_large, too_large.name] = max_val
+    out.loc[too_small, too_small.name] = min_val
+    return out
+
+
 def filter_df(df: pd.DataFrame, **kwargs) -> np.array:
     """
     Determine if each row of the index meets some filter requirements.
@@ -180,7 +264,7 @@ def filter_df(df: pd.DataFrame, **kwargs) -> np.array:
     A boolean array of the same len as df indicating if each row meets the
     requirements.
     """
-    min_max_query = _convert_times(df, _get_min_max(kwargs, df))
+    min_max_query = _convert_times(df, _get_min_max_query(kwargs, df))
     multicolumn_range_query = _convert_times(df, _add_range_query(kwargs, df))
     equality_query, collection_query = _get_flat_and_collection_queries(kwargs)
     # get a blank index of True for filters
@@ -196,7 +280,25 @@ def filter_df(df: pd.DataFrame, **kwargs) -> np.array:
     return bool_index
 
 
-def update_ranges_with_kwargs(df, **kwargs):
-    """Update ranges of each row based on kwargs."""
-    # dim, val = get_dim_value_from_kwargs()
-    # breakpoint()
+def _convert_min_max_in_kwargs(kwargs, df):
+    """
+    Convert the min/max values in kwargs to single key form.
+
+    For example, {'time_min': 10, 'time_max': 20} would be converted
+    to {'time': (10, 20)}
+    """
+    out = dict(kwargs)
+    minmax = defaultdict(lambda: [None, None])
+    col_set = set(df.columns)
+    max_kwargs = {x for x in col_set & set(out) if x.endswith("_max")}
+    min_kwargs = {x for x in col_set & set(out) if x.endswith("_min")}
+    datetime_cols = set(df.select_dtypes(include=np.datetime64).columns)
+    iterable = zip([max_kwargs, min_kwargs], ["_max", "_min"], [0, 1])
+    for minmax_kwargs, suffix, ind in iterable:
+        for key in minmax_kwargs:
+            val = out.pop(key)
+            if key in datetime_cols:
+                val = to_datetime64(val)
+            minmax[key.replace(suffix, "")][ind] = val
+    out.update(minmax)
+    return out
