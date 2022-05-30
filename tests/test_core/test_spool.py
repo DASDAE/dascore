@@ -2,6 +2,7 @@
 Test for stream functions.
 """
 import pandas as pd
+import pytest
 
 import dascore
 from dascore.utils.time import to_timedelta64
@@ -25,6 +26,19 @@ class TestSpoolIterablity:
         patch_list = list(random_spool)
         for pa in patch_list:
             assert isinstance(pa, dascore.Patch)
+
+    def test_index_error(self, random_spool):
+        """Ensure an IndexError is raised when indexing beyond spool."""
+        spool_len = len(random_spool)
+        with pytest.raises(IndexError, match="out-of-bounds"):
+            _ = random_spool[spool_len]
+
+    def test_index_returns_corresponding_patch(self, random_spool):
+        """Ensure the index returns the correct patch"""
+        spool_list = list(random_spool)
+        for num, (patch1, patch2) in enumerate(zip(spool_list, random_spool)):
+            patch3 = random_spool[num]
+            assert patch1 == patch2 == patch3
 
 
 class TestGetContents:

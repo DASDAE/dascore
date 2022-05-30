@@ -293,7 +293,7 @@ def _convert_min_max_in_kwargs(kwargs, df):
     max_kwargs = {x for x in col_set & set(out) if x.endswith("_max")}
     min_kwargs = {x for x in col_set & set(out) if x.endswith("_min")}
     datetime_cols = set(df.select_dtypes(include=np.datetime64).columns)
-    iterable = zip([max_kwargs, min_kwargs], ["_max", "_min"], [0, 1])
+    iterable = zip([min_kwargs, max_kwargs], ["_min", "_max"], [0, 1])
     for minmax_kwargs, suffix, ind in iterable:
         for key in minmax_kwargs:
             val = out.pop(key)

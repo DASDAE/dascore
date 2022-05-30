@@ -46,7 +46,8 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
         kwargs["time"] = times
     # convert tuples into slices
     kwargs = {
-        i: slice(v[0], v[1]) if isinstance(v, tuple) else v for i, v in kwargs.items()
+        i: slice(v[0], v[1]) if isinstance(v, (list, tuple)) else v
+        for i, v in kwargs.items()
     }
     new = patch._data_array.sel(**kwargs)
     data = new.data if not copy else new.data.copy()

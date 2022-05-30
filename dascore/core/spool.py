@@ -88,7 +88,7 @@ class DataFrameSpool(BaseSpool):
     _select_kwargs: Optional[Mapping] = FrozenDict()
 
     def __getitem__(self, item):
-        return self._load_patch(self._df.iloc[0])
+        return self._load_patch(self._df.iloc[item])
 
     def __len__(self):
         return len(self._df)
@@ -97,9 +97,13 @@ class DataFrameSpool(BaseSpool):
         df = self._df
         df_dict_list = self._df_to_dict_list(df)
         for patch_kwargs in df_dict_list:
-            # convert kwargs to format understood by parser
+            # convert kwargs to format understood by parser/patch.select
             kwargs = _convert_min_max_in_kwargs(patch_kwargs, df)
-            yield self._load_patch(kwargs)
+            out = self._load_patch(kwargs)
+            select_kwargs = {
+                i: v for i, v in kwargs.items() if i in out.dims or i in out.coords
+            }
+            yield out.select(**select_kwargs)
 
     def _df_to_dict_list(self, df):
         """
