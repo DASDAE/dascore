@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from dascore.exceptions import ParameterError
 from dascore.utils.chunk import ChunkManager, get_intervals
 from dascore.utils.time import to_timedelta64
 
@@ -75,7 +76,7 @@ class TestArrange:
         assert out[0, 0] == start
 
 
-class TestBasicChunk:
+class TestBasicChunkDF:
     """Test basic DF chunking."""
 
     @pytest.fixture()
@@ -145,6 +146,23 @@ class TestBasicChunk:
         out2 = chunker2.chunk(contiguous_df)
         assert out.equals(out2)
 
+    def test_raises_overlap_no_chunksize(self):
+        """Specifying an overlap and no chunk size should raise."""
+        with pytest.raises(ParameterError, match="used for merging"):
+            ChunkManager(time=None, overlap=10)
+
+
+class TestChunkToMerge:
+    """Tests for using chunking to merge contiguous, or overlapping, data."""
+
+    def test_chunk_can_merge(self, contiguous_df):
+        """Ensure chunk can be used to merge unspecified segment lengths."""
+        cm = ChunkManager(time=None)
+        out = cm.chunk(contiguous_df)
+        assert len(out) == 1
+        assert out["time_min"].min() == contiguous_df["time_min"].min()
+        assert 0
+
 
 class TestInstructionDF:
     """Sanity checks on intermediary df"""
@@ -156,7 +174,3 @@ class TestInstructionDF:
         instruction = chunker.get_instruction_df(contiguous_df, out)
         assert set(instruction["original_index"]).issubset(set(contiguous_df.index))
         assert set(instruction["new_index"]).issubset(set(out.index))
-
-
-class TestChunkToMerge:
-    """Test chunk can be used to merge entities."""

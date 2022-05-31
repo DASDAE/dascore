@@ -7,8 +7,9 @@ import numpy as np
 import pandas as pd
 
 from dascore.constants import numeric_types, timeable_types
+from dascore.exceptions import ParameterError
 from dascore.utils.pd import get_interval_columns
-from dascore.utils.time import is_datetime64, to_timedelta64
+from dascore.utils.time import is_datetime64, to_datetime64, to_timedelta64
 
 
 def get_intervals(
@@ -43,6 +44,13 @@ def get_intervals(
     -------
     A 2D array where first column is start and second column is end.
     """
+    # when length is null just use entire length
+    if pd.isnull(length):
+        out = np.array([start, stop])
+        if is_datetime64(start):
+            out = to_datetime64(out)
+        return np.atleast_2d(out)
+
     if is_datetime64(start):
         length = to_timedelta64(length)
     # get variable and perform checks
@@ -105,12 +113,24 @@ class ChunkManager:
         self._keep_partials = keep_partial
         self._tolerance = tolerance
         self._name, self._value = self._validate_kwargs(kwargs)
+        self._validate_chunker()
 
     def _validate_kwargs(self, kwargs):
         """Ensure kwargs is len one and has a valid"""
         assert len(kwargs) == 1
         ((key, value),) = kwargs.items()
         return key, value
+
+    def _validate_chunker(self):
+        """Ensure selected parameters are compatible."""
+        # chunker is used for merging
+        if pd.isnull(self._value):
+            if self._keep_partials or self._overlap:
+                msg = (
+                    "When chunk value is None (ie Chunker is used for merging) "
+                    "both _keep_partials and self._overlap must not be selected."
+                )
+                raise ParameterError(msg)
 
     def _get_continuity_group_number(self, start, stop, step) -> pd.Series:
         """Return a series of ints indicating continuity group."""

@@ -59,12 +59,18 @@ class TestGetContents:
         assert (sub["time_min"] < new_max).all()
 
 
-class TestMerge:
+class TestChunk:
     """
-    Tests for merging patches together.
-    Note: This doesn't need to be tested very well since the work here is done
-    by utils.patch.merge
+    Tests for merging/chunking patches.
     """
+
+    def test_merge_chunk_adjacent_no_overlap(self, adjacent_spool_no_overlap):
+        """
+        Ensure chunking works on simple case of contiguous data w/ no overlap.
+        """
+        new = adjacent_spool_no_overlap.chunk(time=None)
+        out_list = list(new)
+        assert len(new) == len(out_list) == 1
 
     def test_adjacent_merge_no_overlap(self, adjacent_spool_no_overlap):
         """Test that the adjacent patches get merged."""

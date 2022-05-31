@@ -40,6 +40,8 @@ class BaseSpool(abc.ABC):
         self: SpoolType,
         overlap: Optional[Union[numeric_types, timeable_types]] = None,
         keep_partial: bool = False,
+        snap_coords: bool = True,
+        tolerance: float = 1.5,
         **kwargs
     ) -> Self:
         """
@@ -52,6 +54,12 @@ class BaseSpool(abc.ABC):
         keep_partial
             If True, keep the segments which are smaller than chunk size.
             This often occurs because of data gaps or at end of chunks.
+        snap_coords
+            If True, snap the coords on joined patches such that the spacing
+            remains constant.
+        tolerance
+            The number of samples a block of data can be spaced and still be
+            considered contiguous.
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
@@ -94,16 +102,20 @@ class DataFrameSpool(BaseSpool):
         return len(self._df)
 
     def __iter__(self):
-        df = self._df
-        df_dict_list = self._df_to_dict_list(df)
+        origin_df = self._df
+        df_dict_list = self._df_to_dict_list(origin_df)
         for patch_kwargs in df_dict_list:
             # convert kwargs to format understood by parser/patch.select
-            kwargs = _convert_min_max_in_kwargs(patch_kwargs, df)
+            kwargs = _convert_min_max_in_kwargs(patch_kwargs, origin_df)
             out = self._load_patch(kwargs)
             select_kwargs = {
                 i: v for i, v in kwargs.items() if i in out.dims or i in out.coords
             }
             yield out.select(**select_kwargs)
+
+    def _get_source_patches(self, row):
+        if self._instruction_df is not None:
+            pass
 
     def _df_to_dict_list(self, df):
         """
@@ -176,15 +188,6 @@ class MemorySpool(DataFrameSpool):
     def __init__(self, data: Optional[Union[PatchType, Sequence[PatchType]]] = None):
         if data is not None:
             self._df = self._get_patch_table(data)
-
-    @compose_docstring(doc=BaseSpool.chunk.__doc__)
-    def chunk(
-        self: SpoolType,
-        overlap: Optional[Union[numeric_types, timeable_types]] = None,
-        keep_partial: bool = False,
-        **kwargs
-    ) -> SpoolType:
-        """{doc}"""
 
     def _get_patch_table(self, patch_iterable: Sequence[PatchType]) -> pd.DataFrame:
         """

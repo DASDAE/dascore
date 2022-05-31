@@ -87,6 +87,14 @@ class TestFileIndex:
         schema_fields = PatchFileSummary.__fields__
         assert set(basic_index_df).issuperset(schema_fields)
 
+    def test_patches_extracted(self, basic_file_spool):
+        """Ensure the patches can be extracted."""
+        index = basic_file_spool.get_contents()
+        patches = [x for x in basic_file_spool]
+        assert len(index) == len(patches)
+        for patch in patches:
+            assert isinstance(patch, dc.Patch)
+
 
 class TestSelect:
     """tests for subselecting data."""
@@ -107,13 +115,5 @@ class TestSelect:
             assert patch.attrs["time_max"] <= new_max
 
 
-class TestExtractPatches:
-    """Tests for extracting patches."""
-
-    def test_patches_extracted(self, basic_file_spool):
-        """Ensure the patches can be extracted."""
-        index = basic_file_spool.get_contents()
-        patches = [x for x in basic_file_spool]
-        assert len(index) == len(patches)
-        for patch in patches:
-            assert isinstance(patch, dc.Patch)
+class TestChunk:
+    """Tests for chunking filespool."""
