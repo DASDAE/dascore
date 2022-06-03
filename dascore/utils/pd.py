@@ -302,3 +302,31 @@ def _convert_min_max_in_kwargs(kwargs, df):
             minmax[key.replace(suffix, "")][ind] = val
     out.update(minmax)
     return out
+
+
+def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
+    """
+    Returns the names of columns which represent and range in the dataframe.
+
+    For example, time_min, time_max, d_time would be returned if in dataframe.
+    """
+    cols = set(df.columns)
+    possible_dims = {
+        x.replace("_min", "").replace("_max", "").replace("d_", "") for x in cols
+    }
+    out = {
+        x for x in possible_dims if {f"{x}_min", f"{x}_max", f"d_{x}"}.issubset(cols)
+    }
+    return sorted(out)
+
+
+def get_column_names_from_dim(dims: Sequence[str]) -> list:
+    """
+    Get column names from a sequence of dimensions.
+    """
+    out = []
+    for name in dims:
+        out.append(f"{name}_min")
+        out.append(f"{name}_max")
+        out.append(f"d_{name}")
+    return out

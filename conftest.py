@@ -157,5 +157,4 @@ def adjacent_spool_no_overlap(random_patch) -> dascore.MemorySpool:
     expected_time = pa3.attrs["time_max"] - pa1.attrs["time_min"]
     actual_time = pa3.coords["time"].max() - pa1.coords["time"].min()
     assert expected_time == actual_time
-
     return dascore.MemorySpool([pa2, pa1, pa3])

@@ -448,6 +448,7 @@ def patches_to_df(patches: Union[Sequence[PatchType], SpoolType]) -> pd.DataFram
     else:
         df = pd.DataFrame(scan_patches(patches))
         df["patch"] = patches
+        df["history"] = df["history"].apply(lambda x: ",".join(x))
     return df
 
 

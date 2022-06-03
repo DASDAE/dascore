@@ -68,6 +68,7 @@ class TestChunk:
         """
         Ensure chunking works on simple case of contiguous data w/ no overlap.
         """
+        breakpoint()
         new = adjacent_spool_no_overlap.chunk(time=None)
         out_list = list(new)
         assert len(new) == len(out_list) == 1

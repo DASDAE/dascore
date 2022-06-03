@@ -8,7 +8,11 @@ import pandas as pd
 
 from dascore.constants import numeric_types, timeable_types
 from dascore.exceptions import ParameterError
-from dascore.utils.pd import get_interval_columns
+from dascore.utils.pd import (
+    get_column_names_from_dim,
+    get_dim_names_from_columns,
+    get_interval_columns,
+)
 from dascore.utils.time import is_datetime64, to_datetime64, to_timedelta64
 
 
@@ -185,6 +189,8 @@ class ChunkManager:
         min_name, max_name = f"{self._name}_min", f"{self._name}_max"
         c_start, c_stop, c_step = get_interval_columns(origin_df, self._name)
         new_start, new_stop, new_step = get_interval_columns(chunked_df, self._name)
+        dims = get_dim_names_from_columns(origin_df)
+        cols2keep = get_column_names_from_dim(dims)
         out = []
         # TODO need to think more about this, a naive implementation for now
         for start, stop, ind in zip(new_start.values, new_stop.values, new_stop.index):
@@ -192,11 +198,11 @@ class ChunkManager:
             too_early = c_stop < start
             in_range = ~(too_early | too_late)
             assert in_range.sum() > 0, "no original data source found!"
-            sub_df = origin_df[in_range]
+            sub_df = origin_df[in_range][cols2keep]
             sub_df.loc[sub_df[min_name] < start, min_name] = start
             sub_df.loc[sub_df[max_name] > stop, max_name] = stop
-            sub_df.loc[:, "original_index"] = sub_df.index.values
-            sub_df.loc[:, "new_index"] = ind
+            sub_df.loc[:, "source_index"] = sub_df.index.values
+            sub_df.loc[:, "current_index"] = ind
             out.append(sub_df)
         df = pd.concat(out, axis=0).reset_index(drop=True)
         return df
@@ -215,9 +221,6 @@ class ChunkManager:
         ----------
         df
             Input dataframe to chunk.
-        **kwargs
-            Used to filter the output dataframe according to
-            :func:`dascore.utils.pd.filter_df`
 
         Returns
         -------
@@ -257,3 +260,10 @@ class ChunkManager:
             )
             out.append(sub_new_df)
         return pd.concat(out, axis=0)
+
+    @staticmethod
+    def get_range_columns(df):
+        """
+        Return the names of the columns used by the dataframe to represent
+        a range. Should have a {name}_min, {name}_max, d_{name}.
+        """

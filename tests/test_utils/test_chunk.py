@@ -161,7 +161,6 @@ class TestChunkToMerge:
         out = cm.chunk(contiguous_df)
         assert len(out) == 1
         assert out["time_min"].min() == contiguous_df["time_min"].min()
-        assert 0
 
 
 class TestInstructionDF:
@@ -172,5 +171,5 @@ class TestInstructionDF:
         chunker = ChunkManager(overlap=0, time=10)
         out = chunker.chunk(contiguous_df)
         instruction = chunker.get_instruction_df(contiguous_df, out)
-        assert set(instruction["original_index"]).issubset(set(contiguous_df.index))
-        assert set(instruction["new_index"]).issubset(set(out.index))
+        assert set(instruction["source_index"]).issubset(set(contiguous_df.index))
+        assert set(instruction["current_index"]).issubset(set(out.index))

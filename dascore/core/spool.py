@@ -12,8 +12,14 @@ from dascore.constants import PatchType, SpoolType, numeric_types, timeable_type
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.patch import merge_patches, scan_patches
-from dascore.utils.pd import _convert_min_max_in_kwargs, filter_df
+from dascore.utils.patch import merge_patches, patches_to_df, scan_patches
+from dascore.utils.pd import (
+    _convert_min_max_in_kwargs,
+    adjust_segments,
+    filter_df,
+    get_column_names_from_dim,
+    get_dim_names_from_columns,
+)
 
 
 class BaseSpool(abc.ABC):
@@ -94,24 +100,55 @@ class DataFrameSpool(BaseSpool):
     _instruction_df: Optional[pd.DataFrame] = None
     # kwargs for filtering contents
     _select_kwargs: Optional[Mapping] = FrozenDict()
+    # attributes which effect merge groups for internal patches
+    _group_columns = ("network", "station", "dims", "data_type", "history")
+    _drop_columns = ("patch",)
 
     def __getitem__(self, item):
-        return self._load_patch(self._df.iloc[item])
+        return self._get_patches_from_index(item)
 
     def __len__(self):
         return len(self._df)
 
     def __iter__(self):
-        origin_df = self._df
-        df_dict_list = self._df_to_dict_list(origin_df)
+        for ind in self._df.index:
+            yield from self._get_patches_from_index(ind)
+
+    def _get_patches_from_index(self, df_ind):
+        """
+        Given an index (from current df), return the corresponding patch.
+        """
+        df, source = self._df, self._source_df
+        instruction = self._instruction_df
+        df1 = instruction[instruction["current_index"] == df_ind]
+        joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
+        yield from self._patch_from_instruction_df(joined)
+
+    def _patch_from_instruction_df(self, joined):
+        """Get the patches joined columns of instruction df."""
+        df_dict_list = self._df_to_dict_list(joined)
         for patch_kwargs in df_dict_list:
             # convert kwargs to format understood by parser/patch.select
-            kwargs = _convert_min_max_in_kwargs(patch_kwargs, origin_df)
+            kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
             out = self._load_patch(kwargs)
             select_kwargs = {
                 i: v for i, v in kwargs.items() if i in out.dims or i in out.coords
             }
             yield out.select(**select_kwargs)
+
+    def _get_dataframes(self, input_df):
+        """Return dummy current, source, and instruction dataframes."""
+        output = input_df.copy(deep=False)
+        dims = get_dim_names_from_columns(output)
+        cols2keep = get_column_names_from_dim(dims)
+        instruction = (
+            input_df.copy()[cols2keep]
+            .assign(source_index=output.index)
+            .assign(current_index=output.index)
+            .set_index("source_index")
+            .sort_values("current_index")
+        )
+        return input_df, output, instruction
 
     def _get_source_patches(self, row):
         if self._instruction_df is not None:
@@ -140,8 +177,13 @@ class DataFrameSpool(BaseSpool):
         """
         {doc}
         """
-        df = self._df
-        chunker = ChunkManager(overlap=overlap, keep_partial=keep_partial, **kwargs)
+        df = self._df.drop(columns=list(self._drop_columns), errors="ignore")
+        chunker = ChunkManager(
+            overlap=overlap,
+            keep_partial=keep_partial,
+            group_columns=self._group_columns,
+            **kwargs
+        )
         out = chunker.chunk(df)
         instructions = chunker.get_instruction_df(df, out)
         return self.new_from_df(out, source_df=df, instruction_df=instructions)
@@ -180,24 +222,12 @@ class MemorySpool(DataFrameSpool):
     A Spool for storing patches in memory.
     """
 
-    # a tuple of attrs that must be compatible for patches to be merged
-    _merge_attrs = ("network", "station", "dims", "data_type", "category")
-
     # tuple of attributes to remove from table
 
     def __init__(self, data: Optional[Union[PatchType, Sequence[PatchType]]] = None):
         if data is not None:
-            self._df = self._get_patch_table(data)
-
-    def _get_patch_table(self, patch_iterable: Sequence[PatchType]) -> pd.DataFrame:
-        """
-        Create a table with metadata about patches.
-        """
-        if isinstance(patch_iterable, dascore.Patch):
-            patch_iterable = [patch_iterable]
-        df = pd.DataFrame(scan_patches(patch_iterable))
-        df["patch"] = patch_iterable
-        return df
+            dfs = self._get_dataframes(patches_to_df(data))
+            self._df, self._source_df, self._instruction_df = dfs
 
     def merge(self, dim="time"):
         """
@@ -216,3 +246,40 @@ class MemorySpool(DataFrameSpool):
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory"""
         return kwargs["patch"]
+
+    @classmethod
+    def new_from_df(cls, df, source_df=None, instruction_df=None, select_kwargs=None):
+        """Create a new instance from dataframes."""
+        new_df = resolve_df(df, source_df, instruction_df, select_kwargs)
+        new = cls()
+        new._df = new_df
+        return new
+
+
+# def
+
+
+def resolve_df(current, source, instruction, select_kwargs):
+    """Resolve dataframe."""
+    assert instruction is not None
+    df1 = instruction.set_index("source_index").sort_values("current_index")
+    source_cols = list(df1.columns)
+    out = []
+    for out_ind, sub in df1.groupby("current_index"):
+        joined = sub.join(source.drop(columns=source_cols, errors="ignore"))
+        breakpoint()
+
+    if instruction is not None:
+        breakpoint()
+        current
+        pass
+    out = adjust_segments(current, **select_kwargs)
+    kwargs_list = list(out.T.to_dict().values())
+    kwargs_list = _convert_min_max_in_kwargs(kwargs_list, current)
+    select_kwargs = {
+        i: v for i, v in kwargs.items() if i in out.dims or i in out.coords
+    }
+
+    out = self._load_patch(kwargs)
+
+    breakpoint()
