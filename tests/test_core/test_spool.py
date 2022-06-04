@@ -30,7 +30,7 @@ class TestSpoolIterablity:
     def test_index_error(self, random_spool):
         """Ensure an IndexError is raised when indexing beyond spool."""
         spool_len = len(random_spool)
-        with pytest.raises(IndexError, match="out-of-bounds"):
+        with pytest.raises(IndexError, match="out of bounds"):
             _ = random_spool[spool_len]
 
     def test_index_returns_corresponding_patch(self, random_spool):
@@ -68,7 +68,6 @@ class TestChunk:
         """
         Ensure chunking works on simple case of contiguous data w/ no overlap.
         """
-        breakpoint()
         new = adjacent_spool_no_overlap.chunk(time=None)
         out_list = list(new)
         assert len(new) == len(out_list) == 1

@@ -70,7 +70,3 @@ class DASDAEIO(FiberIO):
             for patch_group in waveform_group:
                 patches.append(_read_patch(patch_group, **kwargs))
         return dc.MemorySpool(patches)
-
-    #
-    # def scan(self, path):
-    #     pass

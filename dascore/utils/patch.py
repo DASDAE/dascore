@@ -428,7 +428,9 @@ class _AttrsCoordsMixer:
 
 
 @compose_docstring(fields=PatchSummaryWithHistory.__annotations__)
-def patches_to_df(patches: Union[Sequence[PatchType], SpoolType]) -> pd.DataFrame:
+def patches_to_df(
+    patches: Union[Sequence[PatchType], SpoolType, pd.DataFrame]
+) -> pd.DataFrame:
     """
     Return a dataframe
 
@@ -445,6 +447,8 @@ def patches_to_df(patches: Union[Sequence[PatchType], SpoolType]) -> pd.DataFram
     """
     if isinstance(patches, dascore.MemorySpool):
         df = patches._df
+    elif isinstance(patches, pd.DataFrame):
+        return patches
     else:
         df = pd.DataFrame(scan_patches(patches))
         df["patch"] = patches

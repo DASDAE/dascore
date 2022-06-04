@@ -1,20 +1,34 @@
 """
 pytest configuration for dascore
 """
+import shutil
 from pathlib import Path
+from uuid import uuid1
 
+import numpy as np
 import pytest
 
 import dascore
+import dascore.examples as ex
+from dascore.clients.filespool import FileSpool
 from dascore.core import MemorySpool, Patch
 from dascore.io.core import read
+from dascore.io.dasdae.core import DASDAEIO
+from dascore.io.terra15.core import Terra15Formatter
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
+from dascore.utils.time import to_timedelta64
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
 
 STREAM_FIXTURES = []
 PATCH_FIXTURES = []
+
+
+def _save_patch(patch, base_path, file_format="dasdae"):
+    """Save the patch based on start_time network, station, tag."""
+    path = base_path / (f"{uuid1()}.hdf5")
+    patch.io.write(path, format=file_format)
 
 
 # --- Pytest configuration
@@ -60,6 +74,7 @@ def pytest_collection_modifyitems(config, items):
 
 
 # --- Test fixtures
+FILE_SPOOLS = []
 
 
 def pytest_sessionstart(session):
@@ -139,7 +154,7 @@ def dummy_text_file(tmp_path_factory):
     return path
 
 
-@pytest.fixture()
+@pytest.fixture(scope="class")
 def adjacent_spool_no_overlap(random_patch) -> dascore.MemorySpool:
     """
     Create a stream with several patches within one time sample but not
@@ -158,3 +173,81 @@ def adjacent_spool_no_overlap(random_patch) -> dascore.MemorySpool:
     actual_time = pa3.coords["time"].max() - pa1.coords["time"].min()
     assert expected_time == actual_time
     return dascore.MemorySpool([pa2, pa1, pa3])
+
+
+@pytest.fixture(scope="class")
+def one_file_dir(tmp_path_factory, random_patch):
+    """Create a directory with a single DAS file."""
+    out = Path(tmp_path_factory.mktemp("one_file_file_spool"))
+    random_patch.io.write(out / "file_1.hdf5", "dasdae")
+    return out
+
+
+@pytest.fixture(scope="class")
+@register_func(FILE_SPOOLS)
+def one_file_file_spool(one_file_dir):
+    """Create a directory with a single DAS file."""
+    return FileSpool(one_file_dir).update()
+
+
+@pytest.fixture(scope="class")
+def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch):
+    """Create a directory of DAS files for testing."""
+    # first copy in a terra15 file
+    dir_path = tmp_path_factory.mktemp("bank_basic")
+    shutil.copy(terra15_das_example_path, dir_path)
+    # save a random patch
+    random_patch.io.write(dir_path / "random.hdf5", "dasdae")
+    return dir_path
+
+
+@pytest.fixture(scope="class")
+def diverse_spool():
+    """Create a spool with a diverse set of patches for testing."""
+    spool_no_gaps = ex._random_spool()
+    spool_no_gaps_different_network = ex._random_spool(network="das2")
+    spool_big_gaps = ex._random_spool(
+        d_time=np.timedelta64(1, "s"), station='big_gaps')
+    spool_overlaps = ex._random_spool(
+        d_time=-np.timedelta64(10, "ms"), station='overlaps')
+    dt = to_timedelta64(spool_big_gaps[0].attrs["d_time"] / np.timedelta64(1, "s"))
+    spool_small_gaps = ex._random_spool(
+        d_time=dt, station='small_gaps')
+    spool_way_late = ex._random_spool(
+        length=1, starttime=np.datetime64('2030-01-01'), station='way out')
+    spool_new_tag = ex._random_spool(tag='some tag', length=1)
+    spool_way_early = ex._random_spool(
+        length=1, starttime=np.datetime64('1989-05-04'), station='way out')
+
+    all_patches = [
+        list(x) for name, x in locals().items() if name.startswith('spool')
+    ]
+    return MemorySpool([y for x in all_patches for y in x])
+
+
+@pytest.fixture(scope="class")
+def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
+    """Create a directory of diverse DAS files for testing."""
+    # create a directory with several patch files in it.
+    dir_path = tmp_path_factory.mktemp("data")
+    for patch in adjacent_spool_no_overlap:
+        _save_patch(patch, dir_path)
+    return dir_path
+
+
+@pytest.fixture(scope="class")
+def diverse_spool_directory(tmp_path_factory, diverse_spool):
+    """Create a directory of diverse DAS files for testing."""
+    # create a directory with several patch files in it.
+    dir_path = tmp_path_factory.mktemp("data")
+    for patch in diverse_spool:
+        _save_patch(patch, dir_path)
+    return dir_path
+
+
+@pytest.fixture(scope="class")
+@register_func(FILE_SPOOLS)
+def basic_file_spool(two_patch_directory):
+    """Return a DAS bank on basic_bank_directory."""
+    out = FileSpool(two_patch_directory)
+    return out.update()

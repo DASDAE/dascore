@@ -7,12 +7,11 @@ from typing import Mapping, Optional, Sequence, Union
 import pandas as pd
 from typing_extensions import Self
 
-import dascore
 from dascore.constants import PatchType, SpoolType, numeric_types, timeable_types
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.patch import merge_patches, patches_to_df, scan_patches
+from dascore.utils.patch import merge_patches, patches_to_df
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     adjust_segments,
@@ -48,7 +47,7 @@ class BaseSpool(abc.ABC):
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float = 1.5,
-        **kwargs
+        **kwargs,
     ) -> Self:
         """
         Chunk the data in the spool along specified dimensions.
@@ -112,29 +111,40 @@ class DataFrameSpool(BaseSpool):
 
     def __iter__(self):
         for ind in self._df.index:
-            yield from self._get_patches_from_index(ind)
+            yield self._get_patches_from_index(ind)
 
     def _get_patches_from_index(self, df_ind):
         """
         Given an index (from current df), return the corresponding patch.
         """
-        df, source = self._df, self._source_df
+        source = self._source_df
         instruction = self._instruction_df
         df1 = instruction[instruction["current_index"] == df_ind]
+        if df1.empty:
+            msg = f"index of [{df_ind}] is out of bounds for spool."
+            raise IndexError(msg)
         joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
-        yield from self._patch_from_instruction_df(joined)
+        return self._patch_from_instruction_df(joined)
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
         df_dict_list = self._df_to_dict_list(joined)
+        out_list = []
         for patch_kwargs in df_dict_list:
             # convert kwargs to format understood by parser/patch.select
             kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
-            out = self._load_patch(kwargs)
+            patch = self._load_patch(kwargs)
             select_kwargs = {
-                i: v for i, v in kwargs.items() if i in out.dims or i in out.coords
+                i: v for i, v in kwargs.items() if i in patch.dims or i in patch.coords
             }
-            yield out.select(**select_kwargs)
+            out_list.append(patch.select(**select_kwargs))
+        if len(out_list) > 1:
+            merged = merge_patches(out_list)
+            assert len(merged) == 1, "failed to merge patches"
+            out = merged[0]
+        else:
+            out = out_list[0]
+        return out
 
     def _get_dataframes(self, input_df):
         """Return dummy current, source, and instruction dataframes."""
@@ -172,7 +182,7 @@ class DataFrameSpool(BaseSpool):
         self: SpoolType,
         overlap: Optional[Union[numeric_types, timeable_types]] = None,
         keep_partial: bool = False,
-        **kwargs
+        **kwargs,
     ) -> Self:
         """
         {doc}
@@ -182,11 +192,11 @@ class DataFrameSpool(BaseSpool):
             overlap=overlap,
             keep_partial=keep_partial,
             group_columns=self._group_columns,
-            **kwargs
+            **kwargs,
         )
         out = chunker.chunk(df)
         instructions = chunker.get_instruction_df(df, out)
-        return self.new_from_df(out, source_df=df, instruction_df=instructions)
+        return self.new_from_df(out, source_df=self._df, instruction_df=instructions)
 
     @classmethod
     def new_from_df(cls, df, source_df=None, instruction_df=None, select_kwargs=None):
@@ -202,9 +212,9 @@ class DataFrameSpool(BaseSpool):
     def select(self, **kwargs) -> Self:
         """Sub-select certain dimensions for Spool"""
         out = self.new_from_df(
-            self._df,
+            adjust_segments(self._df, **kwargs),
             source_df=self._source_df,
-            instruction_df=self._instruction_df,
+            instruction_df=adjust_segments(self._instruction_df, **kwargs),
             select_kwargs=kwargs,
         )
         return out
@@ -250,36 +260,6 @@ class MemorySpool(DataFrameSpool):
     @classmethod
     def new_from_df(cls, df, source_df=None, instruction_df=None, select_kwargs=None):
         """Create a new instance from dataframes."""
-        new_df = resolve_df(df, source_df, instruction_df, select_kwargs)
-        new = cls()
-        new._df = new_df
-        return new
-
-
-# def
-
-
-def resolve_df(current, source, instruction, select_kwargs):
-    """Resolve dataframe."""
-    assert instruction is not None
-    df1 = instruction.set_index("source_index").sort_values("current_index")
-    source_cols = list(df1.columns)
-    out = []
-    for out_ind, sub in df1.groupby("current_index"):
-        joined = sub.join(source.drop(columns=source_cols, errors="ignore"))
-        breakpoint()
-
-    if instruction is not None:
-        breakpoint()
-        current
-        pass
-    out = adjust_segments(current, **select_kwargs)
-    kwargs_list = list(out.T.to_dict().values())
-    kwargs_list = _convert_min_max_in_kwargs(kwargs_list, current)
-    select_kwargs = {
-        i: v for i, v in kwargs.items() if i in out.dims or i in out.coords
-    }
-
-    out = self._load_patch(kwargs)
-
-    breakpoint()
+        # iterating the patches forces the trim/select/merging to occur
+        patches = [x for x in super().new_from_df(df, source_df, instruction_df)]
+        return cls(patches)
