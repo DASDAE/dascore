@@ -132,7 +132,7 @@ class _HDF5IndexManager:
                 time_min.astype(np.int64), time_max.astype(np.int64), int(buffer)
             )
             raw_index = self._get_index(where, **kwargs)
-            index = self.spool._decode_df_from_hdf(raw_index)
+            index = self._decode_df_from_hdf(raw_index)
             self._set_cache(index, time_min, time_max, kwargs)
         else:
             index = cached_index.iloc[0]["cindex"]
@@ -185,9 +185,8 @@ class _HDF5IndexManager:
         """read the hdf5 file"""
         try:
             return pd.read_hdf(
-                self.spool.index_path, self.spool._index_node, where=where, **kwargs
+                self.index_path, self._index_node, where=where, **kwargs
             )
-
         except (ClosedNodeError, Exception) as e:
             # Sometimes in concurrent updates the nodes need time to open/close
             if fail_counts > 10:
@@ -300,7 +299,7 @@ class _HDF5IndexManager:
     @property
     def index_path(self):
         """Return the expected path to the index file."""
-        return Path(self.spool_path) / self.index_name
+        return Path(self.path) / self.index_name
 
     @property
     def _index_node(self):
@@ -366,7 +365,7 @@ class _HDF5IndexManager:
         """Prepare the dataframe to put it into the HDF5 store."""
         # ensure the bank path is not in the path column
         assert "path" in set(df.columns), f"{df} has no path column"
-        df["path"] = _remove_base_path(df["path"], self.spool_path)
+        df["path"] = _remove_base_path(df["path"], self.path)
         for col, func in self._column_encoders.items():
             df[col] = func(df[col])
         # populate index store and update metadata
@@ -383,7 +382,7 @@ class _HDF5IndexManager:
         update_time = time.time()
         new_files = list(self._get_file_iterator(only_new=True))
         smooth_iterator = track_index_update(
-            new_files, f"Indexing {self.spool_path.name}"
+            new_files, f"Indexing {self.path.name}"
         )
         data_list = [y.dict() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
@@ -392,6 +391,52 @@ class _HDF5IndexManager:
             # clear cache out when new traces are added
             self.clear_cache()
         return self
+
+    def _get_file_iterator(self, paths: Optional[path_types] = None, only_new=True):
+        """Return an iterator of potential un-indexed files."""
+        # get mtime, subtract a bit to avoid odd bugs
+        mtime = None
+        # getting last updated might need the db so only call once.
+        last_updated = self.last_updated_timestamp if only_new else None
+        if last_updated is not None and only_new:
+            mtime = last_updated - 0.001
+        # get paths to iterate
+        spool_path = self.path
+        if paths is None:
+            paths = self.path
+        else:
+            paths = [
+                f"{self.path}/{x}" if str(spool_path) not in str(x) else str(x)
+                for x in iterate(paths)
+            ]
+        # return file iterator
+        return iter_files(paths, ext=self.ext, mtime=mtime)
+
+    @property
+    def last_updated_timestamp(self) -> Optional[float]:
+        """
+        Return the last modified time stored in the index, else None.
+        """
+        self.ensure_path_exists()
+        node = self._time_node
+        try:
+            out = pd.read_hdf(self.index_path, node)[0]
+        except (IOError, IndexError, ValueError, KeyError, AttributeError):
+            out = None
+        return out
+
+    def ensure_path_exists(self, create=False):
+        """
+        Ensure the bank_path exists else raise an BankDoesNotExistError.
+
+        If create is True, simply create the bank.
+        """
+        path = Path(self.path)
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
+        if not path.is_dir():
+            msg = f"{path} is not a directory, cant read spool"
+            raise FileExistsError(msg)
 
 
 class FileSpool(DataFrameSpool):
@@ -466,7 +511,7 @@ class FileSpool(DataFrameSpool):
         self._format = format
         self.spool_path = Path(base_path).absolute()
         # initialize cache
-        self._index_cache = _HDF5IndexManager(self)
+        self._index_cache = _HDF5IndexManager(self.spool_path)
         # enforce min version or warn on newer version
         self._enforce_min_version()
         self._warn_on_newer_version()
