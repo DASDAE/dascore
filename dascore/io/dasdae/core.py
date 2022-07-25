@@ -51,9 +51,9 @@ class DASDAEIO(FiberIO):
         with tables.open_file(path, mode="r") as fi:
             is_dasdae, version = False, ""  # NOQA
             with contextlib.suppress(KeyError):
-                is_dasdue = fi.root._v_attrs["__format__"] == "DASDAE"
+                is_dasdae = fi.root._v_attrs["__format__"] == "DASDAE"
                 dasdae_version = fi.root._v_attrs["__DASDAE_version__"]
-            if is_dasdue:
+            if is_dasdae:
                 return (self.name, dasdae_version)
             return False
 
