@@ -3,6 +3,7 @@ A spool for working with file systems.
 
 The spool uses a simple hdf5 index for keeping track of files.
 """
+import copy
 from pathlib import Path
 from typing import Optional, Union
 
@@ -34,7 +35,7 @@ class FileSpool(DataFrameSpool):
         super().__init__()
         # Init file spool from another file spool
         if isinstance(base_path, self.__class__):
-            self.__dict__.update(base_path.__dict__)
+            self.__dict__.update(copy.deepcopy(base_path.__dict__))
             return
         # Init file spool from indexer
         elif isinstance(base_path, AbstractIndexer):
@@ -43,6 +44,15 @@ class FileSpool(DataFrameSpool):
             self.indexer = HDFIndexer(base_path)
         self._preferred_format = preferred_format
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
+
+    def __str__(self):
+        out = (
+            f"FileSpool object managing: {self.spool_path}"
+            f" with select kwargs: {self._select_kwargs}"
+        )
+        return out
+
+    __repr__ = __str__
 
     def _get_df(self):
         """Get the dataframe of current contents."""

@@ -44,7 +44,7 @@ class TestFileSpool:
 
 
 class TestFileIndex:
-    """Tests for returning summaries of all files in path."""
+    """Tests for returning summaries of all files in managed directory."""
 
     @pytest.fixture(scope="class")
     def basic_index_df(self, basic_file_spool):
@@ -75,12 +75,25 @@ class TestFileIndex:
         for patch in patches:
             assert isinstance(patch, dc.Patch)
 
+    def test_str_(self, basic_file_spool):
+        """Ensure the filespool has a useful str/repr."""
+        out = str(basic_file_spool)
+        # ensure the default str is not used.
+        assert "object at" not in out
+
 
 class TestSelect:
     """tests for subselecting data."""
 
+    @pytest.fixture(scope="class")
+    def spool_tag(self, basic_file_spool):
+        """Return a string of a tag in the basic_file_spool."""
+        contents = basic_file_spool.get_contents()
+        tag = contents.loc[contents["tag"].astype(bool), "tag"].iloc[0]
+        return tag
+
     def test_subselect_trims_patches(self, basic_file_spool):
-        """Ensure subslecting trims start/end times on df and output patches."""
+        """Ensure sub-selecting trims start/end times on df and output patches."""
         current = basic_file_spool.get_contents()
         new_min = current["time_min"].min() + np.timedelta64(2, "s")
         new_max = current["time_max"].max() - np.timedelta64(2, "s")
@@ -94,6 +107,48 @@ class TestSelect:
             assert patch.attrs["time_min"] >= new_min
             assert patch.attrs["time_max"] <= new_max
 
+    def test_sub_select_tag_equals(self, basic_file_spool, spool_tag):
+        """Ensure selecting stations works."""
+        new = basic_file_spool.select(tag=spool_tag)
+        new_contents = new.get_contents()
+        assert (new_contents["tag"] == spool_tag).all()
 
-class TestChunk:
+    def test_is_in_tag(self, basic_file_spool, spool_tag):
+        """Ensure tags can also be selected from a collection."""
+        tag_collection = {spool_tag, "bob", "bill"}
+        out = basic_file_spool.select(tag=tag_collection).get_contents()
+        assert out["tag"].isin(tag_collection).all()
+
+
+class TestBasicChunk:
     """Tests for chunking filespool."""
+
+    def test_directoy_path_doesnt_change(self, one_file_file_spool):
+        """Chunking shouldn't change the path to the managed directory."""
+        out = one_file_file_spool.chunk(time=1)
+        assert out.spool_path == one_file_file_spool.spool_path
+
+    def test_chunk_doesnt_modify_original(self, one_file_file_spool):
+        """Chunking shouldn't modify original spool or its dfs."""
+        spool = one_file_file_spool
+        contents_before_chunk = spool.get_contents()
+        _ = spool.chunk(time=2)
+        contents_after_chunk = spool.get_contents()
+        assert contents_before_chunk.equals(contents_after_chunk)
+
+    def test_sub_chunk(self, one_file_file_spool):
+        """Ensure the patches can be subdivided."""
+        spool = one_file_file_spool
+        contents = spool.get_contents()
+        durations = contents["time_max"] - contents["time_min"]
+        new_t_delta = (durations / 4).max()
+        new_spool = spool.chunk(time=new_t_delta, keep_partial=True)
+        # Ensure there are exactly 4x as many patches in spool after chunk
+        new_contents = new_spool.get_contents()
+        assert len(new_contents) == 4 * len(spool)
+        # Ensure each spool can be iterated
+        patch_list = list(new_spool)
+        for patch in patch_list:
+            assert isinstance(patch, dc.Patch)
+
+        # breakpoint()

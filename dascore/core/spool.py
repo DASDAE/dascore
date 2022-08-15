@@ -208,15 +208,13 @@ class DataFrameSpool(BaseSpool):
         instructions = chunker.get_instruction_df(df, out)
         return self.new_from_df(out, source_df=self._df, instruction_df=instructions)
 
-    @classmethod
-    def new_from_df(cls, df, source_df=None, instruction_df=None, select_kwargs=None):
+    def new_from_df(self, df, source_df=None, instruction_df=None):
         """Create a new instance from dataframes."""
-        new = cls()
-        df_, source_, inst_ = cls._get_dummy_dataframes(df)
+        new = self.__class__(self)
+        df_, source_, inst_ = self._get_dummy_dataframes(df)
         new._df = df
         new._source_df = source_df if source_df is not None else source_
         new._instruction_df = instruction_df if instruction_df is not None else inst_
-        new._select_kwargs = {} if select_kwargs is None else select_kwargs
         return new
 
     def select(self, **kwargs) -> Self:
@@ -225,7 +223,6 @@ class DataFrameSpool(BaseSpool):
             adjust_segments(self._df, **kwargs),
             source_df=self._source_df,
             instruction_df=adjust_segments(self._instruction_df, **kwargs),
-            select_kwargs=kwargs,
         )
         return out
 
@@ -267,10 +264,3 @@ class MemorySpool(DataFrameSpool):
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory"""
         return kwargs["patch"]
-
-    # @classmethod
-    # def new_from_df(cls, df, source_df=None, instruction_df=None, select_kwargs=None):
-    #     """Create a new instance from dataframes."""
-    #     # iterating the patches forces the trim/select/merging to occur
-    #     patches = [x for x in super().new_from_df(df, source_df, instruction_df)]
-    #     return cls(patches)

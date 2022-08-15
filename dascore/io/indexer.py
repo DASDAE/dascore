@@ -126,7 +126,7 @@ class HDFIndexer(AbstractIndexer):
     def __init__(self, path: str | Path, cache_size: int = 5):
         self.max_size = cache_size
         self.path = Path(path).absolute()
-        self.index_path = path / self.index_name
+        self.index_path = self.path / self.index_name
         self.cache = pd.DataFrame(
             index=range(cache_size), columns="t1 t2 kwargs cindex".split()
         )

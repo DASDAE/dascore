@@ -80,3 +80,10 @@ class TestChunk:
         merged_len = len(merged_st)
         assert merged_len < st_len
         assert merged_len == 1
+
+    def test_chunk_doesnt_modify_original(self, random_spool):
+        """Chunking shouldn't modify original spool"""
+        first = random_spool.get_contents().copy()
+        _ = random_spool.chunk(time=2)
+        second = random_spool.get_contents().copy()
+        assert first.equals(second)

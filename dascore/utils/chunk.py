@@ -235,7 +235,8 @@ class ChunkManager:
         # to a continuity block) then apply column filters.
         group_cont = self._get_continuity_group_number(start, stop, step)
         cols = [f"d_{self._name}"] + list(self._group_columns or [])
-        col_groups = df.groupby(cols).ngroup()
+        columns = [x for x in cols if x in df.columns]
+        col_groups = df.groupby(columns).ngroup()
         group = group_cont.astype(str) + "_" + col_groups.astype(str)
         # get max, min for each group and expand
         group_mins = start.groupby(group).min()
@@ -245,7 +246,7 @@ class ChunkManager:
         for gnum in group.unique():
             start, stop = group_mins[gnum], group_maxs[gnum]
             current_df = df.loc[group[group == gnum].index]
-            # Reconstruct DF
+            # reconstruct DF
             new_start_stop = get_intervals(
                 start,
                 stop,
