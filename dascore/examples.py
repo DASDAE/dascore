@@ -54,8 +54,14 @@ def _random_patch(starttime="2017-09-18", network="", station="", tag="random"):
 
 
 @register_func(EXAMPLE_SPOOLS, key="random_das")
-def _random_spool(d_time=0, length=3, starttime=np.datetime64("2020-01-03"),
-                  network="", station="", tag="random"):
+def _random_spool(
+    d_time=0,
+    length=3,
+    starttime=np.datetime64("2020-01-03"),
+    network="",
+    station="",
+    tag="random",
+):
     """
     Generate several random patches in the spool.
 

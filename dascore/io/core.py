@@ -126,7 +126,7 @@ def read(
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))
 def scan(
     path: Union[Path, str],
-    format: Optional[str] = None,
+    file_format: Optional[str] = None,
 ) -> List[PatchFileSummary]:
     """
     Scan a file, return the summary dictionary.
@@ -135,7 +135,7 @@ def scan(
     ----------
     path
         The path the to file to scan
-    format
+    file_format
         Format of the file. If not provided DASCore will try to determine it.
 
     Notes
@@ -144,9 +144,9 @@ def scan(
         {fields}
     """
     # dispatch to file format handlers
-    if format is None:
-        format = get_format(path)[0]
-    out = _IO_INSTANCES[format].scan(path)
+    if file_format is None:
+        file_format = get_format(path)[0]
+    out = _IO_INSTANCES[file_format].scan(path)
     return out
 
 

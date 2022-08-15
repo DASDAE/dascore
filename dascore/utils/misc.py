@@ -242,3 +242,30 @@ def iterate(obj):
     if isinstance(obj, str):
         return (obj,)
     return obj if isinstance(obj, Iterable) else (obj,)
+
+
+class CacheDescriptor:
+    """
+    A descriptor for storing information in an instance-level cache (mapping).
+    """
+
+    def __init__(self, cache_name, func_name, args=None, kwargs=None):
+        self._cache_name = cache_name
+        self._func_name = func_name
+        self._args = () if args is None else args
+        self._kwargs = {} if kwargs is None else kwargs
+
+    def __set_name__(self, owner, name):
+        self._name = name
+
+    def __get__(self, instance, owner):
+        cache = getattr(instance, self._cache_name)
+        if self._name not in cache:
+            func = getattr(instance, self._func_name)
+            out = func(*self._args, **self._kwargs)
+            cache[self._name] = out
+        return cache[self._name]
+
+    def __set__(self, instance, value):
+        cache = getattr(instance, self._cache_name)
+        cache[self._name] = value

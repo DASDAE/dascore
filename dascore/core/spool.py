@@ -11,6 +11,7 @@ from dascore.constants import PatchType, SpoolType, numeric_types, timeable_type
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
+from dascore.utils.misc import CacheDescriptor
 from dascore.utils.patch import merge_patches, patches_to_df
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
@@ -77,14 +78,9 @@ class BaseSpool(abc.ABC):
         """
 
     @abc.abstractmethod
-    def get_contents(self: SpoolType, **kwargs) -> pd.DataFrame:
+    def get_contents(self: SpoolType) -> pd.DataFrame:
         """
-        Get a dataframe of the patches in spool.
-
-        Can be filtered using kwargs. For example:
-            get_contents(time=('2012-01-01', None))
-        Will only return a dataframe of patches which contain data after
-        the specified minimum value for time.
+        Get a dataframe of the patches that will be returned by the spool.
         """
 
 
@@ -92,16 +88,28 @@ class DataFrameSpool(BaseSpool):
     """A spool whose contents are managed by a dataframe."""
 
     # A dataframe which represents contents as they will be output
-    _df: Optional[pd.DataFrame] = None
+    _df: pd.DataFrame = CacheDescriptor("_cache", "_get_df")
     # A dataframe which shows patches in the source
-    _source_df: Optional[pd.DataFrame] = None
+    _source_df: pd.DataFrame = CacheDescriptor("_cache", "_get_source_df")
     # A dataframe of instructions for going from source_df to df
-    _instruction_df: Optional[pd.DataFrame] = None
+    _instruction_df: pd.DataFrame = CacheDescriptor("_cache", "_get_instruction_df")
     # kwargs for filtering contents
     _select_kwargs: Optional[Mapping] = FrozenDict()
     # attributes which effect merge groups for internal patches
     _group_columns = ("network", "station", "dims", "data_type", "history")
     _drop_columns = ("patch",)
+
+    def _get_df(self):
+        """Function to get the current df."""
+
+    def _get_source_df(self):
+        """Function to get the current df."""
+
+    def _get_instruction_df(self):
+        """Function to get the current df."""
+
+    def __init__(self):
+        self._cache = {}
 
     def __getitem__(self, item):
         return self._get_patches_from_index(item)
@@ -146,8 +154,14 @@ class DataFrameSpool(BaseSpool):
             out = out_list[0]
         return out
 
-    def _get_dataframes(self, input_df):
-        """Return dummy current, source, and instruction dataframes."""
+    @staticmethod
+    def _get_dummy_dataframes(input_df):
+        """
+        Return dummy current, source, and instruction dataframes.
+
+        Dummy because the source and current df are the same, so the
+        instruction df is a straight mapping between the two.
+        """
         output = input_df.copy(deep=False)
         dims = get_dim_names_from_columns(output)
         cols2keep = get_column_names_from_dim(dims)
@@ -159,10 +173,6 @@ class DataFrameSpool(BaseSpool):
             .sort_values("current_index")
         )
         return input_df, output, instruction
-
-    def _get_source_patches(self, row):
-        if self._instruction_df is not None:
-            pass
 
     def _df_to_dict_list(self, df):
         """
@@ -202,11 +212,11 @@ class DataFrameSpool(BaseSpool):
     def new_from_df(cls, df, source_df=None, instruction_df=None, select_kwargs=None):
         """Create a new instance from dataframes."""
         new = cls()
+        df_, source_, inst_ = cls._get_dummy_dataframes(df)
         new._df = df
-        new._source_df = source_df if source_df is not None else df
-        new._instruction_df = instruction_df
-        if select_kwargs is not None:
-            new._select_kwargs = select_kwargs
+        new._source_df = source_df if source_df is not None else source_
+        new._instruction_df = instruction_df if instruction_df is not None else inst_
+        new._select_kwargs = {} if select_kwargs is None else select_kwargs
         return new
 
     def select(self, **kwargs) -> Self:
@@ -235,8 +245,9 @@ class MemorySpool(DataFrameSpool):
     # tuple of attributes to remove from table
 
     def __init__(self, data: Optional[Union[PatchType, Sequence[PatchType]]] = None):
+        super().__init__()
         if data is not None:
-            dfs = self._get_dataframes(patches_to_df(data))
+            dfs = self._get_dummy_dataframes(patches_to_df(data))
             self._df, self._source_df, self._instruction_df = dfs
 
     def merge(self, dim="time"):
@@ -257,9 +268,9 @@ class MemorySpool(DataFrameSpool):
         """Load the patch into memory"""
         return kwargs["patch"]
 
-    @classmethod
-    def new_from_df(cls, df, source_df=None, instruction_df=None, select_kwargs=None):
-        """Create a new instance from dataframes."""
-        # iterating the patches forces the trim/select/merging to occur
-        patches = [x for x in super().new_from_df(df, source_df, instruction_df)]
-        return cls(patches)
+    # @classmethod
+    # def new_from_df(cls, df, source_df=None, instruction_df=None, select_kwargs=None):
+    #     """Create a new instance from dataframes."""
+    #     # iterating the patches forces the trim/select/merging to occur
+    #     patches = [x for x in super().new_from_df(df, source_df, instruction_df)]
+    #     return cls(patches)

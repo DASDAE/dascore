@@ -2,6 +2,7 @@
 An HDF5-based indexer for local file systems.
 """
 
+import abc
 import os
 import time
 import warnings
@@ -19,9 +20,8 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.constants import LARGEDT64, SMALLDT64, path_types
 from dascore.core.schema import PatchFileSummary
-from dascore.exceptions import UnsupportedKeyword
 from dascore.utils.misc import iter_files, iterate
-from dascore.utils.pd import _remove_base_path
+from dascore.utils.pd import _remove_base_path, filter_df
 from dascore.utils.progress import track_index_update
 from dascore.utils.time import to_datetime64, to_number, to_timedelta64
 
@@ -56,7 +56,25 @@ def _get_kernel_query(starttime: int, endtime: int, buffer: int):
     return con
 
 
-class HDFIndexer:
+class AbstractIndexer:
+    """
+    A base class for indexers.
+
+    This is primarily here for a place-holder.
+    """
+
+    path: Path
+
+    @abc.abstractmethod
+    def update(self) -> Self:
+        """
+        Updates the contents of the Indexer.
+
+        Resets any previous selection.
+        """
+
+
+class HDFIndexer(AbstractIndexer):
     """
     A class for indexing a directory of dascore-readable files.
 
@@ -82,11 +100,12 @@ class HDFIndexer:
     # string column sizes in hdf5 table
     _min_itemsize = {
         "path": 79,
-        "format": 15,
+        "file_format": 15,
         "tag": 8,
         "network": 8,
         "station": 8,
         "dims": 40,
+        "file_version": 9,
     }
     # columns which should be indexed for fast querying
     _query_columns = ("time_min", "time_max", "distance_min", "distance_max")
@@ -106,7 +125,7 @@ class HDFIndexer:
 
     def __init__(self, path: str | Path, cache_size: int = 5):
         self.max_size = cache_size
-        self.path = path
+        self.path = Path(path).absolute()
         self.index_path = path / self.index_name
         self.cache = pd.DataFrame(
             index=range(cache_size), columns="t1 t2 kwargs cindex".split()
@@ -114,13 +133,13 @@ class HDFIndexer:
         self._current_index = 0
         # self.next_index = itertools.cycle(self.cache.index)
 
-    def __call__(self, time_min=None, time_max=None, buffer=one_second, **kwargs):
+    def __call__(self, buffer=one_second, **kwargs):
         """get start and end times, perform in kernel lookup"""
         # create index if it doesn't exist
         if not self.index_path.exists():
             self.update()
-        time_min, time_max = self._get_times(time_min, time_max)
-        self._validate_kwargs(kwargs)
+        time_min, time_max = self._get_times(kwargs.pop("time", None))
+        hdf5_kwargs, kwargs = self._separate_hdf5_kwargs(kwargs)
         buffer = to_timedelta64(buffer)
         # find out if the query falls within one cached times
         con1 = self.cache.t1 <= time_min
@@ -131,19 +150,23 @@ class HDFIndexer:
             where = _get_kernel_query(
                 time_min.astype(np.int64), time_max.astype(np.int64), int(buffer)
             )
-            raw_index = self._get_index(where, **kwargs)
+            raw_index = self._get_index(where, **hdf5_kwargs)
             index = self._decode_df_from_hdf(raw_index)
-            self._set_cache(index, time_min, time_max, kwargs)
+            self._set_cache(index, time_min, time_max, hdf5_kwargs)
         else:
             index = cached_index.iloc[0]["cindex"]
         # trim down index
         con1 = index["time_min"] >= (time_max + buffer)
         con2 = index["time_max"] <= (time_min - buffer)
-        return index[~(con1 | con2)]
+        pre_filter_df = index[~(con1 | con2)]
+        return pre_filter_df[filter_df(pre_filter_df, **kwargs)]
 
     @staticmethod
-    def _get_times(time_min, time_max):
+    def _get_times(kwarg_time=None):
         """Return time_min and time_max."""
+        # first unpack time from tuples
+        assert kwarg_time is None or len(kwarg_time) == 2
+        time_min, time_max = (None, None) if kwarg_time is None else kwarg_time
         # get defaults if starttime or endtime is none
         time_min = None if pd.isnull(time_min) else time_min
         time_max = None if pd.isnull(time_max) else time_max
@@ -155,13 +178,11 @@ class HDFIndexer:
                 raise ValueError(msg)
         return time_min, time_max
 
-    def _validate_kwargs(self, kwargs):
+    def _separate_hdf5_kwargs(self, kwargs):
         """Ensure kwargs are supported."""
-        kwarg_set = set(kwargs)
-        if not kwarg_set.issubset(READ_HDF5_KWARGS):
-            bad_kwargs = kwarg_set - set(READ_HDF5_KWARGS)
-            msg = f"The following kwargs are not supported: {bad_kwargs}. "
-            raise UnsupportedKeyword(msg)
+        kdf_kwargs = {i: v for i, v in kwargs.items() if i in READ_HDF5_KWARGS}
+        kwargs = {i: v for i, v in kwargs.items() if i not in READ_HDF5_KWARGS}
+        return kdf_kwargs, kwargs
 
     def _set_cache(self, index, starttime, endtime, kwargs):
         """Cache the current index"""
@@ -240,7 +261,7 @@ class HDFIndexer:
             update_time = time.time() if update_time is None else update_time
             store.put(self._time_node, pd.Series(update_time))
             # make sure meta table also exists.
-            # Note this is hear to avoid opening the store again.
+            # Note this is here to avoid opening the store again.
             if self._meta_node not in store:
                 meta = self._make_meta_table()
                 store.put(self._meta_node, meta, format="table")

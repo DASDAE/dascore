@@ -27,7 +27,7 @@ def diverse_indexer(diverse_spool_directory):
     return HDFIndexer(diverse_spool_directory).update()
 
 
-@pytest.fixture(scope='class')
+@pytest.fixture(scope="class")
 def diverse_df(diverse_indexer):
     """Return the contents of the diverse indexer"""
     return diverse_indexer()
@@ -60,24 +60,31 @@ class TestGetContents:
 
     def test_filter_large_starttime(self, diverse_df, diverse_ind):
         """Ensure the index can be filtered by end time."""
-        max_starttime = diverse_df['time_min'].max()
-        filtered = diverse_df[diverse_df['time_min'] >= max_starttime]
+        max_starttime = diverse_df["time_min"].max()
+        filtered = diverse_df[diverse_df["time_min"] >= max_starttime]
         out = diverse_ind(time_min=max_starttime)
         assert len(out) == len(filtered)
 
     def test_filter_small_starttime(self, diverse_df, diverse_ind):
         """Ensure the index can be filtered by start time."""
-        min_endtime = diverse_df['time_max'].min()
-        filtered = diverse_df[diverse_df['time_max'] <= min_endtime]
+        min_endtime = diverse_df["time_max"].min()
+        filtered = diverse_df[diverse_df["time_max"] <= min_endtime]
         out = diverse_ind(time_max=min_endtime)
         assert len(out) == len(filtered)
 
     def test_filter_station_exact(self, diverse_df, diverse_ind):
         """Ensure contents can be filtered on time."""
         # tests for filtering with exact station name
-        exact_name = diverse_df['station'].unique()[0]
+        exact_name = diverse_df["station"].unique()[0]
         new_df = diverse_ind(station=exact_name)
-        assert (new_df['station'] == exact_name).all()
+        assert (new_df["station"] == exact_name).all()
+
+    def test_filter_isin(self, diverse_df, diverse_ind):
+        """Ensure contents can be filtered on time."""
+        # tests for filtering with exact station name
+        exact_name = diverse_df["station"].unique()[0]
+        new_df = diverse_ind(station=exact_name)
+        assert (new_df["station"] == exact_name).all()
 
 
 class TestPutData:

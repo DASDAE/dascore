@@ -16,7 +16,7 @@ FILE_SPOOLS = []
 
 @pytest.fixture(scope="class")
 @register_func(FILE_SPOOLS)
-def one_file_file_spool(one_file_dir):
+def one_file_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     return dc.FileSpool(one_file_dir).update()
 
@@ -54,7 +54,7 @@ class TestFileIndex:
 
     def test_index_exists(self, basic_file_spool):
         """An index should be returned."""
-        assert basic_file_spool.index_path.exists()
+        assert basic_file_spool.indexer.index_path.exists()
 
     def test_index_len(self, basic_index_df, two_patch_directory):
         """An index should be returned."""
