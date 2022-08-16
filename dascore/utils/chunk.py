@@ -143,7 +143,8 @@ class ChunkManager:
         start_sorted, stop_sorted, step_sorted = start[args], stop[args], step[args]
         # next get cummax of endtimes and detect gaps
         stop_cum_max = stop_sorted.cummax()
-        has_gap = start_sorted.shift() > (stop_cum_max + step_sorted)
+        end_markers = stop_cum_max.shift() + step_sorted * self._tolerance
+        has_gap = start_sorted > end_markers
         group_num = has_gap.astype(int).cumsum()
         return group_num[start.index]
 
@@ -261,10 +262,3 @@ class ChunkManager:
             )
             out.append(sub_new_df)
         return pd.concat(out, axis=0)
-
-    @staticmethod
-    def get_range_columns(df):
-        """
-        Return the names of the columns used by the dataframe to represent
-        a range. Should have a {name}_min, {name}_max, d_{name}.
-        """

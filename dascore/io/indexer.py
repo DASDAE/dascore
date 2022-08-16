@@ -9,7 +9,7 @@ import warnings
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -123,7 +123,7 @@ class HDFIndexer(AbstractIndexer):
     }
     _index_columns = tuple([x for x in PatchFileSummary.__annotations__])
 
-    def __init__(self, path: str | Path, cache_size: int = 5):
+    def __init__(self, path: Union[str, Path], cache_size: int = 5):
         self.max_size = cache_size
         self.path = Path(path).absolute()
         self.index_path = self.path / self.index_name

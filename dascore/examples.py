@@ -79,3 +79,38 @@ def _random_spool(
         out.append(patch)
         starttime = patch.attrs["time_max"] + to_timedelta64(d_time)
     return dascore.MemorySpool(out)
+
+
+@register_func(EXAMPLE_SPOOLS, key="diverse_das")
+def _diverse_spool():
+    """
+    Create a spool with a diverse set of patches for testing.
+
+    There are various gaps, tags, station names, etc.
+    """
+    spool_no_gaps = _random_spool()
+    spool_no_gaps_different_network = _random_spool(network="das2")
+    spool_big_gaps = _random_spool(d_time=np.timedelta64(1, "s"), station="big_gaps")
+    spool_overlaps = _random_spool(d_time=-np.timedelta64(10, "ms"), station="overlaps")
+    dt = to_timedelta64(spool_big_gaps[0].attrs["d_time"] / np.timedelta64(1, "s"))
+    spool_small_gaps = _random_spool(d_time=dt, station="small_gaps")
+    spool_way_late = _random_spool(
+        length=1, starttime=np.datetime64("2030-01-01"), station="way out"
+    )
+    spool_new_tag = _random_spool(tag="some tag", length=1)
+    spool_way_early = _random_spool(
+        length=1, starttime=np.datetime64("1989-05-04"), station="way out"
+    )
+
+    all_spools = [
+        spool_no_gaps,
+        spool_no_gaps_different_network,
+        spool_big_gaps,
+        spool_overlaps,
+        spool_small_gaps,
+        spool_way_late,
+        spool_new_tag,
+        spool_way_early,
+    ]
+
+    return dascore.MemorySpool([y for x in all_spools for y in x])

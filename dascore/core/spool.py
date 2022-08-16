@@ -1,5 +1,5 @@
 """
-A module for storing streams of fiber data.
+Module for spools, containers of patches.
 """
 import abc
 from typing import Mapping, Optional, Sequence, Union
@@ -257,20 +257,6 @@ class MemorySpool(DataFrameSpool):
             f" {tmin} to {tmax}"
         )
         return out
-
-    def merge(self, dim="time"):
-        """
-        Merge all compatible patches in stream together.
-
-        Parameters
-        ----------
-        dim
-            dimension along which to try to merge.
-
-        See also :func:`dascore.utils.patch.merge_patches`
-        """
-        new_patches = merge_patches(self._df, dim=dim)
-        return self.__class__(new_patches)
 
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory"""

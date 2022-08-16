@@ -5,7 +5,6 @@ import shutil
 from pathlib import Path
 from uuid import uuid1
 
-import numpy as np
 import pytest
 
 import dascore
@@ -15,7 +14,6 @@ from dascore.core import MemorySpool, Patch
 from dascore.io.core import read
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
-from dascore.utils.time import to_timedelta64
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
 
@@ -202,34 +200,7 @@ def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch
 @pytest.fixture(scope="class")
 def diverse_spool():
     """Create a spool with a diverse set of patches for testing."""
-    spool_no_gaps = ex._random_spool()
-    spool_no_gaps_different_network = ex._random_spool(network="das2")
-    spool_big_gaps = ex._random_spool(d_time=np.timedelta64(1, "s"), station="big_gaps")
-    spool_overlaps = ex._random_spool(
-        d_time=-np.timedelta64(10, "ms"), station="overlaps"
-    )
-    dt = to_timedelta64(spool_big_gaps[0].attrs["d_time"] / np.timedelta64(1, "s"))
-    spool_small_gaps = ex._random_spool(d_time=dt, station="small_gaps")
-    spool_way_late = ex._random_spool(
-        length=1, starttime=np.datetime64("2030-01-01"), station="way out"
-    )
-    spool_new_tag = ex._random_spool(tag="some tag", length=1)
-    spool_way_early = ex._random_spool(
-        length=1, starttime=np.datetime64("1989-05-04"), station="way out"
-    )
-
-    all_spools = [
-        spool_no_gaps,
-        spool_no_gaps_different_network,
-        spool_big_gaps,
-        spool_overlaps,
-        spool_small_gaps,
-        spool_way_late,
-        spool_new_tag,
-        spool_way_early,
-    ]
-
-    return MemorySpool([y for x in all_spools for y in x])
+    return ex._diverse_spool()
 
 
 @pytest.fixture(scope="class")

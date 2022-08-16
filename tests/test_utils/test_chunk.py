@@ -155,12 +155,44 @@ class TestBasicChunkDF:
 class TestChunkToMerge:
     """Tests for using chunking to merge contiguous, or overlapping, data."""
 
+    @pytest.fixture()
+    def gapy_df(self, contiguous_df):
+        """Create a dataframe with gaps."""
+        df = contiguous_df.copy()
+        df["time_max"] -= df["d_time"] * 15
+        return df
+
+    @pytest.fixture()
+    def gapy_df_unordered(self, gapy_df):
+        """Create a dataframe with gaps that is not sorted by starttime."""
+        inds = np.random.RandomState(42).permutation(gapy_df.index)
+        return gapy_df.loc[inds].reset_index(drop=True)
+
     def test_chunk_can_merge(self, contiguous_df):
         """Ensure chunk can be used to merge unspecified segment lengths."""
         cm = ChunkManager(time=None)
         out = cm.chunk(contiguous_df)
         assert len(out) == 1
         assert out["time_min"].min() == contiguous_df["time_min"].min()
+
+    def test_doesnt_merge_gappy_df(self, gapy_df):
+        """Ensure the gappy dataframe doesn't get merged."""
+        cm = ChunkManager(time=None)
+        out = cm.chunk(gapy_df)
+        assert len(gapy_df) == len(out)
+        expected_durations = gapy_df["time_max"] - gapy_df["time_min"]
+        durations = out["time_max"] - out["time_min"]
+        assert expected_durations.equals(durations)
+
+    def test_doesnt_merge_unordered_gappy_df(self, gapy_df_unordered):
+        """Ensure the gappy dataframe doesn't get merged."""
+        df = gapy_df_unordered
+        cm = ChunkManager(time=None)
+        out = cm.chunk(df)
+        assert len(df) == len(out)
+        expected_durations = df["time_max"] - df["time_min"]
+        durations = out["time_max"] - out["time_min"]
+        assert expected_durations.equals(durations)
 
 
 class TestInstructionDF:
