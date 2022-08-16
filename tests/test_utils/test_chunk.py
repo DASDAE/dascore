@@ -171,5 +171,7 @@ class TestInstructionDF:
         chunker = ChunkManager(overlap=0, time=10)
         out = chunker.chunk(contiguous_df)
         instruction = chunker.get_instruction_df(contiguous_df, out)
-        assert set(instruction["source_index"]).issubset(set(contiguous_df.index))
+        # ensure the source index is set as the index of the instruction_df
+        assert instruction.index.name == "source_index"
+        assert set(instruction.index).issubset(set(contiguous_df.index))
         assert set(instruction["current_index"]).issubset(set(out.index))

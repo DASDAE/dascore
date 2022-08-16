@@ -96,7 +96,7 @@ def terra15_das_example_path():
 @register_func(STREAM_FIXTURES)
 def terra15_das_stream(terra15_das_example_path) -> MemorySpool:
     """Return the stream of Terra15 Das Array"""
-    return read(terra15_das_example_path, format="terra15")
+    return read(terra15_das_example_path, file_format="terra15")
 
 
 @pytest.fixture(scope="session")

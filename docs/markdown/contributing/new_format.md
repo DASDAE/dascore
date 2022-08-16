@@ -130,7 +130,7 @@ class TestJingleIO:
     @pytest.fixture(scope='class')
     def jingle_patch(self, jingle_file_path):
         """Read the jingle test data"""
-        return dascore.read(jingle_file_path, format='jingle')
+        return dascore.read(jingle_file_path, file_format='jingle')
 
     def test_read(self, jingle_file_path):
         """Ensure the test file can be read."""

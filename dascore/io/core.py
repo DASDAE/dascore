@@ -56,7 +56,7 @@ class FiberIO(ABC):
         out = []
         for pa in spool:
             info = dict(pa.attrs)
-            info["format"] = self.name
+            info["file_format"] = self.name
             info["path"] = str(path)
             out.append(PatchFileSummary.parse_obj(info))
         return out
@@ -92,7 +92,7 @@ class FiberIO(ABC):
 
 def read(
     path: Union[str, Path],
-    format: Optional[str] = None,
+    file_format: Optional[str] = None,
     version: Optional[str] = None,
     time: Optional[tuple[Optional[timeable_types], Optional[timeable_types]]] = None,
     distance: Optional[tuple[Optional[float], Optional[float]]] = None,
@@ -105,7 +105,7 @@ def read(
     ----------
     path
         A path to the file to read.
-    format
+    file_format
         A string indicating the file format. If not provided dascore will
         try to estimate the format.
     version
@@ -117,9 +117,9 @@ def read(
     *kwargs
         All kwargs are passed to the format-specific read functions.
     """
-    if format is None:
-        format = get_format(path)[0].upper()
-    formatter = _IO_INSTANCES[format.upper()]
+    if file_format is None:
+        file_format = get_format(path)[0].upper()
+    formatter = _IO_INSTANCES[file_format.upper()]
     return formatter.read(path, version=version, time=time, distance=distance, **kwargs)
 
 

@@ -205,7 +205,7 @@ class ChunkManager:
             sub_df.loc[:, "current_index"] = ind
             out.append(sub_df)
         df = pd.concat(out, axis=0).reset_index(drop=True)
-        return df
+        return df.set_index("source_index")
 
     def chunk(
         self,

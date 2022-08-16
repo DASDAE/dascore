@@ -8,6 +8,15 @@ import dascore
 from dascore.utils.time import to_timedelta64
 
 
+class TestSpoolBasics:
+    """Tests for the basics of the spool."""
+
+    def test_not_default_str(self, random_spool):
+        """Ensure the default str is not used on the spool."""
+        out = str(random_spool)
+        assert "object at" not in out
+
+
 class TestSpoolIterablity:
     """Tests for indexing/iterating Spools"""
 
@@ -87,3 +96,17 @@ class TestChunk:
         _ = random_spool.chunk(time=2)
         second = random_spool.get_contents().copy()
         assert first.equals(second)
+
+    def test_patches_match_df_contents(self, random_spool):
+        """Ensure the patch content matches the dataframe."""
+        new = random_spool.chunk(time=2)
+        # get contents of chunked spool
+        chunk_df = new.get_contents()
+        new_patches = list(new)
+        new_patch = dascore.MemorySpool(new_patches)
+        # get content of spool created from patches in chunked spool.
+        new_content = new_patch.get_contents()
+        # these should be (nearly) identical.
+        common = set(chunk_df.columns) & set(new_content.columns)
+        cols = sorted(common - {"history"})  # no need to compare history
+        assert chunk_df[cols].equals(new_content[cols])

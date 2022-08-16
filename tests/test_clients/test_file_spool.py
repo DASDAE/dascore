@@ -150,5 +150,3 @@ class TestBasicChunk:
         patch_list = list(new_spool)
         for patch in patch_list:
             assert isinstance(patch, dc.Patch)
-
-        # breakpoint()

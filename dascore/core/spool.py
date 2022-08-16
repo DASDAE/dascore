@@ -127,6 +127,7 @@ class DataFrameSpool(BaseSpool):
         """
         source = self._source_df
         instruction = self._instruction_df
+        # Filter instruction df to only include current index.
         df1 = instruction[instruction["current_index"] == df_ind]
         if df1.empty:
             msg = f"index of [{df_ind}] is out of bounds for spool."
@@ -246,6 +247,16 @@ class MemorySpool(DataFrameSpool):
         if data is not None:
             dfs = self._get_dummy_dataframes(patches_to_df(data))
             self._df, self._source_df, self._instruction_df = dfs
+
+    def __str__(self):
+        """Returns a (hopefully) useful string rep of spool."""
+        df = self._df
+        tmin, tmax = df["time_min"].min(), df["time_max"].max()
+        out = (
+            f"MemorySpool object managing {len(self)} patches spanning:"
+            f" {tmin} to {tmax}"
+        )
+        return out
 
     def merge(self, dim="time"):
         """
