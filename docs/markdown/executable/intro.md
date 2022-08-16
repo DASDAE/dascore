@@ -115,7 +115,7 @@ pa.new(data=pa.data * 10)
 import dascore
 pa = dascore.get_example_patch()
 # update existing attribute 'network' and create new attr 'new_attr'
-pa1 = pa.update_attrs({'network': 'experiment_1', 'new_attr': 42})
+pa1 = pa.update_attrs(**{'network': 'experiment_1', 'new_attr': 42})
 ```
 
 
