@@ -114,3 +114,13 @@ def _diverse_spool():
     ]
 
     return dascore.MemorySpool([y for x in all_spools for y in x])
+
+
+def spool_to_directory(spool, path=None, file_format="DASDAE", split=True):
+    """
+    Write out the contents of spool to a directory.
+
+    Parameters
+    ----------
+
+    """
