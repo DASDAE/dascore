@@ -2,11 +2,14 @@
 Module for spools, containers of patches.
 """
 import abc
+from functools import singledispatch
+from pathlib import Path
 from typing import Mapping, Optional, Sequence, Union
 
 import pandas as pd
 from typing_extensions import Self
 
+import dascore
 from dascore.constants import PatchType, SpoolType, numeric_types, timeable_types
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
@@ -56,7 +59,8 @@ class BaseSpool(abc.ABC):
         Parameters
         ----------
         overlap
-            The amount of overlap for each chunk
+            The amount of overlap between each segment, starting with the end of
+            first patch. Negative values can be used to induce gaps.
         keep_partial
             If True, keep the segments which are smaller than chunk size.
             This often occurs because of data gaps or at end of chunks.
@@ -82,6 +86,9 @@ class BaseSpool(abc.ABC):
         """
         Get a dataframe of the patches that will be returned by the spool.
         """
+
+    def __len__(self):
+        pass
 
 
 class DataFrameSpool(BaseSpool):
@@ -112,14 +119,26 @@ class DataFrameSpool(BaseSpool):
         self._cache = {}
 
     def __getitem__(self, item):
-        return self._get_patches_from_index(item)
+        out = self._get_patches_from_index(item)
+        # a single index was used, should return a single patch
+        if not isinstance(item, slice):
+            out = self._unbox_patch(out)
+        # a slice was used, return a sub-spool
+        else:
+            out = self.__class__(out)
+        return out
 
     def __len__(self):
         return len(self._df)
 
     def __iter__(self):
         for ind in self._df.index:
-            yield self._get_patches_from_index(ind)
+            yield self._unbox_patch(self._get_patches_from_index(ind))
+
+    def _unbox_patch(self, patch_list):
+        """Unbox a single patch from a patch list, check len."""
+        assert len(patch_list) == 1
+        return patch_list[0]
 
     def _get_patches_from_index(self, df_ind):
         """
@@ -127,8 +146,10 @@ class DataFrameSpool(BaseSpool):
         """
         source = self._source_df
         instruction = self._instruction_df
-        # Filter instruction df to only include current index.
-        df1 = instruction[instruction["current_index"] == df_ind]
+        if isinstance(df_ind, slice):  # handle slicing
+            df1 = instruction.loc[instruction["current_index"].values[df_ind]]
+        else:  # Filter instruction df to only include current index.
+            df1 = instruction[instruction["current_index"] == df_ind]
         if df1.empty:
             msg = f"index of [{df_ind}] is out of bounds for spool."
             raise IndexError(msg)
@@ -139,6 +160,7 @@ class DataFrameSpool(BaseSpool):
         """Get the patches joined columns of instruction df."""
         df_dict_list = self._df_to_dict_list(joined)
         out_list = []
+        expected_len = len(joined["current_index"].unique())
         for patch_kwargs in df_dict_list:
             # convert kwargs to format understood by parser/patch.select
             kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
@@ -147,13 +169,9 @@ class DataFrameSpool(BaseSpool):
                 i: v for i, v in kwargs.items() if i in patch.dims or i in patch.coords
             }
             out_list.append(patch.select(**select_kwargs))
-        if len(out_list) > 1:
-            merged = merge_patches(out_list)
-            assert len(merged) == 1, "failed to merge patches"
-            out = merged[0]
-        else:
-            out = out_list[0]
-        return out
+        if len(out_list) > expected_len:
+            out_list = merge_patches(out_list)
+        return out_list
 
     @staticmethod
     def _get_dummy_dataframes(input_df):
@@ -259,6 +277,52 @@ class MemorySpool(DataFrameSpool):
         )
         return out
 
+    __repr__ = __str__
+
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory"""
         return kwargs["patch"]
+
+
+@singledispatch
+def get_spool(
+    obj: Union[Path, str, BaseSpool, Sequence[PatchType]], **kwargs
+) -> SpoolType:
+    """
+    Get a spool from an object.
+
+    Parameters
+    ----------
+    obj
+        An object from which a spool can be derived.
+    """
+    msg = f"Could not get spool from: {obj}"
+    raise ValueError(msg)
+
+
+@get_spool.register(str)
+@get_spool.register(Path)
+def spool_from_str(path, **kwargs):
+    """Get a spool from a path."""
+    path = Path(path)
+    if path.is_dir():  # a directory was passed
+        from dascore.clients.filespool import FileSpool
+
+        return FileSpool(path, **kwargs)
+    elif path.exists():  # a single file path was passed.
+        return dascore.read(path, **kwargs)
+    else:
+        raise ValueError(f"could not get spool from {path}")
+
+
+@get_spool.register(BaseSpool)
+def spool_from_spool(spool, **kwargs):
+    """Return a spool from a spool."""
+    return spool
+
+
+@get_spool.register(list)
+@get_spool.register(tuple)
+def spool_from_patch_list(patch_list, **kwargs):
+    """Return a spool from a sequence of patches."""
+    return MemorySpool(patch_list)

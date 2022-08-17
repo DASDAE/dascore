@@ -86,8 +86,8 @@ class ChunkManager:
     Parameters
     ----------
     overlap
-        The amount of overlap between each segment. Negative values can
-        be used for inducing gaps.
+        The amount of overlap between each segment, starting with the end of
+        first row. Negative values can be used for inducing gaps.
     group_columns
         A sequence of column names which should be used for sorting groups.
     keep_partial

@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 import dascore
+from dascore.core.spool import BaseSpool
 from dascore.utils.time import to_timedelta64
 
 
@@ -16,6 +17,22 @@ class TestSpoolBasics:
         """Ensure the default str is not used on the spool."""
         out = str(random_spool)
         assert "object at" not in out
+
+
+class TestSlicing:
+    """Tests for slicing spools to get sub-spools."""
+
+    def test_simple_slice(self, random_spool):
+        """Ensure a slice works with get_item, should return spool."""
+        new_spool = random_spool[1:]
+        assert isinstance(new_spool, type(random_spool))
+        assert len(new_spool) == (len(random_spool) - 1)
+
+    def test_skip_slice(self, random_spool):
+        """Skipping values should also work."""
+        new_spool = random_spool[::2]
+        assert new_spool[0].equals(random_spool[0])
+        assert new_spool[1].equals(random_spool[2])
 
 
 class TestSpoolIterablity:
@@ -130,8 +147,8 @@ class TestChunk:
         assert chunk_df[cols].equals(new_content[cols])
 
 
-class TestMergePatches:
-    """Tests for merging patches together."""
+class TestMergePatchesWithChunk:
+    """Tests for merging patches together using chunk method."""
 
     @pytest.fixture()
     def desperate_spool_no_overlap(self, random_patch) -> dascore.MemorySpool:
@@ -202,3 +219,40 @@ class TestMergePatches:
         """Ensure gaps slightly more than 1 time interval still work."""
         out = spool_slight_gap.chunk(time=None)
         assert len(out) == 1
+
+
+class TestGetSpool:
+    """Test getting spool from various sources."""
+
+    def test_spool_from_spool(self, random_spool):
+        """Ensure a spool is valid input to get spool."""
+        out = dascore.get_spool(random_spool)
+        for p1, p2 in zip(out, random_spool):
+            assert p1.equals(p2)
+
+    def test_spool_from_patch_sequence(self, random_spool):
+        """Ensure a list of patches returns a spool"""
+        spool_list = dascore.get_spool(list(random_spool))
+        spool_tuple = dascore.get_spool(tuple(random_spool))
+        for p1, p2, p3 in zip(spool_tuple, spool_list, random_spool):
+            assert p1.equals(p2)
+            assert p2.equals(p3)
+
+    def test_spool_from_single_file(self, terra15_das_example_path):
+        """Ensure a single file path returns a spool."""
+        out1 = dascore.get_spool(terra15_das_example_path)
+        assert isinstance(out1, BaseSpool)
+        # ensure format works.
+        out2 = dascore.get_spool(terra15_das_example_path, file_format="terra15")
+        assert isinstance(out2, BaseSpool)
+        assert len(out1) == len(out2)
+
+    def test_non_existent_file_raises(self):
+        """A path that doesn't exist should raise."""
+        with pytest.raises(Exception, match="get spool from"):
+            dascore.get_spool("here_or_there?")
+
+    def test_non_supported_type_raises(self):
+        """A type that can't contain patches should raise."""
+        with pytest.raises(Exception, match="not get spool from"):
+            dascore.get_spool(1.2)

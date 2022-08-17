@@ -38,12 +38,12 @@ class WavIO(FiberIO):
     name = "WAV"
 
     @compose_docstring(doc=write_docstring)
-    def write(self, stream: SpoolType, path: Union[str, Path]):
+    def write(self, spool: SpoolType, path: Union[str, Path]):
         """
         {doc}
         """
-        assert len(stream) == 1
-        _write_wavfolder(stream[0], path)
+        assert len(spool) == 1
+        _write_wavfolder(spool[0], path)
 
 
 @patch_function(required_dims=("time", "distance"))

@@ -24,7 +24,8 @@ PATCH_FIXTURES = []
 def _save_patch(patch, base_path, file_format="dasdae"):
     """Save the patch based on start_time network, station, tag."""
     path = base_path / (f"{uuid1()}.hdf5")
-    patch.io.write(path, format=file_format)
+    patch.io.write(path, file_format=file_format)
+    return path
 
 
 # --- Pytest configuration
@@ -175,8 +176,8 @@ def adjacent_spool_no_overlap(random_patch) -> dascore.MemorySpool:
 def one_file_dir(tmp_path_factory, random_patch):
     """Create a directory with a single DAS file."""
     out = Path(tmp_path_factory.mktemp("one_file_file_spool"))
-    random_patch.io.write(out / "file_1.hdf5", "dasdae")
-    return out
+    spool = dascore.MemorySpool([random_patch])
+    return ex.spool_to_directory(spool, path=out)
 
 
 @pytest.fixture(scope="class")

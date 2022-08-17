@@ -235,7 +235,7 @@ class HDFIndexer(AbstractIndexer):
 
     def _decode_df_from_hdf(self, df):
         """Decode the dataframe from the hdf5 file."""
-        # ensure the bank path is not in the path column
+        # ensure the base path is not in the path column
         for col, func in self._column_decorders.items():
             df[col] = func(df[col])
         # populate index store and update metadata
@@ -285,17 +285,17 @@ class HDFIndexer(AbstractIndexer):
 
     def _warn_on_newer_version(self):
         """
-        Issue a warning if the bank was created by a newer version of dascore.
+        Issue a warning if the index was created by a newer version of dascore.
 
         If this is the case, there is no guarantee it will work.
         """
         version = self._version_or_none
         if version is not None:
             dascore_version = get_version(dc.__last_version__)
-            bank_version = get_version(version)
-            if bank_version > dascore_version:
+            index_version = get_version(version)
+            if index_version > dascore_version:
                 msg = (
-                    f"The bank was created with a newer version of dc ("
+                    f"The index was created with a newer version of dascore ("
                     f"{version}), you are running ({dc.__last_version__}),"
                     f"You may encounter problems, consider updating DASCore."
                 )
@@ -375,9 +375,9 @@ class HDFIndexer(AbstractIndexer):
 
     def ensure_path_exists(self, create=False):
         """
-        Ensure the bank_path exists else raise an BankDoesNotExistError.
+        Ensure the base path exists else raise.
 
-        If create is True, simply create the bank.
+        If create is True, simply create an empty directory.
         """
         path = Path(self.path)
         if create:
@@ -403,11 +403,11 @@ class HDFIndexer(AbstractIndexer):
 
     def _ensure_meta_table_exists(self):
         """
-        If the bank path exists ensure it has a meta table, if not create it.
+        If the base path exists ensure it has a meta table, if not create it.
         """
         if not Path(self.index_path).exists():
             return
-        with pd.HDFStore(self.index_path) as store:
+        with pd.HDFStore(str(self.index_path)) as store:
             # add metadata if not in store
             if self._meta_node not in store:
                 meta = self._make_meta_table()
@@ -424,7 +424,7 @@ class HDFIndexer(AbstractIndexer):
 
     def _encode_df_for_hdf(self, df):
         """Prepare the dataframe to put it into the HDF5 store."""
-        # ensure the bank path is not in the path column
+        # ensure the base path is not in the path column
         assert "path" in set(df.columns), f"{df} has no path column"
         df["path"] = _remove_base_path(df["path"], self.path)
         for col, func in self._column_encoders.items():

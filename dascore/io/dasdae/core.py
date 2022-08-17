@@ -37,7 +37,7 @@ class DASDAEIO(FiberIO):
     preferred_extensions = ("h5", "hdf5")
 
     def write(self, patch, path, **kwargs):
-        """Read a Patch/Stream from disk."""
+        """Read a Patch/Spool from disk."""
         with tables.open_file(path, mode="a") as h5:
             _write_meta(h5)
             # get an iterable of patches and save them

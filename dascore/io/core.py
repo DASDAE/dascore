@@ -61,9 +61,9 @@ class FiberIO(ABC):
             out.append(PatchFileSummary.parse_obj(info))
         return out
 
-    def write(self, stream: SpoolType, path: Union[str, Path]):
+    def write(self, spool: SpoolType, path: Union[str, Path]):
         """
-        Write the file to disk
+        Write the spool to disk
         """
         msg = f"FileFormatter: {self.name} has no write method"
         raise NotImplementedError(msg)
@@ -182,7 +182,7 @@ def get_format(path: Union[str, Path]) -> (str, str):
         raise UnknownFiberFormat(msg)
 
 
-def write(patch_or_spool, path: Union[str, Path], format: str, **kwargs):
+def write(patch_or_spool, path: Union[str, Path], file_format: str, **kwargs):
     """
     Write a Patch or Stream to disk.
 
@@ -190,7 +190,7 @@ def write(patch_or_spool, path: Union[str, Path], format: str, **kwargs):
     ----------
     path
         The path to the file.
-    format
+    file_format
         The string indicating the format to write.
 
     Raises
@@ -198,7 +198,7 @@ def write(patch_or_spool, path: Union[str, Path], format: str, **kwargs):
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
 
     """
-    formatter = _IO_INSTANCES[format.upper()]
+    formatter = _IO_INSTANCES[file_format.upper()]
     if not isinstance(patch_or_spool, dascore.MemorySpool):
         patch_or_spool = dascore.MemorySpool([patch_or_spool])
     formatter.write(patch_or_spool, path, **kwargs)

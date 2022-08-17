@@ -1,6 +1,9 @@
 """
 A small module for loading examples.
 """
+import tempfile
+from pathlib import Path
+
 import numpy as np
 
 import dascore
@@ -95,11 +98,11 @@ def _diverse_spool():
     dt = to_timedelta64(spool_big_gaps[0].attrs["d_time"] / np.timedelta64(1, "s"))
     spool_small_gaps = _random_spool(d_time=dt, station="small_gaps")
     spool_way_late = _random_spool(
-        length=1, starttime=np.datetime64("2030-01-01"), station="way out"
+        length=1, starttime=np.datetime64("2030-01-01"), station="way_out"
     )
-    spool_new_tag = _random_spool(tag="some tag", length=1)
+    spool_new_tag = _random_spool(tag="some_tag", length=1)
     spool_way_early = _random_spool(
-        length=1, starttime=np.datetime64("1989-05-04"), station="way out"
+        length=1, starttime=np.datetime64("1989-05-04"), station="way_out"
     )
 
     all_spools = [
@@ -116,11 +119,26 @@ def _diverse_spool():
     return dascore.MemorySpool([y for x in all_spools for y in x])
 
 
-def spool_to_directory(spool, path=None, file_format="DASDAE", split=True):
+def spool_to_directory(spool, path=None, file_format="DASDAE", extention=".hdf5"):
     """
-    Write out the contents of spool to a directory.
+    Write out each patch in a spool to a directory.
 
     Parameters
     ----------
-
+    spool
+        The spool to save to
+    path
+        The path to the directory, if None, create tempdir.
+    file_format
+        The file format for the saved files.
     """
+    if not path.exists():
+        path = Path(tempfile.TemporaryDirectory().name)
+    for patch in spool:
+        attrs = patch.attrs
+        start_stop = f"{attrs['time_min']}__{attrs['time_max']}"
+        sta, network = attrs["station"], attrs["network"]
+        tag = attrs["tag"]
+        name = path / f"{start_stop}__{sta}__{network}__{tag}.{extention}"
+        patch.io.write(name, file_format=file_format)
+    return path

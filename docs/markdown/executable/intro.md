@@ -163,6 +163,27 @@ including `MemorySpool` for managing a group of patches loaded into memory,
 for accessing remote resources. However, despite some implementation differences,
 all spools have some common behavior/methods.
 
+
+## Accessing patches
+
+Patches are extracted from the spool via simple iteration or indexing. New
+spools are returned via slicing.
+
+```{code-cell}
+import dascore
+spool = dascore.get_example_spool()
+
+patch = spool[0]  # extract first patch
+
+# iterate patchs
+for patch in spool:
+    ...
+
+# slice spool to create new spool which excludes first patch.
+new_spool = spool[1:]
+```
+
+
 ## get_contents
 
 If supported, returns a dataframe listing contents.
@@ -185,7 +206,7 @@ import dascore
 spool = dascore.get_example_spool()
 
 # select a spool with
-subspool = spool.select(time=('2020-01-03T00:00:09', None)
+subspool = spool.select(time=('2020-01-03T00:00:09', None))
 ```
 
 In addition to trimming the data along a specified dimension (as shown above),
@@ -209,36 +230,16 @@ subspool = spool.select(tag='some*')
 
 Chunk controls how data are grouped together in patches. It can be used to
 merge contiguous patches together, specify size of patches for processing,
-overlap with previous segments, etc. For most Spools chunking is lazy, meaning
-it only happens once a patch is requested.
+overlap with previous segments, etc.
 
 ```{code-cell}
 import dascore
 spool = dascore.get_example_spool()
 
-# chunk spool for 3600 second increments with 10 second overlaps
+# chunk spool for 3 second increments with 1 second overlaps
 # and keep any segements that don't have full 3600 seconds
-subspool = spool.chunk(time=3600, overlap=10, keep_partials=True)
+subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
 
 # merge all contiguous segments along time dimension
 merged_spool = spool.chunk(time=None)
-```
-
-## Accessing patches
-
-Patches are extracted from the spool via simple iteration or indexing. New
-spools are returned via slicing.
-
-```{code-cell}
-import dascore
-spool = dascore.get_example_spool()
-
-patch = spool[0]  # extract first patch
-
-# iterate patchs
-for patch in spool:
-    print(patch)
-
-# slice spool to create new spool which excludes first patch.
-new_spool = spool[1:]
 ```
