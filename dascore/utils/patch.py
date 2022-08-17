@@ -5,6 +5,8 @@ import collections
 import copy
 import functools
 import inspect
+import re
+from fnmatch import translate
 from typing import (
     Any,
     Callable,
@@ -300,45 +302,99 @@ class _AttrsCoordsMixer:
         """
         for key, value in kwargs.items():
             attr = self.copied_attrs
+            # convert types to those expected, mainly for converting times
+            # from strings or ints to np.datetime64 or np.timedelta64.
+            if key in self._expected_types:
+                expected_type, func = self._expected_types[key]
+                if not isinstance(value, expected_type):
+                    value = func(value)
             attr[key] = value
             # apply special processing for this key
-            if key in self.set_attr_funcs:
-                for func in self.set_attr_funcs[key]:
-                    func(self)
+            for match_key in self._get_matching_patterns(self.set_attr_funcs, key):
+                match_dims = [x for x in self.dims if x in key]
+                for func in self.set_attr_funcs[match_key]:
+                    func(self, match_dims=match_dims)
 
-    @append_func(set_attr_funcs["time_min"])
-    def _update_time_max_from_time_min(self):
-        """Update end time based on new start time."""
-        td = self._original_attrs["time_max"] - self._original_attrs["time_min"]
-        if not pd.isnull(td):
+    def _get_matching_patterns(self, match_list, key):
+        """
+        Return any patterns that match key. Match list contains unix-style match
+        strings.
+        """
+        for match_str in list(match_list):
+            if re.match(translate(match_str), key):
+                yield match_str
+
+    @append_func(set_attr_funcs["*_min"])
+    def _update_max_from_min(self, match_dims=()):
+        """Update end coord based on new start coord."""
+        if len(match_dims):
+            assert len(match_dims) == 1
+            dim = match_dims[0]
+            td = self._original_attrs[f"{dim}_max"] - self._original_attrs[f"{dim}_min"]
+            if not pd.isnull(td):
+                attrs = self.copied_attrs
+                attrs[f"{dim}_max"] = self.attrs[f"{dim}_min"] + td
+
+    @append_func(set_attr_funcs["*_min"])
+    def _update_coords_min(self, match_dims=()):
+        """Update coordinate for new min"""
+        if len(match_dims):
+            assert len(match_dims) == 1
+            dim = match_dims[0]
+            coord = self.coords.get(dim, None)
+            coord_min = self.attrs[f"{dim}_min"]
+            if coord is not None and np.min(coord) != coord_min:
+                td = coord - coord[0]
+                self.copied_coords[dim] = coord_min + td
+
+    @append_func(set_attr_funcs["*_max"])
+    def _update_min_from_max(self, match_dims=()):
+        """Update start based on new end."""
+        if len(match_dims):
+            assert len(match_dims) == 1
+            dim = match_dims[0]
+            td = self._original_attrs[f"{dim}_max"] - self._original_attrs[f"{dim}_min"]
+            if not pd.isnull(td):
+                attrs = self.copied_attrs
+                attrs["time_min"] = self.attrs["time_max"] - td
+
+    @append_func(set_attr_funcs["*_max"])
+    def _update_coords_from_max(self, match_dims=()):
+        """Update coordinate for new start of dimension."""
+        if len(match_dims):
+            assert len(match_dims) == 1
+            dim = match_dims[0]
+            coord = self.coords.get(dim, None)
+            time_max = self.attrs[f"{dim}_max"]
+            if coord is not None and np.max(coord) != time_max:
+                td = coord - coord[-1]
+                self.copied_coords[dim] = time_max + td
+
+    @append_func(set_attr_funcs["d_*"])
+    def _update_max_from_d(self, match_dims=()):
+        """Update the ending attribute from updating dimension sampling."""
+        if len(match_dims):
+            assert len(match_dims) == 1
+            dim = match_dims[0]
+            coord = self.coords[dim]
             attrs = self.copied_attrs
-            attrs["time_max"] = self.attrs["time_min"] + td
+            start = attrs.get(f"{dim}_min", None)
+            if start:
+                new_end = start + (len(coord) - 1) * attrs[f"d_{dim}"]
+                self.copied_attrs[f"{dim}_max"] = new_end
 
-    @append_func(set_attr_funcs["time_min"])
-    def _update_coords_time_min(self):
-        """Update coordinate time for new starttime"""
-        time = self.coords.get("time", None)
-        time_min = self.attrs["time_min"]
-        if time is not None and np.min(time) != time_min:
-            td = time - time[0]
-            self.copied_coords["time"] = time_min + td
-
-    @append_func(set_attr_funcs["time_max"])
-    def _update_time_min_from_time_max(self):
-        """Update start time based on new end time."""
-        td = self._original_attrs["time_max"] - self._original_attrs["time_min"]
-        if not pd.isnull(td):
-            attrs = self.copied_attrs
-            attrs["time_min"] = self.attrs["time_max"] - td
-
-    @append_func(set_attr_funcs["time_max"])
-    def _update_coords_time_max(self):
-        """Update coordinate time for new starttime"""
-        time = self.coords.get("time", None)
-        time_max = self.attrs["time_max"]
-        if time is not None and np.max(time) != time_max:
-            td = time - time[-1]
-            self.copied_coords["time"] = time_max + td
+    @append_func(set_attr_funcs["d_*"])
+    def _update_coords_from_d(self, match_dims=()):
+        """Update coordinates for new d_dim."""
+        if len(match_dims):
+            assert len(match_dims) == 1
+            dim = match_dims[0]
+            coord = self.coords.get(dim, None)
+            d_dim = self.copied_attrs[f"d_{dim}"]
+            start = self.copied_attrs.get(f"{dim}_min", None)
+            if coord is not None and start is not None:
+                new_coord = start + np.arange(len(coord)) * d_dim
+                self.copied_coords[dim] = new_coord
 
     @functools.cached_property
     def copied_attrs(self):

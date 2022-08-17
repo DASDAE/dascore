@@ -134,10 +134,6 @@ class Patch:
         return self.__class__(self.data, coords=coords, attrs=attrs)
 
     @property
-    def iloc(self):
-        """Return an index locator for selecting based on index, not values."""
-
-    @property
     def data(self):
         """Return the data array."""
         return self._data_array.data
