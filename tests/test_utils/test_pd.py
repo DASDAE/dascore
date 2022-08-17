@@ -80,6 +80,12 @@ class TestFilterDfBasic:
         with pytest.raises(ValueError):
             filter_df(example_df, bad_column=2)
 
+    def test_bad_parameter_doesnt_raise(self, example_df):
+        """A bad parameter shouldn't raise if told filter is told to ignore."""
+        out = filter_df(example_df, bad_column=2, ignore_bad_kwargs=True)
+        # Each row should be kept.
+        assert np.all(out)
+
     def test_min(self, example_df):
         """Tests for using min parameter."""
         df = example_df[filter_df(example_df, age_max=40)]

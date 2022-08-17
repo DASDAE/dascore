@@ -54,7 +54,7 @@ def _get_min_max_query(kwargs, df):
     return out
 
 
-def _add_range_query(kwargs, df):
+def _add_range_query(kwargs, df, ignore_bad_kwargs=False):
     """
     Add a range query that spans two columns.
 
@@ -75,8 +75,12 @@ def _add_range_query(kwargs, df):
         else:
             bad_keys.add(key)
     if len(bad_keys):
-        msg = f"columns: {bad_keys} are not found in df"
-        raise ValueError(msg)
+        if not ignore_bad_kwargs:
+            msg = f"columns: {bad_keys} are not found in df"
+            raise ValueError(msg)
+        else:
+            for key in bad_keys:
+                kwargs.pop(key, None)
     return range_query
 
 
@@ -215,7 +219,7 @@ def get_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
     return name, out_slice
 
 
-def adjust_segments(df, **kwargs):
+def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     """
     Filter a dataframe and adjust its limits.
 
@@ -223,11 +227,13 @@ def adjust_segments(df, **kwargs):
     ----------
     df
         The input dataframe
+    ignore_bad_kwargs
+        Ignore kwargs that dont apply to df, else raise.
     kwargs
         The keyword arguments for filtering.
     """
     # apply filtering
-    out = df[filter_df(df, **kwargs)]
+    out = df[filter_df(df, ignore_bad_kwargs=ignore_bad_kwargs, **kwargs)]
     # find slice kwargs, get series corresponding to interval columns
     try:
         name, qs = get_slice_from_kwargs(out, kwargs)
@@ -243,7 +249,7 @@ def adjust_segments(df, **kwargs):
     return out
 
 
-def filter_df(df: pd.DataFrame, **kwargs) -> np.array:
+def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.array:
     """
     Determine if each row of the index meets some filter requirements.
 
@@ -251,13 +257,17 @@ def filter_df(df: pd.DataFrame, **kwargs) -> np.array:
     ----------
     df
         The input dataframe.
+    ignore_bad_kwargs
+        If True, silently drop incompatible kwargs with dataframe.
+
     kwargs
-        kwargs are used to filter columns.
+        Used to filter columns.
 
         Any condition to check against columns of df. Can be a single value
         or a collection of values (to check isin on columns). Str arguments
         can also use unix style matching. Additionally, queries of the form
-        {column_name}_min or {column_name}_max can be used.
+        {column_name}_min or {column_name}_max can be used, provided columns
+        with the same name don't already exist.
 
     Returns
     -------
@@ -265,7 +275,8 @@ def filter_df(df: pd.DataFrame, **kwargs) -> np.array:
     requirements.
     """
     min_max_query = _convert_times(df, _get_min_max_query(kwargs, df))
-    multicolumn_range_query = _convert_times(df, _add_range_query(kwargs, df))
+    range_query = _add_range_query(kwargs, df, ignore_bad_kwargs)
+    multicolumn_range_query = _convert_times(df, range_query)
     equality_query, collection_query = _get_flat_and_collection_queries(kwargs)
     # get a blank index of True for filters
     bool_index = np.ones(len(df), dtype=bool)

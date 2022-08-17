@@ -69,6 +69,23 @@ class TestGetContents:
         assert (sub["time_min"] < new_max).all()
 
 
+class TestSelect:
+    """Tests for selecting/trimming spools."""
+
+    def test_select_network(self, diverse_spool):
+        """Ensure a tuple can be used to select spools within network."""
+        network_set = {"das2", "das3"}
+        out = diverse_spool.select(network=network_set)
+        for patch in out:
+            assert patch.attrs["network"] in network_set
+
+    def test_select_tag_wildcard(self, diverse_spool):
+        """Ensure wildcards can be used on str columns."""
+        out = diverse_spool.select(tag="some*")
+        for patch in out:
+            assert patch.attrs["tag"].startswith("some")
+
+
 class TestChunk:
     """
     Tests for merging/chunking patches.

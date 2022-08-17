@@ -220,10 +220,11 @@ class DataFrameSpool(BaseSpool):
 
     def select(self, **kwargs) -> Self:
         """Sub-select certain dimensions for Spool"""
+        inst = adjust_segments(self._instruction_df, ignore_bad_kwargs=True, **kwargs)
         out = self.new_from_df(
             adjust_segments(self._df, **kwargs),
             source_df=self._source_df,
-            instruction_df=adjust_segments(self._instruction_df, **kwargs),
+            instruction_df=inst,
         )
         return out
 
