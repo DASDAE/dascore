@@ -117,7 +117,7 @@ def read(
     *kwargs
         All kwargs are passed to the format-specific read functions.
     """
-    if file_format is None:
+    if not file_format:
         file_format = get_format(path)[0].upper()
     formatter = _IO_INSTANCES[file_format.upper()]
     return formatter.read(path, version=version, time=time, distance=distance, **kwargs)
