@@ -6,25 +6,26 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from dascore.io.indexer import HDFIndexer
+from dascore.io.indexer import DirectoryIndexer
+from dascore.utils.patch import get_default_patch_name
 
 
 @pytest.fixture(scope="class")
 def basic_indexer(two_patch_directory):
     """Return and indexer on the basic spool directory."""
-    return HDFIndexer(two_patch_directory)
+    return DirectoryIndexer(two_patch_directory)
 
 
 @pytest.fixture(scope="class")
 def adjacent_indexer(adjacent_spool_directory):
     """Return and indexer on the basic spool directory."""
-    return HDFIndexer(adjacent_spool_directory).update()
+    return DirectoryIndexer(adjacent_spool_directory).update()
 
 
 @pytest.fixture(scope="class")
 def diverse_indexer(diverse_spool_directory):
     """Return and indexer on the basic spool directory."""
-    return HDFIndexer(diverse_spool_directory).update()
+    return DirectoryIndexer(diverse_spool_directory).update()
 
 
 @pytest.fixture(scope="class")
@@ -36,13 +37,29 @@ def diverse_df(diverse_indexer):
 @pytest.fixture()
 def diverse_df_reset_cache(diverse_indexer):
     """Return the indexer with a reset cache"""
-    return HDFIndexer(diverse_indexer.path)
+    return DirectoryIndexer(diverse_indexer.path)
 
 
 @pytest.fixture(params=[diverse_indexer, diverse_df_reset_cache])
 def diverse_ind(request):
     """Aggregate the diverse indexers"""
     return request.getfixturevalue(request.param.__name__)
+
+
+@pytest.fixture()
+def empty_index(tmp_path_factory):
+    """Create an index around an empty directory."""
+    path = tmp_path_factory.mktemp("index_created_test")
+    return DirectoryIndexer(path).update()
+
+
+class TestBasics:
+    """Basic tests for indexer"""
+
+    def test_str_repr(self, basic_indexer):
+        """Ensure a useful (not the default) str/repr is implemented"""
+        out = str(basic_indexer)
+        assert "object at" not in out
 
 
 class TestGetContents:
@@ -86,6 +103,19 @@ class TestGetContents:
         new_df = diverse_ind(station=exact_name)
         assert (new_df["station"] == exact_name).all()
 
+    def test_emtpy_index(self, empty_index):
+        """An empty index should return an empty dataframe."""
+        df = empty_index()
+        assert df.empty
 
-class TestPutData:
-    """Test case for putting data into indexer."""
+
+class TestUpdate:
+    """Tests for updating index."""
+
+    def test_add_one_patch(self, empty_index, random_patch):
+        """Ensure a new patch added to the directory shows up."""
+        path = empty_index.path / get_default_patch_name(random_patch)
+        random_patch.io.write(path, file_format="dasdae")
+        new_index = empty_index.update()
+        contents = new_index()
+        assert len(contents) == 1

@@ -1,7 +1,6 @@
 """
 An HDF5-based indexer for local file systems.
 """
-
 import abc
 import os
 import time
@@ -74,11 +73,21 @@ class AbstractIndexer:
         """
 
 
-class HDFIndexer(AbstractIndexer):
+class DirectoryIndexer(AbstractIndexer):
     """
     A class for indexing a directory of dascore-readable files.
 
-    A cache is kept based on the time-range of queries.
+    This works by crawling the directory, getting a summary about the data it
+    contains, then creating a small HDF index file which can be queried later
+    on.
+
+    Parameters
+    ----------
+    path
+        The path to a directory containing DAS files.
+    cache_size
+        The number of queries to store in memory to avoid frequent reads
+        of the index file.
     """
 
     # hdf5 compression defaults
@@ -121,7 +130,7 @@ class HDFIndexer(AbstractIndexer):
         "time_max": ns_to_datetime,
         "d_time": ns_to_timedelta,
     }
-    _index_columns = tuple([x for x in PatchFileSummary.__annotations__])
+    _index_columns = tuple(PatchFileSummary().dict())
 
     def __init__(self, path: Union[str, Path], cache_size: int = 5):
         self.max_size = cache_size
@@ -133,11 +142,15 @@ class HDFIndexer(AbstractIndexer):
         self._current_index = 0
         # self.next_index = itertools.cycle(self.cache.index)
 
-    def __call__(self, buffer=one_second, **kwargs):
+    def get_contents(self, buffer=one_second, **kwargs):
         """get start and end times, perform in kernel lookup"""
         # create index if it doesn't exist
         if not self.index_path.exists():
             self.update()
+        # if the index still doesn't exist there are no readable files, return
+        # empty df.
+        if not self.index_path.exists():
+            return pd.DataFrame(columns=self._index_columns)
         time_min, time_max = self._get_times(kwargs.pop("time", None))
         hdf5_kwargs, kwargs = self._separate_hdf5_kwargs(kwargs)
         buffer = to_timedelta64(buffer)
@@ -160,6 +173,14 @@ class HDFIndexer(AbstractIndexer):
         con2 = index["time_max"] <= (time_min - buffer)
         pre_filter_df = index[~(con1 | con2)]
         return pre_filter_df[filter_df(pre_filter_df, **kwargs)]
+
+    __call__ = get_contents
+
+    def __str__(self):
+        msg = f"{self.__class__.__name__} managing: {self.path}"
+        return msg
+
+    __repr__ = __str__
 
     @staticmethod
     def _get_times(kwarg_time=None):
@@ -242,6 +263,16 @@ class HDFIndexer(AbstractIndexer):
         assert not df.isnull().any().any(), "null values found in index"
         return df
 
+    def _update_metadata(self, store, update_time):
+        # update timestamp
+        update_time = time.time() if update_time is None else update_time
+        store.put(self._time_node, pd.Series(update_time))
+        # make sure meta table also exists.
+        # Note this is here to avoid opening the store again.
+        if self._meta_node not in store:
+            meta = self._make_meta_table()
+            store.put(self._meta_node, meta, format="table")
+
     def _write_update(self, update_df, update_time):
         """convert updates to dataframe, then append to index table"""
         # read in dataframe and prepare for input into hdf5 index
@@ -257,14 +288,7 @@ class HDFIndexer(AbstractIndexer):
             else:
                 df.index += nrows
                 store.append(node, df, append=True, **self.hdf_kwargs)
-            # update timestamp
-            update_time = time.time() if update_time is None else update_time
-            store.put(self._time_node, pd.Series(update_time))
-            # make sure meta table also exists.
-            # Note this is here to avoid opening the store again.
-            if self._meta_node not in store:
-                meta = self._make_meta_table()
-                store.put(self._meta_node, meta, format="table")
+            self._update_metadata(store, update_time)
 
     def _enforce_min_version(self):
         """
@@ -433,7 +457,7 @@ class HDFIndexer(AbstractIndexer):
         assert not df.isnull().any().any(), "null values found in index"
         return df
 
-    def update(self) -> Self:
+    def update(self, paths=None) -> Self:
         """
         Updates the contents of the Indexer.
 
@@ -441,7 +465,7 @@ class HDFIndexer(AbstractIndexer):
         """
         self._enforce_min_version()  # delete index if schema has changed
         update_time = time.time()
-        new_files = list(self._get_file_iterator(only_new=True))
+        new_files = list(self._get_file_iterator(paths=paths, only_new=True))
         smooth_iterator = track_index_update(new_files, f"Indexing {self.path.name}")
         data_list = [y.dict() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)

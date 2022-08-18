@@ -12,7 +12,7 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.core.spool import DataFrameSpool
-from dascore.io.indexer import AbstractIndexer, HDFIndexer
+from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
 from dascore.utils.pd import adjust_segments
 
 
@@ -41,7 +41,7 @@ class FileSpool(DataFrameSpool):
         elif isinstance(base_path, AbstractIndexer):
             self.indexer = base_path
         elif isinstance(base_path, (Path, str)):
-            self.indexer = HDFIndexer(base_path)
+            self.indexer = DirectoryIndexer(base_path)
         self._preferred_format = preferred_format
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
 

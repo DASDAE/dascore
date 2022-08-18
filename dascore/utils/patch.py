@@ -623,3 +623,20 @@ def get_start_stop_step(patch: PatchType, dim):
     end = patch.attrs[f"{dim}_max"]
     step = patch.attrs[f"d_{dim}"]
     return start, end, step
+
+
+def get_default_patch_name(patch):
+    """Generates the name of the node."""
+
+    def _format_datetime64(dt):
+        """Format the datetime string in a sensible way."""
+        out = str(np.datetime64(dt).astype("datetime64[ns]"))
+        return out.replace(":", "_").replace("-", "_").replace(".", "_")
+
+    attrs = patch.attrs
+    start = _format_datetime64(attrs.get("time_min", ""))
+    end = _format_datetime64(attrs.get("time_max", ""))
+    net = attrs.get("network", "")
+    sta = attrs.get("station", "")
+    tag = attrs.get("tag", "")
+    return f"DAS__{net}__{sta}__{tag}__{start}__{end}"
