@@ -214,6 +214,13 @@ def diverse_spool_directory(diverse_spool):
 
 
 @pytest.fixture(scope="class")
+def diverse_file_spool(diverse_spool_directory):
+    """Save the diverse spool contents to a directory."""
+    out = dascore.get_spool(diverse_spool_directory).update()
+    return out
+
+
+@pytest.fixture(scope="class")
 def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
     """Create a directory of diverse DAS files for testing."""
     # create a directory with several patch files in it.

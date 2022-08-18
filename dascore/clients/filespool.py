@@ -24,7 +24,7 @@ class FileSpool(DataFrameSpool):
     and bulk processing of the files.
     """
 
-    _read_func: callable  # function for reading datatype
+    _drop_columns = ("file_format", "file_version", "path")
 
     def __init__(
         self,
@@ -88,10 +88,12 @@ class FileSpool(DataFrameSpool):
 
     def select(self, **kwargs) -> Self:
         """Sub-select certain dimensions for Spool"""
+        new_kwargs = dict(self._select_kwargs)
+        new_kwargs.update(kwargs)
         out = self.__class__(
             base_path=self.indexer,
             preferred_format=self._preferred_format,
-            select_kwargs=kwargs,
+            select_kwargs=new_kwargs,
         )
         return out
 

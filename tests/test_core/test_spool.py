@@ -102,6 +102,23 @@ class TestSelect:
         for patch in out:
             assert patch.attrs["tag"].startswith("some")
 
+    def test_multiple_selects(self, diverse_spool):
+        """Ensure selects can be stacked."""
+        contents = diverse_spool.get_contents()
+        duration = contents["time_max"] - contents["time_min"]
+        new_max = (contents["time_min"] + duration / 2).max()
+        out = (
+            diverse_spool.select(network="das2")
+            .select(tag="ran*")
+            .select(time=(None, new_max))
+        )
+        assert len(out)
+        for patch in out:
+            attrs = patch.attrs
+            assert attrs["network"] == "das2"
+            assert attrs["tag"].startswith("ran")
+            assert attrs["time_max"] <= new_max
+
 
 class TestChunk:
     """

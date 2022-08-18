@@ -132,12 +132,19 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5")
     file_format
         The file format for the saved files.
     """
+
+    def format_time(time):
+        """Format time for saving to disk."""
+        time_str = str(time).replace(":", "-")  # cant have : on Windows paths
+        return time_str.split(".")[0]
+
     if path is None:
         path = Path(tempfile.mkdtemp())
         assert path.exists()
     for patch in spool:
         attrs = patch.attrs
-        start_stop = f"{attrs['time_min']}__{attrs['time_max']}"
+        start, stop = format_time(attrs["time_min"]), format_time(attrs["time_max"])
+        start_stop = f"{start}__{stop}"
         sta, network = attrs["station"], attrs["network"]
         tag = attrs["tag"]
         name = path / f"{start_stop}__{sta}__{network}__{tag}.{extention}"

@@ -36,6 +36,9 @@ MAXINT64 = np.iinfo(np.int64).max
 # types used to represent paths
 path_types = Union[str, Path]
 
+# One second in numpy timedelta speak
+ONE_SECOND = np.timedelta64(1, "s")
+
 
 # The expected attributes for the Patch
 DEFAULT_PATCH_ATTRS = {

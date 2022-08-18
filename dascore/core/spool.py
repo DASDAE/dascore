@@ -103,7 +103,7 @@ class DataFrameSpool(BaseSpool):
     # kwargs for filtering contents
     _select_kwargs: Optional[Mapping] = FrozenDict()
     # attributes which effect merge groups for internal patches
-    _group_columns = ("network", "station", "dims", "data_type", "history")
+    _group_columns = ("network", "station", "dims", "data_type", "history", "tag")
     _drop_columns = ("patch",)
 
     def _get_df(self):
@@ -223,9 +223,9 @@ class DataFrameSpool(BaseSpool):
             group_columns=self._group_columns,
             **kwargs,
         )
-        out = chunker.chunk(df)
-        instructions = chunker.get_instruction_df(df, out)
-        return self.new_from_df(out, source_df=self._df, instruction_df=instructions)
+        in_df, out_df = chunker.chunk(df)
+        instructions = chunker.get_instruction_df(in_df, out_df)
+        return self.new_from_df(out_df, source_df=self._df, instruction_df=instructions)
 
     def new_from_df(self, df, source_df=None, instruction_df=None):
         """Create a new instance from dataframes."""

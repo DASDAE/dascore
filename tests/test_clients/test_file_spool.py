@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.constants import ONE_SECOND
 from dascore.core.schema import PatchFileSummary
 from dascore.utils.misc import register_func
 
@@ -119,6 +120,29 @@ class TestSelect:
         out = basic_file_spool.select(tag=tag_collection).get_contents()
         assert out["tag"].isin(tag_collection).all()
 
+    def test_multiple_selects(self, diverse_file_spool):
+        """Ensure selects can be stacked."""
+        spool = diverse_file_spool
+        contents = spool.get_contents()
+        duration = contents["time_max"] - contents["time_min"]
+        new_max = (contents["time_min"] + duration.mean() / 2).median()
+        out = (
+            spool.select(network="das2").select(tag="ran*").select(time=(None, new_max))
+        )
+        assert len(out) > 0
+        # first check content dataframe
+        new_content = out.get_contents()
+        assert len(new_content) == len(out)
+        assert (new_content["network"] == "das2").all()
+        assert (new_content["tag"].str.startswith("ran")).all()
+        assert (new_content["time_max"] <= new_max).all()
+        # then check patches
+        for patch in out:
+            attrs = patch.attrs
+            assert attrs["network"] == "das2"
+            assert attrs["tag"].startswith("ran")
+            assert attrs["time_max"] <= new_max
+
 
 class TestBasicChunk:
     """Tests for chunking filespool."""
@@ -159,18 +183,18 @@ class TestFileSpoolIntegrations:
         """Small integration test with diverse spool."""
         network = "das2"
         endtime = np.datetime64("2022-01-01")
-        duration = 2
+        duration = 3
         spool = (
             dc.get_spool(diverse_spool_directory)
             .select(network=network)  # sub-select das2 network
             .select(time=(None, endtime))  # unselect anything after 2022
             .chunk(time=duration, overlap=0.5)  # change the chunking of the patches
         )
-
         for patch in spool:
             assert isinstance(patch, dc.Patch)
             attrs = patch.attrs
             assert attrs["network"] == network
             assert attrs["time_max"] <= endtime
-            patch_duration = attrs["time_max"] - attrs["time_min"]
-            assert np.isclose(patch_duration, duration)
+            patch_duration = (attrs["time_max"] - attrs["time_min"]) / ONE_SECOND
+            diff = patch_duration - duration
+            assert abs(diff) <= 1.5 * attrs["d_time"] / ONE_SECOND

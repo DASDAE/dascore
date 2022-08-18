@@ -102,6 +102,10 @@ class ChunkManager:
         column along which to chunk, typically, `time` or `distance`, and the
         value specifies the chunk size. A value of None means to chunk on all
         available data (e.g. merge all data).
+
+    Notes
+    -----
+    This class is used internally by `dc.Spool.chunk`.
     """
 
     def __init__(
@@ -161,58 +165,81 @@ class ChunkManager:
         over = overlap if not pd.isnull(overlap) else (step * 0).iloc[0]
         return duration, over
 
-    def _create_df(self, df, name, start_stop, index_count=0):
+    def _create_df(self, df, name, start_stop, gnum):
         """Reconstruct the dataframe."""
-        index = np.arange(index_count, index_count + len(start_stop))
-        out = pd.DataFrame(
-            start_stop, columns=[f"{name}_min", f"{name}_max"], index=index
-        )
+        out = pd.DataFrame(start_stop, columns=[f"{name}_min", f"{name}_max"])
         merger = df.drop(columns=out.columns)
         for col in merger:
             vals = merger[col].unique()
-            assert len(vals) == 1, "Havent yet implemented non-homogenous merging"
+            assert len(vals) == 1, "Haven't yet implemented non-homogenous merging"
             out[col] = vals[0]
+        # add the group number for getting instruction df later
+        out["_group"] = gnum
         return out
 
-    def get_instruction_df(self, origin_df, chunked_df, **kwargs):
+    def get_instruction_df(self, source_df, chunked_df):
         """
         Get a dataframe connecting the chunked dataframe to its origin.
 
-        This is useful for describing how data chunking on patches should
-        be performed.
+        This is used to connect source data to desired data after chunking
+        operation.
 
         Parameters
         ----------
-        origin_df
-            The origin dataframe before chunking
+        source_df
+            The dataframe before chunking
         chunked_df
             The chunked dataframe (output of `chunk` method)
         """
+        # the group column should exist and the chunked groups should be subset
+        # of the source groups
+        assert "_group" in source_df.columns and "_group" in chunked_df.columns
+        chunked_groups = set(chunked_df["_group"])
+        assert chunked_groups.issubset(set(source_df["_group"]))
         min_name, max_name = f"{self._name}_min", f"{self._name}_max"
-        c_start, c_stop, c_step = get_interval_columns(origin_df, self._name)
-        new_start, new_stop, new_step = get_interval_columns(chunked_df, self._name)
-        dims = get_dim_names_from_columns(origin_df)
-        cols2keep = get_column_names_from_dim(dims)
+        # iterate each group and create instruction df
         out = []
-        # TODO need to think more about this, a naive implementation for now
-        for start, stop, ind in zip(new_start.values, new_stop.values, new_stop.index):
-            too_late = c_start > stop
-            too_early = c_stop < start
-            in_range = ~(too_early | too_late)
-            assert in_range.sum() > 0, "no original data source found!"
-            sub_df = origin_df[in_range][cols2keep]
-            sub_df.loc[sub_df[min_name] < start, min_name] = start
-            sub_df.loc[sub_df[max_name] > stop, max_name] = stop
-            sub_df.loc[:, "source_index"] = sub_df.index.values
-            sub_df.loc[:, "current_index"] = ind
-            out.append(sub_df)
-        df = pd.concat(out, axis=0).reset_index(drop=True)
-        return df.set_index("source_index")
+        for group, sub_chunk in chunked_df.groupby("_group"):
+            sub_source = source_df[source_df["_group"] == group]
+            c_start, c_stop, c_step = get_interval_columns(sub_source, self._name)
+            new_start, new_stop, new_step = get_interval_columns(sub_chunk, self._name)
+            dims = get_dim_names_from_columns(sub_source)
+            cols2keep = get_column_names_from_dim(dims)
+            # TODO need to think more about this, a naive implementation for now
+            for start, stop, ind in zip(
+                new_start.values, new_stop.values, new_stop.index
+            ):
+                too_late = c_start > stop
+                too_early = c_stop < start
+                in_range = ~(too_early | too_late)
+                assert in_range.sum() > 0, "no original data source found!"
+                sub_df = sub_source[in_range][cols2keep]
+                # trim intervals to existing values
+                sub_df.loc[sub_df[min_name] < start, min_name] = start
+                sub_df.loc[sub_df[max_name] > stop, max_name] = stop
+                sub_df.loc[:, "source_index"] = sub_df.index.values
+                sub_df.loc[:, "current_index"] = ind
+                out.append(sub_df)
+        df = pd.concat(out, axis=0).reset_index(drop=True).set_index("source_index")
+        return df
+
+    def _get_group(self, df, start, stop, step):
+        """
+        Get the group designation for df. This accounts for both time intervals
+        being consistent and group columns matching.
+        """
+        # TODO: Test if different stations bridge time span
+        group_cont = self._get_continuity_group_number(start, stop, step)
+        cols = [f"d_{self._name}"] + list(self._group_columns or [])
+        columns = [x for x in cols if x in df.columns]
+        col_groups = df.groupby(columns).ngroup()
+        group = group_cont.astype(str) + "_" + col_groups.astype(str)
+        return group
 
     def chunk(
         self,
         df: pd.DataFrame,
-    ) -> pd.DataFrame:
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Chunk a dataframe into new contiguous segments.
 
@@ -226,20 +253,15 @@ class ChunkManager:
 
         Returns
         -------
-        A tuple of intermediate dataframe and output dataframe. The intermediate
-        dataframe provides instructions on how to form chunked dataframe from first
-        dataframe.
+        A tuple of the original dataframe with added column '_group' and an
+        output dataframe with column '_group'. The _group column is used
+        to link the two dataframes together.
         """
         # get series of start/stop along requested dimension
         start, stop, step = get_interval_columns(df, self._name)
         dur, overlap = self._get_duration_overlap(self._value, start, step)
-        # Find continuity group numbers (ints which indicate if a row belongs
-        # to a continuity block) then apply column filters.
-        group_cont = self._get_continuity_group_number(start, stop, step)
-        cols = [f"d_{self._name}"] + list(self._group_columns or [])
-        columns = [x for x in cols if x in df.columns]
-        col_groups = df.groupby(columns).ngroup()
-        group = group_cont.astype(str) + "_" + col_groups.astype(str)
+        # get group numbers
+        group = self._get_group(df, start, stop, step)
         # get max, min for each group and expand
         group_mins = start.groupby(group).min()
         group_maxs = stop.groupby(group).max()
@@ -258,8 +280,8 @@ class ChunkManager:
                 keep_partials=self._keep_partials,
             )
             # create the newly chunked dataframe
-            sub_new_df = self._create_df(
-                current_df, self._name, new_start_stop, len(out)
-            )
+            sub_new_df = self._create_df(current_df, self._name, new_start_stop, gnum)
             out.append(sub_new_df)
-        return pd.concat(out, axis=0)
+
+        out = pd.concat(out, axis=0).reset_index(drop=True)
+        return df.assign(_group=group), out
