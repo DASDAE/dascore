@@ -63,7 +63,7 @@ path = ex.spool_to_directory(diverse_spool)
 # Create an indexer and update the index. This will include any new files
 # with timestamps newer than the last update, or create a new HDF index file
 # if one does not yet exist.
-indexer = DirectoryIndexer(path).udpate()
+indexer = DirectoryIndexer(path).update()
 
 # get the contents of the directory's files
 df = indexer.get_contents()
