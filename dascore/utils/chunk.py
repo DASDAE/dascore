@@ -139,7 +139,8 @@ class ChunkManager:
     def _get_continuity_group_number(self, start, stop, step) -> pd.Series:
         """Return a series of ints indicating continuity group."""
         # start by sorting according to start time
-        args = start.argsort()
+        arg_ser = start.argsort()
+        args = arg_ser.index[arg_ser.values]
         start_sorted, stop_sorted, step_sorted = start[args], stop[args], step[args]
         # next get cummax of endtimes and detect gaps
         stop_cum_max = stop_sorted.cummax()

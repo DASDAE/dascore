@@ -150,3 +150,27 @@ class TestBasicChunk:
         patch_list = list(new_spool)
         for patch in patch_list:
             assert isinstance(patch, dc.Patch)
+
+
+class TestFileSpoolIntegrations:
+    """Small integration tests for the file spool."""
+
+    def test_one(self, diverse_spool_directory):
+        """Small integration test with diverse spool."""
+        network = "das2"
+        endtime = np.datetime64("2022-01-01")
+        duration = 2
+        spool = (
+            dc.get_spool(diverse_spool_directory)
+            .select(network=network)  # sub-select das2 network
+            .select(time=(None, endtime))  # unselect anything after 2022
+            .chunk(time=duration, overlap=0.5)  # change the chunking of the patches
+        )
+
+        for patch in spool:
+            assert isinstance(patch, dc.Patch)
+            attrs = patch.attrs
+            assert attrs["network"] == network
+            assert attrs["time_max"] <= endtime
+            patch_duration = attrs["time_max"] - attrs["time_min"]
+            assert np.isclose(patch_duration, duration)

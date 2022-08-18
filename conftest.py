@@ -205,21 +205,20 @@ def diverse_spool():
 
 
 @pytest.fixture(scope="class")
+def diverse_spool_directory(diverse_spool):
+    """Save the diverse spool contents to a directory."""
+    out = ex.spool_to_directory(diverse_spool)
+    yield out
+    if out.is_dir():
+        shutil.rmtree(out)
+
+
+@pytest.fixture(scope="class")
 def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
     """Create a directory of diverse DAS files for testing."""
     # create a directory with several patch files in it.
     dir_path = tmp_path_factory.mktemp("data")
     for patch in adjacent_spool_no_overlap:
-        _save_patch(patch, dir_path)
-    return dir_path
-
-
-@pytest.fixture(scope="class")
-def diverse_spool_directory(tmp_path_factory, diverse_spool):
-    """Create a directory of diverse DAS files for testing."""
-    # create a directory with several patch files in it.
-    dir_path = tmp_path_factory.mktemp("data")
-    for patch in diverse_spool:
         _save_patch(patch, dir_path)
     return dir_path
 

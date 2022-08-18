@@ -14,4 +14,4 @@ or conda:
 conda install dascore -c conda-forge
 ```
 
-See [contributing](contributing.md) for developer installation.
+See [contributing](contributing/contributing.md) for developer installation.

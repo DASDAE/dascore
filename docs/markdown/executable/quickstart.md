@@ -155,7 +155,7 @@ print(pa.attrs['time_min'])
 print(pa1.attrs['time_min'])
 ```
 
-# Spool
+## Spool
 
 Spools are containers/managers of patches. These come in a few varieties
 including `MemorySpool` for managing a group of patches loaded into memory,
@@ -164,7 +164,7 @@ for accessing remote resources. However, despite some implementation differences
 all spools have some common behavior/methods.
 
 
-## Accessing patches
+### Accessing patches
 
 Patches are extracted from the spool via simple iteration or indexing. New
 spools are returned via slicing.
@@ -184,7 +184,7 @@ new_spool = spool[1:]
 ```
 
 
-## get_contents
+### get_contents
 
 If supported, returns a dataframe listing contents.
 
@@ -196,7 +196,7 @@ spool = dascore.get_example_spool()
 print(spool.get_contents())
 ```
 
-## select
+### select
 
 Selects a subset of spool and returns a new spool. `get_contents` will now
 reflect subset of the original data requested by the select operation.
@@ -226,7 +226,7 @@ subspool = spool.select(tag='some*')
 ```
 
 
-## chunk
+### chunk
 
 Chunk controls how data are grouped together in patches. It can be used to
 merge contiguous patches together, specify size of patches for processing,

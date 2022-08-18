@@ -119,7 +119,7 @@ def _diverse_spool():
     return dascore.MemorySpool([y for x in all_spools for y in x])
 
 
-def spool_to_directory(spool, path=None, file_format="DASDAE", extention=".hdf5"):
+def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5"):
     """
     Write out each patch in a spool to a directory.
 
@@ -132,8 +132,9 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extention=".hdf5"
     file_format
         The file format for the saved files.
     """
-    if not path.exists():
-        path = Path(tempfile.TemporaryDirectory().name)
+    if path is None:
+        path = Path(tempfile.mkdtemp())
+        assert path.exists()
     for patch in spool:
         attrs = patch.attrs
         start_stop = f"{attrs['time_min']}__{attrs['time_max']}"
