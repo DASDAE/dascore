@@ -12,6 +12,8 @@ enabled = true
 include-package-data = true
 packages = ["dascore"]
 
+[tool.setuptools_scm]  # this empty section enables the tool
+
 # --- Project Metadata
 
 [project]
