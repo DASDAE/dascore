@@ -138,6 +138,16 @@ class TestFilterDfAdvanced:
         # just the last row should have been selected
         assert out.iloc[-1] and out.astype(int).sum() == 1
 
+    def test_time_query_with_string(self, example_df_2):
+        """Test for time query with a string."""
+        tmax = to_datetime64(example_df_2["time_max"].max() - np.timedelta64(1, "ns"))
+        out1 = filter_df(example_df_2, time=(str(tmax), None))
+        # just the last row should have been selected
+        assert out1.iloc[-1] and out1.astype(int).sum() == 1
+        # also ensure the string can be second element, all rows should be selected
+        out2 = filter_df(example_df_2, time=(None, str(tmax)))
+        assert len(out2) == len(example_df_2)
+
 
 class TestAdjustSegments:
     """Tests for adjusting segments of dataframes."""

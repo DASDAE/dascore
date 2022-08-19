@@ -22,7 +22,7 @@ It has the same interface as other spools mentioned in the
 
 For example:
 
-```{code-cell}
+```python
 import dascore
 from dascore import examples as ex
 

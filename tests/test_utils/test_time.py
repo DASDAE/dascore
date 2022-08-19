@@ -109,6 +109,13 @@ class TestToDateTime64:
         assert pd.isnull(out[0])
         assert out[1] == array[1]
 
+    def test_str_tuples(self):
+        """Ensure tuples of datetime strings can also be converted."""
+        out1 = to_datetime64((None, "2011-01-01"))
+        out2 = to_datetime64(("2011-01-01", None))
+        assert pd.isnull(out2[1]) and pd.isnull(out1[0])
+        assert out1[1] == out2[0]
+
 
 class TestToTimeDelta:
     """Tests for creating timedeltas"""

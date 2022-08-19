@@ -21,9 +21,9 @@ A section of contiguous, uniformly sampled data is called a Patch. These can be 
 
 ### 1. Load an example patch (for simple demonstrations)
 
-```python
-import dascore
-pa = dascore.get_example_patch()
+```{code-cell}
+import dascore as dc
+pa = dc.get_example_patch()
 ```
 
 ### 2. Load a file
@@ -31,13 +31,13 @@ pa = dascore.get_example_patch()
 We first download an example fiber file (you need an internet connection).
 Next, we simply read it into a [Stream](#Stream) object then get the first (and only) patch.
 
-```python
+```{code-cell}
 # get a fiber file
-import dascore
+import dascore as dc
 from dascore.utils.downloader import fetch
 path = fetch("terra15_das_1_trimmed.hdf5")  # path to a datafile
 
-pa = dascore.read(path)[0]
+pa = dc.read(path)[0]
 ```
 
 ### 3. Create from Arrays
@@ -49,10 +49,10 @@ Patches can also be created from numpy arrays and dictionaries. This requires:
 - The attributes (optional)
 
 
-```python
+```{code-cell}
 import numpy as np
 
-import dascore
+import dascore as dc
 from dascore.utils.time import to_timedelta64
 
 
@@ -74,7 +74,7 @@ coords = dict(
     distance=np.arange(array.shape[0]) * attrs["d_distance"],
     time=np.arange(array.shape[1]) * attrs["d_time"],
 )
-pa = dascore.Patch(data=array, coords=coords, attrs=attrs)
+pa = dc.Patch(data=array, coords=coords, attrs=attrs)
 print(pa)
 ```
 
@@ -87,9 +87,9 @@ The patch has several methods which are intended to be chained together via a
 [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface), meaning each
 method returns a new `Patch` instance.
 
-```python
-import dascore
-pa = dascore.get_example_patch()
+```{code-cell}
+import dascore as dc
+pa = dc.get_example_patch()
 
 out = (
     pa.decimate(8)  # decimate to reduce data volume by 8 along time dimension
@@ -105,8 +105,8 @@ DASCore provides various visualization functions found in the `dascore.viz`
 package or using the `Patch.viz` namespace.
 
 ```{code-cell}
-import dascore
-pa = dascore.get_example_patch()
+import dascore as dc
+pa = dc.get_example_patch()
 pa.viz.waterfall(show=True)
 ```
 
@@ -121,9 +121,9 @@ patches with modifications, however, that are functionally the same.
 Often you may wish to modify one aspect of the patch. `Patch.new` is designed
 for this purpose:
 
-```python
-import dascore
-pa = dascore.get_example_patch()
+```{code-cell}
+import dascore as dc
+pa = dc.get_example_patch()
 
 # create a copy of patch with new data but coords and attrs stay the same
 new = pa.new(data=pa.data * 10)
@@ -133,9 +133,9 @@ new = pa.new(data=pa.data * 10)
 `Patch.update_attrs()` is for making small changes to the patch attrs (metadata) while
 keeping the unaffected metadata (`Patch.new` would require you replace the entirety of attrs).
 
-```python
-import dascore
-pa = dascore.get_example_patch()
+```{code-cell}
+import dascore as dc
+pa = dc.get_example_patch()
 
 # update existing attribute 'network' and create new attr 'new_attr'
 pa1 = pa.update_attrs(**{'network': 'experiment_1', 'new_attr': 42})
@@ -145,9 +145,9 @@ pa1 = pa.update_attrs(**{'network': 'experiment_1', 'new_attr': 42})
 For example, changing the start, end, or sampling of a dimension should
 update the other attributes affected by the change.
 
-```python{code-cell}
-import dascore
-pa = dascore.get_example_patch()
+```{code-cell}
+import dascore as dc
+pa = dc.get_example_patch()
 
 # update start time should also shift endtime
 pa1 = pa.update_attrs(time_min='2000-01-01')
@@ -157,12 +157,34 @@ print(pa1.attrs['time_min'])
 
 ## Spool
 
-Spools are containers/managers of patches. These come in a few varieties
-including `MemorySpool` for managing a group of patches loaded into memory,
-`FileSpool` for managing archives of local files, and a variety of clients
-for accessing remote resources. However, despite some implementation differences,
-all spools have some common behavior/methods.
+Spools are containers/managers of patches. These come in a few varieties which
+can manage a group of patches loaded into memory, archives of local files,
+and (in the future) a variety of clients for accessing remote resources.
 
+The simplest way to get the appropriate spool for a specified input is to use
+the `get_spool` method, which should just work in the vast majority of cases.
+
+
+```{code-cell}
+import dascore as dc
+
+# create a list of patches
+patch_list = [dc.get_example_patch()]
+
+# get a spool for managing in-memory patches
+spool1 = dc.get_spool(patch_list)
+
+# get a spool from a das file
+from dascore.utils.downloader import fetch
+path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
+spool2 = dc.get_spool(path_to_das_file)
+
+# get a spool from a directory of DAS files
+directory_path = path_to_das_file.parent
+spool3 = dc.get_spool(directory_path)
+```
+
+Despite some implementation differences, all spools have common behavior/methods.
 
 ### Accessing patches
 
@@ -170,8 +192,8 @@ Patches are extracted from the spool via simple iteration or indexing. New
 spools are returned via slicing.
 
 ```{code-cell}
-import dascore
-spool = dascore.get_example_spool()
+import dascore as dc
+spool = dc.get_example_spool()
 
 patch = spool[0]  # extract first patch
 
@@ -186,11 +208,12 @@ new_spool = spool[1:]
 
 ### get_contents
 
-If supported, returns a dataframe listing contents.
+Returns a dataframe listing contents. This method may not be supported on all
+spools, especially those interfacing with vast remote resources.
 
 ```{code-cell}
-import dascore
-spool = dascore.get_example_spool()
+import dascore as dc
+spool = dc.get_example_spool()
 
 # Return dataframe with contents of spool (each row has metadata of a patch)
 print(spool.get_contents())
@@ -202,8 +225,8 @@ Selects a subset of spool and returns a new spool. `get_contents` will now
 reflect subset of the original data requested by the select operation.
 
 ```{code-cell}
-import dascore
-spool = dascore.get_example_spool()
+import dascore as dc
+spool = dc.get_example_spool()
 
 # select a spool with
 subspool = spool.select(time=('2020-01-03T00:00:09', None))
@@ -214,9 +237,9 @@ select can be used to filter patches that meet a specified criteria.
 
 
 ```{code-cell}
-import dascore
+import dascore as dc
 # load a spool which has many diverse patches
-spool = dascore.get_example_spool('diverse_das')
+spool = dc.get_example_spool('diverse_das')
 
 # Only include patches which are in network 'das2' or 'das3'
 subspool = spool.select(network={'das2', 'das3'})
@@ -225,7 +248,6 @@ subspool = spool.select(network={'das2', 'das3'})
 subspool = spool.select(tag='some*')
 ```
 
-
 ### chunk
 
 Chunk controls how data are grouped together in patches. It can be used to
@@ -233,8 +255,8 @@ merge contiguous patches together, specify size of patches for processing,
 overlap with previous segments, etc.
 
 ```{code-cell}
-import dascore
-spool = dascore.get_example_spool()
+import dascore as dc
+spool = dc.get_example_spool()
 
 # chunk spool for 3 second increments with 1 second overlaps
 # and keep any segements that don't have full 3600 seconds
