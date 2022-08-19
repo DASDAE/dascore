@@ -158,8 +158,8 @@ print(pa1.attrs['time_min'])
 ## Spool
 
 Spools are containers/managers of patches. These come in a few varieties which
-can manage a group of patches loaded into memory, archives of local files, 
-and (in the future) a variety of clients for accessing remote resources. 
+can manage a group of patches loaded into memory, archives of local files,
+and (in the future) a variety of clients for accessing remote resources.
 
 The simplest way to get the appropriate spool for a specified input is to use
 the `get_spool` method, which should just work in the vast majority of cases.

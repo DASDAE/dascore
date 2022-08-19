@@ -52,7 +52,7 @@ def array_to_datetime64(array: np.array) -> np.datetime64:
         try:
             # separate seconds and factions, assume ns precision
             int_sec = array.astype(np.int64).astype("datetime64[s]")
-        except TypeError:
+        except (TypeError, ValueError):
             out = np.array([to_datetime64(x) for x in array])
         else:
             frac_sec = array % 1.0

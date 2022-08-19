@@ -143,6 +143,15 @@ class TestSelect:
             assert attrs["tag"].startswith("ran")
             assert attrs["time_max"] <= new_max
 
+    def test_select_time_tuple_with_string(self, basic_file_spool):
+        """Ensure time tuples with strings still work."""
+        time_str = "2017-09-18T00:00:04"
+        dt = np.datetime64(time_str)
+        spool1 = basic_file_spool.select(time=(None, dt))
+        spool2 = basic_file_spool.select(time=(None, time_str))
+        for pa1, pa2 in zip(spool1, spool2):
+            assert pa1.attrs["time_max"] == pa2.attrs["time_max"]
+
 
 class TestBasicChunk:
     """Tests for chunking filespool."""
