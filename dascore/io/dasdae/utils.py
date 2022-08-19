@@ -4,6 +4,7 @@ DASDAE format utilities
 import numpy as np
 
 import dascore as dc
+from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_number, to_timedelta64
 
 # --- Functions for writing
@@ -14,23 +15,6 @@ def _write_meta(hfile):
     attrs = hfile.root._v_attrs
     attrs["__format__"] = "DASDAE"
     attrs["__DASDAE_version__"] = dc.io.dasdae.__version__
-
-
-def _generate_patch_node_name(patch):
-    """Generates the name of the node."""
-
-    def _format_datetime64(dt):
-        """Format the datetime string in a sensible way."""
-        out = str(np.datetime64(dt).astype("datetime64[ns]"))
-        return out.replace(":", "_").replace("-", "_").replace(".", "_")
-
-    attrs = patch.attrs
-    start = _format_datetime64(attrs.get("time_min", ""))
-    end = _format_datetime64(attrs.get("time_max", ""))
-    net = attrs.get("network", "")
-    sta = attrs.get("station", "")
-    tag = attrs.get("tag", "")
-    return f"DAS__{net}__{sta}__{tag}__{start}__{end}"
 
 
 def _save_attrs_and_dim(patch, patch_group):
@@ -68,7 +52,7 @@ def _save_coords(patch, patch_group, h5):
 
 def _save_patch(patch, wave_group, h5):
     """Save the patch to disk."""
-    name = _generate_patch_node_name(patch)
+    name = get_default_patch_name(patch)
     patch_group = h5.create_group(wave_group, name)
     _save_attrs_and_dim(patch, patch_group)
     _save_coords(patch, patch_group, h5)
@@ -86,7 +70,12 @@ def _get_attrs(patch_group):
     attrs = [x for x in patch_group._v_attrs._f_list() if x.startswith("_attrs_")]
     for attr_name in attrs:
         key = attr_name.replace("_attrs_", "")
-        out[key] = patch_group._v_attrs[attr_name]
+        val = patch_group._v_attrs[attr_name]
+        # need to unpack one value arrays
+        if isinstance(val, np.ndarray) and not val.shape:
+            val = np.array([val])[0]
+        out[key] = val
+        #
     return out
 
 

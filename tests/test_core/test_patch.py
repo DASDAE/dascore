@@ -169,9 +169,11 @@ class TestEquals:
         assert not patch2.equals(random_patch)
 
     def test_one_null_value_in_attrs(self, random_patch):
-        """ "Ensure setting a value to null in attrs still works."""
+        """
+        Ensure setting a value to null in attrs doesn't eval to equal.
+        """
         attrs = dict(random_patch.attrs)
-        attrs["label"] = None
+        attrs["tag"] = None
         patch2 = random_patch.new(attrs=attrs)
         patch2.equals(random_patch)
         assert not patch2.equals(random_patch)
@@ -214,7 +216,12 @@ class TestTranspose:
 
 
 class TestUpdateAttrs:
-    """Tests for updating the attrs."""
+    """
+    Tests for updating the attrs.
+
+    Note: Most of the testing for this functionality is actually done on
+    dascore.util.patch.AttrsCoordsMixer.
+    """
 
     def test_add_attr(self, random_patch):
         """Tests for adding an attribute."""
@@ -222,7 +229,7 @@ class TestUpdateAttrs:
         assert "bob" in new.attrs and new.attrs["bob"] == 1
 
     def test_original_unchanged(self, random_patch):
-        """ "Updating starttime should also update endtime"""
+        """updating attributes shouldn't change original patch in any way."""
         old_attrs = dict(random_patch.attrs)
         _ = random_patch.update_attrs(bob=2)
         assert "bob" not in random_patch.attrs
@@ -234,6 +241,14 @@ class TestUpdateAttrs:
         pa = random_patch.update_attrs(time_min=t1)
         assert pa.attrs["time_min"] == t1
         assert pa.coords["time"].min() == t1
+
+    def test_update_startttime(self, random_patch):
+        """Updating start time should update end time as well."""
+        duration = random_patch.attrs["time_max"] - random_patch.attrs["time_min"]
+        new_start = np.datetime64("2000-01-01")
+        pa1 = random_patch.update_attrs(time_min=str(new_start))
+        assert pa1.attrs["time_min"] == new_start
+        assert pa1.attrs["time_max"] == new_start + duration
 
 
 class TestSqueeze:

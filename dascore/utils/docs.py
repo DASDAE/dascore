@@ -72,7 +72,7 @@ def compose_docstring(**kwargs: Union[str, Sequence[str]]):
                 # determine number of spaces used before matching character
                 spaces = line.split(search_value)[0]
                 # ensure only spaces precede search value
-                assert set(spaces) == {" "}
+                assert set(spaces) == {" "} or not len(spaces)
                 new = textwrap.indent(textwrap.dedent(value), spaces)
                 docstring = docstring.replace(line, new)
 

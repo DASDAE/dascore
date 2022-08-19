@@ -1,18 +1,22 @@
 """Constants used throughout obsplus."""
-from typing import TypedDict, TypeVar, Union
+from pathlib import Path
+from typing import TypeVar, Union
 
 import numpy as np
 import pandas as pd
 
 PatchType = TypeVar("PatchType", bound="dascore.Patch")
 
-StreamType = TypeVar("StreamType", bound="dascore.Stream")
+SpoolType = TypeVar("SpoolType", bound="dascore.Spool")
 
 # Bump this to force re-downloading of all data file
 DATA_VERSION = "0.0.0"
 
 # Types dascore can convert into time representations
 timeable_types = Union[int, float, str, np.datetime64, pd.Timestamp]
+
+# Number types
+numeric_types = Union[int, float]
 
 # Expected Keys in the Summary Dictionaries
 SUMMARY_KEYS = ("format", "min_time", "max_time", "min_distance", "max_distance")
@@ -29,21 +33,11 @@ MININT64 = np.iinfo(np.int64).min
 # The largest value an int64 can rep
 MAXINT64 = np.iinfo(np.int64).max
 
+# types used to represent paths
+path_types = Union[str, Path]
 
-class PatchSummaryDict(TypedDict):
-    """The expected minimum attributes for a Patch attrs."""
-
-    d_time: np.timedelta64
-    d_distance: float
-    data_type: str
-    category: str
-    time_min: np.datetime64
-    time_max: np.datetime64
-    distance_min: float
-    distance_max: float
-    instrument_id: str
-    dims: str
-    tag: str
+# One second in numpy timedelta speak
+ONE_SECOND = np.timedelta64(1, "s")
 
 
 # The expected attributes for the Patch
@@ -65,7 +59,6 @@ DEFAULT_PATCH_ATTRS = {
     "history": lambda: [],
     "dims": "",
     "tag": "",
-    "label": "",
 }
 
 # Methods FileFormatter needs to support
@@ -89,3 +82,21 @@ LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 
 # Required shared attributes to merge patches together
 PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "category")
+
+
+# A map from the unit name to the code used in numpy.timedelta64
+NUMPY_TIME_UNIT_MAPPPING = {
+    "hour": "h",
+    "minute": "m",
+    "second": "s",
+    "millisecond": "ms",
+    "microsecond": "us",
+    "nanosecond": "ns",
+    "picosecond": "ps",
+    "femtosecond": "fs",
+    "attosecond": "as",
+    "year": "Y",
+    "month": "M",
+    "week": "W",
+    "day": "D",
+}

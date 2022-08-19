@@ -60,7 +60,7 @@ class TestRead:
     def test_read_terra15(self, terra15_das_example_path, terra15_das_patch):
         """Ensure terra15 can be read."""
         out = dascore.read(terra15_das_example_path)
-        assert isinstance(out, dascore.Stream)
+        assert isinstance(out, dascore.MemorySpool)
         assert len(out) == 1
         assert out[0].equals(terra15_das_patch)
 
@@ -70,6 +70,6 @@ class TestScan:
 
     def test_scan_terra15(self, terra15_das_example_path):
         """Ensure terra15 format can be automatically determined."""
-        out = dascore.scan_file(terra15_das_example_path)
+        out = dascore.scan(terra15_das_example_path)
         assert isinstance(out, list)
         assert len(out)

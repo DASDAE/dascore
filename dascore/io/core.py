@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 import dascore
-from dascore.constants import PatchSummaryDict, StreamType, timeable_types
+from dascore.constants import SpoolType, timeable_types
+from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
 from dascore.utils.plugin import FiberIOManager
@@ -29,34 +30,40 @@ class FiberIO(ABC):
     name: str = ""
     preferred_extensions: tuple[str] = ()
 
-    def read(self, path, **kwargs) -> StreamType:
+    def read(self, path, **kwargs) -> SpoolType:
         """
         Load data from a path.
 
         *kwargs should include support for selecting expected dimensions. For
-        example, distance=(100, 200) would only read data which distance from
+        example, distance=(100, 200) would only read data with distance from
         100 to 200.
         """
         msg = f"FileFormatter: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, path) -> List[PatchSummaryDict]:
+    def scan(self, path) -> List[PatchFileSummary]:
         """
         Returns a list of summary info for patches contained in file.
         """
         # default scan method reads in the file and returns required attributes
+        # however, this can be very slow, so each parser should implement scan
+        # when possible.
         try:
-            stream = self.read(path)
+            spool = self.read(path)
         except NotImplementedError:
-            msg = f"FileFormatter: {self.name} has no scan method"
+            msg = f"FileFormatter: {self.name} has no scan or read method"
             raise NotImplementedError(msg)
-        expected_keys = sorted(list(PatchSummaryDict.__annotations__))
-        out = [{x: pa.attrs[x] for x in expected_keys} for pa in stream]
+        out = []
+        for pa in spool:
+            info = dict(pa.attrs)
+            info["file_format"] = self.name
+            info["path"] = str(path)
+            out.append(PatchFileSummary.parse_obj(info))
         return out
 
-    def write(self, stream: StreamType, path: Union[str, Path]):
+    def write(self, spool: SpoolType, path: Union[str, Path]):
         """
-        Write the file to disk
+        Write the spool to disk
         """
         msg = f"FileFormatter: {self.name} has no write method"
         raise NotImplementedError(msg)
@@ -85,12 +92,12 @@ class FiberIO(ABC):
 
 def read(
     path: Union[str, Path],
-    format: Optional[str] = None,
+    file_format: Optional[str] = None,
     version: Optional[str] = None,
     time: Optional[tuple[Optional[timeable_types], Optional[timeable_types]]] = None,
     distance: Optional[tuple[Optional[float], Optional[float]]] = None,
     **kwargs,
-) -> StreamType:
+) -> SpoolType:
     """
     Read a fiber file.
 
@@ -98,7 +105,7 @@ def read(
     ----------
     path
         A path to the file to read.
-    format
+    file_format
         A string indicating the file format. If not provided dascore will
         try to estimate the format.
     version
@@ -110,17 +117,17 @@ def read(
     *kwargs
         All kwargs are passed to the format-specific read functions.
     """
-    if format is None:
-        format = get_format(path)[0].upper()
-    formatter = _IO_INSTANCES[format.upper()]
+    if not file_format:
+        file_format = get_format(path)[0].upper()
+    formatter = _IO_INSTANCES[file_format.upper()]
     return formatter.read(path, version=version, time=time, distance=distance, **kwargs)
 
 
-@compose_docstring(fields=list(PatchSummaryDict.__annotations__))
-def scan_file(
+@compose_docstring(fields=list(PatchFileSummary.__annotations__))
+def scan(
     path: Union[Path, str],
-    format: Optional[str] = None,
-) -> List[PatchSummaryDict]:
+    file_format: Optional[str] = None,
+) -> List[PatchFileSummary]:
     """
     Scan a file, return the summary dictionary.
 
@@ -128,7 +135,7 @@ def scan_file(
     ----------
     path
         The path the to file to scan
-    format
+    file_format
         Format of the file. If not provided DASCore will try to determine it.
 
     Notes
@@ -137,9 +144,10 @@ def scan_file(
         {fields}
     """
     # dispatch to file format handlers
-    if format is None:
-        format = get_format(path)[0]
-    return _IO_INSTANCES[format].scan(path)
+    if file_format is None:
+        file_format = get_format(path)[0]
+    out = _IO_INSTANCES[file_format].scan(path)
+    return out
 
 
 def get_format(path: Union[str, Path]) -> (str, str):
@@ -174,7 +182,7 @@ def get_format(path: Union[str, Path]) -> (str, str):
         raise UnknownFiberFormat(msg)
 
 
-def write(patch_or_stream, path: Union[str, Path], format: str, **kwargs):
+def write(patch_or_spool, path: Union[str, Path], file_format: str, **kwargs):
     """
     Write a Patch or Stream to disk.
 
@@ -182,7 +190,7 @@ def write(patch_or_stream, path: Union[str, Path], format: str, **kwargs):
     ----------
     path
         The path to the file.
-    format
+    file_format
         The string indicating the format to write.
 
     Raises
@@ -190,7 +198,7 @@ def write(patch_or_stream, path: Union[str, Path], format: str, **kwargs):
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
 
     """
-    formatter = _IO_INSTANCES[format.upper()]
-    if not isinstance(patch_or_stream, dascore.Stream):
-        patch_or_stream = dascore.Stream([patch_or_stream])
-    formatter.write(patch_or_stream, path, **kwargs)
+    formatter = _IO_INSTANCES[file_format.upper()]
+    if not isinstance(patch_or_spool, dascore.MemorySpool):
+        patch_or_spool = dascore.MemorySpool([patch_or_spool])
+    formatter.write(patch_or_spool, path, **kwargs)

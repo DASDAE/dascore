@@ -134,10 +134,6 @@ class Patch:
         return self.__class__(self.data, coords=coords, attrs=attrs)
 
     @property
-    def iloc(self):
-        """Return an index locator for selecting based on index, not values."""
-
-    @property
     def data(self):
         """Return the data array."""
         return self._data_array.data
@@ -172,11 +168,6 @@ class Patch:
     resample = dascore.proc.resample
     iresample = dascore.proc.iresample
     interpolate = dascore.proc.interpolate
-
-    # --- io funcs
-
-    save_pickle = dascore.utils.save_pickle
-    load_pickle = dascore.utils.load_pickle
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references

@@ -1,11 +1,21 @@
 """
 Misc. tests for misfit utilities.
 """
+import os
+import time
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from dascore.exceptions import ParameterError
-from dascore.utils.misc import MethodNameSpace, check_evenly_sampled, get_slice
+from dascore.utils.misc import (
+    MethodNameSpace,
+    check_evenly_sampled,
+    get_slice,
+    iter_files,
+    iterate,
+)
 
 
 class ParentClass:
@@ -133,3 +143,113 @@ class TestCheckEvenlySampled:
         for _, array in arrays.items():
             with pytest.raises(ParameterError):
                 check_evenly_sampled(array)
+
+
+class TestIterFiles:
+    """Tests for iterating directories of files."""
+
+    sub = {"D": {"C": ".mseed"}, "F": ".json", "G": {"H": ".txt"}}
+    file_paths = {"A": ".txt", "B": sub}
+
+    # --- helper functions
+    def setup_test_directory(self, some_dict: dict, path: Path):
+        """Build the test directory."""
+        for path in self.get_file_paths(some_dict, path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w") as fi:
+                fi.write("useful text")
+
+    def get_file_paths(self, some_dict, path):
+        """Return expected paths to files."""
+        for i, v in some_dict.items():
+            if isinstance(v, dict):
+                yield from self.get_file_paths(v, path / i)
+            else:
+                yield path / (i + v)
+
+    # --- fixtures
+    @pytest.fixture(scope="class")
+    def simple_dir(self, tmp_path_factory):
+        """Return a simple directory for iterating."""
+        path = Path(tmp_path_factory.mktemp("iterfiles"))
+        self.setup_test_directory(self.file_paths, path)
+        return path
+
+    @pytest.fixture(scope="class")
+    def dir_with_hidden_dir(self, tmp_path_factory):
+        """Create a directory with a hidden directory inside."""
+        path = Path(tmp_path_factory.mktemp("iterfiles_hidden"))
+        struct = dict(self.file_paths)
+        # add hidden directory with files in it.
+        struct[".Hidden"] = {"Another": {"hidden_by_parent": ".txt"}}
+        self.setup_test_directory(struct, path)
+        return path
+
+    def test_basic(self, simple_dir):
+        """test basic usage of iterfiles."""
+        files = set(self.get_file_paths(self.file_paths, simple_dir))
+        out = set((Path(x) for x in iter_files(simple_dir)))
+        assert files == out
+
+    def test_one_subdir(self, simple_dir):
+        """Test with one sub directory."""
+        subdirs = simple_dir / "B" / "D"
+        out = set(iter_files(subdirs))
+        assert len(out) == 1
+
+    def test_multiple_subdirs(self, simple_dir):
+        """Test with multiple sub directories."""
+        path1 = simple_dir / "B" / "D"
+        path2 = simple_dir / "B" / "G"
+        out = {Path(x) for x in iter_files([path1, path2])}
+        files = self.get_file_paths(self.file_paths, simple_dir)
+        expected = {
+            x
+            for x in files
+            if str(x).startswith(str(path1)) or str(x).startswith(str(path2))
+        }
+        assert out == expected
+
+    def test_extention(self, simple_dir):
+        """Test filtering based on extention."""
+        out = set(iter_files(simple_dir, ext=".txt"))
+        for val in out:
+            assert val.endswith(".txt")
+
+    def test_mtime(self, simple_dir):
+        """Test filtering based on modified time"""
+        files = list(self.get_file_paths(self.file_paths, simple_dir))
+        # set the first file mtime in future
+        now = time.time()
+        first_file = files[0]
+        os.utime(first_file, (now + 10, now + 10))
+        # get output make sure it only returned first file
+        out = list(iter_files(simple_dir, mtime=now + 5))
+        assert len(out) == 1
+        assert Path(out[0]) == first_file
+
+    def test_skips_files_in_hidden_directory(self, dir_with_hidden_dir):
+        """Hidden directory files should be skipped."""
+        out1 = list(iter_files(dir_with_hidden_dir))
+        has_hidden_by_parent = ["hidden_by_parent" in x for x in out1]
+        assert not any(has_hidden_by_parent)
+        # But if skip_hidden is False it should be there
+        out2 = list(iter_files(dir_with_hidden_dir, skip_hidden=False))
+        has_hidden_by_parent = ["hidden_by_parent" in x for x in out2]
+        assert sum(has_hidden_by_parent) == 1
+
+
+class TestIterate:
+    """Test case for iterate."""
+
+    def test_none(self):
+        """None should return an empty tuple"""
+        assert iterate(None) == tuple()
+
+    def test_object(self):
+        """A single object should be returned in a tuple"""
+        assert iterate(1) == (1,)
+
+    def test_str(self):
+        """A single string object should be returned as a tuple"""
+        assert iterate("hey") == ("hey",)

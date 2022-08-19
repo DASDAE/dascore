@@ -1,14 +1,13 @@
 """
 Test patch utilities.
 """
-
 import numpy as np
 import pandas as pd
 import pytest
 
 import dascore
 from dascore.exceptions import PatchAttributeError, PatchDimError
-from dascore.utils.patch import _AttrsCoordsMixer, merge_patches
+from dascore.utils.patch import _AttrsCoordsMixer
 
 
 @dascore.patch_function(required_dims=("time", "distance"))
@@ -128,7 +127,7 @@ class TestAttrsCoordsMixer:
         return _AttrsCoordsMixer(attrs, coords, random_patch.dims)
 
     def test_original_attrs_unchanged(self, mixer, attrs):
-        """ensure the original attrs dont change."""
+        """ensure the original attrs don't change."""
         t1 = attrs["time_min"]
         td = np.timedelta64(1, "s")
         mixer.update_attrs(time_min=t1 + td)
@@ -137,7 +136,7 @@ class TestAttrsCoordsMixer:
         assert attrs["time_min"] + td == new_attr["time_min"]
 
     def test_original_coords_unchanged(self, mixer, coords, attrs):
-        """ensure the original coords dont change."""
+        """ensure the original coords don't change."""
         t1 = attrs["time_min"]
         td = np.timedelta64(10, "s")
         mixer.update_attrs(time_min=t1 + td)
@@ -146,7 +145,7 @@ class TestAttrsCoordsMixer:
         np.all(np.equal(coords["time"] + td, new_coords["time"]))
 
     def test_coords_unchanged(self, coords, attrs, random_patch):
-        """ensure the original coords dont change."""
+        """ensure the original coords don't change."""
         # this was added to track down some mutation issues
         assert coords["time"].min() == attrs["time_min"]
 
@@ -162,8 +161,7 @@ class TestAttrsCoordsMixer:
         assert np.min(time) == t_new
 
     def test_endtime_updates_starttime(self, mixer, attrs):
-        """Ensure the start time gets updated whwn setting time_max."""
-
+        """Ensure the start time gets updated when setting time_max."""
         tdist1 = attrs["time_max"] - attrs["time_min"]
         t2 = attrs["time_max"]
         t_new = t2 - np.timedelta64(10_000_000, "s")
@@ -211,75 +209,28 @@ class TestAttrsCoordsMixer:
         new_attrs, new_coords = mixer()
         assert not np.any(pd.isnull(new_coords["time"]))
 
+    def test_update_startttime_string(self, mixer, coords, attrs):
+        """check start/end time relationship when starttime is a string."""
+        new_start = np.datetime64("2000-01-01")
+        duration = attrs["time_max"] - attrs["time_min"]
+        mixer.update_attrs(time_min=str(new_start))
+        new_attrs, _ = mixer()
+        assert new_attrs["time_min"] == new_start
+        assert new_attrs["time_max"] == new_start + duration
 
-class TestMergePatches:
-    """Tests for merging patches together."""
-
-    @pytest.fixture()
-    def desperate_stream_no_overlap(self, random_patch) -> dascore.Stream:
-        """
-        Create streams that do not overlap at all
-        """
-        pa1 = random_patch
-        t2 = random_patch.attrs["time_max"]
-        d_time = random_patch.attrs["d_time"] * 1_000
-        pa2 = random_patch.update_attrs(time_min=t2 + d_time)
-        t3 = pa2.attrs["time_max"]
-        pa3 = pa2.update_attrs(time_min=t3 + d_time)
-        return dascore.Stream([pa2, pa1, pa3])
-
-    @pytest.fixture()
-    def stream_complete_overlap(self, random_patch) -> dascore.Stream:
-        """
-        Create a stream which overlaps each other completely.
-        """
-        return dascore.Stream([random_patch, random_patch])
-
-    @pytest.fixture()
-    def stream_slight_gap(self, random_patch) -> dascore.Stream:
-        """
-        Create a stream which has a 1.1 * dt gap.
-        """
-        pa1 = random_patch
-        t2 = random_patch.attrs["time_max"]
-        dt = random_patch.attrs["d_time"]
-        pa2 = random_patch.update_attrs(time_min=t2 + dt * 1.1)
-        t3 = pa2.attrs["time_max"]
-        pa3 = pa2.update_attrs(time_min=t3 + dt * 1.1)
-        return dascore.Stream([pa2, pa1, pa3])
-
-    def test_merge_adjacent(self, adjacent_stream_no_overlap):
-        """Test simple merge of patches."""
-        len_1 = len(adjacent_stream_no_overlap)
-        out_stream = merge_patches(adjacent_stream_no_overlap)
-        assert len(out_stream) < len_1
-        assert len(out_stream) == 1
-        out_patch = out_stream[0]
-        # make sure coords are consistent with attrs
-        assert out_patch.attrs["time_max"] == out_patch.coords["time"].max()
-        assert out_patch.attrs["time_min"] == out_patch.coords["time"].min()
-        # ensure the spacing is still uniform
-        time = out_patch.coords["time"]
-        spacing = time[1:] - time[:-1]
-        unique_spacing = np.unique(spacing)
-        assert len(unique_spacing) == 1
-        assert unique_spacing[0] == out_patch.attrs["d_time"]
-
-    def test_no_overlap(self, desperate_stream_no_overlap):
-        """streams with no overlap should not be merged."""
-        len_1 = len(desperate_stream_no_overlap)
-        out = merge_patches(desperate_stream_no_overlap)
-        assert len_1 == len(out)
-
-    def test_complete_overlap(self, stream_complete_overlap, random_patch):
-        """Ensure complete overlap results in dropped data for overlap section."""
-        out = merge_patches(stream_complete_overlap)
-        assert len(out) == 1
-        pa = out[0]
-        data = pa.data
-        assert data.shape == random_patch.data.shape
-
-    def test_slight_gap(self, stream_slight_gap):
-        """Ensure gaps slightly more than 1 time interval still work."""
-        out = stream_slight_gap.merge()
-        assert len(out) == 1
+    def test_update_time_delta(self, mixer, coords, attrs):
+        """Updating the time delta should also update endtimes."""
+        one_sec = np.timedelta64(1, "s")
+        td_old = attrs["d_time"]
+        td_new = td_old * 2
+        mixer.update_attrs(d_time=td_new)
+        new_attrs, new_coords = mixer()
+        assert new_attrs["d_time"] == td_new
+        # first ensure new time coords are approximately new time delta
+        new_time = new_coords["time"].values
+        tdiff = (new_time[1:] - new_time[:-1]) / one_sec
+        assert np.allclose(tdiff, td_new / one_sec)
+        # also ensure the endtime has increased proportionately.
+        old_duration = attrs["time_max"] - attrs["time_min"]
+        new_duration = new_attrs["time_max"] - new_attrs["time_min"]
+        assert np.isclose(old_duration / new_duration, td_old / td_new)

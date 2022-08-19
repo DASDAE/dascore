@@ -2,7 +2,8 @@
 Misc Utilities.
 """
 import functools
-from typing import Optional, Union
+import os
+from typing import Iterable, Optional, Union
 
 import numpy as np
 import numpy.typing as nt
@@ -183,3 +184,88 @@ def check_evenly_sampled(array: nt.ArrayLike):
             f"have the following unique differences: {unique_diffs}"
         )
         raise ParameterError(msg)
+
+
+def iter_files(
+    paths: Union[str, Iterable[str]],
+    ext: Optional[str] = None,
+    mtime: Optional[float] = None,
+    skip_hidden: bool = True,
+) -> Iterable[str]:
+    """
+    Use os.scan dir to iter files, optionally only for those with given
+    extension (ext) or modified times after mtime
+
+    Parameters
+    ----------
+    paths
+        The path to the base directory to traverse. Can also use a collection
+        of paths.
+    ext : str or None
+        The extensions to map.
+    mtime : int or float
+        Time stamp indicating the minimum mtime.
+    skip_hidden : bool
+        If True skip files or folders (they begin with a '.')
+
+    Yields
+    ------
+    Paths, as strings, meeting requirements.
+    """
+    try:  # a single path was passed
+        for entry in os.scandir(paths):
+            if entry.is_file() and (ext is None or entry.name.endswith(ext)):
+                if mtime is None or entry.stat().st_mtime >= mtime:
+                    if entry.name[0] != "." or not skip_hidden:
+                        yield entry.path
+            elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
+                yield from iter_files(
+                    entry.path, ext=ext, mtime=mtime, skip_hidden=skip_hidden
+                )
+    except TypeError:  # multiple paths were passed
+        for path in paths:
+            yield from iter_files(path, ext, mtime, skip_hidden)
+    except NotADirectoryError:  # a file path was passed, just return it
+        yield paths
+
+
+def iterate(obj):
+    """
+    Return an iterable from any object.
+
+    If a string, do not iterate characters, return str in tuple.
+
+    *This is how iteration *should* work in python.
+    """
+    if obj is None:
+        return ()
+    if isinstance(obj, str):
+        return (obj,)
+    return obj if isinstance(obj, Iterable) else (obj,)
+
+
+class CacheDescriptor:
+    """
+    A descriptor for storing information in an instance-level cache (mapping).
+    """
+
+    def __init__(self, cache_name, func_name, args=None, kwargs=None):
+        self._cache_name = cache_name
+        self._func_name = func_name
+        self._args = () if args is None else args
+        self._kwargs = {} if kwargs is None else kwargs
+
+    def __set_name__(self, owner, name):
+        self._name = name
+
+    def __get__(self, instance, owner):
+        cache = getattr(instance, self._cache_name)
+        if self._name not in cache:
+            func = getattr(instance, self._func_name)
+            out = func(*self._args, **self._kwargs)
+            cache[self._name] = out
+        return cache[self._name]
+
+    def __set__(self, instance, value):
+        cache = getattr(instance, self._cache_name)
+        cache[self._name] = value

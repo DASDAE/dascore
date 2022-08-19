@@ -4,6 +4,7 @@ channels:
   - defaults
 dependencies:
   - pytest
+  - pydantic>1.9.0
   - pip
   - pandas
   - pooch>=1.2

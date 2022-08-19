@@ -12,4 +12,4 @@ A python library for working with distributed fiber optic sensing data.
 
 [Documentation](https://dasdae.github.io/dascore/)
 
-> **WARNING**: dascore is very new and not yet ready for public (non-development) use,
+> **WARNING**: dascore is very new and not yet ready for public (non-development) use.

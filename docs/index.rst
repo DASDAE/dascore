@@ -7,10 +7,13 @@ A python library for working with distributed fiber optic sensing data.
    :maxdepth: 1
 
 
-   Introduction<markdown/executable/intro.md>
+   Quickstart<markdown/executable/quickstart.md>
 
 
    Installation<markdown/installation.md>
+
+
+   Working with Files<markdown/executable/working_with_files.md>
 
 
    Code<https://github.com/dasdae/dascore>

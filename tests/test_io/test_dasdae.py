@@ -78,7 +78,7 @@ class TestReadDasdae:
         """Ensure an emtpy patch can be deserialize."""
         stream = dc.read(written_dasscore_empty)
         assert len(stream) == 1
-        assert stream[0].equals(dc.Patch())
+        stream[0].equals(dc.Patch())
 
     def test_datetimes(self, tmp_path_factory, random_patch):
         """Ensure the datetimes in the attrs come back as datetimes"""
@@ -95,3 +95,15 @@ class TestReadDasdae:
         # test attrs
         for name in ("time_min", "time_max"):
             assert isinstance(patch_2.attrs[name], np.datetime64)
+
+
+class TestScanDasDae:
+    """Tests for scanning the dasdae format."""
+
+    def test_scan_returns_info(self, written_dascore_random, random_patch):
+        """Ensure scanning returns expected values."""
+        info1 = dc.scan(written_dascore_random)[0].dict()
+        info2 = dict(random_patch.attrs)
+        common_keys = set(info1) & set(info2)
+        for key in common_keys:
+            assert info1[key] == info2[key]

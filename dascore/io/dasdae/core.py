@@ -7,7 +7,7 @@ from typing import Union
 import tables
 
 import dascore as dc
-from dascore.constants import StreamType
+from dascore.constants import SpoolType
 from dascore.io.core import FiberIO
 from dascore.io.dasdae.utils import _read_patch, _save_patch, _write_meta
 
@@ -17,7 +17,7 @@ class DASDAEIO(FiberIO):
     Provides IO support for the DASDAE format.
 
     DASDAE format is loosely based on the Adaptable Seismic Data Format (ASDF)
-    which uses hdf5. The hdf5 structure looks like the following:
+    which uses hdf5. The hdf5 structure is the following:
 
     /root
     /root.attrs
@@ -37,7 +37,7 @@ class DASDAEIO(FiberIO):
     preferred_extensions = ("h5", "hdf5")
 
     def write(self, patch, path, **kwargs):
-        """Read a Patch/Stream from disk."""
+        """Read a Patch/Spool from disk."""
         with tables.open_file(path, mode="a") as h5:
             _write_meta(h5)
             # get an iterable of patches and save them
@@ -51,13 +51,13 @@ class DASDAEIO(FiberIO):
         with tables.open_file(path, mode="r") as fi:
             is_dasdae, version = False, ""  # NOQA
             with contextlib.suppress(KeyError):
-                is_dasdue = fi.root._v_attrs["__format__"] == "DASDAE"
+                is_dasdae = fi.root._v_attrs["__format__"] == "DASDAE"
                 dasdae_version = fi.root._v_attrs["__DASDAE_version__"]
-            if is_dasdue:
+            if is_dasdae:
                 return (self.name, dasdae_version)
             return False
 
-    def read(self, path, **kwargs) -> StreamType:
+    def read(self, path, **kwargs) -> SpoolType:
         """
         Read a dascore file.
         """
@@ -66,7 +66,7 @@ class DASDAEIO(FiberIO):
             try:
                 waveform_group = fi.root["/waveforms"]
             except KeyError:
-                return dc.Stream([])
+                return dc.MemorySpool([])
             for patch_group in waveform_group:
                 patches.append(_read_patch(patch_group, **kwargs))
-        return dc.Stream(patches)
+        return dc.MemorySpool(patches)

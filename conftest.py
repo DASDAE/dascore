@@ -1,12 +1,16 @@
 """
 pytest configuration for dascore
 """
+import shutil
 from pathlib import Path
+from uuid import uuid1
 
 import pytest
 
 import dascore
-from dascore.core import Patch, Stream
+import dascore.examples as ex
+from dascore.clients.filespool import FileSpool
+from dascore.core import MemorySpool, Patch
 from dascore.io.core import read
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
@@ -15,6 +19,13 @@ test_data_path = Path(__file__).parent.absolute() / "test_data"
 
 STREAM_FIXTURES = []
 PATCH_FIXTURES = []
+
+
+def _save_patch(patch, base_path, file_format="dasdae"):
+    """Save the patch based on start_time network, station, tag."""
+    path = base_path / (f"{uuid1()}.hdf5")
+    patch.io.write(path, file_format=file_format)
+    return path
 
 
 # --- Pytest configuration
@@ -60,6 +71,7 @@ def pytest_collection_modifyitems(config, items):
 
 
 # --- Test fixtures
+FILE_SPOOLS = []
 
 
 def pytest_sessionstart(session):
@@ -81,9 +93,9 @@ def terra15_das_example_path():
 
 @pytest.fixture()
 @register_func(STREAM_FIXTURES)
-def terra15_das_stream(terra15_das_example_path) -> Stream:
+def terra15_das_stream(terra15_das_example_path) -> MemorySpool:
     """Return the stream of Terra15 Das Array"""
-    return read(terra15_das_example_path, format="terra15")
+    return read(terra15_das_example_path, file_format="terra15")
 
 
 @pytest.fixture(scope="session")
@@ -117,11 +129,11 @@ def random_patch() -> Patch:
 
 @pytest.fixture(scope="session")
 @register_func(STREAM_FIXTURES)
-def random_stream() -> Stream:
+def random_spool() -> MemorySpool:
     """Init a random array."""
-    from dascore.examples import get_example_stream
+    from dascore.examples import get_example_spool
 
-    return get_example_stream("random_das")
+    return get_example_spool("random_das")
 
 
 @pytest.fixture(scope="session", params=PATCH_FIXTURES)
@@ -139,8 +151,8 @@ def dummy_text_file(tmp_path_factory):
     return path
 
 
-@pytest.fixture()
-def adjacent_stream_no_overlap(random_patch) -> dascore.Stream:
+@pytest.fixture(scope="class")
+def adjacent_spool_no_overlap(random_patch) -> dascore.MemorySpool:
     """
     Create a stream with several patches within one time sample but not
     overlapping.
@@ -157,5 +169,70 @@ def adjacent_stream_no_overlap(random_patch) -> dascore.Stream:
     expected_time = pa3.attrs["time_max"] - pa1.attrs["time_min"]
     actual_time = pa3.coords["time"].max() - pa1.coords["time"].min()
     assert expected_time == actual_time
+    return dascore.MemorySpool([pa2, pa1, pa3])
 
-    return dascore.Stream([pa2, pa1, pa3])
+
+@pytest.fixture(scope="class")
+def one_file_dir(tmp_path_factory, random_patch):
+    """Create a directory with a single DAS file."""
+    out = Path(tmp_path_factory.mktemp("one_file_file_spool"))
+    spool = dascore.MemorySpool([random_patch])
+    return ex.spool_to_directory(spool, path=out)
+
+
+@pytest.fixture(scope="class")
+@register_func(FILE_SPOOLS)
+def one_file_file_spool(one_file_dir):
+    """Create a directory with a single DAS file."""
+    return FileSpool(one_file_dir).update()
+
+
+@pytest.fixture(scope="class")
+def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch):
+    """Create a directory of DAS files for testing."""
+    # first copy in a terra15 file
+    dir_path = tmp_path_factory.mktemp("bank_basic")
+    shutil.copy(terra15_das_example_path, dir_path)
+    # save a random patch
+    random_patch.io.write(dir_path / "random.hdf5", "dasdae")
+    return dir_path
+
+
+@pytest.fixture(scope="class")
+def diverse_spool():
+    """Create a spool with a diverse set of patches for testing."""
+    return ex._diverse_spool()
+
+
+@pytest.fixture(scope="class")
+def diverse_spool_directory(diverse_spool):
+    """Save the diverse spool contents to a directory."""
+    out = ex.spool_to_directory(diverse_spool)
+    yield out
+    if out.is_dir():
+        shutil.rmtree(out)
+
+
+@pytest.fixture(scope="class")
+def diverse_file_spool(diverse_spool_directory):
+    """Save the diverse spool contents to a directory."""
+    out = dascore.get_spool(diverse_spool_directory).update()
+    return out
+
+
+@pytest.fixture(scope="class")
+def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
+    """Create a directory of diverse DAS files for testing."""
+    # create a directory with several patch files in it.
+    dir_path = tmp_path_factory.mktemp("data")
+    for patch in adjacent_spool_no_overlap:
+        _save_patch(patch, dir_path)
+    return dir_path
+
+
+@pytest.fixture(scope="class")
+@register_func(FILE_SPOOLS)
+def basic_file_spool(two_patch_directory):
+    """Return a DAS bank on basic_bank_directory."""
+    out = FileSpool(two_patch_directory)
+    return out.update()

@@ -7,8 +7,9 @@ from typing import List, Optional, Union
 import numpy as np
 import tables as tb
 
-from dascore.constants import PatchSummaryDict, timeable_types
-from dascore.core import Patch, Stream
+from dascore.constants import timeable_types
+from dascore.core import MemorySpool, Patch
+from dascore.core.schema import PatchFileSummary
 from dascore.io.core import FiberIO
 from dascore.utils.time import to_datetime64
 
@@ -46,7 +47,7 @@ class Terra15Formatter(FiberIO):
         except (tb.HDF5ExtError, OSError, IndexError, KeyError, tb.NoSuchNodeError):
             return False
 
-    def scan(self, path: Union[str, Path]) -> List[PatchSummaryDict]:
+    def scan(self, path: Union[str, Path]) -> List[PatchFileSummary]:
         """
         Scan a terra15 v2 file, return summary information about the file's contents.
         """
@@ -67,7 +68,9 @@ class Terra15Formatter(FiberIO):
                 tmin, tmax = np.min(time_filtered), np.max(time_filtered)
             out["time_min"] = to_datetime64(tmin)
             out["time_max"] = to_datetime64(tmax)
-            return [out]
+            out["path"] = path
+            out["format"] = self.name
+            return [PatchFileSummary.parse_obj(out)]
 
     def read(
         self,
@@ -75,7 +78,7 @@ class Terra15Formatter(FiberIO):
         time: Optional[tuple[timeable_types, timeable_types]] = None,
         distance: Optional[tuple[float, float]] = None,
         **kwargs
-    ) -> Stream:
+    ) -> MemorySpool:
         """
         Read a terra15 file, return a DataArray.
 
@@ -103,4 +106,4 @@ class Terra15Formatter(FiberIO):
             attrs["distance_max"] = dar.max()
             # get slices of data and read
             patch = Patch(data=data, coords=_coords, attrs=attrs)
-            return Stream([patch])
+            return MemorySpool([patch])

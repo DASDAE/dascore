@@ -9,7 +9,7 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 
-from dascore.constants import timeable_types
+from dascore.constants import NUMPY_TIME_UNIT_MAPPPING, timeable_types
 from dascore.exceptions import TimeError
 
 
@@ -42,22 +42,28 @@ def array_to_datetime64(array: np.array) -> np.datetime64:
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
     array = np.array(array)
+    nans = pd.isnull(array)
     # dealing with an array of datetime64 or empty array
     if np.issubdtype(array.dtype, np.datetime64) or len(array) == 0:
         out = array
     # just check first element to determine type.  # TODO replace with dtype check
     elif np.isreal(array[0]):  # dealing with numerical data
-        # separate seconds and factions, assume ns precision
-        int_sec = array.astype(np.int64).astype("datetime64[s]")
-        frac_sec = array % 1.0
-        ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
-        out = int_sec.astype("datetime64[ns]") + ns
-
+        array[nans] = 0  # temporary replace NaNs
+        try:
+            # separate seconds and factions, assume ns precision
+            int_sec = array.astype(np.int64).astype("datetime64[s]")
+        except TypeError:
+            out = np.array([to_datetime64(x) for x in array])
+        else:
+            frac_sec = array % 1.0
+            ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
+            out = int_sec.astype("datetime64[ns]") + ns
+        # fill NaN Back in
+        out[nans] = np.datetime64("NaT")
     elif isinstance(array[0], str):
         out = array.astype("datetime64[ns]")
-    else:  # already
-        msg = f"{array.dtype} not supported"
-        raise NotImplementedError(msg)
+    else:  # No fast path, just iterate array elements
+        return np.array([to_datetime64(x) for x in array])
 
     return out
 
@@ -105,21 +111,51 @@ def array_to_timedelta64(array: np.array) -> np.datetime64:
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
     array = np.array(array)
+    nans = pd.isnull(array)
+    array[nans] = 0
     if np.issubdtype(array.dtype, np.timedelta64) or len(array) == 0:
         return array.astype("timedelta64[ns]")
     assert np.isreal(array[0])
     # separate seconds and factions, convert fractions to ns precision
+    # sub in array
     seconds = array.astype(np.int64).astype("timedelta64[s]")
     frac_sec = array % 1.0
     ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
     out = seconds + ns
+    out[nans] = np.timedelta64("NaT")
     return out
+
+
+@to_timedelta64.register(pd.Series)
+def series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
+    """
+    Convert a series to a series of timedelta64.
+    """
+    return pd.to_timedelta(ser)
 
 
 @to_timedelta64.register(np.timedelta64)
 def pass_time_delta(time_delta):
     """simply return the time delta."""
     return to_timedelta64(time_delta / np.timedelta64(1, "s"))
+
+
+@to_timedelta64.register(pd.Timedelta)
+def unpack_pandas_time_delta(time_delta: pd.Timedelta):
+    """simply return the time delta."""
+    return time_delta.to_numpy()
+
+
+@to_timedelta64.register(str)
+def time_delta_from_str(time_delta_str: str):
+    """simply return the time delta."""
+    split = time_delta_str.split(" ")
+    assert len(split) == 2
+    val, units = split
+    if units[-1] == "s":
+        units = units[:-1]
+    new_unit = NUMPY_TIME_UNIT_MAPPPING[units]
+    return np.timedelta64(int(val), new_unit)
 
 
 def get_select_time(
@@ -213,15 +249,22 @@ def _return_number_null(null):
 
 
 @to_number.register(np.timedelta64)
-def _pandas_timestamp_to_num(time_delta: np.timedelta64):
+def _time_detal_to_number(time_delta: np.timedelta64):
     return to_number([to_timedelta64(time_delta)])[0]
+
+
+@to_number.register(pd.Series)
+def _pandas_timestamp_to_num(ser: pd.Series):
+    return ser.astype(np.int64)
 
 
 def is_datetime64(obj) -> bool:
     """Return True if object is a timedelta object or array of such."""
     if isinstance(obj, np.datetime64):
         return True
-    if isinstance(obj, (np.ndarray, list, tuple)):
+    if isinstance(obj, (np.ndarray, list, tuple, pd.Series)):
         if np.issubdtype(np.array(obj).dtype, np.datetime64):
             return True
+    if isinstance(obj, pd.Timestamp):
+        return True
     return False

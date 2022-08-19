@@ -7,6 +7,7 @@ import tables as tb
 
 import dascore
 from dascore.constants import REQUIRED_DAS_ATTRS
+from dascore.core.schema import PatchFileSummary
 from dascore.io.terra15.core import Terra15Formatter
 
 
@@ -49,6 +50,14 @@ class TestReadTerra15:
         assert attrs["distance_min"] == coords["distance"].min() == d1
         assert attrs["distance_max"] == coords["distance"].max() == d2
 
+    def test_no_arrays_in_arrays(self, terra15_das_patch):
+        """
+        Ensure that the attributes are not arrays.
+        Originally, attrs like time_min can be arrays with empty shapes.
+        """
+        for key, val in terra15_das_patch.attrs.items():
+            assert not isinstance(val, np.ndarray)
+
 
 class TestIsTerra15:
     """Tests for function to determine if a file is a terra15 file."""
@@ -90,7 +99,7 @@ class TestScanTerra15:
         out = parser.scan(terra15_das_example_path)
         assert isinstance(out, list)
         assert len(out) == 1
-        assert isinstance(out[0], dict)
+        assert isinstance(out[0], PatchFileSummary)
 
 
 class TestTerra15Unfinished:
