@@ -7,7 +7,7 @@ please be sure to read and understand our [code of conduct](code_of_conduct.md).
 
 [Testing](testing.md)
 
-[Adding Support for a File Format](new_format.md)
+[Adding Support for a New File Format](new_format.md)
 
 
 ## General Guidelines
