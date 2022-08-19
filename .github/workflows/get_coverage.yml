@@ -1,5 +1,5 @@
 # Calculates new coverage for the base branch and uploads to codecov
-name: on_master_commit
+name: Calc and Upload Coverage
 on:
   push:
     branches:

@@ -1,0 +1,30 @@
+# Upload to PyPI when a new release tag is made.
+name: Publish package
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: setup conda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          miniconda-version: 'latest'
+          python-version: 3.9
+          channels: conda-forge
+
+      - name: create dists
+        shell: bash -l {0}
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: publish package
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

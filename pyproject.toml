@@ -1,8 +1,88 @@
-              [build-system]
-# Minimum requirements for the build system to execute.
-# see PEP518: https://www.python.org/dev/peps/pep-0518/
-requires = [
-    'numpy>=1.6.1',
-    'setuptools'
-    ]
+
+# --- Build system configuration
+
+[build-system]
+requires = [ "setuptools>=41", "setuptools-scm", ]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools-git-versioning]
+enabled = true
+
+[tool.setuptools]
+include-package-data = true
+packages = ["dascore"]
+
+# --- Project Metadata
+
+[project]
+name = "dascore"
+dynamic = ["version"]  # version is fetched by setuptools-git-versioning
+
+authors = [
+  { name="Derrick Chambers", email="chambers.ja.derrick@gmail.com" },
+]
+
+description = "A python library distributed fiber optic sensing"
+readme = "README.md"
+license = { file="LICENSE" }
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Scientific/Engineering",
+]
+
+keywords = ["geophysics", "distributed-acoustic-sensing"]
+
+# --- Dependencies
+
+dependencies = [
+    "findiff",
+    "matplotlib",
+    "pandas",
+    "pooch>=1.2",
+    "setuptools",
+    "scipy",
+    "tables",
+    "xarray",
+    "pydantic>=1.9.0",
+    "rich",
+]
+
+[project.optional-dependencies]
+docs = [
+    "sphinx>=1.5.1",
+    "numpydoc",
+    "sphinx_autodoc_typehints",
+    "typer",
+    "pandoc",
+    "myst-parser",
+    "myst-nb",
+]
+test = [
+    "pytest",
+    "coverage",
+    "pytest-cov",
+    "coveralls",
+    "twine",
+    "pre-commit",
+    "pytest-codeblocks",
+]
+dev = ["dascore[test]", "dascore[docs]"]
+
+# --- URLs for project
+
+[project.urls]
+"Homepage" = "https://github.com/dasdae/dascore"
+"Documentation" = "https://dasdae.github.io/dascore/"
+"Bug Tracker" = "https://github.com/DASDAE/dascore/issues"
+
+# --- Entry Points
+
+[project.entry-points."dascore.plugin.fiber_io"]
+TERRA15 = "dascore.io.terra15.core:Terra15Formatter"
+PICKLE = "dascore.io.pickle.core:PickleIO"
+WAV = "dascore.io.wav.core:WavIO"
+DASDAE = "dascore.io.dasdae.core:DASDAEIO"
