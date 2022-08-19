@@ -6,7 +6,7 @@ format called `jingle` which conventionally uses a file extension of `jgl`.
 ## Adding a New IO Module
 
 First, we create a new io module called 'jingle' in DASCore's io module (dascore/io/jingle).
-Make sure there is a __init__.py file in this module whose docstring describes the format.
+Make sure there is a \__init__.py file in this module whose docstring describes the format.
 
 contents of `dascore/io/jingle/__init__.py`
 ```python
@@ -25,8 +25,8 @@ jingle = dc.read('path_to_file.jgl')
 ```
 
 Next, create a `core.py` file in the new module (dascore/io/jingle/core.py). Start by creating
-a class called `JingleIO`,  which subclasses `dascore.io.core.FiberIO, and implement the supported
-methods.
+a class called `JingleIO`, or better yet, `JingleIOV1`, which subclasses `dascore.io.core.FiberIO.
+Then all you need to do is implement the supported methods.
 
 Contents of `dascore/io/jingle/core.py`
 
@@ -38,38 +38,43 @@ import dascore.exceptions
 from dascore.io.core import FiberIO
 
 
-class JingleIO(FiberIO):
+class JingleIOV1(FiberIO):
     """
-    An IO class supporting the jingle format.
+    An IO class supporting version 1 of the jingle format.
     """
     # you must specify the format name using the name attribute
     name = 'jingle'
     # you can also define which file extensions are expected like so.
     # this will speed up determining the formats of files if not specified.
     preferred_extensions = ('jgl',)
+    # also specifying a version is good practice so when version 2 is released
+    # you can just make another class in the same module named JingleIOV2.
+    file_version = '1'
+    # you can also use unix-style matching for the version (e.g. '0.1.*')
 
     def read(self, path, jingle_param=1, **kwargs):
         """
-        Read should take, at least, a path and return a patch or sequence of patches.
+        Read should take a path and return a patch or sequence of patches.
 
         It can also define its own parameters, and should always accept kwargs.
+        If the format supports partial reads, these should be implemented as well.
         """
 
     def is_format(self, path):
         """
         Used to determine if path is a supported jingle file.
 
-        Returns a tuple of (format_name, version_number) if the file is a
+        Returns a tuple of (format_name, file_version) if the file is a
         supported jingle file, else return False or raise a
-        dascore.exceptions.UnknownFiberFormat.
+        dascore.exceptions.UnknownFiberFormat exception.
         """
 
-    def scan(self):
+    def scan(self, path):
         """
         Used to gather metadata about a file without reading in the whole file.
 
         This should return a list of dictionaries with the keys/types specified
-        in dascore.constants.SUMMARY_KEYS.
+        by dascore.core.schema.PatchFileSummary
         """
 
     def write(self, patch, path, **kwargs):
@@ -79,8 +84,8 @@ class JingleIO(FiberIO):
 ```
 
 All of the 4 methods are optional; some formats will only support reading,
-others only writing. `is_format` is fairly important otherwise the format
-wont be auto-detectable.
+others only writing. If `is_format` is not implemented the format will not
+be auto-detectable.
 
 
 ## Writing Tests
@@ -89,16 +94,16 @@ Next we need to write tests for the format (you weren't thinking of skipping
 this step were you!?). The tests should go in: `test/test_io/test_jingle.py`.
 The hardest part is finding a *small* (typically no more than 1-2 mb) file to
 include in the test suite. Assuming you have found, or manufactured, such
-as file, it should go into [dasdae's data repo](https://github.com/DASDAE/test_data).
+a file, it should go into [dasdae's data repo](https://github.com/DASDAE/test_data).
 Simply clone the repo, add you file format, and push back to master or open a
-PR on a separate branch.
+PR on a separate branch to include the data file.
 
 Next, add your file to dascore's data registry (dascore/data_registry.txt).
 You will have to get the sha256 hash of your test file, for that you can simply
 use [Pooch's hash_file function](https://www.fatiando.org/pooch/latest/api/generated/pooch.file_hash.html),
 and you can create the proper download url using the other entries as examples.
 
-The name, hash, and url might look  something like this:
+The name, hash, and url might look something like this:
 
 ```
 jingle_test_file.jgl
@@ -130,7 +135,7 @@ class TestJingleIO:
     @pytest.fixture(scope='class')
     def jingle_patch(self, jingle_file_path):
         """Read the jingle test data"""
-        return dascore.read(jingle_file_path, file_format='jingle')
+        return dascore.read(jingle_file_path, file_format='jingle')[0]
 
     def test_read(self, jingle_file_path):
         """Ensure the test file can be read."""
@@ -140,7 +145,7 @@ class TestJingleIO:
         # next assert things about the output, maybe len, attributes etc.
         assert len(out1) == 1
         # test read specifying format
-        out2 = dascore.read(jingle_file_path, 'jingle')
+        out2 = dascore.read(jingle_file_path, file_format='jingle')
         ...
 
     def test_write(self, tmp_path_factory, jingle_patch):
@@ -158,23 +163,23 @@ class TestJingleIO:
 
     def test_is_format(self, jingle_file_path):
         """Tests for automatically determining a jingle format."""
-        out = dascore.get_format(jingle_file_path)
-        assert out[0].lower() == 'jingle'
+        file_format, version = dascore.get_format(jingle_file_path)
+        assert file_format.lower() == 'jingle'
 
 ```
 
 ## Register Plugin
 
 Now that the Jingle format support is implemented and tested, the final step is to
-register jingle as an entry point in the setup.cfg. This is done under
-options.entry_points in the dascore.plugin.fiber_io namespace. For example,
-after adding jingle the setup.cfg section might look like this:
+register jingle as an entry point in DASCore's pyproject.toml. This is done under
+the [project.entry-points."dascore.plugin.fiber_io"] section. For example,
+after adding jingle the pyproject.toml section might look like this:
 
 ```
-[options.entry_points]
-dascore.plugin.fiber_io =
-    TERRA15 = dascore.io.terra15.core:Terra15Formatter
-    PICKLE = dascore.io.pickle.core:PickleIO
-    WAV = dascore.io.wav.core:WavIO
-    JINGLE = dascore.io.jingle.core:JingleIO
+[project.entry-points."dascore.plugin.fiber_io"]
+TERRA15 = "dascore.io.terra15.core:Terra15Formatter"
+PICKLE = "dascore.io.pickle.core:PickleIO"
+WAV = "dascore.io.wav.core:WavIO"
+DASDAE = "dascore.io.dasdae.core:DASDAEIO"
+JINGLE = "dascore.io.jingle.core:JingleIOV1
 ```

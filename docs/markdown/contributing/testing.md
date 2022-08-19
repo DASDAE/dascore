@@ -18,7 +18,7 @@ pytest tests --cov dascore --cov-report term-missing
 
 ## Writing Tests
 
-Tests should go into the `Tests/` folder, which mirrors the structure of the main package.
+Tests should go into the `tests/` folder, which mirrors the structure of the main package.
 For example, if you are writing tests for `dascore.Patch`, whose class definition is
 located in `dascore/core/patch` it should go in `tests/test_core/test_patch.py`.
 
