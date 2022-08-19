@@ -1,5 +1,5 @@
-# Sample workflow for building and deploying a Jekyll site to GitHub Pages
-name: Deploy Jekyll with GitHub Pages dependencies preinstalled
+# Create documentation and deploy
+name: Build/Deploy Docs
 
 on:
   # Runs on pushes targeting the default branch
@@ -45,17 +45,10 @@ jobs:
         shell: bash -l {0}
         run: |
           python scripts/make_docs.py
-      
 
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Setup Pages
-        uses: actions/configure-pages@v1
-      - name: Build with Jekyll
-        uses: actions/jekyll-build-pages@v1
-        with:
-          source: ./
-          destination: ./_site
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
         with:
