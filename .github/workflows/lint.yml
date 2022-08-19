@@ -1,0 +1,16 @@
+# Lint the code using the defined pre-commits
+name: Lint Code
+on: [push]
+
+jobs:
+  lint_code:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: install linting packages
+        run: pip install pre-commit
+
+      - name: run all precommits
+        run: pre-commit run flake8 --files dascore/**/*

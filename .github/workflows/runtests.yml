@@ -1,20 +1,7 @@
-name: validate
+name: Run Tests
 on: [push]
 
 jobs:
-  # Simply applies flake8 to code using pre-commit
-  lint_code:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: install linting packages
-        run: pip install pre-commit
-
-      - name: run all precommits
-        run: pre-commit run flake8 --files dascore/**/*
-
   # Runs the tests on combinations of the supported python/os matrix.
   test_code:
     runs-on: ${{ matrix.os }}
