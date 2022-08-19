@@ -46,9 +46,6 @@ jobs:
         run: |
           python scripts/make_docs.py
 
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
         with:
