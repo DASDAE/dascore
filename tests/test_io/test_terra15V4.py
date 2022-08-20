@@ -1,5 +1,5 @@
 """
-Tests for reading terra15 file formats.
+Tests for reading terra15 format, version 4.
 """
 import numpy as np
 import pytest
@@ -8,7 +8,7 @@ import tables as tb
 import dascore
 from dascore.constants import REQUIRED_DAS_ATTRS
 from dascore.core.schema import PatchFileSummary
-from dascore.io.terra15.core import Terra15Formatter
+from dascore.io.terra15.core import Terra15FormatterV4
 
 
 class TestReadTerra15:
@@ -41,7 +41,7 @@ class TestReadTerra15:
         t1, t2 = time_array[10], time_array[40]
         d1, d2 = dist_array[10], dist_array[40]
 
-        patch = Terra15Formatter().read(
+        patch = Terra15FormatterV4().read(
             terra15_das_example_path, time=(t1, t2), distance=(d1, d2)
         )[0]
         attrs, coords = patch.attrs, patch.coords
@@ -76,17 +76,17 @@ class TestIsTerra15:
 
     def test_version_2(self, terra15_das_example_path):
         """Ensure version two is recognized."""
-        assert Terra15Formatter().get_format(terra15_das_example_path)
+        assert Terra15FormatterV4().get_format(terra15_das_example_path)
 
     def test_not_terra15_not_df5(self, dummy_text_file):
         """Test for not even a hdf5 file."""
-        parser = Terra15Formatter()
+        parser = Terra15FormatterV4()
         assert not parser.get_format(dummy_text_file)
         assert not parser.get_format(dummy_text_file.parent)
 
     def test_hdf5file_not_terra15(self, generic_hdf5):
         """Assert that the generic hdf5 file is not a terra15."""
-        parser = Terra15Formatter()
+        parser = Terra15FormatterV4()
         assert not parser.get_format(generic_hdf5)
 
 
@@ -95,7 +95,7 @@ class TestScanTerra15:
 
     def test_scanning(self, terra15_das_patch, terra15_das_example_path):
         """Tests for getting summary info from terra15 data."""
-        parser = Terra15Formatter()
+        parser = Terra15FormatterV4()
         out = parser.scan(terra15_das_example_path)
         assert isinstance(out, list)
         assert len(out) == 1
@@ -108,7 +108,7 @@ class TestTerra15Unfinished:
     @pytest.fixture(scope="class")
     def patch_unfinished(self, terra15_das_unfinished_path):
         """Return the patch with zeroes at the end."""
-        parser = Terra15Formatter()
+        parser = Terra15FormatterV4()
         out = parser.read(terra15_das_unfinished_path)[0]
         return out
 

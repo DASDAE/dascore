@@ -22,13 +22,14 @@ from .utils import (
 )
 
 
-class Terra15Formatter(FiberIO):
+class Terra15FormatterV4(FiberIO):
     """
-    Support for Terra15 data format.
+    Support for Terra15 data format, version 4.
     """
 
     name = "TERRA15"
     preferred_extensions = ("hdf5", "hf")
+    file_version = "4"
 
     def get_format(self, path: Union[str, Path]) -> Union[tuple[str, str], bool]:
         """

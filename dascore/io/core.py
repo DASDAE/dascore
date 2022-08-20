@@ -23,12 +23,12 @@ class FiberIO(ABC):
     """
     An interface which adds support for a given filer format.
 
-    This class should be subclassed when adding support for new Patch/Spool
-    formats.
+    This class should be subclassed when adding support for new formats.
     """
 
     name: str = ""
     preferred_extensions: tuple[str] = ()
+    file_version = None
 
     def read(self, path, **kwargs) -> SpoolType:
         """
@@ -72,8 +72,8 @@ class FiberIO(ABC):
         """
         Return a tuple of (format_name, version_numbers).
 
-        This only works if path is supported, otherwise raise UnknownFiberError
-        or return False.
+        This should only work if path is the supported file format, otherwise
+        raise UnknownFiberError or return False.
         """
         msg = f"FileFormatter: {self.name} has no get_version method"
         raise NotImplementedError(msg)
@@ -93,7 +93,7 @@ class FiberIO(ABC):
 def read(
     path: Union[str, Path],
     file_format: Optional[str] = None,
-    version: Optional[str] = None,
+    file_version: Optional[str] = None,
     time: Optional[tuple[Optional[timeable_types], Optional[timeable_types]]] = None,
     distance: Optional[tuple[Optional[float], Optional[float]]] = None,
     **kwargs,
@@ -108,7 +108,7 @@ def read(
     file_format
         A string indicating the file format. If not provided dascore will
         try to estimate the format.
-    version
+    file_version
         An optional string indicating the format version.
     time
         An optional tuple of time ranges.
@@ -120,13 +120,16 @@ def read(
     if not file_format:
         file_format = get_format(path)[0].upper()
     formatter = _IO_INSTANCES[file_format.upper()]
-    return formatter.read(path, version=version, time=time, distance=distance, **kwargs)
+    return formatter.read(
+        path, file_version=file_version, time=time, distance=distance, **kwargs
+    )
 
 
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))
 def scan(
     path: Union[Path, str],
     file_format: Optional[str] = None,
+    file_version: Optional[str] = None,
 ) -> List[PatchFileSummary]:
     """
     Scan a file, return the summary dictionary.
@@ -182,9 +185,15 @@ def get_format(path: Union[str, Path]) -> (str, str):
         raise UnknownFiberFormat(msg)
 
 
-def write(patch_or_spool, path: Union[str, Path], file_format: str, **kwargs):
+def write(
+    patch_or_spool,
+    path: Union[str, Path],
+    file_format: str,
+    file_version: Optional[str] = None,
+    **kwargs,
+):
     """
-    Write a Patch or Stream to disk.
+    Write a Patch or Spool to disk.
 
     Parameters
     ----------
@@ -192,11 +201,13 @@ def write(patch_or_spool, path: Union[str, Path], file_format: str, **kwargs):
         The path to the file.
     file_format
         The string indicating the format to write.
+    file_version
+        Optionally specify the version of the file, else use the latest
+        version.
 
     Raises
     ------
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
-
     """
     formatter = _IO_INSTANCES[file_format.upper()]
     if not isinstance(patch_or_spool, dascore.MemorySpool):

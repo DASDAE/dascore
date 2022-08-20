@@ -27,7 +27,10 @@ class TestFormatter:
                 """formatter with no name"""
 
     def test_empty_formatter_undefined_methods(self, random_patch):
-        """Ensure a Not Implemented error is raised for FormatterWithName"""
+        """
+        Ensure a Not Implemented error is raised for un-implemented methods
+        of FormatterWithName.
+        """
         instance = self.FormatterWithName()
         with pytest.raises(NotImplementedError):
             instance.read("empty_path")

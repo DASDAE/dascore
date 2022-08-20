@@ -84,7 +84,7 @@ dev = ["dascore[test]", "dascore[docs]"]
 # --- Entry Points
 
 [project.entry-points."dascore.plugin.fiber_io"]
-TERRA15 = "dascore.io.terra15.core:Terra15Formatter"
-PICKLE = "dascore.io.pickle.core:PickleIO"
-WAV = "dascore.io.wav.core:WavIO"
-DASDAE = "dascore.io.dasdae.core:DASDAEIO"
+TERRA15 = "dascore.io.terra15.core"
+PICKLE = "dascore.io.pickle.core"
+WAV = "dascore.io.wav.core"
+DASDAE = "dascore.io.dasdae.core"

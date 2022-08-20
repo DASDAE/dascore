@@ -50,7 +50,6 @@ class JingleIOV1(FiberIO):
     # also specifying a version is good practice so when version 2 is released
     # you can just make another class in the same module named JingleIOV2.
     file_version = '1'
-    # you can also use unix-style matching for the version (e.g. '0.1.*')
 
     def read(self, path, jingle_param=1, **kwargs):
         """
