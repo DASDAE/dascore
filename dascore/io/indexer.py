@@ -21,7 +21,7 @@ from dascore.constants import LARGEDT64, SMALLDT64, path_types
 from dascore.core.schema import PatchFileSummary
 from dascore.utils.misc import iter_files, iterate
 from dascore.utils.pd import _remove_base_path, filter_df
-from dascore.utils.progress import track_index_update
+from dascore.utils.progress import track
 from dascore.utils.time import to_datetime64, to_number, to_timedelta64
 
 # supported read_hdf5 kwargs
@@ -466,7 +466,7 @@ class DirectoryIndexer(AbstractIndexer):
         self._enforce_min_version()  # delete index if schema has changed
         update_time = time.time()
         new_files = list(self._get_file_iterator(paths=paths, only_new=True))
-        smooth_iterator = track_index_update(new_files, f"Indexing {self.path.name}")
+        smooth_iterator = track(new_files, f"Indexing {self.path.name}")
         data_list = [y.dict() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
         if not df.empty:

@@ -14,3 +14,6 @@ from dascore.version import __last_version__, __version__
 
 # keep attrs on xarray DataArray
 set_options(keep_attrs=True)
+
+# flag for disabling progress bar when debugging
+_debug = False

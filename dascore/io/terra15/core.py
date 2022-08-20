@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
-import tables as tb
 
 from dascore.constants import timeable_types
 from dascore.core import MemorySpool, Patch
 from dascore.core.schema import PatchFileSummary
 from dascore.io.core import FiberIO
+from dascore.utils.hdf5 import HDF5ExtError, NoSuchNodeError, open_hdf5_file
 from dascore.utils.time import to_datetime64
 
 from .utils import (
@@ -41,18 +41,18 @@ class Terra15FormatterV4(FiberIO):
             A path to the file which may contain terra15 data.
         """
         try:
-            with tb.open_file(path, "r") as fi:
+            with open_hdf5_file(path, "r") as fi:
                 version_str = _get_version_str(fi)
                 if version_str:
                     return ("TERRA15", version_str)
-        except (tb.HDF5ExtError, OSError, IndexError, KeyError, tb.NoSuchNodeError):
+        except (HDF5ExtError, OSError, IndexError, KeyError, NoSuchNodeError):
             return False
 
     def scan(self, path: Union[str, Path]) -> List[PatchFileSummary]:
         """
         Scan a terra15 v2 file, return summary information about the file's contents.
         """
-        with tb.open_file(path) as fi:
+        with open_hdf5_file(path) as fi:
             root_attrs = fi.root._v_attrs
             data_type = root_attrs.data_product
             data_node = fi.root[data_type]["data"]
@@ -87,7 +87,7 @@ class Terra15FormatterV4(FiberIO):
         """
 
         # TODO need to create h5 file decorator to avoid too many open/close files.
-        with tb.open_file(path) as fi:
+        with open_hdf5_file(path) as fi:
             # get time arra
             if time is None:
                 time = (None, None)

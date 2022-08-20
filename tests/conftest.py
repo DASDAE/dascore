@@ -76,11 +76,18 @@ FILE_SPOOLS = []
 
 def pytest_sessionstart(session):
     """
-    Ensure a non-visual backend is used so plots don't pop up.
+    Hook to run before any other tests.
+
+    Used to ensure a non-visual backend is used so plots don't pop up
+    and to set debug hook to True to avoid showing progress bars,
+    except when explicitly being tested.
     """
     import matplotlib
 
+    import dascore as dc
+
     matplotlib.use("Agg")
+    dc._debug = True
 
 
 @pytest.fixture(scope="session")

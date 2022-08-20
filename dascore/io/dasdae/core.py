@@ -4,12 +4,11 @@ Core module for reading and writing pickle format.
 import contextlib
 from typing import Union
 
-import tables
-
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io.core import FiberIO
 from dascore.io.dasdae.utils import _read_patch, _save_patch, _write_meta
+from dascore.utils.hdf5 import open_hdf5_file
 
 
 class DASDAEIO(FiberIO):
@@ -38,7 +37,7 @@ class DASDAEIO(FiberIO):
 
     def write(self, patch, path, **kwargs):
         """Read a Patch/Spool from disk."""
-        with tables.open_file(path, mode="a") as h5:
+        with open_hdf5_file(path, mode="a") as h5:
             _write_meta(h5)
             # get an iterable of patches and save them
             patches = [patch] if isinstance(patch, dc.Patch) else patch
@@ -48,7 +47,7 @@ class DASDAEIO(FiberIO):
 
     def get_format(self, path) -> Union[tuple[str, str], bool]:
         """Return the format from a dasdae file."""
-        with tables.open_file(path, mode="r") as fi:
+        with open_hdf5_file(path, mode="r") as fi:
             is_dasdae, version = False, ""  # NOQA
             with contextlib.suppress(KeyError):
                 is_dasdae = fi.root._v_attrs["__format__"] == "DASDAE"
@@ -62,7 +61,7 @@ class DASDAEIO(FiberIO):
         Read a dascore file.
         """
         patches = []
-        with tables.open_file(path, mode="r") as fi:
+        with open_hdf5_file(path, mode="r") as fi:
             try:
                 waveform_group = fi.root["/waveforms"]
             except KeyError:

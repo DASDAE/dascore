@@ -47,7 +47,8 @@ def array_to_datetime64(array: np.array) -> np.datetime64:
     if np.issubdtype(array.dtype, np.datetime64) or len(array) == 0:
         out = array
     # just check first element to determine type.  # TODO replace with dtype check
-    elif np.isreal(array[0]):  # dealing with numerical data
+    # dealing with numerical data
+    elif not isinstance(array[0], np.datetime64) and np.isreal(array[0]):
         array[nans] = 0  # temporary replace NaNs
         try:
             # separate seconds and factions, assume ns precision

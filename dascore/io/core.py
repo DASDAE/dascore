@@ -4,19 +4,93 @@ Das Data.
 """
 import os.path
 from abc import ABC
+from collections import defaultdict
+from functools import cached_property
 from pathlib import Path
 from typing import List, Optional, Union
 
+import pkg_resources
+
 import dascore
+import dascore as dc
 from dascore.constants import SpoolType, timeable_types
 from dascore.core.schema import PatchFileSummary
-from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
+from dascore.exceptions import DASCoreError, InvalidFileFormatter, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
-from dascore.utils.plugin import FiberIOManager
+from dascore.utils.hdf5 import HDF5ExtError
+
+
+class _FiberIOManager:
+    """
+    A structure for intelligently storing, loading, and return FiberIO objects.
+    """
+
+    def __init__(self, entry_point: str):
+        self._entry_point = entry_point
+        self._loaded_eps: dict[str, "dc.io.core.FiberIO"] = {}
+        self._format_version = defaultdict(dict)
+        self._extention_list = defaultdict(list)
+
+    @cached_property
+    def _eps(self):
+        """
+        Get the unlaoded entry points registered to this domain into a dict of
+        {name: ep}
+        """
+        out = {
+            ep.name: ep.load
+            for ep in pkg_resources.iter_entry_points(self._entry_point)
+        }
+        return out
+
+    def __iter__(self):
+        names = sorted(set(self._eps) | set(self._loaded_eps))
+        for name in names:
+            yield name
+
+    def items(self):
+        """return items and content."""
+        for name in sorted(set(self._eps) | set(self._loaded_eps)):
+            yield name, self[name]
+
+    def __getitem__(self, item):
+        if item in self._eps or item in self._loaded_eps:
+            if item not in self._loaded_eps:  # load unloaded entry points
+                self._eps[item]()
+                assert item in self._loaded_eps
+            return self._loaded_eps[item]
+        else:
+            known_formats = set(self._loaded_eps) | set(self._eps)
+            msg = (
+                f"File format {item} is unknown to DASCore. Known formats "
+                f"are: [{', '.join(sorted(known_formats))}]"
+            )
+            raise UnknownFiberFormat(msg)
+
+    def __setitem__(self, key, value: "dc.io.core.FiberIO"):
+        """Set the loaded (instances of) formatters."""
+        self._loaded_eps[key] = value
+        self._format_version[key][value.file_version] = value
+        self._extention_list[key].append(value)
+
+    def get_formatter_list(
+        self,
+        file_format: Optional[str] = None,
+        file_version: Optional[str] = None,
+        extension: Optional[str] = None,
+    ):
+        """
+        Get a prioritized list of formatters based on query info.
+        """
+        if file_format is not None:
+
+            if file_version is not None:
+                pass
+
 
 # ------------- Protocol for File Format support
 
-_IO_INSTANCES = FiberIOManager("dascore.plugin.fiber_io")
+_Manager = _FiberIOManager("dascore.plugin.fiber_io")
 
 
 class FiberIO(ABC):
@@ -87,7 +161,7 @@ class FiberIO(ABC):
             msg = "You must specify the file format with the name field."
             raise InvalidFileFormatter(msg)
         # register formatter
-        _IO_INSTANCES[cls.name.upper()] = cls()
+        _Manager[cls.name.upper()] = cls()
 
 
 def read(
@@ -119,7 +193,7 @@ def read(
     """
     if not file_format:
         file_format = get_format(path)[0].upper()
-    formatter = _IO_INSTANCES[file_format.upper()]
+    formatter = _Manager[file_format.upper()]
     return formatter.read(
         path, file_version=file_version, time=time, distance=distance, **kwargs
     )
@@ -149,7 +223,7 @@ def scan(
     # dispatch to file format handlers
     if file_format is None:
         file_format = get_format(path)[0]
-    out = _IO_INSTANCES[file_format].scan(path)
+    out = _Manager[file_format].scan(path)
     return out
 
 
@@ -173,10 +247,10 @@ def get_format(path: Union[str, Path]) -> (str, str):
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"{path} does not exist.")
-    for name, formatter in _IO_INSTANCES.items():
+    for name, formatter in _Manager.items():
         try:
             format = formatter.get_format(path)
-        except Exception:  # NOQA
+        except (ValueError, TypeError, HDF5ExtError, NotImplementedError, DASCoreError):
             continue
         if format:
             return format
@@ -209,7 +283,7 @@ def write(
     ------
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
     """
-    formatter = _IO_INSTANCES[file_format.upper()]
+    formatter = _Manager[file_format.upper()]
     if not isinstance(patch_or_spool, dascore.MemorySpool):
         patch_or_spool = dascore.MemorySpool([patch_or_spool])
     formatter.write(patch_or_spool, path, **kwargs)
