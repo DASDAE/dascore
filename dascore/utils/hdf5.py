@@ -16,7 +16,7 @@ NoSuchNodeError = tb.NoSuchNodeError
 
 @contextmanager
 def open_hdf5_file(path, mode="r"):
-    """Open an hdf5 file and return a reference to it."""
+    """Open a hdf5 file and return a reference to it."""
     # Note: We suppress DataTypeWarnings because pytables fails to read
     # 8 bit enum indicating true or false written by h5py. See:
     # https://github.com/PyTables/PyTables/issues/647
