@@ -170,15 +170,16 @@ class TestJingleIO:
 ## Register Plugin
 
 Now that the Jingle format support is implemented and tested, the final step is to
-register jingle as an entry point in DASCore's pyproject.toml. This is done under
-the [project.entry-points."dascore.plugin.fiber_io"] section. For example,
-after adding jingle the pyproject.toml section might look like this:
+register the jingle core module in DASCore's entry points. This is done under the
+[project.entry-points."dascore.plugin.fiber_io"] section in dascore's
+pyproject.toml file. For example, after adding jingle the pyproject.toml section
+might look like this:
 
 ```
 [project.entry-points."dascore.plugin.fiber_io"]
-TERRA15 = "dascore.io.terra15.core:Terra15Formatter"
-PICKLE = "dascore.io.pickle.core:PickleIO"
-WAV = "dascore.io.wav.core:WavIO"
-DASDAE = "dascore.io.dasdae.core:DASDAEIO"
-JINGLE = "dascore.io.jingle.core:JingleIOV1
+TERRA15 = "dascore.io.terra15.core"
+PICKLE = "dascore.io.pickle.core"
+WAV = "dascore.io.wav.core"
+DASDAE = "dascore.io.dasdae.core"
+JINGLE = "dascore.io.jingle.core"
 ```
