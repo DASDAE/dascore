@@ -1,11 +1,32 @@
 """
 Test for basic IO and related functions.
 """
+import copy
+
 import pytest
 
 import dascore
 from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
 from dascore.io.core import FiberIO
+from dascore.io.dasdae.core import DASDAEIOV1
+
+
+class TestFormatManager:
+    """tests for the format manager."""
+
+    @pytest.fixture(scope="class")
+    def format_manager(self):
+        """Deep copy manager to avoid changing state used by other objects."""
+        manager = copy.deepcopy(FiberIO._manager)
+        return manager
+
+    def test_specific_format_and_version(self):
+        """
+        Specifying a known format and version should return exactly one formatter.
+        """
+        out = FiberIO.get_formater_list("DASDAE", "1")
+        assert len(out) == 1
+        assert isinstance(out[0], DASDAEIOV1)
 
 
 class TestFormatter:

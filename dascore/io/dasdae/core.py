@@ -11,7 +11,7 @@ from dascore.io.dasdae.utils import _read_patch, _save_patch, _write_meta
 from dascore.utils.hdf5 import open_hdf5_file
 
 
-class DASDAEIO(FiberIO):
+class DASDAEIOV1(FiberIO):
     """
     Provides IO support for the DASDAE format.
 
@@ -34,6 +34,7 @@ class DASDAEIO(FiberIO):
 
     name = "DASDAE"
     preferred_extensions = ("h5", "hdf5")
+    file_version = "1"
 
     def write(self, patch, path, **kwargs):
         """Read a Patch/Spool from disk."""

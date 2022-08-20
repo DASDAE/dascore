@@ -23,6 +23,8 @@ from dascore.utils.hdf5 import HDF5ExtError
 class _FiberIOManager:
     """
     A structure for intelligently storing, loading, and return FiberIO objects.
+
+    This should only be used in conjunction with `FiberIO`.
     """
 
     def __init__(self, entry_point: str):
@@ -80,7 +82,28 @@ class _FiberIOManager:
         extension: Optional[str] = None,
     ):
         """
-        Get a prioritized list of formatters based on query info.
+        Get a list of formatters appropriate to the specified inputs.
+
+        The list is sorted in likelihoold of the formatter being correct. For
+        example, if file format is specified but file_version is not, all
+        formatters for the format will be returned with the newest versions
+        first in the list.
+
+        If neither version or format are specified but extension is all formatters
+        specifying the extension will be first in the list, sorted by format name
+        and format version.
+
+        If nothing is specified, all formatters will be returned sorted by name
+        and version.
+
+        Parameters
+        ----------
+        file_format
+            The format string indicating the format name
+        file_version
+            The version string of the format
+        extension
+            The extension of the file.
         """
         if file_format is not None:
 
@@ -90,7 +113,7 @@ class _FiberIOManager:
 
 # ------------- Protocol for File Format support
 
-_Manager = _FiberIOManager("dascore.plugin.fiber_io")
+# _Manager = _FiberIOManager("dascore.plugin.fiber_io")
 
 
 class FiberIO(ABC):
@@ -103,6 +126,7 @@ class FiberIO(ABC):
     name: str = ""
     preferred_extensions: tuple[str] = ()
     file_version = None
+    _manager = _FiberIOManager("dascore.plugin.fiber_io")
 
     def read(self, path, **kwargs) -> SpoolType:
         """
@@ -161,7 +185,25 @@ class FiberIO(ABC):
             msg = "You must specify the file format with the name field."
             raise InvalidFileFormatter(msg)
         # register formatter
-        _Manager[cls.name.upper()] = cls()
+        manager = getattr(cls.__mro__[1], "_manager")
+        manager[cls.name.upper()] = cls()
+
+    @classmethod
+    @compose_docstring(doc_str=_FiberIOManager.get_formatter_list.__doc__)
+    def get_formater_list(
+        cls,
+        file_format=None,
+        file_version=None,
+        extensions=None,
+    ):
+        """
+        {doc_str}
+        """
+        return cls._manager.get_formatter_list(
+            file_format=file_format,
+            file_version=file_version,
+            extension=extensions,
+        )
 
 
 def read(
@@ -193,7 +235,7 @@ def read(
     """
     if not file_format:
         file_format = get_format(path)[0].upper()
-    formatter = _Manager[file_format.upper()]
+    formatter = FiberIO._manager[file_format.upper()]
     return formatter.read(
         path, file_version=file_version, time=time, distance=distance, **kwargs
     )
@@ -223,7 +265,7 @@ def scan(
     # dispatch to file format handlers
     if file_format is None:
         file_format = get_format(path)[0]
-    out = _Manager[file_format].scan(path)
+    out = FiberIO._manager[file_format].scan(path)
     return out
 
 
@@ -247,7 +289,7 @@ def get_format(path: Union[str, Path]) -> (str, str):
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"{path} does not exist.")
-    for name, formatter in _Manager.items():
+    for name, formatter in FiberIO._manager.items():
         try:
             format = formatter.get_format(path)
         except (ValueError, TypeError, HDF5ExtError, NotImplementedError, DASCoreError):
@@ -283,7 +325,7 @@ def write(
     ------
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
     """
-    formatter = _Manager[file_format.upper()]
+    formatter = FiberIO._manager[file_format.upper()]
     if not isinstance(patch_or_spool, dascore.MemorySpool):
         patch_or_spool = dascore.MemorySpool([patch_or_spool])
     formatter.write(patch_or_spool, path, **kwargs)
