@@ -54,7 +54,7 @@ class TestGetVersion:
         """Ensure the expected version str is returned."""
         # format_version_tuple = dc.get_format(written_dascore)
         formatter = DASDAEV1()
-        ex_format, ex_version = formatter.file_format, formatter.file_version
+        ex_format, ex_version = formatter.name, formatter.version
         dasie_format_ver = DASDAEV1().get_format(dasdae_file_path)
         format_ver = dc.get_format(dasdae_file_path)
         assert dasie_format_ver == format_ver

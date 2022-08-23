@@ -45,7 +45,6 @@ dependencies = [
     "matplotlib",
     "pandas",
     "pooch>=1.2",
-    "setuptools",
     "scipy",
     "tables",
     "xarray",

@@ -88,7 +88,7 @@ class TestFormatManager:
 
     def test_format_multiple_versions(self, format_manager):
         """Ensure multiple versions are returned when only format is specified."""
-        file_format = FiberFormatTestV1.file_format
+        file_format = FiberFormatTestV1.name
         out = list(format_manager.yield_fiberio(format=file_format))
         assert len(out) == 2
 

@@ -48,7 +48,7 @@ class JingleV1(FiberIO):
     # this will speed up determining the formats of files if not specified.
     preferred_extensions = ('jgl',)
     # also specifying a version is good practice so when version 2 is released
-    # you can just make another class in the same module named JingleIOV2.
+    # you can just make another class in the same module named JingleV2.
     version = '1'
 
     def read(self, path, jingle_param=1, **kwargs):
@@ -82,7 +82,7 @@ class JingleV1(FiberIO):
         """
 ```
 
-All of the 4 methods are optional; some formats will only support reading,
+All 4 methods are optional; some formats will only support reading,
 others only writing. If `is_format` is not implemented the format will not
 be auto-detectable.
 
