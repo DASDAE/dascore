@@ -41,7 +41,7 @@ class _FiberIOManager:
         """
 
         out = pd.Series(
-            {ep.name: ep.load for ep in entry_points().select(group=self._entry_point)}
+            {ep.name: ep.load for ep in entry_points(group=self._entry_point)}
         )
         return out
 
