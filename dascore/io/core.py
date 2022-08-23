@@ -84,8 +84,8 @@ class _FiberIOManager:
         for form in formats:
             for eps in self._eps.loc[self._eps.index.str.startswith(form)]:
                 self.register_fiberio(eps()())
-        # all the formats should now be loaded
-        assert not self.unloaded_formats
+        # The selected format(s) should now be loaded
+        assert set(formats).isdisjoint(self.unloaded_formats)
 
     def register_fiberio(self, fiberio: "FiberIO"):
         """Register a new fiber IO to manage."""

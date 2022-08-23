@@ -18,12 +18,14 @@ pytest tests --cov dascore --cov-report term-missing
 
 If you would like to test the IU modules it can be done like so:
 
+<!--pytest-codeblocks:skip-->
 ```bash
 pytest tests/test_io
 ```
 
 Or a particular IO module:
 
+<!--pytest-codeblocks:skip-->
 ```bash
 pytest tests/test_io/test_dasdae.py
 ```
