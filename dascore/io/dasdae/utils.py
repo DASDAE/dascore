@@ -10,11 +10,11 @@ from dascore.utils.time import to_number, to_timedelta64
 # --- Functions for writing
 
 
-def _write_meta(hfile):
+def _write_meta(hfile, file_version):
     """Write metadata to hdf5 file."""
     attrs = hfile.root._v_attrs
     attrs["__format__"] = "DASDAE"
-    attrs["__DASDAE_version__"] = dc.io.dasdae.__version__
+    attrs["__DASDAE_version__"] = file_version
 
 
 def _save_attrs_and_dim(patch, patch_group):

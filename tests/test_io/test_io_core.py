@@ -3,12 +3,27 @@ Test for basic IO and related functions.
 """
 import copy
 
+import numpy as np
 import pytest
 
 import dascore
 from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
 from dascore.io.core import FiberIO
-from dascore.io.dasdae.core import DASDAEIOV1
+from dascore.io.dasdae.core import DASDAEV1
+
+
+class FiberFormatTestV1(FiberIO):
+    """A test format v1"""
+
+    name = "_TestFormatter"
+    version = "1"
+
+
+class FiberFormatTestV2(FiberIO):
+    """A test format v2"""
+
+    name = "_TestFormatter"
+    version = "2"
 
 
 class TestFormatManager:
@@ -17,16 +32,65 @@ class TestFormatManager:
     @pytest.fixture(scope="class")
     def format_manager(self):
         """Deep copy manager to avoid changing state used by other objects."""
-        manager = copy.deepcopy(FiberIO._manager)
+        manager = copy.deepcopy(FiberIO.manager)
         return manager
 
-    def test_specific_format_and_version(self):
+    def test_specific_format_and_version(self, format_manager):
         """
         Specifying a known format and version should return exactly one formatter.
         """
-        out = FiberIO.get_formater_list("DASDAE", "1")
+        out = list(format_manager.yield_fiberio("DASDAE", "1"))
         assert len(out) == 1
-        assert isinstance(out[0], DASDAEIOV1)
+        assert isinstance(out[0], DASDAEV1)
+
+    def test_get_all_formatters(self, format_manager):
+        """Ensure getting all formatters through yield_fiberio works."""
+        formatters = list(format_manager.yield_fiberio())
+        assert len(formatters) >= len(format_manager._eps)
+
+    def test_extension_priority(self, format_manager):
+        """Ensure the extension priority is honored."""
+        ext = "h5"
+        out = list(format_manager.yield_fiberio(extension=ext))
+        all_formatters = list(format_manager.yield_fiberio())
+        in_formatter = [ext in x.preferred_extensions for x in out]
+        format_array = np.array(in_formatter).astype(bool)
+        # ensure all the start of the arrays are True.
+        assert np.argmin(format_array) == np.sum(format_array)
+        # ensure all formats are represented.
+        assert len(format_array) == len(all_formatters)
+        # ensure V2 of the Test formatter appears first
+        v2_arg = np.argmax([isinstance(x, FiberFormatTestV2) for x in out])
+        v1_arg = np.argmax([isinstance(x, FiberFormatTestV1) for x in out])
+        assert v2_arg < v1_arg
+
+    def test_format_raises_unknown_format(self, format_manager):
+        """Ensure we raise for unknown formats."""
+        with pytest.raises(UnknownFiberFormat, match="format"):
+            list(format_manager.yield_fiberio(format="bob_2"))
+
+    def test_format_raises_just_version(self, format_manager):
+        """Providing only a version should also raise."""
+        with pytest.raises(UnknownFiberFormat, match="version"):
+            list(format_manager.yield_fiberio(version="1"))
+
+    def test_format_bad_version(self, format_manager):
+        """Ensure providing a bad version but valid format raises"""
+        with pytest.raises(UnknownFiberFormat, match="known versions"):
+            iterator = format_manager.yield_fiberio(format="DASDAE", version="-1")
+            list(iterator)
+
+    def test_format_format_no_version(self, format_manager):
+        """Ensure providing a bad version but valid format raises"""
+        with pytest.raises(UnknownFiberFormat, match="known versions"):
+            iterator = format_manager.yield_fiberio(format="DASDAE", version="-1")
+            list(iterator)
+
+    def test_format_multiple_versions(self, format_manager):
+        """Ensure multiple versions are returned when only format is specified."""
+        file_format = FiberFormatTestV1.file_format
+        out = list(format_manager.yield_fiberio(format=file_format))
+        assert len(out) == 2
 
 
 class TestFormatter:

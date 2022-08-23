@@ -9,7 +9,7 @@ from dascore.utils.time import to_datetime64
 
 
 def _get_version_str(hdf_fi) -> str:
-    """Return True if the hdf5 file is version 2."""
+    """Return True if the hdf5 file is version 4."""
     frame_groups = ["frame_id", "posix_frame_time", "gps_frame_time"]
     root = hdf_fi.root
     try:

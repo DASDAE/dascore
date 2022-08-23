@@ -38,7 +38,7 @@ import dascore.exceptions
 from dascore.io.core import FiberIO
 
 
-class JingleIOV1(FiberIO):
+class JingleV1(FiberIO):
     """
     An IO class supporting version 1 of the jingle format.
     """
@@ -49,7 +49,7 @@ class JingleIOV1(FiberIO):
     preferred_extensions = ('jgl',)
     # also specifying a version is good practice so when version 2 is released
     # you can just make another class in the same module named JingleIOV2.
-    file_version = '1'
+    version = '1'
 
     def read(self, path, jingle_param=1, **kwargs):
         """
@@ -171,15 +171,18 @@ class TestJingleIO:
 
 Now that the Jingle format support is implemented and tested, the final step is to
 register the jingle core module in DASCore's entry points. This is done under the
-[project.entry-points."dascore.plugin.fiber_io"] section in dascore's
+[project.entry-points."dascore.fiber_io"] section in dascore's
 pyproject.toml file. For example, after adding jingle the pyproject.toml section
 might look like this:
 
 ```
-[project.entry-points."dascore.plugin.fiber_io"]
-TERRA15 = "dascore.io.terra15.core"
-PICKLE = "dascore.io.pickle.core"
-WAV = "dascore.io.wav.core"
-DASDAE = "dascore.io.dasdae.core"
-JINGLE = "dascore.io.jingle.core"
+[project.entry-points."dascore.fiber_io"]
+TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
+PICKLE = "dascore.io.pickle.core:PickleIO"
+WAV = "dascore.io.wav.core:WavIO"
+DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
+JINGLE__V1 = "dascore.io.jingle.core:JingleV1"
 ```
+
+Note the name of the format is always on the left side of a double underscore
+if the version is included (recommended).

@@ -28,8 +28,8 @@ class Terra15FormatterV4(FiberIO):
     """
 
     name = "TERRA15"
-    preferred_extensions = ("hdf5", "hf")
-    file_version = "4"
+    preferred_extensions = ("hdf5", "h5")
+    version = "4"
 
     def get_format(self, path: Union[str, Path]) -> Union[tuple[str, str], bool]:
         """
@@ -70,7 +70,7 @@ class Terra15FormatterV4(FiberIO):
             out["time_min"] = to_datetime64(tmin)
             out["time_max"] = to_datetime64(tmax)
             out["path"] = path
-            out["format"] = self.name
+            out["file_format"] = self.name
             return [PatchFileSummary.parse_obj(out)]
 
     def read(

@@ -42,7 +42,7 @@ class PickleIO(FiberIO):
                 if self._header_is_dascore(start):
                     fp.seek(0)
                     pickle.load(fp)
-                    return ("PICKLE", "")  # TODO add pickle protocol
+                    return ("PICKLE", self.version)  # TODO add pickle protocol
                 else:
                     return False
             except (pickle.UnpicklingError, FileNotFoundError, IndexError):
