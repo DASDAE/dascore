@@ -40,9 +40,7 @@ class _FiberIOManager:
         {name: ep}
         """
 
-        out = pd.Series(
-            {ep.name: ep.load for ep in entry_points(group=self._entry_point)}
-        )
+        out = pd.Series({ep.name: ep.load for ep in entry_points()[self._entry_point]})
         return out
 
     @cached_property
