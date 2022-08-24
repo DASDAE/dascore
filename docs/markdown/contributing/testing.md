@@ -16,9 +16,27 @@ You can also use the cov flags to check coverage.
 pytest tests --cov dascore --cov-report term-missing
 ```
 
+If you would like to test the IU modules it can be done like so:
+
+<!--pytest-codeblocks:skip-->
+```bash
+pytest tests/test_io
+```
+
+Or a particular IO module:
+
+<!--pytest-codeblocks:skip-->
+```bash
+pytest tests/test_io/test_dasdae.py
+```
+
+Pytest is highly configurable and has some rather useful flags such as
+-s, -x, and --pdb (especially with [pdbpp](https://github.com/pdbpp/pdbpp)).
+
+
 ## Writing Tests
 
-Tests should go into the `Tests/` folder, which mirrors the structure of the main package.
+Tests should go into the `tests/` folder, which mirrors the structure of the main package.
 For example, if you are writing tests for `dascore.Patch`, whose class definition is
 located in `dascore/core/patch` it should go in `tests/test_core/test_patch.py`.
 

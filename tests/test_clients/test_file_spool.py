@@ -19,7 +19,8 @@ FILE_SPOOLS = []
 @register_func(FILE_SPOOLS)
 def one_file_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    return dc.FileSpool(one_file_dir).update()
+    spool = dc.FileSpool(one_file_dir)
+    return spool.update()
 
 
 @pytest.fixture(scope="class")

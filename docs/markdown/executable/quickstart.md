@@ -29,7 +29,7 @@ pa = dc.get_example_patch()
 ### 2. Load a file
 
 We first download an example fiber file (you need an internet connection).
-Next, we simply read it into a [Stream](#Stream) object then get the first (and only) patch.
+Next, we simply read it into a [spool](#spool) object then get the first (and only) patch.
 
 ```{code-cell}
 # get a fiber file

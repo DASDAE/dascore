@@ -1,5 +1,5 @@
 # Create documentation and deploy
-name: Build/Deploy Docs
+name: BuildDeployDocs
 
 on:
   # Runs on pushes targeting the default branch

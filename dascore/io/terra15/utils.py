@@ -1,21 +1,20 @@
 """
 Utilities for terra15.
 """
-
 import numpy as np
-import tables as tb
 
+from dascore.utils.hdf5 import NoSuchNodeError
 from dascore.utils.misc import get_slice
 from dascore.utils.time import to_datetime64
 
 
 def _get_version_str(hdf_fi) -> str:
-    """Return True if the hdf5 file is version 2."""
+    """Return True if the hdf5 file is version 4."""
     frame_groups = ["frame_id", "posix_frame_time", "gps_frame_time"]
     root = hdf_fi.root
     try:
         _ = [root[x] for x in frame_groups]
-    except (KeyError, tb.NoSuchNodeError):
+    except (KeyError, NoSuchNodeError):
         return ""
     file_version = str(root._v_attrs.file_version)
     return file_version
@@ -70,7 +69,7 @@ def _get_default_attrs(data_node_attrs, root_node_attrs):
 def _get_distance_array(fi):
     """Get the distance (along fiber) array."""
     # Note: At least for the test file, sensing_range_start, sensing_range_stop,
-    # nx, and dx are not consistent so I just used this method. We need to
+    # nx, and dx are not consistent, so I just used this method. We need to
     # look more into this.
     attrs = fi.root._v_attrs
     dist = (np.arange(attrs.nx) * attrs.dx) + attrs.sensing_range_start

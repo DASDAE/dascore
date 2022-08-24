@@ -38,7 +38,7 @@ class WavIO(FiberIO):
     name = "WAV"
 
     @compose_docstring(doc=write_docstring)
-    def write(self, spool: SpoolType, path: Union[str, Path]):
+    def write(self, spool: SpoolType, path: Union[str, Path], **kwargs):
         """
         {doc}
         """

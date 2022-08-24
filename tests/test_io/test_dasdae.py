@@ -7,8 +7,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io.dasdae import __version__ as DASDAE_file_version
-from dascore.io.dasdae.core import DASDAEIO
+from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.misc import register_func
 
 # a list of fixture names for written DASDAE files
@@ -54,11 +53,12 @@ class TestGetVersion:
     def test_version_tuple_returned(self, dasdae_file_path):
         """Ensure the expected version str is returned."""
         # format_version_tuple = dc.get_format(written_dascore)
-        dasie_format_ver = DASDAEIO().get_format(dasdae_file_path)
+        formatter = DASDAEV1()
+        ex_format, ex_version = formatter.name, formatter.version
+        dasie_format_ver = DASDAEV1().get_format(dasdae_file_path)
         format_ver = dc.get_format(dasdae_file_path)
-        expected = ("DASDAE", DASDAE_file_version)
         assert dasie_format_ver == format_ver
-        assert format_ver == expected
+        assert format_ver == (ex_format, ex_version)
 
 
 class TestReadDasdae:

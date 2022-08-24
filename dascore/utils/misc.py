@@ -1,8 +1,10 @@
 """
 Misc Utilities.
 """
+import contextlib
 import functools
 import os
+import warnings
 from typing import Iterable, Optional, Union
 
 import numpy as np
@@ -55,6 +57,22 @@ class _NameSpaceMeta(type):
         if callable(value):
             value = _pass_through_method(value)
         super(_NameSpaceMeta, self).__setattr__(key, value)
+
+
+@contextlib.contextmanager
+def suppress_warnings(category=Warning):
+    """
+    Context manager for suppressing warnings.
+
+    Parameters
+    ----------
+    category
+        The types of warnings to suppress. Must be a subclass of Warning.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=category)
+        yield
+    return None
 
 
 class MethodNameSpace(metaclass=_NameSpaceMeta):

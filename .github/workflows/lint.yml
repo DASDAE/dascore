@@ -1,5 +1,5 @@
 # Lint the code using the defined pre-commits
-name: Lint Code
+name: LintCode
 on: [push]
 
 jobs:

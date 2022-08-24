@@ -4,31 +4,224 @@ Das Data.
 """
 import os.path
 from abc import ABC
+from collections import defaultdict
+from functools import cache, cached_property
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import List, Optional, Union
+
+import pandas as pd
 
 import dascore
 from dascore.constants import SpoolType, timeable_types
 from dascore.core.schema import PatchFileSummary
-from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
+from dascore.exceptions import DASCoreError, InvalidFileFormatter, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
-from dascore.utils.plugin import FiberIOManager
+from dascore.utils.hdf5 import HDF5ExtError
+
+
+class _FiberIOManager:
+    """
+    A structure for intelligently storing, loading, and return FiberIO objects.
+
+    This should only be used in conjunction with `FiberIO`.
+    """
+
+    def __init__(self, entry_point: str):
+        self._entry_point = entry_point
+        self._loaded_eps: set[str] = set()
+        self._format_version = defaultdict(dict)
+        self._extension_list = defaultdict(list)
+
+    @cached_property
+    def _eps(self):
+        """
+        Get the unlaoded entry points registered to this domain into a dict of
+        {name: ep}
+        """
+
+        out = pd.Series({ep.name: ep.load for ep in entry_points()[self._entry_point]})
+        return out
+
+    @cached_property
+    def known_formats(self):
+        """Return names of known formats."""
+        formats = self._eps.index.str.split("__").str[0]
+        return set(formats) | set(self._format_version)
+
+    @property
+    def unloaded_formats(self):
+        """Return names of known formats."""
+        return sorted(self.known_formats - set(self._format_version))
+
+    @cached_property
+    def _prioritized_list(self):
+        """Yield a prioritized list of formatters."""
+        # must load all plugins before getting list
+        self.load_plugins()
+        priority_formatters = []
+        second_class_formatters = []
+        for format_name in self.known_formats:
+            unsorted = self._format_version[format_name]
+            keys = sorted(unsorted, reverse=True)
+            formatters = [unsorted[key] for key in keys]
+            priority_formatters.append(formatters[0])
+            if len(formatters) > 1:
+                second_class_formatters.extend(formatters[1:])
+        return priority_formatters + second_class_formatters
+
+    @cache
+    def load_plugins(self, format: Optional[str] = None):
+        """Load plugin for specific format or ensure all formats are loaded"""
+        if format is not None and format in self._format_version:
+            return  # already loaded
+        if not (unloaded := self.unloaded_formats):
+            return
+        formats = {format} if format is not None else unloaded
+        # load one, or all, formats
+        for form in formats:
+            for eps in self._eps.loc[self._eps.index.str.startswith(form)]:
+                self.register_fiberio(eps()())
+        # The selected format(s) should now be loaded
+        assert set(formats).isdisjoint(self.unloaded_formats)
+
+    def register_fiberio(self, fiberio: "FiberIO"):
+        """Register a new fiber IO to manage."""
+        forma, ver = fiberio.name.upper(), fiberio.version
+        self._loaded_eps.add(fiberio.name)
+        for ext in iter(fiberio.preferred_extensions):
+            self._extension_list[ext].append(fiberio)
+        self._format_version[forma][ver] = fiberio
+
+    def get_fiberio(
+        self,
+        format: Optional[str] = None,
+        version: Optional[str] = None,
+        extension: Optional[str] = None,
+    ):
+        """
+        Return the most likely formatter for given inputs.
+
+        If no such formatter exists, raise UnknownFiberFormat error.
+
+        Parameters
+        ----------
+        format
+            The format string indicating the format name
+        version
+            The version string of the format
+        extension
+            The extension of the file.
+        """
+        iterator = self.yield_fiberio(
+            format=format,
+            version=version,
+            extension=extension,
+        )
+        for formatter in iterator:
+            return formatter
+        msg = (
+            f"No fiberio instance found for format: {format} "
+            f"version: {version} and extension: {extension}"
+        )
+        raise UnknownFiberFormat(msg)
+
+    def yield_fiberio(
+        self,
+        format: Optional[str] = None,
+        version: Optional[str] = None,
+        extension: Optional[str] = None,
+    ):
+        """
+        Yields fiber IO object based on input priorities.
+
+        The order is sorted in likelihood of the formatter being correct. For
+        example, if file format is specified but file_version is not, all
+        formatters for the format will be yielded with the newest versions
+        first in the list.
+
+        If neither version nor format are specified but extension is all formatters
+        specifying the extension will be first in the list, sorted by format name
+        and format version.
+
+        If nothing is specified, all formatters will be returned starting with
+        the newest (the highest version) of each formatter, followed by older
+        versions.
+
+        Parameters
+        ----------
+        format
+            The format string indicating the format name
+        version
+            The version string of the format
+        extension
+            The extension of the file.
+        """
+        # TODO replace this with concise pattern matching once 3.9 is dropped
+        if version and not format:
+            msg = "Providing only a version is not sufficient to determine format"
+            raise UnknownFiberFormat(msg)
+        if format is not None:
+            self.load_plugins(format)
+            yield from self._yield_format_version(format, version)
+        elif extension is not None:
+            yield from self._yield_extensions(extension)
+        else:
+            yield from self._prioritized_list
+
+    def _yield_format_version(self, format, version):
+        """Yield file format/version prioritized formatters."""
+        if format is not None:
+            formatters = self._format_version.get(format.upper(), None)
+            # no format found
+            if not formatters:
+                format_list = list(self._format_version)
+                msg = f"Unknown format {format}, " f"known formats are {format_list}"
+                raise UnknownFiberFormat(msg)
+            # a version is specified
+            if version:
+                formatter = formatters.get(version, None)
+                if formatter is None:
+                    msg = (
+                        f"Format {format} has no verion: {version} "
+                        f"known versions of this format are: {list(formatters)}"
+                    )
+                    raise UnknownFiberFormat(msg)
+                yield formatter
+                return
+            # reverse sort formatters and yield latest version first.
+            for formatter in dict(sorted(formatters.items(), reverse=True)).values():
+                yield formatter
+            return
+
+    def _yield_extensions(self, extension):
+        """generator to get formatter prioritized by preferred extensions."""
+        has_yielded = set()
+        self.load_plugins()
+        for formatter in self._extension_list[extension]:
+            yield formatter
+            has_yielded.add(formatter)
+        for formatter in self._prioritized_list:
+            if formatter not in has_yielded:
+                yield formatter
+
 
 # ------------- Protocol for File Format support
 
-_IO_INSTANCES = FiberIOManager("dascore.plugin.fiber_io")
+# _Manager = _FiberIOManager("dascore.plugin.fiber_io")
 
 
 class FiberIO(ABC):
     """
     An interface which adds support for a given filer format.
 
-    This class should be subclassed when adding support for new Patch/Spool
-    formats.
+    This class should be subclassed when adding support for new formats.
     """
 
     name: str = ""
+    version: str = ""
     preferred_extensions: tuple[str] = ()
+    manager = _FiberIOManager("dascore.fiber_io")
 
     def read(self, path, **kwargs) -> SpoolType:
         """
@@ -72,11 +265,15 @@ class FiberIO(ABC):
         """
         Return a tuple of (format_name, version_numbers).
 
-        This only works if path is supported, otherwise raise UnknownFiberError
-        or return False.
+        This should only work if path is the supported file format, otherwise
+        raise UnknownFiberError or return False.
         """
         msg = f"FileFormatter: {self.name} has no get_version method"
         raise NotImplementedError(msg)
+
+    def __hash__(self):
+        """FiberIO instances should be uniquely defined by (format, version)"""
+        return hash((self.name, self.version))
 
     def __init_subclass__(cls, **kwargs):
         """
@@ -87,13 +284,14 @@ class FiberIO(ABC):
             msg = "You must specify the file format with the name field."
             raise InvalidFileFormatter(msg)
         # register formatter
-        _IO_INSTANCES[cls.name.upper()] = cls()
+        manager: _FiberIOManager = getattr(cls.__mro__[1], "manager")
+        manager.register_fiberio(cls())
 
 
 def read(
     path: Union[str, Path],
     file_format: Optional[str] = None,
-    version: Optional[str] = None,
+    file_version: Optional[str] = None,
     time: Optional[tuple[Optional[timeable_types], Optional[timeable_types]]] = None,
     distance: Optional[tuple[Optional[float], Optional[float]]] = None,
     **kwargs,
@@ -108,7 +306,7 @@ def read(
     file_format
         A string indicating the file format. If not provided dascore will
         try to estimate the format.
-    version
+    file_version
         An optional string indicating the format version.
     time
         An optional tuple of time ranges.
@@ -118,15 +316,18 @@ def read(
         All kwargs are passed to the format-specific read functions.
     """
     if not file_format:
-        file_format = get_format(path)[0].upper()
-    formatter = _IO_INSTANCES[file_format.upper()]
-    return formatter.read(path, version=version, time=time, distance=distance, **kwargs)
+        file_format, file_version = get_format(path)
+    formatter = FiberIO.manager.get_fiberio(file_format, file_version)
+    return formatter.read(
+        path, file_version=file_version, time=time, distance=distance, **kwargs
+    )
 
 
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))
 def scan(
     path: Union[Path, str],
     file_format: Optional[str] = None,
+    file_version: Optional[str] = None,
 ) -> List[PatchFileSummary]:
     """
     Scan a file, return the summary dictionary.
@@ -144,13 +345,18 @@ def scan(
         {fields}
     """
     # dispatch to file format handlers
-    if file_format is None:
-        file_format = get_format(path)[0]
-    out = _IO_INSTANCES[file_format].scan(path)
+    if not file_format:
+        file_format, file_version = get_format(path)
+    formatter = FiberIO.manager.get_fiberio(file_format, file_version)
+    out = formatter.scan(path)
     return out
 
 
-def get_format(path: Union[str, Path]) -> (str, str):
+def get_format(
+    path: Union[str, Path],
+    file_format: Optional[str] = None,
+    file_version: Optional[str] = None,
+) -> tuple[str, str]:
     """
     Return the name of the format contained in the file and version number.
 
@@ -158,6 +364,11 @@ def get_format(path: Union[str, Path]) -> (str, str):
     ----------
     path
         The path to the file.
+    file_format
+        The known file format.
+    file_version
+        The known file version.
+
 
     Returns
     -------
@@ -170,21 +381,29 @@ def get_format(path: Union[str, Path]) -> (str, str):
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"{path} does not exist.")
-    for name, formatter in _IO_INSTANCES.items():
+    ext = Path(path).suffix or None
+    iterator = FiberIO.manager.yield_fiberio(file_format, file_version, extension=ext)
+    for formatter in iterator:
         try:
-            format = formatter.get_format(path)
-        except Exception:  # NOQA
+            format_version = formatter.get_format(path)
+        except (ValueError, TypeError, HDF5ExtError, NotImplementedError, DASCoreError):
             continue
-        if format:
-            return format
+        if format_version:
+            return format_version
     else:
         msg = f"Could not determine file format of {path}"
         raise UnknownFiberFormat(msg)
 
 
-def write(patch_or_spool, path: Union[str, Path], file_format: str, **kwargs):
+def write(
+    patch_or_spool,
+    path: Union[str, Path],
+    file_format: str,
+    file_version: Optional[str] = None,
+    **kwargs,
+):
     """
-    Write a Patch or Stream to disk.
+    Write a Patch or Spool to disk.
 
     Parameters
     ----------
@@ -192,13 +411,15 @@ def write(patch_or_spool, path: Union[str, Path], file_format: str, **kwargs):
         The path to the file.
     file_format
         The string indicating the format to write.
+    file_version
+        Optionally specify the version of the file, else use the latest
+        version.
 
     Raises
     ------
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
-
     """
-    formatter = _IO_INSTANCES[file_format.upper()]
+    formatter = FiberIO.manager.get_fiberio(file_format, file_version)
     if not isinstance(patch_or_spool, dascore.MemorySpool):
         patch_or_spool = dascore.MemorySpool([patch_or_spool])
     formatter.write(patch_or_spool, path, **kwargs)

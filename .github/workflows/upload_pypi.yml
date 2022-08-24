@@ -1,5 +1,5 @@
 # Upload to PyPI when a new release tag is made.
-name: Publish package
+name: PublishPackage
 on:
   release:
     types:

@@ -137,6 +137,6 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5")
         path = Path(tempfile.mkdtemp())
         assert path.exists()
     for patch in spool:
-        out_path = path / get_default_patch_name(patch)
+        out_path = path / (f"{get_default_patch_name(patch)}.{extention}")
         patch.io.write(out_path, file_format=file_format)
     return path

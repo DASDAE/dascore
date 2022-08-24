@@ -1,5 +1,11 @@
-name: Test Code
+name: TestCode
 on: [push]
+
+# Cancel previous runs when this one starts.
+concurrency:
+  group: TestCode-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 
 jobs:
   # Runs the tests on combinations of the supported python/os matrix.
