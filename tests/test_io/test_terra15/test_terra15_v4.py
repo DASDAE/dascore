@@ -1,35 +1,21 @@
 """
-Tests for reading terra15 format, version 5.
+Tests for reading terra15 format, version 4.
 """
 import numpy as np
 import pytest
-import tables as tb
 
-import dascore as dc
+import dascore
 from dascore.constants import REQUIRED_DAS_ATTRS
 from dascore.core.schema import PatchFileSummary
 from dascore.io.terra15.core import Terra15FormatterV4
-from dascore.utils.downloader import fetch
 
 
-@pytest.fixture(scope="class")
-def terra15_v5_path():
-    """Get the path to terra15 V5 file, download if not cached."""
-    return fetch("terra15_v5_test_file.hdf5")
-
-
-@pytest.fixture(scope="class")
-def terra15_v5_patch(terra15_v5_path):
-    """Read the terra15 v5 file."""
-    return dc.read(terra15_v5_path)
-
-
-class TestReadTerra15V5:
+class TestReadTerra15:
     """Tests for reading the terra15 format."""
 
     def test_type(self, terra15_das_patch):
         """Ensure the expected type is returned."""
-        assert isinstance(terra15_das_patch, dc.Patch)
+        assert isinstance(terra15_das_patch, dascore.Patch)
 
     def test_attributes(self, terra15_das_patch):
         """Ensure a few of the expected attrs exist in array."""
@@ -63,7 +49,7 @@ class TestReadTerra15V5:
         assert attrs["distance_min"] == coords["distance"].min() == d1
         assert attrs["distance_max"] == coords["distance"].max() == d2
 
-    def test_no_arrays_in_arrays(self, terra15_das_patch):
+    def test_no_arrays_in_attrs(self, terra15_das_patch):
         """
         Ensure that the attributes are not arrays.
         Originally, attrs like time_min can be arrays with empty shapes.
@@ -72,24 +58,14 @@ class TestReadTerra15V5:
             assert not isinstance(val, np.ndarray)
 
 
-class TestIsTerra15V5:
+class TestIsTerra15:
     """Tests for function to determine if a file is a terra15 file."""
 
-    @pytest.fixture
-    def generic_hdf5(self, tmp_path):
-        """Create a generic df5 file (not terra15)"""
-        parent = tmp_path / "sum"
-        parent.mkdir()
-        path = parent / "simple.hdf5"
-
-        with tb.open_file(str(path), "w") as fi:
-            group = fi.create_group("/", "bob")
-            fi.create_carray(group, "data", obj=np.random.rand(10))
-        return path
-
-    def test_version_2(self, terra15_das_example_path):
+    def test_format_and_version(self, terra15_das_example_path):
         """Ensure version two is recognized."""
-        assert Terra15FormatterV4().get_format(terra15_das_example_path)
+        format, version = Terra15FormatterV4().get_format(terra15_das_example_path)
+        assert format == Terra15FormatterV4.name
+        assert version == Terra15FormatterV4.version
 
     def test_not_terra15_not_df5(self, dummy_text_file):
         """Test for not even a hdf5 file."""
@@ -103,7 +79,7 @@ class TestIsTerra15V5:
         assert not parser.get_format(generic_hdf5)
 
 
-class TestScanTerra15V5:
+class TestScanTerra15:
     """Tests for scanning terra15 file."""
 
     def test_scanning(self, terra15_das_patch, terra15_das_example_path):
@@ -113,3 +89,29 @@ class TestScanTerra15V5:
         assert isinstance(out, list)
         assert len(out) == 1
         assert isinstance(out[0], PatchFileSummary)
+
+        data = out[0]
+        assert data.file_format == parser.name
+        assert data.file_version == parser.version
+
+
+class TestTerra15Unfinished:
+    """Test for reading files with zeroes filled at the end."""
+
+    @pytest.fixture(scope="class")
+    def patch_unfinished(self, terra15_das_unfinished_path):
+        """Return the patch with zeroes at the end."""
+        parser = Terra15FormatterV4()
+        out = parser.read(terra15_das_unfinished_path)[0]
+        return out
+
+    def test_zeros_gone(self, patch_unfinished):
+        """No zeros should exist in the data."""
+        data = patch_unfinished.data
+        all_zero_rows = np.all(data == 0, axis=1)
+        assert not np.any(all_zero_rows)
+
+    def test_monotonic_time(self, patch_unfinished):
+        """Ensure the time is increasing."""
+        time = patch_unfinished.coords["time"]
+        assert np.all(np.diff(time) >= np.timedelta64(0, "s"))
