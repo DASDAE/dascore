@@ -18,6 +18,7 @@ from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import DASCoreError, InvalidFileFormatter, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
 from dascore.utils.hdf5 import HDF5ExtError
+from dascore.utils.misc import suppress_warnings
 
 
 class _FiberIOManager:
@@ -39,9 +40,11 @@ class _FiberIOManager:
         Get the unlaoded entry points registered to this domain into a dict of
         {name: ep}
         """
-
-        out = pd.Series({ep.name: ep.load for ep in entry_points()[self._entry_point]})
-        return out
+        # TODO remove warning suppression and switch to select when 3.9 is dropped
+        # see https://docs.python.org/3/library/importlib.metadata.html#entry-points
+        with suppress_warnings(DeprecationWarning):
+            out = {ep.name: ep.load for ep in entry_points()[self._entry_point]}
+        return pd.Series(out)
 
     @cached_property
     def known_formats(self):
@@ -315,8 +318,12 @@ def read(
     *kwargs
         All kwargs are passed to the format-specific read functions.
     """
-    if not file_format:
-        file_format, file_version = get_format(path)
+    if not file_format or not file_version:
+        file_format, file_version = get_format(
+            path,
+            file_format=file_format,
+            file_version=file_version,
+        )
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
     return formatter.read(
         path, file_version=file_version, time=time, distance=distance, **kwargs
@@ -345,8 +352,12 @@ def scan(
         {fields}
     """
     # dispatch to file format handlers
-    if not file_format:
-        file_format, file_version = get_format(path)
+    if not file_format or not file_version:
+        file_format, file_version = get_format(
+            path,
+            file_format=file_format,
+            file_version=file_version,
+        )
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
     out = formatter.scan(path)
     return out

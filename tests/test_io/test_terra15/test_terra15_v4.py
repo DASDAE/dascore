@@ -3,7 +3,6 @@ Tests for reading terra15 format, version 4.
 """
 import numpy as np
 import pytest
-import tables as tb
 
 import dascore
 from dascore.constants import REQUIRED_DAS_ATTRS
@@ -50,7 +49,7 @@ class TestReadTerra15:
         assert attrs["distance_min"] == coords["distance"].min() == d1
         assert attrs["distance_max"] == coords["distance"].max() == d2
 
-    def test_no_arrays_in_arrays(self, terra15_das_patch):
+    def test_no_arrays_in_attrs(self, terra15_das_patch):
         """
         Ensure that the attributes are not arrays.
         Originally, attrs like time_min can be arrays with empty shapes.
@@ -62,21 +61,11 @@ class TestReadTerra15:
 class TestIsTerra15:
     """Tests for function to determine if a file is a terra15 file."""
 
-    @pytest.fixture
-    def generic_hdf5(self, tmp_path):
-        """Create a generic df5 file (not terra15)"""
-        parent = tmp_path / "sum"
-        parent.mkdir()
-        path = parent / "simple.hdf5"
-
-        with tb.open_file(str(path), "w") as fi:
-            group = fi.create_group("/", "bob")
-            fi.create_carray(group, "data", obj=np.random.rand(10))
-        return path
-
-    def test_version_2(self, terra15_das_example_path):
+    def test_format_and_version(self, terra15_das_example_path):
         """Ensure version two is recognized."""
-        assert Terra15FormatterV4().get_format(terra15_das_example_path)
+        format, version = Terra15FormatterV4().get_format(terra15_das_example_path)
+        assert format == Terra15FormatterV4.name
+        assert version == Terra15FormatterV4.version
 
     def test_not_terra15_not_df5(self, dummy_text_file):
         """Test for not even a hdf5 file."""
@@ -100,6 +89,10 @@ class TestScanTerra15:
         assert isinstance(out, list)
         assert len(out) == 1
         assert isinstance(out[0], PatchFileSummary)
+
+        data = out[0]
+        assert data.file_format == parser.name
+        assert data.file_version == parser.version
 
 
 class TestTerra15Unfinished:

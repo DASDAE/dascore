@@ -6,6 +6,9 @@ jobs:
   lint_code:
     runs-on: ubuntu-latest
 
+    # only run if CI isn't turned off
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
+
     steps:
       - uses: actions/checkout@v2
 

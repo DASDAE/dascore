@@ -5,7 +5,9 @@ import shutil
 from pathlib import Path
 from uuid import uuid1
 
+import numpy as np
 import pytest
+import tables as tb
 
 import dascore
 import dascore.examples as ex
@@ -243,3 +245,19 @@ def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
     out = FileSpool(two_patch_directory)
     return out.update()
+
+
+@pytest.fixture
+def generic_hdf5(tmp_path):
+    """
+    Create a generic hdf5 file (not das). This is useful for ensuring formatters
+    recognize differences in HDF5 files.
+    """
+    parent = tmp_path / "sum"
+    parent.mkdir()
+    path = parent / "simple.hdf5"
+
+    with tb.open_file(str(path), "w") as fi:
+        group = fi.create_group("/", "bob")
+        fi.create_carray(group, "data", obj=np.random.rand(10))
+    return path

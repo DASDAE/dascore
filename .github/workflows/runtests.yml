@@ -10,11 +10,15 @@ concurrency:
 jobs:
   # Runs the tests on combinations of the supported python/os matrix.
   test_code:
+
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.9', '3.10']
+
+    # only run if CI isn't turned off
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     steps:
       - uses: actions/checkout@v2
