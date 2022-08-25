@@ -282,7 +282,7 @@ class TestReleaseMemory:
         memory.
         """
         patch = get_simple_patch()
-        new = patch.decimate(10)
+        new = patch.decimate(time=10)
         wr = weakref.ref(patch.data)
         del patch
         assert isinstance(new, Patch)
@@ -298,3 +298,16 @@ class TestReleaseMemory:
         del patch
         assert isinstance(new, Patch)
         assert wr() is None
+
+
+class TestXarray:
+    """Tests"""
+
+    pytest.importorskip("xarray")
+
+    def test_convert_to_xarray(self, random_patch):
+        """Tests for converting to xarray object."""
+        import xarray as xr
+
+        da = random_patch.to_xarray()
+        assert isinstance(da, xr.DataArray)

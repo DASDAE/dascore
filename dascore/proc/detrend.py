@@ -8,7 +8,7 @@ from dascore.utils.patch import patch_function
 
 
 @patch_function()
-def detrend(patch: PatchType, dim="time", type="linear") -> PatchType:
+def detrend(patch: PatchType, dim, type="linear") -> PatchType:
     """Perform detrending along a given dimension."""
     assert dim in patch.dims
     axis = patch.dims.index(dim)

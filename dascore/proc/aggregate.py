@@ -34,7 +34,7 @@ def aggregate(
     method: Literal["mean", "median", "min", "max", "first", "last"] = "mean",
 ) -> PatchType:
     """
-    Aggregate values patch along a specified dimension.
+    Aggregate values along a specified dimension.
 
     Parameters
     ----------
@@ -43,9 +43,6 @@ def aggregate(
     method
         The aggregation to apply along dimension. Options are:
             mean, min, max, median, first, last
-
-    Notes
-    -----
     """
     axis = patch.dims.index(dim)
     func = _AGG_FUNCS[method]

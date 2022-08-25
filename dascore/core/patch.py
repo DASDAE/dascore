@@ -153,6 +153,14 @@ class Patch:
         """Return the attributes of the trace."""
         return FrozenDict(self._data_array.attrs)
 
+    def to_xarray(self):
+        """
+        Return a data array with patch contents.
+        """
+        # Note this is here in case we decide to remove xarray there will
+        # still be a way to get a DataArray object with an optional import
+        return self._data_array
+
     squeeze = dascore.proc.squeeze
     rename = dascore.proc.rename
     transpose = dascore.proc.transpose
