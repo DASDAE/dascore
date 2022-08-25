@@ -175,5 +175,5 @@ class TestScan:
 
     def test_scan_directory(self, tmp_path):
         """Trying to scan a directory should raise a nice error"""
-        with pytest.raises(IsADirectoryError):
+        with pytest.raises(OSError, match="a directory"):
             _ = dascore.scan(tmp_path)
