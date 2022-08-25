@@ -175,10 +175,12 @@ class _FiberIOManager:
     def _yield_format_version(self, format, version):
         """Yield file format/version prioritized formatters."""
         if format is not None:
-            formatters = self._format_version.get(format.upper(), None)
+            format = format.upper()
+            self.load_plugins(format)
+            formatters = self._format_version.get(format, None)
             # no format found
             if not formatters:
-                format_list = list(self._format_version)
+                format_list = list(self.known_formats)
                 msg = f"Unknown format {format}, " f"known formats are {format_list}"
                 raise UnknownFiberFormat(msg)
             # a version is specified
@@ -335,6 +337,7 @@ def scan(
     path: Union[Path, str],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
+    ignore: bool = False,
 ) -> List[PatchFileSummary]:
     """
     Scan a file, return the summary dictionary.
@@ -345,6 +348,9 @@ def scan(
         The path the to file to scan
     file_format
         Format of the file. If not provided DASCore will try to determine it.
+    ignore
+        If True, ignore non-DAS files by returning an empty list, else raise
+        UnknownFiberFormat if unreadable file encountered.
 
     Notes
     -----
@@ -353,11 +359,18 @@ def scan(
     """
     # dispatch to file format handlers
     if not file_format or not file_version:
-        file_format, file_version = get_format(
-            path,
-            file_format=file_format,
-            file_version=file_version,
-        )
+        try:
+            file_format, file_version = get_format(
+                path,
+                file_format=file_format,
+                file_version=file_version,
+            )
+        except UnknownFiberFormat as e:
+            if ignore:
+                return []
+            else:
+                raise e
+
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
     out = formatter.scan(path)
     return out

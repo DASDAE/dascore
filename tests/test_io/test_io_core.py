@@ -161,3 +161,19 @@ class TestScan:
         out = dascore.scan(terra15_das_example_path)
         assert isinstance(out, list)
         assert len(out)
+
+    def test_scan_with_ignore(self, tmp_path):
+        """ignore option should make scan return []"""
+        # no ignore should still raise
+        dummy_file = tmp_path / "data.txt"
+        dummy_file.touch()
+        with pytest.raises(UnknownFiberFormat):
+            _ = dascore.scan(dummy_file)
+        out = dascore.scan(dummy_file, ignore=True)
+        assert not len(out)
+        assert out == []
+
+    def test_scan_directory(self, tmp_path):
+        """Trying to scan a directory should raise a nice error"""
+        with pytest.raises(IsADirectoryError):
+            _ = dascore.scan(tmp_path)

@@ -467,7 +467,7 @@ class DirectoryIndexer(AbstractIndexer):
         update_time = time.time()
         new_files = list(self._get_file_iterator(paths=paths, only_new=True))
         smooth_iterator = track(new_files, f"Indexing {self.path.name}")
-        data_list = [y.dict() for x in smooth_iterator for y in dc.scan(x)]
+        data_list = [y.dict() for x in smooth_iterator for y in dc.scan(x, ignore=True)]
         df = pd.DataFrame(data_list)
         if not df.empty:
             self._write_update(df, update_time)

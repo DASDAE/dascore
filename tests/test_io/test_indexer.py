@@ -1,6 +1,8 @@
 """
 Tests for indexing local file systems.
 """
+import shutil
+from contextlib import suppress
 from pathlib import Path
 
 import pandas as pd
@@ -112,6 +114,20 @@ class TestGetContents:
 class TestUpdate:
     """Tests for updating index."""
 
+    @pytest.fixture(scope="class")
+    def spool_directory_with_non_das_file(self, two_patch_directory, tmp_path_factory):
+        """Create a directory with some das files and some non-das files."""
+        new = tmp_path_factory.mktemp("unreadable_test") / "sub"
+        shutil.copytree(two_patch_directory, new)
+        indexer = DirectoryIndexer(new)
+        # remove index if it exists
+        with suppress(FileNotFoundError):
+            indexer.index_path.unlink()
+        # add a non das file
+        with open(new / "not_das.open", "w") as fi:
+            fi.write("cant be das, can it?")
+        return new
+
     def test_add_one_patch(self, empty_index, random_patch):
         """Ensure a new patch added to the directory shows up."""
         path = empty_index.path / get_default_patch_name(random_patch)
@@ -119,3 +135,10 @@ class TestUpdate:
         new_index = empty_index.update()
         contents = new_index()
         assert len(contents) == 1
+
+    def test_index_with_bad_file(self, spool_directory_with_non_das_file):
+        """Ensure if one file is not readable index continues."""
+        indexer = DirectoryIndexer(spool_directory_with_non_das_file)
+        # if this doesn't fail the test passes
+        updated = indexer.update()
+        assert isinstance(updated, DirectoryIndexer)
