@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from packaging.version import parse as get_version
 
+import dascore as dc
 from dascore.io.indexer import DirectoryIndexer
 from dascore.utils.patch import get_default_patch_name
 
@@ -62,6 +64,13 @@ class TestBasics:
         """Ensure a useful (not the default) str/repr is implemented"""
         out = str(basic_indexer)
         assert "object at" not in out
+
+    def test_version(self, basic_indexer):
+        """Ensure the version written to file is correct."""
+        updated = basic_indexer.update()
+        index_version = updated._index_version
+        assert index_version == dc.__last_version__
+        assert get_version(index_version) > get_version("0.0.1")
 
 
 class TestGetContents:
