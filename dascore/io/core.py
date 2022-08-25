@@ -15,7 +15,12 @@ import pandas as pd
 import dascore
 from dascore.constants import SpoolType, timeable_types
 from dascore.core.schema import PatchFileSummary
-from dascore.exceptions import DASCoreError, InvalidFileFormatter, UnknownFiberFormat
+from dascore.exceptions import (
+    DASCoreError,
+    InvalidFiberFile,
+    InvalidFileFormatter,
+    UnknownFiberFormat,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.hdf5 import HDF5ExtError
 from dascore.utils.misc import suppress_warnings
@@ -357,6 +362,9 @@ def scan(
     The summary dictionaries contain the following fields:
         {fields}
     """
+    if not os.path.exists(path) or os.path.isdir(path):
+        msg = f"{path} does not exist or is a directory"
+        raise InvalidFiberFile(msg)
     # dispatch to file format handlers
     if not file_format or not file_version:
         try:

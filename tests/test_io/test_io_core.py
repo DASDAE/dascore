@@ -7,7 +7,11 @@ import numpy as np
 import pytest
 
 import dascore
-from dascore.exceptions import InvalidFileFormatter, UnknownFiberFormat
+from dascore.exceptions import (
+    InvalidFiberFile,
+    InvalidFileFormatter,
+    UnknownFiberFormat,
+)
 from dascore.io.core import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
 
@@ -175,5 +179,5 @@ class TestScan:
 
     def test_scan_directory(self, tmp_path):
         """Trying to scan a directory should raise a nice error"""
-        with pytest.raises(OSError, match="a directory"):
+        with pytest.raises(InvalidFiberFile, match="a directory"):
             _ = dascore.scan(tmp_path)

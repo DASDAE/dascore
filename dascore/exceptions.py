@@ -11,6 +11,10 @@ class InvalidFileFormatter(ValueError, DASCoreError):
     """Raised when an invalid file formatter is defined or used."""
 
 
+class InvalidFiberFile(IOError, DASCoreError):
+    """Raised when a fiber operation is called on an invalid file."""
+
+
 class UnknownFiberFormat(IOError, DASCoreError):
     """Raised when the format of an alleged fiber file is not recognized."""
 
