@@ -1,5 +1,5 @@
 """
-Module for applying decimation to Patches.
+Module for re-sampling patches.
 """
 from typing import Union
 
@@ -18,29 +18,28 @@ from dascore.utils.time import to_number, to_timedelta64
 @patch_function()
 def decimate(
     patch: PatchType,
-    factor: int,
-    dim: str = "time",
     lowpass: bool = True,
     copy=True,
+    **kwargs,
 ) -> PatchType:
     """
     Decimate a patch along a dimension.
 
     Parameters
     ----------
-    factor
-        The decimation factor (e.g., 10)
-    dim
-        dimension along which to decimate.
     lowpass
         If True, first apply a low-pass (anti-alis) filter. Uses
         :func:`dascore.proc.filter._lowpass_cheby_2`
     copy
         If True, copy the decimated data array. This is needed if you want
         the old array to get gc'ed to free memory otherwise a view is returned.
+    **kwargs
+        Used to pass dimension and factor. For example time=10 is 10x
+        decimation along the time axis.
     """
     # Note: We can't simply use scipy.signal.decimate due to this issue:
     # https://github.com/scipy/scipy/issues/15072
+    dim, axis, factor = get_dim_value_from_kwargs(patch, kwargs)
     if lowpass:
         # get new niquest
         if factor > 16:
@@ -51,7 +50,7 @@ def decimate(
             raise FilterValueError(msg)
         sr = _get_sampling_rate(patch, dim)
         freq = sr * 0.5 / float(factor)
-        fdata = _lowpass_cheby_2(patch.data, freq, sr, axis=patch.dims.index(dim))
+        fdata = _lowpass_cheby_2(patch.data, freq, sr, axis=axis)
         patch = dascore.Patch(fdata, coords=patch.coords, attrs=patch.attrs)
 
     kwargs = {dim: slice(None, None, factor)}
