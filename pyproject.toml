@@ -50,6 +50,7 @@ dependencies = [
     "xarray",
     "pydantic>=1.9.0",
     "rich",
+    "packaging",
 ]
 
 [project.optional-dependencies]
