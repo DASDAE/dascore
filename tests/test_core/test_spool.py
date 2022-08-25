@@ -243,33 +243,33 @@ class TestGetSpool:
 
     def test_spool_from_spool(self, random_spool):
         """Ensure a spool is valid input to get spool."""
-        out = dascore.get_spool(random_spool)
+        out = dascore.spool(random_spool)
         for p1, p2 in zip(out, random_spool):
             assert p1.equals(p2)
 
     def test_spool_from_patch_sequence(self, random_spool):
         """Ensure a list of patches returns a spool"""
-        spool_list = dascore.get_spool(list(random_spool))
-        spool_tuple = dascore.get_spool(tuple(random_spool))
+        spool_list = dascore.spool(list(random_spool))
+        spool_tuple = dascore.spool(tuple(random_spool))
         for p1, p2, p3 in zip(spool_tuple, spool_list, random_spool):
             assert p1.equals(p2)
             assert p2.equals(p3)
 
     def test_spool_from_single_file(self, terra15_das_example_path):
         """Ensure a single file path returns a spool."""
-        out1 = dascore.get_spool(terra15_das_example_path)
+        out1 = dascore.spool(terra15_das_example_path)
         assert isinstance(out1, BaseSpool)
         # ensure format works.
-        out2 = dascore.get_spool(terra15_das_example_path, file_format="terra15")
+        out2 = dascore.spool(terra15_das_example_path, file_format="terra15")
         assert isinstance(out2, BaseSpool)
         assert len(out1) == len(out2)
 
     def test_non_existent_file_raises(self):
         """A path that doesn't exist should raise."""
         with pytest.raises(Exception, match="get spool from"):
-            dascore.get_spool("here_or_there?")
+            dascore.spool("here_or_there?")
 
     def test_non_supported_type_raises(self):
         """A type that can't contain patches should raise."""
         with pytest.raises(Exception, match="not get spool from"):
-            dascore.get_spool(1.2)
+            dascore.spool(1.2)

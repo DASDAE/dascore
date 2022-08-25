@@ -92,7 +92,7 @@ import dascore as dc
 pa = dc.get_example_patch()
 
 out = (
-    pa.decimate(8)  # decimate to reduce data volume by 8 along time dimension
+    pa.decimate(time=8)  # decimate to reduce data volume by 8 along time dimension
     .detrend(dim='distance')  # detrend along distance dimension
     .pass_filter(time=(None, 10))  # apply a low-pass 10 Hz butterworth filter
 )
@@ -162,7 +162,7 @@ can manage a group of patches loaded into memory, archives of local files,
 and (in the future) a variety of clients for accessing remote resources.
 
 The simplest way to get the appropriate spool for a specified input is to use
-the `get_spool` method, which should just work in the vast majority of cases.
+the `load` method, which should just work in the vast majority of cases.
 
 
 ```{code-cell}
@@ -172,16 +172,16 @@ import dascore as dc
 patch_list = [dc.get_example_patch()]
 
 # get a spool for managing in-memory patches
-spool1 = dc.get_spool(patch_list)
+spool1 = dc.spool(patch_list)
 
 # get a spool from a das file
 from dascore.utils.downloader import fetch
 path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
-spool2 = dc.get_spool(path_to_das_file)
+spool2 = dc.spool(path_to_das_file)
 
 # get a spool from a directory of DAS files
 directory_path = path_to_das_file.parent
-spool3 = dc.get_spool(directory_path)
+spool3 = dc.spool(directory_path)
 ```
 
 Despite some implementation differences, all spools have common behavior/methods.
