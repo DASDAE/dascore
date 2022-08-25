@@ -32,15 +32,15 @@ path = ex.spool_to_directory(diverse_spool)
 
 # Create a spool for interacting with the files in the directory.
 spool = (
-    dascore.load(path)
-    .select(network='das2')  # sub-select das2 network
-    .select(time=(None, '2022-01-01'))  # unselect anything after 2022
-    .chunk(time=2, overlap=0.5)  # change the chunking of the patches
+  dascore.spool(path)
+  .select(network='das2')  # sub-select das2 network
+  .select(time=(None, '2022-01-01'))  # unselect anything after 2022
+  .chunk(time=2, overlap=0.5)  # change the chunking of the patches
 )
 
 # Iterate each patch and do something with it
 for patch in spool:
-    ...
+  ...
 ```
 
 ## Directory Indexer

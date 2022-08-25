@@ -172,16 +172,16 @@ import dascore as dc
 patch_list = [dc.get_example_patch()]
 
 # get a spool for managing in-memory patches
-spool1 = dc.load(patch_list)
+spool1 = dc.spool(patch_list)
 
 # get a spool from a das file
 from dascore.utils.downloader import fetch
 path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
-spool2 = dc.load(path_to_das_file)
+spool2 = dc.spool(path_to_das_file)
 
 # get a spool from a directory of DAS files
 directory_path = path_to_das_file.parent
-spool3 = dc.load(directory_path)
+spool3 = dc.spool(directory_path)
 ```
 
 Despite some implementation differences, all spools have common behavior/methods.

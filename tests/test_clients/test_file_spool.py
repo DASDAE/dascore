@@ -195,7 +195,7 @@ class TestFileSpoolIntegrations:
         endtime = np.datetime64("2022-01-01")
         duration = 3
         spool = (
-            dc.load(diverse_spool_directory)
+            dc.spool(diverse_spool_directory)
             .select(network=network)  # sub-select das2 network
             .select(time=(None, endtime))  # unselect anything after 2022
             .chunk(time=duration, overlap=0.5)  # change the chunking of the patches

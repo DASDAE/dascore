@@ -285,7 +285,7 @@ class MemorySpool(DataFrameSpool):
 
 
 @singledispatch
-def load(obj: Union[Path, str, BaseSpool, Sequence[PatchType]], **kwargs) -> SpoolType:
+def spool(obj: Union[Path, str, BaseSpool, Sequence[PatchType]], **kwargs) -> SpoolType:
     """
     Load a spool from some data source.
 
@@ -298,8 +298,8 @@ def load(obj: Union[Path, str, BaseSpool, Sequence[PatchType]], **kwargs) -> Spo
     raise ValueError(msg)
 
 
-@load.register(str)
-@load.register(Path)
+@spool.register(str)
+@spool.register(Path)
 def spool_from_str(path, **kwargs):
     """Get a spool from a path."""
     path = Path(path)
@@ -313,14 +313,14 @@ def spool_from_str(path, **kwargs):
         raise ValueError(f"could not get spool from {path}")
 
 
-@load.register(BaseSpool)
+@spool.register(BaseSpool)
 def spool_from_spool(spool, **kwargs):
     """Return a spool from a spool."""
     return spool
 
 
-@load.register(list)
-@load.register(tuple)
+@spool.register(list)
+@spool.register(tuple)
 def spool_from_patch_list(patch_list, **kwargs):
     """Return a spool from a sequence of patches."""
     return MemorySpool(patch_list)

@@ -225,7 +225,7 @@ def diverse_spool_directory(diverse_spool):
 @pytest.fixture(scope="class")
 def diverse_file_spool(diverse_spool_directory):
     """Save the diverse spool contents to a directory."""
-    out = dascore.load(diverse_spool_directory).update()
+    out = dascore.spool(diverse_spool_directory).update()
     return out
 
 
