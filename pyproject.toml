@@ -41,50 +41,53 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
-    "findiff",
-    "matplotlib",
-    "pandas",
-    "pooch>=1.2",
-    "scipy",
-    "tables",
-    "xarray",
-    "pydantic>=1.9.0",
-    "rich",
-    "packaging",
+     "findiff",
+     "matplotlib",
+     "numpy",
+     "packaging",
+     "pandas",
+     "pooch>=1.2",
+     "pydantic>=1.9.0",
+     "rich",
+     "scipy",
+     "tables",
+     "typing_extensions",
+     "xarray",
 ]
 
 [project.optional-dependencies]
 docs = [
-    "sphinx>=1.5.1",
+    "myst-nb",
+    "myst-parser",
     "numpydoc",
+    "pandoc",
+    "sphinx>=1.5.1",
     "sphinx_autodoc_typehints",
     "typer",
-    "pandoc",
-    "myst-parser",
-    "myst-nb",
 ]
 test = [
-    "pytest",
     "coverage",
-    "pytest-cov",
     "coveralls",
-    "twine",
     "pre-commit",
+    "pytest",
     "pytest-codeblocks",
+    "pytest-cov",
+    "twine",
 ]
 dev = ["dascore[test]", "dascore[docs]"]
 
 # --- URLs for project
 
 [project.urls]
-"Homepage" = "https://github.com/dasdae/dascore"
-"Documentation" = "https://dasdae.github.io/dascore/"
 "Bug Tracker" = "https://github.com/DASDAE/dascore/issues"
+"Documentation" = "https://dasdae.github.io/dascore/"
+"Homepage" = "https://github.com/dasdae/dascore"
 
 # --- Entry Points
 
 [project.entry-points."dascore.fiber_io"]
-TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
-PICKLE = "dascore.io.pickle.core:PickleIO"
-WAV = "dascore.io.wav.core:WavIO"
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
+PICKLE = "dascore.io.pickle.core:PickleIO"
+TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
+TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
+WAV = "dascore.io.wav.core:WavIO"
