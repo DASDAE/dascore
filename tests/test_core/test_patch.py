@@ -201,6 +201,11 @@ class TestEquals:
         patch2 = random_patch.new(attrs=attrs2)
         assert patch1.equals(patch2)
 
+    def test_transposed_patches_equal(self, random_patch):
+        """Transposed patches are still equal."""
+        transposed = random_patch.transpose()
+        assert random_patch.equals(transposed)
+
 
 class TestTranspose:
     """Tests for switching dimensions."""
