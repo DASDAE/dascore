@@ -1,9 +1,5 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Created on Wed Jun 22 11:19:17 2022
-
-@author: hafiz
+Utilites to read TDMS format
 """
 import datetime
 import mmap

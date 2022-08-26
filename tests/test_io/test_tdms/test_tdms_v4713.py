@@ -11,7 +11,7 @@ import pytest
 
 import dascore
 from dascore.constants import REQUIRED_DAS_ATTRS
-from dascore.io.silixa.core import SilixaFormatter
+from dascore.io.tdms.core import TDMSFormatterV4713
 from dascore.utils.downloader import fetch
 
 
@@ -25,7 +25,7 @@ def silixa_das_example_path():
 @pytest.fixture()
 def silixa_das_patch(silixa_das_example_path):
     """Make patch for test data"""
-    ft = SilixaFormatter()
+    ft = TDMSFormatterV4713()
     stream_data = ft.read(silixa_das_example_path)
     return stream_data[0]
 
@@ -60,7 +60,7 @@ class TestReadSilixa:
         t1, t2 = time_array[10], time_array[40]
         d1, d2 = dist_array[10], dist_array[40]
 
-        patch = SilixaFormatter().read(
+        patch = TDMSFormatterV4713().read(
             silixa_das_example_path, time=(t1, t2), distance=(d1, d2)
         )[0]
         attrs, coords = patch.attrs, patch.coords
@@ -75,13 +75,13 @@ class TestIsSilixa:
 
     def test_not_silixa_not_tdms(self, dummy_text_file):
         """Test for not a silixa tdms file."""
-        parser = SilixaFormatter()
+        parser = TDMSFormatterV4713()
         assert not parser.get_format(dummy_text_file)
         assert not parser.get_format(dummy_text_file.parent)
 
     def test_silixa_get_format(self, silixa_das_example_path):
         """Test for a silixa tdms file."""
-        parser = SilixaFormatter()
+        parser = TDMSFormatterV4713()
         assert parser.get_format(silixa_das_example_path)
         format_name, format_version = parser.get_format(silixa_das_example_path)
         assert format_name == parser.name
@@ -92,7 +92,7 @@ class TestScansilixa:
 
     def test_scanning(self, silixa_das_patch, silixa_das_example_path):
         """Tests for getting summary info from silixa data."""
-        parser = SilixaFormatter()
+        parser = TDMSFormatterV4713()
         out = parser.scan(silixa_das_example_path)
         assert isinstance(out, list)
         assert len(out) == 1

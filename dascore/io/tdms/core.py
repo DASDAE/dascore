@@ -6,8 +6,9 @@ from typing import List, Optional, Union
 
 import numpy as np
 
-from dascore.constants import PatchSummaryDict, timeable_types
-from dascore.core import Patch, Stream
+from dascore.constants import timeable_types
+from dascore.core import MemorySpool, Patch
+from dascore.core.schema import PatchFileSummary
 from dascore.io.core import FiberIO
 from dascore.utils.time import to_datetime64
 
@@ -21,7 +22,7 @@ from .utils import (
 )
 
 
-class SilixaFormatter(FiberIO):
+class TDMSFormatterV4713(FiberIO):
     """
     Support for Silixa data format (tdms).
     """
@@ -51,12 +52,11 @@ class SilixaFormatter(FiberIO):
         except Exception:  # noqa
             return False
 
-    def scan(self, path: Union[str, Path]) -> List[PatchSummaryDict]:
+    def scan(self, path: Union[str, Path]) -> List[PatchFileSummary]:
         """
         Scan a silixa tdms file, return summary information about the file's contents.
         """
         with open(path, "rb") as tdms_file:
-
             out = _get_default_attrs(tdms_file)
             return [out]
 
@@ -66,7 +66,7 @@ class SilixaFormatter(FiberIO):
         time: Optional[tuple[timeable_types, timeable_types]] = None,
         distance: Optional[tuple[float, float]] = None,
         **kwargs
-    ) -> Stream:
+    ) -> MemorySpool:
         """
         Read a silixa tdms file, return a DataArray.
 
@@ -103,4 +103,4 @@ class SilixaFormatter(FiberIO):
             attrs["distance_max"] = dar.max()
             # get slices of data and read
             patch = Patch(data=data, coords=_coords, attrs=attrs)
-            return Stream([patch])
+            return MemorySpool([patch])
