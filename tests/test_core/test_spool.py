@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import dascore
+import dascore as dc
 from dascore.core.spool import BaseSpool
 from dascore.utils.time import to_timedelta64
 
@@ -17,6 +17,12 @@ class TestSpoolBasics:
         """Ensure the default str is not used on the spool."""
         out = str(random_spool)
         assert "object at" not in out
+
+    def test_spool_from_emtpy_sequence(self):
+        """Ensure a spool can be created from empty list."""
+        out = dc.spool([])
+        assert isinstance(out, BaseSpool)
+        assert len(out) == 0
 
 
 class TestSlicing:
@@ -44,15 +50,15 @@ class TestSpoolIterablity:
 
     def test_index(self, random_spool):
         """Ensure the stream can be indexed."""
-        assert isinstance(random_spool[0], dascore.Patch)
+        assert isinstance(random_spool[0], dc.Patch)
 
     def test_list_o_patches(self, random_spool):
         """Ensure random_string can be iterated"""
         for pa in random_spool:
-            assert isinstance(pa, dascore.Patch)
+            assert isinstance(pa, dc.Patch)
         patch_list = list(random_spool)
         for pa in patch_list:
-            assert isinstance(pa, dascore.Patch)
+            assert isinstance(pa, dc.Patch)
 
     def test_index_error(self, random_spool):
         """Ensure an IndexError is raised when indexing beyond spool."""
@@ -155,7 +161,7 @@ class TestChunk:
         # get contents of chunked spool
         chunk_df = new.get_contents()
         new_patches = list(new)
-        new_patch = dascore.MemorySpool(new_patches)
+        new_patch = dc.MemorySpool(new_patches)
         # get content of spool created from patches in chunked spool.
         new_content = new_patch.get_contents()
         # these should be (nearly) identical.
@@ -163,12 +169,18 @@ class TestChunk:
         cols = sorted(common - {"history"})  # no need to compare history
         assert chunk_df[cols].equals(new_content[cols])
 
+    def test_merge_empty_spool(self, tmp_path_factory):
+        """Ensure merge doesn't raise on empty spools"""
+        spool = dc.spool([])
+        merged = spool.chunk(time=None)
+        assert len(merged) == 0
+
 
 class TestMergePatchesWithChunk:
     """Tests for merging patches together using chunk method."""
 
     @pytest.fixture()
-    def desperate_spool_no_overlap(self, random_patch) -> dascore.MemorySpool:
+    def desperate_spool_no_overlap(self, random_patch) -> dc.MemorySpool:
         """
         Create streams that do not overlap at all.
         Ensure the patches are not sorted in temporal order.
@@ -179,17 +191,17 @@ class TestMergePatchesWithChunk:
         pa2 = random_patch.update_attrs(time_min=t2 + d_time)
         t3 = pa2.attrs["time_max"]
         pa3 = pa2.update_attrs(time_min=t3 + d_time)
-        return dascore.MemorySpool([pa2, pa1, pa3])
+        return dc.MemorySpool([pa2, pa1, pa3])
 
     @pytest.fixture()
-    def spool_complete_overlap(self, random_patch) -> dascore.MemorySpool:
+    def spool_complete_overlap(self, random_patch) -> dc.MemorySpool:
         """
         Create a stream which overlaps each other completely.
         """
-        return dascore.MemorySpool([random_patch, random_patch])
+        return dc.MemorySpool([random_patch, random_patch])
 
     @pytest.fixture()
-    def spool_slight_gap(self, random_patch) -> dascore.MemorySpool:
+    def spool_slight_gap(self, random_patch) -> dc.MemorySpool:
         """
         Create a stream which has a 1.1 * dt gap.
         """
@@ -199,7 +211,7 @@ class TestMergePatchesWithChunk:
         pa2 = random_patch.update_attrs(time_min=t2 + dt * 1.1)
         t3 = pa2.attrs["time_max"]
         pa3 = pa2.update_attrs(time_min=t3 + dt * 1.1)
-        return dascore.MemorySpool([pa2, pa1, pa3])
+        return dc.MemorySpool([pa2, pa1, pa3])
 
     def test_merge_adjacent(self, adjacent_spool_no_overlap):
         """Test simple merge of patches."""
@@ -237,39 +249,53 @@ class TestMergePatchesWithChunk:
         out = spool_slight_gap.chunk(time=None)
         assert len(out) == 1
 
+    def test_merge_transposed_patches(self, spool_complete_overlap):
+        """Ensure if one of the patches is transposed merge still works"""
+        spoo = spool_complete_overlap
+        # transpose patch and remove transpose from history so patch will
+        # merge with other patch
+        new_patch = spoo[0].transpose().update_attrs(history=spoo[1].attrs["history"])
+        new = dc.spool(
+            [new_patch, spoo[1]],
+        )
+        new_merged = new.chunk(time=None)
+        old_merged = spool_complete_overlap.chunk(time=None)
+        assert len(new_merged) == len(old_merged) == 1
+        assert new_merged[0].equals(old_merged[0])
+
 
 class TestGetSpool:
     """Test getting spool from various sources."""
 
     def test_spool_from_spool(self, random_spool):
         """Ensure a spool is valid input to get spool."""
-        out = dascore.spool(random_spool)
+        out = dc.spool(random_spool)
         for p1, p2 in zip(out, random_spool):
             assert p1.equals(p2)
 
     def test_spool_from_patch_sequence(self, random_spool):
         """Ensure a list of patches returns a spool"""
-        spool_list = dascore.spool(list(random_spool))
-        spool_tuple = dascore.spool(tuple(random_spool))
+        spool_list = dc.spool(list(random_spool))
+        spool_tuple = dc.spool(tuple(random_spool))
         for p1, p2, p3 in zip(spool_tuple, spool_list, random_spool):
             assert p1.equals(p2)
             assert p2.equals(p3)
 
     def test_spool_from_single_file(self, terra15_das_example_path):
         """Ensure a single file path returns a spool."""
-        out1 = dascore.spool(terra15_das_example_path)
+        out1 = dc.spool(terra15_das_example_path)
         assert isinstance(out1, BaseSpool)
         # ensure format works.
-        out2 = dascore.spool(terra15_das_example_path, file_format="terra15")
+        out2 = dc.spool(terra15_das_example_path, file_format="terra15")
         assert isinstance(out2, BaseSpool)
         assert len(out1) == len(out2)
 
     def test_non_existent_file_raises(self):
         """A path that doesn't exist should raise."""
         with pytest.raises(Exception, match="get spool from"):
-            dascore.spool("here_or_there?")
+            dc.spool("here_or_there?")
 
     def test_non_supported_type_raises(self):
         """A type that can't contain patches should raise."""
         with pytest.raises(Exception, match="not get spool from"):
-            dascore.spool(1.2)
+            dc.spool(1.2)

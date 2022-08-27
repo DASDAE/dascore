@@ -224,7 +224,10 @@ class DataFrameSpool(BaseSpool):
             **kwargs,
         )
         in_df, out_df = chunker.chunk(df)
-        instructions = chunker.get_instruction_df(in_df, out_df)
+        if df.empty:
+            instructions = None
+        else:
+            instructions = chunker.get_instruction_df(in_df, out_df)
         return self.new_from_df(out_df, source_df=self._df, instruction_df=instructions)
 
     def new_from_df(self, df, source_df=None, instruction_df=None):

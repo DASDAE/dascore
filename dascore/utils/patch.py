@@ -507,8 +507,12 @@ def patches_to_df(
         return patches
     else:
         df = pd.DataFrame(scan_patches(patches))
-        df["patch"] = patches
-        df["history"] = df["history"].apply(lambda x: ",".join(x))
+        if df.empty:  # create empty df with appropriate columns
+            cols = list(PatchSummaryWithHistory().dict())
+            df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
+        else:  # else populate with patches and concat history
+            history = df["history"].apply(lambda x: ",".join(x))
+            df = df.assign(patch=patches, history=history)
     return df
 
 
@@ -558,7 +562,8 @@ def merge_patches(
         dar = xr.concat(dars, dim=dim)
         dar.attrs[min_name] = np.NaN
         dar.attrs[max_name] = np.NaN
-        return dascore.Patch(dar.data, coords=dar.coords, attrs=dar.attrs)
+        dims = tuple(dar.dims)
+        return dascore.Patch(dar.data, coords=dar.coords, attrs=dar.attrs, dims=dims)
 
     def _trim_or_fill(dar, new_start):
         """Trim or fill data array."""

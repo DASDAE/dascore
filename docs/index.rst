@@ -1,7 +1,7 @@
 DASCore
 =======
 
-A python library for working with distributed fiber optic sensing data.
+A python library for distributed fiber optic sensing
 
 .. toctree::
    :maxdepth: 1

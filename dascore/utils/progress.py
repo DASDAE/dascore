@@ -1,7 +1,7 @@
 """
 Simple interface for progress markers.
 """
-from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
+from rich.progress import MofNCompleteColumn, Progress, SpinnerColumn, TimeElapsedColumn
 
 import dascore as dc
 
@@ -21,6 +21,7 @@ def track(sequence, description):
         SpinnerColumn(),
         *Progress.get_default_columns(),
         TimeElapsedColumn(),
+        MofNCompleteColumn(),
     )
     total = len(sequence)
     with progress:

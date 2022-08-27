@@ -64,7 +64,7 @@ class Patch:
 
     __repr__ = __str__
 
-    def equals(patch, other: PatchType, only_required_attrs=True) -> bool:
+    def equals(self, other: PatchType, only_required_attrs=True) -> bool:
         """
         Determine if the current trace equals the other trace.
 
@@ -79,14 +79,14 @@ class Patch:
 
         if only_required_attrs:
             attrs_to_compare = set(DEFAULT_PATCH_ATTRS) - {"history"}
-            attrs1 = {x: patch.attrs.get(x, None) for x in attrs_to_compare}
+            attrs1 = {x: self.attrs.get(x, None) for x in attrs_to_compare}
             attrs2 = {x: other.attrs.get(x, None) for x in attrs_to_compare}
         else:
-            attrs1, attrs2 = dict(patch.attrs), dict(other.attrs)
+            attrs1, attrs2 = dict(self.attrs), dict(other.attrs)
         if set(attrs1) != set(attrs2):  # attrs don't have same keys; not equal
             return False
         if attrs1 != attrs2:
-            # see if some of the values are NaNs, these should be counted equal
+            # see if some values are NaNs, these should be counted equal
             not_equal = {
                 x
                 for x in attrs1
@@ -95,15 +95,19 @@ class Patch:
             }
             if not_equal:
                 return False
-        # check coords
-        coord1 = {x: patch.coords[x] for x in patch.coords}
+        # check coords, names and values
+        coord1 = {x: self.coords[x] for x in self.coords}
         coord2 = {x: other.coords[x] for x in other.coords}
         if not set(coord2) == set(coord1):
             return False
         for name in coord1:
             if not np.all(coord1[name] == coord2[name]):
                 return False
-        return np.equal(patch.data, other.data).all()
+        # handle transposed case; patches that are identical but transposed
+        # should still be equal.
+        if self.dims != other.dims and set(self.dims) == set(other.dims):
+            other = other.transpose(*self.dims)
+        return np.equal(self.data, other.data).all()
 
     def new(self: PatchType, data=None, coords=None, attrs=None) -> PatchType:
         """
@@ -131,7 +135,7 @@ class Patch:
         mixer = _AttrsCoordsMixer(dar.attrs, dar.coords, dar.dims)
         mixer.update_attrs(**attrs)
         attrs, coords = mixer()
-        return self.__class__(self.data, coords=coords, attrs=attrs)
+        return self.__class__(self.data, coords=coords, attrs=attrs, dims=self.dims)
 
     @property
     def data(self):
