@@ -160,3 +160,7 @@ class TestAdjustSegments:
         new = adjust_segments(df, time=(new_min, new_max))
         assert np.all(new["time_min"] >= new_min)
         assert np.all(new["time_max"] <= new_max)
+
+    def test_multiple_kwargs(self):
+        """Ensure multiple dimensions can be adjusted."""
+        assert 0

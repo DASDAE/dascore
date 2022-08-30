@@ -10,6 +10,7 @@ from typing import Collection, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from dascore.exceptions import UnsupportedKeyword
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -77,7 +78,7 @@ def _add_range_query(kwargs, df, ignore_bad_kwargs=False):
     if len(bad_keys):
         if not ignore_bad_kwargs:
             msg = f"columns: {bad_keys} are not found in df"
-            raise ValueError(msg)
+            raise UnsupportedKeyword(msg)
         else:
             for key in bad_keys:
                 kwargs.pop(key, None)
