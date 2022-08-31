@@ -185,9 +185,7 @@ def yield_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
 
     def _get_slice(value):
         """Ensure the value can rep. a slice."""
-        if not isinstance(value, (slice, Sequence)) or not len(value) in {2, 3}:
-            msg = "A 2 length sequence or slice is required."
-            raise ValueError(msg)
+        assert isinstance(value, (slice, Sequence)) and len(value) == 2
         if not isinstance(value, slice):
             value = slice(*value)
         return value

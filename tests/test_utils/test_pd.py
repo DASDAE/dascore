@@ -193,3 +193,9 @@ class TestAdjustSegments:
         assert (out["time_max"] <= time[1]).all()
         assert (out["distance_min"] >= distance[0]).all()
         assert (out["distance_max"] <= distance[1]).all()
+
+    def test_missing_interval_col_raises_keyerro(self, adjacent_df):
+        """Ensure if an interval column is missing a KeyError is raised."""
+        df = adjacent_df.drop(columns=["distance_min"])
+        with pytest.raises(KeyError):
+            _ = adjust_segments(df, distance=(100, 200))
