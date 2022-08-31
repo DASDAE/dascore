@@ -77,7 +77,7 @@ def _add_range_query(kwargs, df, ignore_bad_kwargs=False):
     if len(bad_keys):
         if not ignore_bad_kwargs:
             msg = f"columns: {bad_keys} are not found in df"
-            raise ValueError(msg)
+            raise KeyError(msg)
         else:
             for key in bad_keys:
                 kwargs.pop(key, None)
@@ -173,9 +173,9 @@ def get_interval_columns(df, name):
     return df[names[0]], df[names[1]], df[names[2]]
 
 
-def get_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
+def yield_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
     """
-    Find the slice keyword arguments, return name and slice.
+    For each slice keyword, yield the name and slice.
 
     Will also convert slice values based on dtypes in dataframe, eg
     time=(1, 10) will convert to
@@ -185,9 +185,7 @@ def get_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
 
     def _get_slice(value):
         """Ensure the value can rep. a slice."""
-        if not isinstance(value, (slice, Sequence)) or not len(value) in {2, 3}:
-            msg = "A 2 length sequence or slice is required."
-            raise ValueError(msg)
+        assert isinstance(value, (slice, Sequence)) and len(value) == 2
         if not isinstance(value, slice):
             value = slice(*value)
         return value
@@ -211,12 +209,9 @@ def get_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
         if {f"{x}_min", f"{x}_max"}.issubset(col_set) and x not in col_set
     }
     # ensure exactly one column is found
-    if not len(valid_minmax_kwargs) == 1:
-        msg = "Exactly one "
-        raise ValueError(msg)
-    name = list(valid_minmax_kwargs)[0]
-    out_slice = _maybe_convert_dtype(_get_slice(kwargs[name]), name, df)
-    return name, out_slice
+    for name in valid_minmax_kwargs:
+        out_slice = _maybe_convert_dtype(_get_slice(kwargs[name]), name, df)
+        yield name, out_slice
 
 
 def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
@@ -232,20 +227,17 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     kwargs
         The keyword arguments for filtering.
     """
-    # apply filtering
+    # apply filtering, this creates a copy so we *should* be ok to update inplace.
     out = df[filter_df(df, ignore_bad_kwargs=ignore_bad_kwargs, **kwargs)]
     # find slice kwargs, get series corresponding to interval columns
-    try:
-        name, qs = get_slice_from_kwargs(out, kwargs)
-    except ValueError:  # no slices
-        return out
-    start, stop, step = get_interval_columns(out, name)
-    min_val = qs.start if qs.start is not None else start.min()
-    max_val = qs.stop if qs.stop is not None else stop.max()
-    too_small = start < min_val
-    too_large = stop > max_val
-    out.loc[too_large, too_large.name] = max_val
-    out.loc[too_small, too_small.name] = min_val
+    for (name, qs) in yield_slice_from_kwargs(out, kwargs):
+        start, stop, step = get_interval_columns(out, name)
+        min_val = qs.start if qs.start is not None else start.min()
+        max_val = qs.stop if qs.stop is not None else stop.max()
+        too_small = start < min_val
+        too_large = stop > max_val
+        out.loc[too_large, too_large.name] = max_val
+        out.loc[too_small, too_small.name] = min_val
     return out
 
 

@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from dascore.utils.pd import adjust_segments, filter_df
-from dascore.utils.time import to_datetime64
+from dascore.utils.time import to_datetime64, to_timedelta64
 
 
 @pytest.fixture
@@ -77,7 +77,7 @@ class TestFilterDfBasic:
 
     def test_bad_parameter_raises(self, example_df):
         """ensure passing a parameter that doesn't have a column raises."""
-        with pytest.raises(ValueError):
+        with pytest.raises(KeyError, match="not found in df"):
             filter_df(example_df, bad_column=2)
 
     def test_bad_parameter_doesnt_raise(self, example_df):
@@ -152,6 +152,25 @@ class TestFilterDfAdvanced:
 class TestAdjustSegments:
     """Tests for adjusting segments of dataframes."""
 
+    @pytest.fixture()
+    def adjacent_df(self):
+        """Create a ddtaframe with adjacent times."""
+        time_mins = [
+            np.datetime64("2020-01-01"),
+            np.datetime64("2020-01-01T00:00:10.01"),
+        ]
+        time_maxs = [
+            np.datetime64("2020-01-01T00:00:10.01"),
+            np.datetime64("2020-01-01T00:00:20"),
+        ]
+        dtime = to_timedelta64(0.01)
+        df = (
+            pd.DataFrame(index=range(2))
+            .assign(time_min=time_mins, time_max=time_maxs, d_time=dtime)
+            .assign(distance_min=0, distance_max=100, d_distance=1, station="BOB")
+        )
+        return df
+
     def test_limits_changed(self, example_df_2):
         """Ensure limits of segments are changed when intersected by query."""
         df = example_df_2
@@ -160,3 +179,23 @@ class TestAdjustSegments:
         new = adjust_segments(df, time=(new_min, new_max))
         assert np.all(new["time_min"] >= new_min)
         assert np.all(new["time_max"] <= new_max)
+
+    def test_multiple_kwargs(self, adjacent_df):
+        """Ensure multiple dimensions can be adjusted with one function call."""
+        time = [
+            adjacent_df["time_max"].min() - to_timedelta64(5),
+            adjacent_df["time_max"].max() - to_timedelta64(5),
+        ]
+        distance = (30, 50)
+        out = adjust_segments(adjacent_df, time=time, distance=distance)
+        assert len(adjacent_df) == len(out)
+        assert (out["time_min"] >= time[0]).all()
+        assert (out["time_max"] <= time[1]).all()
+        assert (out["distance_min"] >= distance[0]).all()
+        assert (out["distance_max"] <= distance[1]).all()
+
+    def test_missing_interval_col_raises_keyerro(self, adjacent_df):
+        """Ensure if an interval column is missing a KeyError is raised."""
+        df = adjacent_df.drop(columns=["distance_min"])
+        with pytest.raises(KeyError):
+            _ = adjust_segments(df, distance=(100, 200))
