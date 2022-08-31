@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.spool import BaseSpool
-from dascore.utils.time import to_timedelta64
+from dascore.utils.time import to_datetime64, to_timedelta64
 
 
 class TestSpoolBasics:
@@ -124,6 +124,33 @@ class TestSelect:
             assert attrs["network"] == "das2"
             assert attrs["tag"].startswith("ran")
             assert attrs["time_max"] <= new_max
+
+    def test_multiple_range_selects(self, adjacent_spool_no_overlap):
+        """
+        Ensure multiple range slects can be used in one call (eg time and distance).
+        """
+        spool = adjacent_spool_no_overlap
+        contents = spool.get_contents()
+        # get new time/distance ranges and select them
+        time_min = to_datetime64(contents["time_min"].min() + to_timedelta64(4))
+        time_max = to_datetime64(contents["time_max"].max() - to_timedelta64(4))
+        distance_min = contents["distance_min"].min() + 50
+        distance_max = contents["distance_min"].max() - 50
+        new_spool = spool.select(
+            time=(time_min, time_max), distance=(distance_min, distance_max)
+        )
+        # First check content df honors new ranges
+        new_contents = new_spool.get_contents()
+        assert (new_contents["time_min"] >= time_min).all()
+        assert (new_contents["time_max"] <= time_max).all()
+        assert (new_contents["distance_min"] >= distance_min).all()
+        assert (new_contents["distance_max"] <= distance_max).all()
+        # then check patches
+        for patch in new_spool:
+            assert patch.attrs["time_min"] >= time_min
+            assert patch.attrs["time_max"] <= time_max
+            assert patch.attrs["distance_min"] >= distance_min
+            assert patch.attrs["distance_max"] <= distance_max
 
 
 class TestChunk:
