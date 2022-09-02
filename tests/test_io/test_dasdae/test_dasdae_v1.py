@@ -19,7 +19,7 @@ WRITTEN_FILES = []
 def written_dascore_random(random_patch, tmp_path_factory):
     """write the example patch to disk."""
     path = tmp_path_factory.mktemp("dascore_file") / "test.hdf5"
-    dc.write(random_patch, path, "dasdae")
+    dc.write(random_patch, path, "dasdae", file_version="1")
     return path
 
 
@@ -29,7 +29,7 @@ def written_dasscore_empty(tmp_path_factory):
     """Write an empty patch to the dascore format."""
     path = tmp_path_factory.mktemp("empty_patcc") / "empty.hdf5"
     patch = dc.Patch()
-    dc.write(patch, path, "DASDAE")
+    dc.write(patch, path, "DASDAE", file_version="1")
     return path
 
 

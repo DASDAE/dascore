@@ -76,7 +76,7 @@ class _FiberIOManager:
             priority_formatters.append(formatters[0])
             if len(formatters) > 1:
                 second_class_formatters.extend(formatters[1:])
-        return priority_formatters + second_class_formatters
+        return tuple(priority_formatters + second_class_formatters)
 
     @cache
     def load_plugins(self, format: Optional[str] = None):
@@ -335,6 +335,41 @@ def read(
     return formatter.read(
         path, file_version=file_version, time=time, distance=distance, **kwargs
     )
+
+
+@compose_docstring(fields=list(PatchFileSummary.__annotations__))
+def scan_to_df(
+    path: Union[Path, str],
+    file_format: Optional[str] = None,
+    file_version: Optional[str] = None,
+    ignore: bool = False,
+) -> List[PatchFileSummary]:
+    """
+    Scan a path, return a dataframe of contents.
+
+    Parameters
+    ----------
+    path
+        The path the to file to scan
+    file_format
+        Format of the file. If not provided DASCore will try to determine it.
+    ignore
+        If True, ignore non-DAS files by returning an empty list, else raise
+        UnknownFiberFormat if unreadable file encountered.
+
+    Returns
+    -------
+    Return a dataframe with columns:
+        {fields}
+    """
+    info = scan(
+        path=path,
+        file_format=file_format,
+        file_version=file_version,
+        ignore=ignore,
+    )
+    df = pd.DataFrame([dict(x) for x in info])
+    return df
 
 
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))

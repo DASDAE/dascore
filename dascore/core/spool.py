@@ -9,7 +9,6 @@ from typing import Mapping, Optional, Sequence, Union
 import pandas as pd
 from typing_extensions import Self
 
-import dascore
 from dascore.constants import PatchType, SpoolType, numeric_types, timeable_types
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
@@ -307,11 +306,13 @@ def spool_from_str(path, **kwargs):
     """Get a spool from a path."""
     path = Path(path)
     if path.is_dir():  # a directory was passed
+        from dascore.clients.dirspool import DirectorySpool
+
+        return DirectorySpool(path, **kwargs)
+    elif path.exists():  # a single file path was passed.
         from dascore.clients.filespool import FileSpool
 
         return FileSpool(path, **kwargs)
-    elif path.exists():  # a single file path was passed.
-        return dascore.read(path, **kwargs)
     else:
         raise ValueError(f"could not get spool from {path}")
 

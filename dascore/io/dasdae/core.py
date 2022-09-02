@@ -13,7 +13,7 @@ from dascore.utils.hdf5 import open_hdf5_file
 
 class DASDAEV1(FiberIO):
     """
-    Provides IO support for the DASDAE format.
+    Provides IO support for the DASDAE format version 1.
 
     DASDAE format is loosely based on the Adaptable Seismic Data Format (ASDF)
     which uses hdf5. The hdf5 structure is the following:
@@ -21,7 +21,7 @@ class DASDAEV1(FiberIO):
     /root
     /root.attrs
         __format__ = "DASDAE"
-        __DASDAE_version__ = 'x.y.z'  # version str
+        __DASDAE_version__ = '1'  # version str
     /root/waveforms/
         DAS__{net}__{sta}__{tag}__{start}__{end}
             data   # patch data array
@@ -70,3 +70,30 @@ class DASDAEV1(FiberIO):
             for patch_group in waveform_group:
                 patches.append(_read_patch(patch_group, **kwargs))
         return dc.MemorySpool(patches)
+
+
+class DASDAEV2(DASDAEV1):
+    """
+    Provides IO support for the DASDAE format version 2.
+
+    DASDAE V2 adds a query table located at /root/waveforms/.index which
+    allows large files to be scanned quickly and read operations planed.
+
+    /root
+    /root.attrs
+        __format__ = "DASDAE"
+        __DASDAE_version__ = '1'  # version str
+    /root/waveforms/
+        DAS__{net}__{sta}__{tag}__{start}__{end}
+            data   # patch data array
+            data.attrs
+            _coords_{coord_name}  # each coordinate array is saved here
+        DAS__{net}__{sta}__{tag}__{start}__{end}.attrs
+            _attrs_{attr_nme}  # each patch attribute
+            _dims  # a str of 'dim1, dim2, dim3'
+    /root/waveforms/.index - Index table of waveform contents. The columns
+    in the table are:
+    {table_columns}
+    """
+
+    version = "2"

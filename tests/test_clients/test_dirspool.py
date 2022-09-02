@@ -19,7 +19,7 @@ FILE_SPOOLS = []
 @register_func(FILE_SPOOLS)
 def one_file_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    spool = dc.FileSpool(one_file_dir)
+    spool = dc.DirectorySpool(one_file_dir)
     return spool.update()
 
 
@@ -27,7 +27,7 @@ def one_file_spool(one_file_dir):
 @register_func(FILE_SPOOLS)
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
-    out = dc.FileSpool(two_patch_directory)
+    out = dc.DirectorySpool(two_patch_directory)
     return out.update()
 
 
@@ -42,7 +42,7 @@ class TestFileSpool:
 
     def test_isinstance(self, file_spool):
         """Simply ensure expected type was returned."""
-        assert isinstance(file_spool, dc.FileSpool)
+        assert isinstance(file_spool, dc.DirectorySpool)
 
 
 class TestFileIndex:

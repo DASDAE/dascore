@@ -1,129 +1,44 @@
 """
-A spool for working with file systems.
-
-The spool uses a simple hdf5 index for keeping track of files.
+A spool for working with a single file.
 """
-import copy
-from pathlib import Path
-from typing import Optional, Union
 
-import pandas as pd
+from pathlib import Path
+from typing import Union
+
 from typing_extensions import Self
 
 import dascore as dc
 from dascore.core.spool import DataFrameSpool
-from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
-from dascore.utils.pd import adjust_segments
 
 
 class FileSpool(DataFrameSpool):
     """
-    A spool for interacting with DAS files on disk.
+    A spool for a single file.
 
-    FileSpool creates and index of all files then allows for simple querying
-    and bulk processing of the files.
+    Some file formats support storing multiple patches, this is most useful
+    for those formats, but should work on all dascore supported formats.
     """
 
-    _drop_columns = ("file_format", "file_version", "path")
-
-    def __init__(
-        self,
-        base_path: Union[str, Path, Self, AbstractIndexer] = ".",
-        preferred_format: Optional[str] = None,
-        select_kwargs: Optional[dict] = None,
-    ):
+    def __init__(self, path: Union[str, Path], file_format=None, file_version=None):
+        """"""
         super().__init__()
-        # Init file spool from another file spool
-        if isinstance(base_path, self.__class__):
-            self.__dict__.update(copy.deepcopy(base_path.__dict__))
-            return
-        # Init file spool from indexer
-        elif isinstance(base_path, AbstractIndexer):
-            self.indexer = base_path
-        elif isinstance(base_path, (Path, str)):
-            self.indexer = DirectoryIndexer(base_path)
-        self._preferred_format = preferred_format
-        self._select_kwargs = {} if select_kwargs is None else select_kwargs
+        self._path = Path(path)
+        if not self._path.exists() or self._path.is_dir():
+            msg = f"{path} does not exist or is a directory"
+            raise FileNotFoundError(msg)
+        source_df = dc.scan_to_df(
+            path, file_format=file_format, file_version=file_version
+        )
+        dfs = self._get_dummy_dataframes(source_df)
+        self._df, self._source_df, self._instruction_df = dfs
 
     def __str__(self):
-        out = (
-            f"FileSpool object managing: {self.spool_path}"
-            f" with select kwargs: {self._select_kwargs}"
-        )
+        """Returns a (hopefully) useful string rep of spool."""
+        out = f"FileSpool object managing {self._path}"
         return out
 
     __repr__ = __str__
 
-    def _get_df(self):
-        """Get the dataframe of current contents."""
-        index_contents = self.indexer(**self._select_kwargs)
-        out = adjust_segments(index_contents, **self._select_kwargs)
-        return out
-
-    def _get_instruction_df(self):
-        """Return instruction df on how to get from source_df to df."""
-        _, _, instruction = self._get_dummy_dataframes(self._df)
-        return instruction
-
-    def _get_source_df(self):
-        """Return a dataframe of sources in spool."""
-        return self.indexer(**self._select_kwargs)
-
-    @property
-    def spool_path(self):
-        """Return the path in which the spool contents are found."""
-        return self.indexer.path
-
-    def get_contents(self) -> pd.DataFrame:
-        """
-        Return a dataframe of the contents of the data files.
-
-        Parameters
-        ----------
-        time
-            If not None, a tuple of start/end time where either can be None
-            indicating an open interval.
-        """
-        return self._df
-
-    def select(self, **kwargs) -> Self:
-        """Sub-select certain dimensions for Spool"""
-        new_kwargs = dict(self._select_kwargs)
-        new_kwargs.update(kwargs)
-        out = self.__class__(
-            base_path=self.indexer,
-            preferred_format=self._preferred_format,
-            select_kwargs=new_kwargs,
-        )
-        return out
-
-    def update(self) -> Self:
-        """
-        Updates the contents of the spool and returns a spool.
-
-        Resets any previous selection.
-        """
-        out = self.__class__(
-            base_path=self.indexer.update(),
-            preferred_format=self._preferred_format,
-            select_kwargs=self._select_kwargs,
-        )
-        return out
-
-    def _df_to_dict_list(self, df):
-        """
-        Convert the dataframe to a list of dicts for iteration.
-
-        This is significantly faster than iterating rows.
-        """
-        df = (
-            df.copy(deep=False)
-            .replace("", None)
-            .assign(path=lambda x: str(self.spool_path) + x["path"])
-        )
-        return super()._df_to_dict_list(df)
-
     def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-        patch = dc.read(**kwargs)[0]
-        return patch
+        return dc.read(**kwargs)[0]

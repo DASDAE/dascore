@@ -15,6 +15,7 @@ def _write_meta(hfile, file_version):
     attrs = hfile.root._v_attrs
     attrs["__format__"] = "DASDAE"
     attrs["__DASDAE_version__"] = file_version
+    attrs["__dascore__version__"] = dc.__version__
 
 
 def _save_attrs_and_dim(patch, patch_group):

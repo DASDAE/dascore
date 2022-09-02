@@ -55,17 +55,17 @@ class TestFormatManager:
     def test_extension_priority(self, format_manager):
         """Ensure the extension priority is honored."""
         ext = "h5"
-        out = list(format_manager.yield_fiberio(extension=ext))
+        ext_formatters = list(format_manager.yield_fiberio(extension=ext))
         all_formatters = list(format_manager.yield_fiberio())
-        in_formatter = [ext in x.preferred_extensions for x in out]
+        in_formatter = [ext in x.preferred_extensions for x in ext_formatters]
         format_array = np.array(in_formatter).astype(bool)
         # ensure all the start of the arrays are True.
         assert np.argmin(format_array) == np.sum(format_array)
         # ensure all formats are represented.
         assert len(format_array) == len(all_formatters)
         # ensure V2 of the Test formatter appears first
-        v2_arg = np.argmax([isinstance(x, FiberFormatTestV2) for x in out])
-        v1_arg = np.argmax([isinstance(x, FiberFormatTestV1) for x in out])
+        v2_arg = np.argmax([isinstance(x, FiberFormatTestV2) for x in ext_formatters])
+        v1_arg = np.argmax([isinstance(x, FiberFormatTestV1) for x in ext_formatters])
         assert v2_arg < v1_arg
 
     def test_format_raises_unknown_format(self, format_manager):
