@@ -9,7 +9,12 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 
-from dascore.constants import NUMPY_TIME_UNIT_MAPPPING, timeable_types
+from dascore.constants import (
+    LARGEDT64,
+    NUMPY_TIME_UNIT_MAPPPING,
+    SMALLDT64,
+    timeable_types,
+)
 from dascore.exceptions import TimeError
 
 
@@ -269,3 +274,24 @@ def is_datetime64(obj) -> bool:
     if isinstance(obj, pd.Timestamp):
         return True
     return False
+
+
+def get_max_min_times(kwarg_time=None):
+    """
+    Function to get min/max times from a tuple of possible time values.
+
+    If None, return max/min times possible.
+    """
+    # first unpack time from tuples
+    assert kwarg_time is None or len(kwarg_time) == 2
+    time_min, time_max = (None, None) if kwarg_time is None else kwarg_time
+    # get defaults if starttime or endtime is none
+    time_min = None if pd.isnull(time_min) else time_min
+    time_max = None if pd.isnull(time_max) else time_max
+    time_min = to_datetime64(time_min or SMALLDT64)
+    time_max = to_datetime64(time_max or LARGEDT64)
+    if time_min is not None and time_max is not None:
+        if time_min > time_max:
+            msg = "time_min cannot be greater than time_max."
+            raise ValueError(msg)
+    return time_min, time_max

@@ -97,3 +97,13 @@ class DASDAEV2(DASDAEV1):
     """
 
     version = "2"
+
+    def write(self, patch, path, **kwargs):
+        """Read a Patch/Spool from disk."""
+        with open_hdf5_file(path, mode="a") as h5:
+            _write_meta(h5, self.version)
+            # get an iterable of patches and save them
+            patches = [patch] if isinstance(patch, dc.Patch) else patch
+            waveforms = h5.create_group(h5.root, "waveforms")
+            for patch in patches:
+                _save_patch(patch, waveforms, h5)

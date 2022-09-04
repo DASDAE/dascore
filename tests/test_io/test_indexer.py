@@ -68,7 +68,7 @@ class TestBasics:
     def test_version(self, basic_indexer):
         """Ensure the version written to file is correct."""
         updated = basic_indexer.update()
-        index_version = updated._index_version
+        index_version = updated._index_table._index_version
         assert index_version == dc.__last_version__
         assert get_version(index_version) > get_version("0.0.1")
 
