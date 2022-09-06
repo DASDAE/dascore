@@ -1,3 +1,3 @@
 """
-Module for reading and writing fiber data recorded by Silixa.
+Module for reading and writing TDMS fiber data recorded by Silixa.
 """

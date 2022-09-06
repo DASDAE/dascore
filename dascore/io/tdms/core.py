@@ -1,5 +1,5 @@
 """
-IO module for reading Silixa DAS data.
+IO module for reading Silixa's TDMS DAS data format.
 """
 from pathlib import Path
 from typing import List, Optional, Union
@@ -34,7 +34,7 @@ class TDMSFormatterV4713(FiberIO):
 
     def get_format(self, path: Union[str, Path]) -> Union[tuple[str, str], bool]:
         """
-        Return True if file contains Silixa tdms data else False.
+        Return a tuple of (TDMS, version) if TDMS else False.
 
         Parameters
         ----------
@@ -46,7 +46,7 @@ class TDMSFormatterV4713(FiberIO):
             with open(path, "rb") as tdms_file:
                 version_str = _get_version_str(tdms_file)
                 if version_str:
-                    return ("TDMS", version_str)
+                    return "TDMS", version_str
                 else:
                     return False
         except Exception:  # noqa
@@ -58,7 +58,10 @@ class TDMSFormatterV4713(FiberIO):
         """
         with open(path, "rb") as tdms_file:
             out = _get_default_attrs(tdms_file)
-            return [out]
+            out["path"] = path
+            out["file_format"] = self.name
+            out["file_version"] = self.version
+            return [PatchFileSummary(**out)]
 
     def read(
         self,

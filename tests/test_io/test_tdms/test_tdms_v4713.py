@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
-Tests for reading silixa file formats.
+Tests for reading silixa TDMS file format.
 """
 
 from pathlib import Path
@@ -11,15 +8,34 @@ import pytest
 
 import dascore
 from dascore.constants import REQUIRED_DAS_ATTRS
+from dascore.core.schema import PatchFileSummary
 from dascore.io.tdms.core import TDMSFormatterV4713
 from dascore.utils.downloader import fetch
+from dascore.utils.misc import register_func
+
+TDMS_PATHS = []
 
 
 @pytest.fixture()
-def silixa_das_example_path():
+@register_func(TDMS_PATHS)
+def silixa_das_example_path1():
     """Get path for test file"""
     file_path = fetch("sample_tdms_file_v4713.tdms")
     return Path(file_path)
+
+
+@pytest.fixture()
+@register_func(TDMS_PATHS)
+def silixa_das_example_path2():
+    """Get path for test file"""
+    file_path = fetch("iDAS005_tdms_example.626.tdms")
+    return Path(file_path)
+
+
+@pytest.fixture(params=TDMS_PATHS)
+def silixa_das_example_path(request):
+    """Get path for test file"""
+    return request.getfixturevalue(request.param)
 
 
 @pytest.fixture()
@@ -70,7 +86,7 @@ class TestReadSilixa:
         assert attrs["distance_max"] == coords["distance"].max() == d2
 
 
-class TestIsSilixa:
+class TestGetFormat:
     """Tests for function to determine if a file is a silixa file."""
 
     def test_not_silixa_not_tdms(self, dummy_text_file):
@@ -96,4 +112,4 @@ class TestScansilixa:
         out = parser.scan(silixa_das_example_path)
         assert isinstance(out, list)
         assert len(out) == 1
-        assert isinstance(out[0], dict)
+        assert isinstance(out[0], PatchFileSummary)
