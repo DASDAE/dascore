@@ -116,8 +116,11 @@ class FileSpool(DataFrameSpool):
 
         This is significantly faster than iterating rows.
         """
-        df = df.copy(deep=False).replace("", None)
-        df["path"] = str(self.spool_path) + df["path"]
+        df = (
+            df.copy(deep=False)
+            .replace("", None)
+            .assign(path=lambda x: str(self.spool_path) + x["path"])
+        )
         return super()._df_to_dict_list(df)
 
     def _load_patch(self, kwargs) -> Self:

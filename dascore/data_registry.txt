@@ -4,3 +4,4 @@ terra15_das_unfinished.hdf5 087e98cb228d9be369783998ef96c5221fdd3d9aaa9da1e4f45c
 terra15_v5_test_file.hdf5 b8d27d4b690928da84c913fb1c8658e84c9afd7381ea36ed93790d1f23947b18 https://github.com/dasdae/test_data/raw/master/das/terra15_v5_test_file.hdf5
 iDAS005_hdf5_example.626.h5 28f4f9b1f2b248fa0419b41c11e971f2d395c3ed43afc1ef5d5c35f399e99190 https://github.com/dasdae/test_data/raw/master/das/iDAS005_hdf5_example.626.h5
 iDAS005_tdms_example.626.tdms 0c31f75015bc671d958967c7fdf32e2e64fdb467f997d331ae6a7d4c989ab380 https://github.com/dasdae/test_data/raw/master/das/iDAS005_tdms_example.626.tdms
+sample_tdms_file_v4713.tdms 22a79c4c3166ce3cc8467265540cdb3ad2b54460209d39641c1e8f20e64eca65 https://github.com/dasdae/test_data/raw/master/das/sample_tdms_file_v4713.tdms

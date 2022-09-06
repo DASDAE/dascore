@@ -256,7 +256,7 @@ def _time_detal_to_number(time_delta: np.timedelta64):
 
 @to_number.register(pd.Series)
 def _pandas_timestamp_to_num(ser: pd.Series):
-    return ser.astype(np.int64)
+    return ser.view(np.int64)
 
 
 def is_datetime64(obj) -> bool:
