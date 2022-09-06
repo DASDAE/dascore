@@ -59,7 +59,7 @@ class JingleV1(FiberIO):
         If the format supports partial reads, these should be implemented as well.
         """
 
-    def is_format(self, path):
+    def get_format(self, path):
         """
         Used to determine if path is a supported jingle file.
 
