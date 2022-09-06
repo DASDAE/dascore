@@ -1,5 +1,9 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Utilites to read TDMS format
+Created on Wed Jun 22 11:19:17 2022
+
+@author: hafiz
 """
 import datetime
 import mmap
@@ -283,6 +287,54 @@ def _get_fileinfo(tdms_file, LEAD_IN_LENGTH=28):
 def _get_data_node(tdms_file, LEAD_IN_LENGTH=28):
     """Get all the data saved in the current file"""
 
+    def get_segmentdata(fileinfo, nch, dmap, nso, rdo):
+
+        # seg1_length: length of recording indicated as raw_data in metadata for
+        # each channel in bytes
+        seg_length = int((nso - rdo) / nch / np.dtype(fileinfo["data_type"]).itemsize)
+        channel_length = seg_length
+
+        if fileinfo["decimated"]:
+            # number of completely full chunks
+            n_complete_blk = int(seg_length / fileinfo["chunk_size"])
+            ax_ord = "C"
+        else:
+            n_complete_blk = 0
+            ax_ord = "F"
+        # use data from mapped file to fill variable raw_data
+        raw_data = np.ndarray(
+            (n_complete_blk, nch, fileinfo["chunk_size"]),
+            dtype=fileinfo["data_type"],
+            buffer=dmap,
+            offset=rdo,
+        )
+        # Rotate the axes to [chunk_size, nblk, nch]
+        raw_data = np.rollaxis(raw_data, 2)
+        data_node = np.reshape(raw_data, (n_complete_blk * fileinfo["chunk_size"], nch))
+        if n_complete_blk != seg_length / fileinfo["chunk_size"]:
+            # If the last chunk isn't full there is some data left
+            additional_samples = int(
+                seg_length - n_complete_blk * fileinfo["chunk_size"]
+            )
+            additional_samples_offset = (
+                rdo
+                + n_complete_blk
+                * nch
+                * fileinfo["chunk_size"]
+                * np.dtype(fileinfo["data_type"]).itemsize
+            )
+            raw_last_chunk = np.ndarray(
+                (nch, additional_samples),
+                dtype=fileinfo["data_type"],
+                buffer=dmap,
+                offset=additional_samples_offset,
+                order=ax_ord,
+            )
+            # Rotate the axes to [samples, nch]
+            raw_last_chunk = np.rollaxis(raw_last_chunk, 1)
+            data_node = np.append(data_node, raw_last_chunk, axis=0)
+            return data_node, channel_length
+
     fileinfo, attrs = _get_fileinfo(tdms_file)
 
     # map file contents to a variable dmap
@@ -296,108 +348,25 @@ def _get_data_node(tdms_file, LEAD_IN_LENGTH=28):
     nso = fileinfo["next_segment_offset"]
     # seg1_length: length of recording indicated as raw_data in metadata for
     # each channel in bytes
-    seg1_length = int((nso - rdo) / nch / np.dtype(fileinfo["data_type"]).itemsize)
-    channel_length = seg1_length
 
-    if fileinfo["decimated"]:
-        # number of completely full chunks
-        n_complete_blk = int(seg1_length / fileinfo["chunk_size"])
-        ax_ord = "C"
-    else:
-        n_complete_blk = 0
-        ax_ord = "F"
-    # use data from mapped file to fill variable raw_data
-    raw_data = np.ndarray(
-        (n_complete_blk, nch, fileinfo["chunk_size"]),
-        dtype=fileinfo["data_type"],
-        buffer=dmap,
-        offset=rdo,
-    )
-    # Rotate the axes to [chunk_size, nblk, nch]
-    raw_data = np.rollaxis(raw_data, 2)
-    data_node = np.reshape(raw_data, (n_complete_blk * fileinfo["chunk_size"], nch))
-    if n_complete_blk != seg1_length / fileinfo["chunk_size"]:
-        # If the last chunk isn't full there is some data left
-        additional_samples = int(seg1_length - n_complete_blk * fileinfo["chunk_size"])
-        additional_samples_offset = (
-            rdo
-            + n_complete_blk
-            * nch
-            * fileinfo["chunk_size"]
-            * np.dtype(fileinfo["data_type"]).itemsize
-        )
-        raw_last_chunk = np.ndarray(
-            (nch, additional_samples),
-            dtype=fileinfo["data_type"],
-            buffer=dmap,
-            offset=additional_samples_offset,
-            order=ax_ord,
-        )
-        # Rotate the axes to [samples, nch]
-        raw_last_chunk = np.rollaxis(raw_last_chunk, 1)
-        data_node = np.append(data_node, raw_last_chunk, axis=0)
-
-    # If there is a segment of data after the first segment of raw data,
-    # deal with that also
-    if fileinfo["file_size"] == nso:
-        seg2_length = 0
-        return data_node, channel_length, attrs
-    else:
-        tdms_file.seek(nso + 12, 0)
-        (seg2_nso, seg2_rdo) = struct.unpack("<qq", tdms_file.read(2 * 8))
-        seg2_length = (
-            (seg2_nso - seg2_rdo) / nch / np.dtype(fileinfo["data_type"]).itemsize
-        )
-        if fileinfo["decimated"]:
-            n_complete_blk2 = int(seg2_length / fileinfo["chunk_size"])
+    flag = 0
+    while flag == 0:
+        cdata_node, cchannel_length = get_segmentdata(fileinfo, nch, dmap, nso, rdo)
+        if fileinfo["file_size"] == nso:
+            flag = 1
         else:
-            n_complete_blk2 = int(0)
-        raw_data2 = np.ndarray(
-            (n_complete_blk2, nch, fileinfo["chunk_size"]),
-            dtype=fileinfo["data_type"],
-            buffer=dmap,
-            offset=(nso + LEAD_IN_LENGTH + seg2_rdo),
-        )
-        raw_data2 = np.rollaxis(raw_data2, 2)
-        data_node2 = np.reshape(
-            raw_data2, (n_complete_blk2 * fileinfo["chunk_size"], nch)
-        )
-        if n_complete_blk2 != seg1_length / fileinfo["chunk_size"]:
-            additional_samples = int(
-                seg2_length - n_complete_blk2 * fileinfo["chunk_size"]
-            )
-            additional_samples_offset = (
-                nso
-                + LEAD_IN_LENGTH
-                + seg2_rdo
-                + n_complete_blk2
-                * nch
-                * fileinfo["chunk_size"]
-                * np.dtype(fileinfo["data_type"]).itemsize
-            )
-            raw_last_chunk2 = np.ndarray(
-                (nch, additional_samples),
-                dtype=fileinfo["data_type"],
-                buffer=dmap,
-                offset=additional_samples_offset,
-                order=ax_ord,
-            )
-            # Rotate the axes to [samples, nch]
-            raw_last_chunk2 = np.rollaxis(raw_last_chunk2, 1)
-            data_node2 = np.append(data_node2, raw_last_chunk2, axis=0)
+            tdms_file.seek(nso + 12, 0)
+            (next_seg_nso, next_seg_rdo) = struct.unpack("<qq", tdms_file.read(2 * 8))
+            rdo = min(fileinfo["file_size"], nso + LEAD_IN_LENGTH + next_seg_rdo)
+            nso = min(fileinfo["file_size"], nso + LEAD_IN_LENGTH + next_seg_nso)
+        try:
+            data_node = np.append(data_node, cdata_node, axis=1)
+            channel_length += cchannel_length
+        except NameError:
+            data_node = cdata_node
+            channel_length = cchannel_length
 
-        if raw_data2.size != 0 or raw_last_chunk2.size != 0:
-            pass
-            # raise Exception('Second segment contains some data, \
-            #                 not currently supported')
-        channel_length = seg1_length + seg2_length
-        data_node = np.append(data_node, data_node2, axis=1)
-
-        return data_node, channel_length, attrs
-    # else:
-    #     print "Not decimated"
-    #     raise Exception('Reading file with decimated flag not set is not \
-    #                     supported yet')
+    return data_node, channel_length, attrs
 
 
 def _get_data(time, distance, time_array, dist_array, data_node):
