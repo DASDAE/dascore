@@ -46,7 +46,7 @@ class TimeDelta64(SimpleValidator):
 
 
 class PatchSummary(BaseModel):
-    """The expected minimum attributes for a Patch attrs."""
+    """The expected attributes for a Patch."""
 
     class Config:
         """Configuration for Patch Summary"""
