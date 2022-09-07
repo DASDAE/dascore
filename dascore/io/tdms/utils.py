@@ -8,8 +8,11 @@ import struct
 
 import numpy as np
 
+from dascore.core.schema import PatchSummary
 from dascore.utils.misc import get_slice
 from dascore.utils.time import to_datetime64
+
+DEFAULT_ATTRS = tuple(PatchSummary.__fields__)
 
 
 def type_not_supported(vargin):
@@ -73,29 +76,20 @@ def _get_time_array(tdms_file=None, attrs=None):
     return time_array
 
 
-def _get_default_attrs(tdms_file, all_attrs=None):
+def _get_default_attrs(tdms_file, get_all_attrs=None):
     """
     Return the required/default attributes which can be fetched from attributes.
 
     """
-
-    default_attrs = (
-        "data_type",
-        "d_distance",
-        "instrument_id",
-        "distance_min",
-        "distance_max",
-        "data_units",
-        "d_time",
-        "time_min",
-        "time_max",
-    )
-    if all_attrs is None:
-        out, _ = _get_all_attrs(tdms_file)
+    if get_all_attrs is None:
+        all_attrs, _ = _get_all_attrs(tdms_file)
     else:
-        out = all_attrs
-    out = {default_attr: out[default_attr] for default_attr in default_attrs}
-
+        all_attrs = get_all_attrs
+    out = {
+        default_attr: all_attrs[default_attr]
+        for default_attr in DEFAULT_ATTRS
+        if default_attr in all_attrs
+    }
     return out
 
 
