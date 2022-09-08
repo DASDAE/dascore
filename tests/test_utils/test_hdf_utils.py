@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 import tables
 
+import dascore as dc
 from dascore.exceptions import InvalidFileHandler
-from dascore.utils.hdf5 import open_hdf5_file
+from dascore.utils.hdf5 import HDFPatchIndexManager, open_hdf5_file
 
 
 class TestGetHDF5Handlder:
@@ -60,3 +61,34 @@ class TestGetHDF5Handlder:
         """
         with open_hdf5_file(simple_hdf_file_handler_append, mode="r") as fi:
             assert isinstance(fi, tables.File)
+
+
+class TestHDFPatchIndexManager:
+    """Tests for the HDF5 index manager."""
+
+    @pytest.fixture
+    def index_manager(self, tmp_path_factory):
+        """Create a new index."""
+        path = Path(tmp_path_factory.mktemp("example")) / ".index"
+        return HDFPatchIndexManager(path)
+
+    def test_extra_columns(self, index_manager, random_spool):
+        """
+        Only the columns used for indexing should be kept, extras discarded.
+
+        Here we include a column with types that can't be serialized. If the
+        write_update works the test passes.
+        """
+        df = dc.scan_to_df(random_spool).assign(
+            bad_cols=[[] for _ in range(len(random_spool))]
+        )
+        index_manager.write_update(df)
+
+    def test_empty_tuple(self, index_manager, random_spool):
+        """
+        Empty dims should convert to empty string.
+        """
+        df = dc.scan_to_df(random_spool).assign(
+            dims=[() for _ in range(len(random_spool))],
+        )
+        index_manager.write_update(df)

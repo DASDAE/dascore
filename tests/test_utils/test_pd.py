@@ -1,9 +1,10 @@
 """Tests for pandas utility functions."""
 import numpy as np
 import pandas as pd
+import pydantic
 import pytest
 
-from dascore.utils.pd import adjust_segments, filter_df
+from dascore.utils.pd import adjust_segments, fill_defaults_from_pydantic, filter_df
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -199,3 +200,43 @@ class TestAdjustSegments:
         df = adjacent_df.drop(columns=["distance_min"])
         with pytest.raises(KeyError):
             _ = adjust_segments(df, distance=(100, 200))
+
+    class TestFillDefaultsFromPydantic:
+        """Tests for initing empty columns from pydanitc models."""
+
+        class Model(pydantic.BaseModel):
+            """Example basemodel"""
+
+            int_with_default: int = 10
+            str_with_default: str = "bob"
+            float_with_default: float = 10.0
+            float_no_default: float
+
+        @pytest.fixture(scope="class")
+        def simple_df(self):
+            """Create a simple df for testing."""
+            df = pd.DataFrame(index=range(10)).assign(
+                int_with_default=20,
+                str_with_default="bill",
+                float_with_default=22.2,
+                float_no_default=42.0,
+            )
+            return df
+
+        def test_no_missing_does_nothing(self, simple_df):
+            """Ensure the default gets filled."""
+            out = fill_defaults_from_pydantic(simple_df, self.Model)
+            assert out.equals(simple_df)
+
+        def test_missing_with_default_fills_default(self, simple_df):
+            """Ensure the default values are filled in when missing"""
+            df = simple_df.drop(columns="int_with_default")
+            out = fill_defaults_from_pydantic(df, self.Model)
+            assert "int_with_default" in out.columns
+            assert (out["int_with_default"] == 10).all()
+
+        def test_missing_with_no_default_raises(self, simple_df):
+            """Ensure Value error is raised if no default is there."""
+            df = simple_df.drop(columns="float_no_default")
+            with pytest.raises(ValueError, match="required value"):
+                fill_defaults_from_pydantic(df, self.Model)

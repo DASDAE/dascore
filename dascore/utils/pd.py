@@ -5,10 +5,11 @@ import fnmatch
 import os
 from collections import defaultdict
 from functools import cache
-from typing import Collection, Sequence, Tuple
+from typing import Collection, Sequence, Tuple, Type
 
 import numpy as np
 import pandas as pd
+from pydantic import BaseModel
 
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -333,3 +334,34 @@ def get_column_names_from_dim(dims: Sequence[str]) -> list:
         out.append(f"{name}_max")
         out.append(f"d_{name}")
     return out
+
+
+def fill_defaults_from_pydantic(df, base_model: Type[BaseModel]):
+    """
+    Fill missing columns in dataframe with defaults from base_model.
+
+    If the missing column has no default value, raise ValueError.
+
+    Parameters
+    ----------
+    df
+        A dataframe
+    base_model
+        A pydantic BaseModel
+    """
+    fields = base_model.__fields__
+    missing = set(fields) - set(df.columns)
+    required = {x for x in missing if fields[x].required}
+    if any(required):
+        msg = f"Missing required value: {required}"
+        raise ValueError(msg)
+    fill = {x: fields[x].default for x in missing}
+    return df.assign(**fill)
+
+
+def list_ser_to_str(ser: pd.Series) -> pd.Series:
+    """
+    Convert a column of str sequences to a string with commas separating values.
+    """
+    values = [",".join(x) if not isinstance(x, str) else x for x in ser.values]
+    return pd.Series(values, index=ser.index, dtype=object)

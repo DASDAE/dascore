@@ -39,6 +39,12 @@ path_types = Union[str, Path]
 # One second in numpy timedelta speak
 ONE_SECOND = np.timedelta64(1, "s")
 
+# One nanosecond
+ONE_NANOSECOND = np.timedelta64(1, "ns")
+
+# One second with a precision of nano seconds
+ONE_SECOND_IN_NS = np.timedelta64(1_000_000_000, "ns")
+
 
 # The expected attributes for the Patch
 DEFAULT_PATCH_ATTRS = {

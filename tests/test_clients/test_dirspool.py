@@ -23,14 +23,6 @@ def one_file_spool(one_file_dir):
     return spool.update()
 
 
-@pytest.fixture(scope="class")
-@register_func(FILE_SPOOLS)
-def basic_file_spool(two_patch_directory):
-    """Return a DAS bank on basic_bank_directory."""
-    out = dc.DirectorySpool(two_patch_directory)
-    return out.update()
-
-
 @pytest.fixture(scope="class", params=FILE_SPOOLS)
 def file_spool(request):
     """Meta fixture for getting all file spools."""

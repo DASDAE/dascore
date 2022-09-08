@@ -1,5 +1,5 @@
 """
-Tests for version 2 of DASDAE format.
+Tests for V2 of DASDAE format.
 """
 from pathlib import Path
 
@@ -16,7 +16,7 @@ WRITTEN_FILES = []
 
 @pytest.fixture(scope="class")
 @register_func(WRITTEN_FILES)
-def written_dascore_random(random_patch, tmp_path_factory):
+def written_dascore_v2_random(random_patch, tmp_path_factory):
     """write the example patch to disk."""
     path = tmp_path_factory.mktemp("dascore_file") / "test.hdf5"
     dc.write(random_patch, path, "dasdae", file_version="2")
@@ -25,7 +25,7 @@ def written_dascore_random(random_patch, tmp_path_factory):
 
 @pytest.fixture(scope="class")
 @register_func(WRITTEN_FILES)
-def written_dasscore_empty(tmp_path_factory):
+def written_dasscore_v2_empty(tmp_path_factory):
     """Write an empty patch to the dascore format."""
     path = tmp_path_factory.mktemp("empty_patcc") / "empty.hdf5"
     patch = dc.Patch()
@@ -34,7 +34,7 @@ def written_dasscore_empty(tmp_path_factory):
 
 
 @pytest.fixture(params=WRITTEN_FILES, scope="class")
-def dasdae_file_path(request):
+def dasdae_v2_file_path(request):
     """Gatherer fixture to iterate through each written dasedae format."""
     return request.getfixturevalue(request.param)
 
@@ -42,22 +42,22 @@ def dasdae_file_path(request):
 class TestWrite:
     """Ensure the format can be written."""
 
-    def test_file_exists(self, written_dascore_random):
+    def test_file_exists(self, dasdae_v2_file_path):
         """The file should *of course* exist."""
-        assert Path(written_dascore_random).exists()
+        assert Path(dasdae_v2_file_path).exists()
 
 
 class TestGetVersion:
     """Test for version gathering from files."""
 
-    def test_version_tuple_returned(self, written_dascore_random):
+    def test_version_tuple_returned(self, dasdae_v2_file_path):
         """Ensure the expected version str is returned."""
         # format_version_tuple = dc.get_format(written_dascore)
         formatter = DASDAEV2()
         ex_format, ex_version = formatter.name, formatter.version
-        dasie_format_ver = DASDAEV2().get_format(written_dascore_random)
-        format_ver = dc.get_format(written_dascore_random)
-        assert dasie_format_ver == format_ver
+        dasdae_format_ver = DASDAEV2().get_format(dasdae_v2_file_path)
+        format_ver = dc.get_format(dasdae_v2_file_path)
+        assert dasdae_format_ver == format_ver
         assert format_ver == (ex_format, ex_version)
 
 
@@ -69,16 +69,15 @@ class TestReadDasdae:
     def test_round_trip_random_patch(self, random_patch, tmp_path_factory):
         """Ensure the random patch can be round-tripped"""
         path = tmp_path_factory.mktemp("dasedae_round_trip") / "rt.h5"
-        dc.write(random_patch, path, "DASDAE", file_version="2")
+        dc.write(random_patch, path, "DASDAE")
         out = dc.read(path)
         assert len(out) == 1
         assert out[0].equals(random_patch)
 
-    def test_round_trip_empty_patch(self, written_dasscore_empty):
-        """Ensure an emtpy patch can be deserialize."""
-        stream = dc.read(written_dasscore_empty)
-        assert len(stream) == 1
-        stream[0].equals(dc.Patch())
+    def test_empty_patch_doesnt_save(self, written_dasscore_v2_empty):
+        """Empty patches should just go away..."""
+        spool = dc.read(written_dasscore_v2_empty)
+        assert len(spool) == 0
 
     def test_datetimes(self, tmp_path_factory, random_patch):
         """Ensure the datetimes in the attrs come back as datetimes"""
@@ -100,10 +99,17 @@ class TestReadDasdae:
 class TestScanDasDae:
     """Tests for scanning the dasdae format."""
 
-    def test_scan_returns_info(self, written_dascore_random, random_patch):
+    def test_scan_returns_info(self, written_dascore_v2_random, random_patch):
         """Ensure scanning returns expected values."""
-        info1 = dc.scan(written_dascore_random)[0].dict()
+        info1 = dc.scan(written_dascore_v2_random)[0].dict()
         info2 = dict(random_patch.attrs)
         common_keys = set(info1) & set(info2)
         for key in common_keys:
             assert info1[key] == info2[key]
+
+    def test_scan_format_version(self, written_dascore_v2_random):
+        """Ensure scanning returns expected values."""
+        formatter = DASDAEV2()
+        df = dc.scan_to_df(written_dascore_v2_random)
+        assert all(df["file_version"] == formatter.version)
+        assert all(df["file_format"] == formatter.name)

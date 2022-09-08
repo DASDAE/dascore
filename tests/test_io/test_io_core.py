@@ -181,3 +181,12 @@ class TestScan:
         """Trying to scan a directory should raise a nice error"""
         with pytest.raises(InvalidFiberFile, match="a directory"):
             _ = dascore.scan(tmp_path)
+
+    def test_scan_patch(self, random_patch):
+        """Scan should also work on a patch"""
+        out = dascore.scan_to_df(random_patch)
+        attrs = random_patch.attrs
+        assert len(out) == 1
+        ser = out.iloc[0]
+        assert ser["time_min"] == attrs["time_min"]
+        assert ser["time_max"] == attrs["time_max"]

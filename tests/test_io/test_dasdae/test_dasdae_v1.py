@@ -16,7 +16,7 @@ WRITTEN_FILES = []
 
 @pytest.fixture(scope="class")
 @register_func(WRITTEN_FILES)
-def written_dascore_random(random_patch, tmp_path_factory):
+def written_dascore_v1_random(random_patch, tmp_path_factory):
     """write the example patch to disk."""
     path = tmp_path_factory.mktemp("dascore_file") / "test.hdf5"
     dc.write(random_patch, path, "dasdae", file_version="1")
@@ -25,7 +25,7 @@ def written_dascore_random(random_patch, tmp_path_factory):
 
 @pytest.fixture(scope="class")
 @register_func(WRITTEN_FILES)
-def written_dasscore_empty(tmp_path_factory):
+def written_dascore_v1_empty(tmp_path_factory):
     """Write an empty patch to the dascore format."""
     path = tmp_path_factory.mktemp("empty_patcc") / "empty.hdf5"
     patch = dc.Patch()
@@ -74,9 +74,9 @@ class TestReadDasdae:
         assert len(out) == 1
         assert out[0].equals(random_patch)
 
-    def test_round_trip_empty_patch(self, written_dasscore_empty):
+    def test_round_trip_empty_patch(self, written_dascore_v1_empty):
         """Ensure an emtpy patch can be deserialize."""
-        stream = dc.read(written_dasscore_empty)
+        stream = dc.read(written_dascore_v1_empty)
         assert len(stream) == 1
         stream[0].equals(dc.Patch())
 
@@ -100,9 +100,9 @@ class TestReadDasdae:
 class TestScanDasDae:
     """Tests for scanning the dasdae format."""
 
-    def test_scan_returns_info(self, written_dascore_random, random_patch):
+    def test_scan_returns_info(self, written_dascore_v1_random, random_patch):
         """Ensure scanning returns expected values."""
-        info1 = dc.scan(written_dascore_random)[0].dict()
+        info1 = dc.scan(written_dascore_v1_random)[0].dict()
         info2 = dict(random_patch.attrs)
         common_keys = set(info1) & set(info2)
         for key in common_keys:

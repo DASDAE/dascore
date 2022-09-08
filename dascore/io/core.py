@@ -13,7 +13,7 @@ from typing import List, Optional, Union
 import pandas as pd
 
 import dascore
-from dascore.constants import SpoolType, timeable_types
+from dascore.constants import PatchType, SpoolType, timeable_types
 from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import (
     DASCoreError,
@@ -24,6 +24,8 @@ from dascore.exceptions import (
 from dascore.utils.docs import compose_docstring
 from dascore.utils.hdf5 import HDF5ExtError
 from dascore.utils.misc import suppress_warnings
+from dascore.utils.patch import scan_patches
+from dascore.utils.pd import list_ser_to_str
 
 
 class _FiberIOManager:
@@ -218,8 +220,6 @@ class _FiberIOManager:
 
 # ------------- Protocol for File Format support
 
-# _Manager = _FiberIOManager("dascore.plugin.fiber_io")
-
 
 class FiberIO(ABC):
     """
@@ -337,13 +337,13 @@ def read(
     )
 
 
-@compose_docstring(fields=list(PatchFileSummary.__annotations__))
+@compose_docstring(fields=list(PatchFileSummary.__fields__))
 def scan_to_df(
-    path: Union[Path, str],
+    path: Union[Path, str, PatchType, SpoolType],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
     ignore: bool = False,
-) -> List[PatchFileSummary]:
+) -> pd.DataFrame:
     """
     Scan a path, return a dataframe of contents.
 
@@ -363,18 +363,20 @@ def scan_to_df(
         {fields}
     """
     info = scan(
-        path=path,
+        path_or_spool=path,
         file_format=file_format,
         file_version=file_version,
         ignore=ignore,
     )
-    df = pd.DataFrame([dict(x) for x in info])
+    df = pd.DataFrame([dict(x) for x in info]).assign(
+        dims=lambda x: list_ser_to_str(x["dims"])
+    )
     return df
 
 
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))
 def scan(
-    path: Union[Path, str],
+    path_or_spool: Union[Path, str, PatchType, SpoolType],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
     ignore: bool = False,
@@ -384,10 +386,14 @@ def scan(
 
     Parameters
     ----------
-    path
+    path_or_spool
         The path the to file to scan
     file_format
         Format of the file. If not provided DASCore will try to determine it.
+        Only applicable for path-like inputs.
+    file_version
+        Version of the file. If not provided DASCore will try to determine it.
+        Only applicable for path-like inputs.
     ignore
         If True, ignore non-DAS files by returning an empty list, else raise
         UnknownFiberFormat if unreadable file encountered.
@@ -397,6 +403,23 @@ def scan(
     The summary dictionaries contain the following fields:
         {fields}
     """
+    if isinstance(path_or_spool, (str, Path)):
+        return _scan_from_path(
+            path_or_spool,
+            file_format=file_format,
+            file_version=file_version,
+            ignore=ignore,
+        )
+    return scan_patches(path_or_spool)
+
+
+def _scan_from_path(
+    path: Union[Path, str, PatchType, SpoolType],
+    file_format: Optional[str] = None,
+    file_version: Optional[str] = None,
+    ignore: bool = False,
+):
+    """Scan from a single path."""
     if not os.path.exists(path) or os.path.isdir(path):
         msg = f"{path} does not exist or is a directory"
         raise InvalidFiberFile(msg)
