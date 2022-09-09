@@ -145,6 +145,22 @@ class TestSelect:
         for pa1, pa2 in zip(spool1, spool2):
             assert pa1.attrs["time_max"] == pa2.attrs["time_max"]
 
+    def test_select_non_zero_index(self, diverse_file_spool):
+        """
+        A Bug caused the contents of the source dataframe to have
+        non-zero based indices, thus spools didnt work. This fixes
+        the issue.
+        """
+        contents = diverse_file_spool.get_contents()
+        end_time = contents["time_max"].min()
+        sub = diverse_file_spool.select(
+            time=(None, end_time),
+            distance=(100, 200),
+        )
+        assert len(sub) == 1
+        patch = sub[0]
+        assert isinstance(patch, dc.Patch)
+
 
 class TestBasicChunk:
     """Tests for chunking filespool."""

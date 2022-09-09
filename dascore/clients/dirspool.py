@@ -56,8 +56,7 @@ class DirectorySpool(DataFrameSpool):
 
     def _get_df(self):
         """Get the dataframe of current contents."""
-        index_contents = self.indexer(**self._select_kwargs)
-        out = adjust_segments(index_contents, **self._select_kwargs)
+        out = adjust_segments(self._source_df, **self._select_kwargs)
         return out
 
     def _get_instruction_df(self):
@@ -67,7 +66,7 @@ class DirectorySpool(DataFrameSpool):
 
     def _get_source_df(self):
         """Return a dataframe of sources in spool."""
-        return self.indexer(**self._select_kwargs)
+        return self.indexer(**self._select_kwargs).reset_index(drop=True)
 
     @property
     def spool_path(self):
