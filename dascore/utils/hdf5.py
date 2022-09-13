@@ -31,6 +31,7 @@ from dascore.utils.time import get_max_min_times, to_number
 
 HDF5ExtError = tables.HDF5ExtError
 NoSuchNodeError = tables.NoSuchNodeError
+NodeError = tables.NodeError
 
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
 ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
@@ -340,6 +341,18 @@ class HDFPatchIndexManager:
     def _index_version(self) -> str:
         """Get the version of dascore used to create the index."""
         return self._read_metadata()["dascore_version"].iloc[0]
+
+    @property
+    def has_index(self) -> bool:
+        """Return True if an index table has been writen."""
+        expected_node = "/".join([self.namespace, "metadata"])
+        with open_hdf5_file(self.path) as h5:
+            try:
+                h5.get_node(expected_node)
+            except NoSuchNodeError:
+                return False
+            else:
+                return True
 
     @property
     def _version_or_none(self) -> Optional[str]:

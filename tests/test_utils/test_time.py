@@ -116,6 +116,14 @@ class TestToDateTime64:
         assert pd.isnull(out2[1]) and pd.isnull(out1[0])
         assert out1[1] == out2[0]
 
+    def test_zero_dimensional_array(self):
+        """
+        Ensure a zero-dimensional array of a datetime is just unpacked.
+        """
+        ar = np.array("2011-08-12", dtype="datetime64[ns]")
+        out = to_datetime64(ar)
+        assert isinstance(out, np.datetime64)
+
 
 class TestToTimeDelta:
     """Tests for creating timedeltas"""
@@ -179,6 +187,12 @@ class TestToTimeDelta:
         array = np.array([None, 1.2])
         out = to_timedelta64(array)
         assert pd.isnull(out[0]) and not pd.isnull(out[1])
+
+    def test_zero_dimensional_array(self):
+        """A degenerate array should be unpacked."""
+        array = np.array("1", dtype="timedelta64[s]")
+        out = to_timedelta64(array)
+        assert isinstance(out, np.timedelta64)
 
 
 class TestGetSelectTime:

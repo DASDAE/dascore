@@ -42,7 +42,7 @@ def float_to_datetime(num: Union[float, int]) -> np.datetime64:
 @to_datetime64.register(np.ndarray)
 @to_datetime64.register(list)
 @to_datetime64.register(tuple)
-def array_to_datetime64(array: np.array) -> np.datetime64:
+def array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
@@ -50,7 +50,10 @@ def array_to_datetime64(array: np.array) -> np.datetime64:
     nans = pd.isnull(array)
     # dealing with an array of datetime64 or empty array
     if np.issubdtype(array.dtype, np.datetime64) or len(array) == 0:
-        out = array
+        if not array.shape:  # dealing with 0-D array (scalar)
+            out = np.datetime64(array)
+        else:
+            out = array
     # just check first element to determine type.  # TODO replace with dtype check
     # dealing with numerical data
     elif not isinstance(array[0], np.datetime64) and np.isreal(array[0]):
@@ -120,7 +123,10 @@ def array_to_timedelta64(array: np.array) -> np.datetime64:
     nans = pd.isnull(array)
     array[nans] = 0
     if np.issubdtype(array.dtype, np.timedelta64) or len(array) == 0:
-        return array.astype("timedelta64[ns]")
+        if not array.shape:  # unpack degenerate array
+            return np.timedelta64(array)
+        else:
+            return array.astype("timedelta64[ns]")
     assert np.isreal(array[0])
     # separate seconds and factions, convert fractions to ns precision
     # sub in array

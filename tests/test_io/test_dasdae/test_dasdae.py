@@ -1,6 +1,7 @@
 """
 Tests for DASDAE format.
 """
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ import pytest
 import dascore as dc
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.misc import register_func
+from dascore.utils.time import to_datetime64
 
 # a list of fixture names for written DASDAE files
 WRITTEN_FILES = []
@@ -21,6 +23,17 @@ def written_dascore_v1_random(random_patch, tmp_path_factory):
     path = tmp_path_factory.mktemp("dascore_file") / "test.hdf5"
     dc.write(random_patch, path, "dasdae", file_version="1")
     return path
+
+
+@pytest.fixture(scope="class")
+@register_func(WRITTEN_FILES)
+def written_dascore_v1_random_indexed(written_dascore_v1_random, tmp_path_factory):
+    """copy the previous dasdae file and create an index."""
+    new_path = tmp_path_factory.mktemp("dasdae_test_path") / "indexed_dasdae.h5"
+    shutil.copy(written_dascore_v1_random, new_path)
+    # index new path
+    DASDAEV1().index(new_path)
+    return new_path
 
 
 @pytest.fixture(scope="class")
@@ -45,6 +58,40 @@ class TestWrite:
     def test_file_exists(self, dasdae_v1_file_path):
         """The file should *of course* exist."""
         assert Path(dasdae_v1_file_path).exists()
+
+    def test_append(self, written_dascore_v1_random, tmp_path_factory, random_patch):
+        """Ensure files can be appended to unindexed dasdae file."""
+        # make a copy of the dasdae file.
+        new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
+        shutil.copy(written_dascore_v1_random, new_path)
+        # ensure the patch exists in the copied spool.
+        df_pre = dc.spool(new_path).get_contents()
+        assert len(df_pre) == 1
+        # append patch to dasdae file
+        new_patch = random_patch.update_attrs(time_min="1990-01-01")
+        dc.write(new_patch, new_path, "DASDAE")
+        # ensure the file has grown in contents
+        df = dc.spool(new_path).get_contents()
+        assert len(df) == len(df_pre) + 1
+        assert (df["time_min"] == to_datetime64("1990-01-01")).any()
+
+    def test_append_with_index(
+        self, written_dascore_v1_random_indexed, tmp_path_factory, random_patch
+    ):
+        """Ensure patches can be appended to indexed dasdae file."""
+        # make a copy of the dasdae file.
+        new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
+        shutil.copy(written_dascore_v1_random_indexed, new_path)
+        # ensure the patch exists in the copied spool.
+        df_pre = dc.spool(new_path).get_contents()
+        assert len(df_pre) == 1
+        # append patch to dasdae file
+        new_patch = random_patch.update_attrs(time_min="1990-01-01")
+        dc.write(new_patch, new_path, "DASDAE")
+        # ensure the file has grown in contents
+        df = dc.spool(new_path).get_contents()
+        assert len(df) == len(df_pre) + 1
+        assert (df["time_min"] == to_datetime64("1990-01-01")).any()
 
 
 class TestGetVersion:
@@ -107,3 +154,20 @@ class TestScanDasDae:
         common_keys = set(info1) & set(info2)
         for key in common_keys:
             assert info1[key] == info2[key]
+
+    def test_scan_format_version(self, written_dascore_v1_random):
+        """Ensure scanning returns expected values."""
+        formatter = DASDAEV1()
+        df = dc.scan_to_df(written_dascore_v1_random)
+        assert all(df["file_version"] == formatter.version)
+        assert all(df["file_format"] == formatter.name)
+
+    def test_indexed_vs_unindexed(
+        self,
+        written_dascore_v1_random,
+        written_dascore_v1_random_indexed,
+    ):
+        """Whether the file is indexed or not the summary should be the same."""
+        df1 = dc.scan_to_df(written_dascore_v1_random)
+        df2 = dc.scan_to_df(written_dascore_v1_random_indexed)
+        assert df1.drop(columns="path").equals(df2.drop(columns="path"))
