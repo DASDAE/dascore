@@ -190,3 +190,17 @@ class TestScan:
         ser = out.iloc[0]
         assert ser["time_min"] == attrs["time_min"]
         assert ser["time_max"] == attrs["time_max"]
+
+    def test_implements_scan(self):
+        """Test for checking is subclass implements_scan"""
+        assert not FiberFormatTestV2().implements_scan
+        assert not FiberFormatTestV1().implements_scan
+        dasdae = FiberIO.manager.get_fiberio("DASDAE")
+        assert dasdae.implements_scan
+
+    def test_implements_get_format(self):
+        """Test for checking is subclass implements_get_format"""
+        assert not FiberFormatTestV2().implements_get_format
+        assert not FiberFormatTestV1().implements_get_format
+        dasdae = FiberIO.manager.get_fiberio("DASDAE")
+        assert dasdae.implements_get_format

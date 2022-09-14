@@ -6,7 +6,8 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.spool import BaseSpool
+from dascore.clients.filespool import FileSpool
+from dascore.core.spool import BaseSpool, MemorySpool
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -326,3 +327,22 @@ class TestGetSpool:
         """A type that can't contain patches should raise."""
         with pytest.raises(Exception, match="not get spool from"):
             dc.spool(1.2)
+
+    def test_file_spool(self, random_spool, tmp_path_factory):
+        """
+        Tests for getting a file spool vs in-memory spool. Basically,
+        if a format supports scanning a FileSpool is returned. If it doesn't,
+        all the file contents have to be loaded into memory to scan so a
+        MemorySpool is just returned.
+        """
+        path = tmp_path_factory.mktemp("file_spoolin")
+        dasdae_path = path / "patch.h5"
+        pickle_path = path / "patch.pkl"
+        dc.write(random_spool, dasdae_path, "dasdae")
+        dc.write(random_spool, pickle_path, "pickle")
+
+        dasdae_spool = dc.spool(dasdae_path)
+        assert isinstance(dasdae_spool, FileSpool)
+
+        pickle_spool = dc.spool(pickle_path)
+        assert isinstance(pickle_spool, MemorySpool)

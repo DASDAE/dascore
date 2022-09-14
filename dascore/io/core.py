@@ -281,6 +281,18 @@ class FiberIO(ABC):
         msg = f"FileFormatter: {self.name} has no get_version method"
         raise NotImplementedError(msg)
 
+    @property
+    def implements_scan(self) -> bool:
+        """
+        Returns True if the subclass implements its own scan method else False.
+        """
+        return self.scan.__func__ is not FiberIO.scan
+
+    @property
+    def implements_get_format(self) -> bool:
+        """Return True if the subclass implements its own get_format method."""
+        return self.get_format.__func__ is not FiberIO.get_format
+
     def __hash__(self):
         """FiberIO instances should be uniquely defined by (format, version)"""
         return hash((self.name, self.version))
