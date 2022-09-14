@@ -10,6 +10,7 @@ import pytest
 import dascore as dc
 from dascore.constants import ONE_SECOND
 from dascore.core.schema import PatchFileSummary
+from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func
 
 FILE_SPOOLS = []
@@ -113,9 +114,9 @@ class TestSelect:
         out = basic_file_spool.select(tag=tag_collection).get_contents()
         assert out["tag"].isin(tag_collection).all()
 
-    def test_multiple_selects(self, diverse_file_spool):
+    def test_multiple_selects(self, diverse_directory_spool):
         """Ensure selects can be stacked."""
-        spool = diverse_file_spool
+        spool = diverse_directory_spool
         contents = spool.get_contents()
         duration = contents["time_max"] - contents["time_min"]
         new_max = (contents["time_min"] + duration.mean() / 2).median()
@@ -145,15 +146,15 @@ class TestSelect:
         for pa1, pa2 in zip(spool1, spool2):
             assert pa1.attrs["time_max"] == pa2.attrs["time_max"]
 
-    def test_select_non_zero_index(self, diverse_file_spool):
+    def test_select_non_zero_index(self, diverse_directory_spool):
         """
         A Bug caused the contents of the source dataframe to have
         non-zero based indices, thus spools didnt work. This fixes
         the issue.
         """
-        contents = diverse_file_spool.get_contents()
+        contents = diverse_directory_spool.get_contents()
         end_time = contents["time_max"].min()
-        sub = diverse_file_spool.select(
+        sub = diverse_directory_spool.select(
             time=(None, end_time),
             distance=(100, 200),
         )
@@ -192,6 +193,16 @@ class TestBasicChunk:
         patch_list = list(new_spool)
         for patch in patch_list:
             assert isinstance(patch, dc.Patch)
+
+
+class TestGetContents:
+    """Tests for getting the contents of the spool."""
+
+    def test_str_columns_in_dataframe(self, diverse_directory_spool):
+        """Ensure all the string columns are in index."""
+        df = diverse_directory_spool.get_contents()
+        expected = HDFPatchIndexManager._min_itemsize
+        assert set(df.columns).issuperset(set(expected))
 
 
 class TestFileSpoolIntegrations:
