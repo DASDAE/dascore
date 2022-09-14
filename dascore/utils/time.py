@@ -9,7 +9,12 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 
-from dascore.constants import NUMPY_TIME_UNIT_MAPPPING, timeable_types
+from dascore.constants import (
+    LARGEDT64,
+    NUMPY_TIME_UNIT_MAPPPING,
+    SMALLDT64,
+    timeable_types,
+)
 from dascore.exceptions import TimeError
 
 
@@ -37,7 +42,7 @@ def float_to_datetime(num: Union[float, int]) -> np.datetime64:
 @to_datetime64.register(np.ndarray)
 @to_datetime64.register(list)
 @to_datetime64.register(tuple)
-def array_to_datetime64(array: np.array) -> np.datetime64:
+def array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
@@ -45,7 +50,10 @@ def array_to_datetime64(array: np.array) -> np.datetime64:
     nans = pd.isnull(array)
     # dealing with an array of datetime64 or empty array
     if np.issubdtype(array.dtype, np.datetime64) or len(array) == 0:
-        out = array
+        if not array.shape:  # dealing with 0-D array (scalar)
+            out = np.datetime64(array)
+        else:
+            out = array
     # just check first element to determine type.  # TODO replace with dtype check
     # dealing with numerical data
     elif not isinstance(array[0], np.datetime64) and np.isreal(array[0]):
@@ -115,7 +123,10 @@ def array_to_timedelta64(array: np.array) -> np.datetime64:
     nans = pd.isnull(array)
     array[nans] = 0
     if np.issubdtype(array.dtype, np.timedelta64) or len(array) == 0:
-        return array.astype("timedelta64[ns]")
+        if not array.shape:  # unpack degenerate array
+            return np.timedelta64(array)
+        else:
+            return array.astype("timedelta64[ns]")
     assert np.isreal(array[0])
     # separate seconds and factions, convert fractions to ns precision
     # sub in array
@@ -269,3 +280,24 @@ def is_datetime64(obj) -> bool:
     if isinstance(obj, pd.Timestamp):
         return True
     return False
+
+
+def get_max_min_times(kwarg_time=None):
+    """
+    Function to get min/max times from a tuple of possible time values.
+
+    If None, return max/min times possible.
+    """
+    # first unpack time from tuples
+    assert kwarg_time is None or len(kwarg_time) == 2
+    time_min, time_max = (None, None) if kwarg_time is None else kwarg_time
+    # get defaults if starttime or endtime is none
+    time_min = None if pd.isnull(time_min) else time_min
+    time_max = None if pd.isnull(time_max) else time_max
+    time_min = to_datetime64(time_min or SMALLDT64)
+    time_max = to_datetime64(time_max or LARGEDT64)
+    if time_min is not None and time_max is not None:
+        if time_min > time_max:
+            msg = "time_min cannot be greater than time_max."
+            raise ValueError(msg)
+    return time_min, time_max

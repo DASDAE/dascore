@@ -19,16 +19,8 @@ FILE_SPOOLS = []
 @register_func(FILE_SPOOLS)
 def one_file_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    spool = dc.FileSpool(one_file_dir)
+    spool = dc.DirectorySpool(one_file_dir)
     return spool.update()
-
-
-@pytest.fixture(scope="class")
-@register_func(FILE_SPOOLS)
-def basic_file_spool(two_patch_directory):
-    """Return a DAS bank on basic_bank_directory."""
-    out = dc.FileSpool(two_patch_directory)
-    return out.update()
 
 
 @pytest.fixture(scope="class", params=FILE_SPOOLS)
@@ -42,7 +34,7 @@ class TestFileSpool:
 
     def test_isinstance(self, file_spool):
         """Simply ensure expected type was returned."""
-        assert isinstance(file_spool, dc.FileSpool)
+        assert isinstance(file_spool, dc.DirectorySpool)
 
 
 class TestFileIndex:
@@ -152,6 +144,22 @@ class TestSelect:
         spool2 = basic_file_spool.select(time=(None, time_str))
         for pa1, pa2 in zip(spool1, spool2):
             assert pa1.attrs["time_max"] == pa2.attrs["time_max"]
+
+    def test_select_non_zero_index(self, diverse_file_spool):
+        """
+        A Bug caused the contents of the source dataframe to have
+        non-zero based indices, thus spools didnt work. This fixes
+        the issue.
+        """
+        contents = diverse_file_spool.get_contents()
+        end_time = contents["time_max"].min()
+        sub = diverse_file_spool.select(
+            time=(None, end_time),
+            distance=(100, 200),
+        )
+        assert len(sub) == 1
+        patch = sub[0]
+        assert isinstance(patch, dc.Patch)
 
 
 class TestBasicChunk:

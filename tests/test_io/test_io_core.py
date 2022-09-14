@@ -55,17 +55,17 @@ class TestFormatManager:
     def test_extension_priority(self, format_manager):
         """Ensure the extension priority is honored."""
         ext = "h5"
-        out = list(format_manager.yield_fiberio(extension=ext))
+        ext_formatters = list(format_manager.yield_fiberio(extension=ext))
         all_formatters = list(format_manager.yield_fiberio())
-        in_formatter = [ext in x.preferred_extensions for x in out]
+        in_formatter = [ext in x.preferred_extensions for x in ext_formatters]
         format_array = np.array(in_formatter).astype(bool)
         # ensure all the start of the arrays are True.
         assert np.argmin(format_array) == np.sum(format_array)
         # ensure all formats are represented.
         assert len(format_array) == len(all_formatters)
         # ensure V2 of the Test formatter appears first
-        v2_arg = np.argmax([isinstance(x, FiberFormatTestV2) for x in out])
-        v1_arg = np.argmax([isinstance(x, FiberFormatTestV1) for x in out])
+        v2_arg = np.argmax([isinstance(x, FiberFormatTestV2) for x in ext_formatters])
+        v1_arg = np.argmax([isinstance(x, FiberFormatTestV1) for x in ext_formatters])
         assert v2_arg < v1_arg
 
     def test_format_raises_unknown_format(self, format_manager):
@@ -181,3 +181,26 @@ class TestScan:
         """Trying to scan a directory should raise a nice error"""
         with pytest.raises(InvalidFiberFile, match="a directory"):
             _ = dascore.scan(tmp_path)
+
+    def test_scan_patch(self, random_patch):
+        """Scan should also work on a patch"""
+        out = dascore.scan_to_df(random_patch)
+        attrs = random_patch.attrs
+        assert len(out) == 1
+        ser = out.iloc[0]
+        assert ser["time_min"] == attrs["time_min"]
+        assert ser["time_max"] == attrs["time_max"]
+
+    def test_implements_scan(self):
+        """Test for checking is subclass implements_scan"""
+        assert not FiberFormatTestV2().implements_scan
+        assert not FiberFormatTestV1().implements_scan
+        dasdae = FiberIO.manager.get_fiberio("DASDAE")
+        assert dasdae.implements_scan
+
+    def test_implements_get_format(self):
+        """Test for checking is subclass implements_get_format"""
+        assert not FiberFormatTestV2().implements_get_format
+        assert not FiberFormatTestV1().implements_get_format
+        dasdae = FiberIO.manager.get_fiberio("DASDAE")
+        assert dasdae.implements_get_format

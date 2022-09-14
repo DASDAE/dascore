@@ -8,13 +8,6 @@ import dascore as dc
 from dascore.constants import REQUIRED_DAS_ATTRS
 from dascore.core.schema import PatchFileSummary
 from dascore.io.terra15.core import Terra15FormatterV5
-from dascore.utils.downloader import fetch
-
-
-@pytest.fixture(scope="class")
-def terra15_v5_path():
-    """Get the path to terra15 V5 file, download if not cached."""
-    return fetch("terra15_v5_test_file.hdf5")
 
 
 @pytest.fixture(scope="class")

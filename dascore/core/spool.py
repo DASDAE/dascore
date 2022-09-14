@@ -9,7 +9,7 @@ from typing import Mapping, Optional, Sequence, Union
 import pandas as pd
 from typing_extensions import Self
 
-import dascore
+import dascore as dc
 from dascore.constants import PatchType, SpoolType, numeric_types, timeable_types
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
@@ -306,12 +306,26 @@ def spool(obj: Union[Path, str, BaseSpool, Sequence[PatchType]], **kwargs) -> Sp
 def spool_from_str(path, **kwargs):
     """Get a spool from a path."""
     path = Path(path)
-    if path.is_dir():  # a directory was passed
-        from dascore.clients.filespool import FileSpool
+    # A directory was passed, create Directory Spool
+    if path.is_dir():
+        from dascore.clients.dirspool import DirectorySpool
 
-        return FileSpool(path, **kwargs)
+        return DirectorySpool(path, **kwargs)
+
+    # A single file was passed. If the file format supports quick scanning
+    # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
-        return dascore.read(path, **kwargs)
+        from dascore.io.core import FiberIO
+
+        _format, _version = dc.get_format(path)
+        formatter = FiberIO.manager.get_fiberio(_format, _version)
+        if formatter.implements_scan:
+            from dascore.clients.filespool import FileSpool
+
+            return FileSpool(path, _format, _version)
+
+        else:
+            return MemorySpool(dc.read(path, _format, _version))
     else:
         raise ValueError(f"could not get spool from {path}")
 

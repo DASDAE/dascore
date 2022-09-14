@@ -4,10 +4,12 @@ DASDAE format utilities
 import numpy as np
 
 import dascore as dc
+from dascore.core.schema import PatchFileSummary
+from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_number, to_timedelta64
 
-# --- Functions for writing
+# --- Functions for writing DASDAE format.
 
 
 def _write_meta(hfile, file_version):
@@ -15,6 +17,7 @@ def _write_meta(hfile, file_version):
     attrs = hfile.root._v_attrs
     attrs["__format__"] = "DASDAE"
     attrs["__DASDAE_version__"] = file_version
+    attrs["__dascore__version__"] = dc.__version__
 
 
 def _save_attrs_and_dim(patch, patch_group):
@@ -118,3 +121,26 @@ def _read_patch(patch_group, **kwargs):
     except (IndexError, KeyError):
         data = np.array(None)
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+
+
+def _get_contents_from_patch_groups(path, file_version, file_format="DASDAE"):
+    """Get the contents from each patch group."""
+    out = []
+    with open_hdf5_file(path) as h5:
+        for group in h5.iter_nodes("/waveforms"):
+            contents = _get_patch_content_from_group(group)
+            # populate file info
+            contents["file_version"] = file_version
+            contents["file_format"] = file_format
+            contents["path"] = h5.filename
+            out.append(PatchFileSummary(**contents))
+    return out
+
+
+def _get_patch_content_from_group(group):
+    """Get patch content from a single node."""
+    attrs = group._v_attrs
+    out = {i.replace("_attrs_", ""): getattr(attrs, i) for i in attrs._f_list()}
+    # rename dims
+    out["dims"] = out.pop("_dims")
+    return out

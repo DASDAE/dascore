@@ -11,7 +11,7 @@ import tables as tb
 
 import dascore
 import dascore.examples as ex
-from dascore.clients.filespool import FileSpool
+from dascore.clients.dirspool import DirectorySpool
 from dascore.core import MemorySpool, Patch
 from dascore.io.core import read
 from dascore.utils.downloader import fetch
@@ -116,6 +116,12 @@ def terra15_das_unfinished_path() -> Path:
     return out
 
 
+@pytest.fixture(scope="class")
+def terra15_v5_path():
+    """Get the path to terra15 V5 file, download if not cached."""
+    return fetch("terra15_v5_test_file.hdf5")
+
+
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def terra15_das_patch(terra15_das_example_path) -> Patch:
@@ -193,7 +199,7 @@ def one_file_dir(tmp_path_factory, random_patch):
 @register_func(FILE_SPOOLS)
 def one_file_file_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    return FileSpool(one_file_dir).update()
+    return DirectorySpool(one_file_dir).update()
 
 
 @pytest.fixture(scope="class")
@@ -243,7 +249,7 @@ def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
 @register_func(FILE_SPOOLS)
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
-    out = FileSpool(two_patch_directory)
+    out = DirectorySpool(two_patch_directory)
     return out.update()
 
 

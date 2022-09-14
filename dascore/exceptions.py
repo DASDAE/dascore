@@ -53,3 +53,14 @@ class FilterValueError(ValueError, DASCoreError):
 
 class UnsupportedKeyword(TypeError, DASCoreError):
     """Raised when dascore encounters an unexpected keyword."""
+
+
+class InvalidFileHandler(TypeError, DASCoreError):
+    """Raised when a writable file handler is requested from a read handle."""
+
+
+class InvalidIndexVersionError(ValueError, DASCoreError):
+    """
+    Raised when an old version of dascore is trying to read a newer version of
+    a patch summary index.
+    """
