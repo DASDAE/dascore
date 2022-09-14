@@ -65,6 +65,7 @@ class PatchSummary(BaseModel):
     distance_max: float = np.NaN
     d_distance: float = np.NaN
     instrument_id: str = ""
+    cable_id: str = ""
     dims: str = tuple()
     tag: str = ""
     station: str = ""
