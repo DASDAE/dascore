@@ -123,6 +123,8 @@ class HDFPatchIndexManager:
         "station": 8,
         "dims": 40,
         "file_version": 9,
+        "cable_id": 40,
+        "instrument_id": 40,
     }
     # columns which should be indexed for fast querying
     _query_columns = ("time_min", "time_max", "distance_min", "distance_max")
