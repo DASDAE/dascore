@@ -1,7 +1,7 @@
 """
 A 2D trace object.
 """
-from typing import Mapping, Optional, Tuple, Union
+from typing import Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -28,7 +28,7 @@ class Patch:
         self,
         data: Union[ArrayLike, DataArray] = None,
         coords: Mapping[str, ArrayLike] = None,
-        dims: Tuple[str] = None,
+        dims: Sequence[str] = None,
         attrs: Optional[Mapping] = None,
     ):
         if isinstance(data, DataArray):
@@ -148,7 +148,7 @@ class Patch:
         return Coords(self._data_array.coords)
 
     @property
-    def dims(self) -> Tuple[str, ...]:
+    def dims(self) -> tuple[str, ...]:
         """Return the data array."""
         return self._data_array.dims
 
@@ -156,6 +156,11 @@ class Patch:
     def attrs(self) -> FrozenDict:
         """Return the attributes of the trace."""
         return FrozenDict(self._data_array.attrs)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Return the shape of the data array."""
+        return self._data_array.shape
 
     def to_xarray(self):
         """
@@ -180,6 +185,7 @@ class Patch:
     resample = dascore.proc.resample
     iresample = dascore.proc.iresample
     interpolate = dascore.proc.interpolate
+    normalize = dascore.proc.normalize
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
