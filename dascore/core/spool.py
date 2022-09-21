@@ -341,3 +341,9 @@ def spool_from_spool(spool, **kwargs):
 def spool_from_patch_list(patch_list, **kwargs):
     """Return a spool from a sequence of patches."""
     return MemorySpool(patch_list)
+
+
+@spool.register(dc.Patch)
+def spool_from_patch(patch):
+    """Get a spool from a single patch."""
+    return MemorySpool([patch])

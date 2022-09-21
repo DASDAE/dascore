@@ -189,7 +189,7 @@ class TestChunk:
         # get contents of chunked spool
         chunk_df = new.get_contents()
         new_patches = list(new)
-        new_patch = dc.MemorySpool(new_patches)
+        new_patch = dc.spool(new_patches)
         # get content of spool created from patches in chunked spool.
         new_content = new_patch.get_contents()
         # these should be (nearly) identical.
@@ -208,7 +208,7 @@ class TestMergePatchesWithChunk:
     """Tests for merging patches together using chunk method."""
 
     @pytest.fixture()
-    def desperate_spool_no_overlap(self, random_patch) -> dc.MemorySpool:
+    def desperate_spool_no_overlap(self, random_patch) -> dc.BaseSpool:
         """
         Create streams that do not overlap at all.
         Ensure the patches are not sorted in temporal order.
@@ -219,17 +219,17 @@ class TestMergePatchesWithChunk:
         pa2 = random_patch.update_attrs(time_min=t2 + d_time)
         t3 = pa2.attrs["time_max"]
         pa3 = pa2.update_attrs(time_min=t3 + d_time)
-        return dc.MemorySpool([pa2, pa1, pa3])
+        return dc.spool([pa2, pa1, pa3])
 
     @pytest.fixture()
-    def spool_complete_overlap(self, random_patch) -> dc.MemorySpool:
+    def spool_complete_overlap(self, random_patch) -> dc.BaseSpool:
         """
         Create a stream which overlaps each other completely.
         """
-        return dc.MemorySpool([random_patch, random_patch])
+        return dc.spool([random_patch, random_patch])
 
     @pytest.fixture()
-    def spool_slight_gap(self, random_patch) -> dc.MemorySpool:
+    def spool_slight_gap(self, random_patch) -> dc.BaseSpool:
         """
         Create a stream which has a 1.1 * dt gap.
         """
@@ -239,7 +239,7 @@ class TestMergePatchesWithChunk:
         pa2 = random_patch.update_attrs(time_min=t2 + dt * 1.1)
         t3 = pa2.attrs["time_max"]
         pa3 = pa2.update_attrs(time_min=t3 + dt * 1.1)
-        return dc.MemorySpool([pa2, pa1, pa3])
+        return dc.spool([pa2, pa1, pa3])
 
     def test_merge_adjacent(self, adjacent_spool_no_overlap):
         """Test simple merge of patches."""

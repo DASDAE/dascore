@@ -14,6 +14,7 @@ from dascore.exceptions import (
 )
 from dascore.io.core import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
+from dascore.utils.time import to_datetime64
 
 
 class FiberFormatTestV1(FiberIO):
@@ -152,7 +153,7 @@ class TestRead:
     def test_read_terra15(self, terra15_das_example_path, terra15_das_patch):
         """Ensure terra15 can be read."""
         out = dascore.read(terra15_das_example_path)
-        assert isinstance(out, dascore.MemorySpool)
+        assert isinstance(out, dascore.BaseSpool)
         assert len(out) == 1
         assert out[0].equals(terra15_das_patch)
 
@@ -188,8 +189,8 @@ class TestScan:
         attrs = random_patch.attrs
         assert len(out) == 1
         ser = out.iloc[0]
-        assert ser["time_min"] == attrs["time_min"]
-        assert ser["time_max"] == attrs["time_max"]
+        assert to_datetime64(ser["time_min"]) == to_datetime64(attrs["time_min"])
+        assert to_datetime64(ser["time_max"]) == to_datetime64(attrs["time_max"])
 
     def test_implements_scan(self):
         """Test for checking is subclass implements_scan"""

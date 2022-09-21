@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
 from dascore.core.schema import PatchFileSummary
 from dascore.utils.hdf5 import HDFPatchIndexManager
@@ -20,7 +21,7 @@ FILE_SPOOLS = []
 @register_func(FILE_SPOOLS)
 def one_file_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    spool = dc.DirectorySpool(one_file_dir)
+    spool = DirectorySpool(one_file_dir)
     return spool.update()
 
 
@@ -35,7 +36,7 @@ class TestFileSpool:
 
     def test_isinstance(self, file_spool):
         """Simply ensure expected type was returned."""
-        assert isinstance(file_spool, dc.DirectorySpool)
+        assert isinstance(file_spool, DirectorySpool)
 
 
 class TestFileIndex:

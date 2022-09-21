@@ -6,10 +6,10 @@ from pathlib import Path
 
 import numpy as np
 
-import dascore
+import dascore as dc
 from dascore.utils.misc import register_func
 from dascore.utils.patch import get_default_patch_name
-from dascore.utils.time import to_timedelta64
+from dascore.utils.time import to_datetime64, to_timedelta64
 
 EXAMPLE_PATCHES = {}
 EXAMPLE_SPOOLS = {}
@@ -54,7 +54,55 @@ def _random_patch(starttime="2017-09-18", network="", station="", tag="random"):
         time=np.arange(array.shape[1]) * attrs["d_time"],
     )
     out = dict(data=array, coords=coords, attrs=attrs)
-    return dascore.Patch(**out)
+    return dc.Patch(**out)
+
+
+@register_func(EXAMPLE_PATCHES, key="sin_wav")
+def sin_wave_patch(
+    sample_rate=44100,
+    frequency=100,
+    time_min="2020-01-01",
+    channel_count=3,
+    duration=1,
+):
+    """
+    Return a Patch composed of simple 1 second sin waves.
+
+    This is useful for debugging output to audio formats.
+
+    Parameters
+    ----------
+    sample_rate
+        The sample rate in Hz.
+    frequency
+        The frequency of the sin wave.
+    time_min
+        The start time in the metadata.
+    channel_count
+        The number of  distance channels to include.
+    duration
+        Duration of signal in seconds.
+
+    """
+    t_array = np.linspace(0.0, duration, sample_rate * duration)
+    sin_data = 10 * np.sin(2.0 * np.pi * frequency * t_array)
+    data = np.stack([sin_data] * channel_count).T
+    time = to_timedelta64(t_array) + np.datetime64(time_min)
+    distance = np.arange(1, channel_count + 1, 1)
+
+    patch = dc.Patch(
+        data=data,
+        coords={"time": time, "distance": distance},
+        dims=("time", "distance"),
+        attrs={
+            "time_min": to_datetime64(time_min),
+            "d_time": 1 / sample_rate,
+            "distance_min": 1,
+            "d_distance": 1,
+            "distance_max": 3,
+        },
+    )
+    return patch
 
 
 @register_func(EXAMPLE_SPOOLS, key="random_das")
@@ -82,7 +130,7 @@ def _random_spool(
         )
         out.append(patch)
         starttime = patch.attrs["time_max"] + to_timedelta64(d_time)
-    return dascore.MemorySpool(out)
+    return dc.spool(out)
 
 
 @register_func(EXAMPLE_SPOOLS, key="diverse_das")
@@ -117,7 +165,7 @@ def _diverse_spool():
         spool_way_early,
     ]
 
-    return dascore.MemorySpool([y for x in all_spools for y in x])
+    return dc.spool([y for x in all_spools for y in x])
 
 
 def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5"):

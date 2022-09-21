@@ -6,8 +6,9 @@ from typing import List, Optional, Union
 
 import numpy as np
 
+import dascore as dc
 from dascore.constants import timeable_types
-from dascore.core import MemorySpool, Patch
+from dascore.core import Patch
 from dascore.core.schema import PatchFileSummary
 from dascore.io.core import FiberIO
 from dascore.utils.time import to_datetime64
@@ -69,7 +70,7 @@ class TDMSFormatterV4713(FiberIO):
         time: Optional[tuple[timeable_types, timeable_types]] = None,
         distance: Optional[tuple[float, float]] = None,
         **kwargs
-    ) -> MemorySpool:
+    ) -> dc.BaseSpool:
         """
         Read a silixa tdms file, return a DataArray.
 
@@ -106,4 +107,4 @@ class TDMSFormatterV4713(FiberIO):
             attrs["distance_max"] = dar.max()
             # get slices of data and read
             patch = Patch(data=data, coords=_coords, attrs=attrs)
-            return MemorySpool([patch])
+            return dc.spool(patch)

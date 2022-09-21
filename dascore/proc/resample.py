@@ -51,7 +51,9 @@ def decimate(
         sr = _get_sampling_rate(patch, dim)
         freq = sr * 0.5 / float(factor)
         fdata = _lowpass_cheby_2(patch.data, freq, sr, axis=axis)
-        patch = dascore.Patch(fdata, coords=patch.coords, attrs=patch.attrs)
+        patch = dascore.Patch(
+            fdata, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
+        )
 
     kwargs = {dim: slice(None, None, factor)}
     dar = patch._data_array.sel(**kwargs)
@@ -63,7 +65,7 @@ def decimate(
     d_attr = f"d_{dim}"
     attrs[d_attr] = patch.attrs[d_attr] * factor
 
-    return dascore.Patch(data=data, coords=dar.coords, attrs=dar.attrs)
+    return dascore.Patch(data=data, coords=dar.coords, attrs=dar.attrs, dims=dar.dims)
 
 
 @patch_function()

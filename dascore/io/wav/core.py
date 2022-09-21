@@ -1,33 +1,15 @@
 """
 Core module for wave format.
 """
-
 from pathlib import Path
 from typing import Union
 
 import numpy as np
 from scipy.io.wavfile import write
 
-from dascore.constants import PatchType, SpoolType
+from dascore.constants import ONE_SECOND, SpoolType
 from dascore.io.core import FiberIO
-from dascore.utils.docs import compose_docstring
-from dascore.utils.patch import patch_function
-
-write_docstring = """
-Write the contents of the patch to wavefiles in a folder.
-
-Each distance channel is writen as its own file.
-
-Parameters
-----------
-path
-    The *directory* path to which the wave files are written.
-
-Notes
------
-The sampling rate in the wav format must be an int, so the patch's sampling
-rate is cast to an integer before writing wav file.
-"""
+from dascore.utils.patch import check_patch_dims
 
 
 class WavIO(FiberIO):
@@ -37,33 +19,66 @@ class WavIO(FiberIO):
 
     name = "WAV"
 
-    @compose_docstring(doc=write_docstring)
-    def write(self, spool: SpoolType, path: Union[str, Path], **kwargs):
+    def write(self, spool: SpoolType, path: Union[str, Path], resample_frequency=None):
         """
-        {doc}
+        Write the contents of the patch to one or more wav files.
+
+        Parameters
+        ----------
+        path
+            If a path that ends with .wav, write all the distance channels
+            to a single file. If not, assume the path is a directory and write
+            each distance channel to its own wav file.
+        resample_frequency
+            A resample frequency in Hz. If None, do not perform resampling.
+            Often DAS has non-int sampling rates, so the default resampling
+            rate is usually safe.
+
+        Notes
+        -----
+            - The sampling rate in the wav format must be an int, so the
+            patch's sampling rate is cast to an integer before writing wav file.
+            This may cause some distortion (but it isn't likely to be noticeable).
+
+            - The array data type is converted to np.float32 before writing. This
+            requires values to be between (-1, 1) so the data are detrended
+            and normalized before writing.
+
+            - If a single wavefile is specified with the path argument, and
+            the output the patch has more than one len along the distance
+            dimension, a multi-channel wavefile is created. There may be some
+            players that do not support multi-channel wavefiles.
+
+            - If using VLC, often it won't play the file unless the sampling
+            rate is 44100, in this case just set resample_frequency=44100 to
+            see if this fixes the issue.
         """
-        assert len(spool) == 1
-        _write_wavfolder(spool[0], path)
+        path = Path(path)
+        assert len(spool) == 1, "Only single patch spools can be written to wav"
+        patch = spool[0]
+        # write a single wav file, maybe multi-channeled.
+        data, sr = self._get_wav_data(patch, resample_frequency)
+        if path.name.endswith(".wav"):
+            write(filename=str(path), rate=int(sr), data=data)
+        else:  # write data to directory, one file for each distance
+            path.mkdir(exist_ok=True, parents=True)
+            distances = patch.coords["distance"]
+            for ind, dist in enumerate(distances):
+                sub_data = np.take(data, ind, axis=1)
+                sub_path = path / f"{dist}.wav"
+                write(filename=str(sub_path), rate=int(sr), data=sub_data)
 
-
-@patch_function(required_dims=("time", "distance"))
-@compose_docstring(doc=write_docstring)
-def _write_wavfolder(patch: PatchType, path: Union[str, Path]):
-    """
-    {doc}
-    """
-
-    path = Path(path)
-    path.mkdir(exist_ok=True, parents=True)
-    assert len(patch.dims) == 2, "only 2D patches supported for this function."
-    axis = patch.dims.index("distance")
-    data = patch.data
-
-    distance = patch.coords["distance"]
-    sr = 1 / (patch.attrs["d_time"] / np.timedelta64(1, "s"))
-    inds = np.arange(len(distance))
-
-    for ind, dist in enumerate(patch.coords["distance"]):
-        data = np.take(data, inds, axis=axis)
-        sub_path = path / f"{dist}.wav"
-        write(filename=str(sub_path), rate=int(sr), data=data)
+    @staticmethod
+    def _get_wav_data(patch, resample):
+        """Pre-condition patch data for writing. Return array and sample rate."""
+        check_patch_dims(patch, ("time", "distance"))
+        assert len(patch.dims) == 2, "only 2D patches supported for this function."
+        # handle resampling and normalization
+        pat = patch.transpose("time", "distance")
+        if resample is not None:
+            pat = pat.resample(time=1 / resample)
+        # normalize and detrend
+        pat = pat.detrend("time", "linear").normalize("time", norm="max")
+        data = pat.data
+        sample_rate = resample or np.round(ONE_SECOND / pat.attrs["d_time"])
+        return data.astype(np.float32), int(sample_rate)

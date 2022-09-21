@@ -28,7 +28,7 @@ class TestIsPickle:
     def test_read_pickle(self, pickle_patch_path, random_patch):
         """Ensure a pickle file can be read."""
         out = dascore.read(pickle_patch_path)
-        assert isinstance(out, dascore.MemorySpool)
+        assert isinstance(out, dascore.BaseSpool)
         assert len(out) == 1
         assert isinstance(out[0], dascore.Patch)
         assert random_patch == out[0]

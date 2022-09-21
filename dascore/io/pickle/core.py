@@ -52,7 +52,7 @@ class PickleIO(FiberIO):
         """Read a Patch/Stream from disk."""
         with open(path, "rb") as fi:
             out = pickle.load(fi)
-        return dascore.MemorySpool(out)
+        return dascore.spool(out)
 
     def write(self, patch, path, **kwargs):
         """Read a Patch/Stream from disk."""
