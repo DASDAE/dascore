@@ -522,6 +522,6 @@ def write(
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
     """
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
-    if not isinstance(patch_or_spool, dascore.MemorySpool):
-        patch_or_spool = dascore.MemorySpool([patch_or_spool])
+    if not isinstance(patch_or_spool, dascore.BaseSpool):
+        patch_or_spool = dascore.spool([patch_or_spool])
     formatter.write(patch_or_spool, path, **kwargs)

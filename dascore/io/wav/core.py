@@ -19,7 +19,7 @@ class WavIO(FiberIO):
 
     name = "WAV"
 
-    def write(self, spool: SpoolType, path: Union[str, Path], resample_frequency=44100):
+    def write(self, spool: SpoolType, path: Union[str, Path], resample_frequency=None):
         """
         Write the contents of the patch to one or more wav files.
 
@@ -48,6 +48,10 @@ class WavIO(FiberIO):
             the output the patch has more than one len along the distance
             dimension, a multi-channel wavefile is created. There may be some
             players that do not support multi-channel wavefiles.
+
+            - If using VLC, often it won't play the file unless the sampling
+            rate is 44100, in this case just set resample_frequency=44100 to
+            see if this fixes the issue.
         """
         path = Path(path)
         assert len(spool) == 1, "Only single patch spools can be written to wav"
@@ -74,7 +78,7 @@ class WavIO(FiberIO):
         if resample is not None:
             pat = pat.resample(time=1 / resample)
         # normalize and detrend
-        pat = pat.detrend("distance", "linear").normalize("distance", norm="max")
+        pat = pat.detrend("time", "linear").normalize("time", norm="max")
         data = pat.data
-        sample_rate = resample or int(np.round(ONE_SECOND / pat.attrs["d_time"]))
-        return data.astype(np.float32), sample_rate
+        sample_rate = resample or np.round(ONE_SECOND / pat.attrs["d_time"])
+        return data.astype(np.float32), int(sample_rate)

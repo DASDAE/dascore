@@ -4,8 +4,8 @@ IO module for reading Terra15 DAS data.
 from pathlib import Path
 from typing import List, Optional, Union
 
+import dascore as dc
 from dascore.constants import timeable_types
-from dascore.core import MemorySpool
 from dascore.core.schema import PatchFileSummary
 from dascore.io.core import FiberIO
 from dascore.utils.hdf5 import HDF5ExtError, NoSuchNodeError, open_hdf5_file
@@ -52,7 +52,7 @@ class Terra15FormatterV4(FiberIO):
         time: Optional[tuple[timeable_types, timeable_types]] = None,
         distance: Optional[tuple[float, float]] = None,
         **kwargs
-    ) -> MemorySpool:
+    ) -> dc.BaseSpool:
         """
         Read a terra15 file.
         """
@@ -60,7 +60,7 @@ class Terra15FormatterV4(FiberIO):
         # TODO need to create h5 file decorator to avoid too many open/close files.
         with open_hdf5_file(path) as fi:
             patch = _read_terra15(fi.root, time, distance)
-        return MemorySpool([patch])
+        return dc.spool(patch)
 
 
 class Terra15FormatterV5(Terra15FormatterV4):

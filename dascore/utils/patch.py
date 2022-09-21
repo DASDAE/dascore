@@ -501,7 +501,7 @@ def patches_to_df(
         {fields}
     plus a field called 'patch' which contains a reference to each patch.
     """
-    if isinstance(patches, dascore.MemorySpool):
+    if isinstance(patches, dascore.BaseSpool):
         df = patches._df
     elif isinstance(patches, pd.DataFrame):
         return patches

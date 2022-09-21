@@ -12,7 +12,8 @@ import tables as tb
 import dascore
 import dascore.examples as ex
 from dascore.clients.dirspool import DirectorySpool
-from dascore.core import MemorySpool, Patch
+from dascore.constants import SpoolType
+from dascore.core import Patch
 from dascore.io.core import read
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
@@ -102,7 +103,7 @@ def terra15_das_example_path():
 
 @pytest.fixture()
 @register_func(STREAM_FIXTURES)
-def terra15_das_stream(terra15_das_example_path) -> MemorySpool:
+def terra15_das_stream(terra15_das_example_path) -> SpoolType:
     """Return the stream of Terra15 Das Array"""
     return read(terra15_das_example_path, file_format="terra15")
 
@@ -144,7 +145,7 @@ def random_patch() -> Patch:
 
 @pytest.fixture(scope="session")
 @register_func(STREAM_FIXTURES)
-def random_spool() -> MemorySpool:
+def random_spool() -> SpoolType:
     """Init a random array."""
     from dascore.examples import get_example_spool
 
@@ -167,7 +168,7 @@ def dummy_text_file(tmp_path_factory):
 
 
 @pytest.fixture(scope="class")
-def adjacent_spool_no_overlap(random_patch) -> dascore.MemorySpool:
+def adjacent_spool_no_overlap(random_patch) -> dascore.BaseSpool:
     """
     Create a stream with several patches within one time sample but not
     overlapping.
@@ -184,14 +185,14 @@ def adjacent_spool_no_overlap(random_patch) -> dascore.MemorySpool:
     expected_time = pa3.attrs["time_max"] - pa1.attrs["time_min"]
     actual_time = pa3.coords["time"].max() - pa1.coords["time"].min()
     assert expected_time == actual_time
-    return dascore.MemorySpool([pa2, pa1, pa3])
+    return dascore.spool([pa2, pa1, pa3])
 
 
 @pytest.fixture(scope="class")
 def one_file_dir(tmp_path_factory, random_patch):
     """Create a directory with a single DAS file."""
     out = Path(tmp_path_factory.mktemp("one_file_file_spool"))
-    spool = dascore.MemorySpool([random_patch])
+    spool = dascore.spool(random_patch)
     return ex.spool_to_directory(spool, path=out)
 
 
