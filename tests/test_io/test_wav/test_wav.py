@@ -4,6 +4,7 @@ Tests module for wave format.
 from pathlib import Path
 
 import pytest
+from scipy.io.wavfile import read as read_wav
 
 import dascore as dc
 
@@ -34,3 +35,10 @@ class TestWriteWav:
         path = tmp_path_factory.mktemp("wave_temp") / "temp.wav"
         dc.write(audio_patch, path, "wav")
         assert path.exists()
+
+    def test_resample(self, audio_patch, tmp_path_factory):
+        """Ensure resampling changes sampling rate in file"""
+        path = tmp_path_factory.mktemp("wav_resample") / "resampled.wav"
+        dc.write(audio_patch, path, "wav", resample_frequency=1000)
+        (sr, ar) = read_wav(str(path))
+        assert sr == 1000

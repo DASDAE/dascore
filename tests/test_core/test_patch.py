@@ -109,6 +109,10 @@ class TestInit:
         ar = get_simple_patch()
         assert not np.any(pd.isnull(ar.coords["time"]))
 
+    def test_shape(self, random_patch):
+        """Ensure shape returns the shape of the data array."""
+        assert random_patch.shape == random_patch.data.shape
+
 
 class TestEmptyPatch:
     """Tests for empty patch objects."""
