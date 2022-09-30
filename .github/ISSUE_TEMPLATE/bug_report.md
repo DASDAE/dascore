@@ -17,6 +17,6 @@ Include a short code example which reproduces the issue.
 A clear and concise description of what you expected to happen.
 
 **Versions (please complete the following information):**
- - OS: [e.g. iOS]
- - ObsPlus Version [e.g. 0.1.0]
- - Python Version [e.g. 3.8]
+ - OS: [e.g. Ubuntu 20.04]
+ - DasCore Version [e.g. 0.0.5]
+ - Python Version [e.g. 3.10]
