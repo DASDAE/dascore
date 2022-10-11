@@ -1,6 +1,6 @@
 # DASCore
 
-A python library for distributed fiber optic sensing
+A python library for distributed fiber optic sensing.
 
 [![coverage](https://codecov.io/gh/dasdae/dascore/branch/master/graph/badge.svg)](https://codecov.io/gh/dasdae/dascore)
 [![supported versions](https://img.shields.io/pypi/pyversions/dascore.svg)](https://pypi.python.org/pypi/dascore)

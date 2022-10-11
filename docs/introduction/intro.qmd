@@ -1,0 +1,99 @@
+# DASCore
+
+A python library for distributed fiber optic sensing.
+
+[![coverage](https://codecov.io/gh/dasdae/dascore/branch/master/graph/badge.svg)](https://codecov.io/gh/dasdae/dascore)
+[![supported versions](https://img.shields.io/pypi/pyversions/dascore.svg)](https://pypi.python.org/pypi/dascore)
+[![PyPI](https://pepy.tech/badge/dascore)](https://pepy.tech/project/dascore)
+[![Connda](https://img.shields.io/conda/dn/conda-forge/dascore?label=conda%20downloads)](https://github.com/conda-forge/dascore-feedstock)
+[![Licence](https://www.gnu.org/graphics/lgplv3-88x31.png)](https://www.gnu.org/licenses/lgpl.html)
+
+# Highlights
+
+DasCore is python library for working with distributed fiber optic data. It provides:
+
+1. IO support for common fiber-optic data formats
+2. Common processing routines
+3. Basic visualizations
+
+
+# Usage
+
+## Read a single file
+
+```python
+import dascore as dc
+from dascore.utils.downloader import fetch
+
+# get a path to an example file, replace with your path
+file_path = fetch('terra15_das_1_trimmed.hdf5')
+
+spool = dc.spool(file_path)
+```
+
+## Read data from a directory of fiber files
+
+```python
+import dascore as dc
+from dascore.utils.downloader import fetch
+
+# get a path to a directory of das files, replace with your path
+directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
+
+spool = dc.spool(directory_path).update()
+```
+
+## Get patches (2D array)
+```python
+import dascore as dc
+spool = dc.get_example_spool('diverse_das')
+
+# get patches through iteration
+for patch in spool:
+    ...
+
+# Or through indexing
+patch = spool[0]
+```
+
+## Perform processing
+```python
+import dascore as dc
+patch = dc.get_example_spool('random')
+
+out = (
+    patch.decimate(time=8)  # decimate along time axis
+    .detrend(dim='distance')  # detrend in distance axis
+    .pass_filter(time=(None, 10))  # apply bandpass filter
+)
+```
+
+
+## Visualize
+```python
+import dascore as dc
+patch = dc.get_example_spool('random')
+
+patch.viz.waterfall(show=True, scale=0.02)
+```
+
+# Installation
+
+Simply use pip or conda to install dascore:
+
+```bash
+pip install dascore
+```
+
+```bash
+conda install dascore
+```
+
+See the [contributing docs](contributing/contributing.qmd) for development
+installations.
+
+# Feedback and Support
+
+Use the [project discussions](https://github.com/DASDAE/dascore/discussions) to ask a question.
+
+Use the [project issues](https://github.com/DASDAE/dascore/issues) to report an issue.

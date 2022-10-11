@@ -1,7 +1,0 @@
-# requirements for building documentation
-sphinx>=1.5.1
-ipykernel
-numpydoc
-sphinx_autodoc_typehints
-nbsphinx
-myst-parser
