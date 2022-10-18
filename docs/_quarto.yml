@@ -2,206 +2,85 @@ project:
   type: website
   output-dir: _site
 
-
-website:
-  title: "DasCore"
-  image: "_static/logo.png"
-  favicon: "_static/logo.png"
-  twitter-card: true
-  site-url: https://dascore.org
-  repo-url: https://github.com/dasdae/dascore
-  repo-actions: [edit]
-  page-navigation: true
-
-  sidebar: 
-    style: "floating"
-    collapse-level: 2
-    title: "DasCore: A Python Library for Distributed Fiber Optic Sensing"
-    logo: "_static/logo.png"
-    search: true
-    contents:
-      - index.qmd
-      - setup.qmd
-
-      - section: "Introduction"
-        contents:
-
-        - section: "intro"
-          href: modules/git/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/git/overview.qmd
-            - text: 'slides'
-              href: modules/git/slides.qmd
-            - text: "exercises"
-              href: modules/git/exercises.qmd
-
-        - section: "Style"
-          href: modules/style/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/style/overview.qmd
-            - text: 'slides'
-              href: modules/style/slides.qmd
-            - text: "exercises"
-              href: modules/style/exercises.qmd
-
-        - section: "Linting"
-          href: modules/linting/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/linting/overview.qmd
-            - text: 'slides'
-              href: modules/linting/slides.qmd
-            - text: "exercises"
-              href: modules/linting/exercises.qmd
-
-        - section: "Python: Data Model"
-          href: modules/python_data_model/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/python_data_model/overview.qmd
-            - text: 'slides'
-              href: modules/python_data_model/slides.qmd
-            - text: "exercises"
-              href: modules/python_data_model/exercises.qmd
-
-        - section: "Python: Decorators"
-          href: modules/python_decorators/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/python_decorators/overview.qmd
-            - text: 'slides'
-              href: modules/python_decorators/slides.qmd
-            - text: "exercises"
-              href: modules/python_decorators/exercises.qmd
-
-        - section: "Python: Type Hints"
-          href: modules/python_type_hints/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/python_type_hints/overview.qmd
-            - text: 'slides'
-              href: modules/python_type_hints/slides.qmd
-            - text: "exercises"
-              href: modules/python_type_hints/exercises.qmd
-
-        - section: "Testing: Theory"
-          href: modules/testing_theory/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/testing_theory/overview.qmd
-            - text: 'slides'
-              href: modules/testing_theory/slides.qmd
-            - text: "exercises"
-              href: modules/testing_theory/exercises.qmd
-
-        - section: "Testing: Practice"
-          href: modules/testing_practice/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/testing_practice/overview.qmd
-            - text: 'slides'
-              href: modules/testing_practice/slides.qmd
-            - text: "exercises"
-              href: modules/testing_practice/exercises.qmd
-
-        - section: "Documentation"
-          href: modules/documentation/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/documentation/overview.qmd
-            - text: 'slides'
-              href: modules/documentation/slides.qmd
-            - text: "exercises"
-              href: modules/documentation/exercises.qmd
-
-        - section: "Issues"
-          href: modules/issues/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/issues/overview.qmd
-            - text: 'slides'
-              href: modules/issues/slides.qmd
-            - text: "exercises"
-              href: modules/issues/exercises.qmd
-
-        - section: "Pull Requests"
-          href: modules/pull_requests/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/pull_requests/overview.qmd
-            - text: 'slides'
-              href: modules/pull_requests/slides.qmd
-            - text: "exercises"
-              href: modules/pull_requests/exercises.qmd
-
-        - section: "Code Reviews"
-          href: modules/code_reviews/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/code_reviews/overview.qmd
-            - text: 'slides'
-              href: modules/code_reviews/slides.qmd
-            - text: "exercises"
-              href: modules/code_reviews/exercises.qmd
-
-        - section: "Continuous Integration"
-          href: modules/continuous_integration/overview.qmd
-          contents:
-            - text: 'overview'
-              href: modules/continuous_integration/overview.qmd
-            - text: 'slides'
-              href: modules/continuous_integration/slides.qmd
-            - text: "exercises"
-              href: modules/continuous_integration/exercises.qmd
-
-#        - section: "Packaging"
-#          href: modules/packaging/overview.qmd
-#          contents:
-#            - text: 'overview'
-#              href: modules/packaging/overview.qmd
-#            - text: 'slides'
-#              href: modules/packaging/slides.qmd
-#            - text: "exercises"
-#              href: modules/packaging/exercises.qmd
-#
-#        - section: "Code Isolation"
-#          href: modules/code_isolation/overview.qmd
-#          contents:
-#            - text: 'overview'
-#              href: modules/code_isolation/overview.qmd
-#            - text: 'slides'
-#              href: modules/code_isolation/slides.qmd
-#            - text: "exercises"
-#              href: modules/code_isolation/exercises.qmd
-
-      - acknowledgements.qmd
-
-  navbar:
-    background: light
-    logo: images/logo.png
-    logo-alt: "OSC logo."
-    title: false
-    collapse-below: lg
-    left:
-      - text: "Overview"
-        href: index.qmd
-
-    right:
-      - icon: github
-        href: https://github.com/opensourcecourse/website
-        aria-label: OpenSourceCourse GitHub
-
-  
-# bibliography: references.bib
-
 format:
   html:
     toc: true
     theme:
-      light: [cosmo, theme.scss]
+      light: yeti
     code-copy: true
     code-overflow: wrap
     css: styles.css
+
+website:
+  title: "DASCore"
+  site-path: /docs
+
+  image: "_static/logo.png"
+  favicon: "_static/logo.png"
+  twitter-card: true
+  repo-url: https://github.com/dasdae/dascore/docs
+  repo-actions: [edit, source, issue]
+  page-navigation: true
+
+  navbar:
+    logo: _static/logo.png
+    logo-href: intro.qmd
+    logo-alt: "DASCore logo."
+    background: light
+    search: true
+    left:
+      - text: Intro
+        file: intro.qmd
+
+      - text: Tutorial
+        file: tutorial/concepts.qmd
+
+      - text: Contributing
+        file: contributing/contributing.qmd
+
+      - text: API
+        file: api/api.md
+
+  sidebar:
+    - title: "Intro"
+      style: "floating"
+      collapse-level: 2
+      logo: "_static/logo.png"
+      search: true
+      contents:
+        - intro.qmd
+        - changelog.md
+        - contributors.md
+        - acknowledgements.md
+
+    - title: "Tutorial"
+      contents:
+        - concepts.qmd
+#        - tutorial.qmd
+
+    - title: "Contributing"
+      contents:
+        - contributing/contributing.qmd
+        - text: Dev Install
+          href: contributing/dev_install.qmd
+        - text: "Testing"
+          href: contributing/testing.qmd
+        - text: Build Documentation
+          href: contributing/documentation.qmd
+        - text: "Adding a new format"
+          href: contributing/new_format.qmd
+        - text: "Code of Conduct"
+          href: contributing/code_of_conduct.qmd
+
+    - title: 'API'
+      contents:
+        - api/api.md
+
+
+
+
+
+bibliography: references.bib
+
+
     # include-after-body: js.html
