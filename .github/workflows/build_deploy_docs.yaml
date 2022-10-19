@@ -24,7 +24,6 @@ concurrency:
 jobs:
   # Build job
   build:
-    needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
