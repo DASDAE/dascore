@@ -31,14 +31,10 @@ jobs:
         uses: conda-incubator/setup-miniconda@v2
         with:
           miniconda-version: 'latest'
-          python-version: 3.9
-          channels: conda-forge
-
-      - name: install dascore with docbuild reqs
-        shell: bash -l {0}
-        run: |
-          conda install -c conda-forge pandoc
-          python -m pip install -e .[docs]
+          python-version: ${{ matrix.python-version }}
+          activate-environment: dascore
+          environment-file: environment.yml
+          condarc-file: .github/test_condarc.yml
 
       - name: Install quarto
         uses: quarto-dev/quarto-actions/setup@v2
