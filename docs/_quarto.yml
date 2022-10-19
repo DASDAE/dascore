@@ -120,6 +120,3 @@ website:
 
 
 bibliography: references.bib
-
-
-    # include-after-body: js.html

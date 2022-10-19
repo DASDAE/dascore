@@ -58,3 +58,14 @@ patch = dc.get_example_patch()
 ```
 
  However, its not clear what the units of the provided range are!
+
+# Data structures
+
+DASCore has two key data structures; the [Patch](patch.qmd) and the [Spool](spool.qmd).
+Both of these have their own tutorial pages.
+
+The `Patch` contains a contiguous block of N dimensional data and metadata.
+The `Spool` manages a group of `Patch` instances. These can be in memory, on
+disk, or a remote resource.
+
+![DASCore Patch and Spool](../_static/patch_n_spool.png){#fig-patch_n_spool}
