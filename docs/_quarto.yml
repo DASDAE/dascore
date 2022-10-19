@@ -26,13 +26,13 @@ website:
 
   navbar:
     logo: _static/logo.png
-    logo-href: intro.qmd
+    logo-href: index.qmd
     logo-alt: "DASCore logo."
     background: light
     search: true
     left:
       - text: Introduction
-        file: intro.qmd
+        file: index.qmd
 
       - text: Tutorial
         file: tutorial/concepts.qmd
@@ -54,7 +54,7 @@ website:
       search: true
       contents:
         - text: Introduction
-          href: intro.qmd
+          href: index.qmd
 
         - text: Changelog
           href: changelog.md
