@@ -1,0 +1,29 @@
+---
+title: Guidelines
+---
+This page highlights a few guidelines for DASCore development.
+
+# Branching and versioning
+
+We create new features or bug fixes in their own branches and merge them into master via pull requests. We may switch
+to a more complex branching model if the need arises.
+
+If substantial new features have been added since the last release we will bump the minor version.  If only bug
+fixes/minor changes have been made, only the patch version will be bumped. Like most python projects, we loosely
+follow [semantic versioning](https://semver.org/) in terms that we will not bump the major version until DASCore
+is more stable.
+
+
+# Paths
+
+Prefer `pathlib.Path` to strings when working with paths. However, when dealing with many many files (e.g., indexers)
+strings may be preferred for efficiency.
+
+# Working with dataframes
+
+Column names should be snake_cased whenever possible.
+
+Always access columns with getitem and not getattr (ie use `df['column_name']` not `df.column_name`).
+
+Prefer creating a new `DataFrame`/`Series` to modifying them inplace. Inplace modifications should require opting in
+(usually through an `inplace` key word argument).

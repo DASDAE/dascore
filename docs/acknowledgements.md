@@ -1,3 +1,3 @@
-<!-- 
-Add major acknowledgments here, funding sources, etc. 
+<!--
+Add major acknowledgments here, funding sources, etc.
 -->

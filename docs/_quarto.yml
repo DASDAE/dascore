@@ -18,8 +18,10 @@ website:
   image: "_static/logo.png"
   favicon: "_static/logo.png"
   twitter-card: true
-  repo-url: https://github.com/dasdae/dascore/docs
-  repo-actions: [edit, source, issue]
+  repo-url: https://github.com/dasdae/dascore
+  repo-subdir: docs
+  repo-branch: master
+  repo-actions: [edit]
   page-navigation: true
 
   navbar:
@@ -29,17 +31,20 @@ website:
     background: light
     search: true
     left:
-      - text: Intro
+      - text: Introduction
         file: intro.qmd
 
       - text: Tutorial
         file: tutorial/concepts.qmd
 
+      - text: Recipes
+        file: recipes/overview.qmd
+
       - text: Contributing
         file: contributing/contributing.qmd
 
       - text: API
-        file: api/api.md
+        file: api/api.qmd
 
   sidebar:
     - title: "Intro"
@@ -48,36 +53,70 @@ website:
       logo: "_static/logo.png"
       search: true
       contents:
-        - intro.qmd
-        - changelog.md
-        - contributors.md
-        - acknowledgements.md
+        - text: Introduction
+          href: intro.qmd
+
+        - text: Changelog
+          href: changelog.md
+
+        - text: Contributors
+          href: contributors.md
+
+        - text: Acknowledgements
+          href: acknowledgements.md
 
     - title: "Tutorial"
       contents:
-        - concepts.qmd
-#        - tutorial.qmd
+        - text: DASCore Concepts
+          href: tutorial/concepts.qmd
+
+        - text: Patch
+          href: tutorial/patch.qmd
+
+        - text: Spool
+          href: tutorial/spool.qmd
+
+        - text: Processing
+          href: tutorial/processing.qmd
+
+        - text: Visualization
+          href: tutorial/visualization.qmd
+
+        - text: FIle IO
+          href: tutorial/file_io.qmd
+
+    - title: 'Recipes'
+      contents:
+        - recipes/overview.qmd
 
     - title: "Contributing"
       contents:
         - contributing/contributing.qmd
+
         - text: Dev Install
           href: contributing/dev_install.qmd
+
+        - text: Style
+          href: contributing/style_and_linting.qmd
+
         - text: "Testing"
           href: contributing/testing.qmd
-        - text: Build Documentation
+
+        - text: Documentation
           href: contributing/documentation.qmd
+
+        - text: General Guidelines
+          href: contributing/general_guidelines.qmd
+
         - text: "Adding a new format"
           href: contributing/new_format.qmd
+
         - text: "Code of Conduct"
           href: contributing/code_of_conduct.qmd
 
     - title: 'API'
       contents:
-        - api/api.md
-
-
-
+        - api/api.qmd
 
 
 bibliography: references.bib

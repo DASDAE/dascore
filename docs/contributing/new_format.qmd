@@ -1,5 +1,6 @@
-# Adding Support for a File Format
-
+---
+title: Adding a New Format
+---
 Several steps are required to add support for a new file format. To demonstrate, imagine adding support for a
 format called `jingle` which conventionally uses a file extension of `jgl`.
 
@@ -14,7 +15,7 @@ contents of `dascore/io/jingle/__init__.py`
 Jingle format support module.
 
 Jingle is a really cool new format which supports all the "bells" and whistles
-people need for working with das data.
+people need for working with DAS data.
 
 Examples
 --------
@@ -175,7 +176,7 @@ register the jingle core module in DASCore's entry points. This is done under th
 pyproject.toml file. For example, after adding jingle the pyproject.toml section
 might look like this:
 
-```
+```default
 [project.entry-points."dascore.fiber_io"]
 TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
 PICKLE = "dascore.io.pickle.core:PickleIO"

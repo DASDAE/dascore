@@ -1,4 +1,4 @@
-<!-- 
+<!--
 Add your name and github handle here in alphabetic order by last name.
 Include one empty line between contributors.
 -->
@@ -13,5 +13,5 @@ A Huge thanks to all of our contributors:
 
 [Hafiz Issah](https://github.com/aissah)
 
-You can find more contributor information 
+You can find more contributor information
 [here](https://github.com/DASDAE/dascore/graphs/contributors)

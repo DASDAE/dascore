@@ -1,5 +1,6 @@
-
-# Installing DASCore for Development
+---
+title: DASCore Development Installation
+---
 
 The following steps are needed to set up `DASCore` for development:
 
