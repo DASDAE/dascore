@@ -1,0 +1,130 @@
+---
+title: Documentation
+---
+There are several levels of documentation in DASCore. These include: code comments
+(which are primarily for developers), docstrings (which are used to generate the API docs),
+and markdown documentation pages like this one.
+
+# Code comments
+
+Code comments are primarily for developers. They should describe useful information and not
+just restate obvious parts of the code. Consider refactoring with better named variables or
+smaller, well named functions if you find yourself making lots of these types of comments.
+
+Don't be afraid to make multi-line comments if needed.
+
+# Doc-Strings
+
+Use [numpy style docstrings](https://docs.scipy.org/doc/numpy/docs/howto_document.html). All public code
+(doesn't start with a `_`) should have a "full" docstring but private code (starts with a `_`) can have an
+abbreviated docstring.
+
+DASCore makes extensive use of Python 3's [type hints](https://docs.python.org/3/library/typing.html).
+Please make an effort to accurately annotate public functions/classes/methods.
+
+Here is an example:
+
+```python
+from __futures__ import annotations
+
+import dascore
+from dascore.constants import PatchType
+
+# example public Patch function
+@dascore.patch_function()
+def example_func(patch: PatchType, to_add: int | float | None = None) -> PatchType:
+    """
+    A simple, one line explanation of what this function does.
+
+    Additional details which might be useful, and are not limited to one line.
+    In fact, they might span several lines, especially if the author of the
+    docstring tends to include more details than needed.
+
+    Parameters
+    ----------
+    patch
+        A description of this parameter
+    to_add
+        A description of this parameter
+
+    Returns
+    -------
+    If needed, more information about what this function returns. You shouldn't
+    simply specify the type here since that is already given by the type annotation.
+    If the returned object is self-explanatory feel free to skip this section.
+
+    Examples
+    --------
+    >>> # Examples are included in the doctest style
+    >>> import dascore
+    ... pa = dascore.get_example_patch()
+    ...
+    ... out = example_func(pa)
+    """
+
+# example private function
+def _recombobulate(df, arg1, arg2):
+    """
+    A private function can have a simple (multi-line) snippet and doesn't need as
+    much detail or type hinting as a public function.
+    """
+```
+
+# Generating Documentation
+
+DASCore's documentation is built with [quarto](https://quarto.org/). In order to build the documentation, you
+must first ensure you have followed the [development installation](dev_install.qmd) then
+[install quarto](https://quarto.org/docs/get-started/).
+
+Next, the documentation can be built using the script called "make_docs.py" in the scripts directory.
+
+The docs can then be accessed by double-clicking on the newly created html index at docs/_site/index.html.
+
+Conversely, you can also preview the documentation so changes are rendered in real time in your browser:
+
+```bash
+cd docs
+quarto preview
+```
+
+# Cross references
+
+Cross references provide a means of linking parts of the documentation to the API docs for specific modules, classes,
+functions, or methods. They work just like normal markdown links except the reference is a dascore object surrounded
+by backticks like so:
+
+```
+This is a link to DASCore's [Patch](`dascore.core.Patch`).
+```
+
+This can be used in both docstrings and the documentation pages.
+
+
+:::{.callout-note}
+This actually isn't implemented yet, but will be soon!
+:::
+
+# Referencing publications
+
+New references should be added to the references.bib file in the docs folder.
+
+Then, publications can be referenced in standard
+[pandoc style](https://quarto.org/docs/authoring/footnotes-and-citations.html#sec-citations)
+
+Citing @lindsey2021fiber or [@lindsey2021fiber] is done like so:
+
+```
+Citing @lindsey2021fiber or [@lindsey2021fiber]
+```
+
+References then show up at the bottom of the page, or if a mouse hovers over the link.
+
+# Contributing to the documentation
+
+The documentation is primarily done in markdown but easily converted to jupyter notebooks using
+[jupytext](https://github.com/mwouts/jupytext).
+
+Markdown files should go into docs/markdown. If the markdown file contains python code which should be
+tested (most python code should be tested), the file should go in docs/markdown/executable. The
+executable code uses the [myst markdown flavor](https://myst-parser.readthedocs.io/en/latest/).
+For an example see the [intro page source code](https://github.com/DASDAE/dascore/blob/master/docs/markdown/executable/intro.md).

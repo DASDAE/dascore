@@ -1,0 +1,122 @@
+project:
+  type: website
+  output-dir: _site
+
+format:
+  html:
+    toc: true
+    theme:
+      light: yeti
+    code-copy: true
+    code-overflow: wrap
+    css: styles.css
+
+website:
+  title: "DASCore"
+  site-path: /docs
+
+  image: "_static/logo.png"
+  favicon: "_static/logo.png"
+  twitter-card: true
+  repo-url: https://github.com/dasdae/dascore
+  repo-subdir: docs
+  repo-branch: master
+  repo-actions: [edit]
+  page-navigation: true
+
+  navbar:
+    logo: _static/logo.png
+    logo-href: intro.qmd
+    logo-alt: "DASCore logo."
+    background: light
+    search: true
+    left:
+      - text: Introduction
+        file: intro.qmd
+
+      - text: Tutorial
+        file: tutorial/concepts.qmd
+
+      - text: Recipes
+        file: recipes/overview.qmd
+
+      - text: Contributing
+        file: contributing/contributing.qmd
+
+      - text: API
+        file: api/api.qmd
+
+  sidebar:
+    - title: "Intro"
+      style: "floating"
+      collapse-level: 2
+      logo: "_static/logo.png"
+      search: true
+      contents:
+        - text: Introduction
+          href: intro.qmd
+
+        - text: Changelog
+          href: changelog.md
+
+        - text: Contributors
+          href: contributors.md
+
+        - text: Acknowledgements
+          href: acknowledgements.md
+
+    - title: "Tutorial"
+      contents:
+        - text: DASCore Concepts
+          href: tutorial/concepts.qmd
+
+        - text: Patch
+          href: tutorial/patch.qmd
+
+        - text: Spool
+          href: tutorial/spool.qmd
+
+        - text: Processing
+          href: tutorial/processing.qmd
+
+        - text: Visualization
+          href: tutorial/visualization.qmd
+
+        - text: FIle IO
+          href: tutorial/file_io.qmd
+
+    - title: 'Recipes'
+      contents:
+        - recipes/overview.qmd
+
+    - title: "Contributing"
+      contents:
+        - contributing/contributing.qmd
+
+        - text: Dev Install
+          href: contributing/dev_install.qmd
+
+        - text: Style
+          href: contributing/style_and_linting.qmd
+
+        - text: "Testing"
+          href: contributing/testing.qmd
+
+        - text: Documentation
+          href: contributing/documentation.qmd
+
+        - text: General Guidelines
+          href: contributing/general_guidelines.qmd
+
+        - text: "Adding a new format"
+          href: contributing/new_format.qmd
+
+        - text: "Code of Conduct"
+          href: contributing/code_of_conduct.qmd
+
+    - title: 'API'
+      contents:
+        - api/api.qmd
+
+
+bibliography: references.bib

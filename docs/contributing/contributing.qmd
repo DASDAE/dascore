@@ -1,0 +1,11 @@
+---
+title: Contributing
+---
+
+Contributions to DASCore are welcomed and appreciated. Before contributing
+please be aware of our [code of conduct](code_of_conduct.md).
+
+To start, clone DASCore and [install it in development mode](dev_install.qmd).
+
+Review how [DASCore's testing](testing.qmd) works, [how DASCore is documented](documentation.qmd),
+[DAScore style and linting](style_and_linting.qmd), and the [general guidelines](general_guidelines.qmd).

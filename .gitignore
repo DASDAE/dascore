@@ -77,3 +77,4 @@ target/
 # docs
 docs/api/*
 _autosummary
+.quarto/

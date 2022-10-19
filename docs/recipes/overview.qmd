@@ -1,0 +1,7 @@
+---
+title: "Recipes"
+---
+
+Welcome to DASCore's cook book! This is a collection of examples (recipes) for performing common processing task.
+Please look around and consider [contributing](../contributing/contributing.qmd) some examples of your
+own.

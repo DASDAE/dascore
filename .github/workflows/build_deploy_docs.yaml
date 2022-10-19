@@ -20,7 +20,6 @@ concurrency:
   group: "pages"
   cancel-in-progress: true
 
-
 jobs:
   # Build job
   build:
@@ -41,33 +40,29 @@ jobs:
           conda install -c conda-forge pandoc
           python -m pip install -e .[docs]
 
-      - name: build docs
+      - name: Install quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: pre-release
+          tinytex: true
+
+      - name: print quarto version
+        run: |
+          quarto --version
+
+      - name: Render Quarto Project
         shell: bash -l {0}
         run: |
-          python scripts/make_docs.py
+          quarto render docs
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v2
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
         with:
-          path: ./docs/_build/html
+          path: '_docs/site'
 
-  deploy:
-    # Add a dependency to the build job
-    needs: build
-
-    # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
-    permissions:
-      pages: write      # to deploy to Pages
-      id-token: write   # to verify the deployment originates from an appropriate source
-
-    # Deploy to the github-pages environment
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    # Specify runner + deployment step
-    runs-on: ubuntu-latest
-    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v1

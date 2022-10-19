@@ -29,7 +29,7 @@ def _remove_base_path(series: pd.Series, base="") -> pd.Series:
         return series
     unix_paths = series.str.replace(os.sep, "/")
     unix_base_path = str(base).replace(os.sep, "/")
-    return unix_paths.str.replace(unix_base_path, "")
+    return unix_paths.str.replace(unix_base_path, "", regex=False)
 
 
 def _get_min_max_query(kwargs, df):

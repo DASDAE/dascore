@@ -25,7 +25,7 @@ authors = [
 ]
 
 description = "A python library distributed fiber optic sensing"
-readme = "README.md"
+readme = ".github/README.md"
 license = { file="LICENSE" }
 requires-python = ">=3.9"
 classifiers = [
@@ -57,12 +57,6 @@ dependencies = [
 
 [project.optional-dependencies]
 docs = [
-    "myst-nb",
-    "myst-parser",
-    "numpydoc",
-    "pandoc",
-    "sphinx>=1.5.1",
-    "sphinx_autodoc_typehints",
     "typer",
 ]
 test = [
@@ -80,8 +74,8 @@ dev = ["dascore[test]", "dascore[docs]"]
 
 [project.urls]
 "Bug Tracker" = "https://github.com/DASDAE/dascore/issues"
-"Documentation" = "https://dasdae.github.io/dascore/"
-"Homepage" = "https://github.com/dasdae/dascore"
+"Documentation" = "https://dascore.org"
+"Homepage" = "https://dascore.org"
 
 # --- Entry Points
 

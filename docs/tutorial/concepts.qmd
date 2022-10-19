@@ -1,0 +1,71 @@
+---
+title: Concepts
+---
+This page highlights a few core DASCore concepts.
+
+# Time
+
+Any expression of time should use [numpy](https://numpy.org/doc/stable/reference/arrays.datetime.html) time
+constructs, which include [datetime64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.datetime64)
+and [timedelta64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.timedelta64).
+
+For example:
+
+```{python}
+import numpy as np
+
+# create a datetime64 with a very precise time string
+time_1 = np.datetime64('2022-01-01T15:12:11.172455')
+
+# create a new time by adding some time to time_1
+time_2 = time_1 + np.timedelta64(60, 's')
+
+# get the number of hour separating them:
+delta_1 = (time_2 - time_1) / np.timedelta64(1, 'h')
+```
+
+DASCore provides two convenience functions for working with times:
+
+[to_datetime64](`dc.utils.time.to_datetime64`) which tries to convert most types of inputs expressing date times
+to the proper numpy type. [to_timedelta64](`dc.utils.time.to_datetime64`) performs a similar function for
+timedeltas. For example:
+
+```python
+import dascore as dc
+
+# convert a time string to a datetime64 object.
+time_1 = dc.to_datetime64('2022-01-01T12:12:12.1212')
+
+# convert a timestamp (seconds from 1970-01-01) to a datetime object
+time_2 = dc.to_datetime64(610243200)
+```
+
+In general you should try to be as explicit as possible and use numpy's time constructs directly, but the
+dascore time functions provide a helpful way to sanitize a variety of time inputs.
+
+# Dimension Selection
+
+Most of DASCore's processing methods can be applied along any dimension. For example,
+[pass_filter](`dascore.proc.filter.pass_filter`) can be applied along any dimension by passing a range and
+dimension name
+
+```{python}
+import dascore as dc
+patch = dc.get_example_patch()
+
+# filtered_time = patch.pass_filter(time=(1, 5))
+# filtered_distance = patch.pass_filter(distance=(1, 2))
+```
+
+ However, its not clear what the units of the provided range are!
+
+# Data structures
+
+DASCore has two key data structures; the [Patch](patch.qmd) and the [Spool](spool.qmd).
+Both of these have their own tutorial pages.
+
+The `Patch` contains a contiguous block of N dimensional data and metadata.
+The `Spool` manages a group of `Patch` instances. These can be in memory, on
+disk, or a remote resource.
+
+![DASCore Patch and Spool](../_static/patch_n_spool.png){#fig-patch_n_spool}

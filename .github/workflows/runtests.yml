@@ -56,10 +56,10 @@ jobs:
           pytest dascore --doctest-modules
 
       # Runs the documentation notebooks
-      - name: test notebook docs
-        shell: bash -l {0}
-        run: |
-          pytest docs --codeblocks
+#      - name: test notebook docs
+#        shell: bash -l {0}
+#        run: |
+#          pytest docs --codeblocks
 
       # upload coverage
       - name: upload coverage
