@@ -12,6 +12,10 @@ A python library for distributed fiber optic sensing.
 [![Conda Downloads](https://img.shields.io/conda/dn/conda-forge/dascore.svg?label=conda)](https://github.com/conda-forge/dascore-feedstock)
 [![Licence](https://www.gnu.org/graphics/lgplv3-88x31.png)](https://www.gnu.org/licenses/lgpl.html)
 
+[Documentation](https://dascore.org)
+
+[Code](https://github.com/DASDAE/dascore)
+
 # Highlights
 
 DasCore is python library for working with distributed fiber optic data. It provides:
