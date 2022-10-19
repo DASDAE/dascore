@@ -1,8 +1,4 @@
----
-title: DASCore
-aliases:
-  - index.html
----
+# DASCore
 
 A python library for distributed fiber optic sensing.
 
