@@ -8,6 +8,6 @@ A python library for distributed fiber optic sensing.
 [![Connda](https://img.shields.io/conda/dn/conda-forge/dascore?label=conda%20downloads)](https://github.com/conda-forge/dascore-feedstock)
 [![Licence](https://www.gnu.org/graphics/lgplv3-88x31.png)](https://www.gnu.org/licenses/lgpl.html)
 
-[Documentation](https://dasdae.github.io/dascore/)
+[Documentation](https://dascore.org)
 
 > **WARNING**: dascore is still very new and not yet ready for public (non-development) use.
