@@ -1,0 +1,53 @@
+---
+title: Quickstart
+---
+
+## Read a single file
+
+```{python}
+import dascore as dc
+from dascore.utils.downloader import fetch
+# get a path to an example file, replace with your path
+file_path = fetch('terra15_das_1_trimmed.hdf5')
+spool = dc.spool(file_path)
+```
+
+## Read data from a directory of fiber optic data files
+
+```{python}
+import dascore as dc
+from dascore.utils.downloader import fetch
+# get a path to a directory of das files, replace with your path
+directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
+spool = dc.spool(directory_path).update()
+```
+
+## Get patches (2D array)
+```{python}
+import dascore as dc
+spool = dc.get_example_spool('diverse_das')
+# get patches through iteration
+for patch in spool:
+    ...
+# Or through indexing
+patch = spool[0]
+```
+
+## Perform processing
+```{python}
+import dascore as dc
+patch = dc.get_example_patch('random_das')
+out = (
+    patch.decimate(time=8)  # decimate along time axis
+    .detrend(dim='distance')  # detrend in distance axis
+    .pass_filter(time=(None, 10))  # apply bandpass filter
+)
+```
+
+
+## Visualize
+```{python}
+import dascore as dc
+patch = dc.get_example_patch('random_das')
+patch.viz.waterfall(show=True, scale=0.02);
+```
