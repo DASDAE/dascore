@@ -24,9 +24,10 @@ from dascore.utils.downloader import fetch
 path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
 spool2 = dc.spool(path_to_das_file)
 
-# get a spool from a directory of DAS files
+# get a spool from a directory of DAS files. The update
+# command is only needed the first time or if new files are added.
 directory_path = path_to_das_file.parent
-spool3 = dc.spool(directory_path)
+spool3 = dc.spool(directory_path).update()
 ```
 
 Despite some implementation differences, all spools have common behavior/methods.
