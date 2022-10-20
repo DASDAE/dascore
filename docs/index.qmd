@@ -14,13 +14,15 @@ A python library for distributed fiber optic sensing.
 
 # Highlights
 
-DasCore is python library for working with distributed fiber optic data. It provides:
+DASCore is a Python library for working with fiber optic distributed acoustic sensing (DAS) data. It provides:
 
 1. IO support for common fiber-optic data formats
 2. Common processing routines
 3. Basic visualizations
 
-# Usage
+DASCore is the foundational package of the [DAS Data Analysis Ecosystem (DASDAE) Organization](https://github.com/DASDAE), and can serve as a common dependency for other DASDAE packages that carry out more specialized DAS data analysis or visualization. 
+
+# Introductory usage
 
 ## Read a single file
 
@@ -34,7 +36,7 @@ file_path = fetch('terra15_das_1_trimmed.hdf5')
 spool = dc.spool(file_path)
 ```
 
-## Read data from a directory of fiber files
+## Read data from a directory of fiber optic data files
 
 ```{python}
 import dascore as dc
@@ -82,7 +84,7 @@ patch.viz.waterfall(show=True, scale=0.02);
 
 # Installation
 
-Simply use pip or conda to install dascore:
+Simply use Pip or Conda to install DASCore:
 
 ```bash
 pip install dascore
