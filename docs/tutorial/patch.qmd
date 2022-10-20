@@ -15,6 +15,8 @@ Patches can be generated in a few ways.
 
 ## Load an example patch (for simple demonstrations)
 
+This example patch contains some artificially generated data. 
+
 ```{python}
 import dascore as dc
 pa = dc.get_example_patch()
@@ -22,8 +24,8 @@ pa = dc.get_example_patch()
 
 # Load a file
 
-We first download an example fiber file (you need an internet connection).
-Next, we simply read it into a [spool](#spool) object then get the first (and only) patch.
+We first download a small example fiber file from a URL in the DASCore library (you need an internet connection).
+Next, we simply read it into a [spool](spool.qmd) object then get the first (and only) patch.
 
 ```{python}
 # get a fiber file
@@ -46,7 +48,7 @@ Usually `dc.spool` is the function you want.
 
 # Create from Arrays
 
-Patches can also be created from numpy arrays and dictionaries. This requires:
+Patches can also be created from NumPy arrays and dictionaries. This requires:
 
 - The data array
 - The coordinates for labeling each axis
@@ -85,11 +87,11 @@ print(pa)
 # Processing
 For various reasons, Patches should be treated as *immutable*, meaning they should
 not be modified in place, but rather new patches created when something needs to be
-modified.
+modified. 
 
 The patch has several methods which are intended to be chained together via a
 [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface), meaning each
-method returns a new `Patch` instance.
+method returns a new `Patch` instance. 
 
 ```{python}
 import dascore as dc
