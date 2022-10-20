@@ -3,7 +3,7 @@ title: Contributing
 ---
 
 Contributions to DASCore are welcomed and appreciated. Before contributing
-please be aware of our [code of conduct](code_of_conduct.md).
+please be aware of our [code of conduct](code_of_conduct.qmd).
 
 To start, clone DASCore and [install it in development mode](dev_install.qmd).
 
