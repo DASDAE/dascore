@@ -18,7 +18,7 @@ fiber data.
 ## FileSpool
 The file spool is used to retrieve data from a directory of dascore-readable files.
 It has the same interface as other spools mentioned in the
-[quickstart](./quickstart.md).
+[quickstart](../quickstart.qmd).
 
 For example:
 
