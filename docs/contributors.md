@@ -7,7 +7,7 @@ Include one empty line between contributors.
 
 A Huge thanks to all of our contributors:
 
-[Derrick Chambers](github.com/d-chambers)
+[Derrick Chambers](https://github.com/d-chambers)
 
 [Hafiz Issah](https://github.com/aissah)
 
