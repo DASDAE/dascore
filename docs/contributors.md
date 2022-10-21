@@ -9,11 +9,11 @@ A Huge thanks to all of our contributors:
 
 [Derrick Chambers](github.com/d-chambers)
 
+[Hafiz Issah](https://github.com/aissah)
+
 [Ge Jin](https://github.com/jinwar)
 
 [Eileen Martin](https://github.com/eileenrmartin)
-
-[Hafiz Issah](https://github.com/aissah)
 
 You can find more contributor information
 [here](https://github.com/DASDAE/dascore/graphs/contributors)
