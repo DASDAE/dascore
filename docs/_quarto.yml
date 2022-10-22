@@ -24,6 +24,8 @@ website:
   repo-actions: [edit]
   page-navigation: true
 
+
+
   navbar:
     logo: _static/logo.png
     logo-href: index.qmd
@@ -45,6 +47,16 @@ website:
 
       - text: API
         file: api/api.qmd
+
+    right:
+# Uncomment this once we have a dasdae twitter account
+#      - icon: twitter
+#        href: https://twitter.com/dasdae
+#        aria-label: DASDAE Twitter
+
+      - icon: github
+        href: https://github.com/dasdae/dascore
+        aria-label: DASCore GitHub
 
   sidebar:
     - title: "Intro"
