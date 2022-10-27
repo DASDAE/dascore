@@ -1,6 +1,8 @@
 ---
-Title: Testing
+Title: "Testing"
 ---
+
+# Testing
 
 DASCore's test suite is run with [pytest](https://docs.pytest.org/en/stable/). While in the base dascore repo
 (and after [installing DASCore for development](dev_install.md)) invoke pytest from the command line:

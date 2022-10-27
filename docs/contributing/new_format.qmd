@@ -10,7 +10,7 @@ First, we create a new io module called 'jingle' in DASCore's io module (dascore
 Make sure there is a \__init__.py file in this module whose docstring describes the format.
 
 contents of `dascore/io/jingle/__init__.py`
-```python
+```{python}
 """
 Jingle format support module.
 
@@ -31,7 +31,7 @@ Then all you need to do is implement the supported methods.
 
 Contents of `dascore/io/jingle/core.py`
 
-```python
+```{python}
 """
 Core module for jingle file format support.
 """
@@ -93,29 +93,15 @@ be auto-detectable.
 Next we need to write tests for the format (you weren't thinking of skipping
 this step were you!?). The tests should go in: `test/test_io/test_jingle.py`.
 The hardest part is finding a *small* (typically no more than 1-2 mb) file to
-include in the test suite. Assuming you have found, or manufactured, such
-a file, it should go into [dasdae's data repo](https://github.com/DASDAE/test_data).
-Simply clone the repo, add you file format, and push back to master or open a
-PR on a separate branch to include the data file.
+include in the test suite. The [Adding test data](adding_test_data.qmd) section
+details how to do this.
 
-Next, add your file to dascore's data registry (dascore/data_registry.txt).
-You will have to get the sha256 hash of your test file, for that you can simply
-use [Pooch's hash_file function](https://www.fatiando.org/pooch/latest/api/generated/pooch.file_hash.html),
-and you can create the proper download url using the other entries as examples.
-
-The name, hash, and url might look something like this:
-
-```
-jingle_test_file.jgl
-12e087d2c1cd08c9afd18334e17e21787be0b646151b39802541ee11a516976a
-https://github.com/dasdae/test_data/raw/master/das/jingle_test_file.jgl
-```
-
-Then your test file might look like this:
+Assuming you added a file called "jingle_test_file.jgl", then the test
+file might look something like this:
 
 contents of tests/test_io/test_jingle.py
 
-```python
+```{python}
 
 import pytest
 
