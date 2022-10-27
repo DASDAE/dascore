@@ -22,7 +22,7 @@ It has the same interface as other spools mentioned in the
 
 For example:
 
-```python
+```{python}
 import dascore
 from dascore import examples as ex
 
@@ -51,7 +51,7 @@ of the directory which can be efficiently queried for retrieving data
 the data archive.
 
 
-```python
+```{python}
 import dascore
 from dascore.io.indexer import DirectoryIndexer
 from dascore import examples as ex

@@ -1,0 +1,78 @@
+---
+title: Adding Test Data
+---
+
+There are a few different way to add test data to dascore. The key, however,
+is to ensure test files and generated patches are small (a few mb at most) so
+the documentation and test suite still run quickly.
+
+# Adding functions which create example data
+
+The [examples module](`dascore.examples`) contains several functions for creating
+example `Patch` and `Spool` instances. You can add a new function in that module
+which creates a new patch or spool, then just register the function so it can be
+called from `dc.get_example_patch` or `dc.get_example_spool`. These should be simple
+objects which can be generated within python. If you need to download a file see
+[adding a data file](#adding_a_data_file).
+
+:::{.callout-note}
+All example functions should have either no arguments or keyword arguments with
+default values.
+:::
+
+```{python, filename="dascore.examples.py"}
+#| eval: false
+
+# Register an example patch function
+@register_func(EXAMPLE_PATCHES, key="new_das_patch")
+def create_example_patch(argument_1='default_value'):
+    ...
+
+# Register an example spool function
+@register_func(EXAMPLE_SPOOLS, key="new_das_spool")
+def create_example_spool(another_value=None):
+    ...
+```
+
+The new example patches/spools can then be created via
+
+```{python}
+#| eval: false
+import dascore as dc
+
+patch_example = dc.get_example_patch("new_das_patch", argument_1="bob")
+
+spool_example = dc.get_example_spool("new_das_spool")
+```
+
+If, in the test code, the example patch or spool is used only once, just call
+the get_example function in the test. If it is needed multiple times, consider
+putting it in a fixture. See [testing](./testing.qmd) for more on fixtures.
+
+# Adding a data file
+
+Of course, not all data can easily be generated in python. For example, testing
+[support for new file formats](./new_format.qmd) typically requires a test file.
+
+If you have a small file that isn't already hosted on a permanent site, you can put
+ it into [dasdae's data repo](https://github.com/DASDAE/test_data).
+Simply clone the repo, add you file format, and push back to master or open a
+PR on a separate branch and someone will merge it in.
+
+Next, add your file to dascore's data registry (dascore/data_registry.txt).
+You will have to get the sha256 hash of your test file, for that you can simply
+use [Pooch's hash_file function](https://www.fatiando.org/pooch/latest/api/generated/pooch.file_hash.html),
+and you can create the proper download url using the other entries as examples.
+
+The name, hash, and url might look something like this:
+```
+jingle_test_file.jgl
+12e087d2c1cd08c9afd18334e17e21787be0b646151b39802541ee11a516976a
+https://github.com/dasdae/test_data/raw/master/das/jingle_test_file.jgl
+```
+
+```{python}
+#| eval: false
+from dascore.utils.downloader import fetch
+path = fetch("jingle_test_file.jgl")
+```

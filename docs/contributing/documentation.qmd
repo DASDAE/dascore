@@ -24,8 +24,8 @@ Please make an effort to accurately annotate public functions/classes/methods.
 
 Here is an example:
 
-```python
-from __futures__ import annotations
+```{python}
+from __future__ import annotations
 
 import dascore
 from dascore.constants import PatchType

@@ -30,7 +30,7 @@ DASCore provides two convenience functions for working with times:
 to the proper numpy type. [to_timedelta64](`dc.utils.time.to_datetime64`) performs a similar function for
 timedeltas. For example:
 
-```python
+```{python}
 import dascore as dc
 
 # convert a time string to a datetime64 object.

@@ -15,7 +15,7 @@ Patches can be generated in a few ways.
 
 ## Load an example patch (for simple demonstrations)
 
-This example patch contains some artificially generated data. 
+This example patch contains some artificially generated data.
 
 ```{python}
 import dascore as dc
@@ -87,11 +87,11 @@ print(pa)
 # Processing
 For various reasons, Patches should be treated as *immutable*, meaning they should
 not be modified in place, but rather new patches created when something needs to be
-modified. 
+modified.
 
 The patch has several methods which are intended to be chained together via a
 [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface), meaning each
-method returns a new `Patch` instance. 
+method returns a new `Patch` instance.
 
 ```{python}
 import dascore as dc

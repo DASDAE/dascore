@@ -20,7 +20,7 @@ DASCore is a Python library for working with fiber optic distributed acoustic se
 2. Common processing routines
 3. Basic visualizations
 
-DASCore is the foundational package of the [DAS Data Analysis Ecosystem (DASDAE) Organization](https://github.com/DASDAE), and can serve as a common dependency for other DASDAE packages that carry out more specialized DAS data analysis or visualization. 
+DASCore is the foundational package of the [DAS Data Analysis Ecosystem (DASDAE) Organization](https://github.com/DASDAE), and can serve as a common dependency for other DASDAE packages that carry out more specialized DAS data analysis or visualization.
 
 # Introductory usage
 

@@ -13,22 +13,19 @@ format:
 
 website:
   title: "DASCore"
+  repo-url: https://github.com/dasdae/dascore
   site-path: /docs
 
   image: "_static/logo.png"
   favicon: "_static/logo.png"
   twitter-card: true
-  repo-url: https://github.com/dasdae/dascore
   repo-subdir: docs
   repo-branch: master
   repo-actions: [edit]
   page-navigation: true
 
-
-
   navbar:
     logo: _static/logo.png
-    logo-href: index.qmd
     logo-alt: "DASCore logo."
     background: light
     search: true
@@ -49,10 +46,10 @@ website:
         file: api/api.qmd
 
     right:
-# Uncomment this once we have a dasdae twitter account
-#      - icon: twitter
-#        href: https://twitter.com/dasdae
-#        aria-label: DASDAE Twitter
+
+      - icon: twitter
+        href: https://twitter.com/dasdae_org
+        aria-label: DASDAE Twitter
 
       - icon: github
         href: https://github.com/dasdae/dascore
@@ -113,6 +110,9 @@ website:
 
         - text: "Testing"
           href: contributing/testing.qmd
+
+        - text: "Adding Test Data"
+          href: contributing/adding_test_data.qmd
 
         - text: Documentation
           href: contributing/documentation.qmd
