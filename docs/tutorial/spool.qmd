@@ -11,6 +11,8 @@ the `spool` function, which should work in the vast majority of cases.
 
 
 ```{python}
+#| echo: false
+
 import dascore as dc
 
 # create a list of patches
@@ -58,11 +60,29 @@ Returns a dataframe listing contents. This method may not be supported on all
 spools, especially those interfacing with vast remote resources.
 
 ```{python}
+#| output: false
 import dascore as dc
 spool = dc.get_example_spool()
 
 # Return dataframe with contents of spool (each row has metadata of a patch)
 print(spool.get_contents())
+```
+
+```{python}
+#| output: false
+import dascore as dc
+spool = dc.get_example_spool()
+
+# Return dataframe with contents of spool (each row has metadata of a patch)
+contents = spool.get_contents()
+print(contents)
+```
+
+```{python}
+#| echo: false
+from IPython.display import display
+
+display(contents.drop(columns=['patch']))
 ```
 
 # select
