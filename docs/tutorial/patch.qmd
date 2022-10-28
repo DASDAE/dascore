@@ -162,3 +162,38 @@ pa1 = pa.update_attrs(time_min='2000-01-01')
 print(pa.attrs['time_min'])
 print(pa1.attrs['time_min'])
 ```
+
+# Method Chaining
+
+In most cases, you should use method chaining as part of a
+[fluent interface](https://en.wikipedia.org/wiki/Fluent_interface) when working with patches.
+
+For example:
+```{.python}
+import dascore as dc
+
+patch = (
+    dc.get_example_patch()  # load the patch
+    .pass_filter(time=(1, 10)  # apply bandpass filter
+    .detrend(dim='time')  # detrend along time dimension
+)
+```
+
+Similar to Pandas, `Patch` has a [pipe method](`dascore.core.patch.Patch.pipe`) so non-patch methods
+can still be used in a method chain.
+
+
+```{.python}
+import dascore as dc
+
+def func(patch, arg1=1):
+    """Example non-patch method"""
+    return patch.update_attrs(arg1=1)
+
+patch = (
+    dc.get_example_patch()
+    .pass_filter(time=(None, 10))
+    .detrend('time', 'linear')
+    .pipe(func, arg1=3)
+)
+```
