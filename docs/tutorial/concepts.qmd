@@ -65,7 +65,7 @@ DASCore has two key data structures; the [Patch](patch.qmd) and the [Spool](spoo
 Both of these have their own tutorial pages.
 
 The `Patch` contains a contiguous block of N dimensional data and metadata.
-The `Spool` manages a group of `Patch` instances. These can be in memory, on
+The `Spool` manages a group of `Patch`s. These can be in memory, on
 disk, or a remote resource.
 
-![DASCore Patch and Spool](../_static/patch_n_spool.png){#fig-patch_n_spool}
+![Patch (blue) and Spool (red)](../_static/patch_n_spool.png){#fig-patch_n_spool}
