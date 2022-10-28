@@ -21,8 +21,8 @@ DASCore is a Python library for distributed acoustic sensing (DAS). It provides:
 3. Basic visualizations
 
 :::{.callout-note}
-DASCore is a foundational package of the [DAS Data Analysis Ecosystem (DASDAE)](https://github.com/DASDAE),
-and facilitates rapid development of other DASDAE packages that do more specialized analysis or visualization.
+DASCore is a foundational package of the [DAS Data Analysis Ecosystem (DASDAE)](https://github.com/DASDAE). It
+facilitates rapid development of other DASDAE packages that do more specialized analysis/visualization.
 :::
 
 # Introductory usage
