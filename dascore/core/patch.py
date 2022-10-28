@@ -1,7 +1,7 @@
 """
 A 2D trace object.
 """
-from typing import Mapping, Optional, Sequence, Union
+from typing import Callable, Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -205,3 +205,23 @@ class Patch:
     def io(self) -> PatchIO:
         """Return a patch IO object for saving patches to various formats."""
         return PatchIO(self)
+
+    def pipe(self, func: Callable[["Patch", ...], "Patch"], *args, **kwargs) -> "Patch":
+        """
+        Pipe the patch to a function.
+
+        This is primarily useful for maintaining a chain of patch calls for
+        a function.
+
+        Parameters
+        ----------
+        func
+            The function to pipe the patch. It must take a patch instance as
+            the first argument followed by any number of positional or keyword
+            arguments, then return a patch.
+        *args
+            Positional arguments that get passed to func.
+        **kwargs
+            Keyword arguments passed to func.
+        """
+        return func(self, *args, **kwargs)

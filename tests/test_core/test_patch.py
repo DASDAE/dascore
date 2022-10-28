@@ -320,3 +320,25 @@ class TestXarray:
 
         da = random_patch.to_xarray()
         assert isinstance(da, xr.DataArray)
+
+
+class TestPipe:
+    """Tests for piping Patch to other functions."""
+
+    @staticmethod
+    def pipe_func(patch, positional_arg, keyword_arg=None):
+        """Just add passed arguments to stats, return new patch."""
+        out = patch.update_attrs(positional_arg=positional_arg, keyword_arg=keyword_arg)
+        return out
+
+    def test_pipe_basic(self, random_patch):
+        """Test simple application of pipe."""
+        out = random_patch.pipe(self.pipe_func, 2)
+        assert out.attrs["positional_arg"] == 2
+        assert out.attrs["keyword_arg"] is None
+
+    def test_keyword_arg(self, random_patch):
+        """Ensure passing a keyword arg works."""
+        out = random_patch.pipe(self.pipe_func, 2, keyword_arg="bob")
+        assert out.attrs["positional_arg"] == 2
+        assert out.attrs["keyword_arg"] == "bob"
