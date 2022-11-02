@@ -48,32 +48,31 @@ def array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
     """
     array = np.array(array)
     nans = pd.isnull(array)
+    # dealing with objects
+    if np.issubdtype(array.dtype, np.dtype(object)):
+        array = np.array([to_datetime64(x) for x in array]).astype("datetime64[ns]")
+    # dealing with a string
+    if np.issubdtype(array.dtype, np.dtype(str)):
+        array = array.astype("datetime64[ns]")
     # dealing with an array of datetime64 or empty array
     if np.issubdtype(array.dtype, np.datetime64) or len(array) == 0:
-        if not array.shape:  # dealing with 0-D array (scalar)
+        if not array.shape:  # dealing with degenerate (0-D( array
             out = np.datetime64(array)
         else:
             out = array
-    # just check first element to determine type.  # TODO replace with dtype check
     # dealing with numerical data
-    elif not isinstance(array[0], np.datetime64) and np.isreal(array[0]):
-        array[nans] = 0  # temporary replace NaNs
-        try:
+    elif not np.issubdtype(array.dtype, np.datetime64) and np.isreal(array[0]):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            array[nans] = 0  # temporary replace NaNs
+            abs_array = np.abs(array)
+            sign = np.sign(array)
             # separate seconds and factions, assume ns precision
-            int_sec = array.astype(np.int64).astype("datetime64[s]")
-        except (TypeError, ValueError):
-            out = np.array([to_datetime64(x) for x in array])
-        else:
-            frac_sec = array % 1.0
-            ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
-            out = int_sec.astype("datetime64[ns]") + ns
+            int_sec = abs_array.astype(np.int64)
+            frac_sec = abs_array % 1.0
+            ns = (frac_sec * 1_000_000_000).astype(np.int64)
+            out = (sign * (int_sec * 1_000_000_000 + ns)).astype("datetime64[ns]")
         # fill NaN Back in
         out[nans] = np.datetime64("NaT")
-    elif isinstance(array[0], str):
-        out = array.astype("datetime64[ns]")
-    else:  # No fast path, just iterate array elements
-        return np.array([to_datetime64(x) for x in array])
-
     return out
 
 
@@ -122,19 +121,26 @@ def array_to_timedelta64(array: np.array) -> np.datetime64:
     array = np.array(array)
     nans = pd.isnull(array)
     array[nans] = 0
+    # convert pure object arrays into float so sign casting works.
+    if np.issubdtype(array.dtype, np.dtype(object)):
+        array = array.astype(np.float64)
     if np.issubdtype(array.dtype, np.timedelta64) or len(array) == 0:
         if not array.shape:  # unpack degenerate array
             return np.timedelta64(array)
         else:
             return array.astype("timedelta64[ns]")
     assert np.isreal(array[0])
-    # separate seconds and factions, convert fractions to ns precision
-    # sub in array
-    seconds = array.astype(np.int64).astype("timedelta64[s]")
-    frac_sec = array % 1.0
-    ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
-    out = seconds + ns
-    out[nans] = np.timedelta64("NaT")
+    # inf/NaN complain, salience these types of warnings for this block.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # separate seconds and factions, convert fractions to ns precision,
+        # sub in array. Track sign and use abs to ensure sign comes out.
+        sign = np.sign(array)
+        abs_array = np.abs(array)
+        seconds = abs_array.astype(np.int64).astype("timedelta64[s]")
+        frac_sec = abs_array % 1.0
+        ns = (frac_sec * 1_000_000_000).astype(np.int64).astype("timedelta64[ns]")
+        out = sign * (seconds + ns)
+        out[nans] = np.timedelta64("NaT")
     return out
 
 
