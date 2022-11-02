@@ -143,16 +143,8 @@ def random_patch() -> Patch:
 @pytest.fixture(scope="class")
 @register_func(PATCH_FIXTURES)
 def random_patch_with_lat_lon(random_patch):
-    """Create a random patch with added lat/lon coordinates."""
-
-    dist = random_patch.coords["distance"]
-    lat = np.arange(0, len(dist)) * 0.001 - 109.857952
-    lon = np.arange(0, len(dist)) * 0.001 + 41.544654
-    # add a single coord
-    out = random_patch.add_coords(
-        latitude=("distance", lat), longitude=("distance", lon)
-    )
-    return out
+    """Get a random patch with added lat/lon coordinates."""
+    return dc.get_example_patch("random_patch_with_lat_lon")
 
 
 @pytest.fixture(scope="class")

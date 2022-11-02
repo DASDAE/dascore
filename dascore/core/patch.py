@@ -38,7 +38,7 @@ class Patch:
             self._data_array = data
             return
         coords = {} if coords is None else coords
-        dims = dims if dims is not None else list(coords)
+        dims = dims if dims is not None else coords
         mixer = _AttrsCoordsMixer(attrs, coords, dims)
         attrs, coords = mixer()
         # get xarray coords from custom coords object
@@ -158,7 +158,7 @@ class Patch:
     @property
     def coords(self):
         """Return the data array."""
-        return Coords(self._data_array.coords)
+        return Coords(self._data_array.coords, data_shape=self._data_array.shape)
 
     @property
     def dims(self) -> tuple[str, ...]:

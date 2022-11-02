@@ -5,6 +5,7 @@ import collections
 import copy
 import functools
 import inspect
+import itertools
 import re
 from fnmatch import translate
 from typing import (
@@ -34,22 +35,55 @@ from dascore.constants import (
 from dascore.core.schema import PatchSummaryWithHistory
 from dascore.exceptions import PatchAttributeError, PatchDimError
 from dascore.utils.docs import compose_docstring, format_dtypes
-from dascore.utils.misc import append_func
+from dascore.utils.misc import append_func, iterate
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 attr_type = Union[Dict[str, Any], str, Sequence[str], None]
 
 
 class Coords:
-    """A wrapper around xarray coords for a bit more intuitive access."""
+    """
+    A class to simplify the handling of coordinates.
 
-    def __init__(self, coords):
-        self._coords = coords
+    Also helps in supporting non-dimensional coordinates and inferring
+    dimensions.
+    """
 
-    def __getitem__(self, item):
-        """Return the raw numpy array."""
-        out = self._coords[item]
-        return getattr(out, "values", out)
+    # --- Init stuff
+    _dims = None
+
+    def __init__(self, coords, data_shape):
+        # Another coord as input
+        if isinstance(coords, Coords):
+            self.__dict__.update(coords.__dict__)
+            return
+        # hande a dict being passed
+        if isinstance(coords, dict):
+            coord_dict = self._coord_dict_from_dict(coords)
+        # handle xarray coordinate
+        else:
+            coord_dict = self._coord_dict_from_xr(coords)
+            self._dims = coords.dims
+        self._coord_dict = coord_dict
+        self._data_shape = data_shape
+
+    def _coord_dict_from_xr(self, coord):
+        out = {}
+        for i, v in coord.items():
+            out[i] = (tuple(iterate(v.dims)), v.data)
+        return out
+
+    def _coord_dict_from_dict(self, coord_dict):
+        """Get the coordinate dict from a dictionary"""
+        out = {}
+        for i, v in coord_dict.items():
+            # determine if of the form (dim_name(s), value) or just value
+            if len(v) and isinstance(v[0], (str, tuple, list)):
+                assert len(v) == 2  # should be
+                out[i] = (tuple(iterate(v[0])), v[1])
+            else:
+                out[i] = ((i,), v)
+        return out
 
     def __str__(self):
         return str(self._coords)
@@ -58,21 +92,35 @@ class Coords:
 
     def get(self, item):
         """Return item or None if not in coord. Same as dict.get"""
-        return self._coords.get(item)
+        maybe_out = self._coord_dict.get(item)
+        if maybe_out is not None:
+            return maybe_out[1]
+        return maybe_out
 
     def __iter__(self):
-        return self._coords.__iter__()
+        return self._coord_dict.__iter__()
+
+    def __getitem__(self, item):
+        return self._coord_dict[item][1]
 
     @property
-    def timedelta64(self):
-        """Return time deltas of time dimension."""
-        time = self._coords["time"]
-        return time - time[0]
+    def dims(self) -> tuple[str, ...]:
+        """Infer dimensions"""
+        if self._dims is None:
+            self._dims = self._get_dimensional_names()
+        return self._dims
 
-    @property
-    def datetime64(self):
-        """Return datetime64 of time dimension."""
-        return self._coords["time"]
+    def _get_dimensional_names(self) -> tuple[str, ...]:
+        """Infer dimensional names in proper order."""
+
+        coord_names = set(self._coord_dict)
+        nested_coord_names = [v[0] for i, v in self._coord_dict.items()]
+        names = set(coord_names) & set(nested_coord_names)
+        shapes = {i: len(self._coord_dict[i][1]) for i in names}
+        # now get order based on data shape
+        data_shape_dict = {x: i for i, x in enumerate(self._data_shape)}
+        order = sorted(names, key=lambda x: data_shape_dict[shapes[x]])
+        return tuple(order)
 
 
 def _shallow_copy(patch: PatchType) -> PatchType:
@@ -645,3 +693,31 @@ def get_default_patch_name(patch):
     sta = attrs.get("station", "")
     tag = attrs.get("tag", "")
     return f"DAS__{net}__{sta}__{tag}__{start}__{end}"
+
+
+def get_dim_coords(coords, dims=None):
+    """
+    Get only coords that correspond to dimensions. Return dict.
+    """
+
+    def _strip_dimension_names(value):
+        """Strip out dimension names."""
+        if len(value) and isinstance(value[0], (str, tuple, list)):
+            assert len(value) >= 2
+            return value[1]
+
+    def _get_dimensional_names(coords):
+        """Infer dimensional names"""
+        candidates = set(coords)
+        # get the coordinates that can be listed as the first of a tuple
+        nested_coord_names = [
+            v[0] if len(v) and isinstance(v[0], (str, tuple, list)) else i
+            for i, v in coords.items()
+        ]
+        dim_set = set(itertools.chain(nested_coord_names)) & candidates
+        # This tries to preserve the order in coords
+        return [x for x in coords if x in dim_set]
+
+    dims = dims or _get_dimensional_names(coords)
+    sub = {x: _strip_dimension_names(coords[x]) for x in dims}
+    return sub

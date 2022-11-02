@@ -105,6 +105,23 @@ def sin_wave_patch(
     return patch
 
 
+@register_func(EXAMPLE_PATCHES, key="random_patch_with_lat_lon")
+def _random_patch_lat_lon():
+    """
+    Create a patch with latitude/longitude coords attached to
+    the distance dimension.
+    """
+    random_patch = get_example_patch("random")
+    dist = random_patch.coords["distance"]
+    lat = np.arange(0, len(dist)) * 0.001 - 109.857952
+    lon = np.arange(0, len(dist)) * 0.001 + 41.544654
+    # add a single coord
+    out = random_patch.add_coords(
+        latitude=("distance", lat), longitude=("distance", lon)
+    )
+    return out
+
+
 @register_func(EXAMPLE_SPOOLS, key="random_das")
 def _random_spool(
     d_time=0,

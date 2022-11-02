@@ -34,7 +34,7 @@ class TestInit:
 
     @pytest.fixture()
     def random_dt_coord(self):
-        """Create a random trace with a datetime coord"""
+        """Create a random patch with a datetime coord"""
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 200))
         attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
@@ -44,6 +44,23 @@ class TestInit:
             time=self.time1 + time_deltas,
         )
         out = dict(data=array, coords=coords, attrs=attrs)
+        return Patch(**out)
+
+    @pytest.fixture(scope="class")
+    def patch_complex_coords(self):
+        """Create a patch with 'complex' (non-dimensional) coords."""
+        rand = np.random.RandomState(13)
+        array = rand.random(size=(20, 100))
+        attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
+        time_deltas = to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
+        coords = dict(
+            distance=np.arange(array.shape[0]) * attrs["dx"],
+            time=self.time1 + time_deltas,
+            latitude=("distance", array[0, :]),
+            qaulity=(("distance", "time"), array),
+        )
+        dims = ("distance", "time")
+        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
 
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
@@ -112,6 +129,14 @@ class TestInit:
     def test_shape(self, random_patch):
         """Ensure shape returns the shape of the data array."""
         assert random_patch.shape == random_patch.data.shape
+
+    def test_init_with_complex_coordinates(self, patch_complex_coords):
+        """Ensure complex coordinates work."""
+        patch = patch_complex_coords
+        assert isinstance(patch, Patch)
+        assert "latitude" in patch.coords
+        assert "quality" in patch.coords
+        assert np.all(patch.coords["quality"].values == patch.data)
 
 
 class TestEmptyPatch:

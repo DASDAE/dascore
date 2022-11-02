@@ -20,7 +20,7 @@ def _write_meta(hfile, file_version):
     attrs["__dascore__version__"] = dc.__version__
 
 
-def _save_attrs_and_dim(patch, patch_group):
+def _save_attrs_and_dims(patch, patch_group):
     """Save the attributes."""
     # copy attrs to group attrs
     # TODO will need to test if objects are serializable
@@ -48,16 +48,20 @@ def _save_array(data, name, group, h5):
 def _save_coords(patch, patch_group, h5):
     """Save coordinates"""
     for name, coord in patch._data_array.coords.items():
+        # First save coordinate arrays
         data = coord.values
         save_name = f"_coord_{name}"
         _save_array(data, save_name, patch_group, h5)
+        # then save dimensions of coordinates
+        save_name = f"_cdims_{name}"
+        patch_group._v_attrs[save_name] = ",".join(coord.dims)
 
 
 def _save_patch(patch, wave_group, h5):
     """Save the patch to disk."""
     name = get_default_patch_name(patch)
     patch_group = h5.create_group(wave_group, name)
-    _save_attrs_and_dim(patch, patch_group)
+    _save_attrs_and_dims(patch, patch_group)
     _save_coords(patch, patch_group, h5)
     # add data
     if patch.data.shape:
@@ -98,6 +102,14 @@ def _get_coords(patch_group):
     for coord in [x for x in patch_group if x.name.startswith("_coord_")]:
         name = coord.name.replace("_coord_", "")
         out[name] = _read_array(coord)
+
+    attrs = [x for x in patch_group._v_attrs._f_list() if x.startswith("_cdims")]
+    for coord_name in attrs:
+        name = coord_name.replace("_cdims_", "")
+        value = patch_group._v_attrs[coord_name]
+        assert name in out, "Should already have loaded coordinate array"
+        # add dimensions to coordinates that have them.
+        out[name] = (tuple(value.split(".")), out[name])
     return out
 
 
