@@ -123,9 +123,9 @@ class TestReadDasdae:
 
     def test_round_trip_empty_patch(self, written_dascore_v1_empty):
         """Ensure an emtpy patch can be deserialize."""
-        stream = dc.read(written_dascore_v1_empty)
-        assert len(stream) == 1
-        stream[0].equals(dc.Patch())
+        spool = dc.read(written_dascore_v1_empty)
+        assert len(spool) == 1
+        spool[0].equals(dc.Patch())
 
     def test_datetimes(self, tmp_path_factory, random_patch):
         """Ensure the datetimes in the attrs come back as datetimes"""

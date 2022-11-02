@@ -98,7 +98,7 @@ def terra15_das_example_path():
 @pytest.fixture(scope="session")
 @register_func(SPOOL_FIXTURES)
 def terra15_das_unfinished_path() -> Path:
-    """Return the stream of Terra15 Das Array"""
+    """Return the spool of Terra15 Das Array"""
     out = fetch("terra15_das_unfinished.hdf5")
     assert out.exists()
     return out
@@ -113,7 +113,7 @@ def terra15_v5_path():
 @pytest.fixture()
 @register_func(SPOOL_FIXTURES)
 def terra15_das_spool(terra15_das_example_path) -> SpoolType:
-    """Return the stream of Terra15 Das Array"""
+    """Return the spool of Terra15 Das Array"""
     return read(terra15_das_example_path, file_format="terra15")
 
 
@@ -231,7 +231,7 @@ def random_spool() -> SpoolType:
 @register_func(SPOOL_FIXTURES)
 def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
     """
-    Create a stream with several patches within one time sample but not
+    Create a spool with several patches within one time sample but not
     overlapping.
     """
     pa1 = random_patch

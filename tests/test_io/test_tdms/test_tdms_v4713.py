@@ -42,8 +42,8 @@ def tdms_das_example_path(request):
 def tdms_das_patch(tdms_das_example_path):
     """Make patch for test data"""
     ft = TDMSFormatterV4713()
-    stream_data = ft.read(tdms_das_example_path)
-    return stream_data[0]
+    spool = ft.read(tdms_das_example_path)
+    return spool[0]
 
 
 class TestReadTDMS:

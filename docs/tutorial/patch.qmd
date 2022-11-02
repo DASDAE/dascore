@@ -197,3 +197,5 @@ patch = (
     .pipe(func, arg1=3)
 )
 ```
+
+# Adding dimensional coordinates
