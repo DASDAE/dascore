@@ -63,21 +63,16 @@ def array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
     # dealing with numerical data
     elif not np.issubdtype(array.dtype, np.datetime64) and np.isreal(array[0]):
         with np.errstate(divide="ignore", invalid="ignore"):
-
             array[nans] = 0  # temporary replace NaNs
             abs_array = np.abs(array)
             sign = np.sign(array)
-            try:
-                # separate seconds and factions, assume ns precision
-                int_sec = abs_array.astype(np.int64)
-            except (TypeError, ValueError):
-                out = np.array([to_datetime64(x) for x in array])
-            else:
-                frac_sec = abs_array % 1.0
-                ns = (frac_sec * 1_000_000_000).astype(np.int64)
-                out = (sign * (int_sec * 1_000_000_000 + ns)).astype("datetime64[ns]")
-            # fill NaN Back in
-            out[nans] = np.datetime64("NaT")
+            # separate seconds and factions, assume ns precision
+            int_sec = abs_array.astype(np.int64)
+            frac_sec = abs_array % 1.0
+            ns = (frac_sec * 1_000_000_000).astype(np.int64)
+            out = (sign * (int_sec * 1_000_000_000 + ns)).astype("datetime64[ns]")
+        # fill NaN Back in
+        out[nans] = np.datetime64("NaT")
     return out
 
 
