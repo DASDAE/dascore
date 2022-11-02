@@ -12,6 +12,49 @@ To start, clone DASCore and [install it in development mode](dev_install.qmd).
 Review how [DASCore's testing](testing.qmd) works, [how DASCore is documented](documentation.qmd),
 [DAScore style and linting](style_and_linting.qmd), and the [general guidelines](general_guidelines.qmd).
 
+
+
 # Planning
 
 Development planning and prioritization takes place [here](https://github.com/DASDAE/dascore/projects/2).
+
+# DASCore or other DASDAE packages
+
+You may wonder whether a new feature you'd like to add belongs in DASCore, or if it should be 
+part of another [DASDAE](https://github.com/DASDAE) package. The guiding principle is that
+if it does not require additional dependencies and is not particularly specialized to
+one sub-area of applied seismology, then it can be part of DASCore. What if the feature 
+you're interested in adding is generally applicable for many kinds of DAS data analysis, but 
+requires some additional package dependency? If this is the case, open a discussion describing
+the feature, the additional dependency, and (optional but encouraged) other future
+features that may also share this dependency. Typically we'll try to come to a clear consensus, then you can 
+move ahead with development. If the proposed DASCore dependency addition appears to be controversial, then you will 
+deliver a short presentation at one of the bi-weekly DASDAE developer team check-ins that should
+descrive the feature, the additional dependency (including approximate added size of the software 
+required to be installed), and ideas for other features that could be enabled by this dependency. 
+Then the developer community in attendance will discuss the proposed change and take a vote (majority
+approval required).
+
+If you are interested in creating a new [DASDAE](https://github.com/DASDAE) package which uses 
+DASCore as a dependency, you are not required to hold it to the same style and testing guidelines 
+as DASCore, but you are encouraged to do so, and can use DASCore's setup as an example. Following
+a common set of style and contributor workflows will make it easier for us to develop a 
+community of DASDAE developers who can easily move between using and developing any of the 
+DASDAE packages.
+
+# Leadership 
+
+Currently DASCore operates in BDFL mode during its initial construction phase, 
+with Derrick Chambers leading the oversight of the master branch, but this is 
+not intended to be the mode of operation in the future. In October 2023 at a 
+DASDAE developer team check-in, the team will review the additions provided by 
+contributors, and will nominate and approve a leadership team with a record of
+contribution to share the code management leadership responsibility. 
+
+Currently Eileen Martin and Ge Jin lead organizational activities (e.g. organize 
+team meetings, coordinate logistics of training and tutorial activities, enforcement
+of community standards, approving travel and research assistantships for some contributors
+at Colorado School of Mines) as PI and co-PI of the NSF Geoinformatics grant that is 
+supporting initial development of DASDAE packages. However, as the contributor 
+community grows beyond Colorado School of Mines, after the life of the grant, these 
+roles are intended to be rotating among community members.
