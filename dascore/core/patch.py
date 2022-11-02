@@ -1,6 +1,8 @@
 """
 A 2D trace object.
 """
+from __future__ import annotations
+
 from typing import Callable, Mapping, Optional, Sequence, Union
 
 import numpy as np
@@ -12,6 +14,7 @@ import dascore.proc
 from dascore.constants import DEFAULT_PATCH_ATTRS, PatchType
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
+from dascore.utils.coords import add_coords
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.patch import Coords, _AttrsCoordsMixer
 from dascore.viz import VizPatchNameSpace
@@ -109,9 +112,19 @@ class Patch:
             other = other.transpose(*self.dims)
         return np.equal(self.data, other.data).all()
 
-    def new(self: PatchType, data=None, coords=None, attrs=None) -> PatchType:
+    def new(
+        self: PatchType,
+        data: None | ArrayLike = None,
+        coords: None | dict[str | Sequence[str], ArrayLike] = None,
+        attrs: None | Mapping = None,
+        dims: None | Sequence[str] = None,
+    ) -> PatchType:
         """
-        Return a copy of the trace with data, coords, or attrs updated.
+        Return a copy of the Patch with updated data.
+
+        Parameters
+        ----------
+
         """
         data = data if data is not None else self.data
         attrs = attrs if attrs is not None else self.attrs
@@ -119,7 +132,7 @@ class Patch:
             coords = getattr(self.coords, "_coords", self.coords)
             dims = self.dims
         else:
-            dims = list(coords)
+            dims = dims or list(coords)
         return self.__class__(data=data, coords=coords, attrs=attrs, dims=dims)
 
     def update_attrs(self: PatchType, **attrs) -> PatchType:
@@ -225,3 +238,6 @@ class Patch:
             Keyword arguments passed to func.
         """
         return func(self, *args, **kwargs)
+
+    # Bind add_coords as method
+    add_coords = add_coords

@@ -342,3 +342,35 @@ class TestPipe:
         out = random_patch.pipe(self.pipe_func, 2, keyword_arg="bob")
         assert out.attrs["positional_arg"] == 2
         assert out.attrs["keyword_arg"] == "bob"
+
+
+class TestAddCoords:
+    """Tests for adding non-standard coords to traces."""
+
+    @pytest.fixture(scope="class")
+    def random_patch_with_lat(self, random_patch):
+        """Create a random patch with added lat/lon coordinates."""
+
+        dist = random_patch.coords["distance"]
+        lat = np.arange(0, len(dist)) * 0.001 - 109.857952
+        # add a single coord
+        out = random_patch.add_coords(latitude=("distance", lat))
+        return out
+
+    def test_add_single_dim_one_coord(self, random_patch_with_lat):
+        """Tests that one coordinate can be added to a patch"""
+        assert "latitude" in random_patch_with_lat.coords
+
+    def test_add_single_dim_two_coord2(self, random_patch_with_lat_lon):
+        """Ensure multiple coords can be added to patch."""
+        out2 = random_patch_with_lat_lon
+        assert {"latitude", "longitude"}.issubset(set(out2.coords))
+        assert out2.coords["longitude"].shape
+        assert out2.coords["latitude"].shape
+
+    def test_add_multi_dim_coords(self, multi_dim_coords_patch):
+        """Ensure coords with multiple dimensions works."""
+        out1 = multi_dim_coords_patch
+        assert "quality" in out1.coords
+        assert out1.coords["quality"].shape
+        assert np.all(out1.coords["quality"] == 1)

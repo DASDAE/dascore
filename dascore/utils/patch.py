@@ -523,7 +523,7 @@ def merge_patches(
     tolerance: float = 1.5,
 ) -> Sequence[PatchType]:
     """
-    Merge all compatible patches in stream together.
+    Merge all compatible patches in spool or patch list together.
 
     Parameters
     ----------

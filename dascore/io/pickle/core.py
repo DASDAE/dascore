@@ -24,8 +24,8 @@ class PickleIO(FiberIO):
     def _header_is_dascore(self, byte_stream):
         """Return True if the first few bytes mention dascore classes."""
         has_dascore = b"dascore.core" in byte_stream
-        spool_or_stream = b"Spool" in byte_stream or b"Patch" in byte_stream
-        return has_dascore and spool_or_stream
+        spool_or_patch = b"Spool" in byte_stream or b"Patch" in byte_stream
+        return has_dascore and spool_or_patch
 
     def get_format(self, path: Union[str, Path]) -> Union[tuple[str, str], bool]:
         """
@@ -49,12 +49,12 @@ class PickleIO(FiberIO):
                 return False
 
     def read(self, path, **kwargs):
-        """Read a Patch/Stream from disk."""
+        """Read a Patch/Spool from disk."""
         with open(path, "rb") as fi:
             out = pickle.load(fi)
         return dascore.spool(out)
 
     def write(self, patch, path, **kwargs):
-        """Read a Patch/Stream from disk."""
+        """Read a Patch/Spool from disk."""
         with open(path, "wb") as fi:
             pickle.dump(patch, fi)

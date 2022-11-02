@@ -60,15 +60,15 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders via email. The current 
+reported to the community leaders via email. The current
 community leaders responsible for enforcement of standards of acceptable
-behavior are [Ge Jin](https://people.mines.edu/gjin/) and 
+behavior are [Ge Jin](https://people.mines.edu/gjin/) and
 [Eileen Martin](https://eileenrmartin.github.io/).
 
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
-reporter of any incident. 
+reporter of any incident.
 
 ## Enforcement Guidelines
 
