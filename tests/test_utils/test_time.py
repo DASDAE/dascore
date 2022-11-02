@@ -124,8 +124,24 @@ class TestToDateTime64:
         out = to_datetime64(ar)
         assert isinstance(out, np.datetime64)
 
+    def test_negative_float(self):
+        """Negative floats should be a symmetric operation."""
+        floats_to_test = [0.1, 10.0, 10.001, 100.0, 0, np.inf]
+        for val in floats_to_test:
+            out = to_datetime64(-val)
+            expected = to_datetime64(0) - to_timedelta64(val)
+            assert out == expected or (pd.isnull(out) and pd.isnull(expected))
 
-class TestToTimeDelta:
+    def test_negative_int(self):
+        """Negative ints should be a symmetric operation."""
+        floats_to_test = [0, 10, 100]
+        for val in floats_to_test:
+            out = to_datetime64(-val)
+            expected = to_datetime64(0) - to_timedelta64(val)
+            assert out == expected or (pd.isnull(out) and pd.isnull(expected))
+
+
+class TestToTimeDelta64:
     """Tests for creating timedeltas"""
 
     @pytest.fixture(
@@ -153,7 +169,9 @@ class TestToTimeDelta:
 
     def test_timedelta64_array(self):
         """Ensure passing timedelta array works."""
-        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64")
+        expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64[s]").astype(
+            "timedelta64[ns]"
+        )
         out = to_timedelta64(expected)
         assert np.equal(out, expected).all()
 
@@ -190,9 +208,26 @@ class TestToTimeDelta:
 
     def test_zero_dimensional_array(self):
         """A degenerate array should be unpacked."""
-        array = np.array("1", dtype="timedelta64[s]")
-        out = to_timedelta64(array)
-        assert isinstance(out, np.timedelta64)
+        array1 = np.array("1", dtype="timedelta64[s]")
+        assert isinstance(to_timedelta64(array1), np.timedelta64)
+        array2 = np.array(1, dtype="timedelta64[s]")
+        assert isinstance(to_timedelta64(array2), np.timedelta64)
+
+    def test_negative_float(self):
+        """Negative floats should be a symmetric operation."""
+        floats_to_test = [0.1, 10.0, 10.001, 100.0, 0, np.inf]
+        for val in floats_to_test:
+            out = to_timedelta64(-val)
+            expected = -to_timedelta64(abs(val))
+            assert out == expected or (pd.isnull(out) and pd.isnull(expected))
+
+    def test_negative_int(self):
+        """Negative ints should be a symmetric operation."""
+        floats_to_test = [1, 10, 100]
+        for val in floats_to_test:
+            out = to_timedelta64(-val)
+            expected = -to_timedelta64(abs(val))
+            assert out == expected or (pd.isnull(out) and pd.isnull(expected))
 
 
 class TestGetSelectTime:
