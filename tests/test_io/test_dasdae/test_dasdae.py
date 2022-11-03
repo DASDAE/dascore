@@ -186,5 +186,7 @@ class TestRoundTrips:
         new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
         patch = random_patch_with_lat_lon
         dc.write(patch, new_path, "DASDAE")
-        # new = dc.read(new_path, file_format="DASDAE")
-        # breakpoint()
+        spool = dc.read(new_path, file_format="DASDAE")
+        assert len(spool) == 1
+        new_patch = spool[0]
+        assert patch.equals(new_patch)
