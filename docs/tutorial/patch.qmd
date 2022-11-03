@@ -13,16 +13,17 @@ The `Patch` design was heavily inspired by
 
 Patches can be generated in a few ways.
 
-## Load an example patch (for simple demonstrations)
+## Load an Example Patch
 
-This example patch contains some artificially generated data.
+This example patch contains some artificially generated data. They are mostly used
+for simple demonstrations or testing.
 
 ```{python}
 import dascore as dc
 pa = dc.get_example_patch()
 ```
 
-## Load a file
+## Load a File
 
 We first download a small example fiber file from a URL in the DASCore library (you need an internet connection).
 Next, we simply read it into a [spool](spool.qmd) object then get the first (and only) patch.
@@ -46,7 +47,7 @@ depending on the file support for scanning, often load data lazily.
 Usually `dc.spool` is the function you want.
 :::
 
-## Create from Arrays
+## Create from Scratch
 
 Patches can also be created from NumPy arrays and dictionaries. This requires:
 
@@ -127,7 +128,7 @@ Because patches should be treated as immutable objects, you can't just modify
 them with normal item assignment. There are a few methods that return new
 patches with modifications, however, that are functionally the same.
 
-## new
+## New
 
 Often you may wish to modify one aspect of the patch. [`Patch.new`](`dascore.core.patch.Patch.new`)
 is designed for this purpose:
@@ -140,7 +141,7 @@ pa = dc.get_example_patch()
 new = pa.new(data=pa.data * 10)
 ```
 
-## update attrs
+## Update Attrs
 [`Patch.update_attrs`](`dascore.core.patch.Patch.update_attrs`) is for making small changes
 to the patch attrs (metadata) while keeping the unaffected metadata (`Patch.new` would require
 you replace the entirety of attrs).
@@ -208,7 +209,7 @@ It is common to have additional coordinates, such as latitude/longitude,
 attached to a particular dimension (e.g., distance). There are two ways
 to add coordinates to a patch:
 
-## Assign_coordinates
+## Assign Coordinates
 
 The [assign_coordinates](`dascore.utils.coords.assign_coords`) method will
 add the requested coordinates and return a new patch instance.
@@ -239,7 +240,7 @@ out_3 = pa.assign_coords(
 )
 ```
 
-## Include Coords in Patch Init
+## Coords in Patch Init
 
 Any number of coordinates can also be assigned when the patch is initiated. For
 coordinates other than those of the patch dimensions, the associated dimensions
