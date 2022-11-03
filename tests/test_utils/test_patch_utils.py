@@ -7,8 +7,7 @@ import pytest
 
 import dascore
 from dascore.exceptions import PatchAttributeError, PatchDimError
-from dascore.utils.misc import register_func
-from dascore.utils.patch import Coords, _AttrsCoordsMixer
+from dascore.utils.patch import _AttrsCoordsMixer
 
 
 @dascore.patch_function(required_dims=("time", "distance"))
@@ -228,64 +227,10 @@ class TestAttrsCoordsMixer:
         new_attrs, new_coords = mixer()
         assert new_attrs["d_time"] == td_new
         # first ensure new time coords are approximately new time delta
-        new_time = new_coords["time"].values
+        new_time = new_coords["time"]
         tdiff = (new_time[1:] - new_time[:-1]) / one_sec
         assert np.allclose(tdiff, td_new / one_sec)
         # also ensure the endtime has increased proportionately.
         old_duration = attrs["time_max"] - attrs["time_min"]
         new_duration = new_attrs["time_max"] - new_attrs["time_min"]
         assert np.isclose(old_duration / new_duration, td_old / td_new)
-
-
-class TestCoords:
-    """Tests for DASCore's custom coord class."""
-
-    coord_fixtures = []
-    time = [1, 2, 3]
-    distance = [1, 2, 3, 4, 5]
-    shape = (len(time), len(distance))
-
-    @pytest.fixture(scope="class")
-    @register_func(coord_fixtures)
-    def simple_dict_coords(self):
-        """Create a simple version of coords from dict."""
-        cdict = {"time": self.time, "distance": self.distance}
-        return Coords(cdict, self.shape)
-
-    @pytest.fixture(scope="class")
-    @register_func(coord_fixtures)
-    def simple_dict_coords_dim_name_tuple(self):
-        """Create a simple version of coords from dict."""
-        input_dict = {
-            "time": ("time", self.time),
-            "distance": ("distance", self.distance),
-        }
-        return Coords(input_dict, self.shape)
-
-    @pytest.fixture(scope="class")
-    @register_func(coord_fixtures)
-    def simple_dict_coords_other_coords(self):
-        """Create a simple version of coords from dict."""
-        input_dict = {
-            "time": ("time", self.time),
-            "distance": self.distance,
-            "latitude": ("distance", np.ones_like(self.distance)),
-        }
-        return Coords(input_dict, self.shape)
-
-    @pytest.fixture(scope="class")
-    @register_func(coord_fixtures)
-    def coord_from_xarray(self, random_patch):
-        """Return a Coord instance from xarray coords."""
-        xr_coord = random_patch.to_xarray().coords
-        shape = random_patch.data.shape
-        return Coords(xr_coord, shape)
-
-    @pytest.fixture(scope="class", params=coord_fixtures)
-    def coord(self, request):
-        """metafixture to aggregate all coords."""
-        return request.getfixturevalue(request.param)
-
-    def test_dims_inferred(self, coord):
-        """Ensure dimensions can be inferred."""
-        assert coord.dims == ("time", "distance")

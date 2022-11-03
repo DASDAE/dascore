@@ -23,6 +23,7 @@ def get_simple_patch() -> Patch:
         data=np.random.random((100, 100)),
         coords={"time": np.arange(100) * 0.01, "distance": np.arange(100) * 0.2},
         attrs=attrs,
+        dims=("time", "distance"),
     )
     return pa
 
@@ -43,7 +44,8 @@ class TestInit:
             distance=np.arange(array.shape[0]) * attrs["dx"],
             time=self.time1 + time_deltas,
         )
-        out = dict(data=array, coords=coords, attrs=attrs)
+        dims = tuple(coords)
+        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
 
     @pytest.fixture(scope="class")
@@ -56,8 +58,8 @@ class TestInit:
         coords = dict(
             distance=np.arange(array.shape[0]) * attrs["dx"],
             time=self.time1 + time_deltas,
-            latitude=("distance", array[0, :]),
-            qaulity=(("distance", "time"), array),
+            latitude=("distance", array[:, 0]),
+            quality=(("distance", "time"), array),
         )
         dims = ("distance", "time")
         out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
@@ -105,7 +107,9 @@ class TestInit:
         attrs = dict(random_patch.attrs)
         attrs["d_time"] = to_timedelta64(10)
         coords = random_patch.coords
-        new = dascore.Patch(data=random_patch.data, attrs=attrs, coords=coords)
+        new = dascore.Patch(
+            data=random_patch.data, attrs=attrs, coords=coords, dims=list(coords)
+        )
         assert new.attrs["d_time"] == to_timedelta64(10)
 
     def test_had_default_attrs(self, patch):
@@ -118,6 +122,7 @@ class TestInit:
         pa = Patch(
             data=np.random.random((100, 100)),
             coords={"time": np.random.random(100), "distance": np.random.random(100)},
+            dims=("time", "distance"),
         )
         assert isinstance(pa, Patch)
 
@@ -136,7 +141,7 @@ class TestInit:
         assert isinstance(patch, Patch)
         assert "latitude" in patch.coords
         assert "quality" in patch.coords
-        assert np.all(patch.coords["quality"].values == patch.data)
+        assert np.all(patch.coords["quality"] == patch.data)
 
 
 class TestEmptyPatch:

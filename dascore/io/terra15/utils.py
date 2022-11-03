@@ -114,7 +114,7 @@ def _read_terra15(
     attrs["time_max"] = tar.max()
     attrs["distance_min"] = dar.min()
     attrs["distance_max"] = dar.max()
-    return Patch(data=data, coords=_coords, attrs=attrs)
+    return Patch(data=data, coords=_coords, attrs=attrs, dims=("time", "distance"))
 
 
 def _get_data(time, distance, time_array, dist_array, data_node):

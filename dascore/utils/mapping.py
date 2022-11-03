@@ -14,7 +14,7 @@ class FrozenDict(collections.abc.Mapping):
 
     Notes
     -----
-    This implimentation was Inspired by the no-longer maintained package
+    This implementation was Inspired by the no-longer maintained package
     frozen-dict (https://github.com/slezica/python-frozendict)
 
     By design, changes in the original dict are not reflected in the frozen

@@ -34,93 +34,12 @@ from dascore.constants import (
 )
 from dascore.core.schema import PatchSummaryWithHistory
 from dascore.exceptions import PatchAttributeError, PatchDimError
+from dascore.utils.coords import Coords
 from dascore.utils.docs import compose_docstring, format_dtypes
-from dascore.utils.misc import append_func, iterate
+from dascore.utils.misc import append_func
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 attr_type = Union[Dict[str, Any], str, Sequence[str], None]
-
-
-class Coords:
-    """
-    A class to simplify the handling of coordinates.
-
-    Also helps in supporting non-dimensional coordinates and inferring
-    dimensions.
-    """
-
-    # --- Init stuff
-    _dims = None
-
-    def __init__(self, coords, data_shape):
-        # Another coord as input
-        if isinstance(coords, Coords):
-            self.__dict__.update(coords.__dict__)
-            return
-        # hande a dict being passed
-        if isinstance(coords, dict):
-            coord_dict = self._coord_dict_from_dict(coords)
-        # handle xarray coordinate
-        else:
-            coord_dict = self._coord_dict_from_xr(coords)
-            self._dims = coords.dims
-        self._coord_dict = coord_dict
-        self._data_shape = data_shape
-
-    def _coord_dict_from_xr(self, coord):
-        out = {}
-        for i, v in coord.items():
-            out[i] = (tuple(iterate(v.dims)), v.data)
-        return out
-
-    def _coord_dict_from_dict(self, coord_dict):
-        """Get the coordinate dict from a dictionary"""
-        out = {}
-        for i, v in coord_dict.items():
-            # determine if of the form (dim_name(s), value) or just value
-            if len(v) and isinstance(v[0], (str, tuple, list)):
-                assert len(v) == 2  # should be
-                out[i] = (tuple(iterate(v[0])), v[1])
-            else:
-                out[i] = ((i,), v)
-        return out
-
-    def __str__(self):
-        return str(self._coords)
-
-    __repr__ = __str__
-
-    def get(self, item):
-        """Return item or None if not in coord. Same as dict.get"""
-        maybe_out = self._coord_dict.get(item)
-        if maybe_out is not None:
-            return maybe_out[1]
-        return maybe_out
-
-    def __iter__(self):
-        return self._coord_dict.__iter__()
-
-    def __getitem__(self, item):
-        return self._coord_dict[item][1]
-
-    @property
-    def dims(self) -> tuple[str, ...]:
-        """Infer dimensions"""
-        if self._dims is None:
-            self._dims = self._get_dimensional_names()
-        return self._dims
-
-    def _get_dimensional_names(self) -> tuple[str, ...]:
-        """Infer dimensional names in proper order."""
-
-        coord_names = set(self._coord_dict)
-        nested_coord_names = [v[0] for i, v in self._coord_dict.items()]
-        names = set(coord_names) & set(nested_coord_names)
-        shapes = {i: len(self._coord_dict[i][1]) for i in names}
-        # now get order based on data shape
-        data_shape_dict = {x: i for i, x in enumerate(self._data_shape)}
-        order = sorted(names, key=lambda x: data_shape_dict[shapes[x]])
-        return tuple(order)
 
 
 def _shallow_copy(patch: PatchType) -> PatchType:
@@ -328,8 +247,8 @@ class _AttrsCoordsMixer:
         if not dims and coords:
             dims = list(coords)
         self.attrs = attrs if attrs is not None else {}
-        self.coords = coords
-        self.dims = dims
+        self.coords = Coords(coords)
+        self.dims = dims if dims is not None else ()
         self._original_attrs = attrs
         self._original_coords = coords
         # fill missing values with default or implicit values
@@ -389,11 +308,11 @@ class _AttrsCoordsMixer:
         if len(match_dims):
             assert len(match_dims) == 1
             dim = match_dims[0]
-            coord = self.coords.get(dim, None)
+            coord = self.coords.get(dim)
             coord_min = self.attrs[f"{dim}_min"]
             if coord is not None and np.min(coord) != coord_min:
                 td = coord - coord[0]
-                self.copied_coords[dim] = coord_min + td
+                self.coords = self.coords.update(**{dim: coord_min + td})
 
     @append_func(set_attr_funcs["*_max"])
     def _update_min_from_max(self, match_dims=()):
@@ -416,7 +335,7 @@ class _AttrsCoordsMixer:
             time_max = self.attrs[f"{dim}_max"]
             if coord is not None and np.max(coord) != time_max:
                 td = coord - coord[-1]
-                self.copied_coords[dim] = time_max + td
+                self.coords = self.coords.update(**{dim: time_max + td})
 
     @append_func(set_attr_funcs["d_*"])
     def _update_max_from_d(self, match_dims=()):
@@ -442,7 +361,7 @@ class _AttrsCoordsMixer:
             start = self.copied_attrs.get(f"{dim}_min", None)
             if coord is not None and start is not None:
                 new_coord = start + np.arange(len(coord)) * d_dim
-                self.copied_coords[dim] = new_coord
+                self.coords = self.coords.update(**{dim: new_coord})
 
     @functools.cached_property
     def copied_attrs(self):
@@ -453,14 +372,8 @@ class _AttrsCoordsMixer:
     @functools.cached_property
     def copied_coords(self):
         """Make a copy of the coords before mutating."""
-        coords = self.coords
-        if isinstance(coords, Coords):  # unpack coordinates
-            coords = coords._coords
         # TODO I don't like having this deep copy but shallow still caused
-        # mutations so I will leave it for now.
-        coords = copy.deepcopy(coords)
-        self.coords = coords
-        return coords
+        return copy.deepcopy(self.coords)
 
     def __call__(self, *args, **kwargs):
         return self.attrs, self.coords
@@ -500,8 +413,7 @@ class _AttrsCoordsMixer:
 
     def update_coords(self, **kwargs):
         """Update the coordinates based on kwarg inputs."""
-        for key, value in kwargs.items():
-            self.copied_coords[key] = value
+        self.coords = self.coords.update(**kwargs)
         self._condition_coords()
         self._update_attrs_from_coords()
 
@@ -521,7 +433,7 @@ class _AttrsCoordsMixer:
         if not np.issubdtype(time.dtype, np.datetime64):
             td = to_timedelta64(time)
             time = start_time + td
-        self.copied_coords["time"] = time
+        self.coords = self.coords.update(time=time)
 
     def _set_attr_types(self):
         """Make sure time attrs are expected types"""

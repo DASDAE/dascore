@@ -3,7 +3,7 @@ A 2D trace object.
 """
 from __future__ import annotations
 
-from typing import Callable, Mapping, Optional, Sequence, Union
+from typing import Callable, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -14,37 +14,59 @@ import dascore.proc
 from dascore.constants import DEFAULT_PATCH_ATTRS, PatchType
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
-from dascore.utils.coords import add_coords
+from dascore.utils.coords import Coords, add_coords
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.patch import Coords, _AttrsCoordsMixer
+from dascore.utils.patch import _AttrsCoordsMixer
 from dascore.viz import VizPatchNameSpace
 
 
 class Patch:
     """
-    A Class for storing and accessing 2D fiber data.
-    """
+    A Class for managing data and metadata.
 
-    # --- Dunder methods
+    Parameters
+    ----------
+    data
+        An array-like containing data, an xarray DataArray object, or a Patch.
+    coords
+        The coordinates, or dimensional labels for the data. These can be
+        passed in three forms:
+        {coord_name: data}
+        {coord_name: ((dimensions,), data)}
+        {coord_name: (dimensions, data)}
+    dims
+        A sequence of dimension strings. The first entry cooresponds to the
+        first axis of data, the second to the second dimension, and so on.
+    attrs
+        Optional attributes (non-coordinate metadata) passed as a dict.
+
+    Notes
+    -----
+    Unless data is a DataArray or Patch, data, coords, and dims are required.
+    """
 
     def __init__(
         self,
-        data: Union[ArrayLike, DataArray] = None,
-        coords: Mapping[str, ArrayLike] = None,
-        dims: Sequence[str] = None,
+        data: ArrayLike | DataArray | None = None,
+        coords: Mapping[str, ArrayLike] | None = None,
+        dims: Sequence[str] | None = None,
         attrs: Optional[Mapping] = None,
     ):
-        if isinstance(data, DataArray):
-            self._data_array = data
+        non_attrs = [x is None for x in [data, coords, dims]]
+        if isinstance(data, (DataArray, self.__class__)):
+            dar = data if isinstance(data, DataArray) else data._data_array
+            self._data_array = dar
             return
-        coords = {} if coords is None else coords
-        dims = dims if dims is not None else coords
+        elif any(non_attrs) and not all(non_attrs):
+            msg = "data, coords, and dims must be defined to init Patch."
+            raise ValueError(msg)
         mixer = _AttrsCoordsMixer(attrs, coords, dims)
         attrs, coords = mixer()
         # get xarray coords from custom coords object
-        if isinstance(coords, Coords):
-            coords = coords._coords
-        self._data_array = DataArray(data=data, dims=dims, coords=coords, attrs=attrs)
+        xr_coords = coords.to_nested_dict()
+        self._data_array = DataArray(
+            data=data, dims=dims, coords=xr_coords, attrs=attrs
+        )
 
     def __eq__(self, other):
         """
@@ -157,12 +179,17 @@ class Patch:
 
     @property
     def coords(self):
-        """Return the data array."""
-        return Coords(self._data_array.coords, data_shape=self._data_array.shape)
+        """Return a dict of coordinate data {coord_name: data}"""
+        return Coords(self._data_array.coords, dims=self.dims).array_dict
+
+    @property
+    def coord_dims(self):
+        """Return a dict of coordinate dimensions {coord_name: (**dims)}"""
+        return Coords(self._data_array.coords, dims=self.dims).dims_dict
 
     @property
     def dims(self) -> tuple[str, ...]:
-        """Return the data array."""
+        """Return the dimensions contained in patch."""
         return self._data_array.dims
 
     @property
