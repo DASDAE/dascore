@@ -154,7 +154,7 @@ def multi_dim_coords_patch(random_patch):
     dist = random_patch.coords["distance"]
     time = random_patch.coords["time"]
     quality = np.ones((len(dist), len(time)))
-    out = random_patch.add_coords(quality=(("distance", "time"), quality))
+    out = random_patch.assign_coords(quality=(("distance", "time"), quality))
     return out
 
 

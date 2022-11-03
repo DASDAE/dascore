@@ -14,7 +14,7 @@ import dascore.proc
 from dascore.constants import DEFAULT_PATCH_ATTRS, PatchType
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
-from dascore.utils.coords import Coords, add_coords
+from dascore.utils.coords import Coords, assign_coords
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.patch import _AttrsCoordsMixer
 from dascore.viz import VizPatchNameSpace
@@ -266,5 +266,5 @@ class Patch:
         """
         return func(self, *args, **kwargs)
 
-    # Bind add_coords as method
-    add_coords = add_coords
+    # Bind assign_coords as method
+    assign_coords = assign_coords

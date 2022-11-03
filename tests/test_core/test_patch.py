@@ -384,7 +384,7 @@ class TestAddCoords:
         dist = random_patch.coords["distance"]
         lat = np.arange(0, len(dist)) * 0.001 - 109.857952
         # add a single coord
-        out = random_patch.add_coords(latitude=("distance", lat))
+        out = random_patch.assign_coords(latitude=("distance", lat))
         return out
 
     def test_add_single_dim_one_coord(self, random_patch_with_lat):

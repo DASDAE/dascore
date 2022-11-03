@@ -80,7 +80,11 @@ coords = dict(
     distance=np.arange(array.shape[0]) * attrs["d_distance"],
     time=np.arange(array.shape[1]) * attrs["d_time"],
 )
-pa = dc.Patch(data=array, coords=coords, attrs=attrs)
+
+# define dimensions (first label corresponds to data axis 0)
+dims = ('distance', 'time')
+
+pa = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
 print(pa)
 ```
 
@@ -198,4 +202,75 @@ patch = (
 )
 ```
 
-# Adding dimensional coordinates
+# Adding Coordinates
+
+It is common to have additional coordinates, such as latitude/longitude,
+attached to a particular dimension (e.g., distance). There are two ways
+to add coordinates to a patch:
+
+## Assign_coordinates
+
+The [assign_coordinates](`dascore.utils.coords.assign_coords`) method will
+add the requested coordinates and return a new patch instance.
+
+```{python}
+import numpy as np
+import dascore as dc
+patch_1 = dc.get_example_patch()
+coords = patch_1.coords
+dist = coords['distance']
+time = coords['time']
+
+# Add a single coordinate associated with distance dimension
+lat = np.arange(0, len(dist)) * .001 -109.857952
+out_1 = patch_1.assign_coords(latitude=('distance', lat))
+# Add multiple coordinates associated with distance dimension
+lon = np.arange(0, len(dist)) *.001 + 41.544654
+out_2 = patch_1.assign_coords(
+    latitude=('distance', lat),
+    longitude=('distance', lon),
+)
+
+# Add multi-dimensional coordinates
+quality = np.ones_like(patch_1.data)
+out_3 = patch_1.assign_coords(
+    quality=(patch_1.dims, quality)
+)
+```
+
+## Include Coords in Patch Init
+Any number of coordinates can also be assigned when the patch is initiated. For
+coordinates other than those of the patch dimensions, the associated dimensions
+must be specified. For exampel:
+
+```{python}
+import dascore as dc
+import numpy as np
+
+# create fake data
+rand = np.random.RandomState(13)
+array = rand.random(size=(20, 100))
+time1 = np.datetime64("2020-01-01")
+
+# create attributes of patch
+attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
+time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
+
+# create coordinate data
+distance = np.arange(array.shape[0]) * attrs["dx"]
+time = time1 + time_deltas
+quality = np.ones_like(array)
+latitude = np.arange(array.shape[1]) * .001 - 111.00
+
+# create coord dict
+coords = dict(
+    distance=distance,
+    time=time,
+    latitude=("distance", latitude),  # Note distance is attached dimension
+    quality=(("distance", "time"), quality),  # Two attached dimensions here
+)
+
+# Define dimensions of array and init Patch
+dims = ("distance", "time")
+out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
+```

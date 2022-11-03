@@ -9,7 +9,7 @@ from dascore.constants import PatchType
 from dascore.utils.mapping import FrozenDict
 
 
-def add_coords(patch: PatchType, **kwargs) -> PatchType:
+def assign_coords(patch: PatchType, **kwargs) -> PatchType:
     """
     Add non-dimensional coordinates to a patch.
 
@@ -32,18 +32,18 @@ def add_coords(patch: PatchType, **kwargs) -> PatchType:
     >>> time = coords['time']
     >>> # Add a single coordinate associated with distance dimension
     >>> lat = np.arange(0, len(dist)) * .001 -109.857952
-    >>> out_1 = patch_1.add_coords(latitude=('distance', lat))
+    >>> out_1 = patch_1.assign_coords(latitude=('distance', lat))
     >>> # Add multiple coordinates associated with distance dimension
     >>> lon = np.arange(0, len(dist)) *.001 + 41.544654
-    >>> out_2 = patch_1.add_coords(
-    >>>     latitude=('distance', lat),
-    >>>     longitude=('distance', lon),
-    >>> )
+    >>> out_2 = patch_1.assign_coords(
+    ...     latitude=('distance', lat),
+    ...     longitude=('distance', lon),
+    ... )
     >>> # Add multi-dimensional coordinates
-    >>> quality = np.ones(len(lat), len(lon))
-    >>> out_3 = patch_1.add_coords(
-    >>>     quality=(('latitude', 'longitude'), quality)
-    >>> )
+    >>> quality = np.ones_like(patch_1.data)
+    >>> out_3 = patch_1.assign_coords(
+    ...     quality=(patch_1.dims, quality)
+    ... )
     """
     coords = {x: patch.coords[x] for x in patch.coords}
     for coord_key, (dimension, value) in kwargs.items():
