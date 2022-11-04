@@ -143,6 +143,12 @@ class TestInit:
         assert "quality" in patch.coords
         assert np.all(patch.coords["quality"] == patch.data)
 
+    def test_incomplete_raises(self):
+        """An incomplete patch should raise an error."""
+        data = np.ones((10, 10))
+        with pytest.raises(ValueError, match="data, coords, and dims"):
+            Patch(data=data)
+
 
 class TestEmptyPatch:
     """Tests for empty patch objects."""

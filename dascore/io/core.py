@@ -130,11 +130,6 @@ class _FiberIOManager:
         )
         for formatter in iterator:
             return formatter
-        msg = (
-            f"No fiberio instance found for format: {format} "
-            f"version: {version} and extension: {extension}"
-        )
-        raise UnknownFiberFormat(msg)
 
     def yield_fiberio(
         self,

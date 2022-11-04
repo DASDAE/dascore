@@ -44,3 +44,8 @@ class TestBasic:
         assert HDFPatchIndexManager(path).has_index
         new_contents = new_spool.get_contents()
         assert contents.equals(new_contents)
+
+    def test_raises_bad_file(self):
+        """Simply ensures a bad file will raise."""
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            FileSpool("/not/a/directory")
