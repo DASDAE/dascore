@@ -15,7 +15,7 @@ from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor
-from dascore.utils.patch import merge_patches, patches_to_df
+from dascore.utils.patch import _merge_patches, patches_to_df
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     adjust_segments,
@@ -170,7 +170,7 @@ class DataFrameSpool(BaseSpool):
             }
             out_list.append(patch.select(**select_kwargs))
         if len(out_list) > expected_len:
-            out_list = merge_patches(out_list)
+            out_list = _merge_patches(out_list)
         return out_list
 
     @staticmethod

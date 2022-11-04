@@ -460,6 +460,7 @@ def patches_to_df(
         {fields}
     plus a field called 'patch' which contains a reference to each patch.
     """
+
     if isinstance(patches, dascore.BaseSpool):
         df = patches._df
     elif isinstance(patches, pd.DataFrame):
@@ -472,6 +473,11 @@ def patches_to_df(
         else:  # else populate with patches and concat history
             history = df["history"].apply(lambda x: ",".join(x))
             df = df.assign(patch=patches, history=history)
+    # Ensure history is in df
+    if "history" not in df.columns:
+        df = df.assign(history="")
+    if "patch" not in df.columns:
+        df["patch"] = [x for x in patches]
     return df
 
 
@@ -505,14 +511,14 @@ def merge_patches(
         sort_names = group_names + [min_name, max_name]
         if check_history:
             sort_names += ["history"]
-            patches = patches.assign(history=lambda x: x.get("history", "").apply(str))
+            patches = patches.assign(history=lambda x: x["history"].apply(str))
         return patches.sort_values(sort_names), sort_names, group_names
 
     def _merge_compatible_patches(patch_df):
         """perform merging after patch compatibility has been confirmed."""
         has_overlap = patch_df["_dist_to_previous"] <= to_timedelta64(0)
         overlap_start = patch_df[min_name] - patch_df["_dist_to_previous"]
-
+        # get data arrays
         dars = [x._data_array for x in patch_df["patch"]]
         dars = [
             _trim_or_fill(x, start) if needs_action else x

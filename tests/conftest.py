@@ -197,11 +197,10 @@ def diverse_spool_directory(diverse_spool):
 
 @pytest.fixture(scope="class")
 def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
-    """Create a directory of diverse DAS files for testing."""
-
+    """Create a directory of adjacent patches."""
     # create a directory with several patch files in it.
     dir_path = Path(tmp_path_factory.mktemp("data"))
-    for num, patch in adjacent_spool_no_overlap:
+    for num, patch in enumerate(adjacent_spool_no_overlap):
         path = dir_path / f"{num}_patch.hdf5"
         dc.write(patch, path, file_format="dasdae")
     return dir_path
