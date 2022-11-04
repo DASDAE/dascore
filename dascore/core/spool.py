@@ -186,8 +186,7 @@ class DataFrameSpool(BaseSpool):
         cols2keep = get_column_names_from_dim(dims)
         instruction = (
             input_df.copy()[cols2keep]
-            .assign(source_index=output.index)
-            .assign(current_index=output.index)
+            .assign(source_index=output.index, current_index=output.index)
             .set_index("source_index")
             .sort_values("current_index")
         )

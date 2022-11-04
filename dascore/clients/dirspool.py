@@ -47,7 +47,7 @@ class DirectorySpool(DataFrameSpool):
 
     def __str__(self):
         out = (
-            f"FileSpool object managing: {self.spool_path}"
+            f"DirectorySpool object managing: {self.spool_path}"
             f" with select kwargs: {self._select_kwargs}"
         )
         return out

@@ -79,8 +79,17 @@ class DirectoryIndexer(AbstractIndexer):
             self.namespace,
         )
 
-    def get_contents(self, buffer=ONE_SECOND_IN_NS, **kwargs):
-        """get start and end times, perform in kernel lookup"""
+    def get_contents(self, buffer=ONE_SECOND_IN_NS, **kwargs) -> pd.DataFrame:
+        """
+        Get contents of directory with specific query params.
+
+        Parameters
+        ----------
+        buffer
+            A buffer to ensure enough info is returned from hdf index.
+        kwargs
+            Used to query contents.
+        """
         # create index if it doesn't exist
         if not self.index_path.exists():
             self.update()
@@ -109,7 +118,10 @@ class DirectoryIndexer(AbstractIndexer):
         con1 = index["time_min"] >= (time_max + buffer)
         con2 = index["time_max"] <= (time_min - buffer)
         pre_filter_df = index[~(con1 | con2)]
-        return pre_filter_df[filter_df(pre_filter_df, **kwargs)]
+        out = pre_filter_df[
+            filter_df(pre_filter_df, time=(time_min, time_max), **kwargs)
+        ]
+        return out
 
     def __str__(self):
         msg = f"{self.__class__.__name__} managing: {self.path}"
