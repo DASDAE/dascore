@@ -6,6 +6,7 @@ import copy
 import functools
 import inspect
 import re
+import warnings
 from fnmatch import translate
 from typing import (
     Any,
@@ -482,6 +483,38 @@ def patches_to_df(
 
 
 def merge_patches(
+    patches: Union[Sequence[PatchType], pd.DataFrame, SpoolType],
+    dim: str = "time",
+    check_history: bool = True,
+    tolerance: float = 1.5,
+) -> Sequence[PatchType]:
+    """
+    Merge all compatible patches in spool or patch list together.
+
+    Parameters
+    ----------
+    patches
+        A sequence of patches to merge (if compatible)
+    dim
+        The dimension along which to merge
+    check_history
+        If True, only merge patches with common history. This will, for
+        example, prevent merging filtered and unfiltered data together.
+    tolerance
+        The upper limit of a gap to tolerate in terms of the sampling
+        along the desired dimension. E.G., the default value means any patches
+        with gaps <= 1.5 * dt will be merged.
+    """
+    msg = (
+        "merge_patches is deprecated. Use spool.chunk instead."
+        "For example, to merge a list of patches you can use:"
+        "dascore.spool(patch_list).chunk(time=None) to merge on time dimension"
+    )
+    warnings.warn(msg, DeprecationWarning)
+    return _merge_patches(patches, dim, check_history, tolerance)
+
+
+def _merge_patches(
     patches: Union[Sequence[PatchType], pd.DataFrame, SpoolType],
     dim: str = "time",
     check_history: bool = True,

@@ -244,3 +244,10 @@ class TestMergePatches:
         spool = dc.spool(adjacent_spool_directory)
         out = _merge_patches(spool)
         assert len(out) == 1
+
+    def test_deprecated(self, random_patch):
+        """Ensure deprecation warning is raised."""
+        from dascore.utils.patch import merge_patches
+
+        with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
+            merge_patches(random_patch)
