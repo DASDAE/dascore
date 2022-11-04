@@ -1,5 +1,5 @@
 """
-Test for stream functions.
+Test for spool functions.
 """
 import numpy as np
 import pandas as pd
@@ -46,11 +46,11 @@ class TestSpoolIterablity:
     """Tests for indexing/iterating Spools"""
 
     def test_len(self, random_spool):
-        """Ensure the stream has a length"""
+        """Ensure the spool has a length"""
         assert len(random_spool) == len(list(random_spool))
 
     def test_index(self, random_spool):
-        """Ensure the stream can be indexed."""
+        """Ensure the spool can be indexed."""
         assert isinstance(random_spool[0], dc.Patch)
 
     def test_list_o_patches(self, random_spool):
@@ -210,7 +210,7 @@ class TestMergePatchesWithChunk:
     @pytest.fixture()
     def desperate_spool_no_overlap(self, random_patch) -> dc.BaseSpool:
         """
-        Create streams that do not overlap at all.
+        Create spool that do not overlap at all.
         Ensure the patches are not sorted in temporal order.
         """
         pa1 = random_patch
@@ -224,14 +224,14 @@ class TestMergePatchesWithChunk:
     @pytest.fixture()
     def spool_complete_overlap(self, random_patch) -> dc.BaseSpool:
         """
-        Create a stream which overlaps each other completely.
+        Create a spool which overlaps each other completely.
         """
         return dc.spool([random_patch, random_patch])
 
     @pytest.fixture()
     def spool_slight_gap(self, random_patch) -> dc.BaseSpool:
         """
-        Create a stream which has a 1.1 * dt gap.
+        Create a spool which has a 1.1 * dt gap.
         """
         pa1 = random_patch
         t2 = random_patch.attrs["time_max"]
@@ -244,10 +244,10 @@ class TestMergePatchesWithChunk:
     def test_merge_adjacent(self, adjacent_spool_no_overlap):
         """Test simple merge of patches."""
         len_1 = len(adjacent_spool_no_overlap)
-        out_stream = adjacent_spool_no_overlap.chunk(time=None)
-        assert len(out_stream) < len_1
-        assert len(out_stream) == 1
-        out_patch = out_stream[0]
+        out_spool = adjacent_spool_no_overlap.chunk(time=None)
+        assert len(out_spool) < len_1
+        assert len(out_spool) == 1
+        out_patch = out_spool[0]
         # make sure coords are consistent with attrs
         assert out_patch.attrs["time_max"] == out_patch.coords["time"].max()
         assert out_patch.attrs["time_min"] == out_patch.coords["time"].min()
@@ -259,7 +259,7 @@ class TestMergePatchesWithChunk:
         assert unique_spacing[0] == out_patch.attrs["d_time"]
 
     def test_no_overlap(self, desperate_spool_no_overlap):
-        """streams with no overlap should not be merged."""
+        """Spools with no overlap should not be merged."""
         len_1 = len(desperate_spool_no_overlap)
         out = desperate_spool_no_overlap.chunk(time=None)
         assert len_1 == len(out)

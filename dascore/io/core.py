@@ -130,11 +130,6 @@ class _FiberIOManager:
         )
         for formatter in iterator:
             return formatter
-        msg = (
-            f"No fiberio instance found for format: {format} "
-            f"version: {version} and extension: {extension}"
-        )
-        raise UnknownFiberFormat(msg)
 
     def yield_fiberio(
         self,
@@ -503,7 +498,7 @@ def write(
     file_format: str,
     file_version: Optional[str] = None,
     **kwargs,
-):
+) -> Path:
     """
     Write a Patch or Spool to disk.
 
@@ -525,3 +520,4 @@ def write(
     if not isinstance(patch_or_spool, dascore.BaseSpool):
         patch_or_spool = dascore.spool([patch_or_spool])
     formatter.write(patch_or_spool, path, **kwargs)
+    return path

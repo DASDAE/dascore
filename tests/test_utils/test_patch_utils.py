@@ -227,7 +227,7 @@ class TestAttrsCoordsMixer:
         new_attrs, new_coords = mixer()
         assert new_attrs["d_time"] == td_new
         # first ensure new time coords are approximately new time delta
-        new_time = new_coords["time"].values
+        new_time = new_coords["time"]
         tdiff = (new_time[1:] - new_time[:-1]) / one_sec
         assert np.allclose(tdiff, td_new / one_sec)
         # also ensure the endtime has increased proportionately.

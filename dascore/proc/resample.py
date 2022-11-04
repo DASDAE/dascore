@@ -10,8 +10,12 @@ import dascore.compat as compat
 from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
 from dascore.proc.filter import _get_sampling_rate, _lowpass_cheby_2
-from dascore.utils.misc import check_evenly_sampled, get_dim_value_from_kwargs
-from dascore.utils.patch import get_start_stop_step, patch_function
+from dascore.utils.misc import check_evenly_sampled
+from dascore.utils.patch import (
+    get_dim_value_from_kwargs,
+    get_start_stop_step,
+    patch_function,
+)
 from dascore.utils.time import to_number, to_timedelta64
 
 

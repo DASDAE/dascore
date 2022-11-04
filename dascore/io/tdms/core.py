@@ -97,6 +97,7 @@ class TDMSFormatterV4713(FiberIO):
             # Get data in distance and time requested and assoociated time
             # and distance arrays
             data, tar, dar = _get_data(time, distance, time_ar, dist_ar, data_node)
+            dims = ("time", "distance")
             _coords = {"time": tar, "distance": dar}
             attrs = _get_default_attrs(tdms_file, attrs)
 
@@ -106,5 +107,5 @@ class TDMSFormatterV4713(FiberIO):
             attrs["distance_min"] = dar.min()
             attrs["distance_max"] = dar.max()
             # get slices of data and read
-            patch = Patch(data=data, coords=_coords, attrs=attrs)
+            patch = Patch(data=data, coords=_coords, attrs=attrs, dims=dims)
             return dc.spool(patch)

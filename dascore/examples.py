@@ -53,7 +53,7 @@ def _random_patch(starttime="2017-09-18", network="", station="", tag="random"):
         distance=np.arange(array.shape[0]) * attrs["d_distance"],
         time=np.arange(array.shape[1]) * attrs["d_time"],
     )
-    out = dict(data=array, coords=coords, attrs=attrs)
+    out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
     return dc.Patch(**out)
 
 
@@ -103,6 +103,23 @@ def sin_wave_patch(
         },
     )
     return patch
+
+
+@register_func(EXAMPLE_PATCHES, key="random_patch_with_lat_lon")
+def _random_patch_lat_lon():
+    """
+    Create a patch with latitude/longitude coords attached to
+    the distance dimension.
+    """
+    random_patch = get_example_patch("random_das")
+    dist = random_patch.coords["distance"]
+    lat = np.arange(0, len(dist)) * 0.001 - 109.857952
+    lon = np.arange(0, len(dist)) * 0.001 + 41.544654
+    # add a single coord
+    out = random_patch.assign_coords(
+        latitude=("distance", lat), longitude=("distance", lon)
+    )
+    return out
 
 
 @register_func(EXAMPLE_SPOOLS, key="random_das")

@@ -1,5 +1,5 @@
 """
-Core module for reading and writing pickle format.
+Core module for reading and writing DASDAE format.
 """
 import contextlib
 from typing import Union

@@ -52,7 +52,7 @@ def dasdae_v1_file_path(request):
     return request.getfixturevalue(request.param)
 
 
-class TestWrite:
+class TestWriteDASDAE:
     """Ensure the format can be written."""
 
     def test_file_exists(self, dasdae_v1_file_path):
@@ -94,7 +94,7 @@ class TestWrite:
         assert (df["time_min"] == to_datetime64("1990-01-01")).any()
 
 
-class TestGetVersion:
+class TestGetVersionDASDAE:
     """Test for version gathering from files."""
 
     def test_version_tuple_returned(self, dasdae_v1_file_path):
@@ -108,7 +108,7 @@ class TestGetVersion:
         assert format_ver == (ex_format, ex_version)
 
 
-class TestReadDasdae:
+class TestReadDASDAE:
     """
     Test for reading a dasdae format.
     """
@@ -123,9 +123,9 @@ class TestReadDasdae:
 
     def test_round_trip_empty_patch(self, written_dascore_v1_empty):
         """Ensure an emtpy patch can be deserialize."""
-        stream = dc.read(written_dascore_v1_empty)
-        assert len(stream) == 1
-        stream[0].equals(dc.Patch())
+        spool = dc.read(written_dascore_v1_empty)
+        assert len(spool) == 1
+        spool[0].equals(dc.Patch())
 
     def test_datetimes(self, tmp_path_factory, random_patch):
         """Ensure the datetimes in the attrs come back as datetimes"""
@@ -144,7 +144,7 @@ class TestReadDasdae:
             assert isinstance(patch_2.attrs[name], np.datetime64)
 
 
-class TestScanDasDae:
+class TestScanDASDAE:
     """Tests for scanning the dasdae format."""
 
     def test_scan_returns_info(self, written_dascore_v1_random, random_patch):
@@ -171,3 +171,22 @@ class TestScanDasDae:
         df1 = dc.scan_to_df(written_dascore_v1_random)
         df2 = dc.scan_to_df(written_dascore_v1_random_indexed)
         assert df1.drop(columns="path").equals(df2.drop(columns="path"))
+
+
+class TestRoundTrips:
+    """Tests for round-tripping various patches/spools"""
+
+    def test_write_patch_with_lat_lon(
+        self, random_patch_with_lat_lon, tmp_path_factory
+    ):
+        """
+        DASDAE should support writing patches with non-dimensional
+        coords.
+        """
+        new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
+        patch = random_patch_with_lat_lon
+        dc.write(patch, new_path, "DASDAE")
+        spool = dc.read(new_path, file_format="DASDAE")
+        assert len(spool) == 1
+        new_patch = spool[0]
+        assert patch.equals(new_patch)

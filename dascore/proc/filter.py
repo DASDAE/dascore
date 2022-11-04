@@ -123,7 +123,9 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
         out = sosfiltfilt(sos, patch.data, axis=axis)
     else:
         out = sosfilt(sos, patch.data, axis=axis)
-    return dascore.Patch(data=out, coords=patch.coords, attrs=patch.attrs)
+    return dascore.Patch(
+        data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
+    )
 
 
 #

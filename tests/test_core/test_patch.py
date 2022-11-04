@@ -23,6 +23,7 @@ def get_simple_patch() -> Patch:
         data=np.random.random((100, 100)),
         coords={"time": np.arange(100) * 0.01, "distance": np.arange(100) * 0.2},
         attrs=attrs,
+        dims=("time", "distance"),
     )
     return pa
 
@@ -34,7 +35,7 @@ class TestInit:
 
     @pytest.fixture()
     def random_dt_coord(self):
-        """Create a random trace with a datetime coord"""
+        """Create a random patch with a datetime coord"""
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 200))
         attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
@@ -43,7 +44,25 @@ class TestInit:
             distance=np.arange(array.shape[0]) * attrs["dx"],
             time=self.time1 + time_deltas,
         )
-        out = dict(data=array, coords=coords, attrs=attrs)
+        dims = tuple(coords)
+        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
+        return Patch(**out)
+
+    @pytest.fixture(scope="class")
+    def patch_complex_coords(self):
+        """Create a patch with 'complex' (non-dimensional) coords."""
+        rand = np.random.RandomState(13)
+        array = rand.random(size=(20, 100))
+        attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
+        time_deltas = to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
+        coords = dict(
+            distance=np.arange(array.shape[0]) * attrs["dx"],
+            time=self.time1 + time_deltas,
+            latitude=("distance", array[:, 0]),
+            quality=(("distance", "time"), array),
+        )
+        dims = ("distance", "time")
+        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
 
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
@@ -88,7 +107,9 @@ class TestInit:
         attrs = dict(random_patch.attrs)
         attrs["d_time"] = to_timedelta64(10)
         coords = random_patch.coords
-        new = dascore.Patch(data=random_patch.data, attrs=attrs, coords=coords)
+        new = dascore.Patch(
+            data=random_patch.data, attrs=attrs, coords=coords, dims=list(coords)
+        )
         assert new.attrs["d_time"] == to_timedelta64(10)
 
     def test_had_default_attrs(self, patch):
@@ -101,6 +122,7 @@ class TestInit:
         pa = Patch(
             data=np.random.random((100, 100)),
             coords={"time": np.random.random(100), "distance": np.random.random(100)},
+            dims=("time", "distance"),
         )
         assert isinstance(pa, Patch)
 
@@ -112,6 +134,20 @@ class TestInit:
     def test_shape(self, random_patch):
         """Ensure shape returns the shape of the data array."""
         assert random_patch.shape == random_patch.data.shape
+
+    def test_init_with_complex_coordinates(self, patch_complex_coords):
+        """Ensure complex coordinates work."""
+        patch = patch_complex_coords
+        assert isinstance(patch, Patch)
+        assert "latitude" in patch.coords
+        assert "quality" in patch.coords
+        assert np.all(patch.coords["quality"] == patch.data)
+
+    def test_incomplete_raises(self):
+        """An incomplete patch should raise an error."""
+        data = np.ones((10, 10))
+        with pytest.raises(ValueError, match="data, coords, and dims"):
+            Patch(data=data)
 
 
 class TestEmptyPatch:
@@ -342,3 +378,35 @@ class TestPipe:
         out = random_patch.pipe(self.pipe_func, 2, keyword_arg="bob")
         assert out.attrs["positional_arg"] == 2
         assert out.attrs["keyword_arg"] == "bob"
+
+
+class TestAddCoords:
+    """Tests for adding non-standard coords to traces."""
+
+    @pytest.fixture(scope="class")
+    def random_patch_with_lat(self, random_patch):
+        """Create a random patch with added lat/lon coordinates."""
+
+        dist = random_patch.coords["distance"]
+        lat = np.arange(0, len(dist)) * 0.001 - 109.857952
+        # add a single coord
+        out = random_patch.assign_coords(latitude=("distance", lat))
+        return out
+
+    def test_add_single_dim_one_coord(self, random_patch_with_lat):
+        """Tests that one coordinate can be added to a patch"""
+        assert "latitude" in random_patch_with_lat.coords
+
+    def test_add_single_dim_two_coord2(self, random_patch_with_lat_lon):
+        """Ensure multiple coords can be added to patch."""
+        out2 = random_patch_with_lat_lon
+        assert {"latitude", "longitude"}.issubset(set(out2.coords))
+        assert out2.coords["longitude"].shape
+        assert out2.coords["latitude"].shape
+
+    def test_add_multi_dim_coords(self, multi_dim_coords_patch):
+        """Ensure coords with multiple dimensions works."""
+        out1 = multi_dim_coords_patch
+        assert "quality" in out1.coords
+        assert out1.coords["quality"].shape
+        assert np.all(out1.coords["quality"] == 1)

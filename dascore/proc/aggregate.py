@@ -63,4 +63,6 @@ def aggregate(
     new_attrs[f"{dim}_min"] = new_coord_val
     new_attrs[f"{dim}_max"] = new_coord_val
     new_attrs[f"d_{dim}"] = np.NaN
-    return patch.__class__(new_data, attrs=new_attrs, coords=new_coords)
+    return patch.__class__(
+        new_data, attrs=new_attrs, coords=new_coords, dims=list(new_coords)
+    )
