@@ -5,24 +5,24 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import dascore
+import dascore as dc
 from dascore.exceptions import PatchAttributeError, PatchDimError
-from dascore.utils.patch import _AttrsCoordsMixer
+from dascore.utils.patch import _AttrsCoordsMixer, _merge_patches
 
 
-@dascore.patch_function(required_dims=("time", "distance"))
+@dc.patch_function(required_dims=("time", "distance"))
 def time_dist_func(patch):
     """A dummy function to test time, distance coord requirement."""
     return patch
 
 
-@dascore.patch_function(required_attrs=("bob",))
+@dc.patch_function(required_attrs=("bob",))
 def require_bob(patch):
     """Require bob attribute"""
     return patch
 
 
-@dascore.patch_function(required_attrs={"bob": "what about?"})
+@dc.patch_function(required_attrs={"bob": "what about?"})
 def require_bob_value(patch):
     """Require bob attribute with specific value."""
     return patch
@@ -34,12 +34,12 @@ class TestPatchFunction:
     def test_no_call(self, random_patch):
         """Ensure the decorator can be used with or without parens"""
 
-        @dascore.patch_function
+        @dc.patch_function
         def func1(patch):
             """first test func"""
             return patch
 
-        @dascore.patch_function()
+        @dc.patch_function()
         def func2(patch):
             """second test func"""
             return patch
@@ -234,3 +234,20 @@ class TestAttrsCoordsMixer:
         old_duration = attrs["time_max"] - attrs["time_min"]
         new_duration = new_attrs["time_max"] - new_attrs["time_min"]
         assert np.isclose(old_duration / new_duration, td_old / td_new)
+
+
+class TestMergePatches:
+    """Tests for merging patches together."""
+
+    def test_merge_dir_spool(self, adjacent_spool_directory):
+        """Ensure merge_patches works on a directory spool."""
+        spool = dc.spool(adjacent_spool_directory)
+        out = _merge_patches(spool)
+        assert len(out) == 1
+
+    def test_deprecated(self, random_patch):
+        """Ensure deprecation warning is raised."""
+        from dascore.utils.patch import merge_patches
+
+        with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
+            merge_patches(random_patch)
