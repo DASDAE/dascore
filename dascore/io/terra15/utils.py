@@ -102,7 +102,7 @@ def _get_start_stop(time_len, time_lims, file_tmin, dt):
     stop_ind = int(np.round((tmax - file_tmin) / dt)) + 1
     # enforce upper limit on time end index.
     if stop_ind > time_len:
-        stop_ind = time_len - 1
+        stop_ind = time_len
     assert 0 <= start_ind < stop_ind
     return start_ind, stop_ind
 
@@ -156,7 +156,9 @@ def _read_terra15(
     _, data_node = _get_version_data_node(root)
     gps_time = data_node["gps_time"]
     file_t_min, file_t_max, time_len = _get_scanned_time_min_max(data_node)
-    dt = (file_t_max - file_t_min) / time_len
+    # surprisingly, using gps time column, dt is much different than dt
+    # reported in data attrs!, use GPS time here.
+    dt = (file_t_max - file_t_min) / (time_len - 1)
     # get the start and stop along the time axis
     start_ind, stop_ind = _get_start_stop(time_len, time_lims, file_t_min, dt)
     req_t_min = file_t_min if start_ind == 0 else gps_time[start_ind]
@@ -170,7 +172,7 @@ def _read_terra15(
     )
     assert req_t_max > req_t_min
     # calculate time array, convert to datetime64
-    t_float = file_t_min + start_ind * dt + np.arange(stop_ind - start_ind) * dt
+    t_float = file_t_min + np.arange(start_ind, stop_ind) * dt
     time_ar = to_datetime64(t_float)
     time_inds = (start_ind, stop_ind)
     # get data and sliced distance coord
