@@ -12,7 +12,8 @@ DASCore's test suite is run with [pytest](https://docs.pytest.org/en/stable/). W
 pytest tests
 ```
 
-You can also use the cov flags to check coverage.
+You can also use the cov flags to check coverage. Please make sure you don't
+introduce large blocks of dead code.
 
 <!--pytest-codeblocks:skip-->
 ```bash

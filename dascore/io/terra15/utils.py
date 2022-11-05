@@ -107,18 +107,6 @@ def _get_start_stop(time_len, time_lims, file_tmin, dt):
     return start_ind, stop_ind
 
 
-def _maybe_adjust_stop_ind(stop_ind, file_t_min, data_node, time_len):
-    """Check if file is partially written, adjust t_end accordingly."""
-    file_t_max = data_node["gps_time"][stop_ind - 1]
-    # Dead bits at the end of the file found. Need to remove.
-    if file_t_max < file_t_min:
-        gps_time = data_node["gps_time"].read()
-        # finds first index with 0 then backs up one
-        stop_ind = np.argmin(gps_time)
-        time_len = stop_ind
-    return stop_ind, time_len
-
-
 def _get_dar_attrs(data_node, root, tar, dar):
     """Get the attributes for the terra15 data array (loaded)"""
     attrs = _get_default_attrs(data_node.data.attrs, root._v_attrs)
@@ -182,16 +170,6 @@ def _read_terra15(
     dims = ("time", "distance")
     attrs = _get_dar_attrs(data_node, root, time_ar, dist_ar_trimmed)
     return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
-
-
-def _get_data(time_index, distance, dist_array, data_node):
-    """
-    Get the data array. Slice based on input and check for 0 blocks. Also
-    return sliced distance.
-    """
-    tslice = slice(*time_index)
-    dslice = get_slice(dist_array, distance)
-    return data_node.data[tslice, dslice], dist_array[dslice]
 
 
 def _get_default_attrs(data_node_attrs, root_node_attrs):
