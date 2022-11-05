@@ -39,13 +39,12 @@ class TestReadTerra15:
         dist_array = terra15_das_patch.coords["distance"]
         t1, t2 = time_array[10], time_array[40]
         d1, d2 = dist_array[10], dist_array[40]
-
         patch = Terra15FormatterV4().read(
             terra15_das_example_path, time=(t1, t2), distance=(d1, d2)
         )[0]
         attrs, coords = patch.attrs, patch.coords
         assert attrs["time_min"] == coords["time"].min() == t1
-        assert attrs["time_max"] == coords["time"].max() == t2
+        assert (attrs["time_max"] - t2) < (attrs["d_time"] / 4)
         assert attrs["distance_min"] == coords["distance"].min() == d1
         assert attrs["distance_max"] == coords["distance"].max() == d2
 

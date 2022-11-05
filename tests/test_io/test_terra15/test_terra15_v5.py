@@ -39,19 +39,32 @@ class TestReadTerra15V5:
         coord_time = terra15_v5_patch.coords["time"].max()
         assert attr_time == coord_time
 
+    def test_read_with_limits(self, terra15_v5_patch, terra15_v5_path):
+        """If start/end time sare select the same patch ought to be returned."""
+        attrs = terra15_v5_patch.attrs
+        time = (attrs["time_min"], attrs["time_max"])
+        dist = (attrs["distance_min"], attrs["distance_max"])
+        patch = Terra15FormatterV5().read(
+            terra15_v5_path,
+            time=time,
+            distance=dist,
+        )[0]
+        assert attrs["time_max"] == patch.attrs["time_max"]
+
     def test_time_dist_slice(self, terra15_v5_patch, terra15_v5_path):
         """Ensure slicing distance and time works from read func."""
         time_array = terra15_v5_patch.coords["time"]
         dist_array = terra15_v5_patch.coords["distance"]
         t1, t2 = time_array[10], time_array[40]
         d1, d2 = dist_array[10], dist_array[40]
-
         patch = Terra15FormatterV5().read(
             terra15_v5_path, time=(t1, t2), distance=(d1, d2)
         )[0]
         attrs, coords = patch.attrs, patch.coords
         assert attrs["time_min"] == coords["time"].min() == t1
-        assert attrs["time_max"] == coords["time"].max() == t2
+        assert attrs["time_max"] == coords["time"].max()
+        # since we use floats sometimes this are a little off.
+        assert (attrs["time_max"] - t2) < (attrs["d_time"] / 4)
         assert attrs["distance_min"] == coords["distance"].min() == d1
         assert attrs["distance_max"] == coords["distance"].max() == d2
 

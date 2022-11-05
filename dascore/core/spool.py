@@ -6,11 +6,13 @@ from functools import singledispatch
 from pathlib import Path
 from typing import Mapping, Optional, Sequence, Union
 
+import numpy as np
 import pandas as pd
 from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PatchType, SpoolType, numeric_types, timeable_types
+from dascore.exceptions import PatchDimError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
@@ -170,7 +172,9 @@ class DataFrameSpool(BaseSpool):
             }
             out_list.append(patch.select(**select_kwargs))
         if len(out_list) > expected_len:
-            out_list = _merge_patches(out_list)
+            patch_df = patches_to_df(out_list)
+            self._ensure_same_coord_lims(patch_df, joined)
+            out_list = _merge_patches(patch_df)
         return out_list
 
     @staticmethod
@@ -254,6 +258,22 @@ class DataFrameSpool(BaseSpool):
         {doc}
         """
         return self._df[filter_df(self._df, **self._select_kwargs)]
+
+    def _ensure_same_coord_lims(self, patch_df, joined):
+        """
+        The loaded patches should have the same coordinate limits
+        as the joined df, else planned join operation may be invalid.
+        """
+        dims = set(",".join(joined["dims"].values).split(","))
+        for dim in dims:
+            sub_cols = [f"{dim}_max", f"{dim}_min", f"d_{dim}"]
+            eq = np.all(patch_df[sub_cols].values == joined[sub_cols].values)
+            if not eq:
+                msg = (
+                    f"The dimension start, stop, or spacing of dimension {dim} "
+                    f"are not the same between loaded patches and spool contents."
+                )
+                raise PatchDimError(msg)
 
 
 class MemorySpool(DataFrameSpool):

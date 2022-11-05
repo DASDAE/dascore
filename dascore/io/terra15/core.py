@@ -56,7 +56,6 @@ class Terra15FormatterV4(FiberIO):
         """
         Read a terra15 file.
         """
-
         # TODO need to create h5 file decorator to avoid too many open/close files.
         with open_hdf5_file(path) as fi:
             patch = _read_terra15(fi.root, time, distance)
