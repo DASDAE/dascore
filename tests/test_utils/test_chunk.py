@@ -31,7 +31,7 @@ def contiguous_sr_spaced_df(contiguous_df):
     """separate df by one sample rate."""
     sr = contiguous_df.loc[:, "d_time"]
     out = contiguous_df.copy()
-    out.loc[:, "time_max"] = out.loc[:, "time_max"] - sr
+    out["time_max"] = out["time_max"] - sr
     return out
 
 

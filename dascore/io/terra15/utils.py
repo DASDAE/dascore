@@ -10,7 +10,7 @@ from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.schema import PatchFileSummary
 from dascore.utils.misc import get_slice
-from dascore.utils.time import to_datetime64
+from dascore.utils.time import datetime_to_float, to_datetime64
 
 # --- Getting format/version
 
@@ -37,8 +37,10 @@ def _get_terra15_version_str(hdf_fi) -> str:
 # --- Getting File summaries
 
 
-def _get_scanned_time_min_max(time):
+def _get_scanned_time_min_max(data_node):
     """Get the min/max time from time array."""
+    time = data_node["gps_time"]
+    t_len = len(time)
     # first try fast path by tacking first/last of time
     tmin, tmax = time[0], time[-1]
     # This doesn't work if an incomplete datablock exists at the end of
@@ -46,13 +48,14 @@ def _get_scanned_time_min_max(time):
     if tmin > tmax:
         time = time[:]
         time_filtered = time[time > 0]
-        tmin, tmax = np.min(time_filtered), np.max(time_filtered)
-    return tmin, tmax
+        t_len = len(time_filtered)
+        tmin, tmax = time_filtered[0], time_filtered[-1]
+    return tmin, tmax, t_len
 
 
-def _get_extra_scan_attrs(self, file_version, path, time):
+def _get_extra_scan_attrs(self, file_version, path, data_node):
     """Get the extra attributes that go into summary information."""
-    tmin, tmax = _get_scanned_time_min_max(time)
+    tmin, tmax, _ = _get_scanned_time_min_max(data_node)
     out = {
         "time_min": to_datetime64(tmin),
         "time_max": to_datetime64(tmax),
@@ -72,7 +75,7 @@ def _get_version_data_node(root):
     elif version == "5":
         data_node = root["data_product"]
     else:
-        raise NotImplementedError("Unkown Terra15 version")
+        raise NotImplementedError("Unknown Terra15 version")
     return version, data_node
 
 
@@ -82,13 +85,48 @@ def _scan_terra15(self, fi, path):
     root_attrs = fi.root._v_attrs
     version, data_node = _get_version_data_node(root)
     out = _get_default_attrs(data_node.data.attrs, root_attrs)
-    time = data_node["gps_time"]
-    out.update(_get_extra_scan_attrs(self, version, path, time))
+    out.update(_get_extra_scan_attrs(self, version, path, data_node))
     return [PatchFileSummary.parse_obj(out)]
 
 
 #
 # --- Reading patch
+
+
+def _get_start_stop(time_len, time_lims, file_tmin, dt):
+    """Get the start/stop index along time axis."""
+    # sst start index
+    tmin = time_lims[0] or file_tmin
+    tmax = time_lims[1] or dt * (time_len - 1) + file_tmin
+    start_ind = int(np.round((tmin - file_tmin) / dt))
+    stop_ind = int(np.round((tmax - file_tmin) / dt)) + 1
+    # enforce upper limit on time end index.
+    if stop_ind > time_len:
+        stop_ind = time_len - 1
+    assert 0 <= start_ind < stop_ind
+    return start_ind, stop_ind
+
+
+def _maybe_adjust_stop_ind(stop_ind, file_t_min, data_node, time_len):
+    """Check if file is partially written, adjust t_end accordingly."""
+    file_t_max = data_node["gps_time"][stop_ind - 1]
+    # Dead bits at the end of the file found. Need to remove.
+    if file_t_max < file_t_min:
+        gps_time = data_node["gps_time"].read()
+        # finds first index with 0 then backs up one
+        stop_ind = np.argmin(gps_time)
+        time_len = stop_ind
+    return stop_ind, time_len
+
+
+def _get_dar_attrs(data_node, root, tar, dar):
+    """Get the attributes for the terra15 data array (loaded)"""
+    attrs = _get_default_attrs(data_node.data.attrs, root._v_attrs)
+    attrs["time_min"] = tar.min()
+    attrs["time_max"] = tar.max()
+    attrs["distance_min"] = dar.min()
+    attrs["distance_max"] = dar.max()
+    return attrs
 
 
 def _read_terra15(
@@ -98,37 +136,62 @@ def _read_terra15(
 ) -> Patch:
     """
     Read a terra15 file.
+
+    Notes
+    -----
+    The time array is complicated. There is GPS time and Posix time included
+    in the file. In version 0.0.6 and less of dascore we just used gps time.
+    However, sometimes this results in subsequent samples having a time before
+    the previous sample (time did not increase monotonically).
+
+    So now, we use the first GPS sample, then the reported dt to calculate
+    time array. The Terra15 folks suggested this is probably the best way to
+    do it.
     """
     # get time array
     time_lims = tuple(
-        to_datetime64(x) if x is not None else None
+        datetime_to_float(x) if x is not None else None
         for x in (time if time is not None else (None, None))
     )
     _, data_node = _get_version_data_node(root)
-    time_ar = to_datetime64(data_node["gps_time"].read())
+    gps_time = data_node["gps_time"]
+    file_t_min, file_t_max, time_len = _get_scanned_time_min_max(data_node)
+    dt = (file_t_max - file_t_min) / time_len
+    # get the start and stop along the time axis
+    start_ind, stop_ind = _get_start_stop(time_len, time_lims, file_t_min, dt)
+    req_t_min = file_t_min if start_ind == 0 else gps_time[start_ind]
+    # account for files that might not be full, adjust requested max time
+    stop_ind, time_len = _maybe_adjust_stop_ind(
+        stop_ind, file_t_min, data_node, time_len
+    )
+    assert stop_ind > start_ind
+    req_t_max = (
+        time_lims[-1] if stop_ind < time_len else file_t_min + (stop_ind - 1) * dt
+    )
+    assert req_t_max > req_t_min
+    # calculate time array, convert to datetime64
+    t_float = file_t_min + start_ind * dt + np.arange(stop_ind - start_ind) * dt
+    time_ar = to_datetime64(t_float)
+    time_inds = (start_ind, stop_ind)
+    # get data and sliced distance coord
     dist_ar = _get_distance_array(root)
-    data, tar, dar = _get_data(time_lims, distance, time_ar, dist_ar, data_node)
-    _coords = {"time": tar, "distance": dar}
-    attrs = _get_default_attrs(data_node.data.attrs, root._v_attrs)
-    attrs["time_min"] = tar.min()
-    attrs["time_max"] = tar.max()
-    attrs["distance_min"] = dar.min()
-    attrs["distance_max"] = dar.max()
-    return Patch(data=data, coords=_coords, attrs=attrs, dims=("time", "distance"))
+    dslice = get_slice(dist_ar, distance)
+    dist_ar_trimmed = dist_ar[dslice]
+    data = data_node.data[slice(*time_inds), dslice]
+    coords = {"time": time_ar, "distance": dist_ar_trimmed}
+    dims = ("time", "distance")
+    attrs = _get_dar_attrs(data_node, root, time_ar, dist_ar_trimmed)
+    return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
 
 
-def _get_data(time, distance, time_array, dist_array, data_node):
+def _get_data(time_index, distance, dist_array, data_node):
     """
     Get the data array. Slice based on input and check for 0 blocks. Also
-    return sliced coordinates.
+    return sliced distance.
     """
-    # need to handle empty data blocks. This happens when data is stopped
-    # recording before the pre-allocated file is filled.
-    if time_array[-1] < time_array[0]:
-        time = (time[0], time_array.max())
-    tslice = get_slice(time_array, time)
+    tslice = slice(*time_index)
     dslice = get_slice(dist_array, distance)
-    return data_node.data[tslice, dslice], time_array[tslice], dist_array[dslice]
+    return data_node.data[tslice, dslice], dist_array[dslice]
 
 
 def _get_default_attrs(data_node_attrs, root_node_attrs):

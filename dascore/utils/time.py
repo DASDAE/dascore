@@ -12,6 +12,7 @@ import pandas as pd
 from dascore.constants import (
     LARGEDT64,
     NUMPY_TIME_UNIT_MAPPPING,
+    ONE_SECOND,
     SMALLDT64,
     timeable_types,
 )
@@ -196,7 +197,7 @@ def get_select_time(
     time_min
         The reference start time (used for relative times).
     time_max
-        The reference end tiem (used for relative times).
+        The reference end time (used for relative times).
 
     """
     if pd.isnull(time):
@@ -210,6 +211,12 @@ def get_select_time(
             msg = "Cannot use relative times when reference times are null"
             raise TimeError(msg)
         return relative_to + d_time
+
+
+def datetime_to_float(dt):
+    """Convert a datetime-like object to a float (timestamp)."""
+    datetime64 = (to_datetime64(dt) - to_datetime64(0)) / ONE_SECOND
+    return datetime64
 
 
 @singledispatch
