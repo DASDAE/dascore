@@ -7,15 +7,18 @@ format called `jingle` which conventionally uses a file extension of `jgl`.
 ## Adding a New IO Module
 
 First, we create a new io module called 'jingle' in DASCore's io module (dascore/io/jingle).
-Make sure there is a \__init__.py file in this module whose docstring describes the format.
+Make sure there is a \__init__.py file in this module whose docstring
+describes basic use of the format and lists any non-obvious implementation details
+that might debug/improve the parser.
 
 contents of `dascore/io/jingle/__init__.py`
 ```{python}
 """
 Jingle format support module.
 
-Jingle is a really cool new format which supports all the "bells" and whistles
-people need for working with DAS data.
+Jingle is a really cool new DAS format.
+
+It supports all the "bells" and whistles.
 
 Examples
 --------
@@ -48,16 +51,18 @@ class JingleV1(FiberIO):
     # you can also define which file extensions are expected like so.
     # this will speed up determining the formats of files if not specified.
     preferred_extensions = ('jgl',)
-    # also specifying a version is good practice so when version 2 is released
-    # you can just make another class in the same module named JingleV2.
+    # also specifying a version is good practice so when version 2 is
+    # released you can just make another class in the same module named
+    # JingleV2.
     version = '1'
 
     def read(self, path, jingle_param=1, **kwargs):
         """
         Read should take a path and return a patch or sequence of patches.
 
-        It can also define its own parameters, and should always accept kwargs.
-        If the format supports partial reads, these should be implemented as well.
+        It can also define its own optional parameters, and should always
+        accept kwargs. If the format supports partial reads, these should
+        be implemented as well.
         """
 
     def get_format(self, path):
@@ -71,10 +76,10 @@ class JingleV1(FiberIO):
 
     def scan(self, path):
         """
-        Used to gather metadata about a file without reading in the whole file.
+        Used to get metadata about a file without reading the whole file.
 
-        This should return a list of dictionaries with the keys/types specified
-        by dascore.core.schema.PatchFileSummary
+        This should return a list of `PatchFileSummary` objects from the
+        dascore.core.schema module.
         """
 
     def write(self, patch, path, **kwargs):
@@ -86,6 +91,12 @@ class JingleV1(FiberIO):
 All 4 methods are optional; some formats will only support reading,
 others only writing. If `is_format` is not implemented the format will not
 be auto-detectable.
+
+:::{.callout-warning}
+It is very important that the `scan` method returns *exactly* the same min and max
+values for each dimension as the trace attrs created by `read`. If this is not
+the case, the lazy merge planning done by spool can be inaccurate!
+:::
 
 
 ## Writing Tests
@@ -146,6 +157,8 @@ class TestJingleIO:
         """Tests for scanning a jingle file"""
         scan = dascore.scan(jingle_file_path)
         assert len(scan) == 1
+        # should also test the scan time/distance min/max values are
+        # the same as the ones in the patch returned by read
 
     def test_is_format(self, jingle_file_path):
         """Tests for automatically determining a jingle format."""

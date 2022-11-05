@@ -163,9 +163,7 @@ def _read_terra15(
     start_ind, stop_ind = _get_start_stop(time_len, time_lims, file_t_min, dt)
     req_t_min = file_t_min if start_ind == 0 else gps_time[start_ind]
     # account for files that might not be full, adjust requested max time
-    stop_ind, time_len = _maybe_adjust_stop_ind(
-        stop_ind, file_t_min, data_node, time_len
-    )
+    stop_ind = min(stop_ind, time_len)
     assert stop_ind > start_ind
     req_t_max = (
         time_lims[-1] if stop_ind < time_len else file_t_min + (stop_ind - 1) * dt
@@ -224,8 +222,8 @@ def _get_default_attrs(data_node_attrs, root_node_attrs):
 def _get_distance_array(root):
     """Get the distance (along fiber) array."""
     # TODO: At least for the v4 test file, sensing_range_start, sensing_range_stop,
-    # nx, and dx are not consistent, so I just used this method. We need to
-    # look more into this.
+    # nx, and dx are not consistent, meaning d_min + dx * nx != d_max
+    # so I just used this method. We need to look more into this.
     attrs = root._v_attrs
     dist = (np.arange(attrs.nx) * attrs.dx) + attrs.sensing_range_start
     return dist

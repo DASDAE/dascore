@@ -508,7 +508,8 @@ def merge_patches(
     msg = (
         "merge_patches is deprecated. Use spool.chunk instead."
         "For example, to merge a list of patches you can use:"
-        "dascore.spool(patch_list).chunk(time=None) to merge on time dimension"
+        "dascore.spool(patch_list).chunk(time=None) to merge on the time "
+        "dimension"
     )
     warnings.warn(msg, DeprecationWarning)
     return _merge_patches(patches, dim, check_history, tolerance)
