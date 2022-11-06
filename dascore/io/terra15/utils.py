@@ -142,14 +142,13 @@ def _read_terra15(
         for x in (time if time is not None else (None, None))
     )
     _, data_node = _get_version_data_node(root)
-    gps_time = data_node["gps_time"]
     file_t_min, file_t_max, time_len = _get_scanned_time_min_max(data_node)
     # surprisingly, using gps time column, dt is much different than dt
     # reported in data attrs!, use GPS time here.
     dt = (file_t_max - file_t_min) / (time_len - 1)
     # get the start and stop along the time axis
     start_ind, stop_ind = _get_start_stop(time_len, time_lims, file_t_min, dt)
-    req_t_min = file_t_min if start_ind == 0 else gps_time[start_ind]
+    req_t_min = file_t_min if start_ind == 0 else file_t_min + dt * start_ind
     # account for files that might not be full, adjust requested max time
     stop_ind = min(stop_ind, time_len)
     assert stop_ind > start_ind

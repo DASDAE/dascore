@@ -1,7 +1,6 @@
 """
 Test for spool functions.
 """
-import copy
 
 import numpy as np
 import pandas as pd
@@ -10,7 +9,6 @@ import pytest
 import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
-from dascore.exceptions import PatchDimError
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -205,25 +203,6 @@ class TestChunk:
         spool = dc.spool([])
         merged = spool.chunk(time=None)
         assert len(merged) == 0
-
-    def test_inconsistent_patch_spool_contents(self, random_spool):
-        """
-        Ensure when the patch has different dimensional contents than the
-        spool thinks, an error is raised. If this isn't enforced chunking/
-        merging can fail.
-        """
-        # this requires some mucking about with the internals of the spool.
-        # TODO consider a less invasive way to test this.
-        spool = copy.deepcopy(random_spool)
-        df = spool._df
-        patch_list = list(df["patch"])
-        # trim one of the patches, put it back
-        patch = patch_list[0]
-        new_end = patch.attrs["time_max"] - patch.attrs["d_time"] * 3
-        patch_list[0] = patch.select(time=(None, new_end))
-        df["patch"] = patch_list
-        with pytest.raises(PatchDimError, match="not the same between"):
-            spool.chunk(time=None)[0]
 
 
 class TestMergePatchesWithChunk:
