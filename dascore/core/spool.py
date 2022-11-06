@@ -225,6 +225,7 @@ class DataFrameSpool(BaseSpool):
             overlap=overlap,
             keep_partial=keep_partial,
             group_columns=self._group_columns,
+            tolerance=tolerance,
             **kwargs,
         )
         in_df, out_df = chunker.chunk(df)
