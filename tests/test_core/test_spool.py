@@ -160,6 +160,12 @@ class TestChunk:
     Tests for merging/chunking patches.
     """
 
+    @pytest.fixture(scope="class")
+    def random_spool_df(self, random_spool):
+        """Get contents and sort the contents of random_spool."""
+        df = random_spool.get_contents().sort_values("time_min").reset_index(drop=True)
+        return df
+
     def test_merge_chunk_adjacent_no_overlap(self, adjacent_spool_no_overlap):
         """
         Ensure chunking works on simple case of contiguous data w/ no overlap.
@@ -203,6 +209,34 @@ class TestChunk:
         spool = dc.spool([])
         merged = spool.chunk(time=None)
         assert len(merged) == 0
+
+    def test_chunk_across_boundary(self, random_spool, random_spool_df):
+        """Ensure query across a boundary works."""
+        df = random_spool_df
+        dt = df["d_time"][0]
+        time_1 = df.loc[0, "time_max"] - to_timedelta64(1.00000123123)
+        time_2 = time_1 + to_timedelta64(1)
+        spool = random_spool.select(time=(time_1, time_2)).chunk(time=None)
+        assert len(spool) == 1
+        patch = spool[0]
+        assert np.abs(patch.attrs["time_min"] - time_1) < dt
+        assert np.abs(patch.attrs["time_max"] - time_2) < dt
+
+    def test_uneven_chunk_iteration(self, random_spool, random_spool_df):
+        """Ensure uneven start/end still yield consistent slices."""
+        df = random_spool_df
+        dt = df["d_time"][0]
+        one_sec = to_timedelta64(1)
+        time_1 = df.loc[0, "time_max"] - to_timedelta64(1.00000123123)
+        time_2 = time_1 + to_timedelta64(10)
+        spool_2 = random_spool.select(time=(time_1, time_2)).chunk(time=1)
+        assert len(spool_2) == 10
+        patches = list(spool_2)
+        durations = [x.attrs["time_max"] - x.attrs["time_min"] for x in patches]
+        # there should ba a single duration
+        assert len(set(durations)) == 1
+        duration = durations[0] / one_sec
+        assert np.abs(duration - 1) <= (2 * dt / one_sec)
 
 
 class TestMergePatchesWithChunk:
