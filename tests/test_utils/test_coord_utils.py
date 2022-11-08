@@ -62,7 +62,7 @@ class TestCoords:
         assert coord.dims == ("time", "distance")
 
     def test_update(self, coord_from_xarray):
-        """ensure update returns a new coord with updated values"""
+        """Ensure update returns a new coord with updated values."""
         time = coord_from_xarray["time"]
         new_time = time + np.timedelta64(1, "s")
         out = coord_from_xarray.update(time=new_time)

@@ -1,6 +1,4 @@
-"""
-Pydantic schemas.
-"""
+"""Pydantic schemas used by DASCore."""
 from pathlib import Path
 from typing import Sequence, Union
 
@@ -24,7 +22,7 @@ class SimpleValidator:
 
     @classmethod
     def __get_validators__(cls):
-        """Hook used by pydantic"""
+        """Hook used by pydantic."""
         yield cls.validate
 
     @classmethod

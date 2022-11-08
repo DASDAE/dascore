@@ -2,6 +2,9 @@ project:
   type: website
   output-dir: _site
 
+filters:
+  - filters/fill_links.py
+
 format:
   html:
     toc: true
@@ -43,7 +46,7 @@ website:
         file: contributing/contributing.qmd
 
       - text: API
-        file: api/api.qmd
+        file: api/dascore.qmd
 
     right:
 
@@ -56,7 +59,7 @@ website:
         aria-label: DASCore GitHub
 
   sidebar:
-    - title: "Intro"
+    - title: "About"
       style: "floating"
       collapse-level: 2
       logo: "_static/logo.png"
@@ -128,7 +131,7 @@ website:
 
     - title: 'API'
       contents:
-        - api/api.qmd
+        - auto: "api"
 
 
 bibliography: references.bib

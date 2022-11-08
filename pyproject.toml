@@ -58,6 +58,8 @@ dependencies = [
 [project.optional-dependencies]
 docs = [
     "typer",
+    "pretty_html_table",
+    "panflute",
 ]
 test = [
     "coverage",

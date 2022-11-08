@@ -1,6 +1,4 @@
-"""
-Utilities for terra15.
-"""
+"""Utilities for terra15."""
 
 from typing import Optional
 
@@ -178,7 +176,6 @@ def _get_default_attrs(data_node_attrs, root_node_attrs):
     Note: missing time, distance absolute ranges. Downstream functions should handle
     this.
     """
-
     out = dict(dims="time, distance")
     _root_attrs = {
         "data_product": "data_type",

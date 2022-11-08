@@ -1,6 +1,4 @@
-"""
-DASCore - A library for fiber optic sensing.
-"""
+"""DASCore - A library for fiber optic sensing."""
 # set xarray settings
 from xarray import set_options
 

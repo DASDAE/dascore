@@ -1,0 +1,9 @@
+# {{ rend.name.title() }}
+{{ rend.short_description }}
+{%- if rend.long_description -%}
+    {{ rend.long_description }}
+{%- endif %}
+{% if rend.has_subsection('parameter') %}
+## Parameters
+{{ rend.render_linked_table('parameter') }}
+{%- endif %}

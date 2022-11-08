@@ -79,14 +79,14 @@ def array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
 
 @to_datetime64.register(np.datetime64)
 def _pass_datetime(datetime):
-    """simply return the datetime"""
+    """Simply return the datetime."""
     return np.datetime64(datetime, "ns")
 
 
 @to_datetime64.register(type(None))
 @to_datetime64.register(type(pd.NaT))
 def _return_NaT(datetime):
-    """Convert non to NaT"""
+    """Convert non to NaT."""
     return np.datetime64("NaT")
 
 
@@ -107,7 +107,7 @@ def to_timedelta64(obj: Union[float, np.array, str]):
 @to_timedelta64.register(float)
 @to_timedelta64.register(int)
 def float_to_timedelta64(num: Union[float, int]) -> np.datetime64:
-    """Convert a float to a single datetime"""
+    """Convert a float to a single datetime."""
     ar = np.array([num])
     return array_to_timedelta64(ar)[0]
 
@@ -234,7 +234,7 @@ def to_number(obj: Union[timeable_types, np.array]) -> np.array:
 @to_number.register(float)
 @to_number.register(int)
 def float_to_num(num: Union[float, int]) -> Union[float, int]:
-    """Convert a float to a single datetime"""
+    """Convert a float to a single datetime."""
     return num
 
 
@@ -261,7 +261,7 @@ def array_to_number(array: np.array) -> np.array:
 @to_number.register(datetime)
 @to_number.register(pd.Timestamp)
 def _time_to_num(datetime):
-    """simply return the datetime"""
+    """Simply return the datetime."""
     return to_number([to_datetime64(datetime)])[0]
 
 
@@ -269,12 +269,12 @@ def _time_to_num(datetime):
 @to_number.register(type(pd.NaT))
 @to_number.register(type(pd.NA))
 def _return_number_null(null):
-    """Convert non to NaT"""
+    """Convert non to NaT."""
     return np.NaN
 
 
 @to_number.register(np.timedelta64)
-def _time_detal_to_number(time_delta: np.timedelta64):
+def _time_delta_to_number(time_delta: np.timedelta64):
     return to_number([to_timedelta64(time_delta)])[0]
 
 

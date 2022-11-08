@@ -1,6 +1,4 @@
-"""
-An HDF5-based indexer for local file systems.
-"""
+"""An HDF5-based indexer for local file systems."""
 import abc
 import os
 import time
@@ -124,6 +122,7 @@ class DirectoryIndexer(AbstractIndexer):
         return out
 
     def __str__(self):
+        """Rep. indexer as a string."""
         msg = f"{self.__class__.__name__} managing: {self.path}"
         return msg
 
@@ -138,7 +137,7 @@ class DirectoryIndexer(AbstractIndexer):
         return kdf_kwargs, kwargs
 
     def _set_cache(self, index, starttime, endtime, kwargs):
-        """Cache the current index"""
+        """Cache the current index."""
         ser = pd.Series(
             {
                 "t1": starttime,
@@ -150,13 +149,13 @@ class DirectoryIndexer(AbstractIndexer):
         self.cache.loc[self._get_next_index()] = ser
 
     def _kwargs_to_str(self, kwargs):
-        """convert kwargs to a string"""
+        """Convert kwargs to a string."""
         keys = sorted(list(kwargs.keys()))
         out = str([(item, kwargs[item]) for item in keys])
         return out
 
     def clear_cache(self):
-        """removes all cached dataframes."""
+        """Removes all cached dataframes."""
         self.cache = pd.DataFrame(
             index=range(self.max_size), columns="t1 t2 kwargs cindex".split()
         )

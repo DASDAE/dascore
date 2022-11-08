@@ -1,4 +1,4 @@
-""" Version of dascore. """
+"""Module for reporting the version of dascore."""
 from importlib.metadata import PackageNotFoundError, version
 
 try:

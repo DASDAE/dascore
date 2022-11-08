@@ -1,6 +1,5 @@
-"""
-A small module for loading examples.
-"""
+"""A module for loading examples."""
+
 import tempfile
 from pathlib import Path
 
@@ -35,7 +34,7 @@ def get_example_spool(example_name="random_das", **kwargs):
 
 @register_func(EXAMPLE_PATCHES, key="random_das")
 def _random_patch(starttime="2017-09-18", network="", station="", tag="random"):
-    """Generate a random DAS Patch"""
+    """Generate a random DAS Patch."""
     rand = np.random.RandomState(13)
     array = rand.random(size=(300, 2_000))
     t1 = np.datetime64(starttime)
@@ -107,10 +106,7 @@ def sin_wave_patch(
 
 @register_func(EXAMPLE_PATCHES, key="random_patch_with_lat_lon")
 def _random_patch_lat_lon():
-    """
-    Create a patch with latitude/longitude coords attached to
-    the distance dimension.
-    """
+    """Create a patch with latitude/longitude coords on distance dim."""
     random_patch = get_example_patch("random_das")
     dist = random_patch.coords["distance"]
     lat = np.arange(0, len(dist)) * 0.001 - 109.857952

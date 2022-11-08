@@ -26,8 +26,8 @@ delta_1 = (time_2 - time_1) / np.timedelta64(1, 'h')
 
 DASCore provides two convenience functions for working with times:
 
-[to_datetime64](`dc.utils.time.to_datetime64`) which tries to convert most types of inputs expressing date times
-to the proper numpy type. [to_timedelta64](`dc.utils.time.to_datetime64`) performs a similar function for
+[to_datetime64](`dascore.utils.time.to_datetime64`) which tries to convert most types of inputs expressing date times
+to the proper numpy type. [to_timedelta64](`dascore.utils.time.to_datetime64`) performs a similar function for
 timedeltas. For example:
 
 ```{python}

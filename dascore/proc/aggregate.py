@@ -12,7 +12,7 @@ from dascore.utils.time import to_datetime64
 
 
 def _take_first(data, axis):
-    """just take the first values of data along an axis."""
+    """Just take the first values of data along an axis."""
     return np.take(data, 0, axis=axis)
 
 

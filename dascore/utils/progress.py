@@ -7,9 +7,7 @@ import dascore as dc
 
 
 def track(sequence, description):
-    """
-    A simple iterator for tracking updates.
-    """
+    """A simple iterator for tracking updates."""
     # This is a dirty hack to allow debugging while running tests.
     # Otherwise, pdb doesn't work in any tracking scope.
     # See: https://github.com/Textualize/rich/issues/1053

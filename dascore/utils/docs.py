@@ -7,6 +7,8 @@ from typing import Any, Dict, Sequence, Union
 
 def format_dtypes(dtype_dict: Dict[str, Any]) -> str:
     """
+    Convert dict to string for printing.
+
     Convert a dictionary of {name: type} to a string printable format for
     displaying in docstrings.
 
@@ -46,7 +48,6 @@ def compose_docstring(**kwargs: Union[str, Sequence[str]]):
 
     Examples
     --------
-
     @compose_docstring(some_value='10')
     def example_function():
         '''

@@ -1,0 +1,17 @@
+# {{ rend.name.title() }}
+{{ rend.short_description }}
+{%- if rend.long_description -%}
+    {{ rend.long_description }}
+{%- endif %}
+{% if rend.has_subsection('parameter') %}
+## Parameters
+{{ rend.render_linked_table('parameter') }}
+{%- endif %}
+{% if rend.has_subsection('method') %}
+## Methods
+{{ rend.render_linked_table('method') }}
+{%- endif %}
+{% if rend.has_subsection('attribute') %}
+## Attributes
+{{ rend.render_linked_table('attribute') }}
+{%- endif %}

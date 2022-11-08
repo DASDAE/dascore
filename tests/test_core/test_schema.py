@@ -1,6 +1,4 @@
-"""
-Tests for schema.
-"""
+"""Tests for schema."""
 import pytest
 
 from dascore.core.schema import PatchSummary
