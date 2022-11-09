@@ -1,4 +1,7 @@
 # {{ rend.name.title() }}
+{%- if rend.is_callable -%}
+    {{ rend.make_signature() }}
+{%- endif %}
 {{ rend.short_description }}
 {%- if rend.long_description -%}
     {{ rend.long_description }}
