@@ -21,29 +21,42 @@ from dascore.exceptions import TimeError
 
 @singledispatch
 def to_datetime64(obj: Union[timeable_types, np.array]):
-    """Convert"""
+    """
+    Convert an object to a datetime64.
+
+    This function accepts a wide range of inputs and returns something
+    of the same shape, but converted to numpy's datetime64 representation.
+
+    Examples
+    --------
+    >>> # Convert an [iso 8601](https://en.wikipedia.org/wiki/ISO_8601) string
+    >>> import dascore as dc
+    >>> time = dc.to_datetime64('2017-09-17T12:11:01.23212')
+    >>> # Convert a timestamp (float)
+    >>> dt = dc.to_datetime64(631152000.0)
+    """
     msg = f"type {type(obj)} is not yet supported"
     raise NotImplementedError(msg)
 
 
 @to_datetime64.register(str)
-def str_to_datetime64(obj: str) -> np.datetime64:
+def _str_to_datetime64(obj: str) -> np.datetime64:
     """Convert a string to a datetime64 object."""
     return np.datetime64(obj, "ns")
 
 
 @to_datetime64.register(float)
 @to_datetime64.register(int)
-def float_to_datetime(num: Union[float, int]) -> np.datetime64:
+def _float_to_datetime(num: Union[float, int]) -> np.datetime64:
     """Convert a float to a single datetime"""
     ar = np.array([num])
-    return array_to_datetime64(ar)[0]
+    return _array_to_datetime64(ar)[0]
 
 
 @to_datetime64.register(np.ndarray)
 @to_datetime64.register(list)
 @to_datetime64.register(tuple)
-def array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
+def _array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
@@ -97,7 +110,20 @@ def _pandas_timestamp(datetime: pd.Timestamp):
 
 @singledispatch
 def to_timedelta64(obj: Union[float, np.array, str]):
-    """Convert"""
+    """
+    Convert an object to timedelta64.
+
+    This function accepts a wide range of inputs and returns something
+    of the same shape, but converted to numpy's timedelta64 representation.
+
+    Examples
+    --------
+    >>> # Convert a float to seconds
+    >>> import dascore as dc
+    >>> d_time_1 = dc.to_timedelta64(10.1232)
+    >>> # also works on negative numbers
+    >>> d_time_2 = dc.to_datetime64(-10.5)
+    """
     if pd.isnull(obj):
         return np.datetime64("NaT")
     msg = f"type {type(obj)} is not yet supported"
@@ -106,16 +132,16 @@ def to_timedelta64(obj: Union[float, np.array, str]):
 
 @to_timedelta64.register(float)
 @to_timedelta64.register(int)
-def float_to_timedelta64(num: Union[float, int]) -> np.datetime64:
+def _float_to_timedelta64(num: Union[float, int]) -> np.datetime64:
     """Convert a float to a single datetime."""
     ar = np.array([num])
-    return array_to_timedelta64(ar)[0]
+    return _array_to_timedelta64(ar)[0]
 
 
 @to_timedelta64.register(np.ndarray)
 @to_timedelta64.register(list)
 @to_timedelta64.register(tuple)
-def array_to_timedelta64(array: np.array) -> np.datetime64:
+def _array_to_timedelta64(array: np.array) -> np.datetime64:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
@@ -146,7 +172,7 @@ def array_to_timedelta64(array: np.array) -> np.datetime64:
 
 
 @to_timedelta64.register(pd.Series)
-def series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
+def _series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
     """
     Convert a series to a series of timedelta64.
     """
@@ -154,19 +180,19 @@ def series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
 
 
 @to_timedelta64.register(np.timedelta64)
-def pass_time_delta(time_delta):
+def _pass_time_delta(time_delta):
     """simply return the time delta."""
     return to_timedelta64(time_delta / np.timedelta64(1, "s"))
 
 
 @to_timedelta64.register(pd.Timedelta)
-def unpack_pandas_time_delta(time_delta: pd.Timedelta):
+def _unpack_pandas_time_delta(time_delta: pd.Timedelta):
     """simply return the time delta."""
     return time_delta.to_numpy()
 
 
 @to_timedelta64.register(str)
-def time_delta_from_str(time_delta_str: str):
+def _time_delta_from_str(time_delta_str: str):
     """simply return the time delta."""
     split = time_delta_str.split(" ")
     assert len(split) == 2
@@ -233,7 +259,7 @@ def to_number(obj: Union[timeable_types, np.array]) -> np.array:
 
 @to_number.register(float)
 @to_number.register(int)
-def float_to_num(num: Union[float, int]) -> Union[float, int]:
+def _float_to_num(num: Union[float, int]) -> Union[float, int]:
     """Convert a float to a single datetime."""
     return num
 
@@ -241,7 +267,7 @@ def float_to_num(num: Union[float, int]) -> Union[float, int]:
 @to_number.register(np.ndarray)
 @to_number.register(list)
 @to_number.register(tuple)
-def array_to_number(array: np.array) -> np.array:
+def _array_to_number(array: np.array) -> np.array:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """

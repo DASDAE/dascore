@@ -4,6 +4,7 @@ Script to make the API docs for dascore.
 from __future__ import annotations
 
 import inspect
+import json
 from inspect import signature
 from typing import get_type_hints
 from pathlib import Path
@@ -55,23 +56,26 @@ class Render:
 
     def make_signature(self):
         """Create a nice looking signature."""
+
         def _format_params(sig):
             """format the parameter."""
             out = []
-            for name in sig.parameters.items():
-
-
-                breakpoint()
-                print(name)
-
-
+            # add parameters
+            for name, param in sig.parameters.items():
+                if name == 'self':
+                    out.append(name)
+                    continue
+                out.append(f"{name}: {param.annotation}")
+            return out
 
         sig = self.signature
 
+        out = f"{self.name}({', '.join(_format_params(sig))})"
+        # add return
+        if sig.return_annotation:
+            out += f" -> {sig.return_annotation}"
 
-        out = f"{self.name}({','.join(_format_params(sig))})"
-
-        breakpoint()
+        return out
 
 
     def render_linked_table(self, name):
@@ -139,7 +143,6 @@ def extract_data(obj):
     doc_str = inspect.getdoc(obj)
     doc = docstring_parser.parse(doc_str, style=NUMPY_STYLE)
     dtype = get_type(obj)
-
     data = defaultdict(list)
     data["long_description"] = doc.long_description
     data["short_description"] = doc.short_description
@@ -163,8 +166,16 @@ def is_private(name):
     """Return True if the object is private."""
 
 
+def unwrap_obj(obj):
+    """Unwrap a decorated object. """
+    while getattr(obj, '__wrapped__', None) is not None:
+        obj = obj.__wrapped__
+    return obj
+
+
 def get_type(obj) -> None | Literal["module", "function", "method", "class"]:
     """Return a string of the type of object."""
+    obj = unwrap_obj(obj)
     if isinstance(obj, ModuleType):
         return "module"
     elif isinstance(obj, FunctionType):
@@ -187,6 +198,7 @@ def parse_project(obj, key=None):
 
 def _get_file_path(obj):
     """Try to get the file of a python object."""
+    obj = unwrap_obj(obj)
     try:
         path = inspect.getfile(obj)
     except TypeError:
@@ -232,21 +244,28 @@ def traverse(obj, key, data_dict, base_path):
 
 def render_project(data_dict, api_path=API_DOC_PATH):
     """Render the markdown files."""
+    # key: md_path
+    path_mapping = {}
 
-    for key, data in data_dict.items():
-        render = Render(data_dict, key)
-
+    for obj_id, data in data_dict.items():
+        render = Render(data_dict, obj_id)
         template = get_template(data["data_type"])
         markdown = template.render(rend=render)
-
         sub_dir = api_path / "/".join(data["key"].split(".")[:-1])
         # Ensure expected path exists
         path = api_path / sub_dir / f"{data['name']}.qmd"
         path.parent.mkdir(exist_ok=True, parents=True)
         path.write_text(markdown)
+        path_mapping[data['key']] = f"/{path.relative_to(DOC_PATH)}"
+
+    # dump the json mapping to disk in doc folder
+    with open(Path(api_path) / 'cross_ref.json', 'w') as fi:
+        json.dump(path_mapping, fi, indent=2)
+
 
 
 if __name__ == "__main__":
     data_dict = parse_project(dascore)
+
     render_project(data_dict)
     breakpoint()
