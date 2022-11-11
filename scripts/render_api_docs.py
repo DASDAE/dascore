@@ -3,8 +3,10 @@ Script to make the API docs for dascore.
 """
 from __future__ import annotations
 
+import fnmatch
 import inspect
 import json
+import re
 from inspect import signature
 from typing import get_type_hints
 from pathlib import Path
@@ -27,6 +29,23 @@ API_DOC_PATH = DOC_PATH / "api"
 API_DOC_PATH.mkdir(exist_ok=True, parents=True)
 TEMPLATE_PATH = DOC_PATH / "_templates"
 NUMPY_STYLE = docstring_parser.DocstringStyle.NUMPYDOC
+
+
+def numpy_doc_to_markdown(doc):
+    """Convert numpy docstrings to markdown."""
+    lines = doc.split('\n')
+    lin_set = [set(x) for x in lines]
+    breakpoint()
+
+    for lin in lin_set:
+        if lin == {'-'}:
+            pass
+
+    regex = fnmatch.translate(r'*\n*\n---*')
+    find = re.findall(regex, doc)
+    if find:
+        breakpoint()
+
 
 
 class Render:
@@ -62,17 +81,18 @@ class Render:
             out = []
             # add parameters
             for name, param in sig.parameters.items():
-                if name == 'self':
-                    out.append(name)
+                if name == 'self' or param.annotation is inspect._empty:
+                    out.append(f"{name},")
                     continue
-                out.append(f"{name}: {param.annotation}")
+                out.append(f"{name}: {param.annotation},")
             return out
 
         sig = self.signature
 
-        out = f"{self.name}({', '.join(_format_params(sig))})"
+        joined = '\n    '.join(_format_params(sig))
+        out = f"{self.name}(\n    {joined}\n)"
         # add return
-        if sig.return_annotation:
+        if sig.return_annotation is not inspect._empty:
             out += f" -> {sig.return_annotation}"
 
         return out
@@ -146,6 +166,7 @@ def extract_data(obj):
     data = defaultdict(list)
     data["long_description"] = doc.long_description
     data["short_description"] = doc.short_description
+    data['doc_str'] = numpy_doc_to_markdown(doc_str)
     data["signature"] = add_signature(obj, doc, sig)
     data["parameters"] = add_parameters(obj, doc, sig)
     data["attributes"] = add_attributes(obj, doc)
@@ -235,6 +256,7 @@ def traverse(obj, key, data_dict, base_path):
     data_dict[obj_id]["key"] = key
     data_dict[obj_id]["name"] = key.split(".")[-1]
     data_dict[obj_id]["base_address"] = base_address
+    data_dict[obj_id]['doc'] = inspect.getdoc(obj)
     for (member_name, member) in inspect.getmembers(obj):
         if member_name.startswith("_"):
             continue
@@ -266,6 +288,5 @@ def render_project(data_dict, api_path=API_DOC_PATH):
 
 if __name__ == "__main__":
     data_dict = parse_project(dascore)
-
     render_project(data_dict)
     breakpoint()

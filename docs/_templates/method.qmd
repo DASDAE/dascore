@@ -1,4 +1,5 @@
 # {{ rend.name.title() }}
+{{ rend.make_signature() }}
 {{ rend.short_description }}
 {%- if rend.long_description -%}
     {{ rend.long_description }}
