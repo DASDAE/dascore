@@ -95,14 +95,14 @@ patch.viz.waterfall(show=True, scale=0.02);
 
 # Installation
 
-Use Pip or Conda to install DASCore:
+Use pip or conda to install DASCore:
 
 ```bash
 pip install dascore
 ```
 
 ```bash
-conda install dascore
+conda install dascore -c conda-forge
 ```
 
 See the [contributing docs](contributing/contributing.qmd) for development
