@@ -16,7 +16,7 @@ Review how [DASCore's testing](testing.qmd) works, [how DASCore is documented](d
 
 # Planning
 
-Development planning and prioritization takes place [here](https://github.com/DASDAE/dascore/projects/2).
+Development planning and prioritization takes place [here](https://github.com/orgs/DASDAE/projects/2).
 
 # DASCore or other DASDAE packages
 
