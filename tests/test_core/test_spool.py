@@ -236,7 +236,7 @@ class TestChunk:
         # there should ba a single duration
         assert len(set(durations)) == 1
         duration = durations[0] / one_sec
-        assert np.abs(duration - 1) <= (2 * dt / one_sec)
+        assert np.abs(duration - 1) <= (2.2 * dt / one_sec)
 
 
 class TestMergePatchesWithChunk:

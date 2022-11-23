@@ -7,6 +7,7 @@ import fnmatch
 import inspect
 import json
 import re
+import textwrap
 from inspect import signature
 from typing import get_type_hints
 from pathlib import Path
@@ -21,7 +22,7 @@ from pretty_html_table import build_table
 import dascore
 import docstring_parser
 import jinja2
-from dascore.utils.misc import register_func
+from dascore.utils.misc import register_func, iterate
 
 RENDER_FUNCS = {}
 DOC_PATH = Path(__file__).absolute().parent.parent / "docs"
@@ -31,21 +32,37 @@ TEMPLATE_PATH = DOC_PATH / "_templates"
 NUMPY_STYLE = docstring_parser.DocstringStyle.NUMPYDOC
 
 
-def numpy_doc_to_markdown(doc):
+def numpy_doc_to_markdown(doc, section_pat=fnmatch.translate('*\n-*-\n')):
     """Convert numpy docstrings to markdown."""
-    lines = doc.split('\n')
-    lin_set = [set(x) for x in lines]
-    breakpoint()
+    dedented = textwrap.dedent(doc)
+    # lines = textwrap.dedent(doc).split('\n')
+    # lin_set = [set(x) for x in lines]
+    #
+    # for lin in lin_set:
+    #     if lin == {'-'}:
+    #         breakpoint()
 
-    for lin in lin_set:
-        if lin == {'-'}:
-            pass
+    test = "Parameters\n--------\nbob\n   hey\n\nExamples\n-------"
 
-    regex = fnmatch.translate(r'*\n*\n---*')
-    find = re.findall(regex, doc)
-    if find:
+    pat = '*\n-*-\n'
+    reg = fnmatch.translate(pat)
+
+    # out1 = fnmatch.fnmatch(dedented, pat)
+    match = fnmatch.fnmatch(test, pat)
+
+    out1 = re.match(section_pat, dedented)
+
+    if out1:
         breakpoint()
-
+    elif '---' in dedented:
+        breakpoint()
+    # regex = fnmatch.translate(r'*\n*\n---*')
+    # find = re.findall(regex, doc)
+    #
+    # breakpoint()
+    #
+    # if find:
+    #     breakpoint()
 
 
 class Render:
@@ -96,7 +113,6 @@ class Render:
             out += f" -> {sig.return_annotation}"
 
         return out
-
 
     def render_linked_table(self, name):
         """Render a table for a specific name."""
@@ -283,7 +299,6 @@ def render_project(data_dict, api_path=API_DOC_PATH):
     # dump the json mapping to disk in doc folder
     with open(Path(api_path) / 'cross_ref.json', 'w') as fi:
         json.dump(path_mapping, fi, indent=2)
-
 
 
 if __name__ == "__main__":
