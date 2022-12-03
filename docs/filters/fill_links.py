@@ -34,7 +34,7 @@ def action(elem, doc):
         found_str = elem.url[3:-3]
         if found_str not in mapping:
             msg = f"{found_str} is not a listed cross reference! Aborting doc gen."
-            raise KeyError(mapping)
+            raise KeyError(msg)
         elem.url = mapping[found_str]
         return elem
 
