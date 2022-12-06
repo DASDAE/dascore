@@ -142,7 +142,7 @@ class Render:
         data = self._data
         dedented_docstr = textwrap.dedent(data['docstring'])
         docstr = self._get_headings(dedented_docstr, heading)
-        # Preserve indentation
+        # Preserve indentation in parameters
         docstr = self._style_indents(docstr)
         tables = [
             f"\n{self.render_linked_table(x)}\n"
@@ -150,10 +150,10 @@ class Render:
             if self.has_subsection(x)
         ]
         signature = build_signature(data)
+        # if signature:
+        #     breakpoint()
         out = f"# {self._data['name']}\n{signature}\n{docstr}\n{''.join(tables)}\n"
         return out
-
-    # def
 
 
 def _simple_plural(text):
@@ -255,6 +255,7 @@ def get_data(obj, key, base_address):
         data['docstring'] = docstr
         data['signature'] = sig
         data["data_type"] = dtype
+        data['docparser'] = doc
         for i in sorted(dir(obj)):
             if i.startswith("_"):
                 continue

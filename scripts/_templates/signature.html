@@ -1,14 +1,8 @@
-<!--
-Jinja2 template for rendering signatures of functions.
--->
-<div class=".def_block">
-    <span>
-        {{ data_type}} {{ name }} (
-    <br>
-    {%- for param in params %}
-        <td>"&emsp;&emsp;{{ param }},"</td>
-        <br>
-    {%- endfor %}
-    {{ return_line }}
-    </span>
-</div>
+{# Jinja2 template for rendering signatures of functions. #}
+```{.python code-copy="false"}
+{{ data_type }} {{ name }}(
+{%- for param in params %}
+    {{ param }}
+{%- endfor %}
+{{ return_line }}
+```

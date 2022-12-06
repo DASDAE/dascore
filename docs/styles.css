@@ -1,4 +1,6 @@
 /* css styles */
+
+/* Table stuff */
 table {
   border-collapse: collapse;
   border: 2px solid rgb(200,200,200);
@@ -31,18 +33,23 @@ td {
   text-align: center;
 }
 
-.def_block{
-  background: #003B4F;
-}
 
 caption {
   padding: 10px;
 }
 
-/*tbody tr:nth-child(odd) {*/
-/*  background-color: rgba(51, 119, 255, 0.15);*/
-/*}*/
-
 tbody tr:nth-child(even) {
   background-color: rgba(210, 209, 209, 0.4);
+}
+
+
+/* Custom classes */
+
+.dtype_label{
+  color: #00abe3;
+  font-style: italic;
+}
+
+.def_block{
+  background-color: #FBD603;
 }
