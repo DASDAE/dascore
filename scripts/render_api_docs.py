@@ -2,10 +2,13 @@
 Script to make the API docs for dascore.
 """
 from __future__ import annotations
+from importlib import import_module
 
 import inspect
 import json
+import os
 import re
+import shutil
 import textwrap
 import numpy as np
 from collections import defaultdict
@@ -150,8 +153,6 @@ class Render:
             if self.has_subsection(x)
         ]
         signature = build_signature(data)
-        # if signature:
-        #     breakpoint()
         out = f"# {self._data['name']}\n{signature}\n{docstr}\n{''.join(tables)}\n"
         return out
 
@@ -201,7 +202,8 @@ def parse_project(obj, key=None):
     key = key or getattr(obj, "__name__", None)
     base_path = Path(_get_file_path(obj)).parent.parent
     data_dict = {}
-    traverse(obj, key, data_dict, str(base_path))
+    traverse(obj, data_dict, base_path)
+    # traverse(obj, key, data_dict, str(base_path), parent_path=base_path)
     return data_dict
 
 
@@ -231,7 +233,7 @@ def get_base_address(path, base_path):
     return new.replace("/", ".")
 
 
-def get_data(obj, key, base_address):
+def get_data(obj, key, base_path):
     """Get data from object. """
 
     def extract_data(obj):
@@ -256,42 +258,132 @@ def get_data(obj, key, base_address):
         data['signature'] = sig
         data["data_type"] = dtype
         data['docparser'] = doc
-        for i in sorted(dir(obj)):
-            if i.startswith("_"):
+        # get sub-modules, methods, functions, etc. (just one level deep)
+
+        subs = list(inspect.getmembers(obj)) + list(yield_get_submodules(obj, base_path))
+        for name, sub_obj in subs:
+            if name.startswith("_"):
                 continue
-            sub_obj = getattr(obj, i)
-            sub_dtype = get_type(getattr(obj, i), dtype=='class')
+            sub_dtype = get_type(sub_obj, dtype == 'class')
             data[sub_dtype].append(str(id(sub_obj)))
 
         return data
 
+    path = inspect.getfile(obj)
+    base_address = get_base_address(path, base_path)
     data = extract_data(obj)
     data["key"] = key
     data["name"] = key.split(".")[-1]
     data["base_address"] = base_address
     return data
+#
+#
+# def traverse(obj, key, data_dict, base_path, parent_path=Path('')):
+#     """Traverse the tree and write out markdown."""
+#     obj = unwrap_obj(obj)
+#     obj_id = str(id(obj))
+#     path = _get_file_path(obj)
+#     # if not a module, ensure parent path is the same as current path.
+#     # This prevents alias (imports) from messing up the structure.
+#     if not isinstance(obj, ModuleType):
+#         if path != parent_path:
+#             return
+#     # we are looking at an alias apart from where the file is defined.
+#     # skip so that only the source def gets picked up
+#     base_address = get_base_address(path, base_path)
+#     if not base_address or base_address not in key:
+#         return
+#     if obj_id in data_dict:
+#         return
+#     # get data about object, store in data_dict
+#     data_dict[obj_id] = get_data(obj, key, base_address)
+#     # recurse members
+#     if 'proc' in str(path):
+#         breakpoint()
+#     for (member_name, member) in inspect.getmembers(obj):
+#         if member_name.startswith("_"):
+#             continue
+#         new_key = ".".join([key, member_name])
+#         traverse(member, new_key, data_dict, base_path, parent_path=path)
 
 
-def traverse(obj, key, data_dict, base_path):
-    """Traverse the tree and write out markdown."""
+
+def yield_get_submodules(obj, base_path):
+    """Dynamically load submodules that may not have been imported."""
+    path = Path(inspect.getfile(obj))
+    if not isinstance(obj, ModuleType) or path.name != '__init__.py':
+        return
+    submodules = path.parent.glob('*')
+    for submod_path in submodules:
+        is_dir = submod_path.is_dir()
+        is_init = submod_path.name.endswith('__init__.py')
+        # this is a directory, look for corresponding __init__.py
+        if is_dir and (submod_path / '__init__.py').exists():
+            mod_name = (
+                str(submod_path.relative_to(base_path))
+                .replace(os.sep, '.')
+            )
+            mod = import_module(mod_name)
+            yield mod_name, mod
+        elif submod_path.name.endswith('.py') and not is_init:
+            mod_name = (
+                str(submod_path.relative_to(base_path))
+                .replace('.py', '')
+                .replace(os.sep, '.')
+            )
+            mod = import_module(mod_name)
+            yield mod_name, mod
+
+
+def get_address(obj, rel_path):
+    """Get the address for an object."""
+    base_list = (
+        str(rel_path).replace(f"{os.sep}__init__.py", "")
+        .replace('.py', '')
+        .split(os.sep)
+    )
+    if not isinstance(obj, ModuleType) and hasattr(obj, '__name__'):
+        name_list = [obj.__name__]
+    else:
+        name_list = []
+    return '.'.join(base_list + name_list)
+
+
+
+
+
+def traverse(obj, data_dict, base_path, key=None):
+    """Traverse tree, populate data_dict"""
     obj = unwrap_obj(obj)
     obj_id = str(id(obj))
     path = _get_file_path(obj)
-    # we are looking at an alias apart from where the file is defined.
-    # skip so that only the source def gets picked up
-    base_address = get_base_address(path, base_path)
-    if not base_address or base_address not in key:
+    # this is something outside of dascore
+    if str(base_path) not in str(path) or obj_id in data_dict:
         return
-    if obj_id in data_dict:
-        return
-    # get data about object, store in data_dict
-    data_dict[obj_id] = get_data(obj, key, base_address)
-    # recurse members
-    for (member_name, member) in inspect.getmembers(obj):
-        if member_name.startswith("_"):
-            continue
-        new_key = ".".join([key, member_name])
-        traverse(member, new_key, data_dict, base_path)
+    # load all the modules first
+    if isinstance(obj, ModuleType):
+        key = get_address(obj, path.relative_to(base_path))
+        data_dict[obj_id] = get_data(obj, key, base_path)
+        for _, mod in yield_get_submodules(obj, base_path):
+            traverse(mod, data_dict, base_path)
+        for name, obj in inspect.getmembers(obj):
+            # recurse non-private methods
+            if not name.startswith('_'):
+                traverse(obj, data_dict, base_path, key=f"{key}.{name}")
+    # then handle non-modules
+    else:
+        data_dict[str(id(obj))] = get_data(obj, key, base_path)
+        # recurse attributes and methods of classes
+        if inspect.isclass(obj):
+            for sub_name, sub_obj in inspect.getmembers(obj):
+                if sub_name.startswith('_') or not callable(sub_obj):
+                    continue
+                sub_path = _get_file_path(sub_obj)
+                if not str(base_path) in str(sub_path):
+                    continue
+                sub_key = f'{key}.{sub_name}'
+                traverse(sub_obj, data_dict, base_path, key=sub_key)
+
 
 
 def render_project(data_dict, obj_dict, api_path=API_DOC_PATH):
@@ -352,4 +444,6 @@ def get_alias_mapping(module, key=None):
 if __name__ == "__main__":
     data_dict = parse_project(dascore)
     obj_dict = get_alias_mapping(dascore)
+    if API_DOC_PATH.exists():
+        shutil.rmtree(API_DOC_PATH)
     render_project(data_dict, obj_dict)
