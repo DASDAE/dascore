@@ -47,17 +47,16 @@ dascore time functions provide a helpful way to sanitize a variety of time input
 
 Most of DASCore's processing methods can be applied along any dimension. For example,
 [pass_filter](`dascore.proc.filter.pass_filter`) can be applied along any dimension by passing a range and
-dimension name
+dimension name:
 
 ```{python}
 import dascore as dc
 patch = dc.get_example_patch()
 
-# filtered_time = patch.pass_filter(time=(1, 5))
-# filtered_distance = patch.pass_filter(distance=(1, 2))
+filtered_time = patch.pass_filter(time=(1, 5))
+filtered_distance = patch.pass_filter(distance=(1, 2))
 ```
-
- However, its not clear what the units of the provided range are!
+However, the meaning of the values (ie frequency vs period) depends on the function, so be sure to read the docs!
 
 # Data structures
 
