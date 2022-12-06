@@ -17,7 +17,7 @@ from typing import Literal
 import docstring_parser
 import jinja2
 import pandas as pd
-from pretty_html_table import build_table
+from render import build_table, build_signature
 
 import dascore
 
@@ -42,7 +42,7 @@ class Render:
         self._data = data_dict[object_id]
 
     def _render_table(self, df):
-        return build_table(df, "blue_light", font_size="large")
+        return
 
     def has_subsection(self, name):
         """Return True if a module has a subsection."""
@@ -89,7 +89,7 @@ class Render:
             desc = sub_data["short_description"]
             out.append((linked_name, desc))
         df = pd.DataFrame(out, columns=["name", "description"])
-        return self._render_table(df)
+        return build_table(df, _simple_plural(name))
 
     def __getattr__(self, item):
         return self._data[item]
@@ -107,7 +107,7 @@ class Render:
         return ''
 
     def _style_indents(self, docstr):
-        """Replace indents with quarto styled fencing."""
+        """put indents in pre tags"""
         regex = r"([ \t]{2,})(.*?)"
         lines = docstr.split('\n')
         matches = [bool(re.match(regex, x)) for x in lines]
@@ -145,11 +145,11 @@ class Render:
         # Preserve indentation
         docstr = self._style_indents(docstr)
         tables = [
-            f"\n# {_simple_plural(x)}\n{self.render_linked_table(x)}\n"
+            f"\n{self.render_linked_table(x)}\n"
             for x in self._table_order
             if self.has_subsection(x)
         ]
-        signature = self.get_signature_html()
+        signature = build_signature(data)
         out = f"# {self._data['name']}\n{signature}\n{docstr}\n{''.join(tables)}\n"
         return out
 

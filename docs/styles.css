@@ -1,1 +1,48 @@
 /* css styles */
+table {
+  border-collapse: collapse;
+  border: 2px solid rgb(200,200,200);
+  letter-spacing: 1px;
+  font-size: 0.8rem;
+  display: table;
+  width: 100%;
+}
+
+caption {
+  padding: 20px;
+  caption-side: top;
+  color: #666;
+  text-align: center;
+  letter-spacing: 1px;
+  font-size: large;
+}
+
+td, th {
+  border: 1px solid rgb(190,190,190);
+  padding: 10px 20px;
+}
+
+th {
+  background-color: rgb(235,235,235);
+  text-align: center;
+}
+
+td {
+  text-align: center;
+}
+
+.def_block{
+  background: #003B4F;
+}
+
+caption {
+  padding: 10px;
+}
+
+/*tbody tr:nth-child(odd) {*/
+/*  background-color: rgba(51, 119, 255, 0.15);*/
+/*}*/
+
+tbody tr:nth-child(even) {
+  background-color: rgba(210, 209, 209, 0.4);
+}

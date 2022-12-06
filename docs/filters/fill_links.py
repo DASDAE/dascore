@@ -14,7 +14,7 @@ import panflute as pf
 @cache
 def get_cross_ref_dict():
     """
-    Load cross reference dictionaries.
+    Load cross-reference dictionaries.
 
     Returns
     -------
@@ -29,6 +29,7 @@ def get_cross_ref_dict():
 
 
 def action(elem, doc):
+    """callback to run on each element."""
     if isinstance(elem, pf.Link) and fnmatch.fnmatch(elem.url, "%60*60"):
         mapping = get_cross_ref_dict()
         found_str = elem.url[3:-3]
@@ -40,7 +41,7 @@ def action(elem, doc):
 
 
 def main(doc=None):
-    return pf.run_filter(action, doc=doc)
+    return pf.run_filter(action, doc=None)
 
 
 if __name__ == "__main__":
