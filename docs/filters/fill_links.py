@@ -3,6 +3,7 @@ Panflute filter that embeds wikipedia text
 
 Replaces markdown such as [Stack Overflow](wiki://) with the resulting text.
 """
+import warnings
 import fnmatch
 import json
 from functools import cache
@@ -35,8 +36,10 @@ def action(elem, doc):
         found_str = elem.url[3:-3]
         if found_str not in mapping:
             msg = f"{found_str} is not a listed cross reference! Aborting doc gen."
-            raise KeyError(msg)
-        elem.url = mapping[found_str]
+            warnings.warn(msg)
+            # raise KeyError(msg)
+        else:
+            elem.url = mapping[found_str]
         return elem
 
 
