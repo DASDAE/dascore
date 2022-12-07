@@ -19,7 +19,8 @@ def format_dtypes(dtype_dict: Dict[str, Any]) -> str:
 
     Returns
     -------
-    A string formatted for :func:`dascore.utils.docs.compose_docstring`.
+    A string formatted for
+    [compose_docstring](`dascore.utils.docs.compose_docstring`)
     """
 
     def _format_cls_str(cls):
