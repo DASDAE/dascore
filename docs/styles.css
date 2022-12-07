@@ -53,3 +53,10 @@ tbody tr:nth-child(even) {
 .def_block{
   background-color: #FBD603;
 }
+
+.origin_block {
+    font-family:'Bree Serif', serif;
+    color: #2980b9;
+    display:block;
+    margin-bottom:10px;
+}

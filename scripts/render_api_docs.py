@@ -132,6 +132,8 @@ def parse_project(obj, key=None):
         path = inspect.getfile(obj)
         base_address = _get_base_address(path, base_path)
         data = extract_data(obj)
+        data['base_path'] = Path(base_path)
+        data['path'] = Path(path)
         data["key"] = key
         data["name"] = key.split(".")[-1]
         data["base_address"] = base_address
@@ -182,7 +184,7 @@ def parse_project(obj, key=None):
                     sub_key = f'{key}.{sub_name}'
                     traverse(sub_obj, data_dict, base_path, key=sub_key)
 
-    key = key or getattr(obj, "__name__", None)
+    # key = key or getattr(obj, "__name__", None)
     base_path = Path(_get_file_path(obj)).parent.parent
     data_dict = {}
     traverse(obj, data_dict, base_path)
@@ -222,4 +224,4 @@ def get_alias_mapping(module, key=None):
 if __name__ == "__main__":
     data_dict = parse_project(dascore)
     obj_dict = get_alias_mapping(dascore)
-    render_project(data_dict, obj_dict)
+    render_project(data_dict, obj_dict, debug=True)

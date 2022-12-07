@@ -3,6 +3,7 @@ Create the html tables for parameters and such from dataframes.
 """
 import inspect
 import json
+import os
 import re
 import shutil
 import textwrap
@@ -20,6 +21,9 @@ API_DOC_PATH = DOC_PATH / "api"
 API_DOC_PATH.mkdir(exist_ok=True, parents=True)
 TEMPLATE_PATH = DOC_PATH / "_templates"
 NUMPY_STYLE = docstring_parser.DocstringStyle.NUMPYDOC
+GITHUB_PATH = 'https://github.com'
+GITHUB_REPOSITORY = 'DASDAE/dascore'
+GITHUB_REF = "/master"
 
 
 @cache
@@ -100,7 +104,6 @@ class DocStr:
     def __init__(self, data):
         self._data = data
 
-
     def _style_indents(self, docstr):
         """put indents in pre tags"""
         regex = r"([ \t]{2,})(.*?)"
@@ -178,15 +181,35 @@ class Render:
         }
         return out
 
-    def _get_parent_block(self, data):
+    def _get_github_source(self, data):
+        """Get the github source url."""
+        obj = data['object']
+        source_code, line_start = inspect.getsourcelines(obj)
+        line_end = line_start + len(source_code)
+        rel_path = data['path'].relative_to(data['base_path'])
+        # grab repo stuff from environment (on GH actions) or defaults
+        github_url = os.environ.get('GITHUB_SERVER_URL', GITHUB_PATH)
+        owner_repo = os.environ.get('GITHUB_REPOSITORY', GITHUB_REPOSITORY)
+        branch = os.environ.get("GITHUB_REF", GITHUB_REF).split('/')[-1]
+        source_url = (
+            f"{github_url}/{owner_repo}/blob/{branch}/{str(rel_path)}"
+            f"#L{line_start+1}-L{line_end}"
+        )
+        return source_url
+
+    def _get_parent_source_block(self, data):
         """Create a parent block with a link."""
         parent = data['key'].split(data['name'])[0].rstrip('.')
         if parent:
             parent_str = f" of [{parent}](`{parent}`)"
         else:
             parent_str = ""
-        out = f"*{self._data['data_type']}* {parent_str}"
+        origin_txt = f"*{self._data['data_type']}* {parent_str}"
+        source_url = self._get_github_source(data)
+        template = get_template('parent_source_block.html')
+        out = template.render(origin_txt=origin_txt, source_url=source_url)
         return out
+
 
     def render_markdown(self, heading='##'):
         """Convert numpy docstrings to markdown with some html styling."""
@@ -201,7 +224,7 @@ class Render:
         signature = build_signature(data)
         out = (
             f"# {self._data['name']}\n\n"
-            f"{self._get_parent_block(data)}\n\n<br>"
+            f"{self._get_parent_source_block(data)}\n\n"
             f"{signature}\n"
             f"{docstr()}\n"
             f"{''.join(tables)}\n")
