@@ -62,13 +62,12 @@ def compose_docstring(**kwargs: Union[str, Sequence[str]]):
     """
 
     def _wrap(func):
-
         docstring = func.__doc__
         # iterate each provided value and look for it in the docstring
         for key, value in kwargs.items():
             value = value if isinstance(value, str) else "\n".join(value)
             # strip out first line if needed
-            value = value.lstrip()
+            value = textwrap.dedent(value).lstrip()
             search_value = "{%s}" % key
             # find all lines that match values
             lines = [x for x in docstring.split("\n") if search_value in x]

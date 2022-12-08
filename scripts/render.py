@@ -9,10 +9,8 @@ import typing
 from functools import cache
 from pathlib import Path
 
-import docstring_parser
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
-from numpy.typing import ArrayLike
 
 
 RENDER_FUNCS = {}
@@ -20,7 +18,6 @@ DOC_PATH = Path(__file__).absolute().parent.parent / "docs"
 API_DOC_PATH = DOC_PATH / "api"
 API_DOC_PATH.mkdir(exist_ok=True, parents=True)
 TEMPLATE_PATH = DOC_PATH / "_templates"
-NUMPY_STYLE = docstring_parser.DocstringStyle.NUMPYDOC
 GITHUB_PATH = "https://github.com"
 GITHUB_REPOSITORY = "DASDAE/dascore"
 GITHUB_REF = "/master"
@@ -77,8 +74,6 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
     """Convert an annotation to string with linking"""
     str_id = str(id(obj))
     str_rep = str(obj)
-
-
     # this is a basic type, just get its name.
     if is_it_subclass(obj, (str, int, float)):
         out = str_rep.replace("<class ", "").replace(">", "").replace("'", "")
@@ -120,6 +115,9 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
     # generic class from another library
     elif str_rep.startswith("<class"):
         out = str_rep.split(".")[-1].replace("'>", "")
+    # return a self type.
+    elif str_rep.endswith('.Self'):
+        out = 'Self'
     # probably a literal, just give up here
     else:
         out = str(obj)
@@ -404,7 +402,7 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
         path = api_path / sub_dir / f"{data['name']}.qmd"
         path.parent.mkdir(exist_ok=True, parents=True)
         # dont render non-target file if debugging
-        if debug and not path.name.endswith("new.qmd"):
+        if debug and not 'chunk' in str(path):
             continue
         # render and write
         render = Render(data_dict, obj_id, address_dict)

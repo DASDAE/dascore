@@ -46,19 +46,8 @@ tbody tr:nth-child(even) {
 
 /* Custom classes */
 
-.dtype_label {
-    color: #00abe3;
-    font-style: italic;
-}
-
 .padded_bottom_10pt {
-    /*padding-left: 0pt;*/
-    /*padding-top: 10pt;*/
     padding-bottom: 10pt;
-}
-
-.padded5pt {
-    padding: 5pt;
 }
 
 .def_block {
@@ -72,10 +61,6 @@ tbody tr:nth-child(even) {
     padding-top: 2px;
 }
 
-.origin_div {
-    font-size: 5em;
-}
-
 .origin_table {
     border: 0em;
     width: 100%;
@@ -83,7 +68,6 @@ tbody tr:nth-child(even) {
     font-size: 1em;
     border-style: hidden !important;
     font-family: 'Bree Serif', serif;
-    /*color: #2980b9;*/
     display: block;
     margin-bottom: 10px;
 }
