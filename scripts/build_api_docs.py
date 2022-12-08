@@ -224,4 +224,4 @@ def get_alias_mapping(module, key=None):
 if __name__ == "__main__":
     data_dict = parse_project(dascore)
     obj_dict = get_alias_mapping(dascore)
-    render_project(data_dict, obj_dict, debug=False)
+    render_project(data_dict, obj_dict, debug=True)

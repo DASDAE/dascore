@@ -12,6 +12,8 @@ from pathlib import Path
 import docstring_parser
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
+from numpy.typing import ArrayLike
+
 
 RENDER_FUNCS = {}
 DOC_PATH = Path(__file__).absolute().parent.parent / "docs"
@@ -65,11 +67,18 @@ def is_it_subclass(obj, cls):
     except TypeError:
         return False
 
+def _deduplicate_list(seq):
+    """Return a list with duplicate removed, preserves order."""
+    seen = set()
+    return [x for x in seq if not (x in seen or seen.add(x))]
+
 
 def unpact_annotation(obj, data_dict, address_dict) -> str:
     """Convert an annotation to string with linking"""
     str_id = str(id(obj))
     str_rep = str(obj)
+
+
     # this is a basic type, just get its name.
     if is_it_subclass(obj, (str, int, float)):
         out = str_rep.replace("<class ", "").replace(">", "").replace("'", "")
@@ -80,17 +89,18 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
         key = str(obj).split("('")[-1].replace("')", "")
         name = key.split(".")[-1]
         return f"[{name}](`{key}`)"
-
+    # Array-like thing from numpy #TODO improve this
+    elif 'numpy.typing' in str_rep:
+        return 'ArrayLike'
     # this is a union, unpack it
-    elif str_rep.startswith("typing.Union"):
-        out = " | ".join(
-            [unpact_annotation(x, data_dict, address_dict) for x in obj.__args__]
-        )
+    elif str_rep.startswith("typing.Union") or str_rep.startswith('typing.Optional'):
+        annos = [unpact_annotation(x, data_dict, address_dict) for x in obj.__args__]
+        out = " | ".join(_deduplicate_list(annos))
     # This is a Dict, List, Tuple, etc. Just unpack.
     elif hasattr(obj, "__args__"):
-        name = str_id.replace("typing.", "").split("[")[0].lower()
+        name = str_rep.replace("typing.", "").split("[")[0]
         sub = [unpact_annotation(x, data_dict, address_dict) for x in obj.__args__]
-        out = f"{name}{sub}"
+        out = f"{name}[{','.join(sub)}]"
     # this is a typevar
     elif hasattr(obj, "__bound__"):
         out = unpact_annotation(obj.__bound__, data_dict, address_dict)
@@ -131,7 +141,6 @@ def build_signature(data, data_dict, address_dict):
         for param, value in sig.parameters.items():
             annotation_str = get_annotation_str(annotations.get(param))
             out.append(f"{param}{annotation_str}\n")
-            pass
         return out
 
     def get_return_line(sig):
@@ -390,15 +399,16 @@ def create_json_mapping(data_dict, obj_dict, api_path):
 def write_api_markdown(data_dict, api_path, address_dict, debug=False):
     """write all the markdown to disk."""
     for obj_id, data in data_dict.items():
-        render = Render(data_dict, obj_id, address_dict)
-        # template = get_template(data["data_type"])
-        markdown = render.render_markdown()
+        # get path and ensure parents exist
         sub_dir = api_path / "/".join(data["key"].split(".")[:-1])
-        # Ensure expected path exists
         path = api_path / sub_dir / f"{data['name']}.qmd"
         path.parent.mkdir(exist_ok=True, parents=True)
-        if debug and not path.name.endswith("iresample.qmd"):
+        # dont render non-target file if debugging
+        if debug and not path.name.endswith("new.qmd"):
             continue
+        # render and write
+        render = Render(data_dict, obj_id, address_dict)
+        markdown = render.render_markdown()
         path.write_text(markdown)
 
 

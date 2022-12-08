@@ -36,9 +36,9 @@ def example_func(patch: PatchType, to_add: int | float | None = None) -> PatchTy
     """
     A simple, one line explanation of what this function does.
 
-    Additional details which might be useful, and are not limited to one line.
-    In fact, they might span several lines, especially if the author of the
-    docstring tends to include more details than needed.
+    Additional details which might be useful, and are not limited to one
+    line. In fact, they might span several lines, especially if the author
+    of the docstring tends to include more details than needed.
 
     Parameters
     ----------
@@ -49,9 +49,10 @@ def example_func(patch: PatchType, to_add: int | float | None = None) -> PatchTy
 
     Returns
     -------
-    If needed, more information about what this function returns. You shouldn't
-    simply specify the type here since that is already given by the type annotation.
-    If the returned object is self-explanatory feel free to skip this section.
+    If needed, more information about what this function returns.
+    You shouldn't simply specify the type here since that is already
+    given by the type annotation. If the returned object is self-explanatory
+    feel free to skip this section.
 
     Examples
     --------
@@ -65,10 +66,19 @@ def example_func(patch: PatchType, to_add: int | float | None = None) -> PatchTy
 # example private function
 def _recombobulate(df, arg1, arg2):
     """
-    A private function can have a simple (multi-line) snippet and doesn't need as
-    much detail or type hinting as a public function.
+    A private function can have a simple (multi-line) snippet
+    and doesn't need as much detail or type hinting as a public
+    function.
     """
+
 ```
+
+## Examples in docstrings
+
+Examples in docstrings can be done using the standard
+[doctest](https://docs.python.org/3/library/doctest.html) syntax as above, or
+[quarto code blocks](https://quarto.org/docs/output-formats/html-code.html)
+can be used directly. The latter gives more control over outputs and display options.
 
 # Generating Documentation
 
@@ -76,10 +86,16 @@ DASCore's documentation is built with [quarto](https://quarto.org/). In order to
 must first [install DASCore in development mode](dev_install.qmd) then
 [install quarto](https://quarto.org/docs/get-started/).
 
-Next, the documentation can be built by calling quarto render on the docs folder:
+Next, the automatic API documents are created with scripts/build_api_docs.py
 
 ```bash
-quart render docs
+python scripts/build_api_docs.py
+```
+
+Finally, the documentation can be built by calling quarto render on the docs folder:
+
+```bash
+quarto render docs
 ```
 
 The newly generated html can then be accessed by double-clicking on the html index at docs/_site/index.html.
@@ -102,11 +118,6 @@ This is a link to DASCore's [Patch](`dascore.core.Patch`).
 
 This can be used in both docstrings and the documentation pages.
 
-
-:::{.callout-note}
-This actually isn't implemented yet, but will hopefully be soon!
-:::
-
 # Referencing publications
 
 New references should be added to the references.bib file in the docs folder.
@@ -120,7 +131,8 @@ Citing @lindsey2021fiber or [@lindsey2021fiber] is done like so:
 Citing @lindsey2021fiber or [@lindsey2021fiber]
 ```
 
-References then show up at the bottom of the page, or if a mouse hovers over the link.
+References then show up at the bottom of the page, or if the mouse pointer hovers over
+the link.
 
 # Equations
 
@@ -149,7 +161,6 @@ $${#eq-rotations}
 ```
 
 and @eq-rotations is referenced by `@eq-rotations`.
-
 
 # Additional Tips
 

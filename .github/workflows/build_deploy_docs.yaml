@@ -60,6 +60,7 @@ jobs:
       - name: Render Quarto Project
         shell: bash -l {0}
         run: |
+          python scripts/build_api_docs.py
           quarto render docs
 
       - name: Setup Pages
