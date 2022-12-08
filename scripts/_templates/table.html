@@ -1,0 +1,24 @@
+{# A template for making tables. #}
+<table>
+    {%- if caption %}
+      <caption class="h1">
+        {{ caption }}
+      </caption>
+    {%- endif %}
+  <thead>
+    <tr>
+        {%- for col in columns %}
+            <th scope="col"> {{ col }}</th>
+        {%- endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {%- for row in rows %}
+        <tr>
+        {%- for val in row %}
+            <td>{{ val }}</td>
+        {%- endfor %}
+        </tr>
+    {%- endfor %}
+  </tbody>
+</table>

@@ -57,7 +57,8 @@ dependencies = [
 
 [project.optional-dependencies]
 docs = [
-    "typer",
+    "panflute",
+    "jinja2",
 ]
 test = [
     "coverage",

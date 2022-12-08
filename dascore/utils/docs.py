@@ -7,6 +7,8 @@ from typing import Any, Dict, Sequence, Union
 
 def format_dtypes(dtype_dict: Dict[str, Any]) -> str:
     """
+    Convert dict to string for printing.
+
     Convert a dictionary of {name: type} to a string printable format for
     displaying in docstrings.
 
@@ -17,7 +19,8 @@ def format_dtypes(dtype_dict: Dict[str, Any]) -> str:
 
     Returns
     -------
-    A string formatted for :func:`dascore.utils.docs.compose_docstring`.
+    A string formatted for
+    [compose_docstring](`dascore.utils.docs.compose_docstring`)
     """
 
     def _format_cls_str(cls):
@@ -46,7 +49,7 @@ def compose_docstring(**kwargs: Union[str, Sequence[str]]):
 
     Examples
     --------
-
+    ```{python}
     @compose_docstring(some_value='10')
     def example_function():
         '''
@@ -55,16 +58,16 @@ def compose_docstring(**kwargs: Union[str, Sequence[str]]):
         The following line will be the string '10':
         {some_value}
         '''
+    ```
     """
 
     def _wrap(func):
-
         docstring = func.__doc__
         # iterate each provided value and look for it in the docstring
         for key, value in kwargs.items():
             value = value if isinstance(value, str) else "\n".join(value)
             # strip out first line if needed
-            value = value.lstrip()
+            value = textwrap.dedent(value).lstrip()
             search_value = "{%s}" % key
             # find all lines that match values
             lines = [x for x in docstring.split("\n") if search_value in x]

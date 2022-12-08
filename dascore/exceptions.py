@@ -1,6 +1,4 @@
-"""
-Custom dascore exceptions.
-"""
+"""Custom dascore exceptions."""
 
 
 class DASCoreError(Exception):
@@ -40,7 +38,7 @@ class PatchAttributeError(ValueError, PatchError):
 
 
 class TimeError(ValueError, DASCoreError):
-    """Raised when something is wrong with a time value"""
+    """Raised when something is wrong with a time value."""
 
 
 class InvalidTimeRange(TimeError):
@@ -60,7 +58,4 @@ class InvalidFileHandler(TypeError, DASCoreError):
 
 
 class InvalidIndexVersionError(ValueError, DASCoreError):
-    """
-    Raised when an old version of dascore is trying to read a newer version of
-    a patch summary index.
-    """
+    """Raised when a version mismatch occurs in index."""

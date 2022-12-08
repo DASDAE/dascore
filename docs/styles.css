@@ -1,1 +1,73 @@
 /* css styles */
+
+/* Table stuff */
+table {
+    border-collapse: collapse;
+    border: 2px solid rgb(200, 200, 200);
+    letter-spacing: 1px;
+    font-size: 0.8rem;
+    display: table;
+    width: 100%;
+    padding-bottom: 4px;
+}
+
+caption {
+    padding: 1px;
+    caption-side: top;
+    color: #666;
+    text-align: center;
+    letter-spacing: 1px;
+    font-size: small;
+}
+
+td, th {
+    border: 1px solid rgb(190, 190, 190);
+    padding: 10px 20px;
+}
+
+th {
+    background-color: rgb(235, 235, 235);
+    text-align: center;
+}
+
+td {
+    text-align: center;
+}
+
+
+caption {
+    padding: 10px;
+}
+
+tbody tr:nth-child(even) {
+    background-color: rgba(210, 209, 209, 0.4);
+}
+
+
+/* Custom classes */
+
+.padded_bottom_10pt {
+    padding-bottom: 10pt;
+}
+
+.def_block {
+    background-color: rgba(210, 209, 209, 0.4);
+    margin: 1em;
+    box-sizing: content-box;
+    padding-left: 10px;
+    padding-right: 10px;
+    border-radius: 25px;
+    padding-bottom: 0px;
+    padding-top: 2px;
+}
+
+.origin_table {
+    border: 0em;
+    width: 100%;
+    margin: 0;
+    font-size: 1em;
+    border-style: hidden !important;
+    font-family: 'Bree Serif', serif;
+    display: block;
+    margin-bottom: 10px;
+}

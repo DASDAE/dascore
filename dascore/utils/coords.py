@@ -23,7 +23,6 @@ def assign_coords(patch: PatchType, **kwargs) -> PatchType:
 
     Examples
     --------
-
     >>> import numpy as np
     >>> import dascore as dc
     >>> patch_1 = dc.get_example_patch()
@@ -125,7 +124,7 @@ class Coords:
     __repr__ = __str__
 
     def get(self, item, default=None):
-        """Return item or None if not in coord. Same as dict.get"""
+        """Return item or None if not in coord. Same as dict.get."""
         return self.array_dict.get(item, default=default)
 
     def __iter__(self):

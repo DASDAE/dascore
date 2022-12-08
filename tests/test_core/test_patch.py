@@ -177,7 +177,7 @@ class TestEquals:
     """Tests for checking equality."""
 
     def test_equal_self(self, random_patch):
-        """Ensure a trace equals itself"""
+        """Ensure a trace equals itself."""
         assert random_patch.equals(random_patch)
 
     def test_non_equal_array(self, random_patch):
@@ -274,7 +274,7 @@ class TestUpdateAttrs:
         assert "bob" in new.attrs and new.attrs["bob"] == 1
 
     def test_original_unchanged(self, random_patch):
-        """updating attributes shouldn't change original patch in any way."""
+        """Updating attributes shouldn't change original patch in any way."""
         old_attrs = dict(random_patch.attrs)
         _ = random_patch.update_attrs(bob=2)
         assert "bob" not in random_patch.attrs
@@ -334,9 +334,7 @@ class TestReleaseMemory:
         assert wr() is None
 
     def test_select(self):
-        """
-        A similar test to ensure select releases old memory.
-        """
+        """A similar test to ensure select releases old memory."""
         patch = get_simple_patch()
         new = patch.select(time=[0.1, 10], copy=True)
         wr = weakref.ref(patch.data)
@@ -346,7 +344,7 @@ class TestReleaseMemory:
 
 
 class TestXarray:
-    """Tests"""
+    """Tests for xarray conversions."""
 
     pytest.importorskip("xarray")
 
@@ -386,7 +384,6 @@ class TestAddCoords:
     @pytest.fixture(scope="class")
     def random_patch_with_lat(self, random_patch):
         """Create a random patch with added lat/lon coordinates."""
-
         dist = random_patch.coords["distance"]
         lat = np.arange(0, len(dist)) * 0.001 - 109.857952
         # add a single coord
@@ -394,7 +391,7 @@ class TestAddCoords:
         return out
 
     def test_add_single_dim_one_coord(self, random_patch_with_lat):
-        """Tests that one coordinate can be added to a patch"""
+        """Tests that one coordinate can be added to a patch."""
         assert "latitude" in random_patch_with_lat.coords
 
     def test_add_single_dim_two_coord2(self, random_patch_with_lat_lon):

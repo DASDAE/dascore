@@ -64,9 +64,7 @@ def _check_filter_range(niquest, low, high, filt_min, filt_max):
 
 
 def _get_sos(sr, filt_min, filt_max, corners):
-    """
-    Get second order sections from sampling rate and filter bounds.
-    """
+    """Get second order sections from sampling rate and filter bounds."""
     niquest = 0.5 * sr
     low = None if pd.isnull(filt_min) else filt_min / niquest
     high = None if pd.isnull(filt_max) else filt_max / niquest
@@ -111,7 +109,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     >>>  # 1. Apply bandpass filter along time axis from 1 to 100 Hz
     >>> bandpassed = pa.pass_filter(time=(1, 100))
 
-    >>>  # 2. Apply lowpass filter along distance axis for wavelengths less than 1000m
+    >>>  # 2. Apply lowpass filter along distance axis for wavelengths less than 100m
     >>> lowpassed = pa.pass_filter(distance=(None, 1/100))
     """
     dim, filt_min, filt_max = _check_filter_kwargs(kwargs)

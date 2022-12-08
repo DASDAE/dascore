@@ -1,0 +1,19 @@
+:::{.padded_bottom_10pt}
+
+:::{.def_block}
+{% if params %}
+
+<b>{{ name }}</b>(<br>
+{%- for param in params %}
+    &nbsp;&nbsp;&nbsp;&nbsp;{{ param }},<br>
+{%- endfor %}
+{{ return_line }}
+
+{% else %}
+
+<b>{{ name }}</b>({{ return_line }}
+
+{% endif %}
+:::
+
+:::

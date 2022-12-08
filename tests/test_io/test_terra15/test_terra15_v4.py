@@ -24,11 +24,11 @@ class TestReadTerra15:
         assert set(expected_attrs).issubset(set(attrs))
 
     def test_has_required_attrs(self, terra15_das_patch):
-        """ "Ensure the required das attrs are found"""
+        """Ensure the required das attrs are found."""
         assert set(REQUIRED_DAS_ATTRS).issubset(set(terra15_das_patch.attrs))
 
     def test_coord_attr_time_equal(self, terra15_das_patch):
-        """The time reported in the attrs and coords should match"""
+        """The time reported in the attrs and coords should match."""
         attr_time = terra15_das_patch.attrs["time_max"]
         coord_time = terra15_das_patch.coords["time"].max()
         assert attr_time == coord_time

@@ -12,7 +12,7 @@ class TestSpectroTransform:
 
     @pytest.fixture()
     def spec_patch(self, random_patch):
-        """simple patch trasnformed to spectrogram."""
+        """Simple patch trasnformed to spectrogram."""
         return random_patch.tran.spectrogram()
 
     def test_spec_patch_dimensions(self, spec_patch, random_patch):

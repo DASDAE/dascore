@@ -32,3 +32,9 @@ repos:
       - id: isort
         name: isort (pyi)
         types: [pyi]
+#-   repo: https://github.com/pycqa/pydocstyle
+#    rev: 6.1.1  # pick a git hash / tag to point to
+#    hooks:
+#      - id: pydocstyle
+#        args:
+#          - --ignore=D105,D106,D107,D200,D400,D203,D212

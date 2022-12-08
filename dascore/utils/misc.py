@@ -118,6 +118,7 @@ def get_slice(array, cond=Optional[tuple]) -> slice:
     Examples
     --------
     >>> import numpy as np
+    >>> from dascore.utils.misc import get_slice
     >>> ar = np.arange(100)
     >>> array_slice = get_slice(ar, cond=(1, 10))
     """
@@ -240,9 +241,7 @@ def iterate(obj):
 
 
 class CacheDescriptor:
-    """
-    A descriptor for storing information in an instance-level cache (mapping).
-    """
+    """A descriptor for storing infor in an instance cache (mapping)."""
 
     def __init__(self, cache_name, func_name, args=None, kwargs=None):
         self._cache_name = cache_name
@@ -251,9 +250,11 @@ class CacheDescriptor:
         self._kwargs = {} if kwargs is None else kwargs
 
     def __set_name__(self, owner, name):
+        """Method to set the name of the description on the instance."""
         self._name = name
 
     def __get__(self, instance, owner):
+        """Get contents of the cache."""
         cache = getattr(instance, self._cache_name)
         if self._name not in cache:
             func = getattr(instance, self._func_name)
@@ -262,5 +263,6 @@ class CacheDescriptor:
         return cache[self._name]
 
     def __set__(self, instance, value):
+        """Set the cache contents."""
         cache = getattr(instance, self._cache_name)
         cache[self._name] = value

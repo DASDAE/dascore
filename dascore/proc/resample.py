@@ -32,8 +32,7 @@ def decimate(
     Parameters
     ----------
     lowpass
-        If True, first apply a low-pass (anti-alis) filter. Uses
-        :func:`dascore.proc.filter._lowpass_cheby_2`
+        If True, first apply a low-pass (anti-alis) filter.
     copy
         If True, copy the decimated data array. This is needed if you want
         the old array to get gc'ed to free memory otherwise a view is returned.
@@ -97,7 +96,7 @@ def interpolate(
     Notes
     -----
     This function just uses scipy's interp1d function under the hood.
-    See :func:`scipy.inpterp.interp1d for information.
+    See scipy.inpterp.interp1d for information.
 
     Values for interpolation must be evenly-spaced.
     """
@@ -135,8 +134,8 @@ def resample(
     Since Fourier methods only support adding or removing an integer number
     of frequency bins, the exact desired sampling rate is often not achievable
     with resampling alone. If the fourier resampling doesn't produce the exact
-    an interpolation (see :func:`dascore.proc.interpolate`) is used to achieve
-    the desired sampling rate.
+    an interpolation (see [interpolate](`dascore.proc.interpolate`)) is used to
+    achieve the desired sampling rate.
 
     Parameters
     ----------
@@ -144,7 +143,7 @@ def resample(
         The patch to resample.
     window
         The Fourier-domain window that tapers the Fourier spectrum. See
-        :func:`scipy.signal.resample` for details. Only used if method == 'fft'.
+        scipy.signal.resample for details. Only used if method == 'fft'.
     interp_kind
         The interpolation type if output of fourier resampling doesn't produce
         exactly the right sampling rate.
@@ -153,7 +152,7 @@ def resample(
 
     Notes
     -----
-    Unlike :func: `dascore.proc.iresample` this function requires a
+    Unlike [iresample](`dascore.proc.iresample`) this function requires a
     sampling_period.
 
     Often the resulting Patch will be slightly shorter than the input Patch.
@@ -167,9 +166,9 @@ def resample(
 
     See Also
     --------
-    decimate: :func: `~dascore.proc.resample.decimate`
-    interpolate :func: `~dascore.proc.resample.interpolate`
-    iresample: :func: `~dascore.proc.resmaple.isample`
+    [decimate](`dascore.proc.resample.decimate`)
+    [interpolate](`dascore.proc.resample.interpolate`)
+    [iresample](`dascore.proc.resmaple.irsample`)
     """
     dim, axis, new_d_dim = get_dim_value_from_kwargs(patch, kwargs)
     d_dim = patch.attrs[f"d_{dim}"]  # current sampling rate
@@ -193,7 +192,7 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
     """
     Resample a patch along a single dimension using Fourier Method.
 
-    Unlike :func: `dascore.proc.resample` this function requires the
+    Unlike [resample](`dascore.proc.resample`) this function requires the
     number of samples for the selected dimension.
 
     Parameters
@@ -202,24 +201,24 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
         The patch to resample.
     window
         The Fourier-domain window that tapers the Fourier spectrum. See
-        :func:`scipy.signal.resample` for details.
+        scipy.signal.resample for details.
     **kwargs
-         keyword arguments to specify
+         keyword arguments to specify dimension.
 
     Notes
     -----
-    Normally uses scipy.signal.resample
+    Simply uses scipy.signal.resample.
 
     Examples
     --------
-    import dascore as dc
-    patch = dc.get_example_patch()
-    new = patch.iresample(time=50)
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> new = patch.iresample(time=50)
 
     See Also
     --------
-    iresample: :func: `~dascore.proc.resmaple.isample`
-    decimate: :func: `~dascore.proc.resample.decimate`
+    [iresample](`dascore.proc.resmaple.irsample`)
+    [decimate](`dascore.proc.resample.decimate`)
     """
     dim, axis, new_length = get_dim_value_from_kwargs(patch, kwargs)
     coord = patch.coords[dim]

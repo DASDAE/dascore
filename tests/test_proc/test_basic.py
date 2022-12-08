@@ -1,6 +1,5 @@
-"""
-Tests for basic patch functions.
-"""
+"""Tests for basic patch functions."""
+
 import numpy as np
 import pytest
 
@@ -9,7 +8,7 @@ class TestAbs:
     """Test absolute values."""
 
     def test_no_negatives(self, random_patch):
-        """simply ensure the data has no negatives."""
+        """Simply ensure the data has no negatives."""
         # add
         data = np.array(random_patch.data)
         data[:, 0] = -2
@@ -22,7 +21,7 @@ class TestNormalize:
     """Tests for normalization."""
 
     def test_bad_norm_raises(self, random_patch):
-        """Ensure an unsupported norm raises"""
+        """Ensure an unsupported norm raises."""
         with pytest.raises(ValueError):
             random_patch.normalize("time", norm="bob_norm")
 

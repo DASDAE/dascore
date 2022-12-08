@@ -8,7 +8,7 @@ class TestWaterfall:
     """Tests for waterfall plot"""
 
     def test_returns_axes(self, random_patch):
-        """Call waterfall plot, return"""
+        """Call waterfall plot, return."""
         # modify patch to include line at start
         data = random_patch.data
         data[:100, :100] = 2.0  # create an origin block for testing axis line up
