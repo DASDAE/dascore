@@ -118,7 +118,13 @@ def parse_project(obj, key=None):
         for name, sub_obj in subs:
             if name.startswith("_"):
                 continue
+            sub_obj = _unwrap_obj(sub_obj)
             sub_dtype = get_type(sub_obj, dtype == "class")
+            # for modules, skip entities that aren't children
+            if dtype == 'module':
+                path, sub_path = _get_file_path(obj), _get_file_path(sub_obj)
+                if not str(path).replace('/__init__.py', '') in str(sub_path):
+                    continue
             data[sub_dtype].append(str(id(sub_obj)))
 
         return data

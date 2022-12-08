@@ -212,6 +212,7 @@ def patch_function(
             return out
 
         _func.func = func  # attach original function
+        _func.__wrapped__ = func
 
         return _func
 

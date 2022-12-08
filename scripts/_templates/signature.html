@@ -2,6 +2,7 @@
 
 :::{.def_block}
 {% if params %}
+
 <b>{{ name }}</b>(<br>
 {%- for param in params %}
     &nbsp;&nbsp;&nbsp;&nbsp;{{ param }},<br>
@@ -10,7 +11,7 @@
 
 {% else %}
 
-<b>{{ name }}</b>() {{ return_line }}
+<b>{{ name }}</b>({{ return_line }}
 
 {% endif %}
 :::

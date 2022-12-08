@@ -12,7 +12,6 @@ from pathlib import Path
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
-
 RENDER_FUNCS = {}
 DOC_PATH = Path(__file__).absolute().parent.parent / "docs"
 API_DOC_PATH = DOC_PATH / "api"
@@ -65,6 +64,7 @@ def is_it_subclass(obj, cls):
     except TypeError:
         return False
 
+
 def _deduplicate_list(seq):
     """Return a list with duplicate removed, preserves order."""
     seen = set()
@@ -96,7 +96,7 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
     elif hasattr(obj, "__args__"):
         name = str_rep.replace("typing.", "").split("[")[0]
         sub = [unpact_annotation(x, data_dict, address_dict) for x in obj.__args__]
-        out = f"{name}[{','.join(sub)}]"
+        out = f"{name}[{', '.join(sub)}]"
     # this is a typevar
     elif hasattr(obj, "__bound__"):
         out = unpact_annotation(obj.__bound__, data_dict, address_dict)
@@ -121,7 +121,10 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
         out = 'Self'
     # probably a literal, just give up here
     else:
-        out = str(obj)
+        if isinstance(obj, str):  # make str look like str
+            out = f"'{str(obj)}'"
+        else:
+            out = str(obj)
     return out.strip()
 
 
@@ -185,20 +188,20 @@ class NumpyDocStrParser:
         out = {}
         doc_lines = docstr.split("\n")
         dividers = (
-            [0]
-            + [
-                num
-                for num, x in enumerate(doc_lines)
-                if (set(x).issubset({" ", "-", "\t"}) and ("-" in x))
-            ]
-            + [len(doc_lines) + 2]
+                [0]
+                + [
+                    num
+                    for num, x in enumerate(doc_lines)
+                    if (set(x).issubset({" ", "-", "\t"}) and ("-" in x))
+                ]
+                + [len(doc_lines) + 2]
         )
         for start, stop in zip(dividers[:-1], dividers[1:]):
             # determine header or just use 'pre' for txt before headings
             header = "pre" if start == 0 else doc_lines[start - 1].strip()
             # skips the ----- line where applicable
             lstart = start if header == "pre" else start + 1
-            out[header] = "\n".join(doc_lines[lstart : stop - 2]).strip()
+            out[header] = "\n".join(doc_lines[lstart: stop - 2]).strip()
         return out
 
     def style_parameters(self, param_str):
@@ -211,7 +214,7 @@ class NumpyDocStrParser:
         param_desc = []
         for ind_num, ind in enumerate(param_start[:-1]):
             key = lines[ind].strip()
-            vals = [x.strip() for x in lines[ind + 1 : param_start[ind_num + 1]]]
+            vals = [x.strip() for x in lines[ind + 1: param_start[ind_num + 1]]]
             param_desc.append((key, "\n".join(vals)))
         table = pd.DataFrame(param_desc, columns=["Parameter", "Description"])
         return build_table(table)
@@ -301,7 +304,8 @@ class Render:
 
     def has_subsection(self, name):
         """Return True if a module has a subsection."""
-        children = self.get_children_object_ids(self._data.get(name, {}))
+        possible_children = self._data.get(name, {})
+        children = self.get_children_object_ids(possible_children)
         return bool(children)
 
     def render_linked_table(self, name):
@@ -343,7 +347,7 @@ class Render:
 
     def _get_parent_source_block(self, data):
         """Create a parent block with a link."""
-        parent = data["key"].split(data["name"])[0].rstrip(".")
+        parent = data['key'].removesuffix(f".{data['name']}")
         if parent:
             parent_str = f" of [{parent}](`{parent}`)"
         else:
@@ -404,7 +408,7 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
         path = api_path / sub_dir / f"{data['name']}.qmd"
         path.parent.mkdir(exist_ok=True, parents=True)
         # dont render non-target file if debugging
-        if debug and data['name'] != 'new':
+        if debug and data['name'] != 'Terra15FormatterV4':
             continue
         # render and write
         render = Render(data_dict, obj_id, address_dict)

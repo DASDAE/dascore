@@ -78,3 +78,4 @@ target/
 docs/api/*
 _autosummary
 .quarto/
+docs/site_libs
