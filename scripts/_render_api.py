@@ -46,10 +46,11 @@ def _simple_plural(text):
     return text + "s"
 
 
-def build_table(df, caption=None):
+def build_table(df: pd.DataFrame, caption=None):
     """
     An opinionated function to make a dataframe into html table.
     """
+    df = df.drop_duplicates()
     template = get_template("table.html")
     columns = [x.capitalize() for x in df.columns]
     rows = df.to_records(index=False).tolist()
@@ -314,7 +315,7 @@ class Render:
             desc = sub_data["short_description"]
             out.append((linked_name, desc))
         df = pd.DataFrame(out, columns=["name", "description"])
-        return build_table(df, _simple_plural(name))
+        return build_table(df)
 
     def get_children_object_ids(self, ids):
         """Of an object id list, return the children of the current object."""
@@ -359,7 +360,8 @@ class Render:
         docstr = NumpyDocStrParser(data)
 
         tables = [
-            f"\n{self.render_linked_table(x)}\n"
+            f"\n{heading} {_simple_plural(x).capitalize()}\n"
+            f"{self.render_linked_table(x)}\n"
             for x in self._table_order
             if self.has_subsection(x)
         ]
@@ -402,7 +404,7 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
         path = api_path / sub_dir / f"{data['name']}.qmd"
         path.parent.mkdir(exist_ok=True, parents=True)
         # dont render non-target file if debugging
-        if debug and not 'chunk' in str(path):
+        if debug and data['name'] != 'new':
             continue
         # render and write
         render = Render(data_dict, obj_id, address_dict)

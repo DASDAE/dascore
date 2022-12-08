@@ -138,15 +138,27 @@ class Patch:
         self: PatchType,
         data: None | ArrayLike = None,
         coords: None | dict[str | Sequence[str], ArrayLike] = None,
-        attrs: None | Mapping = None,
         dims: None | Sequence[str] = None,
+        attrs: None | Mapping = None,
     ) -> PatchType:
         """
-        Return a copy of the Patch with updated data.
+        Return a copy of the Patch with updated data, coords, dims, or attrs.
 
         Parameters
         ----------
-
+        data
+            An array-like containing data, an xarray DataArray object, or a Patch.
+        coords
+            The coordinates, or dimensional labels for the data. These can be
+            passed in three forms:
+            {coord_name: data}
+            {coord_name: ((dimensions,), data)}
+            {coord_name: (dimensions, data)}
+        dims
+            A sequence of dimension strings. The first entry cooresponds to the
+            first axis of data, the second to the second dimension, and so on.
+        attrs
+            Optional attributes (non-coordinate metadata) passed as a dict.
         """
         data = data if data is not None else self.data
         attrs = attrs if attrs is not None else self.attrs
