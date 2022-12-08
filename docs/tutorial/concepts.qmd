@@ -54,7 +54,7 @@ import dascore as dc
 patch = dc.get_example_patch()
 
 filtered_time = patch.pass_filter(time=(1, 5))
-filtered_distance = patch.pass_filter(distance=(1, 2))
+filtered_distance = patch.pass_filter(distance=(0.1, 0.2))
 ```
 However, the meaning of the values (ie frequency vs period) depends on the function, so be sure to read the docs!
 

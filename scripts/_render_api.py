@@ -138,11 +138,20 @@ def build_signature(data, data_dict, address_dict):
         annotation_str = unpact_annotation(param, data_dict, address_dict)
         return f": {annotation_str}"
 
+    def get_param_prefix(kind):
+        """Get the prefix for a parameter (eg ** in **kwargs)"""
+        if kind == inspect.Parameter.VAR_POSITIONAL:
+            return '*'
+        elif kind == inspect.Parameter.VAR_KEYWORD:
+            return '**'
+        return ''
+
     def get_params(sig, annotations):
         out = []
         for param, value in sig.parameters.items():
+            prefix = get_param_prefix(value.kind)
             annotation_str = get_annotation_str(annotations.get(param))
-            out.append(f"{param}{annotation_str}\n")
+            out.append(f"{prefix + param}{annotation_str}\n")
         return out
 
     def get_return_line(sig):
@@ -237,7 +246,7 @@ class NumpyDocStrParser:
                     out.append(line.strip(">")[1:])
                 elif line.startswith(".."):
                     out.append(line.strip(".")[1:])
-                elif line.startswith("#"):
+                elif line.startswith("#") or not line.strip():
                     out.append(line)
                 else:
                     out.append(f"# {line}")
@@ -408,7 +417,7 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
         path = api_path / sub_dir / f"{data['name']}.qmd"
         path.parent.mkdir(exist_ok=True, parents=True)
         # dont render non-target file if debugging
-        if debug and data['name'] != 'Terra15FormatterV4':
+        if debug and data['name'] != 'read':
             continue
         # render and write
         render = Render(data_dict, obj_id, address_dict)
