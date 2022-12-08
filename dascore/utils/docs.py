@@ -49,6 +49,7 @@ def compose_docstring(**kwargs: Union[str, Sequence[str]]):
 
     Examples
     --------
+    ```{python}
     @compose_docstring(some_value='10')
     def example_function():
         '''
@@ -57,6 +58,7 @@ def compose_docstring(**kwargs: Union[str, Sequence[str]]):
         The following line will be the string '10':
         {some_value}
         '''
+    ```
     """
 
     def _wrap(func):

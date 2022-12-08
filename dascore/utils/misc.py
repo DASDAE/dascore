@@ -118,6 +118,7 @@ def get_slice(array, cond=Optional[tuple]) -> slice:
     Examples
     --------
     >>> import numpy as np
+    >>> from dascore.utils.misc import get_slice
     >>> ar = np.arange(100)
     >>> array_slice = get_slice(ar, cond=(1, 10))
     """

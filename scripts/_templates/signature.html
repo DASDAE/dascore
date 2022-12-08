@@ -1,8 +1,18 @@
-{# Jinja2 template for rendering signatures of functions. #}
-```{.python code-copy="false"}
-{{ data_type }} {{ name }}(
+:::{.padded_bottom_10pt}
+
+:::{.def_block}
+{% if params %}
+<b>{{ name }}</b>(<br>
 {%- for param in params %}
-    {{ param }}
+    &nbsp;&nbsp;&nbsp;&nbsp;{{ param }},<br>
 {%- endfor %}
 {{ return_line }}
-```
+
+{% else %}
+
+<b>{{ name }}</b>() {{ return_line }}
+
+{% endif %}
+:::
+
+:::

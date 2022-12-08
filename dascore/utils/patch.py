@@ -178,13 +178,15 @@ def patch_function(
     Examples
     --------
     1. A patch method which requires dimensions (time, distance)
-    >>> @dascore.patch_function(required_dims=('time', 'distance'))
+    >>> import dascore as dc
+    >>> @dc.patch_function(required_dims=('time', 'distance'))
     ... def do_something(patch):
     ...     ...   # raises a PatchCoordsError if patch doesn't have time,
     ...     #  distance
 
     2. A patch method which requires an attribute 'data_type' == 'DAS'
-    >>> @dascore.patch_function(required_attrs={'data_type': 'DAS'})
+    >>> import dascore as dc
+    >>> @dc.patch_function(required_attrs={'data_type': 'DAS'})
     ... def do_another_thing(patch):
     ...     ...  # raise PatchAttributeError if patch doesn't have attribute
     ...     # called "data_type" or its values is not equal to "DAS".

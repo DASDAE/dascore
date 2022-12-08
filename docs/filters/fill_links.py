@@ -3,9 +3,9 @@ Panflute filter that embeds wikipedia text
 
 Replaces markdown such as [Stack Overflow](wiki://) with the resulting text.
 """
-import warnings
 import fnmatch
 import json
+import warnings
 from functools import cache
 from pathlib import Path
 

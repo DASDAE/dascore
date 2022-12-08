@@ -11,15 +11,13 @@ from pathlib import Path
 from types import MethodType, ModuleType, FunctionType
 from typing import Literal
 
-import docstring_parser
-
 import dascore
 from render import render_project
 
 
 def _unwrap_obj(obj):
-    """Unwrap a decorated object. """
-    while getattr(obj, '__wrapped__', None) is not None:
+    """Unwrap a decorated object."""
+    while getattr(obj, "__wrapped__", None) is not None:
         obj = obj.__wrapped__
     return obj
 
@@ -56,30 +54,29 @@ def parse_project(obj, key=None):
     def yield_get_submodules(obj, base_path):
         """Dynamically load submodules that may not have been imported."""
         path = Path(inspect.getfile(obj))
-        if not isinstance(obj, ModuleType) or path.name != '__init__.py':
+        if not isinstance(obj, ModuleType) or path.name != "__init__.py":
             return
-        submodules = path.parent.glob('*')
+        submodules = path.parent.glob("*")
         for submod_path in submodules:
             is_dir = submod_path.is_dir()
-            is_init = submod_path.name.endswith('__init__.py')
+            is_init = submod_path.name.endswith("__init__.py")
             # this is a directory, look for corresponding __init__.py
-            if is_dir and (submod_path / '__init__.py').exists():
-                mod_name = (
-                    str(submod_path.relative_to(base_path))
-                    .replace(os.sep, '.')
-                )
+            if is_dir and (submod_path / "__init__.py").exists():
+                mod_name = str(submod_path.relative_to(base_path)).replace(os.sep, ".")
                 mod = import_module(mod_name)
                 yield mod_name, mod
-            elif submod_path.name.endswith('.py') and not is_init:
+            elif submod_path.name.endswith(".py") and not is_init:
                 mod_name = (
                     str(submod_path.relative_to(base_path))
-                    .replace('.py', '')
-                    .replace(os.sep, '.')
+                    .replace(".py", "")
+                    .replace(os.sep, ".")
                 )
                 mod = import_module(mod_name)
                 yield mod_name, mod
 
-    def get_type(obj, parent_is_class=False) -> None | Literal["module", "function", "method", "class"]:
+    def get_type(
+        obj, parent_is_class=False
+    ) -> None | Literal["module", "function", "method", "class"]:
         """Return a string of the type of object."""
         obj = _unwrap_obj(obj)
         if isinstance(obj, ModuleType):
@@ -96,7 +93,7 @@ def parse_project(obj, key=None):
             return "class"
         return None
 
-    def extract_data(obj):
+    def extract_data(obj, parent_is_class):
         """
         Make lists of attributes, methods, etc.
 
@@ -109,31 +106,33 @@ def parse_project(obj, key=None):
             sig = None
 
         docstr = inspect.getdoc(obj)
-        dtype = get_type(obj)
+        dtype = get_type(obj, parent_is_class)
         data = defaultdict(list)
-        data['docstring'] = docstr
-        data['signature'] = sig
+        data["docstring"] = docstr
+        data["signature"] = sig
         data["data_type"] = dtype
-        data['short_description'] = docstr.split('\n')[0]
-        data['object'] = obj
+        data["short_description"] = docstr.split("\n")[0]
+        data["object"] = obj
         # get sub-motdules, methods, functions, etc. (just one level deep)
 
-        subs = list(inspect.getmembers(obj)) + list(yield_get_submodules(obj, base_path))
+        subs = list(inspect.getmembers(obj)) + list(
+            yield_get_submodules(obj, base_path)
+        )
         for name, sub_obj in subs:
             if name.startswith("_"):
                 continue
-            sub_dtype = get_type(sub_obj, dtype == 'class')
+            sub_dtype = get_type(sub_obj, dtype == "class")
             data[sub_dtype].append(str(id(sub_obj)))
 
         return data
 
-    def get_data(obj, key, base_path):
-        """Get data from object. """
+    def get_data(obj, key, base_path, parent_is_class):
+        """Get data from object."""
         path = inspect.getfile(obj)
         base_address = _get_base_address(path, base_path)
-        data = extract_data(obj)
-        data['base_path'] = Path(base_path)
-        data['path'] = Path(path)
+        data = extract_data(obj, parent_is_class)
+        data["base_path"] = Path(base_path)
+        data["path"] = Path(path)
         data["key"] = key
         data["name"] = key.split(".")[-1]
         data["base_address"] = base_address
@@ -142,17 +141,18 @@ def parse_project(obj, key=None):
     def get_address(obj, rel_path):
         """Get the address for an object."""
         base_list = (
-            str(rel_path).replace(f"{os.sep}__init__.py", "")
-            .replace('.py', '')
+            str(rel_path)
+            .replace(f"{os.sep}__init__.py", "")
+            .replace(".py", "")
             .split(os.sep)
         )
-        if not isinstance(obj, ModuleType) and hasattr(obj, '__name__'):
+        if not isinstance(obj, ModuleType) and hasattr(obj, "__name__"):
             name_list = [obj.__name__]
         else:
             name_list = []
-        return '.'.join(base_list + name_list)
+        return ".".join(base_list + name_list)
 
-    def traverse(obj, data_dict, base_path, key=None):
+    def traverse(obj, data_dict, base_path, key=None, parent_is_class=False):
         """Traverse tree, populate data_dict"""
         obj = _unwrap_obj(obj)
         obj_id = str(id(obj))
@@ -163,26 +163,26 @@ def parse_project(obj, key=None):
         # load all the modules first
         if isinstance(obj, ModuleType):
             key = get_address(obj, path.relative_to(base_path))
-            data_dict[obj_id] = get_data(obj, key, base_path)
+            data_dict[obj_id] = get_data(obj, key, base_path, parent_is_class)
             for _, mod in yield_get_submodules(obj, base_path):
                 traverse(mod, data_dict, base_path)
             for name, obj in inspect.getmembers(obj):
                 # recurse non-private methods
-                if not name.startswith('_'):
-                    traverse(obj, data_dict, base_path, key=f"{key}.{name}")
+                if not name.startswith("_"):
+                    traverse(obj, data_dict, base_path, f"{key}.{name}", False)
         # then handle non-modules
         else:
-            data_dict[str(id(obj))] = get_data(obj, key, base_path)
+            data_dict[str(id(obj))] = get_data(obj, key, base_path, parent_is_class)
             # recurse attributes and methods of classes
             if inspect.isclass(obj):
                 for sub_name, sub_obj in inspect.getmembers(obj):
-                    if sub_name.startswith('_') or not callable(sub_obj):
+                    if sub_name.startswith("_") or not callable(sub_obj):
                         continue
                     sub_path = _get_file_path(sub_obj)
                     if not str(base_path) in str(sub_path):
                         continue
-                    sub_key = f'{key}.{sub_name}'
-                    traverse(sub_obj, data_dict, base_path, key=sub_key)
+                    sub_key = f"{key}.{sub_name}"
+                    traverse(sub_obj, data_dict, base_path, sub_key, True)
 
     # key = key or getattr(obj, "__name__", None)
     base_path = Path(_get_file_path(obj)).parent.parent
@@ -210,7 +210,7 @@ def get_alias_mapping(module, key=None):
             if member_name.startswith("_"):
                 continue
             new_key = ".".join([key, member_name])
-            if new_key.split('.')[-1] in key:
+            if new_key.split(".")[-1] in key:
                 continue
             traverse_simple(member, new_key, data_dict, base_path)
 
@@ -224,4 +224,4 @@ def get_alias_mapping(module, key=None):
 if __name__ == "__main__":
     data_dict = parse_project(dascore)
     obj_dict = get_alias_mapping(dascore)
-    render_project(data_dict, obj_dict, debug=True)
+    render_project(data_dict, obj_dict, debug=False)

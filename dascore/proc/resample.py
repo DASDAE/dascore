@@ -168,7 +168,7 @@ def resample(
     --------
     [decimate](`dascore.proc.resample.decimate`)
     [interpolate](`dascore.proc.resample.interpolate`)
-    [iresample](`dascore.proc.resmaple.isample`)
+    [iresample](`dascore.proc.resmaple.irsample`)
     """
     dim, axis, new_d_dim = get_dim_value_from_kwargs(patch, kwargs)
     d_dim = patch.attrs[f"d_{dim}"]  # current sampling rate
@@ -203,11 +203,11 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
         The Fourier-domain window that tapers the Fourier spectrum. See
         scipy.signal.resample for details.
     **kwargs
-         keyword arguments to specify
+         keyword arguments to specify dimension.
 
     Notes
     -----
-    Normally uses scipy.signal.resample
+    Simply uses scipy.signal.resample.
 
     Examples
     --------
@@ -217,7 +217,7 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
 
     See Also
     --------
-    [iresample](`dascore.proc.resmaple.isample`)
+    [iresample](`dascore.proc.resmaple.irsample`)
     [decimate](`dascore.proc.resample.decimate`)
     """
     dim, axis, new_length = get_dim_value_from_kwargs(patch, kwargs)
