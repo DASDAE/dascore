@@ -60,7 +60,11 @@ def _get_distance_array(tdms_file=None, attrs=None):
     zero_offset = attrs["distance_min"]
     channel_spacing = attrs["d_distance"] * attrs["Fibre Length Multiplier"]
     max_dist = attrs["distance_max"]
-    dist = np.arange(zero_offset, max_dist, channel_spacing)
+    # Note: I found files where the end was slightly less than one channel spacing
+    # as a result the distance array was one channels short. Adding 10% of the
+    # channels spacing to distance_max fixes the issue without causing problems
+    # for files that don't have this rounding error.
+    dist = np.arange(zero_offset, max_dist + channel_spacing / 10, channel_spacing)
     return dist
 
 
