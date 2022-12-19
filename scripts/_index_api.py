@@ -198,9 +198,6 @@ def parse_project(obj, key=None):
     return data_dict
 
 
-# --- Rendering
-
-
 def get_alias_mapping(module, key=None):
     """Return a dict of {object_path: id} to construct cross refs."""
 
