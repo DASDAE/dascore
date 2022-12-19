@@ -1,15 +1,16 @@
 """
 Create the html tables for parameters and such from dataframes.
 """
+import hashlib
 import inspect
 import json
 import os
-import shutil
 import typing
 from functools import cache
 from pathlib import Path
 
 import pandas as pd
+import pooch
 from jinja2 import Environment, FileSystemLoader
 
 RENDER_FUNCS = {}
@@ -43,6 +44,14 @@ def _simple_plural(text):
     if text.endswith("s"):
         return text + "es"
     return text + "s"
+
+
+def sha_256(path_or_str: Path | str) -> str:
+    """Get the Sha256 hash of a file or a string."""
+    if isinstance(path_or_str, Path) and Path(path_or_str).exists():
+        with open(path_or_str) as fi:
+            path_or_str = fi.read()
+    return hashlib.sha256(str(path_or_str).encode('utf-8')).hexdigest()
 
 
 def build_table(df: pd.DataFrame, caption=None):
@@ -411,26 +420,34 @@ def create_json_mapping(data_dict, obj_dict, api_path):
 
 def write_api_markdown(data_dict, api_path, address_dict, debug=False):
     """write all the markdown to disk."""
+    files_to_delete = set(Path(api_path).rglob('*.qmd'))
     for obj_id, data in data_dict.items():
         # get path and ensure parents exist
         sub_dir = api_path / "/".join(data["key"].split(".")[:-1])
         path = api_path / sub_dir / f"{data['name']}.qmd"
         path.parent.mkdir(exist_ok=True, parents=True)
+        # remove path from files to delete
+        if path in files_to_delete:
+            files_to_delete.remove(path)
         # dont render non-target file if debugging
         if debug and data['name'] != 'read':
             continue
         # render and write
         render = Render(data_dict, obj_id, address_dict)
         markdown = render.render_markdown()
+        # check if file has changed, if not don't write
+        if path.exists() and sha_256(path) == sha_256(markdown):
+            continue
         path.write_text(markdown)
+    # remove files that are no longer writen. This can happen when the code is
+    # refactored or objects are deleted.
+    for path in files_to_delete:
+        path.unlink()
 
 
 def render_project(data_dict, address_dict, api_path=API_DOC_PATH, debug=False):
     """Render the markdown files."""
-    # clear old contents from API directory
-    if api_path.exists() and api_path.is_dir():
-        shutil.rmtree(api_path)
-    # write each of the markdown files
+    # Create and write the qmd files for each function/class/module
     write_api_markdown(data_dict, api_path, address_dict, debug=debug)
     # dump the json mapping to disk in doc folder
     path_mapping = create_json_mapping(data_dict, address_dict, api_path)
