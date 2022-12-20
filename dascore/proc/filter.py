@@ -10,7 +10,16 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 from scipy import ndimage
-from scipy.signal import cheb2ord, cheby2, iirfilter, sosfilt, sosfiltfilt, zpk2sos
+from scipy.signal import (
+    cheb2ord,
+    cheby2,
+    iirfilter,
+    medfilt2d,
+    sosfilt,
+    sosfiltfilt,
+    zpk2sos,
+)
+
 import dascore
 from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
