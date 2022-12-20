@@ -64,11 +64,6 @@ def _check_sobel_kwargs(kwargs):
     if not mode.issubset(mode_options):
         msg = f"The valid values for modes are {mode_options}."
         raise FilterValueError(msg)
-    if "constant" not in mode and len(kwargs) > 1:
-        msg = (
-            "value to fill past edges of input is only required if mode is 'constant'."
-        )
-        raise FilterValueError(msg)
     if not isinstance(mode, str) or not isinstance(mode, Sequence):
         msg = "mode parameter should be a string or a sequence of strings."
         raise FilterValueError(msg)
