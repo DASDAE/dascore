@@ -42,6 +42,13 @@ conda activate dascore
 pip install -e .[test,docs]
 ```
 
+or if you get an error, you can use:
+
+<!--pytest-codeblocks:skip-->
+```bash
+pip install -e .[\test,docs\]
+```
+
 ## 5. Setup pre-commit hooks
 
 dascore uses several [pre-commit](https://pre-commit.com/) hooks to ensure the code stays tidy. Please install and use them!
