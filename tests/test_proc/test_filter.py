@@ -77,7 +77,6 @@ class TestFilterBasics:
         assert isinstance(out, dascore.Patch)
         assert not np.any(pd.isnull(out.data))
 
-
 class TestSobelFilter:
     """Simple tests to make sure Sobel filter runs."""
 
@@ -111,5 +110,26 @@ class TestSobelFilter:
     def test_sobel_runs(self, random_patch):
         """Ensure Sobel filter works with default params."""
         out = random_patch.sobel_filter(axis=-1, mode={"reflect"}, cval=0.0)
+        assert isinstance(out, dascore.Patch)
+        assert not np.any(pd.isnull(out.data))
+
+class TestMedianFilter:
+    """Simple tests on median filter"""
+
+    def test_median_filter_default(self, random_patch):
+        """apply default values"""
+        out = random_patch.median_filter()
+        assert isinstance(out, dascore.Patch)
+        assert not np.any(pd.isnull(out.data))
+
+    def test_median_filter_user_single_value(self, random_patch):
+        """apply default values"""
+        out = random_patch.median_filter(kernel_size=5)
+        assert isinstance(out, dascore.Patch)
+        assert not np.any(pd.isnull(out.data))
+
+    def test_median_filter_user_multi_value(self, random_patch):
+        """apply default values"""
+        out = random_patch.median_filter(kernel_size=(5, 3))
         assert isinstance(out, dascore.Patch)
         assert not np.any(pd.isnull(out.data))
