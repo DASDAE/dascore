@@ -232,6 +232,7 @@ class Patch:
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     pass_filter = dascore.proc.pass_filter
+    median_filter = dascore.proc.median_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
     resample = dascore.proc.resample

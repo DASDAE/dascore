@@ -9,7 +9,15 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from scipy.signal import cheb2ord, cheby2, iirfilter, sosfilt, sosfiltfilt, zpk2sos
+from scipy.signal import (
+    cheb2ord,
+    cheby2,
+    iirfilter,
+    medfilt2d,
+    sosfilt,
+    sosfiltfilt,
+    zpk2sos,
+)
 
 import dascore
 from dascore.constants import PatchType
@@ -176,3 +184,34 @@ def _lowpass_cheby_2(data, freq, df, maxorder=12, axis=0):
     z, p, k = cheby2(order, rs, wn, btype="low", analog=0, output="zpk")
     sos = zpk2sos(z, p, k)
     return sosfilt(sos, data, axis=axis)
+
+
+@patch_function()
+def median_filter(patch: PatchType, kernel_size=3) -> PatchType:
+    """
+    Apply 2-D median filter
+
+    Parameters
+    ----------
+    kernel_size: array_like, optional
+        A scalar or a list of length 2, giving the size of the median filter window
+        in each dimension. Elements of kernel_size should be odd. If kernel_size is
+        a scalar, then this scalar is used as the size in each dimension. Default is
+        a kernel of size (3, 3).
+
+    Examples
+    --------
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+
+    >>>  # 1. Apply median filter with 9 time intervals and 5 channels
+    >>> filtered_pa = pa.median_filter((9,5))
+
+    Written by Ge Jin (gjin@mines.edu)
+
+    """
+    # get niquest and low/high in terms of niquest
+    out = medfilt2d(patch.data, kernel_size=kernel_size)
+    return dascore.Patch(
+        data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
+    )

@@ -76,3 +76,25 @@ class TestFilterBasics:
         out = random_patch.pass_filter(distance=(0.1, 0.2))
         assert isinstance(out, dascore.Patch)
         assert not np.any(pd.isnull(out.data))
+
+
+class TestMedianFilter:
+    """Simple tests on median filter"""
+
+    def test_median_filter_default(self, random_patch):
+        """apply default values"""
+        out = random_patch.median_filter()
+        assert isinstance(out, dascore.Patch)
+        assert not np.any(pd.isnull(out.data))
+
+    def test_median_filter_user_single_value(self, random_patch):
+        """apply default values"""
+        out = random_patch.median_filter(kernel_size=5)
+        assert isinstance(out, dascore.Patch)
+        assert not np.any(pd.isnull(out.data))
+
+    def test_median_filter_user_multi_value(self, random_patch):
+        """apply default values"""
+        out = random_patch.median_filter(kernel_size=(5, 3))
+        assert isinstance(out, dascore.Patch)
+        assert not np.any(pd.isnull(out.data))
