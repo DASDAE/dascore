@@ -39,44 +39,41 @@ def _check_filter_kwargs(kwargs):
     return dim, filt1, filt2
 
 
-# def _check_sobel_kwargs(kwargs):
-#     """Check Sobel filter kwargs and return"""
-#     mode_options = np.array(
-#         [
-#             "reflect",
-#             "constant",
-#             "nearest",
-#             "mirror",
-#             "wrap",
-#             "grid-constant",
-#             "grid-mirror",
-#             "grid-wrap",
-#         ]
-#     )
-#     if len(kwargs) < 3:
-#         msg = "Sobel filter requires you specify one dimension, \
-# at least one mode, and cval."
-#         raise FilterValueError(msg)
-#     dim = list(kwargs.keys())[0]
-#     mode = list(kwargs.keys())[1]
-#     cval = list(kwargs.keys())[2]
-#     if len(mode) > 2:
-#         msg = "Sobel filter can take up to two modes."
-#         raise FilterValueError(msg)
-#     if not np.all(np.isin(mode, mode_options) == True):
-#         msg = f"The valid values for modes are {mode_options}."
-#         raise FilterValueError(msg)
-#     if not "constant" in mode and len(kwargs) > 1:
-#         msg = (
-#             "value to fill past edges of input is \
-# only required if mode is 'constant'."
-#         )
-#         raise FilterValueError(msg)
-#     if not isinstance(mode, str) or not isinstance(mode, Sequence):
-#         msg = "mode parameter should be a string or a sequence of strings."
-#         raise FilterValueError(msg)
+def _check_sobel_kwargs(kwargs):
+    """Check Sobel filter kwargs and return"""
+    mode_options = {
+        "reflect",
+        "constant",
+        "nearest",
+        "mirror",
+        "wrap",
+        "grid-constant",
+        "grid-mirror",
+        "grid-wrap",
+    }
+    if len(kwargs) < 3:
+        msg = "Sobel filter requires you specify one dimension,\
+            at least one mode, and cval."
+        raise FilterValueError(msg)
+    dim = list(kwargs.keys())[0]
+    mode = set(list(kwargs.keys())[1])
+    cval = list(kwargs.keys())[2]
+    if len(mode) > 2:
+        msg = "Sobel filter can take up to two modes."
+        raise FilterValueError(msg)
+    if not mode.issubset(mode_options):
+        msg = f"The valid values for modes are {mode_options}."
+        raise FilterValueError(msg)
+    if "constant" not in mode and len(kwargs) > 1:
+        msg = (
+            "value to fill past edges of input is only required if mode is 'constant'."
+        )
+        raise FilterValueError(msg)
+    if not isinstance(mode, str) or not isinstance(mode, Sequence):
+        msg = "mode parameter should be a string or a sequence of strings."
+        raise FilterValueError(msg)
 
-#     return dim, mode, cval
+    return dim, mode, cval
 
 
 def _get_sampling_rate(patch, dim):
