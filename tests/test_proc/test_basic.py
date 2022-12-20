@@ -1,6 +1,7 @@
 """Tests for basic patch functions."""
 
 import numpy as np
+import pandas as pd
 import pytest
 
 
@@ -66,3 +67,12 @@ class TestNormalize:
         axis = dims.index("time")
         norm = np.abs(np.sum(time_norm.data, axis=axis))
         assert np.allclose(norm, 1)
+
+
+class TestStandarize:
+    """Tests for standardization."""
+
+    def test_base_case(self, random_patch):
+        """Ensure runs with default parameters."""
+        out = random_patch.standardize("time")
+        assert not np.any(pd.isnull(out.data))

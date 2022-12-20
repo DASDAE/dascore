@@ -112,3 +112,44 @@ def normalize(
         raise ValueError(msg)
     new_data = data / np.expand_dims(norm_values, axis=axis)
     return self.new(data=new_data)
+
+
+@patch_function()
+def standardize(
+    self: PatchType,
+    dim: str,
+) -> PatchType:
+    """
+    Standardize data by removing the mean and scaling to unit variance.
+
+    The standard score of a sample x is calculated as:
+
+    z = (x - u) / s
+    where u is the mean of the training samples or zero if with_mean=False,
+    and s is the standard deviation of the training samples or one if with_std=False.
+
+    Parameters
+    ----------
+    dim
+        The dimension along which the normalization takes place.
+
+    Examples
+    --------
+    ```{python}
+    import dascore as dc
+
+    patch = dc.load_example_patch()
+
+    # standardize along the time axis
+    standardized_time = patch.standardize('time')
+
+    # standardize along the x axis
+    standardized_distance = patch.standardize('distance')
+    ```
+    """
+    axis = self.dims.index(dim)
+    data = self.data
+    mean = np.mean(data, axis=axis, keepdims=True)
+    std = np.std(data, axis=axis, keepdims=True)
+    new_data = (data - mean) / std
+    return self.new(data=new_data)
