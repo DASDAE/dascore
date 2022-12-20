@@ -104,6 +104,72 @@ def sin_wave_patch(
     return patch
 
 
+@register_func(EXAMPLE_PATCHES, key="wavelet_mo")
+def wavelet_mo_patch(
+    sample_rate=44100,
+    freq=100,
+    time_min="2020-01-01",
+    channel_count=3,
+    channel_spacing=10,
+    channel_loc=1,
+    vel=2000,
+    duration=1,
+):
+    """
+    Return a Patch composed of a wavelet with moveout.
+
+    This is useful for source identification.
+
+    Parameters
+    ----------
+    sample_rate
+        The sample rate in Hz.
+    frequency
+        The frequency of the sin wave.
+    time_min
+        The start time in the metadata.
+    channel_count
+        The number of distance channels to include.
+    channel_spacing
+        The spacing of the channels in meters.
+    channel_loc
+        Which channel number the source is located at.
+    vel
+        Velocity at which the wave moves in m/s
+    duration
+        Duration of signal in seconds.
+
+    """
+    t_array = np.linspace(0.0, duration, sample_rate * duration)
+    wavelet = (1.0 - 2.0 * np.pi**2.0 * freq**2.0 * t_array**2.0) * np.e ** (
+        -np.pi**2 * freq**2.0 * t_array**2.0
+    )
+    wave_stack = []
+    for ii in range(1, channel_count + 1):
+        moveout_delay = int(channel_spacing * abs(channel_loc - ii) / vel * sample_rate)
+        new_wav = np.pad(
+            wavelet, (moveout_delay, 0), "constant", constant_values=(0, 0)
+        )[:-moveout_delay]
+        wave_stack.append(new_wav)
+    data = np.vstack(wave_stack)
+    time = to_timedelta64(t_array) + np.datetime64(time_min)
+    distance = np.arange(1, channel_count + 1, 1)
+
+    patch = dc.Patch(
+        data=data,
+        coords={"time": time, "distance": distance},
+        dims=("time", "distance"),
+        attrs={
+            "time_min": to_datetime64(time_min),
+            "d_time": 1 / sample_rate,
+            "distance_min": 1,
+            "d_distance": 1,
+            "distance_max": 3,
+        },
+    )
+    return patch
+
+
 @register_func(EXAMPLE_PATCHES, key="random_patch_with_lat_lon")
 def _random_patch_lat_lon():
     """Create a patch with latitude/longitude coords on distance dim."""
