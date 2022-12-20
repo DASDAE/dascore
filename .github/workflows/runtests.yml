@@ -1,5 +1,11 @@
 name: TestCode
-on: [push]
+on:
+  push:
+    branches:
+    - master
+  pull_request:
+    branches:
+    - master
 
 # Cancel previous runs when this one starts.
 concurrency:
