@@ -95,6 +95,7 @@ class DataFrameSpool(BaseSpool):
     """
     An abstract class for spools whose contents are managed by a dataframe.
     """
+
     # A dataframe which represents contents as they will be output
     _df: pd.DataFrame = CacheDescriptor("_cache", "_get_df")
     # A dataframe which shows patches in the source

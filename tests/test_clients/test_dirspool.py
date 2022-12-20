@@ -77,6 +77,14 @@ class TestFileIndex:
         # ensure the default str is not used.
         assert "object at" not in out
 
+    def test_long_tags(self, random_patch, tmp_path):
+        """Ensure a long tag still works."""
+        new = random_patch.update_attrs(tag="hey" * 15)
+        path = tmp_path / "test.h5"
+        new.io.write(path, "dasdae")
+        spool = dc.spool(path).update()
+        isinstance(spool, dc.BaseSpool)
+
 
 class TestSelect:
     """tests for subselecting data."""
