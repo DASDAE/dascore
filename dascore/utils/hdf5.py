@@ -118,7 +118,7 @@ class HDFPatchIndexManager:
     _min_itemsize = {
         "path": 120,
         "file_format": 15,
-        "tag": 8,
+        "tag": 100,
         "network": 8,
         "station": 8,
         "dims": 40,
