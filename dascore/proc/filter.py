@@ -55,16 +55,13 @@ def _check_sobel_kwargs(kwargs):
         msg = "Sobel filter requires you specify one dimension,\
             at least one mode, and cval."
         raise FilterValueError(msg)
-    dim = list(kwargs.values())[0]
+    axis = list(kwargs.values())[0]
+    mode = list(kwargs.values())[1]
     cval = list(kwargs.values())[2]
-    try:
-        mode = set(list(kwargs.values())[1])
-    except TypeError:
+    if not isinstance(mode, (str, set)):
         msg = "mode parameter should be a string or a sequence of strings."
         raise FilterValueError(msg)
-    print(kwargs)
-    print(mode)
-    if not all(isinstance(m, (str, Sequence)) for m in mode):
+    if not all(isinstance(m, str) for m in mode):
         msg = "mode parameter should be a string or a sequence of strings."
         raise FilterValueError(msg)
     if len(mode) > 2:
@@ -73,8 +70,13 @@ def _check_sobel_kwargs(kwargs):
     if not mode.issubset(mode_options):
         msg = f"The valid values for modes are {mode_options}."
         raise FilterValueError(msg)
+    if axis not in np.arange(-1, 2):
+        msg = "Valid axes are -1, 0, 1."
+        raise FilterValueError(msg)
+    if len(mode) == 1:
+        mode = "".join(mode)
 
-    return dim, mode, cval
+    return axis, mode, cval
 
 
 def _get_sampling_rate(patch, dim):
@@ -186,8 +188,7 @@ def sobel_filter(patch: PatchType, **kwargs) -> PatchType:
     >>>  # 2. Apply sobel filter with arbitrary parameter values.
     >>> sobel_arbitrary = pa.sobel_filter(mode='constant', cval=1)
     """
-    dim, mode, cval = _check_sobel_kwargs(kwargs)
-    axis = patch.dims.index(dim)
+    axis, mode, cval = _check_sobel_kwargs(kwargs)
     out = ndimage.sobel(patch.data, axis=axis, mode=mode, cval=cval)
     return dascore.Patch(
         data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims

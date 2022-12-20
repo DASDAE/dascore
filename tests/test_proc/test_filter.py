@@ -89,22 +89,27 @@ class TestSobelFilter:
     def test_invalid_mode(self, random_patch):
         """Ensure ValueError is raised with an invalid mode."""
         with pytest.raises(FilterValueError):
-            _ = random_patch.sobel_filter(dim=-1, mode="test", cval=0.0)
+            _ = random_patch.sobel_filter(axis=-1, mode={"test"}, cval=0.0)
 
     def test_invalid_mode_type(self, random_patch):
         """Ensure ValueError is raised with an invalid mode type."""
         with pytest.raises(FilterValueError):
-            _ = random_patch.sobel_filter(dim=-1, mode=0.0, cval=0.0)
+            _ = random_patch.sobel_filter(axis=-1, mode=0.0, cval=0.0)
 
     def test_many_mode(self, random_patch):
         """Ensure ValueError is raised with 3+ modes."""
         with pytest.raises(FilterValueError):
             _ = random_patch.sobel_filter(
-                dim=-1, mode={"reflect", "constant", "nearest"}, cval=0.0
+                axis=-1, mode={"reflect", "constant", "nearest"}, cval=0.0
             )
+
+    def test_invalid_axis(self, random_patch):
+        """Ensure ValueError is raised with an invalid axis value."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter(axis=None, mode={"constant"}, cval=0.0)
 
     def test_sobel_runs(self, random_patch):
         """Ensure Sobel filter works with default params."""
-        out = random_patch.sobel_filter(dim=-1, mode="reflect", cval=0.0)
+        out = random_patch.sobel_filter(axis=-1, mode={"reflect"}, cval=0.0)
         assert isinstance(out, dascore.Patch)
         assert not np.any(pd.isnull(out.data))
