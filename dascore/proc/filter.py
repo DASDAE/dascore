@@ -185,8 +185,7 @@ def sobel_filter(patch: PatchType, **kwargs) -> PatchType:
     >>>  # 2. Apply sobel filter with arbitrary parameter values.
     >>> sobel_arbitrary = pa.sobel_filter(mode='constant', cval=1)
     """
-    # dim, mode, cval = _check_sobel_kwargs(kwargs)
-    dim, mode, cval = kwargs
+    dim, mode, cval = _check_sobel_kwargs(kwargs)
     axis = patch.dims.index(dim)
     out = ndimage.sobel(patch.data, axis=axis, mode=mode, cval=cval)
     return dascore.Patch(
