@@ -191,10 +191,10 @@ def sobel_filter(patch: PatchType, **kwargs) -> PatchType:
     >>> pa = dascore.get_example_patch()
 
     >>>  # 1. Apply Sobel filter using the default parameter values.
-    >>> sobel_default = pa.sobel_filter(axis=-1, mode='reflect', cval=0.0)
+    >>> sobel_default = pa.sobel_filter(axis=-1, mode={'reflect'}, cval=0.0)
 
     >>>  # 2. Apply sobel filter with arbitrary parameter values.
-    >>> sobel_arbitrary = pa.sobel_filter(axis=-1, mode='constant', cval=1)
+    >>> sobel_arbitrary = pa.sobel_filter(axis=-1, mode={'constant'}, cval=1)
     """
     axis, mode, cval = _check_sobel_kwargs(kwargs)
     out = ndimage.sobel(patch.data, axis=axis, mode=mode, cval=cval)
