@@ -46,7 +46,7 @@ or if you get an error, you can use:
 
 <!--pytest-codeblocks:skip-->
 ```bash
-pip install -e .[\test,docs\]
+pip install -e .\[test,docs\]
 ```
 
 ## 5. Setup pre-commit hooks
