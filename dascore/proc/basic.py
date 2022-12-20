@@ -13,6 +13,12 @@ from dascore.utils.patch import patch_function
 def abs(patch: PatchType) -> PatchType:
     """
     Take the absolute value of the patch data.
+
+    Examples
+    --------
+    >>> import dascore # import dascore library
+    >>> pa = dascore.get_example_patch() # generate example patch
+    >>> out = dascore.proc.abs(pa) # take absolute value of generated example patch data
     """
     new_data = np.abs(patch.data)
     return patch.new(data=new_data)
@@ -27,7 +33,15 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     ----------
     *dims
         Dimension names which define the new data axis order.
+
+    Examples
+    --------
+    >>> import dascore # import dascore library
+    >>> pa = dascore.get_example_patch() # generate example patch
+    >>> # transpose the time and data array dimensions in the example patch
+    >>> out = dascore.proc.transpose(pa,"time", "distance")
     """
+
     return self.__class__(self._data_array.transpose(*dims))
 
 
