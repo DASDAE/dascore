@@ -1,6 +1,7 @@
 """Tests for basic patch functions."""
 
 import numpy as np
+import pandas as pd
 import pytest
 
 
@@ -66,3 +67,48 @@ class TestNormalize:
         axis = dims.index("time")
         norm = np.abs(np.sum(time_norm.data, axis=axis))
         assert np.allclose(norm, 1)
+
+
+class TestStandarize:
+    """Tests for standardization."""
+
+    def test_base_case(self, random_patch):
+        """Ensure runs with default parameters."""
+        # test along distance axis
+        out = random_patch.standardize("distance")
+        assert not np.any(pd.isnull(out.data))
+        # test along time axis
+        out = random_patch.standardize("time")
+        assert not np.any(pd.isnull(out.data))
+
+    def test_std(self, random_patch):
+        """Ensure after operation standard deviations are 1."""
+        dims = random_patch.dims
+        # test along distance axis
+        axis = dims.index("distance")
+        out = random_patch.standardize("distance")
+        assert np.allclose(
+            np.round(np.std(out.data, axis=axis, keepdims=True), decimals=1), 1.0
+        )
+        # test along time axis
+        out = random_patch.standardize("time")
+        axis = dims.index("time")
+        assert np.allclose(
+            np.round(np.std(out.data, axis=axis, keepdims=True), decimals=1), 1.0
+        )
+
+    def test_mean(self, random_patch):
+        """Ensure after operation means are 0."""
+        dims = random_patch.dims
+        # test along distance axis
+        out = random_patch.standardize("distance")
+        axis = dims.index("distance")
+        assert np.allclose(
+            np.round(np.mean(out.data, axis=axis, keepdims=True), decimals=1), 0.0
+        )
+        # test along time axis
+        out = random_patch.standardize("time")
+        axis = dims.index("time")
+        assert np.allclose(
+            np.round(np.mean(out.data, axis=axis, keepdims=True), decimals=1), 0.0
+        )
