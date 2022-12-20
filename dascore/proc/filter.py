@@ -55,17 +55,23 @@ def _check_sobel_kwargs(kwargs):
         msg = "Sobel filter requires you specify one dimension,\
             at least one mode, and cval."
         raise FilterValueError(msg)
-    dim = list(kwargs.keys())[0]
-    mode = set(list(kwargs.keys())[1])
-    cval = list(kwargs.keys())[2]
+    dim = list(kwargs.values())[0]
+    cval = list(kwargs.values())[2]
+    try:
+        mode = set(list(kwargs.values())[1])
+    except TypeError:
+        msg = "mode parameter should be a string or a sequence of strings."
+        raise FilterValueError(msg)
+    print(kwargs)
+    print(mode)
+    if not all(isinstance(m, (str, Sequence)) for m in mode):
+        msg = "mode parameter should be a string or a sequence of strings."
+        raise FilterValueError(msg)
     if len(mode) > 2:
         msg = "Sobel filter can take up to two modes."
         raise FilterValueError(msg)
     if not mode.issubset(mode_options):
         msg = f"The valid values for modes are {mode_options}."
-        raise FilterValueError(msg)
-    if not isinstance(mode, str) or not isinstance(mode, Sequence):
-        msg = "mode parameter should be a string or a sequence of strings."
         raise FilterValueError(msg)
 
     return dim, mode, cval
@@ -167,7 +173,7 @@ def sobel_filter(patch: PatchType, **kwargs) -> PatchType:
     Parameters
     ----------
     **kwargs
-        Used to specify the dimension, mode, and cval for the 'constant' mode.
+        Used to specify the dimension, mode, and for the 'constant' mode, cval.
 
     Examples
     --------
