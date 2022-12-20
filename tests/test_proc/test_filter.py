@@ -76,3 +76,35 @@ class TestFilterBasics:
         out = random_patch.pass_filter(distance=(0.1, 0.2))
         assert isinstance(out, dascore.Patch)
         assert not np.any(pd.isnull(out.data))
+
+
+class TestSobelFilter:
+    """Simple tests to make sure Sobel filter runs."""
+
+    def test_no_kwargs_raises(self, random_patch):
+        """Ensure ValueError is raised with no parameters."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter()
+
+    def test_invalid_mode(self, random_patch):
+        """Ensure ValueError is raised with an invalid mode."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter(dim=-1, mode="test", cval=0.0)
+
+    def test_invalid_mode_type(self, random_patch):
+        """Ensure ValueError is raised with an invalid mode type."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter(dim=-1, mode=0.0, cval=0.0)
+
+    def test_many_mode(self, random_patch):
+        """Ensure ValueError is raised with 3+ modes."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter(
+                dim=-1, mode={"reflect", "constant", "nearest"}, cval=0.0
+            )
+
+    def test_sobel_runs(self, random_patch):
+        """Ensure Sobel filter works with default params."""
+        out = random_patch.sobel_filter(dim=-1, mode="reflect", cval=0.0)
+        assert isinstance(out, dascore.Patch)
+        assert not np.any(pd.isnull(out.data))
