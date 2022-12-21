@@ -65,8 +65,8 @@ def _check_sobel_args(dim, mode, cval):
     if not isinstance(mode, str):
         msg = "mode parameter should be a string."
         raise FilterValueError(msg)
-    if not isinstance(cval, float):
-        msg = "cval parameter should be a float."
+    if not isinstance(cval, (float, int)):
+        msg = "cval parameter should be a float or an int."
         raise FilterValueError(msg)
     if mode not in mode_options:
         msg = f"The valid values for modes are {mode_options}."
