@@ -47,7 +47,7 @@ def _check_filter_kwargs(kwargs):
     return dim, filt1, filt2
 
 
-def _check_sobel_kwargs(kwargs):
+def _check_sobel_args(dim, mode, cval):
     """Check Sobel filter kwargs and return"""
     mode_options = {
         "reflect",
@@ -59,32 +59,20 @@ def _check_sobel_kwargs(kwargs):
         "grid-mirror",
         "grid-wrap",
     }
-    if len(kwargs) < 3:
-        msg = "Sobel filter requires you specify one dimension,\
-            at least one mode, and cval."
+    if not isinstance(dim, str):
+        msg = "dim parameter should be a string."
         raise FilterValueError(msg)
-    axis = list(kwargs.values())[0]
-    mode = list(kwargs.values())[1]
-    cval = list(kwargs.values())[2]
-    if not isinstance(mode, (str, set)):
-        msg = "mode parameter should be a string or a sequence of strings."
+    if not isinstance(mode, str):
+        msg = "mode parameter should be a string."
         raise FilterValueError(msg)
-    if not all(isinstance(m, str) for m in mode):
-        msg = "mode parameter should be a string or a sequence of strings."
+    if not isinstance(cval, float):
+        msg = "cval parameter should be a float."
         raise FilterValueError(msg)
-    if len(mode) > 2:
-        msg = "Sobel filter can take up to two modes."
-        raise FilterValueError(msg)
-    if not mode.issubset(mode_options):
+    if mode not in mode_options:
         msg = f"The valid values for modes are {mode_options}."
         raise FilterValueError(msg)
-    if axis not in np.arange(-1, 2):
-        msg = "Valid axes are -1, 0, 1."
-        raise FilterValueError(msg)
-    if len(mode) == 1:
-        mode = "".join(mode)
 
-    return axis, mode, cval
+    return dim, mode, cval
 
 
 def _get_sampling_rate(patch, dim):
@@ -176,7 +164,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
 
 
 @patch_function()
-def sobel_filter(patch: PatchType, **kwargs) -> PatchType:
+def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchType:
     """
     Apply a Sobel filter.
 
@@ -191,12 +179,16 @@ def sobel_filter(patch: PatchType, **kwargs) -> PatchType:
     >>> pa = dascore.get_example_patch()
 
     >>>  # 1. Apply Sobel filter using the default parameter values.
-    >>> sobel_default = pa.sobel_filter(axis=-1, mode={'reflect'}, cval=0.0)
+    >>> sobel_default = pa.sobel_filter(axis='time', mode='reflect', cval=0.0)
 
-    >>>  # 2. Apply sobel filter with arbitrary parameter values.
-    >>> sobel_arbitrary = pa.sobel_filter(axis=-1, mode={'constant'}, cval=1)
+    >>>  # 2. Apply Sobel filter with arbitrary parameter values.
+    >>> sobel_arbitrary = pa.sobel_filter(axis='time', mode='constant', cval=1)
+
+    >>> # 3. Apply Sobel filter along both axes
+    >>> sobel_time_space = pa.sobel_filter('time',).sobel_filter('distance')
     """
-    axis, mode, cval = _check_sobel_kwargs(kwargs)
+    dim, mode, cval = _check_sobel_args(dim, mode, cval)
+    axis = patch.dims.index(dim)
     out = ndimage.sobel(patch.data, axis=axis, mode=mode, cval=cval)
     return dascore.Patch(
         data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
