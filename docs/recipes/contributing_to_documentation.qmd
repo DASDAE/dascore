@@ -1,0 +1,47 @@
+---
+title: "Contributing to Documentation?"
+---
+
+Here, we elaborate on how you can build new documentation or make changes to existing dASCore documentation.
+
+## Building/Editing documentation
+
+First, install the [Quarto](https://quarto.org/docs/get-started/)
+
+To ensure Quarto is installed properly and to get the installation directory:
+
+Run "where quarto" command for the Windows
+
+```bash
+where quarto
+```
+
+Or, run "which quarto" command for Linux/Mac
+
+```bash
+which quarto
+```
+
+If you have not already installed jupyter in your environment, install it using conda:
+
+```bash
+conda install jupyter
+```
+
+Go to the DASCore directory on your machine:
+
+```bash
+cd dascore
+```
+
+Then:
+
+```bash
+python scripts/build_api_docs.py
+```
+
+```bash
+quarto preview docs
+```
+
+Now, you can make new documentation or make changes in the /dascore/index.qmd file, /dascore/docs/ directory and so on.
