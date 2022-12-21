@@ -96,7 +96,7 @@ def interpolate(
     Notes
     -----
     This function just uses scipy's interp1d function under the hood.
-    See scipy.inpterp.interp1d for information.
+    See scipy.interpolate.interp1d for information.
 
     Values for interpolation must be evenly-spaced.
     """
