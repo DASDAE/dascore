@@ -179,10 +179,10 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
     >>> pa = dascore.get_example_patch()
 
     >>>  # 1. Apply Sobel filter using the default parameter values.
-    >>> sobel_default = pa.sobel_filter(axis='time', mode='reflect', cval=0.0)
+    >>> sobel_default = pa.sobel_filter(dim='time', mode='reflect', cval=0.0)
 
     >>>  # 2. Apply Sobel filter with arbitrary parameter values.
-    >>> sobel_arbitrary = pa.sobel_filter(axis='time', mode='constant', cval=1)
+    >>> sobel_arbitrary = pa.sobel_filter(dim='time', mode='constant', cval=1)
 
     >>> # 3. Apply Sobel filter along both axes
     >>> sobel_time_space = pa.sobel_filter('time',).sobel_filter('distance')
