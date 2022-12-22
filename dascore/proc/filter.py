@@ -9,6 +9,7 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
+from scipy import ndimage
 from scipy.signal import (
     cheb2ord,
     cheby2,
@@ -44,6 +45,34 @@ def _check_filter_kwargs(kwargs):
         raise FilterValueError(msg)
 
     return dim, filt1, filt2
+
+
+def _check_sobel_args(dim, mode, cval):
+    """Check Sobel filter kwargs and return"""
+    mode_options = {
+        "reflect",
+        "constant",
+        "nearest",
+        "mirror",
+        "wrap",
+        "grid-constant",
+        "grid-mirror",
+        "grid-wrap",
+    }
+    if not isinstance(dim, str):
+        msg = "dim parameter should be a string."
+        raise FilterValueError(msg)
+    if not isinstance(mode, str):
+        msg = "mode parameter should be a string."
+        raise FilterValueError(msg)
+    if not isinstance(cval, (float, int)):
+        msg = "cval parameter should be a float or an int."
+        raise FilterValueError(msg)
+    if mode not in mode_options:
+        msg = f"The valid values for modes are {mode_options}."
+        raise FilterValueError(msg)
+
+    return dim, mode, cval
 
 
 def _get_sampling_rate(patch, dim):
@@ -129,6 +158,38 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
         out = sosfiltfilt(sos, patch.data, axis=axis)
     else:
         out = sosfilt(sos, patch.data, axis=axis)
+    return dascore.Patch(
+        data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
+    )
+
+
+@patch_function()
+def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchType:
+    """
+    Apply a Sobel filter.
+
+    Parameters
+    ----------
+    **kwargs
+        Used to specify the dimension, mode, and for the 'constant' mode, cval.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+
+    >>>  # 1. Apply Sobel filter using the default parameter values.
+    >>> sobel_default = pa.sobel_filter(dim='time', mode='reflect', cval=0.0)
+
+    >>>  # 2. Apply Sobel filter with arbitrary parameter values.
+    >>> sobel_arbitrary = pa.sobel_filter(dim='time', mode='constant', cval=1)
+
+    >>> # 3. Apply Sobel filter along both axes
+    >>> sobel_time_space = pa.sobel_filter('time',).sobel_filter('distance')
+    """
+    dim, mode, cval = _check_sobel_args(dim, mode, cval)
+    axis = patch.dims.index(dim)
+    out = ndimage.sobel(patch.data, axis=axis, mode=mode, cval=cval)
     return dascore.Patch(
         data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
     )

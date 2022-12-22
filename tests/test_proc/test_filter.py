@@ -78,6 +78,41 @@ class TestFilterBasics:
         assert not np.any(pd.isnull(out.data))
 
 
+class TestSobelFilter:
+    """Simple tests to make sure Sobel filter runs."""
+
+    def test_invalid_mode(self, random_patch):
+        """Ensure ValueError is raised with an invalid mode."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter(dim="time", mode="test", cval=0.0)
+
+    def test_invalid_mode_type(self, random_patch):
+        """Ensure ValueError is raised with an invalid mode type."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter(dim="time", mode=0.0)
+
+    def test_invalid_dim(self, random_patch):
+        """Ensure ValueError is raised with an invalid dim type."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter(dim=-1)
+
+    def test_invalid_axis(self, random_patch):
+        """Ensure ValueError is raised with an invalid axis value."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter(dim=None, mode="constant", cval=0.0)
+
+    def test_invalid_cval(self, random_patch):
+        """Ensure ValueError is raised with an invalid cval value."""
+        with pytest.raises(FilterValueError):
+            _ = random_patch.sobel_filter(dim="distance", mode="constant", cval=None)
+
+    def test_sobel_runs(self, random_patch):
+        """Ensure Sobel filter works with default params."""
+        out = random_patch.sobel_filter(dim="time")
+        assert isinstance(out, dascore.Patch)
+        assert not np.any(pd.isnull(out.data))
+
+
 class TestMedianFilter:
     """Simple tests on median filter"""
 
