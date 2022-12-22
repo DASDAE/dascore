@@ -25,4 +25,4 @@ I have (if applicable):
 - [ ] documented the new feature with docstrings or appropriate doc page.
 - [ ] included a test. See [testing guidelines](https://dascore.org/contributing/testing.html).
 - [ ] your name has been added to the contributors page (docs/contributors.md).
-- [ ] added the "read_for_review" tag once the PR is ready to be reviewed.
+- [ ] added the "ready_for_review" tag once the PR is ready to be reviewed.
