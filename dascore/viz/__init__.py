@@ -15,4 +15,4 @@ class VizPatchNameSpace(MethodNameSpace):
 
     waterfall = waterfall
     spectrogram = spectrogram
-    wiggle=wiggle
+    wiggle = wiggle

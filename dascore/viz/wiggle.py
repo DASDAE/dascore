@@ -1,6 +1,7 @@
 """
 Module for wiggle plotting.
 """
+from datetime import timedelta
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -35,29 +36,51 @@ def wiggle(
         If True, show the plot, else just return axis.
     """
     ax = _get_ax(ax)
-    data = patch.data
     dims = patch.dims
     assert len(dims) == 2, "Can only make wiggle plot of 2D Patch"
-    patch = patch.transpose(..., "time")
+    patch = patch.transpose(..., dim)
+    data = patch.data
     dims = patch.dims
     dims_r = tuple(reversed(dims))
-    coords = {dim: patch.coords[dim] for dim in dims}
+    coords = {dimen: patch.coords[dimen] for dimen in dims}
 
     if dim == "time":
         maxOfTraces = abs(data).max(axis=1)
         data = data / maxOfTraces[:, np.newaxis]
+        axisAcrossWiggles = coords["distance"]
+        axisAlongWiggles = coords["time"]
+        intervals = coords["distance"][1:] - coords["distance"][:-1]
     else:
         maxOfTraces = abs(data).max(axis=0)
         data = data / maxOfTraces[np.newaxis, :]
+        axisAcrossWiggles = coords["time"]
+        axisAlongWiggles = coords["distance"]
+        intervals = (coords["time"][1:] - coords["time"][:-1]) / np.timedelta64(1, "s")
 
-    time = coords["time"]
-    for a in range(len(data)):
-        ax.plot(time, a + data[a], color, alpha=1, linewidth=1)
-        wher = data[a] > 0
+    totalWiggles = len(data)
+    data = -1 * data
+    for a in range(totalWiggles):
+        if dim == "distance":
+            wiggle = (
+                np.array(
+                    [
+                        timedelta(seconds=(intervals[min(a, totalWiggles - 2)] * b))
+                        for b in data[a]
+                    ],
+                    dtype="timedelta64[ns]",
+                )
+                + axisAcrossWiggles[a]
+            )
+        else:
+            wiggle = (
+                intervals[min(a, totalWiggles - 2)] * data[a] + axisAcrossWiggles[a]
+            )
+        ax.plot(axisAlongWiggles, wiggle, color, alpha=1, linewidth=1)
+        wher = data[a] < 0
         ax.fill_between(
-            time,
-            a + 0 * data[a],
-            a + data[a],
+            axisAlongWiggles,
+            np.array([axisAcrossWiggles[a]] * len(data[a])),
+            wiggle,
             color=color,
             where=wher,
             edgecolor=None,
