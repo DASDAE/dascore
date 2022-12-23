@@ -57,8 +57,4 @@ pip install -e ".[dev]"
 
 The first line ensures you are on the master branch, the second line will pull the latest changes and tags, and the last line
 will install again in developer mode. This is only required if DASCore's entry points or requirements have changed, but
-won't hurt anything if not. 
-
-
-
-
+won't hurt anything if not.

@@ -59,3 +59,7 @@ class InvalidFileHandler(TypeError, DASCoreError):
 
 class InvalidIndexVersionError(ValueError, DASCoreError):
     """Raised when a version mismatch occurs in index."""
+
+
+class MissingOptionalDependency(ImportError, DASCoreError):
+    """Raised when an optional package needed for some functionality is missing."""

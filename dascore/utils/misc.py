@@ -3,15 +3,17 @@ Misc Utilities.
 """
 import contextlib
 import functools
+import importlib
 import os
 import warnings
+from types import ModuleType
 from typing import Iterable, Optional, Union
 
 import numpy as np
 import numpy.typing as nt
 import pandas as pd
 
-from dascore.exceptions import ParameterError
+from dascore.exceptions import MissingOptionalDependency, ParameterError
 
 
 def register_func(list_or_dict: Union[list, dict], key: Optional[str] = None):
@@ -266,3 +268,28 @@ class CacheDescriptor:
         """Set the cache contents."""
         cache = getattr(instance, self._cache_name)
         cache[self._name] = value
+
+
+def optional_import(package_name: str) -> ModuleType:
+    """
+    Import a module and return the module object if installed, else raise error.
+
+    Parameters
+    ----------
+    package_name
+        The name of the package which may or may not be installed. Can
+        also be sub-packages/modules (eg dascore.core).
+
+    Raises
+    ------
+    MissingOptionalDependency if the package is not installed.
+    """
+    try:
+        mod = importlib.import_module(package_name)
+    except ImportError:
+        msg = (
+            f"{package_name} is not installed but is required for the "
+            f"requested functionality"
+        )
+        raise MissingOptionalDependency(msg)
+    return mod
