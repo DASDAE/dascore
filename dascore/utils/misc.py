@@ -283,6 +283,17 @@ def optional_import(package_name: str) -> ModuleType:
     Raises
     ------
     MissingOptionalDependency if the package is not installed.
+
+    Examples
+    --------
+    >>> from dascore.utils.misc import optional_import
+    >>> from dascore.exceptions import MissingOptionalDependency
+    >>> # import a module (this is the same as import dascore as dc)
+    >>> dc = optional_import('dascore')
+    >>> try:
+    ...     optional_import('boblib5')  # doesn't exist so this raises
+    ... except MissingOptionalDependency:
+    ...     pass
     """
     try:
         mod = importlib.import_module(package_name)
