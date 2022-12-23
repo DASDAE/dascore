@@ -45,6 +45,17 @@ ONE_NANOSECOND = np.timedelta64(1, "ns")
 # One second with a precision of nano seconds
 ONE_SECOND_IN_NS = np.timedelta64(1_000_000_000, "ns")
 
+max_lens = {
+    "path": 120,
+    "file_format": 15,
+    "tag": 100,
+    "network": 8,
+    "station": 8,
+    "dims": 40,
+    "file_version": 9,
+    "cable_id": 50,
+    "instrument_id": 50,
+}
 
 # The expected attributes for the Patch
 DEFAULT_PATCH_ATTRS = {
@@ -91,7 +102,7 @@ PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "category")
 
 
 # A map from the unit name to the code used in numpy.timedelta64
-NUMPY_TIME_UNIT_MAPPPING = {
+NUMPY_TIME_UNIT_MAPPING = {
     "hour": "h",
     "minute": "m",
     "second": "s",

@@ -18,7 +18,7 @@ from packaging.version import parse as get_version
 from tables import ClosedNodeError
 
 import dascore as dc
-from dascore.constants import ONE_SECOND_IN_NS
+from dascore.constants import ONE_SECOND_IN_NS, max_lens
 from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import InvalidFileHandler, InvalidIndexVersionError
 from dascore.utils.misc import suppress_warnings
@@ -115,17 +115,7 @@ class HDFPatchIndexManager:
     # attributes subclasses need to define
     buffer = ONE_SECOND_IN_NS
     # string column sizes in hdf5 table
-    _min_itemsize = {
-        "path": 120,
-        "file_format": 15,
-        "tag": 100,
-        "network": 8,
-        "station": 8,
-        "dims": 40,
-        "file_version": 9,
-        "cable_id": 40,
-        "instrument_id": 40,
-    }
+    _min_itemsize = max_lens
     # columns which should be indexed for fast querying
     _query_columns = ("time_min", "time_max", "distance_min", "distance_max")
     # functions applied to encode dataframe before saving to hdf5

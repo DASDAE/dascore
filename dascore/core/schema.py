@@ -3,8 +3,9 @@ from pathlib import Path
 from typing import Sequence, Union
 
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from dascore.constants import max_lens
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -44,7 +45,46 @@ class TimeDelta64(SimpleValidator):
 
 
 class PatchSummary(BaseModel):
-    """The expected attributes for a Patch."""
+    """
+    The expected attributes for a Patch.
+
+
+    Parameter
+    ---------
+    d_time
+        The temporal sample spacing. If the patch is not evenly sampled
+        this should be set to `np.timedelta64('NaT')`
+    time_min
+        The time represented by the first sample in the patch.
+    time_max
+        The time represented by the last sample in the patch.
+    time_units
+        The units of time axis. Not needed when type is `np.datetime64`.
+    d_distance
+        The spatial sampling rate, set to NaN if the patch is not evenly sampled
+        in space.
+    distance_min
+        The along-fiber distance of the first channel in the patch.
+    distance_max
+        The along-fiber distance of the last channel in the patch.
+    distance_units
+        The units of distance, defaults to m.
+    data_units
+        units
+    category
+        The category
+    network
+        The network code an ascii-compatible string up to 2 characters.
+    station
+        The station code an ascii-compatible string up to 5 characters
+    instrument_id
+        The identifier of the instrument.
+    dims
+        A tuple of dimension names in the same order as the data dimensions.
+    tag
+
+
+    """
 
     class Config:
         """Configuration for Patch Summary"""
@@ -62,12 +102,18 @@ class PatchSummary(BaseModel):
     distance_min: float = np.NaN
     distance_max: float = np.NaN
     d_distance: float = np.NaN
-    instrument_id: str = ""
-    cable_id: str = ""
-    dims: str = tuple()
-    tag: str = ""
-    station: str = ""
-    network: str = ""
+    instrument_id: str = Field("", max_length=max_lens["instrument_id"])
+    cable_id: str = Field("", max_length=max_lens["cable_id"])
+    dims: tuple[str, ...] | str = tuple()
+    tag: str = Field("", max_length=max_lens["tag"])
+    station: str = Field("", max_length=max_lens["station"])
+    network: str = Field("", max_length=max_lens["network"])
+
+    def __getitem__(self, item):
+        return getattr(self, item)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
 
 
 class PatchSummaryWithHistory(PatchSummary):
@@ -77,8 +123,64 @@ class PatchSummaryWithHistory(PatchSummary):
 
 
 class PatchFileSummary(PatchSummary):
-    """The expected minimum attributes for a Patch/spool file."""
+    """
+    The expected minimum attributes for a Patch/spool file.
+    """
 
     file_version: str = ""
     file_format: str = ""
     path: Union[str, Path] = ""
+
+
+class PatchAttrs(PatchSummary):
+    """
+    The schema for the metadata attached to a patch.
+
+    Attributes
+    ----------
+    d_time
+        The temporal sample spacing. If the patch is not evenly sampled
+        this should be set to `np.timedelta64('NaT')`
+    time_min
+        The time represented by the first sample in the patch.
+    time_max
+        The time represented by the last sample in the patch.
+    time_units
+        The units of time axis. Not needed when type is `np.datetime64`.
+    d_distance
+        The spatial sampling rate, set to NaN if the patch is not evenly sampled
+        in space.
+    distance_min
+        The along-fiber distance of the first channel in the patch.
+    distance_max
+        The along-fiber distance of the last channel in the patch.
+    distance_units
+        The units of distance, defaults to m.
+    data_type
+        d
+    data_units
+        units
+    category
+        The category
+    network
+        The network code an ascii-compatible string up to 2 characters.
+    station
+        The station code an ascii-compatible string up to 5 characters
+    instrument_id
+
+    history: list[str] = []
+    dims: tuple = ()
+    tag: str = ""
+
+
+
+    Notes
+    -----
+    PatchAttrs behaves like a dictionary for backwards compatibility reasons.
+
+    """
+
+    data_units = ""
+    time_units: str = "s"
+    distance_units: str = "m"
+    history: list[str] = []
