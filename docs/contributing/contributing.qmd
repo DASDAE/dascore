@@ -7,7 +7,7 @@ please be aware of our [code of conduct](code_of_conduct.qmd).
 
 # Prerequisites
 
-To start, follow the [recipes](https://dascore.org/recipes/overview.html) for the contribution and clone DASCore and [install it in development mode](dev_install.qmd).
+To start, clone DASCore and [install it in development mode](dev_install.qmd). If you are new to contributing to open-source projects, this [recipe](recipes/how_to_contribute.qmd) provides step-by-step instructions.
 
 Review how [DASCore's testing](testing.qmd) works, [how DASCore is documented](documentation.qmd),
 [DAScore style and linting](style_and_linting.qmd), and the [general guidelines](general_guidelines.qmd).
