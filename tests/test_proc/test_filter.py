@@ -133,3 +133,13 @@ class TestMedianFilter:
         out = random_patch.median_filter(kernel_size=(5, 3))
         assert isinstance(out, dascore.Patch)
         assert not np.any(pd.isnull(out.data))
+
+
+class TestfkTransform:
+    """Simple tests on f-k transform"""
+
+    def test_fk_filter(self, random_patch):
+        """apply default values"""
+        out = random_patch.fk_transform()
+        assert isinstance(out, dascore.Patch)
+        assert not np.any(pd.isnull(out.data))

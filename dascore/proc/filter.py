@@ -276,3 +276,23 @@ def median_filter(patch: PatchType, kernel_size=3) -> PatchType:
     return dascore.Patch(
         data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
     )
+
+
+@patch_function()
+def fk_transform(patch: PatchType) -> PatchType:
+    """
+    Apply 2-D f-k transform to apply median filter on
+
+    Examples
+    --------
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+
+    >>> # 1. Apply f-k transform
+    >>> fk_pa = pa.fk_transform()
+    """
+
+    out = np.fft.fft2(patch.data)
+    return dascore.Patch(
+        data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
+    )

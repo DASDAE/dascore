@@ -234,6 +234,7 @@ class Patch:
     pass_filter = dascore.proc.pass_filter
     sobel_filter = dascore.proc.sobel_filter
     median_filter = dascore.proc.median_filter
+    fk_transform = dascore.proc.fk_transform
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
     resample = dascore.proc.resample
