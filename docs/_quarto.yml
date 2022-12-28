@@ -94,12 +94,18 @@ website:
         - text: Visualization
           href: tutorial/visualization.qmd
 
-        - text: FIle IO
+        - text: File IO
           href: tutorial/file_io.qmd
 
     - title: 'Recipes'
       contents:
         - recipes/overview.qmd
+
+        - text: How to Contribute?
+          href: recipes/how_to_contribute.qmd
+
+        - text: Contributing to Documentation
+          href: recipes/contributing_to_documentation.qmd
 
     - title: "Contributing"
       contents:

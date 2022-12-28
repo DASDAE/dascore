@@ -1,0 +1,70 @@
+---
+title: "How to Contribute?"
+---
+
+On this page, we provide a step-by-step procedure on how you can start contributing to the DASCore package.
+
+# Step 1: Install DASCore in development mode
+
+For the first time using DASCore in development mode, or if a new release is out, you need to install DASCore as it is mentioned [here](https://dascore.org/contributing/dev_install.html).
+Otherwise, you just need to activate the environment:
+
+```bash
+conda activate dascore
+```
+
+First, pull the latest changes and tags, and then run a test in the dascore repository (where you cloned it before):
+
+```bash
+git checkout master
+git pull origin master --tags
+pip install -e ".[dev]"
+```
+
+```bash
+cd dascore
+pytest
+```
+
+
+# Step 2: Create a new branch to work on
+
+To create a new branch:
+
+```bash
+git checkout -b "branch name"
+```
+
+Now, you can make changes to the codes. To test what you have done, while you are in the dascore repository:
+
+```bash
+pytest
+```
+
+Or, to be able to interact and debug after testing:
+
+```bash
+pytest --pdb
+```
+
+Finally, to make a commit and push your branch to GitHub, follow below steps:
+
+1- Run the following command twice(the first time will automatically fix some issues):
+
+```bash
+pre-commit run –all
+```
+
+2- Run all the following commands:
+
+```bash
+git add --all
+```
+
+```bash
+git commit -m "your commit"
+```
+
+```bash
+git push origin branch_name
+```
