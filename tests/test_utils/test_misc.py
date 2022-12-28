@@ -8,13 +8,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from dascore.exceptions import ParameterError
+from dascore.exceptions import MissingOptionalDependency, ParameterError
 from dascore.utils.misc import (
     MethodNameSpace,
     check_evenly_sampled,
     get_slice,
     iter_files,
     iterate,
+    optional_import,
 )
 
 
@@ -253,3 +254,21 @@ class TestIterate:
     def test_str(self):
         """A single string object should be returned as a tuple"""
         assert iterate("hey") == ("hey",)
+
+
+class TestOptionalImport:
+    """Ensure the optional import works."""
+
+    def test_import_installed_module(self):
+        """Test to ensure an installed module imports."""
+        import dascore as dc
+
+        mod = optional_import("dascore")
+        assert mod is dc
+        sub_mod = optional_import("dascore.core")
+        assert sub_mod is dc.core
+
+    def test_missing_module_raises(self):
+        """Ensure a module which is missing raises the appropriate Error."""
+        with pytest.raises(MissingOptionalDependency, match="boblib4"):
+            optional_import("boblib4")

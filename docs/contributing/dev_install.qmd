@@ -6,7 +6,6 @@ The following steps are needed to set up `DASCore` for development:
 
 ## 1. Clone DASCore
 
-<!--pytest-codeblocks:skip-->
 ```bash
 git clone https://github.com/dasdae/dascore
 cd dascore
@@ -16,9 +15,7 @@ cd dascore
 
 Make sure to pull all of the latest git tags.
 
-**NOTE:** You may need to do this periodically to keep tags in sync.
 
-<!--pytest-codeblocks:skip-->
 ```bash
 git pull origin master --tags
 ```
@@ -29,7 +26,6 @@ Create and activate a virtual environment so DASCore will not mess with the base
 
 If you are using [Anaconda](https://www.anaconda.com/), simply use the environment provided:
 
-<!--pytest-codeblocks:skip-->
 ```bash
 conda env create -f environment.yml
 conda activate dascore
@@ -37,23 +33,28 @@ conda activate dascore
 
 ## 4. Install DASCore in development mode
 
-<!--pytest-codeblocks:skip-->
 ```bash
-pip install -e .[test,docs]
-```
-
-or if you get an error, you can use:
-
-<!--pytest-codeblocks:skip-->
-```bash
-pip install -e .\[test,docs\]
+pip install -e ".[dev]"
 ```
 
 ## 5. Setup pre-commit hooks
 
 dascore uses several [pre-commit](https://pre-commit.com/) hooks to ensure the code stays tidy. Please install and use them!
 
-<!--pytest-codeblocks:skip-->
 ```bash
 pre-commit install -f
 ```
+
+# Refresh
+
+If you have already installed dascore but it has been a while, please do the following before creating a new branch:
+
+```bash
+git checkout master
+git pull origin master --tags
+pip install -e ".[dev]"
+```
+
+The first line ensures you are on the master branch, the second line will pull the latest changes and tags, and the last line
+will install again in developer mode. This is only required if DASCore's entry points or requirements have changed, but
+won't hurt anything if not.
