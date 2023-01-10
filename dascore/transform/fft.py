@@ -34,3 +34,28 @@ def rfft(patch: PatchType, dim="time") -> PatchType:
     new_coords = {new_dim_name: freqs}
     new_coords.update({x: patch.coords[x] for x in patch.dims if x != dim})
     return patch.__class__(data=new_data, coords=new_coords, dims=new_dims)
+
+
+@patch_function()
+def fk_transform(patch: PatchType, dim="time") -> PatchType:
+    """
+    Perform a 2-D f-k transform along the specified dimension.
+
+    Parameters
+    ----------
+    patch
+        The Patch object to transform.
+    dim
+        The dimension along which the transform is applied.
+    """
+
+    data = patch.data
+    axis = patch.dims.index(dim)
+    new_dim_name = f"frequency_{dim}"
+    sr = 1 / _get_sampling_rate(patch.attrs[f"d_{dim}"])
+    freqs = np.fft.rfftfreq(data.shape[axis], sr)
+    new_data = np.fft.rfft2(data)
+    new_dims = [(x if x != dim else new_dim_name) for x in patch.dims]
+    new_coords = {new_dim_name: freqs}
+    new_coords.update({x: patch.coords[x] for x in patch.dims if x != dim})
+    return patch.__class__(data=new_data, coords=new_coords, dims=new_dims)

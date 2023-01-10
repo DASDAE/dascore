@@ -5,7 +5,7 @@ Tests for fft style transforms.
 import numpy as np
 import pytest
 
-from dascore.transform.fft import rfft
+from dascore.transform.fft import fk_transform, rfft
 
 
 class TestRfft:
@@ -27,3 +27,19 @@ class TestRfft:
         """Ensure abs works with rfft to get amplitude spectra."""
         out = rfft_patch.abs()
         assert np.allclose(out.data, np.abs(rfft_patch.data))
+
+
+class TestFK:
+    """Tests for the f-k transform."""
+
+    @pytest.fixture(scope="class")
+    def fk_patch(self, random_patch):
+        """return the random patched transformed along time w/ f-k transform."""
+        out = fk_transform(random_patch, dim="time")
+        return out
+
+    def test_dims(self, fk_patch):
+        """Ensure frequency shows up in dimensions."""
+        dims = fk_patch.dims
+        start_freq = [x.startswith("frequency") for x in dims]
+        assert any(start_freq)
