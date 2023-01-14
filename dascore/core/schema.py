@@ -73,7 +73,7 @@ class PatchSummary(BaseModel):
     d_distance: float = np.NaN
     instrument_id: str = Field("", max_length=max_lens["instrument_id"])
     cable_id: str = Field("", max_length=max_lens["cable_id"])
-    dims: tuple[str, ...] | str = tuple()
+    dims: Union[tuple[str, ...], str] = tuple()
     tag: str = Field("", max_length=max_lens["tag"])
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
