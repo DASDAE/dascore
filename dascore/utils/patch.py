@@ -12,7 +12,6 @@ from typing import (
     Any,
     Callable,
     Dict,
-    List,
     Literal,
     Mapping,
     Optional,
@@ -25,14 +24,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-import dascore
-from dascore.constants import (
-    DEFAULT_PATCH_ATTRS,
-    PATCH_MERGE_ATTRS,
-    PatchType,
-    SpoolType,
-)
-from dascore.core.schema import PatchSummaryWithHistory
+import dascore as dc
+from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
+from dascore.core.schema import PatchAttrs, PatchFileSummary, PatchSummaryWithHistory
 from dascore.exceptions import PatchAttributeError, PatchDimError
 from dascore.utils.coords import Coords
 from dascore.utils.docs import compose_docstring, format_dtypes
@@ -147,7 +141,7 @@ def check_patch_attrs(patch: PatchType, required_attrs: attr_type) -> PatchType:
             msg = f"Patch's attrs {sub} are not required attrs: {required_attrs}"
             raise PatchAttributeError(msg)
     else:
-        missing = set(required_attrs) - set(patch.attrs)
+        missing = set(required_attrs) - set(dict(patch.attrs))
         if missing:
             msg = f"Patch is missing the following attributes: {missing}"
             raise PatchAttributeError(msg)
@@ -379,20 +373,14 @@ class _AttrsCoordsMixer:
         return copy.deepcopy(self.coords)
 
     def __call__(self, *args, **kwargs):
-        return self.attrs, self.coords
+        return PatchAttrs(**self.attrs), self.coords
 
     def _set_default_attrs(self):
         """Get the attribute dict, add required keys if not yet defined."""
         # add default values if they are not in out or attrs yet
-        missing = set(DEFAULT_PATCH_ATTRS) - set(self.attrs)
-        if not missing:
-            return
-        self._missing_attr_keys = missing
-        out = copy_attrs(self.attrs)
-        for key in missing:
-            value = DEFAULT_PATCH_ATTRS[key]
-            out[key] = value if not callable(value) else value()
-        self.attrs = out
+        defaults = PatchAttrs.get_defaults()
+        defaults.update(self.attrs)
+        self.attrs = defaults
 
     # --- Coordinate bits
 
@@ -465,12 +453,15 @@ def patches_to_df(
     plus a field called 'patch' which contains a reference to each patch.
     """
 
-    if isinstance(patches, dascore.BaseSpool):
+    if isinstance(patches, dc.BaseSpool):
         df = patches._df
+    # Handle spool case
+    elif hasattr(patches, "get_contents"):
+        return patches.get_contents()
     elif isinstance(patches, pd.DataFrame):
         return patches
     else:
-        df = pd.DataFrame(scan_patches(patches))
+        df = pd.DataFrame([dict(x) for x in scan_patches(patches)])
         if df.empty:  # create empty df with appropriate columns
             cols = list(PatchSummaryWithHistory().dict())
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
@@ -565,7 +556,7 @@ def _merge_patches(
         dar.attrs[min_name] = np.NaN
         dar.attrs[max_name] = np.NaN
         dims = tuple(dar.dims)
-        return dascore.Patch(dar.data, coords=dar.coords, attrs=dar.attrs, dims=dims)
+        return dc.Patch(dar.data, coords=dar.coords, attrs=dar.attrs, dims=dims)
 
     def _trim_or_fill(dar, new_start):
         """Trim or fill data array."""
@@ -596,28 +587,24 @@ def _merge_patches(
     return out
 
 
-@compose_docstring(fields=format_dtypes(PatchSummaryWithHistory.__annotations__))
+@compose_docstring(fields=format_dtypes(PatchFileSummary.__annotations__))
 def scan_patches(
-    patch: Union[PatchType, Sequence[PatchType]]
-) -> List[PatchSummaryWithHistory]:
+    patches: Union[PatchType, Sequence[PatchType]]
+) -> list[PatchFileSummary]:
     """
-    Scan a sequence of patches and return a list of summary dicts.
+    Scan a sequence of patches and return a list of summaries.
 
     The summary dicts have the following fields:
         {fields}
 
     Parameters
     ----------
-    patch
+    patches
         A single patch or a sequence of patches.
     """
-    if isinstance(patch, dascore.Patch):
-        patch = [patch]  # make sure we have an iterable
-    out = []
-    for pa in patch:
-        attrs = pa.attrs
-        summary = {i: attrs.get(i, DEFAULT_PATCH_ATTRS[i]) for i in DEFAULT_PATCH_ATTRS}
-        out.append(PatchSummaryWithHistory.parse_obj(summary).dict())
+    if isinstance(patches, dc.Patch):
+        patches = [patches]  # make sure we have an iterable
+    out = [PatchFileSummary(**dict(pa.attrs)) for pa in patches]
     return out
 
 

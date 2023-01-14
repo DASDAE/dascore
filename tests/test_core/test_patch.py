@@ -92,7 +92,9 @@ class TestInit:
     def test_min_max_populated(self, random_patch):
         """The min/max values of the distance attrs should have been populated."""
         attrs = random_patch.attrs
-        expected_filled_in = [x for x in attrs if x.startswith("distance")]
+        expected_filled_in = [
+            x for x in list(attrs.__fields__) if x.startswith("distance")
+        ]
         for attr in expected_filled_in:
             assert not pd.isnull(attrs[attr])
 
@@ -114,8 +116,8 @@ class TestInit:
 
     def test_had_default_attrs(self, patch):
         """Test that all patches used in the test suite have default attrs."""
-        attr_set = set(patch.attrs)
-        assert attr_set.issubset(set(patch.attrs))
+        attr_set = set(patch.attrs.dict())
+        assert attr_set.issubset(set(patch.attrs.dict()))
 
     def test_no_attrs(self):
         """Ensure a patch with no attrs can be created."""
@@ -213,7 +215,7 @@ class TestEquals:
         Ensure setting a value to null in attrs doesn't eval to equal.
         """
         attrs = dict(random_patch.attrs)
-        attrs["tag"] = None
+        attrs["tag"] = ""
         patch2 = random_patch.new(attrs=attrs)
         patch2.equals(random_patch)
         assert not patch2.equals(random_patch)
@@ -271,13 +273,13 @@ class TestUpdateAttrs:
     def test_add_attr(self, random_patch):
         """Tests for adding an attribute."""
         new = random_patch.update_attrs(bob=1)
-        assert "bob" in new.attrs and new.attrs["bob"] == 1
+        assert "bob" in new.attrs.dict() and new.attrs["bob"] == 1
 
     def test_original_unchanged(self, random_patch):
         """Updating attributes shouldn't change original patch in any way."""
         old_attrs = dict(random_patch.attrs)
         _ = random_patch.update_attrs(bob=2)
-        assert "bob" not in random_patch.attrs
+        assert "bob" not in dict(random_patch.attrs)
         assert random_patch.attrs == old_attrs
 
     def test_update_starttime(self, random_patch):

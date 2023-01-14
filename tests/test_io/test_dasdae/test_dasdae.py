@@ -151,7 +151,7 @@ class TestScanDASDAE:
         """Ensure scanning returns expected values."""
         info1 = dc.scan(written_dascore_v1_random)[0].dict()
         info2 = dict(random_patch.attrs)
-        common_keys = set(info1) & set(info2)
+        common_keys = set(info1) & set(info2) - {"history"}
         for key in common_keys:
             assert info1[key] == info2[key]
 

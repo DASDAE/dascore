@@ -179,9 +179,15 @@ class TestScan:
         assert out == []
 
     def test_scan_directory(self, tmp_path):
+        """Trying to scan an empty directory should return empty list."""
+        out = dascore.scan(tmp_path)
+        assert len(out) == 0
+
+    def test_scan_bad_files(self, tmp_path):
         """Trying to scan a directory should raise a nice error"""
-        with pytest.raises(InvalidFiberFile, match="a directory"):
-            _ = dascore.scan(tmp_path)
+        new = tmp_path / "myfile.txt"
+        with pytest.raises(InvalidFiberFile):
+            _ = dascore.scan(new)
 
     def test_scan_patch(self, random_patch):
         """Scan should also work on a patch"""

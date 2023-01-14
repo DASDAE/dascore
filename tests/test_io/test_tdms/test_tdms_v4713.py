@@ -55,13 +55,13 @@ class TestReadTDMS:
 
     def test_attributes(self, tdms_das_patch):
         """Ensure a few of the expected attrs exist in array."""
-        attrs = tdms_das_patch.attrs
+        attrs = dict(tdms_das_patch.attrs)
         expected_attrs = {"time_min", "time_max", "distance_min", "data_units"}
         assert set(expected_attrs).issubset(set(attrs))
 
     def test_has_required_attrs(self, tdms_das_patch):
         """ "Ensure the required das attrs are found"""
-        assert set(REQUIRED_DAS_ATTRS).issubset(set(tdms_das_patch.attrs))
+        assert set(REQUIRED_DAS_ATTRS).issubset(set(dict(tdms_das_patch.attrs)))
 
     def test_coord_attr_time_equal(self, tdms_das_patch):
         """The time reported in the attrs and coords should match"""
