@@ -5,7 +5,8 @@ from typing import Sequence, Union
 import numpy as np
 from pydantic import BaseModel, Field
 
-from dascore.constants import max_lens
+from dascore.constants import basic_summary_attrs, max_lens
+from dascore.utils.docs import compose_docstring
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -44,55 +45,23 @@ class TimeDelta64(SimpleValidator):
     func = to_timedelta64
 
 
+@compose_docstring(basic_params=basic_summary_attrs)
 class PatchSummary(BaseModel):
     """
     The expected attributes for a Patch.
 
-
     Parameter
     ---------
-    d_time
-        The temporal sample spacing. If the patch is not evenly sampled
-        this should be set to `np.timedelta64('NaT')`
-    time_min
-        The time represented by the first sample in the patch.
-    time_max
-        The time represented by the last sample in the patch.
-    time_units
-        The units of time axis. Not needed when type is `np.datetime64`.
-    d_distance
-        The spatial sampling rate, set to NaN if the patch is not evenly sampled
-        in space.
-    distance_min
-        The along-fiber distance of the first channel in the patch.
-    distance_max
-        The along-fiber distance of the last channel in the patch.
-    distance_units
-        The units of distance, defaults to m.
-    data_units
-        units
-    category
-        The category
-    network
-        The network code an ascii-compatible string up to 2 characters.
-    station
-        The station code an ascii-compatible string up to 5 characters
-    instrument_id
-        The identifier of the instrument.
-    dims
-        A tuple of dimension names in the same order as the data dimensions.
-    tag
+    {basic_params}
 
+    Notes
+    -----
+    These attributes go into the HDF5 index used by dascore. Therefore,
+    when they are changed the index version needs to be incremented so
+    previous indices are invalidated.
 
+    See also [PatchAttrs](`dascore.core.schema.PatchAttrs`).
     """
-
-    class Config:
-        """Configuration for Patch Summary"""
-
-        json_encoders = {
-            np.datetime64: lambda x: str(x),
-            np.timedelta64: lambda x: str(x),
-        }
 
     data_type: str = ""
     category: str = ""
@@ -109,11 +78,46 @@ class PatchSummary(BaseModel):
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
 
+    # In order to maintain backward compatibility, these dunders make the
+    # class also behave like a dict.
+
     def __getitem__(self, item):
         return getattr(self, item)
 
     def __setitem__(self, key, value):
         setattr(self, key, value)
+
+    def __len__(self):
+        return len(self.dict())
+
+    def get(self, item, default=None):
+        """dict-like get method."""
+        try:
+            return self[item]
+        except (AttributeError, KeyError):
+            return default
+
+    def items(self):
+        """Yield (attribute, values) just like dict.items()."""
+        for item, value in self.dict().items():
+            yield item, value
+
+    @classmethod
+    def get_defaults(cls):
+        """return a dict of default values"""
+        new = cls()
+        return new.dict()
+
+    class Config:
+        """Configuration for Patch Summary"""
+
+        title = "Patch Summary"
+        extra = "allow"
+        allow_mutation = True
+        json_encoders = {
+            np.datetime64: lambda x: str(x),
+            np.timedelta64: lambda x: str(x),
+        }
 
 
 class PatchSummaryWithHistory(PatchSummary):
@@ -132,52 +136,28 @@ class PatchFileSummary(PatchSummary):
     path: Union[str, Path] = ""
 
 
+@compose_docstring(basic_params=basic_summary_attrs)
 class PatchAttrs(PatchSummary):
     """
     The schema for the metadata attached to a patch.
 
     Attributes
     ----------
-    d_time
-        The temporal sample spacing. If the patch is not evenly sampled
-        this should be set to `np.timedelta64('NaT')`
-    time_min
-        The time represented by the first sample in the patch.
-    time_max
-        The time represented by the last sample in the patch.
-    time_units
-        The units of time axis. Not needed when type is `np.datetime64`.
-    d_distance
-        The spatial sampling rate, set to NaN if the patch is not evenly sampled
-        in space.
-    distance_min
-        The along-fiber distance of the first channel in the patch.
-    distance_max
-        The along-fiber distance of the last channel in the patch.
-    distance_units
-        The units of distance, defaults to m.
-    data_type
-        d
+    {basic_summary_attrs}
     data_units
-        units
-    category
-        The category
-    network
-        The network code an ascii-compatible string up to 2 characters.
-    station
-        The station code an ascii-compatible string up to 5 characters
-    instrument_id
-
-    history: list[str] = []
-    dims: tuple = ()
-    tag: str = ""
-
-
+        The units of data (e.g., m/s)
+    time_units
+        Units of time axis (if time coord is not datetime64)
+    distance_units
+        Units of distance axis (default is m)
+    history
+        A list keeping track of processing occurring on patch.
 
     Notes
     -----
-    PatchAttrs behaves like a dictionary for backwards compatibility reasons.
-
+    `PatchAttrs` is a superset of [PatchSummary](`dascore.core.schema.PatchSummary`).
+    `PatchAttrs` is the actual object attached to Patches, whereas `PatchSummary` is
+    the information required to index and filter a patch.
     """
 
     data_units = ""

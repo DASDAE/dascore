@@ -58,25 +58,25 @@ max_lens = {
 }
 
 # The expected attributes for the Patch
-DEFAULT_PATCH_ATTRS = {
-    "d_time": np.NaN,
-    "d_distance": np.NaN,
-    "data_type": "DAS",
-    "data_units": "",
-    "category": "",
-    "time_min": np.datetime64("NaT"),
-    "time_max": np.datetime64("NaT"),
-    "time_units": "s",
-    "distance_min": np.NaN,
-    "distance_max": np.NaN,
-    "distance_units": "m",
-    "network": "",
-    "station": "",
-    "instrument_id": "",
-    "history": lambda: [],
-    "dims": "",
-    "tag": "",
-}
+# DEFAULT_PATCH_ATTRS = {
+#     "d_time": np.NaN,
+#     "d_distance": np.NaN,
+#     "data_type": "DAS",
+#     "data_units": "",
+#     "category": "",
+#     "time_min": np.datetime64("NaT"),
+#     "time_max": np.datetime64("NaT"),
+#     "time_units": "s",
+#     "distance_min": np.NaN,
+#     "distance_max": np.NaN,
+#     "distance_units": "m",
+#     "network": "",
+#     "station": "",
+#     "instrument_id": "",
+#     "history": lambda: [],
+#     "dims": "",
+#     "tag": "",
+# }
 
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
@@ -117,3 +117,43 @@ NUMPY_TIME_UNIT_MAPPING = {
     "week": "W",
     "day": "D",
 }
+
+# A description of basic patch metadata.
+basic_summary_attrs = """
+d_time
+    The temporal sample spacing. If the patch is not evenly sampled
+    this should be set to `np.timedelta64('NaT')`
+time_min
+    The time represented by the first sample in the patch.
+time_max
+    The time represented by the last sample in the patch.
+time_units
+    The units of time axis. Not needed when type is `np.datetime64`.
+d_distance
+    The spatial sampling rate, set to NaN if the patch is not evenly sampled
+    in space.
+distance_min
+    The along-fiber distance of the first channel in the patch.
+distance_max
+    The along-fiber distance of the last channel in the patch.
+distance_units
+    The units of distance, defaults to m.
+data_units
+    units
+category
+    The category
+network
+    The network code an ascii-compatible string up to 2 characters.
+station
+    The station code an ascii-compatible string up to 5 characters
+instrument_id
+    The identifier of the instrument.
+dims
+    A tuple of dimension names in the same order as the data dimensions.
+tag
+    A custom string up to 100 chars.
+station
+    A network code (up to 8 chars).
+network
+    A network code (up to 8 chars).
+"""

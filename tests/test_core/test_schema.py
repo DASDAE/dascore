@@ -1,13 +1,19 @@
 """Tests for schema."""
 import pytest
 
-from dascore.core.schema import PatchSummary
+from dascore.core.schema import PatchAttrs, PatchSummary
 
 
 @pytest.fixture(scope="class")
 def random_summary(random_patch) -> PatchSummary:
     """Return the summary of the random patch."""
     return PatchSummary.parse_obj(dict(random_patch.attrs))
+
+
+@pytest.fixture(scope="class")
+def random_attrs(random_patch) -> PatchAttrs:
+    """Return the summary of the random patch."""
+    return random_patch.attrs
 
 
 class TestSummarySchema:
@@ -31,3 +37,12 @@ class TestSummarySchema:
         json = random_summary.json()
         random_summary2 = PatchSummary.parse_raw(json)
         assert random_summary2 == random_summary
+
+
+class TestSchemaIsDictLike:
+    """Tests to insure schema behaves like a dict."""
+
+    def test_get(self, random_attrs):
+        """Ensure get returns existing values."""
+        out = random_attrs.get("time_min")
+        assert out == random_attrs.time_min

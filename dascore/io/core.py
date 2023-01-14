@@ -5,14 +5,16 @@ Das Data.
 import os.path
 from abc import ABC
 from collections import defaultdict
-from functools import cache, cached_property
+from functools import cache, cached_property, reduce
 from importlib.metadata import entry_points
+from operator import add
 from pathlib import Path
 from typing import List, Optional, Union
 
 import pandas as pd
+from typing_extensions import Self
 
-import dascore
+import dascore as dc
 from dascore.constants import PatchType, SpoolType, timeable_types
 from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import (
@@ -108,7 +110,7 @@ class _FiberIOManager:
         format: Optional[str] = None,
         version: Optional[str] = None,
         extension: Optional[str] = None,
-    ):
+    ) -> "FiberIO":
         """
         Return the most likely formatter for given inputs.
 
@@ -136,7 +138,7 @@ class _FiberIOManager:
         format: Optional[str] = None,
         version: Optional[str] = None,
         extension: Optional[str] = None,
-    ):
+    ) -> Self:
         """
         Yields fiber IO object based on input priorities.
 
@@ -378,7 +380,7 @@ def scan_to_df(
     df = pd.DataFrame([dict(x) for x in info]).assign(
         dims=lambda x: list_ser_to_str(x["dims"])
     )
-    return df
+    return df[list(PatchFileSummary.__fields__)]
 
 
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))
@@ -387,7 +389,7 @@ def scan(
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
     ignore: bool = False,
-) -> List[PatchFileSummary]:
+) -> list[PatchFileSummary]:
     """
     Scan a file, return the summary dictionary.
 
@@ -411,13 +413,15 @@ def scan(
         {fields}
     """
     if isinstance(path_or_spool, (str, Path)):
-        return _scan_from_path(
+        out = _scan_from_path(
             path_or_spool,
             file_format=file_format,
             file_version=file_version,
             ignore=ignore,
         )
-    return scan_patches(path_or_spool)
+    else:
+        out = scan_patches(path_or_spool)
+    return out
 
 
 def _scan_from_path(
@@ -425,11 +429,21 @@ def _scan_from_path(
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
     ignore: bool = False,
-):
+) -> list[PatchFileSummary]:
     """Scan from a single path."""
-    if not os.path.exists(path) or os.path.isdir(path):
-        msg = f"{path} does not exist or is a directory"
+    if not os.path.exists(path):
+        msg = f"{path} does not exist"
         raise InvalidFiberFile(msg)
+    # recursively handle directory files
+    if os.path.isdir(path):
+        out = [
+            _scan_from_path(x, file_format, file_version, ignore=True)
+            for x in Path(path).glob("*")
+        ]
+        if len(out):
+            return reduce(add, out)
+        else:
+            return []
     # dispatch to file format handlers
     if not file_format or not file_version:
         try:
@@ -517,7 +531,7 @@ def write(
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
     """
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
-    if not isinstance(patch_or_spool, dascore.BaseSpool):
-        patch_or_spool = dascore.spool([patch_or_spool])
+    if not isinstance(patch_or_spool, dc.BaseSpool):
+        patch_or_spool = dc.spool([patch_or_spool])
     formatter.write(patch_or_spool, path, **kwargs)
     return path
