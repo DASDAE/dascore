@@ -81,11 +81,11 @@ class PatchAttrs(BaseModel):
     distance_units: str = ""
     instrument_id: str = Field("", max_length=max_lens["instrument_id"])
     cable_id: str = Field("", max_length=max_lens["cable_id"])
-    dims: tuple[str, ...] | str = tuple()
+    dims: Union[tuple[str, ...], str] = tuple()
     tag: str = Field("", max_length=max_lens["tag"])
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
-    history: str | Sequence[str] = Field(default_factory=list)
+    history: Union[str, Sequence[str]] = Field(default_factory=list)
 
     # In order to maintain backward compatibility, these dunders make the
     # class also behave like a dict.
