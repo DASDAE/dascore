@@ -1,7 +1,8 @@
 """Tests for schema."""
+import pydantic
 import pytest
 
-from dascore.core.schema import PatchAttrs, PatchSummary
+from dascore.core.schema import PatchAttrs, PatchSummary, SimpleValidator
 
 
 @pytest.fixture(scope="class")
@@ -14,6 +15,21 @@ def random_summary(random_patch) -> PatchSummary:
 def random_attrs(random_patch) -> PatchAttrs:
     """Return the summary of the random patch."""
     return random_patch.attrs
+
+
+class TestSimpleValidator:
+    """Test suite for validator."""
+
+    def test_base_validator(self):
+        """Ensure the base validator does nothing."""
+
+        class MyModel(pydantic.BaseModel):
+            """A test model."""
+
+            value: SimpleValidator = 1
+
+        my_model = MyModel(value=2)
+        assert my_model.value == 2
 
 
 class TestSummarySchema:
@@ -52,3 +68,20 @@ class TestSchemaIsDictLike:
         """Ensure get returns existing values."""
         out = random_attrs.get("time_min")
         assert out == random_attrs.time_min
+
+    def test_get_existing_key(self, random_attrs):
+        """Ensure get returns existing values."""
+        out = random_attrs.get("time_min")
+        assert out == random_attrs.time_min
+
+    def test_get_no_key(self, random_attrs):
+        """Ensure missing keys return default value."""
+        out = random_attrs.get("not_a_key", 1)
+        assert out == 1
+
+    def test_immutable(self, random_attrs):
+        """Ensure random_attrs is faux-immutable."""
+        with pytest.raises(TypeError, match="is immutable"):
+            random_attrs.bob = 1
+        with pytest.raises(TypeError, match="is immutable"):
+            random_attrs["bob"] = 1

@@ -120,16 +120,19 @@ data_category
     are {VALID_DATA_CATEGORIES}.
 data_units
     The units in which the data are recorded (e.g., strain_rate).
+d_time
+    The temporal sample spacing. If the patch is not evenly sampled
+    this should be set to `np.timedelta64('NaT')`
 time_min
     The time represented by the first sample in the patch.
 time_max
     The time represented by the last sample in the patch.
-d_time
-    The temporal sample spacing. If the patch is not evenly sampled
-    this should be set to `np.timedelta64('NaT')`
 time_units
     The units of the time axis (in most cases should be seconds) or
     specified by datetime64 arrays in time coordinate.
+d_distance
+    The spatial sampling rate, set to NaN if the patch is not evenly sampled
+    in space.
 distance_min
     The along-fiber distance of the first channel in the patch.
 distance_max
@@ -143,6 +146,18 @@ instrument_id
     A unique identifier of the instrument.
 cable_id
     A Unique identifier of the cable, or composition of cables.
+distance_units
+    The units of distance, defaults to m.
+data_units
+    units
+category
+    The category
+network
+    The network code an ascii-compatible string up to 2 characters.
+station
+    The station code an ascii-compatible string up to 5 characters
+instrument_id
+    The identifier of the instrument.
 dims
     A tuple of dimension names in the same order as the data dimensions.
 tag

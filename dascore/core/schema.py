@@ -23,9 +23,9 @@ class SimpleValidator:
     """
 
     @classmethod
-    def func(cls, x):
+    def func(cls, value):
         """A method to overwrite with custom validation."""
-        return x
+        return value
 
     @classmethod
     def __get_validators__(cls):
@@ -33,9 +33,9 @@ class SimpleValidator:
         yield cls.validate
 
     @classmethod
-    def validate(cls, v):
+    def validate(cls, validator):
         """Simply call func."""
-        return cls.func(v)
+        return cls.func(validator)
 
 
 class DateTime64(np.datetime64, SimpleValidator):
@@ -121,12 +121,10 @@ class PatchSummary(BaseModel):
 
         title = "Patch Summary"
         extra = "allow"
-        allow_mutation = True
+        allow_mutation = False
         json_encoders = {
             np.datetime64: lambda x: str(x),
             np.timedelta64: lambda x: str(x),
-            DateTime64: lambda x: str(x),
-            TimeDelta64: lambda x: str(x),
         }
 
 
