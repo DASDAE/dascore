@@ -217,7 +217,7 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
     out = dict(out)
     # Add other attributes not yet included
     out["n_channels"] = n_channels
-    out["data_type"] = "strain rate"
+    out["data_type"] = "strain_rate"
     out["data_units"] = ""
     out["dims"] = "time, distance"
     out["d_time"] = 1 / out["SamplingFrequency[Hz]"]

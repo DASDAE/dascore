@@ -6,29 +6,41 @@ Spools are containers/managers of [patches](patch.qmd). Spools come in a few var
 can manage a group of patches loaded into memory, archives of local files,
 and (in the future) a variety of clients for accessing remote resources.
 
+# Data Sources
+
 The simplest way to get the appropriate spool for a specified input is to use
 the `spool` function, which should work in the vast majority of cases.
 
+## Patches (in-memory)
 
 ```{python}
-#| echo: false
-
 import dascore as dc
 
-# create a list of patches
 patch_list = [dc.get_example_patch()]
 
-# get a spool for managing in-memory patches
 spool1 = dc.spool(patch_list)
+```
 
-# get a spool from a das file
+## A Single File
+
+```{python}
+import dascore as dc
 from dascore.utils.downloader import fetch
-path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
-spool2 = dc.spool(path_to_das_file)
 
-# get a spool from a directory of DAS files. The update
-# command is only needed the first time or if new files are added.
+path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
+
+spool2 = dc.spool(path_to_das_file)
+```
+
+## A Directory of DAS Files
+
+```{python}
+import dascore as dc
+from dascore.utils.downloader import fetch
+
+path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
 directory_path = path_to_das_file.parent
+
 spool3 = dc.spool(directory_path).update()
 ```
 
@@ -41,6 +53,7 @@ spools are returned via slicing.
 
 ```{python}
 import dascore as dc
+
 spool = dc.get_example_spool()
 
 patch = spool[0]  # extract first patch
@@ -53,20 +66,10 @@ for patch in spool:
 new_spool = spool[1:]
 ```
 
-
 # get_contents
 
 Returns a dataframe listing contents. This method may not be supported on all
 spools, especially those interfacing with vast remote resources.
-
-```{python}
-#| output: false
-import dascore as dc
-spool = dc.get_example_spool()
-
-# Return dataframe with contents of spool (each row has metadata of a patch)
-print(spool.get_contents())
-```
 
 ```{python}
 #| output: false

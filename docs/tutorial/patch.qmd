@@ -20,6 +20,7 @@ for simple demonstrations or testing.
 
 ```{python}
 import dascore as dc
+
 pa = dc.get_example_patch()
 ```
 
@@ -29,9 +30,9 @@ We first download a small example fiber file from a URL in the DASCore library (
 Next, we simply read it into a [spool](spool.qmd) object then get the first (and only) patch.
 
 ```{python}
-# get a fiber file
 import dascore as dc
 from dascore.utils.downloader import fetch
+
 path = fetch("terra15_das_1_trimmed.hdf5")  # path to a datafile
 
 pa = dc.read(path)[0]
@@ -62,11 +63,10 @@ import numpy as np
 import dascore as dc
 from dascore.utils.time import to_timedelta64
 
-
-## Create the patch data
+# Create the patch data
 array = np.random.random(size=(300, 2_000))
 
-## Create attributes, or metadata
+# Create attributes, or metadata
 t1 = np.datetime64("2017-09-18")
 attrs = dict(
     d_distance=1,
@@ -89,7 +89,21 @@ pa = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
 print(pa)
 ```
 
+# Attrs
+
+The metadata stored in `Patch.attrs` is a
+[pydnatic model](https://docs.pydantic.dev/usage/models/) which enforces some
+basic schema validation. You can print the schema info like this:
+
+```{python}
+import dascore as dc
+
+print(dc.PatchAttrs.__doc__)
+```
+
+
 # Processing
+
 For various reasons, Patches should be treated as *immutable*, meaning they should
 not be modified in place, but rather new patches created when something needs to be
 modified.
@@ -142,6 +156,7 @@ new = pa.new(data=pa.data * 10)
 ```
 
 ## Update Attrs
+
 [`Patch.update_attrs`](`dascore.core.patch.Patch.update_attrs`) is for making small changes
 to the patch attrs (metadata) while keeping the unaffected metadata (`Patch.new` would require
 you replace the entirety of attrs).
@@ -151,7 +166,7 @@ import dascore as dc
 pa = dc.get_example_patch()
 
 # update existing attribute 'network' and create new attr 'new_attr'
-pa1 = pa.update_attrs(**{'network': 'experiment_1', 'new_attr': 42})
+pa1 = pa.update_attrs(**{'network': 'exp1', 'new_attr': 42})
 ```
 
 `Patch.update_attrs` also tries to keep the patch attributes consistent.
@@ -164,6 +179,7 @@ pa = dc.get_example_patch()
 
 # update start time should also shift endtime
 pa1 = pa.update_attrs(time_min='2000-01-01')
+
 print(pa.attrs['time_min'])
 print(pa1.attrs['time_min'])
 ```

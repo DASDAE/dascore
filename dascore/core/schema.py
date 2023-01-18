@@ -1,11 +1,16 @@
 """Pydantic schemas used by DASCore."""
 from pathlib import Path
-from typing import Sequence, Union
+from typing import Literal, Sequence, Union
 
 import numpy as np
 from pydantic import BaseModel, Field
 
-from dascore.constants import basic_summary_attrs, max_lens
+from dascore.constants import (
+    VALID_DATA_CATEGORIES,
+    VALID_DATA_TYPES,
+    basic_summary_attrs,
+    max_lens,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -33,14 +38,14 @@ class SimpleValidator:
         return cls.func(v)
 
 
-class DateTime64(SimpleValidator):
-    """Datetime64 validator"""
+class DateTime64(np.datetime64, SimpleValidator):
+    """DateTime64 validator"""
 
     func = to_datetime64
 
 
-class TimeDelta64(SimpleValidator):
-    """Datetime64 validator"""
+class TimeDelta64(np.timedelta64, SimpleValidator):
+    """TimeDelta64 validator"""
 
     func = to_timedelta64
 
@@ -63,14 +68,17 @@ class PatchSummary(BaseModel):
     See also [PatchAttrs](`dascore.core.schema.PatchAttrs`).
     """
 
-    data_type: str = ""
-    category: str = ""
+    data_type: Literal[VALID_DATA_TYPES] = ""
+    data_category: Literal[VALID_DATA_CATEGORIES] = ""
+    data_units: str = ""
     time_min: DateTime64 = np.datetime64("NaT")
     time_max: DateTime64 = np.datetime64("NaT")
     d_time: TimeDelta64 = np.timedelta64("NaT")
+    time_units: str = ""
     distance_min: float = np.NaN
     distance_max: float = np.NaN
     d_distance: float = np.NaN
+    distance_units: str = ""
     instrument_id: str = Field("", max_length=max_lens["instrument_id"])
     cable_id: str = Field("", max_length=max_lens["cable_id"])
     dims: tuple[str, ...] | str = tuple()
@@ -117,6 +125,8 @@ class PatchSummary(BaseModel):
         json_encoders = {
             np.datetime64: lambda x: str(x),
             np.timedelta64: lambda x: str(x),
+            DateTime64: lambda x: str(x),
+            TimeDelta64: lambda x: str(x),
         }
 
 
@@ -143,13 +153,7 @@ class PatchAttrs(PatchSummary):
 
     Attributes
     ----------
-    {basic_summary_attrs}
-    data_units
-        The units of data (e.g., m/s)
-    time_units
-        Units of time axis (if time coord is not datetime64)
-    distance_units
-        Units of distance axis (default is m)
+    {basic_params}
     history
         A list keeping track of processing occurring on patch.
 
@@ -160,7 +164,4 @@ class PatchAttrs(PatchSummary):
     the information required to index and filter a patch.
     """
 
-    data_units = ""
-    time_units: str = "s"
-    distance_units: str = "m"
-    history: list[str] = []
+    history: list[str] = Field(default_factory=list)

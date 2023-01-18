@@ -38,6 +38,12 @@ class TestSummarySchema:
         random_summary2 = PatchSummary.parse_raw(json)
         assert random_summary2 == random_summary
 
+    def test_sub_docstrings(self):
+        """Ensure the docstring for PatchSummary had params subbed in."""
+        docstr = PatchAttrs.__doc__
+        # data_type is one of the parameters inserted into docstring.
+        assert "data_type" in docstr
+
 
 class TestSchemaIsDictLike:
     """Tests to insure schema behaves like a dict."""

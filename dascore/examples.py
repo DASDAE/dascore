@@ -42,7 +42,6 @@ def _random_patch(starttime="2017-09-18", network="", station="", tag="random"):
         d_distance=1,
         d_time=to_timedelta64(1 / 250),
         category="DAS",
-        id="test_data1",
         time_min=t1,
         network=network,
         station=station,
