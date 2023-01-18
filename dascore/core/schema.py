@@ -51,7 +51,7 @@ class TimeDelta64(np.timedelta64, SimpleValidator):
 
 
 @compose_docstring(basic_params=basic_summary_attrs)
-class PatchSummary(BaseModel):
+class PatchAttrs(BaseModel):
     """
     The expected attributes for a Patch.
 
@@ -85,6 +85,7 @@ class PatchSummary(BaseModel):
     tag: str = Field("", max_length=max_lens["tag"])
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
+    history: str | Sequence[str] = Field(default_factory=list)
 
     # In order to maintain backward compatibility, these dunders make the
     # class also behave like a dict.
@@ -128,38 +129,20 @@ class PatchSummary(BaseModel):
         }
 
 
-class PatchSummaryWithHistory(PatchSummary):
-    """Patch summary which includes history."""
-
-    history: Union[str, Sequence[str]] = ""
-
-
-class PatchFileSummary(PatchSummary):
+class PatchFileSummary(PatchAttrs):
     """
     The expected minimum attributes for a Patch/spool file.
     """
+
+    # These attributes are excluded from the HDF index.
+    _excluded_index = ("data_units", "time_units", "distance_units", "history")
 
     file_version: str = ""
     file_format: str = ""
     path: Union[str, Path] = ""
 
-
-@compose_docstring(basic_params=basic_summary_attrs)
-class PatchAttrs(PatchSummary):
-    """
-    The schema for the metadata attached to a patch.
-
-    Attributes
-    ----------
-    {basic_params}
-    history
-        A list keeping track of processing occurring on patch.
-
-    Notes
-    -----
-    `PatchAttrs` is a superset of [PatchSummary](`dascore.core.schema.PatchSummary`).
-    `PatchAttrs` is the actual object attached to Patches, whereas `PatchSummary` is
-    the information required to index and filter a patch.
-    """
-
-    history: list[str] = Field(default_factory=list)
+    @classmethod
+    def get_index_columns(cls) -> tuple[str, ...]:
+        """Return the column names which should be used for indexing."""
+        fields = set(cls.__fields__) - set(cls._excluded_index)
+        return tuple(sorted(fields))

@@ -8,11 +8,11 @@ import struct
 
 import numpy as np
 
-from dascore.core.schema import PatchSummary
+from dascore.core.schema import PatchAttrs
 from dascore.utils.misc import get_slice
 from dascore.utils.time import to_datetime64
 
-DEFAULT_ATTRS = tuple(PatchSummary.__fields__)
+DEFAULT_ATTRS = tuple(PatchAttrs.__fields__)
 
 
 def type_not_supported(vargin):

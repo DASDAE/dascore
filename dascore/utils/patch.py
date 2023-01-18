@@ -26,7 +26,7 @@ import xarray as xr
 
 import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
-from dascore.core.schema import PatchAttrs, PatchFileSummary, PatchSummaryWithHistory
+from dascore.core.schema import PatchAttrs, PatchFileSummary
 from dascore.exceptions import PatchAttributeError, PatchDimError
 from dascore.utils.coords import Coords
 from dascore.utils.docs import compose_docstring, format_dtypes
@@ -434,7 +434,7 @@ class _AttrsCoordsMixer:
                 self.copied_attrs[key] = func(val)
 
 
-@compose_docstring(fields=PatchSummaryWithHistory.__annotations__)
+@compose_docstring(fields=PatchAttrs.__annotations__)
 def patches_to_df(
     patches: Union[Sequence[PatchType], SpoolType, pd.DataFrame]
 ) -> pd.DataFrame:
@@ -463,7 +463,7 @@ def patches_to_df(
     else:
         df = pd.DataFrame([dict(x) for x in scan_patches(patches)])
         if df.empty:  # create empty df with appropriate columns
-            cols = list(PatchSummaryWithHistory().dict())
+            cols = list(PatchAttrs().dict())
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
         else:  # else populate with patches and concat history
             history = df["history"].apply(lambda x: ",".join(x))

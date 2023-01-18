@@ -166,4 +166,6 @@ station
     A network code (up to 8 chars).
 network
     A network code (up to 8 chars).
+history
+    A list of strings indicating what processing has occurred on the patch.
 """

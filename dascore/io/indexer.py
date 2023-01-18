@@ -55,7 +55,7 @@ class DirectoryIndexer(AbstractIndexer):
         The path to a directory containing DAS files.
     cache_size
         The number of queries to store in memory to avoid frequent reads
-        of the index file.
+        of the index file. It is rare this needs to be modified.
     """
 
     # hdf5 compression defaults

@@ -380,7 +380,7 @@ def scan_to_df(
     df = pd.DataFrame([dict(x) for x in info]).assign(
         dims=lambda x: list_ser_to_str(x["dims"])
     )
-    return df[list(PatchFileSummary.__fields__)]
+    return df[list(PatchFileSummary.get_index_columns())]
 
 
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))

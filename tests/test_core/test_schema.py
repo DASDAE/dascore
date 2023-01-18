@@ -2,13 +2,13 @@
 import pydantic
 import pytest
 
-from dascore.core.schema import PatchAttrs, PatchSummary, SimpleValidator
+from dascore.core.schema import PatchAttrs, SimpleValidator
 
 
 @pytest.fixture(scope="class")
-def random_summary(random_patch) -> PatchSummary:
+def random_summary(random_patch) -> PatchAttrs:
     """Return the summary of the random patch."""
-    return PatchSummary.parse_obj(dict(random_patch.attrs))
+    return PatchAttrs.parse_obj(dict(random_patch.attrs))
 
 
 @pytest.fixture(scope="class")
@@ -51,7 +51,7 @@ class TestSummarySchema:
     def test_can_roundrip(self, random_summary):
         """Ensure json can be round-tripped"""
         json = random_summary.json()
-        random_summary2 = PatchSummary.parse_raw(json)
+        random_summary2 = PatchAttrs.parse_raw(json)
         assert random_summary2 == random_summary
 
     def test_sub_docstrings(self):

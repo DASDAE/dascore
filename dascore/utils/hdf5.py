@@ -132,7 +132,7 @@ class HDFPatchIndexManager:
         "d_time": ns_to_timedelta,
     }
     _base_model = PatchFileSummary
-    index_columns = tuple(_base_model.__fields__)
+    index_columns = tuple(_base_model.get_index_columns())
     # The minimum version of dascore required to read this index. If an older
     # version is used an error will be raised.
     _min_version = "0.0.1"

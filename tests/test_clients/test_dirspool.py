@@ -60,7 +60,7 @@ class TestFileIndex:
 
     def test_index_columns(self, basic_index_df):
         """Ensure expected columns show up in the index."""
-        schema_fields = PatchFileSummary.__fields__
+        schema_fields = PatchFileSummary.get_index_columns()
         assert set(basic_index_df).issuperset(schema_fields)
 
     def test_patches_extracted(self, basic_file_spool):
