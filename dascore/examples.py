@@ -42,7 +42,6 @@ def _random_patch(starttime="2017-09-18", network="", station="", tag="random"):
         d_distance=1,
         d_time=to_timedelta64(1 / 250),
         category="DAS",
-        id="test_data1",
         time_min=t1,
         network=network,
         station=station,
@@ -158,13 +157,13 @@ def _diverse_spool():
     spool_big_gaps = _random_spool(d_time=np.timedelta64(1, "s"), station="big_gaps")
     spool_overlaps = _random_spool(d_time=-np.timedelta64(10, "ms"), station="overlaps")
     dt = to_timedelta64(spool_big_gaps[0].attrs["d_time"] / np.timedelta64(1, "s"))
-    spool_small_gaps = _random_spool(d_time=dt, station="small_gaps")
+    spool_small_gaps = _random_spool(d_time=dt, station="smallg")
     spool_way_late = _random_spool(
-        length=1, starttime=np.datetime64("2030-01-01"), station="way_out"
+        length=1, starttime=np.datetime64("2030-01-01"), station="wayout"
     )
     spool_new_tag = _random_spool(tag="some_tag", length=1)
     spool_way_early = _random_spool(
-        length=1, starttime=np.datetime64("1989-05-04"), station="way_out"
+        length=1, starttime=np.datetime64("1989-05-04"), station="wayout"
     )
 
     all_spools = [

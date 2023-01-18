@@ -3,7 +3,7 @@ A spool for working with a single file.
 """
 
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 from typing_extensions import Self
 
@@ -17,12 +17,27 @@ class FileSpool(DataFrameSpool):
     """
     A spool for a single file.
 
+    Parameters
+    ----------
+    path
+        The path to the file.
+    file_format
+        The format name, optional.
+    file_version
+        The version string of the format, optional.
+
+    Notes
+    -----
     Some file formats support storing multiple patches, this is most useful
     for those formats, but should work on all dascore supported formats.
     """
 
-    def __init__(self, path: Union[str, Path], file_format=None, file_version=None):
-        """"""
+    def __init__(
+        self,
+        path: Union[str, Path],
+        file_format: Optional[str] = None,
+        file_version: Optional[str] = None,
+    ):
         super().__init__()
         self._path = Path(path)
         if not self._path.exists() or self._path.is_dir():

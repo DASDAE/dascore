@@ -3,6 +3,7 @@
 from xarray import set_options
 
 from dascore.core.patch import Patch
+from dascore.core.schema import PatchAttrs
 from dascore.core.spool import BaseSpool, spool
 from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import get_format, read, scan, scan_to_df, write

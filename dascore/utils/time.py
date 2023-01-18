@@ -11,7 +11,7 @@ import pandas as pd
 
 from dascore.constants import (
     LARGEDT64,
-    NUMPY_TIME_UNIT_MAPPPING,
+    NUMPY_TIME_UNIT_MAPPING,
     ONE_SECOND,
     SMALLDT64,
     timeable_types,
@@ -199,7 +199,7 @@ def _time_delta_from_str(time_delta_str: str):
     val, units = split
     if units[-1] == "s":
         units = units[:-1]
-    new_unit = NUMPY_TIME_UNIT_MAPPPING[units]
+    new_unit = NUMPY_TIME_UNIT_MAPPING[units]
     return np.timedelta64(int(val), new_unit)
 
 

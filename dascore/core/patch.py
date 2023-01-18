@@ -11,11 +11,13 @@ from numpy.typing import ArrayLike
 from xarray import DataArray
 
 import dascore.proc
-from dascore.constants import DEFAULT_PATCH_ATTRS, PatchType
+from dascore.constants import PatchType
+from dascore.core.schema import PatchAttrs
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.coords import Coords, assign_coords
-from dascore.utils.mapping import FrozenDict
+
+# from dascore.utils.mapping import FrozenDict
 from dascore.utils.patch import _AttrsCoordsMixer
 from dascore.viz import VizPatchNameSpace
 
@@ -44,6 +46,11 @@ class Patch:
     -----
     Unless data is a DataArray or Patch, data, coords, and dims are required.
     """
+
+    data: ArrayLike
+    coords: Mapping[str, ArrayLike]
+    dims: tuple[str, ...]
+    attrs: PatchAttrs
 
     def __init__(
         self,
@@ -103,7 +110,7 @@ class Patch:
         """
 
         if only_required_attrs:
-            attrs_to_compare = set(DEFAULT_PATCH_ATTRS) - {"history"}
+            attrs_to_compare = set(PatchAttrs.get_defaults()) - {"history"}
             attrs1 = {x: self.attrs.get(x, None) for x in attrs_to_compare}
             attrs2 = {x: other.attrs.get(x, None) for x in attrs_to_compare}
         else:
@@ -205,9 +212,9 @@ class Patch:
         return self._data_array.dims
 
     @property
-    def attrs(self) -> FrozenDict:
+    def attrs(self) -> PatchAttrs:
         """Return the attributes of the trace."""
-        return FrozenDict(self._data_array.attrs)
+        return PatchAttrs(**self._data_array.attrs)
 
     @property
     def shape(self) -> tuple[int, ...]:

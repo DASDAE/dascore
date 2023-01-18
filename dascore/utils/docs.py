@@ -63,6 +63,7 @@ def compose_docstring(**kwargs: Union[str, Sequence[str]]):
 
     def _wrap(func):
         docstring = func.__doc__
+        assert isinstance(docstring, str)
         # iterate each provided value and look for it in the docstring
         for key, value in kwargs.items():
             value = value if isinstance(value, str) else "\n".join(value)

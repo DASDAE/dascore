@@ -25,13 +25,13 @@ class TestReadTerra15V5:
 
     def test_attributes(self, terra15_v5_patch):
         """Ensure a few of the expected attrs exist in array."""
-        attrs = terra15_v5_patch.attrs
+        attrs = dict(terra15_v5_patch.attrs)
         expected_attrs = {"time_min", "time_max", "distance_min", "data_units"}
         assert set(expected_attrs).issubset(set(attrs))
 
     def test_has_required_attrs(self, terra15_v5_patch):
         """ "Ensure the required das attrs are found"""
-        assert set(REQUIRED_DAS_ATTRS).issubset(set(terra15_v5_patch.attrs))
+        assert set(REQUIRED_DAS_ATTRS).issubset(set(dict(terra15_v5_patch.attrs)))
 
     def test_coord_attr_time_equal(self, terra15_v5_patch):
         """The time reported in the attrs and coords should match"""

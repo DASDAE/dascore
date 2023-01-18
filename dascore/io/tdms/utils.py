@@ -8,11 +8,11 @@ import struct
 
 import numpy as np
 
-from dascore.core.schema import PatchSummary
+from dascore.core.schema import PatchAttrs
 from dascore.utils.misc import get_slice
 from dascore.utils.time import to_datetime64
 
-DEFAULT_ATTRS = tuple(PatchSummary.__fields__)
+DEFAULT_ATTRS = tuple(PatchAttrs.__fields__)
 
 
 def type_not_supported(vargin):
@@ -217,7 +217,7 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
     out = dict(out)
     # Add other attributes not yet included
     out["n_channels"] = n_channels
-    out["data_type"] = "strain rate"
+    out["data_type"] = "strain_rate"
     out["data_units"] = ""
     out["dims"] = "time, distance"
     out["d_time"] = 1 / out["SamplingFrequency[Hz]"]
