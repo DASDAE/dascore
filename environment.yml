@@ -1,4 +1,4 @@
-name: dascore2
+name: dascore
 channels:
   - conda-forge
   - defaults
