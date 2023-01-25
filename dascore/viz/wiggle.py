@@ -34,6 +34,13 @@ def wiggle(
         The format for the time axis.
     show
         If True, show the plot, else just return axis.
+
+    Examples
+    --------
+    >>> # simple plotting
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> patch.viz.wiggle(show=True)
     """
     ax = _get_ax(ax)
     dims = patch.dims
