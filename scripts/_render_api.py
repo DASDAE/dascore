@@ -10,7 +10,6 @@ from functools import cache
 from pathlib import Path
 
 import pandas as pd
-import pooch
 from jinja2 import Environment, FileSystemLoader
 
 RENDER_FUNCS = {}

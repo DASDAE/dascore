@@ -9,7 +9,7 @@ import dascore  # NOQA
 
 PatchType = TypeVar("PatchType", bound="dascore.Patch")
 
-SpoolType = TypeVar("SpoolType", bound="dascore.Spool")
+SpoolType = TypeVar("SpoolType", bound="dascore.BaseSpool")
 
 # Bump this to force re-downloading of all data file
 DATA_VERSION = "0.0.0"
