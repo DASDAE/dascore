@@ -77,7 +77,7 @@ def waterfall(
     >>> # Plot the default patch
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> _ = patch.viz.waterfall(show=True, scale=0.1)
+    >>> _ = patch.viz.waterfall(scale=0.1)
     """
     ax = _get_ax(ax)
     cmap = _get_cmap(cmap)
