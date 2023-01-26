@@ -48,30 +48,49 @@ def dump_stdout(output_str, out_stream=None):
     out_stream.write(output_str)
 
 
-def _has_link(raw_data, start, stop):
-    """Determine if the work 'link' occurs before start index."""
-    new_start = max([start - 15, 0])
-    return "link" in raw_data[new_start:stop]
+def replace_links(json_data, raw_string):
+    """Replace the aliases (links) with the cross-references."""
 
+    def _yield_links(element):
+        """Yield all link elements."""
+        if isinstance(element, list):
+            for sub_element in element:
+                yield from _yield_links(sub_element)
+        elif isinstance(element, (dict)):
+            if element.get("t") == "Link":
+                yield element
+            else:
+                yield from _yield_links(element.get("c", []))
 
-def replace_links(data):
-    reg_pattern = "(?<=\%60)(.*?)(?=\%60)"
-    for match in re.finditer(reg_pattern, data):
-        start, stop = match.span()
-        # look back for "link" otherwise this may just be an emphasis.
-        if not _has_link(data, start, stop):
-            continue
-        cross_refs = get_cross_ref_dict()
-        key = data[start:stop].replace("`", "")
-        new_value = cross_refs.get(key, key)
-        data = f"{data[:start]}{new_value}{data[stop:]}"
-    return data
+    reg_pattern = '(?<="\%60)(.*?)(?=\%60")'
+    blocks = json_data["blocks"]
+
+    replace_dict = {}
+    for link in _yield_links(blocks):
+        str_to_scan = json.dumps(link, separators=(",", ":"), ensure_ascii=False)
+        if not str_to_scan in raw_string:
+            from remote_pdb import RemotePdb
+
+            RemotePdb("127.0.0.1", 4444).set_trace()
+
+        matches = re.finditer(reg_pattern, str_to_scan)
+        for match in matches:
+            start, stop = match.span()
+            cross_refs = get_cross_ref_dict()
+            key = str_to_scan[start:stop].replace("`", "")
+            new_value = cross_refs.get(key, key)
+            if new_value != key:
+                new_sub_str = str_to_scan.replace(f'"%60{key}%60"', f'"{new_value}"')
+                replace_dict[str_to_scan] = new_sub_str
+    for i, v in replace_dict.items():
+        raw_string = raw_string.replace(i, v)
+    return raw_string
 
 
 def test():
     """Function to test filter."""
     here = Path(__file__).parent
-    data_path = here / "filter_test_data" / "test.json"
+    data_path = here / "filter_test_data" / "test_data_2.json"
     with data_path.open("r") as fi:
         data = fi.read()
     input_stream = io.StringIO(data)
@@ -80,11 +99,12 @@ def test():
 
 def main(raw_data=None):
     """Run filter."""
-    raw_data = load_stdin(raw_data)
-    output_data = replace_links(raw_data)
+    raw_str = load_stdin(raw_data)
+    json_data = json.loads(raw_str)
+    output_data = replace_links(json_data, raw_str)
     dump_stdout(output_data)
 
 
 if __name__ == "__main__":
     # test()  # uncomment to test.
-    main()
+    main()  # uncomment before running quarto so IO works.
