@@ -71,6 +71,13 @@ def waterfall(
         If True, show the color bar.
     show
         If True, show the plot, else just return axis.
+
+    Examples
+    --------
+    >>> # Plot the default patch
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> _ = patch.viz.waterfall(show=True, scale=0.1)
     """
     ax = _get_ax(ax)
     cmap = _get_cmap(cmap)

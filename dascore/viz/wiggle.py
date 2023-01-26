@@ -37,10 +37,10 @@ def wiggle(
 
     Examples
     --------
-    >>> # simple plotting
+    >>> # Plot the default patch
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> patch.viz.wiggle(show=True)
+    >>> _ = patch.viz.wiggle(show=True)
     """
     ax = _get_ax(ax)
     dims = patch.dims
