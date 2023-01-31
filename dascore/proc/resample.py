@@ -48,6 +48,15 @@ def decimate(
     -----
     Simply uses scipy.signal.decimate if filter_type is specified. Otherwise,
     just slice data long specified dimension only including every n samples.
+
+    Examples
+    --------
+    # Simple example using iir
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> decimated_irr = patch.decimate(time=10, filter_type='iir')
+    # Example using fir
+    >>> decimated_fir = patch.decimate(time=10, filter_type='fir')
     """
     dim, axis, factor = get_dim_value_from_kwargs(patch, kwargs)
     # Apply scipy
