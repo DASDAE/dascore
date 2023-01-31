@@ -1,15 +1,15 @@
 """
 Module for re-sampling patches.
 """
-from typing import Union
+from typing import Literal, Union
 
 import numpy as np
+from scipy.signal import decimate as scipy_decimate
 
-import dascore
+import dascore as dc
 import dascore.compat as compat
 from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
-from dascore.proc.filter import _get_sampling_rate, _lowpass_cheby_2
 from dascore.utils.misc import check_evenly_sampled
 from dascore.utils.patch import (
     get_dim_value_from_kwargs,
@@ -22,7 +22,7 @@ from dascore.utils.time import to_number, to_timedelta64
 @patch_function()
 def decimate(
     patch: PatchType,
-    lowpass: bool = True,
+    filter_type: Literal["iir", "fir", None] = "iir",
     copy=True,
     **kwargs,
 ) -> PatchType:
@@ -31,44 +31,49 @@ def decimate(
 
     Parameters
     ----------
-    lowpass
-        If True, first apply a low-pass (anti-alis) filter.
+    filter_type
+        filter type to use to avoid aliasing. Options are:
+            iir - infinite impulse response
+            fir - finite impulse response
+            None - No pre-filtering
     copy
         If True, copy the decimated data array. This is needed if you want
         the old array to get gc'ed to free memory otherwise a view is returned.
+        Only applies when filter_type == None.
     **kwargs
         Used to pass dimension and factor. For example time=10 is 10x
         decimation along the time axis.
+
+    Notes
+    -----
+    Simply uses scipy.signal.decimate if filter_type is specified. Otherwise,
+    just slice data long specified dimension only including every n samples.
     """
-    # Note: We can't simply use scipy.signal.decimate due to this issue:
-    # https://github.com/scipy/scipy/issues/15072
     dim, axis, factor = get_dim_value_from_kwargs(patch, kwargs)
-    if lowpass:
+    # Apply scipy
+    if filter_type:
         # get new niquest
-        if factor > 16:
+        if filter_type == "IRR" and factor > 13:
             msg = (
-                "Automatic filter design is unstable for decimation "
-                + "factors above 16. Manual decimation is necessary."
+                "IRR filter is unstable for decimation factors above"
+                " 13. Call decimate multiple times."
             )
             raise FilterValueError(msg)
-        sr = _get_sampling_rate(patch, dim)
-        freq = sr * 0.5 / float(factor)
-        fdata = _lowpass_cheby_2(patch.data, freq, sr, axis=axis)
-        patch = dascore.Patch(
-            fdata, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
-        )
+        data = scipy_decimate(patch.data, factor, ftype=filter_type, axis=axis)
+        coords = {x: patch.coords[x] for x in patch.dims}
+        coords[dim] = coords[dim][::factor]
+    else:
+        dar = patch._data_array.sel(**{dim: slice(None, None, factor)})
+        # need to create a new xarray so the old, probably large, numpy array
+        # gets gc'ed, otherwise it stays in memory (if lowpass isn't called)
+        data = dar.data if not copy else dar.data.copy()
+        coords = dar.coords
 
-    kwargs = {dim: slice(None, None, factor)}
-    dar = patch._data_array.sel(**kwargs)
-    # need to create a new xarray so the old, probably large, numpy array
-    # gets gc'ed, otherwise it stays in memory (if lowpass isn't called)
-    data = dar.data if not copy else dar.data.copy()
-    attrs = dar.attrs
     # update delta_dim since spacing along dimension has changed
-    d_attr = f"d_{dim}"
-    attrs[d_attr] = patch.attrs[d_attr] * factor
-
-    return dascore.Patch(data=data, coords=dar.coords, attrs=dar.attrs, dims=dar.dims)
+    attrs = dict(patch.attrs)
+    attrs[f"d_{dim}"] = patch.attrs[f"d_{dim}"] * factor
+    out = dc.Patch(data=data, coords=coords, attrs=attrs, dims=patch.dims)
+    return out
 
 
 @patch_function()
