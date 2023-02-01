@@ -6,16 +6,22 @@ labels: bug
 assignees: ''
 ---
 
-**Description**
-A clear and concise description of the bug.
+## Description
+<!--
+Provide a clear description of the issue.
+-->
 
-**To Reproduce**
-Include a short code example which reproduces the issue.
+## Example
+<!--
+Include a short example that reproduces the issue, if applicable.
+-->
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+## Expected behavior
+<!--
+Describe the expected behavior, if applicable.
+-->
 
-**Versions (please complete the following information):**
- - OS: [e.g. Ubuntu 20.04]
- - DasCore Version [e.g. 0.0.5]
- - Python Version [e.g. 3.10]
+## Versions
+ - OS [e.g. Ubuntu 20.04]:
+ - DasCore Version [e.g. 0.0.5]:
+ - Python Version [e.g. 3.10]:
