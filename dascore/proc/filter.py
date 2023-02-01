@@ -10,15 +10,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 from scipy import ndimage
-from scipy.signal import (
-    cheb2ord,
-    cheby2,
-    iirfilter,
-    medfilt2d,
-    sosfilt,
-    sosfiltfilt,
-    zpk2sos,
-)
+from scipy.signal import iirfilter, medfilt2d, sosfilt, sosfiltfilt, zpk2sos
 
 import dascore
 from dascore.constants import PatchType
@@ -222,29 +214,6 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 #     if zerophase:
 #         out = sosfilt(sos, out[::-1])[::-1]
 #     return dascore.Patch(data=out, coords=patch.coords, attrs=patch.attrs)
-
-
-def _lowpass_cheby_2(data, freq, df, maxorder=12, axis=0):
-    """
-    Cheby2-Lowpass Filter used for pre-conditioning decimation.
-
-    Based on Obspy's implementation found here:
-    https://docs.obspy.org/master/_modules/obspy/signal/filter.html#lowpass_cheby_2
-    """
-    nyquist = df * 0.5
-    # rp - maximum ripple of passband, rs - attenuation of stopband
-    rp, rs, order = 1, 96, 1e99
-    ws = freq / nyquist  # stop band frequency
-    wp = ws  # pass band frequency
-    # raise for some bad scenarios
-    while True:
-        if order <= maxorder:
-            break
-        wp = wp * 0.99
-        order, wn = cheb2ord(wp, ws, rp, rs, analog=0)
-    z, p, k = cheby2(order, rs, wn, btype="low", analog=0, output="zpk")
-    sos = zpk2sos(z, p, k)
-    return sosfilt(sos, data, axis=axis)
 
 
 @patch_function()

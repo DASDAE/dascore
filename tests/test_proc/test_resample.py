@@ -2,8 +2,10 @@
 Tests for decimation
 """
 import numpy as np
+import pandas as pd
 import pytest
 
+import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.utils.patch import get_start_stop_step
 
@@ -89,6 +91,32 @@ class TestDecimate:
         dt1 = random_patch.attrs["d_time"]
         out = random_patch.decimate(time=10)
         assert out.attrs["d_time"] == dt1 * 10
+
+    def test_float_32_stability(self, random_patch):
+        """
+        Ensure float32 works for decimation.
+
+        See scipy#15072.
+        """
+        ar = np.random.random((10_000, 2)).astype("float32")
+        dt = dc.to_timedelta64(0.001)
+        t1 = dc.to_datetime64("2020-01-01")
+        coords = {
+            "distance": [1, 2],
+            "time": np.arange(0, ar.shape[0]) * dt + t1,
+        }
+        dims = ("time", "distance")
+        attrs = {"d_time": dt, "time_min": t1}
+        patch = dc.Patch(data=ar, coords=coords, dims=dims, attrs=attrs)
+        # ensure all modes of decimation don't produce NaN values.
+        decimated_iir = patch.decimate(time=10, filter_type="iir")
+        assert not np.any(pd.isnull(decimated_iir.data))
+
+        decimated_fir = patch.decimate(time=10, filter_type="fir")
+        assert not np.any(pd.isnull(decimated_fir.data))
+
+        decimated_none = patch.decimate(time=10, filter_type=None)
+        assert not np.any(pd.isnull(decimated_none.data))
 
 
 class TestResample:

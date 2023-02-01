@@ -1,6 +1,7 @@
 """
 pytest configuration for dascore
 """
+import os
 import shutil
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from dascore.utils.misc import register_func
 test_data_path = Path(__file__).parent.absolute() / "test_data"
 
 # A list to register functions that return general spools or patches
-# These are to be used for running many different patches/spools through
+# These are to be used for running many patches/spools through
 # Generic tests.
 SPOOL_FIXTURES = []
 PATCH_FIXTURES = []
@@ -80,7 +81,11 @@ def pytest_sessionstart(session):
 
     import dascore as dc
 
-    matplotlib.use("Agg")
+    # If running in CI make sure to turn off matplotlib.
+    if os.environ.get("CI", False):
+        matplotlib.use("Agg")
+
+    # Ensure debug is set. This disables progress bars which disrupt debugging.
     dc._debug = True
 
 

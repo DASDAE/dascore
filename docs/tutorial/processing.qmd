@@ -1,3 +1,57 @@
 ---
 title: Processing
 ---
+The following shows some simple examples of patch processing. See the
+[proc module documentation](`dascore.proc`) for a list of processing functions.
+
+# Decimate
+
+The [decimate patch function](`dascore.Patch.decimate`) decimates a `Patch`
+along a given axis while by default performing low-pass filtering to avoid
+[aliasing](https://en.wikipedia.org/wiki/Aliasing).
+
+## Data creation
+
+First, we create a patch composed of two sine waves; one above the new
+decimation frequency and one below.
+
+```{python}
+import dascore as dc
+
+patch = dc.examples.sin_wave_patch(
+    sample_rate=1000,
+    frequency=[200, 10],
+    channel_count=2,
+)
+_ = patch.viz.wiggle(show=True)
+```
+
+## IIR filter
+
+Next we decimate by 10x using IIR filter
+
+```{python}
+decimated_iir = patch.decimate(time=10, filter_type='iir')
+_ = decimated_iir.viz.wiggle(show=True)
+```
+
+Notice the lowpass filter removed the 200 Hz signal and only
+the 10Hz wave remains.
+
+## FIR filter
+
+Next we decimate by 10x using FIR filter.
+
+```{python}
+decimated_fir = patch.decimate(time=10, filter_type='fir')
+_ = decimated_fir.viz.wiggle(show=True)
+```
+
+## No Filter
+
+Next, we decimate without a filter to purposely induce aliasing.
+
+```{python}
+decimated_no_filt = patch.decimate(time=10, filter_type=None)
+_ = decimated_no_filt.viz.wiggle(show=True)
+```
