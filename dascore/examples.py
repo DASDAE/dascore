@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from typing import Sequence, Union
 
 import numpy as np
 
@@ -58,10 +59,11 @@ def _random_patch(starttime="2017-09-18", network="", station="", tag="random"):
 @register_func(EXAMPLE_PATCHES, key="sin_wav")
 def sin_wave_patch(
     sample_rate=44100,
-    frequency=100,
+    frequency: Union[Sequence[float], float] = 100.0,
     time_min="2020-01-01",
     channel_count=3,
     duration=1,
+    amplitude=10,
 ):
     """
     Return a Patch composed of simple 1 second sin waves.
@@ -80,13 +82,19 @@ def sin_wave_patch(
         The number of  distance channels to include.
     duration
         Duration of signal in seconds.
-
+    amplitude
+        The amplitude of the sin wave.
     """
     t_array = np.linspace(0.0, duration, sample_rate * duration)
-    sin_data = 10 * np.sin(2.0 * np.pi * frequency * t_array)
-    data = np.stack([sin_data] * channel_count).T
-    time = to_timedelta64(t_array) + np.datetime64(time_min)
+    # Get time and distance coords
     distance = np.arange(1, channel_count + 1, 1)
+    time = to_timedelta64(t_array) + np.datetime64(time_min)
+    freqs = [frequency] if isinstance(frequency, (float, int)) else frequency
+    # init empty data and add frequencies.
+    data = np.zeros((len(time), len(distance)))
+    for freq in freqs:
+        sin_data = amplitude * np.sin(2.0 * np.pi * freq * t_array)
+        data += sin_data[..., np.newaxis]
 
     patch = dc.Patch(
         data=data,

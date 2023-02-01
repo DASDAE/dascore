@@ -41,7 +41,7 @@ def decimate(
         the old array to get gc'ed to free memory otherwise a view is returned.
         Only applies when filter_type == None.
     **kwargs
-        Used to pass dimension and factor. For example time=10 is 10x
+        Used to pass dimension and factor. For example `time=10` is 10x
         decimation along the time axis.
 
     Notes
@@ -55,13 +55,12 @@ def decimate(
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> decimated_irr = patch.decimate(time=10, filter_type='iir')
-    # Example using fir
-    >>> decimated_fir = patch.decimate(time=10, filter_type='fir')
+    >>> # Example using fir along distance dimension
+    >>> decimated_fir = patch.decimate(distance=10, filter_type='fir')
     """
     dim, axis, factor = get_dim_value_from_kwargs(patch, kwargs)
-    # Apply scipy
+    # Apply scipy.signal.decimate and geet new coords
     if filter_type:
-        # get new niquest
         if filter_type == "IRR" and factor > 13:
             msg = (
                 "IRR filter is unstable for decimation factors above"
@@ -71,14 +70,12 @@ def decimate(
         data = scipy_decimate(patch.data, factor, ftype=filter_type, axis=axis)
         coords = {x: patch.coords[x] for x in patch.dims}
         coords[dim] = coords[dim][::factor]
-    else:
+    else:  # No filter, simply slice along specified dimension.
         dar = patch._data_array.sel(**{dim: slice(None, None, factor)})
-        # need to create a new xarray so the old, probably large, numpy array
-        # gets gc'ed, otherwise it stays in memory (if lowpass isn't called)
+        # Need to copy so array isn't a slice and holds onto reference of parent
         data = dar.data if not copy else dar.data.copy()
         coords = dar.coords
-
-    # update delta_dim since spacing along dimension has changed
+    # Update delta_dim since spacing along dimension has changed.
     attrs = dict(patch.attrs)
     attrs[f"d_{dim}"] = patch.attrs[f"d_{dim}"] * factor
     out = dc.Patch(data=data, coords=coords, attrs=attrs, dims=patch.dims)
