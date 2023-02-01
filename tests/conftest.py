@@ -5,9 +5,11 @@ import os
 import shutil
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pytest
 import tables as tb
+import tables.parameters
 
 import dascore as dc
 import dascore.examples as ex
@@ -77,13 +79,13 @@ def pytest_sessionstart(session):
     and to set debug hook to True to avoid showing progress bars,
     except when explicitly being tested.
     """
-    import matplotlib
-
-    import dascore as dc
-
     # If running in CI make sure to turn off matplotlib.
     if os.environ.get("CI", False):
         matplotlib.use("Agg")
+
+    # need to set nodes to 32 to avoid crash on p3.11. See pytables#977.
+    tables.parameters.NODE_CACHE_SLOTS = 32
+    matplotlib.use("Agg")
 
     # Ensure debug is set. This disables progress bars which disrupt debugging.
     dc._debug = True
