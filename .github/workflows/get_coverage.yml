@@ -16,8 +16,10 @@ jobs:
         uses: conda-incubator/setup-miniconda@v2
         with:
           miniconda-version: 'latest'
-          python-version: 3.10
-          channels: conda-forge
+          python-version: "3.10"
+          activate-environment: dascore
+          environment-file: environment.yml
+          condarc-file: .github/test_condarc.yml
 
       - name: install dascore
         shell: bash -l {0}
