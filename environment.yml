@@ -12,7 +12,7 @@ dependencies:
   - pre-commit
   - pytables
   - matplotlib
-  - scipy
+  - scipy>=1.10.0
   - findiff
   - jupyter
   - nbformat
