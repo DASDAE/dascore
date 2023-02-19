@@ -17,6 +17,10 @@ class UnknownFiberFormat(IOError, DASCoreError):
     """Raised when the format of an alleged fiber file is not recognized."""
 
 
+class UnknownExample(DASCoreError):
+    """Raised when an unregistered example is requested."""
+
+
 class ParameterError(ValueError, DASCoreError):
     """Raised when something is wrong with an input parameter."""
 

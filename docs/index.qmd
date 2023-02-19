@@ -1,3 +1,9 @@
+---
+execute:
+  warning: false
+---
+
+
 # DASCore
 
 A python library for distributed fiber optic sensing.
@@ -88,9 +94,12 @@ out = (
 
 ```{python}
 import dascore as dc
-patch = dc.get_example_patch('random_das')
+patch = (
+    dc.get_example_patch('example_event_1')
+    .pass_filter(time=(None, 300))
+)
 
-patch.viz.waterfall(show=True, scale=0.02);
+patch.viz.waterfall(show=True, scale=0.04);
 ```
 
 # Installation

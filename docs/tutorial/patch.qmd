@@ -1,5 +1,7 @@
 ---
 title: Patch
+execute:
+  warning: false
 ---
 
 A [`Patch`](`dascore.core.patch.Patch`) is a section of contiguous, uniformly sampled data and metadata.

@@ -18,7 +18,7 @@ def wiggle(
     dim="time",
     color="black",
     ax: Optional[plt.Axes] = None,
-    timefmt="%H:%M:%S",
+    timefmt=None,
     show=False,
 ) -> plt.Figure:
     """
@@ -97,7 +97,7 @@ def wiggle(
     for dim, x in zip(dims_r, ["x", "y"]):
         getattr(ax, f"set_{x}label")(str(dim).capitalize())
     if "time" in dims_r:
-        _format_time_axis(ax, dims_r, timefmt)
+        _format_time_axis(ax, dims_r, timefmt, patch.coords["time"])
         _add_time_axis_label(ax, patch, dims_r)
     ax.invert_yaxis()  # invert y axis so origin is at top
     if show:

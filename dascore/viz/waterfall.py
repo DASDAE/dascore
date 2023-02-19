@@ -39,7 +39,7 @@ def waterfall(
     patch: PatchType,
     ax: Optional[plt.Axes] = None,
     cmap="bwr",
-    timefmt="%H:%M:%S",
+    timefmt=None,
     scale: Optional[Union[float, Sequence[float]]] = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     colorbar=True,
@@ -55,7 +55,8 @@ def waterfall(
     cmap
         A matplotlib colormap string or instance.
     timefmt
-        The format for the time axis.
+        The format for the time axis (e.g., "%H:%M:%S"). If None,
+        try to automatically determine the most clear format.
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
@@ -94,7 +95,7 @@ def waterfall(
     for dim, x in zip(dims_r, ["x", "y"]):
         getattr(ax, f"set_{x}label")(str(dim).capitalize())
     if "time" in dims_r:
-        _format_time_axis(ax, dims_r, timefmt)
+        _format_time_axis(ax, dims_r, timefmt, patch.coords["time"])
         _add_time_axis_label(ax, patch, dims_r)
     # add color bar
     if colorbar:

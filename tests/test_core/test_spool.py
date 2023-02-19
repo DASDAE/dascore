@@ -381,3 +381,27 @@ class TestGetSpool:
 
         pickle_spool = dc.spool(pickle_path)
         assert isinstance(pickle_spool, MemorySpool)
+
+
+class TestMisc:
+    """Tests for misc. spool cases."""
+
+    def test_changed_memory_spool(self, random_patch):
+        """
+        Calling spool on a patch that was returned from None results in
+        the spool contents reverting to original patch.
+        """
+        # setup patch with simple history
+        patch = random_patch.pass_filter(time=(10, 20))
+        assert patch.attrs.history
+        # create new patch with cleared history
+        new_attrs = dict(patch.attrs)
+        new_attrs["history"] = []
+        new_patch = patch.new(attrs=new_attrs)
+        assert not new_patch.attrs.history
+        # add new patch (w/ no history) to spool, get first patch out.
+        spool = dc.spool([new_patch])
+        assert len(spool) == 1
+        # get first patch, assert it has no history
+        out = spool[0]
+        assert not out.attrs.history

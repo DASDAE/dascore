@@ -41,23 +41,10 @@ def pytest_addoption(parser):
         default=False,
         help="Run integration tests",
     )
-    parser.addoption(
-        "--gui", action="store_true", default=False, help="only run gui tests"
-    )
 
 
 def pytest_collection_modifyitems(config, items):
     """Configure pytest command line options."""
-    # skip workbench gui tests unless --gui is specified.
-    run_guis = config.getoption("--gui")
-    skip = pytest.mark.skip(reason="only run manual tests when --gui is used")
-    for item in items:
-        # skip all gui tests if gui flag is not set
-        if not run_guis and "gui" in item.keywords:
-            item.add_marker(skip)
-        # skip all non-gui tests if gui flag is set
-        if run_guis and "gui" not in item.keywords:
-            item.add_marker(skip)
 
     marks = {}
     if not config.getoption("--integration"):
@@ -85,7 +72,6 @@ def pytest_sessionstart(session):
 
     # need to set nodes to 32 to avoid crash on p3.11. See pytables#977.
     tables.parameters.NODE_CACHE_SLOTS = 32
-    matplotlib.use("Agg")
 
     # Ensure debug is set. This disables progress bars which disrupt debugging.
     dc._debug = True
@@ -163,6 +149,14 @@ def multi_dim_coords_patch(random_patch):
     quality = np.ones((len(dist), len(time)))
     out = random_patch.assign_coords(quality=(("distance", "time"), quality))
     return out
+
+
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def event_patch_1():
+    """Fetch event patch 1."""
+    path = fetch("example_dasdae_event_1.h5")
+    return dc.spool(path)[0]
 
 
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)
