@@ -9,10 +9,10 @@ import numpy as np
 from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
-    _add_time_axis_label,
     _format_time_axis,
     _get_ax,
     _get_cmap,
+    _get_dim_label,
     _get_extents,
 )
 
@@ -93,10 +93,9 @@ def waterfall(
     if scale is not None:
         _set_scale(im, scale, scale_type, patch)
     for dim, x in zip(dims_r, ["x", "y"]):
-        getattr(ax, f"set_{x}label")(str(dim).capitalize())
+        getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
     if "time" in dims_r:
-        _format_time_axis(ax, dims_r, timefmt, patch.coords["time"])
-        _add_time_axis_label(ax, patch, dims_r)
+        _format_time_axis(ax, patch, dims_r, timefmt, extents)
     # add color bar
     if colorbar:
         ax.get_figure().colorbar(im)

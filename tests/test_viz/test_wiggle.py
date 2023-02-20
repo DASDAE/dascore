@@ -29,4 +29,4 @@ class TestWiggle:
             frequency=[200, 10],
             channel_count=2,
         )
-        _ = patch.viz.wiggle(show=True)
+        _ = patch.viz.wiggle()

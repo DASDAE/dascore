@@ -53,8 +53,8 @@ class TestWaterfall:
         ax2 = patch.viz.waterfall(scale_type="absolute", scale=10)
         assert ax2 is not None
 
-    def test_small_time_range(self, patch_random_start):
-        """Ensure time-scale changes to be readable."""
-        # ax1 = patch_random_start.viz.waterfall()
-
-        # x_tick_labels = ax1.get_xticklabels()
+    def test_doc_intro_example(self, event_patch_1):
+        """Simple test to ensure the doc examples can be run"""
+        patch = event_patch_1.pass_filter(time=(None, 300))
+        _ = patch.viz.waterfall(scale=0.04)
+        _ = patch.transpose("distance", "time").viz.waterfall(scale=0.04)
