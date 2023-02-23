@@ -9,10 +9,10 @@ import numpy as np
 from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
-    _add_time_axis_label,
     _format_time_axis,
     _get_ax,
     _get_cmap,
+    _get_dim_label,
     _get_extents,
 )
 
@@ -39,7 +39,7 @@ def waterfall(
     patch: PatchType,
     ax: Optional[plt.Axes] = None,
     cmap="bwr",
-    timefmt="%H:%M:%S",
+    timefmt=None,
     scale: Optional[Union[float, Sequence[float]]] = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     colorbar=True,
@@ -55,7 +55,8 @@ def waterfall(
     cmap
         A matplotlib colormap string or instance.
     timefmt
-        The format for the time axis.
+        The format for the time axis (e.g., "%H:%M:%S"). If None,
+        try to automatically determine the most clear format.
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
@@ -92,10 +93,9 @@ def waterfall(
     if scale is not None:
         _set_scale(im, scale, scale_type, patch)
     for dim, x in zip(dims_r, ["x", "y"]):
-        getattr(ax, f"set_{x}label")(str(dim).capitalize())
+        getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
     if "time" in dims_r:
-        _format_time_axis(ax, dims_r, timefmt)
-        _add_time_axis_label(ax, patch, dims_r)
+        _format_time_axis(ax, patch, dims_r, timefmt, extents)
     # add color bar
     if colorbar:
         ax.get_figure().colorbar(im)

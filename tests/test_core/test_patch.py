@@ -29,7 +29,7 @@ def get_simple_patch() -> Patch:
 
 
 class TestInit:
-    """Tests for init'ing Trace2D"""
+    """Tests for init'ing Patch"""
 
     time1 = np.datetime64("2020-01-01")
 
@@ -150,6 +150,20 @@ class TestInit:
         data = np.ones((10, 10))
         with pytest.raises(ValueError, match="data, coords, and dims"):
             Patch(data=data)
+
+
+class TestNew:
+    """Tests for `Patch.new` method."""
+
+    def test_erase_history(self, random_patch):
+        """Ensure new can erase history."""
+        # do some processing, so history shows up.
+        patch = random_patch.pass_filter(time=(None, 10)).decimate(time=5)
+        assert patch.attrs.history
+        new_attrs = dict(patch.attrs)
+        new_attrs["history"] = []
+        new_patch = patch.new(attrs=new_attrs)
+        assert not new_patch.attrs.history
 
 
 class TestEmptyPatch:
@@ -381,7 +395,7 @@ class TestPipe:
 
 
 class TestAddCoords:
-    """Tests for adding non-standard coords to traces."""
+    """Tests for adding non-standard coords to patches."""
 
     @pytest.fixture(scope="class")
     def random_patch_with_lat(self, random_patch):

@@ -7,18 +7,19 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 
-from dascore.constants import PatchType
+from dascore.constants import ONE_BILLION, PatchType
 from dascore.utils.patch import patch_function
-from dascore.utils.plotting import _add_time_axis_label, _format_time_axis, _get_ax
+from dascore.utils.plotting import _format_time_axis, _get_ax
+from dascore.utils.time import to_number
 
 
-@patch_function()
+@patch_function(required_dims=("time", "distance"))
 def wiggle(
     patch: PatchType,
     dim="time",
     color="black",
     ax: Optional[plt.Axes] = None,
-    timefmt="%H:%M:%S",
+    timefmt=None,
     show=False,
 ) -> plt.Figure:
     """
@@ -55,12 +56,12 @@ def wiggle(
         max_of_traces = abs(data).max(axis=1)
         data = data / max_of_traces[:, np.newaxis]
         axis_across_wiggles = coords["distance"]
-        axis_along_wiggles = coords["time"]
+        axis_along_wiggles = to_number(coords["time"]) / ONE_BILLION
         intervals = coords["distance"][1:] - coords["distance"][:-1]
     else:
         max_of_traces = abs(data).max(axis=0)
         data = data / max_of_traces[np.newaxis, :]
-        axis_across_wiggles = coords["time"]
+        axis_across_wiggles = to_number(coords["time"]) / ONE_BILLION
         axis_along_wiggles = coords["distance"]
         intervals = (coords["time"][1:] - coords["time"][:-1]) / np.timedelta64(1, "s")
 
@@ -68,16 +69,10 @@ def wiggle(
     data = -1 * data
     for a in range(total_wiggles):
         if dim == "distance":
-            wiggle = (
-                np.array(
-                    [
-                        timedelta(seconds=(intervals[min(a, total_wiggles - 2)] * b))
-                        for b in data[a]
-                    ],
-                    dtype="timedelta64[ns]",
-                )
-                + axis_across_wiggles[a]
-            )
+            _intervals = intervals[min(a, total_wiggles - 2)]
+            array_inputs = [timedelta(seconds=(_intervals * b)) for b in data[a]]
+            array = np.array(array_inputs, dtype="timedelta64[ns]")
+            wiggle = array + axis_across_wiggles[a]
         else:
             wiggle = (
                 intervals[min(a, total_wiggles - 2)] * data[a] + axis_across_wiggles[a]
@@ -97,8 +92,7 @@ def wiggle(
     for dim, x in zip(dims_r, ["x", "y"]):
         getattr(ax, f"set_{x}label")(str(dim).capitalize())
     if "time" in dims_r:
-        _format_time_axis(ax, dims_r, timefmt)
-        _add_time_axis_label(ax, patch, dims_r)
+        _format_time_axis(ax, patch, dims_r, timefmt)
     ax.invert_yaxis()  # invert y axis so origin is at top
     if show:
         plt.show()

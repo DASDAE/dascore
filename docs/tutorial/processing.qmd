@@ -1,5 +1,7 @@
 ---
 title: Processing
+execute:
+  warning: false
 ---
 The following shows some simple examples of patch processing. See the
 [proc module documentation](`dascore.proc`) for a list of processing functions.

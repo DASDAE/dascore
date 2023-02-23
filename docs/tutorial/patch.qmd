@@ -1,5 +1,7 @@
 ---
 title: Patch
+execute:
+  warning: false
 ---
 
 A [`Patch`](`dascore.core.patch.Patch`) is a section of contiguous, uniformly sampled data and metadata.
@@ -132,8 +134,12 @@ based visualizations but other DASDAE packages will do more interesting visualiz
 
 ```{python}
 import dascore as dc
-pa = dc.get_example_patch()
-pa.viz.waterfall(show=True)
+patch = (
+    dc.get_example_patch('example_event_1')
+    .pass_filter(time=(None, 300))
+)
+
+patch.viz.waterfall(show=True, scale=0.04);
 ```
 
 # Modifying Patches

@@ -5,6 +5,9 @@ project:
 filters:
   - filters/fill_links.py
 
+execute:
+  warning: false
+
 format:
   html:
     toc: true
@@ -13,6 +16,7 @@ format:
     code-copy: true
     code-overflow: wrap
     css: styles.css
+
 
 website:
   title: "DASCore"

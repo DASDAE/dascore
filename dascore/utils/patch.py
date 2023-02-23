@@ -42,7 +42,7 @@ def _shallow_copy(patch: PatchType) -> PatchType:
 
     Note
     ----
-    This is an internal function because Patch should not be immutable with
+    This is an internal function because Patch should be immutable with
     the public APIs.
     """
     dar = patch._data_array.copy(deep=False)  # dont copy data and such

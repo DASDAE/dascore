@@ -1,5 +1,7 @@
 ---
 title: Working with Files
+execute:
+  warning: false
 ---
 
 DASCore contains two data structures which are useful for working with directories of

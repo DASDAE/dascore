@@ -7,6 +7,8 @@ from typing import Sequence, Union
 import numpy as np
 
 import dascore as dc
+from dascore.exceptions import UnknownExample
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_datetime64, to_timedelta64
@@ -19,8 +21,24 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     """
     Load an example Patch.
 
-    kwargs are passed to the corresponding functions to generate data.
+    Parameters
+    ----------
+    example_name
+        The name of the example to load.
+    **kwargs
+        Passed to the corresponding functions to generate data.
+
+    Raises
+    ------
+        UnknownExample if unregistered patch is requested.
+
     """
+    if example_name not in EXAMPLE_PATCHES:
+        msg = (
+            f"No example patch registered with name {example_name} "
+            f"Registered example patches are {list(EXAMPLE_PATCHES)}"
+        )
+        raise UnknownExample(msg)
     return EXAMPLE_PATCHES[example_name](**kwargs)
 
 
@@ -30,6 +48,12 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
 
     kwargs are passed to the corresponding functions to generate data.
     """
+    if example_name not in EXAMPLE_SPOOLS:
+        msg = (
+            f"No example spool registered with name {example_name} "
+            f"Registered example spools are {list(EXAMPLE_SPOOLS)}"
+        )
+        raise UnknownExample(msg)
     return EXAMPLE_SPOOLS[example_name](**kwargs)
 
 
@@ -123,6 +147,13 @@ def _random_patch_lat_lon():
         latitude=("distance", lat), longitude=("distance", lon)
     )
     return out
+
+
+@register_func(EXAMPLE_PATCHES, key="example_event_1")
+def _example_event_1():
+    """Returns an example of a passive event recorded by DAS."""
+    path = fetch("example_dasdae_event_1.h5")
+    return dc.spool(path)[0]
 
 
 @register_func(EXAMPLE_SPOOLS, key="random_das")

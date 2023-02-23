@@ -2,6 +2,23 @@
 Tests for waterfall plots.
 """
 import matplotlib.pyplot as plt
+import pytest
+
+import dascore as dc
+
+
+@pytest.fixture(scope="session")
+def patch_random_start(event_patch_1):
+    """Get a patch with a random, odd, starttime."""
+    random_starttime = dc.to_datetime64("2020-01-02T02:12:11.02232")
+    attrs = dict(event_patch_1.attrs)
+    coords = {i: v for i, v in event_patch_1.coords.items()}
+    time = coords["time"] - coords["time"].min()
+    coords["time"] = time + random_starttime
+    attrs["time_min"] = coords["time"].min()
+    attrs["time_max"] = coords["time"].max()
+    patch = event_patch_1.new(attrs=attrs, coords=coords)
+    return patch
 
 
 class TestWaterfall:
@@ -15,6 +32,7 @@ class TestWaterfall:
         data[:100, -100:] = -2.0  #
         out = random_patch.new(data=data)
         ax = out.viz.waterfall()
+
         # check labels
         assert random_patch.dims[0].capitalize() in ax.get_ylabel()
         assert random_patch.dims[1].capitalize() in ax.get_xlabel()
@@ -34,3 +52,9 @@ class TestWaterfall:
         assert ax1 is not None
         ax2 = patch.viz.waterfall(scale_type="absolute", scale=10)
         assert ax2 is not None
+
+    def test_doc_intro_example(self, event_patch_1):
+        """Simple test to ensure the doc examples can be run"""
+        patch = event_patch_1.pass_filter(time=(None, 300))
+        _ = patch.viz.waterfall(scale=0.04)
+        _ = patch.transpose("distance", "time").viz.waterfall(scale=0.04)

@@ -4,6 +4,7 @@ Tests for selecting data from traces.
 
 import numpy as np
 
+import dascore as dc
 from dascore.utils.time import to_timedelta64
 
 
@@ -65,3 +66,17 @@ class TestSelect:
         dist_max, dist_mean = np.max(dist), np.mean(dist)
         out = random_patch.select(distance=(dist_mean, dist_max - 1))
         assert out.attrs["time_max"] == out.coords["time"].max()
+
+
+class TestSelectHistory:
+    """Test behavior of history added by select."""
+
+    def test_select_outside_bounds(self, random_patch):
+        """Selecting outside the bounds should do nothing."""
+        attrs = random_patch.attrs
+        dt = dc.to_timedelta64(1)
+        time = (attrs["time_min"] - dt, attrs["time_max"] + dt)
+        dist = (attrs["distance_min"] - 1, attrs["distance_max"] + 1)
+        new = random_patch.select(time=time, distance=dist)
+        # if no select performed everything should be identical.
+        assert new.equals(random_patch, only_required_attrs=False)

@@ -38,8 +38,11 @@ ONE_SECOND = np.timedelta64(1, "s")
 # One nanosecond
 ONE_NANOSECOND = np.timedelta64(1, "ns")
 
+# one billion
+ONE_BILLION = 1_000_000_000
+
 # One second with a precision of nano seconds
-ONE_SECOND_IN_NS = np.timedelta64(1_000_000_000, "ns")
+ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
 
 # Valid strings for "datatype" attribute
 VALID_DATA_TYPES = (

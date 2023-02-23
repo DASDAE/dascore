@@ -1,5 +1,7 @@
 ---
 title: Spool
+execute:
+  warning: false
 ---
 
 Spools are containers/managers of [patches](patch.qmd). Spools come in a few varieties which

@@ -19,3 +19,14 @@ class TestWiggle:
         assert random_patch.dims[0].capitalize() in ax.get_ylabel()
         assert random_patch.dims[1].capitalize() in ax.get_xlabel()
         assert isinstance(ax, plt.Axes)
+
+    def test_example(self):
+        """test the example from the docs"""
+        import dascore as dc
+
+        patch = dc.examples.sin_wave_patch(
+            sample_rate=1000,
+            frequency=[200, 10],
+            channel_count=2,
+        )
+        _ = patch.viz.wiggle()
