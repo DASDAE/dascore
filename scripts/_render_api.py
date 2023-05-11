@@ -154,12 +154,23 @@ def build_signature(data, data_dict, address_dict):
             return '**'
         return ''
 
+    def get_default_value(param, sig):
+        """Get the default value for a parameter."""
+        default = sig.parameters[param].default
+        if default is inspect._empty:
+            return
+        return str(default)
+
     def get_params(sig, annotations):
         out = []
         for param, value in sig.parameters.items():
             prefix = get_param_prefix(value.kind)
             annotation_str = get_annotation_str(annotations.get(param))
-            out.append(f"{prefix + param}{annotation_str}\n")
+            return_str = get_default_value(param, sig)
+            param_str = f"{prefix + param}{annotation_str}\n"
+            if return_str is not None:
+                param_str += f" = {return_str}"
+            out.append(param_str)
         return out
 
     def get_return_line(sig):
@@ -175,7 +186,6 @@ def build_signature(data, data_dict, address_dict):
         """Create a dict of render-able signature stuff."""
         sig = data["signature"]
         annotations = typing.get_type_hints(data["object"])
-
         out = dict(
             params=get_params(sig, annotations),
             return_line=get_return_line(sig),
