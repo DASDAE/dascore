@@ -40,10 +40,31 @@ spool2 = dc.spool(path_to_das_file)
 import dascore as dc
 from dascore.utils.downloader import fetch
 
+# we use the fetch to make sure the file is downloaded. You would
+# just need to replace directory_path with your data directory path.
 path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
 directory_path = path_to_das_file.parent
 
+# update will create an index of the contents for fast querying/access
 spool3 = dc.spool(directory_path).update()
+```
+
+If you want the index file to exist somewhere else, for example if you can't
+write to the data directory, you can specify an index path.
+
+```{python}
+#| warning: false
+#| output: false
+import tempfile
+from pathlib import Path
+
+index_path = Path(tempfile.mkdtemp()) / "index.h5"
+
+# update will create an index of the contents for fast querying/access
+spool = dc.spool(directory_path, index_path=index_path).update()
+
+# new spools will also need to specify the index path
+spool_new = dc.spool(directory_path, index_path=index_path).update()
 ```
 
 Despite some implementation differences, all spools have common behavior/methods.

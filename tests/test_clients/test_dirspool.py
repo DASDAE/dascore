@@ -85,6 +85,29 @@ class TestFileIndex:
         spool = dc.spool(path).update()
         isinstance(spool, dc.BaseSpool)
 
+    def test_specify_index_path(self, random_patch, tmp_path_factory):
+        """
+        Ensure an external path can be specified for the index. See #129.
+        """
+        bank_path = tmp_path_factory.mktemp("bank")
+        index_path = tmp_path_factory.mktemp("index") / "index.h5"
+        random_patch.io.write(bank_path / "contents.h5", "dasdae")
+        spool1 = dc.spool(bank_path, index_path=index_path)
+        spool1.update()
+        # ensure the index was created in the expected place
+        assert spool1.indexer.index_path == index_path
+        # ensure the default index file was not written
+        spool2 = dc.spool(bank_path)
+        default_index_path = spool2.indexer.index_path
+        assert not default_index_path.exists()
+        # next ensure the index path is used
+        spool3 = dc.spool(bank_path, index_path=index_path)
+        df = spool3.get_contents()
+        assert len(df) == 1
+        patch = spool3[0]
+        assert isinstance(patch, dc.Patch)
+        assert not default_index_path.exists()
+
 
 class TestSelect:
     """tests for subselecting data."""
