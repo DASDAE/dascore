@@ -9,6 +9,7 @@ import pytest
 import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
+from dascore.exceptions import InvalidSpoolError
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -405,3 +406,8 @@ class TestMisc:
         # get first patch, assert it has no history
         out = spool[0]
         assert not out.attrs.history
+
+    def test_nice_non_exist_message(self):
+        """Ensure a nice message is raised for nonexistent paths. See #126."""
+        with pytest.raises(InvalidSpoolError, match="may not exist"):
+            dc.spool("Bad/file/path.h5")
