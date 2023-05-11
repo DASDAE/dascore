@@ -56,6 +56,9 @@ class DirectoryIndexer(AbstractIndexer):
     cache_size
         The number of queries to store in memory to avoid frequent reads
         of the index file. It is rare this needs to be modified.
+    index_path
+        The path to the index. By default, the index will be created on the
+        top level of the data directory.
     """
 
     # hdf5 compression defaults
@@ -64,10 +67,10 @@ class DirectoryIndexer(AbstractIndexer):
     index_name = ".dascore_index.h5"  # name of index file
     executor = None  # an executor for using parallelism
 
-    def __init__(self, path: Union[str, Path], cache_size: int = 5):
+    def __init__(self, path: Union[str, Path], cache_size: int = 5, index_path=None):
         self.max_size = cache_size
         self.path = Path(path).absolute()
-        self.index_path = self.path / self.index_name
+        self.index_path = Path(index_path or self.path / self.index_name)
         self.cache = pd.DataFrame(
             index=range(cache_size), columns="t1 t2 kwargs cindex".split()
         )

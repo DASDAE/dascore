@@ -22,6 +22,19 @@ class DirectorySpool(DataFrameSpool):
 
     FileSpool creates and index of all files then allows for simple querying
     and bulk processing of the files.
+
+    Parameters
+    ----------
+    base_path
+        The path to the directory to index.
+    index_path
+        The path to the index file containing the contents of the directory.
+        By default it will be created in the top-level of the data directory.
+    preferred_format
+        A string to specify the format of the data. Specifying this parameter
+        will save time in indexing.
+    select_kwargs
+        Dict of keyword arguments to restrict output contents.
     """
 
     _drop_columns = ("file_format", "file_version", "path")
@@ -29,6 +42,8 @@ class DirectorySpool(DataFrameSpool):
     def __init__(
         self,
         base_path: Union[str, Path, Self, AbstractIndexer] = ".",
+        *,
+        index_path: Optional[Path] = None,
         preferred_format: Optional[str] = None,
         select_kwargs: Optional[dict] = None,
     ):
@@ -41,7 +56,7 @@ class DirectorySpool(DataFrameSpool):
         elif isinstance(base_path, AbstractIndexer):
             self.indexer = base_path
         elif isinstance(base_path, (Path, str)):
-            self.indexer = DirectoryIndexer(base_path)
+            self.indexer = DirectoryIndexer(base_path, index_path=index_path)
         self._preferred_format = preferred_format
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
 
