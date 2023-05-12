@@ -67,3 +67,7 @@ class InvalidIndexVersionError(ValueError, DASCoreError):
 
 class MissingOptionalDependency(ImportError, DASCoreError):
     """Raised when an optional package needed for some functionality is missing."""
+
+
+class InvalidSpoolError(ValueError, DASCoreError):
+    """Raised when something is wrong with a spool."""

@@ -11,6 +11,7 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PatchType, SpoolType, numeric_types, timeable_types
+from dascore.exceptions import InvalidSpoolError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
@@ -318,7 +319,6 @@ def spool_from_str(path, **kwargs):
         from dascore.clients.dirspool import DirectorySpool
 
         return DirectorySpool(path, **kwargs)
-
     # A single file was passed. If the file format supports quick scanning
     # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
@@ -334,7 +334,11 @@ def spool_from_str(path, **kwargs):
         else:
             return MemorySpool(dc.read(path, _format, _version))
     else:
-        raise ValueError(f"could not get spool from {path}")
+        msg = (
+            f"could not get spool from argument: {path}. "
+            f"If it is a path, it may not exist."
+        )
+        raise InvalidSpoolError(msg)
 
 
 @spool.register(BaseSpool)
