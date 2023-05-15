@@ -1,5 +1,7 @@
 """
 A module for applying transformation to Patches.
+
+Transforms are defined as
 """
 
 from dascore.utils.misc import MethodNameSpace
