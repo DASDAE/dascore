@@ -9,8 +9,7 @@ from dascore.constants import REQUIRED_DAS_ATTRS
 from dascore.core.schema import PatchFileSummary
 from dascore.io.core import read
 from dascore.io.optasense.core import OptasenseV2
-
-# from dascore.utils.downloader import fetch
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 
 PATCH_FIXTURES = []
@@ -19,9 +18,8 @@ PATCH_FIXTURES = []
 @pytest.fixture(scope="session")
 def optasense_v2_example_path():
     """Return the path to the example OptasenseV2 file."""
-    # out = fetch("opta_sense_quantx_v2.h5")
-    # assert out.exists()
-    out = "D:/test_data-master/test_data-master/das/opta_sense_quantx_v2.h5"
+    out = fetch("opta_sense_quantx_v2.h5")
+    assert out.exists()
     return out
 
 
@@ -29,24 +27,11 @@ def optasense_v2_example_path():
 @register_func(PATCH_FIXTURES)
 def optasense_v2_das_patch(optasense_v2_example_path):
     """Read the OptasenseV2 data, return contained DataArray"""
-
-    # OptaS=OptasenseV2()
     out = read(optasense_v2_example_path, "optasense")[0]
     attr_time = out.attrs["time_max"]
     coord_time = out.coords["time"].max()
     assert attr_time == coord_time
     return out
-
-
-#
-# class TestV2:
-#     """Tests for version 2 of optasense."""
-#
-#     def test_can_read(self, optasense_v2_example_path):
-#         """simple read test using dascore.spool."""
-#         opta_spool = dc.spool(optasense_v2_example_path)
-#         opta_patch = opta_spool[0]
-#         assert isinstance(opta_patch, dc.Patch)
 
 
 class TestReadOptasenseV2:

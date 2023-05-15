@@ -42,17 +42,15 @@ def _get_optasense_version_str(hdf_fi) -> str:
 
 def _get_scanned_time_min_max(data_node):
     """Get the min/max time from time array."""
-    time = 1e-6 * data_node.RawDataTime.read()
+    # time array is an int with microseconds as precision, so it is better
+    # to not convert to float and potentially lose precision.
+    time = data_node["RawDataTime"]
     t_len = len(time)
     # first try fast path by tacking first/last of time
-    tmin, tmax = time[0], time[-1]
-    # This doesn't work if an incomplete datablock exists at the end of
-    # the file. In this case we need to read/filter time array (slower).
-    if tmin > tmax:
-        time = time[:]
-        time_filtered = time[time > 0]
-        t_len = len(time_filtered)
-        tmin, tmax = time_filtered[0], time_filtered[-1]
+    # Note: due to numpy #22197 we have to cast to python int
+    tmin = np.datetime64(int(time[0]), "us")
+    tmax = np.datetime64(int(time[-1]), "us")
+    assert tmin < tmax, "Bad timeblock found, contact the developers."
     return tmin, tmax, t_len
 
 
@@ -72,11 +70,9 @@ def _get_extra_scan_attrs(self, file_version, path, data_node):
 def _get_version_data_node(root):
     """Get the version, time, and data node from Optasense file."""
     version = str(root._v_attrs.schemaVersion.decode())
-
     if version == "2.0":
         data_type = "Raw[0]"
         data_node = root[data_type]
-
     else:
         raise NotImplementedError("Unknown Optasense version")
     return version, data_node
@@ -127,16 +123,6 @@ def _read_optasense(
 ) -> Patch:
     """
     Read an Optasense file.
-
-    Notes
-    -----
-    The time array is complicated. There is GPS time included
-    in the file. In version 0.0.6 and less of dascore we just used gps time.
-    However, sometimes this results in subsequent samples having a time before
-    the previous sample (time did not increase monotonically).
-
-    So now, we use the first GPS sample, then the reported dt to calculate
-    time array.
 
     We use channel number rather than distance.
     """
