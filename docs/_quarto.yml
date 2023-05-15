@@ -95,6 +95,9 @@ website:
         - text: Processing
           href: tutorial/processing.qmd
 
+        - text: Transformations
+          href: tutorial/transformations.qmd
+
         - text: Visualization
           href: tutorial/visualization.qmd
 
