@@ -133,8 +133,6 @@ def _read_optasense(
 ) -> Patch:
     """
     Read an Optasense file.
-
-    We use channel number rather than distance.
     """
     # get time array
     time_lims = tuple(
@@ -155,8 +153,7 @@ def _read_optasense(
     )
     assert req_t_max > req_t_min
     # calculate time array, convert to datetime64
-    t_float = file_t_min + np.arange(start_ind, stop_ind) * dt
-    time_ar = to_datetime64(t_float)
+    time_ar = to_datetime64(file_t_min + np.arange(start_ind, stop_ind) * dt)
     time_inds = (start_ind, stop_ind)
     # get data and sliced distance coord
     dist_ar = _get_distance_array(root)

@@ -53,11 +53,21 @@ class TestReadOptasenseV2:
 
     def test_coord_attr_time_equal(self, optasense_v2_das_patch):
         """The time reported in the attrs and coords should match."""
-        attr_time = optasense_v2_das_patch.attrs["time_max"]
-        coord_time = optasense_v2_das_patch.coords["time"].max()
-        attr_time = optasense_v2_das_patch.attrs["time_min"]
-        coord_time = optasense_v2_das_patch.coords["time"].min()
-        assert attr_time == coord_time
+        attr_time_max = optasense_v2_das_patch.attrs["time_max"]
+        coord_time_max = optasense_v2_das_patch.coords["time"].max()
+        assert attr_time_max == coord_time_max
+        attr_time_min = optasense_v2_das_patch.attrs["time_min"]
+        coord_time_min = optasense_v2_das_patch.coords["time"].min()
+        assert attr_time_min == coord_time_min
+
+    def test_precision_of_time_array(self, optasense_v2_das_patch):
+        """
+        Ensure the time array is in ns, not native ms, in order to
+        be consistent with other patches.
+        """
+        time = optasense_v2_das_patch.coords["time"]
+        dtype = time.dtype
+        assert "[ns]" in str(dtype)
 
     def test_time_dist_slice(self, optasense_v2_das_patch, optasense_v2_example_path):
         """Ensure slicing distance and time works from read func."""
