@@ -8,7 +8,7 @@ from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.schema import PatchFileSummary
 from dascore.utils.misc import get_slice
-from dascore.utils.time import datetime_to_float, to_datetime64
+from dascore.utils.time import to_datetime64
 
 # --- Getting format/version
 
@@ -58,8 +58,8 @@ def _get_extra_scan_attrs(self, file_version, path, data_node):
     """Get the extra attributes that go into summary information."""
     tmin, tmax, _ = _get_scanned_time_min_max(data_node)
     out = {
-        "time_min": to_datetime64(tmin.astype(np.float64)),
-        "time_max": to_datetime64(tmax.astype(np.float64)),
+        "time_min": to_datetime64(tmin),
+        "time_max": to_datetime64(tmax),
         "path": path,
         "file_format": self.name,
         "file_version": str(file_version),
@@ -116,6 +116,16 @@ def _get_dar_attrs(data_node, root, tar, dar):
     return attrs
 
 
+def _get_distance_array(root):
+    """
+    Return an array of distance along fiber values.
+    """
+    vattrs = root._v_attrs
+    channel_numbers = np.arange(vattrs.NumberOfLoci) + vattrs.StartLocusIndex
+    assert vattrs.SpatialSamplingIntervalUnit == b"m", "expecting distance in m"
+    return channel_numbers * vattrs.SpatialSamplingInterval
+
+
 def _read_optasense(
     root,
     time: Optional[tuple[timeable_types, timeable_types]] = None,
@@ -128,13 +138,11 @@ def _read_optasense(
     """
     # get time array
     time_lims = tuple(
-        datetime_to_float(x) if x is not None else None
+        to_datetime64(x) if x is not None else None
         for x in (time if time is not None else (None, None))
     )
     _, data_node = _get_version_data_node(root)
     file_t_min, file_t_max, time_len = _get_scanned_time_min_max(data_node)
-    # surprisingly, using gps time column, dt is much different than dt
-    # reported in data attrs!, use GPS time here.
     dt = (file_t_max - file_t_min) / (time_len - 1)
     # get the start and stop along the time axis
     start_ind, stop_ind = _get_start_stop(time_len, time_lims, file_t_min, dt)
@@ -151,14 +159,13 @@ def _read_optasense(
     time_ar = to_datetime64(t_float)
     time_inds = (start_ind, stop_ind)
     # get data and sliced distance coord
-    dist_ar = np.arange(root._v_attrs.NumberOfLoci)
+    dist_ar = _get_distance_array(root)
     dslice = get_slice(dist_ar, distance)
     dist_ar_trimmed = dist_ar[dslice]
     data = data_node.RawData[slice(*time_inds), dslice]
     coords = {"time": time_ar, "channel_number": dist_ar_trimmed}
     dims = ("time", "channel_number")
     attrs = _get_dar_attrs(data_node, root, time_ar, dist_ar_trimmed)
-
     return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
 
 
@@ -169,16 +176,25 @@ def _get_default_attrs(data_node, root_node_attrs):
     Note: missing time, distance absolute ranges. Downstream functions should handle
     this.
     """
-    out = dict(dims="time, channel_number")
+    # breakpoint()
+    out = dict(dims="time, channel_number", data_category="DAS")
     _root_attrs = {
         "SpatialSamplingInterval": "d_distance",
-        "StartLocusIndex": "distance_min",
-        "NumberOfLoci": "distance_max",
         "SpatialSamplingIntervalUnit": "distance_units",
+        "uuid": "intrument_id",  # not 100% sure about this one
     }
     for treble_name, out_name in _root_attrs.items():
         out[out_name] = getattr(root_node_attrs, treble_name)
-    timing = data_node.RawDataTime.read()
-    out["d_time"] = 1e-6 * (timing[1] - timing[0])
-    out["data_units"] = data_node._v_attrs.RawDataUnit
+    # get calculated attributes
+    timing = data_node.RawDataTime
+    out["d_time"] = np.timedelta64(timing[1] - timing[0], "us")
+    d_ind_start = root_node_attrs.StartLocusIndex
+    d_ind_num = root_node_attrs.NumberOfLoci
+    out["distance_min"] = d_ind_start * out["d_distance"]
+    out["distance_max"] = (d_ind_start + d_ind_num) * out["d_distance"]
+    # get attributes from data node
+    out["data_units"] = data_node._v_attrs.RawDataUnit.decode()
+    # when radians are part of the units this is a phase measurement
+    if "rad" in out["data_units"]:
+        out["data_type"] = "phase"
     return out

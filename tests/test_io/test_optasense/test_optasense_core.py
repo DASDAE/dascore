@@ -55,6 +55,8 @@ class TestReadOptasenseV2:
         """The time reported in the attrs and coords should match."""
         attr_time = optasense_v2_das_patch.attrs["time_max"]
         coord_time = optasense_v2_das_patch.coords["time"].max()
+        attr_time = optasense_v2_das_patch.attrs["time_min"]
+        coord_time = optasense_v2_das_patch.coords["time"].min()
         assert attr_time == coord_time
 
     def test_time_dist_slice(self, optasense_v2_das_patch, optasense_v2_example_path):
