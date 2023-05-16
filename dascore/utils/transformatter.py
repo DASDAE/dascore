@@ -38,7 +38,7 @@ class BaseTransformatter(abc.ABC):
         """Rename the dimensions."""
         func = self._forward_rename if forward else self._inverse_rename
         new = list(dims)
-        index_list = [index] if index else range(len(dims))
+        index_list = [index] if index is not None else range(len(dims))
         for index in index_list:
             new[index] = func(new[index])
         return tuple(new)
@@ -46,13 +46,19 @@ class BaseTransformatter(abc.ABC):
     def rename_attrs(self, dims, attrs, index=None, forward=True):
         """Rename the unit attribute names."""
         func = self._forward_unit_label if forward else self._inverse_unit_label
-        index_list = [index] if index else range(len(dims))
-        out = dict(attrs)
+        index_list = [index] if index is not None else range(len(dims))
+        out = dict(attrs)  # this ensures we have a dict and a copy
         for ind in index_list:
             dim_unit_attr_name = f"{dims[ind]}_units"
             if dim_unit_attr_name in out:
                 out[dim_unit_attr_name] = func(out[dim_unit_attr_name])
         return out
+
+    def transform_dims_and_attrs(self, dims, attrs, index=None, forward=True):
+        """Create new dims and attrs."""
+        new_attrs = self.rename_attrs(dims, attrs, index=index, forward=forward)
+        new_dims = self.rename_dims(dims, index=index, forward=forward)
+        return new_dims, new_attrs
 
 
 class FourierTransformatter(BaseTransformatter):
@@ -70,7 +76,7 @@ class FourierTransformatter(BaseTransformatter):
     def _toggle_unit_str(self, unit_str):
         """Toggle the unit string."""
         if fnmatch.fnmatch(unit_str, "1/(*)"):
-            out = unit_str[2:-1]
+            out = unit_str[3:-1]
         else:
             out = f"1/({unit_str})"
         return out
@@ -82,6 +88,3 @@ class FourierTransformatter(BaseTransformatter):
     def _inverse_unit_label(self, unit_name):
         """Adjust the init label for inverse transform."""
         return self._toggle_unit_str(unit_name)
-
-
-# formaer

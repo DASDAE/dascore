@@ -71,6 +71,8 @@ def _random_patch(starttime="2017-09-18", network="", station="", tag="random"):
         network=network,
         station=station,
         tag=tag,
+        time_units="s",
+        distance_units="m",
     )
     coords = dict(
         distance=np.arange(array.shape[0]) * attrs["d_distance"],
