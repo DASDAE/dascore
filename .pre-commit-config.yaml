@@ -21,7 +21,7 @@ repos:
           - flake8-breakpoint
           - flake8-docstrings
 -   repo: https://github.com/pycqa/isort
-    rev: 5.8.0
+    rev: 5.12.0
     hooks:
       - id: isort
         name: isort (python)
