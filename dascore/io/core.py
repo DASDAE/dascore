@@ -192,7 +192,7 @@ class _FiberIOManager:
                 formatter = formatters.get(version, None)
                 if formatter is None:
                     msg = (
-                        f"Format {format} has no verion: {version} "
+                        f"Format {format} has no version: [{version}] "
                         f"known versions of this format are: {list(formatters)}"
                     )
                     raise UnknownFiberFormat(msg)

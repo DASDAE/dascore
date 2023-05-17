@@ -35,7 +35,7 @@ class Terra15FormatterV4(FiberIO):
             with open_hdf5_file(path, "r") as fi:
                 version_str = _get_terra15_version_str(fi)
                 if version_str:
-                    return ("TERRA15", version_str)
+                    return (self.name, version_str)
         except (HDF5ExtError, OSError, IndexError, KeyError, NoSuchNodeError):
             return False
 

@@ -10,15 +10,15 @@ from dascore.core.schema import PatchFileSummary
 from dascore.io.core import FiberIO
 from dascore.utils.hdf5 import HDF5ExtError, NoSuchNodeError, open_hdf5_file
 
-from .utils import _get_optasense_version_str, _read_optasense, _scan_optasense
+from .utils import _get_qunatx_version_str, _read_quantx, _scan_quantx
 
 
-class OptasenseV2(FiberIO):
+class QuantXV2(FiberIO):
     """
     Support for Optasense data format, version 2.
     """
 
-    name = "OPTASENSE"
+    name = "QUANTX"
     preferred_extensions = ("hdf5", "h5")
     version = "2.0"
 
@@ -33,9 +33,9 @@ class OptasenseV2(FiberIO):
         """
         try:
             with open_hdf5_file(path, "r") as fi:
-                version_str = _get_optasense_version_str(fi)
+                version_str = _get_qunatx_version_str(fi)
                 if version_str:
-                    return ("OPTASENSE", version_str)
+                    return (self.name, version_str)
         except (HDF5ExtError, OSError, IndexError, KeyError, NoSuchNodeError):
             return False
 
@@ -44,7 +44,7 @@ class OptasenseV2(FiberIO):
         Scan an Optasense v2 file, return summary information about the file's contents.
         """
         with open_hdf5_file(path) as fi:
-            return _scan_optasense(self, fi, path)
+            return _scan_quantx(self, fi, path)
 
     def read(
         self,
@@ -58,5 +58,5 @@ class OptasenseV2(FiberIO):
         """
         # TODO need to create h5 file decorator to avoid too many open/close files.
         with open_hdf5_file(path) as fi:
-            patch = _read_optasense(fi.get_node("/Acquisition"), time, distance)
+            patch = _read_quantx(fi.get_node("/Acquisition"), time, distance)
         return dc.spool(patch)

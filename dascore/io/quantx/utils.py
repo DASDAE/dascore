@@ -1,4 +1,4 @@
-"""Utilities for Optasense."""
+"""Utilities for Quantx."""
 
 from typing import Optional
 
@@ -13,12 +13,12 @@ from dascore.utils.time import to_datetime64
 # --- Getting format/version
 
 
-def _get_optasense_version_str(hdf_fi) -> str:
+def _get_qunatx_version_str(hdf_fi) -> str:
     """
-    Return the version string for Optasense file.
+    Return the version string for Quantx file.
     """
 
-    # define a few root attrs that act as a "fingerprint" for Optasense files
+    # define a few root attrs that act as a "fingerprint" for Quantx files
     expected_attrs = [
         "GaugeLength",
         "VendorCode",
@@ -29,11 +29,10 @@ def _get_optasense_version_str(hdf_fi) -> str:
     acquisition_group = hdf_fi.get_node("/Acquisition")
     acquisition_attrs = acquisition_group._v_attrs
 
-    is_optasense = all([hasattr(acquisition_attrs, x) for x in expected_attrs])
-    if not is_optasense:
+    is_quantx = all([hasattr(acquisition_attrs, x) for x in expected_attrs])
+    has_optasense = str(acquisition_attrs.VendorCode.decode())
+    if not (is_quantx and has_optasense):
         return ""
-    if "OptaSense" not in str(acquisition_attrs.VendorCode.decode()):
-        return "Not Optasense file"
     return str(acquisition_attrs.schemaVersion.decode())
 
 
@@ -68,18 +67,18 @@ def _get_extra_scan_attrs(self, file_version, path, data_node):
 
 
 def _get_version_data_node(root):
-    """Get the version, time, and data node from Optasense file."""
+    """Get the version, time, and data node from Quantx file."""
     version = str(root._v_attrs.schemaVersion.decode())
     if version == "2.0":
         data_type = "Raw[0]"
         data_node = root[data_type]
     else:
-        raise NotImplementedError("Unknown Optasense version")
+        raise NotImplementedError("Unknown Quantx version")
     return version, data_node
 
 
-def _scan_optasense(self, fi, path):
-    """Scan an Optasense file, return metadata."""
+def _scan_quantx(self, fi, path):
+    """Scan an Quantx file, return metadata."""
     root = fi.get_node("/Acquisition")
     root_attrs = root._v_attrs
     version, data_node = _get_version_data_node(root)
@@ -107,7 +106,7 @@ def _get_start_stop(time_len, time_lims, file_tmin, dt):
 
 
 def _get_dar_attrs(data_node, root, tar, dar):
-    """Get the attributes for the Optasense data array (loaded)"""
+    """Get the attributes for the Quantx data array (loaded)"""
     attrs = _get_default_attrs(data_node, root._v_attrs)
     attrs["time_min"] = tar.min()
     attrs["time_max"] = tar.max()
@@ -126,13 +125,13 @@ def _get_distance_array(root):
     return channel_numbers * vattrs.SpatialSamplingInterval
 
 
-def _read_optasense(
+def _read_quantx(
     root,
     time: Optional[tuple[timeable_types, timeable_types]] = None,
     distance: Optional[tuple[float, float]] = None,
 ) -> Patch:
     """
-    Read an Optasense file.
+    Read an Quantx file.
     """
     # get time array
     time_lims = tuple(
