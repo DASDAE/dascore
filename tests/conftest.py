@@ -243,7 +243,7 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
 
 @pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
-def one_file_file_spool(one_file_dir):
+def one_file_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     return DirectorySpool(one_file_dir).update()
 

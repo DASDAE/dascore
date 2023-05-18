@@ -14,19 +14,19 @@ from dascore.core.schema import PatchFileSummary
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func
 
-FILE_SPOOLS = []
+DIRECTORY_SPOOLS = []
 
 
 @pytest.fixture(scope="class")
-@register_func(FILE_SPOOLS)
-def one_file_spool(one_file_dir):
+@register_func(DIRECTORY_SPOOLS)
+def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     spool = DirectorySpool(one_file_dir)
     return spool.update()
 
 
-@pytest.fixture(scope="class", params=FILE_SPOOLS)
-def file_spool(request):
+@pytest.fixture(scope="class", params=DIRECTORY_SPOOLS)
+def directory_spool(request):
     """Meta fixture for getting all file spools."""
     return request.getfixturevalue(request.param)
 
@@ -34,12 +34,12 @@ def file_spool(request):
 class TestFileSpool:
     """Test that the file spool works."""
 
-    def test_isinstance(self, file_spool):
+    def test_isinstance(self, directory_spool):
         """Simply ensure expected type was returned."""
-        assert isinstance(file_spool, DirectorySpool)
+        assert isinstance(directory_spool, DirectorySpool)
 
 
-class TestFileIndex:
+class TestDirectoryIndex:
     """Tests for returning summaries of all files in managed directory."""
 
     @pytest.fixture(scope="class")
@@ -198,22 +198,22 @@ class TestSelect:
 class TestBasicChunk:
     """Tests for chunking filespool."""
 
-    def test_directoy_path_doesnt_change(self, one_file_file_spool):
+    def test_directory_path_doesnt_change(self, one_file_directory_spool):
         """Chunking shouldn't change the path to the managed directory."""
-        out = one_file_file_spool.chunk(time=1)
-        assert out.spool_path == one_file_file_spool.spool_path
+        out = one_file_directory_spool.chunk(time=1)
+        assert out.spool_path == one_file_directory_spool.spool_path
 
-    def test_chunk_doesnt_modify_original(self, one_file_file_spool):
+    def test_chunk_doesnt_modify_original(self, one_file_directory_spool):
         """Chunking shouldn't modify original spool or its dfs."""
-        spool = one_file_file_spool
+        spool = one_file_directory_spool
         contents_before_chunk = spool.get_contents()
         _ = spool.chunk(time=2)
         contents_after_chunk = spool.get_contents()
         assert contents_before_chunk.equals(contents_after_chunk)
 
-    def test_sub_chunk(self, one_file_file_spool):
+    def test_sub_chunk(self, one_file_directory_spool):
         """Ensure the patches can be subdivided."""
-        spool = one_file_file_spool
+        spool = one_file_directory_spool
         contents = spool.get_contents()
         durations = contents["time_max"] - contents["time_min"]
         new_t_delta = (durations / 4).max()

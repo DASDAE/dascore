@@ -67,6 +67,17 @@ spool = dc.spool(directory_path, index_path=index_path).update()
 spool_new = dc.spool(directory_path, index_path=index_path).update()
 ```
 
+:::{.callout-warning}
+If you remove files from a directory that has already been indexed, you should delete the index file and then call `update` again on the spool like this:
+
+```python
+spool.indexer.index_path.unlink()
+spool.update()
+```
+
+It is best not to delete files once added to a directory managed by a spool.
+:::
+
 Despite some implementation differences, all spools have common behavior/methods.
 
 # Accessing patches
