@@ -66,3 +66,12 @@ class TestFTUnitRename:
         assert f"1/({value})" == out[key]
         out_2 = ft_reformatter.rename_attrs(self.dims, out, index=0)
         assert out_2 == self.attrs
+
+    def test_backward_unit_transform(self, ft_reformatter):
+        """Simple forward unit transformation"""
+        out = ft_reformatter.rename_attrs(self.dims, self.attrs, index=0, forward=False)
+        key = f"{self.dims[0]}_units"
+        value = self.attrs[key]
+        assert f"1/({value})" == out[key]
+        out_2 = ft_reformatter.rename_attrs(self.dims, out, index=0, forward=False)
+        assert out_2 == self.attrs

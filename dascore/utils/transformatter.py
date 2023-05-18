@@ -69,10 +69,6 @@ class FourierTransformatter(BaseTransformatter):
     forward_prefix: str = "ft_"
     inverse_prefix: str = "ift_"
 
-    def _one_over_str(self, some_str):
-        """Return True if the string is 1/(unit)."""
-        return fnmatch.fnmatch(some_str, "1/(*)")
-
     def _toggle_unit_str(self, unit_str):
         """Toggle the unit string."""
         if fnmatch.fnmatch(unit_str, "1/(*)"):
