@@ -1,0 +1,19 @@
+---
+title: Transformations
+execute:
+  warning: false
+---
+
+In DASCore, transformations are operations which change the units of a patch. For example, applying a [real Fourier Transform](`dascore.transform.fft.rfft`) to the time dimension of a Patch. Transforms can be found in the [transform module](`dascore.transform`) or access via the `Patch.tran` attribute.
+
+```python
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+transformed = patch.tran.rfft(dim="time")
+# note how the dimension name has changed
+print(transformed.dims)
+# as have the units
+print(transformed.attrs.data_units)
+```
