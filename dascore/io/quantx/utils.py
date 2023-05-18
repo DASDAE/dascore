@@ -30,7 +30,7 @@ def _get_qunatx_version_str(hdf_fi) -> str:
     acquisition_attrs = acquisition_group._v_attrs
 
     is_quantx = all([hasattr(acquisition_attrs, x) for x in expected_attrs])
-    has_optasense = str(acquisition_attrs.VendorCode.decode())
+    has_optasense = getattr(acquisition_attrs, "VendorCode", None)
     if not (is_quantx and has_optasense):
         return ""
     return str(acquisition_attrs.schemaVersion.decode())
