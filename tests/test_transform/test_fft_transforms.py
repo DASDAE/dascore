@@ -18,10 +18,14 @@ class TestRfft:
         return out
 
     def test_dims(self, rfft_patch):
-        """Ensure frequency shows up in dimensions."""
+        """Ensure ft of original axis shows up in dimensions."""
         dims = rfft_patch.dims
-        start_freq = [x.startswith("frequency") for x in dims]
+        start_freq = [x.startswith("ft_") for x in dims]
         assert any(start_freq)
+
+    def test_time_units(self, rfft_patch):
+        """Time units should be 1/s now."""
+        assert rfft_patch.attrs["time_units"] == "1/(s)"
 
     def test_abs_rrft(self, rfft_patch):
         """Ensure abs works with rfft to get amplitude spectra."""
