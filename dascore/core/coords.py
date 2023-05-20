@@ -2,9 +2,11 @@
 Machinery for coordinates.
 """
 import abc
-from typing import Any, Optional, Union
+from functools import cache
+from typing import Any, Optional, Sequence, Union
 
 import numpy as np
+import pandas as pd
 from typing_extensions import Self
 
 from dascore.exceptions import CoordError
@@ -22,7 +24,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Convert from one unit to another. Set units if None are set."""
 
     @abc.abstractmethod
-    def select(self, **kwargs) -> Union[slice, ArrayLike]:
+    def select(self, arg) -> Union[slice, ArrayLike]:
         """Returns an entity that can be used in a list for numpy indexing."""
 
     @abc.abstractmethod
@@ -38,20 +40,15 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def values(self) -> ArrayLike:
         """Returns (or generates) the array data."""
 
-    # @property
-    # @abc.abstractmethod
-    # def min(self):
-    #     """Returns (or generates) the array data."""
-    #
-    # @property
-    # @abc.abstractmethod
-    # def max(self):
-    #     """Returns (or generates) the array data."""
-    #
-    # @property
-    # @abc.abstractmethod
-    # def step(self):
-    #     """Returns (or generates) the array data."""
+    @property
+    @abc.abstractmethod
+    def min(self):
+        """Returns (or generates) the array data."""
+
+    @property
+    @abc.abstractmethod
+    def max(self):
+        """Returns (or generates) the array data."""
 
     @property
     @abc.abstractmethod
@@ -89,19 +86,44 @@ class CoordRange(BaseCoord):
             out[name] = getattr(self, name) * factor
         return self.__class__(**out)
 
-    @property
-    def dtype(self):
-        """Return the datatype of the coordinate."""
-        pass
-
-    def select(self, **kwargs) -> Union[slice, ArrayLike]:
+    def select(self, args) -> Union[slice, ArrayLike]:
         """Return an object for indexing along a dimension."""
-        pass
+        if isinstance(args, Sequence):
+            assert len(args) == 2, "Only length two sequence allowed for indexing."
+            start = self._get_index(args[0])
+            stop = self._get_index(args[1], forward=False)
+            return slice(start, stop)
+
+    def _get_index(self, value, forward=True):
+        """Get the index corresponding to a value."""
+        if pd.isnull(value):
+            return None
+        func = np.ceil if forward else np.floor
+        out = int(func((value - self.start + self.step) / self.step))
+        if out < 0 or out > self.stop:
+            return None
+        return out
 
     @property
     def values(self) -> ArrayLike:
         """Return the values of the coordinate as an array."""
         return np.arange(self.start, self.stop + self.step, self.step)
+
+    @property
+    def min(self):
+        """Return min value"""
+        return self.start
+
+    @property
+    def max(self):
+        """Return max value in range."""
+        return self.stop
+
+    @property
+    @cache
+    def dtype(self):
+        """Returns datatype."""
+        return np.arange(self.start, self.start + self.step, self.step).dtype
 
 
 class CoordArray(BaseCoord):
@@ -153,5 +175,3 @@ def get_coord(
         return CoordArray(data=data, units=units)
     else:
         return CoordRange(start=start, stop=stop, step=step, units=units)
-
-    start()

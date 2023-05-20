@@ -7,6 +7,7 @@ import numpy as np
 import numpy.typing as npt
 import pint
 from pydantic import BaseModel
+from typing_extensions import Self
 
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -21,6 +22,13 @@ class DascoreBaseModel(BaseModel):
         validate_assignment = True  # validators run on assignment
         keep_untouched = (cached_property,)
         frozen = True
+
+    def update(self, **kwargs) -> Self:
+        """Update some attribute in the model."""
+        out = dict(self)
+        for item, value in kwargs.items():
+            out[item] = value
+        return self.__class__(**out)
 
 
 class SimpleValidator:
