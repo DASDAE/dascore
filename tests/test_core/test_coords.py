@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.coords import BaseCoord, get_coord
+from dascore.core.coords import BaseCoord, CoordArray, CoordMonotonicArray, get_coord
 from dascore.exceptions import CoordError
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
@@ -17,8 +17,16 @@ COORDS = []
 @register_func(COORDS)
 def evenly_sampled_coord():
     """Create coordinates which are evenly sampled."""
-    ar = np.arange(1, 100, 1)
-    return get_coord(data=ar)
+    ar = np.arange(0, 100, 1)
+    return get_coord(values=ar)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORDS)
+def evenly_sampled_float_coord_with_units():
+    """Create coordinates which are evenly sampled and have units."""
+    ar = np.arange(1, 100, 1 / 3)
+    return get_coord(values=ar, units="m")
 
 
 @pytest.fixture(scope="class")
@@ -26,13 +34,60 @@ def evenly_sampled_coord():
 def evenly_sampled_date_coord():
     """Create coordinates which are evenly sampled."""
     ar = to_datetime64(np.arange(1, 100_000, 1_000))
-    return get_coord(data=ar)
+    return get_coord(values=ar)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORDS)
+def monotonic_float_coord():
+    """Create coordinates which are evenly sampled."""
+    ar = np.cumsum(np.abs(np.random.rand(100)))
+    return get_coord(values=ar)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORDS)
+def reverse_monotonic_float_coord():
+    """Create coordinates which are evenly sampled."""
+    ar = np.cumsum(np.abs(np.random.rand(100)))[::-1]
+    return get_coord(values=ar)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORDS)
+def monotonic_datetime_coord():
+    """Create coordinates which are evenly sampled."""
+    ar = np.cumsum(np.abs(np.random.rand(100) * 1_000))
+    return get_coord(values=to_datetime64(ar))
+
+
+@pytest.fixture(scope="class")
+@register_func(COORDS)
+def random_coord():
+    """Create coordinates which are evenly sampled."""
+    ar = np.random.rand(100) * 1_000
+    return get_coord(values=ar)
 
 
 @pytest.fixture(scope="class", params=COORDS)
 def coord(request):
     """Meta-fixture for returning all coords"""
     return request.getfixturevalue(request.param)
+
+
+def assert_value_in_one_step(coord, index, value, greater=True):
+    """Ensure value at index is within one step of value"""
+    # reverse greater for reverse monotonic
+    coord_value = coord.values[index]
+    if greater:
+        assert value <= coord_value
+    else:
+        assert value >= coord_value
+    # next we ensure value is in the correct index. This is a little
+    # bit complicated by reverse order coords.
+    val1 = coord.values[index + 1]
+    val2 = coord.values[index - 1]
+    assert (val1 <= value <= val2) or (val2 <= value <= val1)
 
 
 class TestBasics:
@@ -46,6 +101,42 @@ class TestBasics:
         """Ensure no parameters raises error"""
         with pytest.raises(CoordError):
             get_coord()
+
+    def test_value(self, coord):
+        """All coords should return an array with the values attr."""
+        ar = coord.values
+        assert isinstance(ar, np.ndarray)
+
+    def test_filter_ordered_coords(self, coord):
+        """Basic filter tests all coords should pass."""
+        if isinstance(coord, CoordArray):
+            return
+        assert len(coord.values) == len(coord)
+        value1 = coord.values[10]
+        new, sliced = coord.filter((value1, ...))
+        assert_value_in_one_step(coord, sliced.start, value1, greater=True)
+        assert new.values is not coord.values, "new data should be made"
+        assert sliced.start == 10
+        assert len(coord.values) == len(coord)
+        # now test exact value
+        value2 = coord.values[20]
+        new, sliced = coord.filter((value2, ...))
+        assert_value_in_one_step(coord, sliced.start, value2, greater=True)
+        assert sliced.start == 20
+        assert len(coord.values) == len(coord)
+        # test end index
+        new, sliced = coord.filter((..., value1))
+        assert sliced.stop == 10
+        new, sliced = coord.filter((..., value2))
+        assert sliced.stop == 20
+        assert len(coord.values) == len(coord)
+        # test range
+        new, sliced = coord.filter((value1, value2))
+        if not len(new) == 10:
+            new1, sliced = coord.filter((value1, value2))
+            len(new1)
+        assert len(new.values) == 10 == len(new)
+        assert slice(10, 20) == sliced
 
 
 class TestCoordRange:
@@ -86,11 +177,134 @@ class TestCoordRange:
 
     def test_select_tuple_ints(self, evenly_sampled_coord):
         """Ensure a tuple works as a limit."""
-        assert evenly_sampled_coord.select((50, None)) == slice(50, None)
-        assert evenly_sampled_coord.select((0, None)) == slice(0, None)
-        assert evenly_sampled_coord.select((-10, None)) == slice(None, None)
-        assert evenly_sampled_coord.select((None, None)) == slice(None, None)
-        assert evenly_sampled_coord.select((None, 1_000_000)) == slice(None, None)
+        assert evenly_sampled_coord.filter((50, None))[1] == slice(50, None)
+        assert evenly_sampled_coord.filter((0, None))[1] == slice(None, None)
+        assert evenly_sampled_coord.filter((-10, None))[1] == slice(None, None)
+        assert evenly_sampled_coord.filter((None, None))[1] == slice(None, None)
+        assert evenly_sampled_coord.filter((None, 1_000_000))[1] == slice(None, None)
 
-    def test_select_date_string(self):
+    def test_identity_slice_ints(self, evenly_sampled_coord):
+        """Ensure slice with exact start/end gives same coord."""
+        coord = evenly_sampled_coord
+        new, sliced = coord.filter((coord.start, coord.stop))
+        assert new == coord
+
+    def test_identity_slice_floats(self, evenly_sampled_float_coord_with_units):
+        """Ensure slice with exact start/end gives same coord."""
+        coord = evenly_sampled_float_coord_with_units
+        new, sliced = coord.filter((coord.start, coord.stop))
+        assert new == coord
+
+    def test_float_basics(self):
+        """Ensure floating point range coords work."""
+        ar = np.arange(1, 100, 1 / 3)
+        out = get_coord(values=ar, units="m")
+        assert len(out) == len(ar)
+        assert np.allclose(out.values, ar)
+
+    def test_select_units(self, evenly_sampled_float_coord_with_units):
+        """Ensure units can work in select."""
+        coord = evenly_sampled_float_coord_with_units
+        value_ft = 100
+        value_m = value_ft * 0.3048
+        new, sliced = coord.filter((value_ft * dc.Unit("ft"), ...))
+        # ensure value is surrounded.
+        assert new.start + new.step >= value_m
+        assert new.start - new.step <= value_m
+        # units should also not change
+        assert new.units == coord.units
+
+    def test_select_date_string(self, evenly_sampled_date_coord):
         """Ensure string selection works with datetime objects."""
+        coord = evenly_sampled_date_coord
+        date_str = "1970-01-01T12"
+        new, sliced = coord.filter((date_str, ...))
+        datetime = to_datetime64(date_str)
+        assert new.start + new.step >= datetime
+        assert new.start - new.step <= datetime
+
+    def test_sort(self, evenly_sampled_coord):
+        """Ensure sort returns equal coord"""
+        out, _ = evenly_sampled_coord.sort()
+        assert out == evenly_sampled_coord
+
+
+class TestMonoTonicCoord:
+    """Tests for monotonic array coords."""
+
+    def test_slice(self, monotonic_float_coord):
+        """Basic slice tests for monotonic array."""
+        coord = monotonic_float_coord
+        # test start only
+        new, sliced = coord.filter((5, ...))
+        assert_value_in_one_step(coord, sliced.start, 5)
+        assert new.min >= 5
+        # test stop only
+        new, sliced = coord.filter((..., 40))
+        assert_value_in_one_step(coord, sliced.stop, 40, greater=False)
+        assert new.max <= 40
+
+    def test_sort(self, monotonic_float_coord):
+        """Ensure sort returns equal coord"""
+        out, _ = monotonic_float_coord.sort()
+        assert out == monotonic_float_coord
+
+    def test_reverse_monotonic(self):
+        """Ensure reverse monotonic values can be handled."""
+        ar = np.cumsum(np.abs(np.random.rand(100)))[::-1]
+        coord = get_coord(values=ar)
+        assert np.allclose(coord.values, ar)
+        new, sliced = coord.filter((ar[10], ar[20]))
+        assert len(new) == 10 == len(new.values)
+        assert np.allclose(new.values, coord.values[10:20])
+        # test edges
+        eps = 0.000000001
+        new, sliced = coord.filter((ar[0] + eps, ar[20] - eps))
+        assert sliced.start is None
+        # ensure messing with the ends keeps the order
+        val1, val2 = ar[10] - eps, ar[20] + eps
+        new, sliced = coord.filter((val1, val2))
+        assert sliced == slice(11, 19)
+        assert new[0] <= val1
+        assert new[-1] >= val2
+
+    def test_index_with_string(self, monotonic_datetime_coord):
+        """Ensure indexing works with date string."""
+        coord = monotonic_datetime_coord
+        value1 = coord.values[12] + np.timedelta64(1, "ns")
+        new, sliced = coord.filter((value1, ...))
+        assert_value_in_one_step(coord, sliced.start, value1, greater=True)
+        assert sliced.start == 13
+        # now test exact value
+        value2 = coord.values[12]
+        new, sliced = coord.filter((value2, ...))
+        assert_value_in_one_step(coord, sliced.start, value2, greater=True)
+        assert sliced.start == 12
+        # test end index
+        new, sliced = coord.filter((..., value1))
+        assert sliced.stop == 12
+        new, sliced = coord.filter((..., value2 - np.timedelta64(1, "ns")))
+        assert sliced.stop == 11
+        # test range
+        new, sliced = coord.filter((coord.values[10], coord.values[20]))
+        assert len(new) == 10
+        assert slice(10, 20) == sliced
+
+
+class TestNonOrderedArrayCoords:
+    """Tests for non-ordered array coords."""
+
+    def test_filter(self, random_coord):
+        """Ensure filtering returns an ndarray"""
+        min_v, max_v = np.min(random_coord.values), np.max(random_coord.values)
+        dist = max_v - min_v
+        val1, val2 = min_v + 0.2 * dist, max_v - 0.2 * dist
+        new, bool_array = random_coord.filter((val1, val2))
+        assert np.all(new.values >= val1)
+        assert np.all(new.values <= val2)
+        assert bool_array.sum() == len(new)
+
+    def test_sort(self, random_coord):
+        """Ensure the coord can be ordered."""
+        new, ordering = random_coord.sort()
+        assert isinstance(new, CoordMonotonicArray)

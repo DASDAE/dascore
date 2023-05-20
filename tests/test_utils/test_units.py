@@ -27,3 +27,9 @@ class TestUnitInit:
         inverted = invert_unit(unit)
         reverted = invert_unit(inverted)
         assert unit == reverted
+
+    def test_conversion_factor_none(self):
+        """If either unit is None it should return 1."""
+        assert get_conversion_factor(None, None) == 1
+        assert get_conversion_factor(None, "m") == 1
+        assert get_conversion_factor("m", None) == 1

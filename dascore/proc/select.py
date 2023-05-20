@@ -51,7 +51,7 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     >>> import numpy as np
     >>> from dascore.examples import get_example_patch
     >>> tr = get_example_patch()
-    >>> new = tr.select(distance=(50,300))
+    >>> new = tr._get_select_inds(distance=(50,300))
     """
     kwargs = _prepare_kwargs(patch, kwargs)
     # convert tuples into slices

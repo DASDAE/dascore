@@ -66,13 +66,13 @@ class TimeDelta64(np.timedelta64, SimpleValidator):
     func = to_timedelta64
 
 
-class ArrayLike(SimpleValidator):
+class ArrayLike(SimpleValidator, np.ndarray):
     """An array like validator."""
 
     @classmethod
     def func(cls, object):
         """Ensure an object is array-like."""
-        assert isinstance(object, npt.ArrayLike)
+        assert isinstance(object, np.ndarray)
         return object
 
 
@@ -88,9 +88,5 @@ class DTypeLike(SimpleValidator):
 
 class Unit(pint.Unit, SimpleValidator):
     """A pint unit which can be used by pydantic."""
-
-    # @classmethod
-    # def func(cls):
-    #     """A function for validating OptionalUnit Input."""
 
     func = pint.Unit
