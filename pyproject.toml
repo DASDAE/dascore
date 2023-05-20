@@ -54,6 +54,7 @@ dependencies = [
      "tables",
      "typing_extensions",
      "xarray",
+     "pint",
 ]
 
 [project.optional-dependencies]

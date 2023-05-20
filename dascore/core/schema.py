@@ -12,42 +12,7 @@ from dascore.constants import (
     max_lens,
 )
 from dascore.utils.docs import compose_docstring
-from dascore.utils.time import to_datetime64, to_timedelta64
-
-
-class SimpleValidator:
-    """
-    A custom class for getting simple validation behavior in pydantic.
-
-    Subclass, then define function to be used as validator. func
-    """
-
-    @classmethod
-    def func(cls, value):
-        """A method to overwrite with custom validation."""
-        return value
-
-    @classmethod
-    def __get_validators__(cls):
-        """Hook used by pydantic."""
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, validator):
-        """Simply call func."""
-        return cls.func(validator)
-
-
-class DateTime64(np.datetime64, SimpleValidator):
-    """DateTime64 validator"""
-
-    func = to_datetime64
-
-
-class TimeDelta64(np.timedelta64, SimpleValidator):
-    """TimeDelta64 validator"""
-
-    func = to_timedelta64
+from dascore.utils.models import DateTime64, TimeDelta64
 
 
 @compose_docstring(basic_params=basic_summary_attrs)

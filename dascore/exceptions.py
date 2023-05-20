@@ -29,8 +29,8 @@ class PatchError(DASCoreError):
     """Parent class for more specific Patch Errors."""
 
 
-class PatchCoordError(ValueError, PatchError):
-    """Raised when something is wrong with a Patch's coordinates."""
+class CoordError(ValueError, PatchError):
+    """Raised when something is wrong with a Coordinate."""
 
 
 class PatchDimError(ValueError, PatchError):

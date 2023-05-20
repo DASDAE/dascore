@@ -2,7 +2,8 @@
 import pydantic
 import pytest
 
-from dascore.core.schema import PatchAttrs, SimpleValidator
+from dascore.core.schema import PatchAttrs
+from dascore.utils.models import SimpleValidator
 
 
 @pytest.fixture(scope="class")
