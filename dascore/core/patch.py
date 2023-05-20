@@ -7,7 +7,6 @@ from typing import Callable, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-from numpy.typing import ArrayLike
 from xarray import DataArray
 
 import dascore.proc
@@ -16,8 +15,7 @@ from dascore.core.schema import PatchAttrs
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.coords import Coords, assign_coords
-
-# from dascore.utils.mapping import FrozenDict
+from dascore.utils.models import ArrayLike
 from dascore.utils.patch import _AttrsCoordsMixer
 from dascore.viz import VizPatchNameSpace
 
@@ -29,15 +27,15 @@ class Patch:
     Parameters
     ----------
     data
-        An array-like containing data, an xarray DataArray object, or a Patch.
+        The data representing fiber optic measurements.
     coords
         The coordinates, or dimensional labels for the data. These can be
         passed in three forms:
-        {coord_name: data}
-        {coord_name: ((dimensions,), data)}
-        {coord_name: (dimensions, data)}
+        {coord_name: coord}
+        {coord_name: ((dimensions,), coord)}
+        {coord_name: (dimensions, coord)}
     dims
-        A sequence of dimension strings. The first entry cooresponds to the
+        A sequence of dimension strings. The first entry corresponds to the
         first axis of data, the second to the second dimension, and so on.
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict.

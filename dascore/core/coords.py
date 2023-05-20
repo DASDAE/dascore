@@ -12,7 +12,7 @@ from typing_extensions import Self
 
 from dascore.exceptions import CoordError
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
-from dascore.utils.time import is_datetime64, to_datetime64
+from dascore.utils.time import is_datetime64, to_datetime64, to_number
 from dascore.utils.units import get_conversion_factor
 
 
@@ -20,6 +20,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     """Coordinate interface."""
 
     units: Optional[Unit]
+    _even_sampling = False
 
     @abc.abstractmethod
     def convert_units(self, unit) -> Self:
@@ -88,6 +89,20 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         return self, slice(None)
 
+    def snap(self) -> "CoordRange":
+        """
+        Snap the coordinates to evenly sampled grid points.
+
+        This will cause some loss of precision but often makes the data much
+        easier to work with.
+        """
+        return self
+
+    @property
+    def data(self):
+        """Return the internal data. Same as values attribute."""
+        return self.values
+
 
 class CoordRange(BaseCoord):
     """A coordinate represent a range of evenly sampled data."""
@@ -95,6 +110,7 @@ class CoordRange(BaseCoord):
     start: Any
     stop: Any
     step: Any
+    _even_sampling = True
 
     @root_validator()
     def ensure_all_attrs_set(cls, values):
@@ -166,7 +182,8 @@ class CoordRange(BaseCoord):
     @property
     def max(self):
         """Return max value in range."""
-        return self.stop
+        # like range, coord range is exclusive of final value.
+        return self.stop - self.step
 
     @property
     @cache
@@ -210,6 +227,25 @@ class CoordArray(BaseCoord):
         arg_dict["values"] = self.values[argsort]
         new = get_coord(**arg_dict)
         return new, argsort
+
+    def snap(self):
+        """
+        Snap the coordinates to evenly sampled grid points.
+
+        This will cause some loss of precision but often makes the coordinate
+        much easier to work with.
+        """
+        values = self.values
+        is_datetime = np.issubdtype(self.dtype, (np.datetime64, np.timedelta64))
+        if is_datetime:
+            values = to_number(self.values)
+        max_v, min_v = np.max(values), np.min(values)
+        step = (max_v - min_v) / (len(self) - 1)
+        if is_datetime:
+            max_v = np.datetime64(int(max_v), "ns")
+            min_v = np.datetime64(int(min_v), "ns")
+            step = np.timedelta64(int(np.round(step)), "ns")
+        return CoordRange(start=min_v, stop=max_v, step=step, units=self.units)
 
     def __getitem__(self, item):
         return self.values[item]

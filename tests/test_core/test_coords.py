@@ -5,7 +5,13 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.coords import BaseCoord, CoordArray, CoordMonotonicArray, get_coord
+from dascore.core.coords import (
+    BaseCoord,
+    CoordArray,
+    CoordMonotonicArray,
+    CoordRange,
+    get_coord,
+)
 from dascore.exceptions import CoordError
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
@@ -67,6 +73,14 @@ def random_coord():
     """Create coordinates which are evenly sampled."""
     ar = np.random.rand(100) * 1_000
     return get_coord(values=ar)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORDS)
+def random_date_coord():
+    """Create coordinates which are evenly sampled."""
+    ar = np.random.rand(100) * 1_000
+    return get_coord(values=to_datetime64(ar))
 
 
 @pytest.fixture(scope="class", params=COORDS)
@@ -308,3 +322,14 @@ class TestNonOrderedArrayCoords:
         """Ensure the coord can be ordered."""
         new, ordering = random_coord.sort()
         assert isinstance(new, CoordMonotonicArray)
+
+    def test_snap(self, random_coord):
+        """Ensure coords can be snapped to even sampling intervals."""
+        out = random_coord.snap()
+        assert isinstance(out, CoordRange)
+
+    def test_snap_date(self, random_date_coord):
+        """Ensure coords can be snapped to even sampling intervals."""
+        out = random_date_coord.snap()
+        assert np.issubdtype(out.dtype, np.datetime64)
+        assert isinstance(out, CoordRange)
