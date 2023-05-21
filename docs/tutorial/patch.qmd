@@ -262,11 +262,11 @@ out_3 = pa.assign_coords(
 )
 ```
 
-## Coords in Patch Init
+## Coords in Patch Initialization
 
 Any number of coordinates can also be assigned when the patch is initiated. For
 coordinates other than those of the patch dimensions, the associated dimensions
-must be specified. For exampel:
+must be specified. For example:
 
 ```{python}
 import dascore as dc
