@@ -68,3 +68,11 @@ class Terra15FormatterV5(Terra15FormatterV4):
     """
 
     version = "5"
+
+
+class Terra15FormatterV6(Terra15FormatterV4):
+    """
+    Support for Terra15 data format, version 5.
+    """
+
+    version = "6"

@@ -3,6 +3,7 @@
 from typing import Optional
 
 import numpy as np
+from tables.exceptions import NoSuchNodeError
 
 from dascore.constants import timeable_types
 from dascore.core import Patch
@@ -37,7 +38,10 @@ def _get_terra15_version_str(hdf_fi) -> str:
 
 def _get_scanned_time_min_max(data_node):
     """Get the min/max time from time array."""
-    time = data_node["gps_time"]
+    try:
+        time = data_node["gps_time"]
+    except (NoSuchNodeError, IndexError):
+        time = data_node["posix_time"]
     t_len = len(time)
     # first try fast path by tacking first/last of time
     tmin, tmax = time[0], time[-1]
@@ -70,7 +74,7 @@ def _get_version_data_node(root):
     if version == "4":
         data_type = root._v_attrs.data_product
         data_node = root[data_type]
-    elif version == "5":
+    elif version in {"5", "6"}:
         data_node = root["data_product"]
     else:
         raise NotImplementedError("Unknown Terra15 version")

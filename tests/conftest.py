@@ -103,6 +103,12 @@ def terra15_v5_path():
     return fetch("terra15_v5_test_file.hdf5")
 
 
+@pytest.fixture(scope="class")
+def terra15_v6_path():
+    """Get the path to terra15 V5 file, download if not cached."""
+    return fetch("terra15_v6_test_file.hdf5")
+
+
 @pytest.fixture()
 @register_func(SPOOL_FIXTURES)
 def terra15_das_spool(terra15_das_example_path) -> SpoolType:
