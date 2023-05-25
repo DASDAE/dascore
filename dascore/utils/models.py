@@ -66,7 +66,7 @@ class TimeDelta64(np.timedelta64, SimpleValidator):
     func = to_timedelta64
 
 
-class ArrayLike(SimpleValidator, np.ndarray):
+class ArrayLike(np.ndarray, SimpleValidator):
     """An array like validator."""
 
     @classmethod

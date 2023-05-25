@@ -3,7 +3,7 @@ Machinery for coordinates.
 """
 import abc
 from functools import cache
-from typing import Any, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -11,6 +11,7 @@ from pydantic import root_validator
 from typing_extensions import Self
 
 from dascore.exceptions import CoordError
+from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
 from dascore.utils.time import is_datetime64, to_datetime64, to_number
 from dascore.utils.units import get_conversion_factor
@@ -72,16 +73,21 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return to_datetime64(value)
         return value
 
-    def _get_value_for_indexing(self, value):
+    def _get_value_for_indexing(self, value, invert=False):
         """Function to get a value for indexing."""
         # strip units and v
         if hasattr(value, "units"):
-            uf = get_conversion_factor(value.units, self.units)
+            unit = value.units
+            i_unit = (1 / unit).units
+            if i_unit == self.units:
+                value = 1 / value
+                unit = i_unit
+            uf = get_conversion_factor(unit, self.units)
             value = value.magnitude * uf
         # if null or ... just return None
         if pd.isnull(value) or value is Ellipsis:
             return None
-        return self._cast_values(value)
+        return self._cast_values(value if not invert else 1 / value)
 
     def sort(self) -> Tuple["BaseCoord", Union[slice, ArrayLike]]:
         """
@@ -97,6 +103,31 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         easier to work with.
         """
         return self
+
+    def get_query_range(
+        self, start, end, invert=False
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Get a tuple of query ranges normalized to coordinate units.
+
+        Parameters
+        ----------
+        start
+            The starting value of the query.
+        end
+            The ending value of the query.
+        invert
+            If true, return the inverted range, meaning 1/end, 1/start.
+            This is useful, for example, for getting frequencies (1/s) when
+            coordinates are in s.
+        """
+        out = [
+            self._get_value_for_indexing(start, invert=invert),
+            self._get_value_for_indexing(end, invert=invert),
+        ]
+        if not any(pd.isnull(out)):
+            return tuple(sorted(out))
+        return tuple(out)
 
     @property
     def data(self):
@@ -281,7 +312,9 @@ class CoordArray(BaseCoord):
         except TypeError:
             return False
         v1, v2 = self_d.pop("values", None), other_d.pop("values", None)
-        if self_d == other_d and np.allclose(v1, v2):
+        # Frustratingly, allcose doesn't work with datetime64 so we we need
+        # this short-circuiting equality check.
+        if self_d == other_d and (np.all(v1 == v2) or np.allclose(v1, v2)):
             return True
         return False
 
@@ -353,6 +386,9 @@ def get_coord(
         # the array cannot be evenly sampled if it isn't monotonic
         if is_monotonic:
             unique_diff = np.unique(view2 - view1)
+            # here we are dealing with a length 0 or 1 array.
+            if not len(unique_diff):
+                return None, None, None, False
             if len(unique_diff) == 1 or _all_diffs_close(unique_diff):
                 _min = data[0]
                 _max = data[-1]
@@ -363,6 +399,8 @@ def get_coord(
     _check_inputs(values, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
     if values is not None:
+        if isinstance(values, BaseCoord):  # just return coordinate
+            return values
         start, stop, step, monotonic = _maybe_get_start_stop_step(values)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)
@@ -373,3 +411,91 @@ def get_coord(
         return CoordArray(values=values, units=units)
     else:
         return CoordRange(start=start, stop=stop, step=step, units=units)
+
+
+class CoordManager(DascoreBaseModel):
+    """
+    Class for managing coordinates.
+
+    Attributes
+    ----------
+    coord_map
+        A mapping of {coord_name: Coord}
+    dim_map
+        A mapping of {coord_name: (dimensions, )
+    """
+
+    dims: Tuple[str, ...]
+    coord_map: Dict[str, BaseCoord]
+    dim_map: Dict[str, Tuple[str, ...]]
+
+    def __getitem__(self, item):
+        return self.coord_map[item]
+
+    def __rich__(self) -> str:
+        out = ["[bold] Coordinates [/bold]"]
+        for name, coord in self.coord_map.items():
+            dims = self.dim_map[name]
+            new = f"    {name}: {dims}: {coord}"
+            out.append(new)
+        return "\n".join(out)
+
+
+def get_coord_manager(coord_dict, dims) -> CoordManager:
+    """
+    Create a coordinate manager.
+    """
+
+    def _coord_from_simple(name, coord):
+        """
+        Get coordinates from {coord_name: coord} where coord_name is dim name.
+        """
+        if name not in dims:
+            msg = (
+                "Coordinates that are not named the same as dimensions"
+                "must be passed as a tuple of the form: "
+                "(dimension, coord) "
+            )
+            raise CoordError(msg)
+        assert name in dims
+        return get_coord(values=coord), (name,)
+
+    def _coord_from_nested(coord):
+        """
+        Get coordinates from {coord_name: (dim_name, coord)} or
+        {coord_name: ((dim_names...,), coord)}
+        """
+        if not len(coord) == 2:
+            msg = (
+                "Second input for coords must be length two of the form:"
+                " (dimension, coord) or ((dimensions,...), coord)"
+            )
+            raise CoordError(msg)
+        dim_names = iterate(coord[0])
+        # all dims must be in the input dims.
+        if not (d1 := set(dim_names)).issubset((d2 := set(dims))):
+            bad_dims = d2 - d1
+            msg = (
+                f"Coordinate specified invalid dimension(s) {bad_dims}."
+                f" Valid dimensions are {dims}"
+            )
+            raise CoordError(msg)
+        coord_out = get_coord(values=coord[1])
+        return coord_out, dim_names
+
+    # each dimension must have a coordinate
+    if not (cset := set(coord_dict)).issuperset((dset := set(dims))):
+        missing = cset - dset
+        msg = (
+            f"All dimensions must have coordinates. The following "
+            f"are missing {missing}"
+        )
+        raise CoordError(msg)
+
+    coord_map, dim_map = {}, {}
+    for name, coord in coord_dict.items():
+        if isinstance(coord, (BaseCoord, ArrayLike, np.ndarray)):
+            coord_map[name], dim_map[name] = _coord_from_simple(name, coord)
+        else:
+            coord_map[name], dim_map[name] = _coord_from_nested(coord)
+    return CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)

@@ -8,9 +8,11 @@ import dascore as dc
 from dascore.core.coords import (
     BaseCoord,
     CoordArray,
+    CoordManager,
     CoordMonotonicArray,
     CoordRange,
     get_coord,
+    get_coord_manager,
 )
 from dascore.exceptions import CoordError
 from dascore.utils.misc import register_func
@@ -84,7 +86,7 @@ def random_date_coord():
 
 
 @pytest.fixture(scope="class", params=COORDS)
-def coord(request):
+def coord(request) -> BaseCoord:
     """Meta-fixture for returning all coords"""
     return request.getfixturevalue(request.param)
 
@@ -120,6 +122,42 @@ class TestBasics:
         """All coords should return an array with the values attr."""
         ar = coord.values
         assert isinstance(ar, np.ndarray)
+
+    def test_len_one_array(self):
+        """Ensure one length array returns coord."""
+        ar = np.array([10])
+        coord = get_coord(values=ar)
+        assert isinstance(coord, BaseCoord)
+        assert len(coord) == 1
+
+    def test_empty_array(self):
+        """An empty array should also be a valid coordinate."""
+        ar = np.array([])
+        coord = get_coord(values=ar)
+        assert isinstance(coord, BaseCoord)
+        assert len(coord) == 0
+
+    def test_coord_input(self, coord):
+        """A coordinate should be valid input."""
+        assert get_coord(values=coord) == coord
+
+    def test_get_range(self, coord):
+        """Basic tests for range of coords."""
+        start = coord.min
+        end = coord.max
+        out = coord.get_query_range(start, end)
+        assert out == (start, end)
+        assert coord.get_query_range(start, None) == (start, None)
+        assert coord.get_query_range(None, end) == (None, end)
+        # if units aren't none, ensure they work.
+        if not (unit := coord.units):
+            return
+        start_unit = start * unit
+        end_unit = end * unit
+        assert coord.get_query_range(start_unit, None) == (start, None)
+        assert coord.get_query_range(start_unit, end_unit) == (start, end)
+        assert coord.get_query_range(1 / end_unit, 1 / start_unit) == (start, end)
+        # test inverse units
 
     def test_filter_ordered_coords(self, coord):
         """Basic filter tests all coords should pass."""
@@ -333,3 +371,64 @@ class TestNonOrderedArrayCoords:
         out = random_date_coord.snap()
         assert np.issubdtype(out.dtype, np.datetime64)
         assert isinstance(out, CoordRange)
+
+
+class TestCoordManagerInputs:
+    """Tests for coordinates management."""
+
+    coords = {
+        "time": to_datetime64(np.arange(10, 100, 10)),
+        "distance": get_coord(values=np.arange(0, 1_000, 10)),
+    }
+    dims = ("time", "distance")
+
+    @pytest.fixture(scope="class")
+    def coord_manager(self):
+        """The simplest coord manager"""
+        return get_coord_manager(self.coords, self.dims)
+
+    def test_simple_inputs(self):
+        """Simplest input case."""
+        out = get_coord_manager(self.coords, self.dims)
+        assert isinstance(out, CoordManager)
+
+    def test_additional_coords(self):
+        """Ensure a additional (non-dimensional) coords work."""
+        coords = dict(self.coords)
+        lats = np.random.rand(len(self.coords["distance"]))
+        coords["latitude"] = ("distance", lats)
+        out = get_coord_manager(coords, self.dims)
+        assert isinstance(out["latitude"], BaseCoord)
+
+    def test_str(self, coord_manager):
+        """Ensure a custom (readable) str is returned."""
+        coord_str = str(coord_manager)
+        assert isinstance(coord_str, str)
+
+    def test_bad_coords(self):
+        """Ensure specifying a bad coordinate raises"""
+        coords = dict(self.coords)
+        coords["bill"] = np.arange(10, 100, 10)
+        with pytest.raises(CoordError, match="not named the same as dimension"):
+            get_coord_manager(coords, self.dims)
+
+    def test_nested_coord_too_long(self):
+        """Nested coordinates that are gt 2 should fail"""
+        coords = dict(self.coords)
+        coords["time"] = ("time", to_datetime64(np.arange(10, 100, 10)), "space")
+        with pytest.raises(CoordError, match="must be length two"):
+            get_coord_manager(coords, self.dims)
+
+    def test_invalid_dimensions(self):
+        """Nested coordinates must specify valid dimensions"""
+        coords = dict(self.coords)
+        coords["time"] = ("bob", to_datetime64(np.arange(10, 100, 10)))
+        with pytest.raises(CoordError, match="invalid dimension"):
+            get_coord_manager(coords, self.dims)
+
+    def test_missing_coordinates(self):
+        """If all dims don't have coords an error should be raised."""
+        coords = dict(self.coords)
+        coords.pop("distance")
+        with pytest.raises(CoordError, match="All dimensions must have coordinates"):
+            get_coord_manager(coords, self.dims)
