@@ -432,6 +432,37 @@ class CoordManager(DascoreBaseModel):
     def __getitem__(self, item):
         return self.coord_map[item]
 
+    def update(self, **kwargs) -> Self:
+        """
+        Update the coordinates, return a new Coordinate Manager.
+
+        Input values can be of the same form as initialization.
+        To drop coordinates, simply pass {coord_name: None}
+
+        """
+        coords = dict(self.coord_map)
+        for item, value in kwargs.items():
+            if value is None:
+                coords.pop(item, None)
+            else:
+                coords[item] = value
+        out = dict(coord_map=coords, dim_map=self.dim_map, dims=self.dims)
+        return self.__class__(**out)
+
+    def drop_dim(self, dim: Union[str, Sequence[str]]) -> Self:
+        """Drop one or more dimension."""
+        coord_name_to_kill = []
+        dims_to_kill = set(iterate(dim))
+        for name, dims in self.dims.items():
+            if dims_to_kill & set(dims):
+                coord_name_to_kill.append(name)
+        coord_map = {
+            i: v for i, v in self.coord_map.items() if i not in coord_name_to_kill
+        }
+        dim_map = {i: v for i, v in self.dim_map.items() if i not in coord_name_to_kill}
+        dims = tuple(x for x in self.dims if x not in dims_to_kill)
+        return self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
+
     def __rich__(self) -> str:
         out = ["[bold] Coordinates [/bold]"]
         for name, coord in self.coord_map.items():

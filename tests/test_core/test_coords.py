@@ -432,3 +432,11 @@ class TestCoordManagerInputs:
         coords.pop("distance")
         with pytest.raises(CoordError, match="All dimensions must have coordinates"):
             get_coord_manager(coords, self.dims)
+
+
+class TestCoordManagerDrop:
+    """Tests for dropping coords with coord manager."""
+
+    def test_drop(self):
+        """Ensure coordinates can be dropped."""
+        assert False
