@@ -2,7 +2,7 @@
 Function for querying Patchs
 """
 from dascore.constants import PatchType
-from dascore.utils.patch import _AttrsCoordsMixer, patch_function
+from dascore.utils.patch import _get_history_str, patch_function
 from dascore.utils.time import get_select_time
 
 

@@ -1,12 +1,20 @@
 """
-Utilities for working with coordinates on Patches.
+Machinery for coordinates.
 """
-from __future__ import annotations
+import abc
+from functools import cache
+from typing import Any, Optional, Sequence, Tuple, Union
 
+import numpy as np
+import pandas as pd
+from pydantic import root_validator
 from typing_extensions import Self
 
 from dascore.constants import PatchType
-from dascore.utils.mapping import FrozenDict
+from dascore.exceptions import CoordError
+from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
+from dascore.utils.time import is_datetime64, to_datetime64, to_number
+from dascore.utils.units import get_conversion_factor
 
 
 def assign_coords(patch: PatchType, **kwargs) -> PatchType:
@@ -50,105 +58,397 @@ def assign_coords(patch: PatchType, **kwargs) -> PatchType:
     return patch.new(coords=coords, dims=patch.dims)
 
 
-class Coords:
-    """
-    A class to simplify the handling of coordinates.
+class BaseCoord(DascoreBaseModel, abc.ABC):
+    """Coordinate interface."""
 
-    Also helps in supporting non-dimensional coordinates and inferring
-    dimensions.
+    units: Optional[Unit]
+    _even_sampling = False
 
-    Attributes
-    ----------
-    array_dict
-        A dict of {coord_name: array}.
-    dims_dict
-        A dict of {coord_name: tuple[dim_1, dim_2...]}.
-    dims
-        A tuple of the dimensions for the coordinates.
-    """
+    @abc.abstractmethod
+    def convert_units(self, unit) -> Self:
+        """Convert from one unit to another. Set units if None are set."""
 
-    # --- Init stuff
-    dims = ()
-    array_dict = FrozenDict()
-    dims_dict = FrozenDict()
+    @abc.abstractmethod
+    def filter(self, arg) -> Tuple[Self, Union[slice, ArrayLike]]:
+        """
+        Returns an entity that can be used in a list for numpy indexing
+        and filtered coord.
+        """
 
-    def __init__(self, coords, dims=None):
-        if coords is None:
-            return
-        # Another coord as input
-        if isinstance(coords, Coords):
-            self.__dict__.update(coords.__dict__)
-            return
-        # hande a dict being passed
-        if isinstance(coords, (dict, FrozenDict)):
-            array_dict, dim_dict = self._coord_dict_from_dict(coords)
-            self.dims = dims
-        # handle xarray coordinate
-        else:
-            array_dict, dim_dict = self._coord_dict_from_xr(coords)
-            self.dims = coords.dims
-        self.array_dict = FrozenDict(array_dict)
-        self.dims_dict = FrozenDict(dim_dict)
+    @abc.abstractmethod
+    def __getitem__(self, item) -> Self:
+        """Should implement slicing and return new instance."""
 
-    def _coord_dict_from_xr(self, coord):
-        """Get the coordinates from an xarray coordinate object."""
-        array_dict = {}
-        dim_dict = {}
-        for i, v in coord.items():
-            array_dict[i] = v.data
-            dims = v.dims
-            dim_dict[i] = (dims,) if isinstance(dims, str) else tuple(dims)
-        return array_dict, dim_dict
+    @abc.abstractmethod
+    def __len__(self):
+        """Total number of elements."""
 
-    def _coord_dict_from_dict(self, coord_dict):
-        """Get the coordinate dict from a dictionary"""
-        arrays = {}
-        dimensions = {}
-        for i, v in coord_dict.items():
-            # determine if of the form (dim_name(s), value) or just value
-            if len(v) and isinstance(v[0], (str, tuple, list)):
-                assert len(v) == 2  # should be a sequence of dims, array
-                arrays[i] = v[1]
-                dims = v[0]
-                dimensions[i] = (dims,) if isinstance(dims, str) else tuple(dims)
-            else:
-                arrays[i] = v
-                dimensions[i] = (i,)
-        return arrays, dimensions
+    @property
+    @abc.abstractmethod
+    def min(self):
+        """Returns (or generates) the array data."""
 
-    def __str__(self):
-        # TODO: Once I am convinced Coords will stay we need a better str
-        msg = f"Coords managing {list(self.dims_dict)}"
-        return msg
+    @property
+    @abc.abstractmethod
+    def max(self):
+        """Returns (or generates) the array data."""
 
-    __repr__ = __str__
+    @property
+    @abc.abstractmethod
+    def dtype(self) -> DTypeLike:
+        """Returns a numpy datatype"""
 
-    def get(self, item, default=None):
-        """Return item or None if not in coord. Same as dict.get."""
-        return self.array_dict.get(item, default=default)
+    def set_units(self, units) -> Self:
+        """Set new units on coordinates."""
+        new = dict(self)
+        new["units"] = units
+        return self.__class__(**new)
 
-    def __iter__(self):
-        return self.array_dict.__iter__()
+    def _cast_values(self, value):
+        """
+        Function to cast input values to current dtype.
+
+        Used, for example, to allow strings to represent dates.
+        """
+        if np.issubdtype(self.dtype, np.datetime64):
+            return to_datetime64(value)
+        return value
+
+    def _get_value_for_indexing(self, value, invert=False):
+        """Function to get a value for indexing."""
+        # strip units and v
+        if hasattr(value, "units"):
+            unit = value.units
+            i_unit = (1 / unit).units
+            if i_unit == self.units:
+                value = 1 / value
+                unit = i_unit
+            uf = get_conversion_factor(unit, self.units)
+            value = value.magnitude * uf
+        # if null or ... just return None
+        if pd.isnull(value) or value is Ellipsis:
+            return None
+        return self._cast_values(value if not invert else 1 / value)
+
+    def sort(self) -> Tuple["BaseCoord", Union[slice, ArrayLike]]:
+        """
+        Sort the contents of the coord. Return new coord and slice for sorting.
+        """
+        return self, slice(None)
+
+    def snap(self) -> "CoordRange":
+        """
+        Snap the coordinates to evenly sampled grid points.
+
+        This will cause some loss of precision but often makes the data much
+        easier to work with.
+        """
+        return self
+
+    def get_query_range(
+        self, start, end, invert=False
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Get a tuple of query ranges normalized to coordinate units.
+
+        Parameters
+        ----------
+        start
+            The starting value of the query.
+        end
+            The ending value of the query.
+        invert
+            If true, return the inverted range, meaning 1/end, 1/start.
+            This is useful, for example, for getting frequencies (1/s) when
+            coordinates are in s.
+        """
+        out = [
+            self._get_value_for_indexing(start, invert=invert),
+            self._get_value_for_indexing(end, invert=invert),
+        ]
+        if not any(pd.isnull(out)):
+            return tuple(sorted(out))
+        return tuple(out)
+
+    @property
+    def data(self):
+        """Return the internal data. Same as values attribute."""
+        return self.values
+
+
+class CoordRange(BaseCoord):
+    """A coordinate represent a range of evenly sampled data."""
+
+    start: Any
+    stop: Any
+    step: Any
+    _even_sampling = True
+
+    @root_validator()
+    def ensure_all_attrs_set(cls, values):
+        """If any info is neglected the coord is invalid."""
+        for name in ["start", "stop", "step"]:
+            assert values[name] is not None
+        return values
 
     def __getitem__(self, item):
-        return self.array_dict[item]
+        return self.values[item]
 
-    def to_nested_dict(self):
-        """
-        Return a dict of {coord_name: ((*dims), data)}.
+    @cache
+    def __len__(self):
+        out = abs((self.stop - self.start) / self.step)
+        # due to floating point weirdness this can sometimes be very close
+        # but not exactly an int, so we need to round.
+        return int(np.round(out))
 
-        This is useful for input into xarray.
-        """
-        out = {i: (self.dims_dict[i], self.array_dict[i]) for i in self.dims_dict}
+    def convert_units(self, units) -> Self:
+        """Convert units, or set units if none exist."""
+        if self.units is None:
+            return self.set_units(units)
+        out = dict(units=units)
+        factor = get_conversion_factor(self.units, units)
+        for name in ["start", "stop", "step"]:
+            out[name] = getattr(self, name) * factor
+        return self.update(**out)
+
+    def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+        """Apply filter, return filtered coords and index for filtering data."""
+        if isinstance(args, Sequence):
+            assert len(args) == 2, "Only length two sequence allowed for indexing."
+            start = self._get_index(args[0])
+            stop = self._get_index(args[1], forward=False)
+            out = slice(start, stop)
+            new_start = self[start] if start else self.start
+            new_end = self[stop] if stop else self.stop
+            new = self.update(start=new_start, stop=new_end)
+            return new, out
+
+    def _get_index(self, value, forward=True):
+        """Get the index corresponding to a value."""
+        if (value := self._get_value_for_indexing(value)) is None:
+            return value
+        func = np.ceil if forward else np.floor
+        start, _, step = self.start, self.stop, self.step
+        # Due to float weirdness we need a little bit of a fudge factor here.
+        fraction = func(np.round((value - start) / step, decimals=10))
+        out = int(fraction)
+        if out <= 0 or out >= len(self):
+            return None
         return out
 
-    def update(self, **kwargs) -> Self:
-        """Set the data of an existing coordinate."""
-        assert set(kwargs).issubset(set(self.array_dict))
-        coords = self.to_nested_dict()
-        for item, val in kwargs.items():
-            data_list = list(coords[item])
-            data_list[1] = val
-            coords[item] = data_list
-        out = self.__class__(coords)
-        return out
+    @property
+    def values(self) -> ArrayLike:
+        """Return the values of the coordinate as an array."""
+        # note: linspace works better for floats that might have slightly
+        # uneven spacing. It ensures the length of the output array is robust
+        # to small deviations in spacing. However, this doesnt work for datetimes.
+        if is_datetime64(self.start):
+            return np.arange(self.start, self.stop, self.step)
+        return np.linspace(self.start, self.stop - self.step, num=len(self))
+
+    @property
+    def min(self):
+        """Return min value"""
+        return self.start
+
+    @property
+    def max(self):
+        """Return max value in range."""
+        # like range, coord range is exclusive of final value.
+        return self.stop - self.step
+
+    @property
+    @cache
+    def dtype(self):
+        """Returns datatype."""
+        return np.arange(self.start, self.start + self.step, self.step).dtype
+
+
+class CoordArray(BaseCoord):
+    """
+    A coordinate with arbitrary values in an array.
+    """
+
+    values: ArrayLike
+
+    def convert_units(self, units) -> Self:
+        """Convert units, or set units if none exist."""
+        if self.units is None:
+            return self.set_units(units)
+        factor = get_conversion_factor(self.units, units)
+        return self.update(units=units, values=self.values * factor)
+
+    def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+        """Apply filter, return filtered coords and index for filtering data."""
+        if isinstance(args, Sequence):
+            assert len(args) == 2, "Only length two sequence allowed for indexing."
+            values = self.values
+            out = np.ones_like(values, dtype=np.bool_)
+            val1 = self._get_value_for_indexing(args[0])
+            val2 = self._get_value_for_indexing(args[1])
+            if val1 is not None:
+                out = out & (values >= val1)
+            if val2 is not None:
+                out = out & (values <= val2)
+            return self.update(values=values[out]), out
+
+    def sort(self) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
+        """Sort the coord to be monotonic (maybe range)."""
+        argsort: ArrayLike = np.argsort(self.values)
+        arg_dict = dict(self)
+        arg_dict["values"] = self.values[argsort]
+        new = get_coord(**arg_dict)
+        return new, argsort
+
+    def snap(self):
+        """
+        Snap the coordinates to evenly sampled grid points.
+
+        This will cause some loss of precision but often makes the coordinate
+        much easier to work with.
+        """
+        values = self.values
+        is_datetime = np.issubdtype(self.dtype, (np.datetime64, np.timedelta64))
+        if is_datetime:
+            values = to_number(self.values)
+        max_v, min_v = np.max(values), np.min(values)
+        step = (max_v - min_v) / (len(self) - 1)
+        if is_datetime:
+            max_v = np.datetime64(int(max_v), "ns")
+            min_v = np.datetime64(int(min_v), "ns")
+            step = np.timedelta64(int(np.round(step)), "ns")
+        return CoordRange(start=min_v, stop=max_v, step=step, units=self.units)
+
+    def __getitem__(self, item):
+        return self.values[item]
+
+    def __hash__(self):
+        return hash(id(self))
+
+    @cache
+    def __len__(self):
+        return len(self.values)
+
+    @property
+    @cache
+    def min(self):
+        """Return min value"""
+        return np.min(self.values)
+
+    @property
+    @cache
+    def max(self):
+        """Return max value in range."""
+        return np.max(self.values)
+
+    @property
+    @cache
+    def dtype(self):
+        """Returns datatype."""
+        return self.values.dtype
+
+    def __eq__(self, other):
+        try:
+            self_d, other_d = dict(self), dict(other)
+        except TypeError:
+            return False
+        v1, v2 = self_d.pop("values", None), other_d.pop("values", None)
+        # Frustratingly, allcose doesn't work with datetime64 so we we need
+        # this short-circuiting equality check.
+        if self_d == other_d and (np.all(v1 == v2) or np.allclose(v1, v2)):
+            return True
+        return False
+
+
+class CoordMonotonicArray(CoordArray):
+    """
+    A coordinate with strictly increasing or decreasing values.
+    """
+
+    values: ArrayLike
+
+    def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+        """Apply filter, return filtered coords and index for filtering data."""
+        if isinstance(args, Sequence):
+            assert len(args) == 2, "Only length two sequence allowed for indexing."
+            start = self._get_index(args[0])
+            new_start = start if start is not None and start > 0 else None
+            stop = self._get_index(args[1], forward=False)
+            new_stop = stop if stop is not None and stop < len(self) else None
+            out = slice(new_start, new_stop)
+            return self.update(values=self.values[out]), out
+
+    def _get_index(self, value, forward=True):
+        """Get the index corresponding to a value."""
+        if (value := self._get_value_for_indexing(value)) is None:
+            return value
+        side_dict = {True: "left", False: "right"}
+        values = self.values
+        mod = 0 if forward else -1
+        # since search sorted only works on ascending monotonic arrays we
+        # can negative descending arrays to get the same effect.
+        if values[0] > values[1]:
+            values = values * -1
+            value = value * -1
+        out = np.searchsorted(values, value, side=side_dict[forward])
+        return out + mod
+
+
+def get_coord(
+    *,
+    values: Optional[ArrayLike] = None,
+    start=None,
+    stop=None,
+    step=None,
+    units: Union[None, Unit, str] = None,
+) -> BaseCoord:
+    """
+    Given multiple types of input, return a coordinate.
+    """
+
+    def _check_inputs(data, start, stop, step):
+        """Ensure input combinations are valid."""
+        if data is None:
+            if any([start is None, stop is None, step is None]):
+                msg = "When data is not defined, start, stop, and step must be."
+                raise CoordError(msg)
+
+    def _all_diffs_close(diffs):
+        """Check if all the diffs are 'close' handling timedeltas."""
+        if np.issubdtype(diffs.dtype, np.timedelta64):
+            diffs = diffs.astype(np.int64)
+        return np.allclose(diffs, diffs[0])
+
+    def _maybe_get_start_stop_step(data):
+        """Get start, stop, step, is_monotonic"""
+        view2 = data[1:]
+        view1 = data[:-1]
+        is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)
+        # the array cannot be evenly sampled if it isn't monotonic
+        if is_monotonic:
+            unique_diff = np.unique(view2 - view1)
+            # here we are dealing with a length 0 or 1 array.
+            if not len(unique_diff):
+                return None, None, None, False
+            if len(unique_diff) == 1 or _all_diffs_close(unique_diff):
+                _min = data[0]
+                _max = data[-1]
+                _step = unique_diff[0]
+                return _min, _max + _step, _step, is_monotonic
+        return None, None, None, is_monotonic
+
+    _check_inputs(values, start, stop, step)
+    # data array was passed; see if it is monotonic/evenly sampled
+    if values is not None:
+        if isinstance(values, BaseCoord):  # just return coordinate
+            return values
+        start, stop, step, monotonic = _maybe_get_start_stop_step(values)
+        if start is not None:
+            out = CoordRange(start=start, stop=stop, step=step, units=units)
+            assert len(out) == len(values), "failed!"
+            return out
+        elif monotonic:
+            return CoordMonotonicArray(values=values, units=units)
+        return CoordArray(values=values, units=units)
+    else:
+        return CoordRange(start=start, stop=stop, step=step, units=units)

@@ -5,16 +5,14 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.coords import (
+from dascore.exceptions import CoordError
+from dascore.utils.coords import (
     BaseCoord,
     CoordArray,
-    CoordManager,
     CoordMonotonicArray,
     CoordRange,
     get_coord,
-    get_coord_manager,
 )
-from dascore.exceptions import CoordError
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
 
@@ -371,72 +369,3 @@ class TestNonOrderedArrayCoords:
         out = random_date_coord.snap()
         assert np.issubdtype(out.dtype, np.datetime64)
         assert isinstance(out, CoordRange)
-
-
-class TestCoordManagerInputs:
-    """Tests for coordinates management."""
-
-    coords = {
-        "time": to_datetime64(np.arange(10, 100, 10)),
-        "distance": get_coord(values=np.arange(0, 1_000, 10)),
-    }
-    dims = ("time", "distance")
-
-    @pytest.fixture(scope="class")
-    def coord_manager(self):
-        """The simplest coord manager"""
-        return get_coord_manager(self.coords, self.dims)
-
-    def test_simple_inputs(self):
-        """Simplest input case."""
-        out = get_coord_manager(self.coords, self.dims)
-        assert isinstance(out, CoordManager)
-
-    def test_additional_coords(self):
-        """Ensure a additional (non-dimensional) coords work."""
-        coords = dict(self.coords)
-        lats = np.random.rand(len(self.coords["distance"]))
-        coords["latitude"] = ("distance", lats)
-        out = get_coord_manager(coords, self.dims)
-        assert isinstance(out["latitude"], BaseCoord)
-
-    def test_str(self, coord_manager):
-        """Ensure a custom (readable) str is returned."""
-        coord_str = str(coord_manager)
-        assert isinstance(coord_str, str)
-
-    def test_bad_coords(self):
-        """Ensure specifying a bad coordinate raises"""
-        coords = dict(self.coords)
-        coords["bill"] = np.arange(10, 100, 10)
-        with pytest.raises(CoordError, match="not named the same as dimension"):
-            get_coord_manager(coords, self.dims)
-
-    def test_nested_coord_too_long(self):
-        """Nested coordinates that are gt 2 should fail"""
-        coords = dict(self.coords)
-        coords["time"] = ("time", to_datetime64(np.arange(10, 100, 10)), "space")
-        with pytest.raises(CoordError, match="must be length two"):
-            get_coord_manager(coords, self.dims)
-
-    def test_invalid_dimensions(self):
-        """Nested coordinates must specify valid dimensions"""
-        coords = dict(self.coords)
-        coords["time"] = ("bob", to_datetime64(np.arange(10, 100, 10)))
-        with pytest.raises(CoordError, match="invalid dimension"):
-            get_coord_manager(coords, self.dims)
-
-    def test_missing_coordinates(self):
-        """If all dims don't have coords an error should be raised."""
-        coords = dict(self.coords)
-        coords.pop("distance")
-        with pytest.raises(CoordError, match="All dimensions must have coordinates"):
-            get_coord_manager(coords, self.dims)
-
-
-class TestCoordManagerDrop:
-    """Tests for dropping coords with coord manager."""
-
-    def test_drop(self):
-        """Ensure coordinates can be dropped."""
-        assert False

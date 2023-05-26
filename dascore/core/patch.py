@@ -14,9 +14,9 @@ from dascore.constants import PatchType
 from dascore.core.schema import PatchAttrs
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
-from dascore.utils.coords import Coords, assign_coords
+from dascore.utils.coordmanager import CoordManager
+from dascore.utils.coords import assign_coords
 from dascore.utils.models import ArrayLike
-from dascore.utils.patch import _AttrsCoordsMixer
 from dascore.viz import VizPatchNameSpace
 
 

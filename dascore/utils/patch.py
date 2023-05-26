@@ -1,13 +1,9 @@
 """
 Utilities for working with the Patch class.
 """
-import collections
-import copy
 import functools
 import inspect
-import re
 import warnings
-from fnmatch import translate
 from typing import (
     Any,
     Callable,
@@ -28,10 +24,10 @@ import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
 from dascore.core.schema import PatchAttrs, PatchFileSummary
 from dascore.exceptions import PatchAttributeError, PatchDimError
-from dascore.utils.coords import Coords
+
+# from dascore.utils.coords import Coords
 from dascore.utils.docs import compose_docstring, format_dtypes
-from dascore.utils.misc import append_func
-from dascore.utils.time import to_datetime64, to_timedelta64
+from dascore.utils.time import to_timedelta64
 
 attr_type = Union[Dict[str, Any], str, Sequence[str], None]
 
@@ -224,214 +220,214 @@ def copy_attrs(attrs) -> dict:
     return out
 
 
-class _AttrsCoordsMixer:
-    """Class for handling complex interactions between attrs and coords."""
-
-    # a dict of {key: List[func]} for special handling of set attrs.
-    set_attr_funcs = collections.defaultdict(list)
-    # a dict of {key: func} for special handling of missing attributes.
-    missing_attr_funcs = {}
-    _missing_attr_keys = frozenset()
-    # a dict of {attr: (expected_type, func)}
-    _expected_types = dict(
-        d_time=(np.timedelta64, to_timedelta64),
-        time_min=(np.datetime64, to_datetime64),
-        time_max=(np.datetime64, to_datetime64),
-    )
-
-    def __init__(self, attrs, coords, dims):
-        """Init with attrs and coords"""
-        if not dims and coords:
-            dims = list(coords)
-        self.attrs = attrs if attrs is not None else {}
-        self.coords = Coords(coords)
-        self.dims = dims if dims is not None else ()
-        self._original_attrs = attrs
-        self._original_coords = coords
-        # fill missing values with default or implicit values
-        self._set_default_attrs()
-        self._set_attr_types()
-        self._condition_coords()
-        # infer any attr values from coordinates
-        self._update_attrs_from_coords(self._missing_attr_keys)
-
-    def update_attrs(self, **kwargs):
-        """
-        Update a coordinate.
-
-        Parameters
-        ----------
-        **kwargs
-            The coordinates to update.
-        """
-        for key, value in kwargs.items():
-            attr = self.copied_attrs
-            # convert types to those expected, mainly for converting times
-            # from strings or ints to np.datetime64 or np.timedelta64.
-            if key in self._expected_types:
-                expected_type, func = self._expected_types[key]
-                if not isinstance(value, expected_type):
-                    value = func(value)
-            attr[key] = value
-            # apply special processing for this key
-            for match_key in self._get_matching_patterns(self.set_attr_funcs, key):
-                match_dims = [x for x in self.dims if x in key]
-                for func in self.set_attr_funcs[match_key]:
-                    func(self, match_dims=match_dims)
-
-    def _get_matching_patterns(self, match_list, key):
-        """
-        Return any patterns that match key. Match list contains unix-style match
-        strings.
-        """
-        for match_str in list(match_list):
-            if re.match(translate(match_str), key):
-                yield match_str
-
-    @append_func(set_attr_funcs["*_min"])
-    def _update_max_from_min(self, match_dims=()):
-        """Update end coord based on new start coord."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            td = self._original_attrs[f"{dim}_max"] - self._original_attrs[f"{dim}_min"]
-            if not pd.isnull(td):
-                attrs = self.copied_attrs
-                attrs[f"{dim}_max"] = self.attrs[f"{dim}_min"] + td
-
-    @append_func(set_attr_funcs["*_min"])
-    def _update_coords_min(self, match_dims=()):
-        """Update coordinate for new min"""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            coord = self.coords.get(dim)
-            coord_min = self.attrs[f"{dim}_min"]
-            if coord is not None and np.min(coord) != coord_min:
-                td = coord - coord[0]
-                self.coords = self.coords.update(**{dim: coord_min + td})
-
-    @append_func(set_attr_funcs["*_max"])
-    def _update_min_from_max(self, match_dims=()):
-        """Update start based on new end."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            td = self._original_attrs[f"{dim}_max"] - self._original_attrs[f"{dim}_min"]
-            if not pd.isnull(td):
-                attrs = self.copied_attrs
-                attrs["time_min"] = self.attrs["time_max"] - td
-
-    @append_func(set_attr_funcs["*_max"])
-    def _update_coords_from_max(self, match_dims=()):
-        """Update coordinate for new start of dimension."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            coord = self.coords.get(dim, None)
-            time_max = self.attrs[f"{dim}_max"]
-            if coord is not None and np.max(coord) != time_max:
-                td = coord - coord[-1]
-                self.coords = self.coords.update(**{dim: time_max + td})
-
-    @append_func(set_attr_funcs["d_*"])
-    def _update_max_from_d(self, match_dims=()):
-        """Update the ending attribute from updating dimension sampling."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            coord = self.coords[dim]
-            attrs = self.copied_attrs
-            start = attrs.get(f"{dim}_min", None)
-            if start:
-                new_end = start + (len(coord) - 1) * attrs[f"d_{dim}"]
-                self.copied_attrs[f"{dim}_max"] = new_end
-
-    @append_func(set_attr_funcs["d_*"])
-    def _update_coords_from_d(self, match_dims=()):
-        """Update coordinates for new d_dim."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            coord = self.coords.get(dim, None)
-            d_dim = self.copied_attrs[f"d_{dim}"]
-            start = self.copied_attrs.get(f"{dim}_min", None)
-            if coord is not None and start is not None:
-                new_coord = start + np.arange(len(coord)) * d_dim
-                self.coords = self.coords.update(**{dim: new_coord})
-
-    @functools.cached_property
-    def copied_attrs(self):
-        """Make a copy of the attrs before mutating."""
-        self.attrs = copy_attrs(self.attrs)
-        return self.attrs
-
-    @functools.cached_property
-    def copied_coords(self):
-        """Make a copy of the coords before mutating."""
-        # TODO I don't like having this deep copy but shallow still caused
-        return copy.deepcopy(self.coords)
-
-    def __call__(self, *args, **kwargs):
-        return PatchAttrs(**self.attrs), self.coords
-
-    def _set_default_attrs(self):
-        """Get the attribute dict, add required keys if not yet defined."""
-        # add default values if they are not in out or attrs yet
-        defaults = PatchAttrs.get_defaults()
-        defaults.update(self.attrs)
-        self.attrs = defaults
-
-    # --- Coordinate bits
-
-    def _update_attrs_from_coords(self, fill_keys=None):
-        """Fill in missing attributes that can be inferred."""
-        fill_keys = fill_keys if fill_keys else set(self.attrs)
-        # iterate each dimension, fill in missing values with data from coords
-        for dim in self.dims:
-            array = self.coords[dim]
-            # make sure its not an xarray thing
-            array = getattr(array, "values", array)
-            if f"{dim}_min" in fill_keys:
-                minval = np.min(array) if len(array) else np.NaN
-                self.copied_attrs[f"{dim}_min"] = minval
-            if f"{dim}_max" in fill_keys:
-                maxval = np.max(array) if len(array) else np.NaN
-                self.copied_attrs[f"{dim}_max"] = maxval
-        # add dims column
-        if not len(self.attrs["dims"]):
-            self.copied_attrs["dims"] = ",".join(self.dims)
-
-    def update_coords(self, **kwargs):
-        """Update the coordinates based on kwarg inputs."""
-        self.coords = self.coords.update(**kwargs)
-        self._condition_coords()
-        self._update_attrs_from_coords()
-
-    def _condition_coords(self):
-        """
-        Condition the coordinates before using them.
-
-        This is mainly to enforce common time conventions
-        """
-        coords = self.coords
-        if coords is None or (time := coords.get("time")) is None:
-            return
-        start_time = self.attrs["time_min"]
-        if pd.isnull(start_time):
-            start_time = to_datetime64(0)
-        # Convert non-datetime into time deltas
-        if not np.issubdtype(time.dtype, np.datetime64):
-            td = to_timedelta64(time)
-            time = start_time + td
-        self.coords = self.coords.update(time=time)
-
-    def _set_attr_types(self):
-        """Make sure time attrs are expected types"""
-        for key, (expected_type, func) in self._expected_types.items():
-            val = self.attrs[key]
-            if not isinstance(val, expected_type):
-                self.copied_attrs[key] = func(val)
+# class _AttrsCoordsMixer:
+#     """Class for handling complex interactions between attrs and coords."""
+#
+#     # a dict of {key: List[func]} for special handling of set attrs.
+#     set_attr_funcs = collections.defaultdict(list)
+#     # a dict of {key: func} for special handling of missing attributes.
+#     missing_attr_funcs = {}
+#     _missing_attr_keys = frozenset()
+#     # a dict of {attr: (expected_type, func)}
+#     _expected_types = dict(
+#         d_time=(np.timedelta64, to_timedelta64),
+#         time_min=(np.datetime64, to_datetime64),
+#         time_max=(np.datetime64, to_datetime64),
+#     )
+#
+#     def __init__(self, attrs, coords, dims):
+#         """Init with attrs and coords"""
+#         if not dims and coords:
+#             dims = list(coords)
+#         self.attrs = attrs if attrs is not None else {}
+#         self.coords = Coords(coords)
+#         self.dims = dims if dims is not None else ()
+#         self._original_attrs = attrs
+#         self._original_coords = coords
+#         # fill missing values with default or implicit values
+#         self._set_default_attrs()
+#         self._set_attr_types()
+#         self._condition_coords()
+#         # infer any attr values from coordinates
+#         self._update_attrs_from_coords(self._missing_attr_keys)
+#
+#     def update_attrs(self, **kwargs):
+#         """
+#         Update a coordinate.
+#
+#         Parameters
+#         ----------
+#         **kwargs
+#             The coordinates to update.
+#         """
+#         for key, value in kwargs.items():
+#             attr = self.copied_attrs
+#             # convert types to those expected, mainly for converting times
+#             # from strings or ints to np.datetime64 or np.timedelta64.
+#             if key in self._expected_types:
+#                 expected_type, func = self._expected_types[key]
+#                 if not isinstance(value, expected_type):
+#                     value = func(value)
+#             attr[key] = value
+#             # apply special processing for this key
+#             for match_key in self._get_matching_patterns(self.set_attr_funcs, key):
+#                 match_dims = [x for x in self.dims if x in key]
+#                 for func in self.set_attr_funcs[match_key]:
+#                     func(self, match_dims=match_dims)
+#
+#     def _get_matching_patterns(self, match_list, key):
+#         """
+#         Return any patterns that match key. Match list contains unix-style match
+#         strings.
+#         """
+#         for match_str in list(match_list):
+#             if re.match(translate(match_str), key):
+#                 yield match_str
+#
+#     @append_func(set_attr_funcs["*_min"])
+#     def _update_max_from_min(self, match_dims=()):
+#         """Update end coord based on new start coord."""
+#         if len(match_dims):
+#             assert len(match_dims) == 1
+#             dim = match_dims[0]
+#             td = self._original_attrs[f"{dim}_max"] - self._original_attrs[f"{dim}_min"]
+#             if not pd.isnull(td):
+#                 attrs = self.copied_attrs
+#                 attrs[f"{dim}_max"] = self.attrs[f"{dim}_min"] + td
+#
+#     @append_func(set_attr_funcs["*_min"])
+#     def _update_coords_min(self, match_dims=()):
+#         """Update coordinate for new min"""
+#         if len(match_dims):
+#             assert len(match_dims) == 1
+#             dim = match_dims[0]
+#             coord = self.coords.get(dim)
+#             coord_min = self.attrs[f"{dim}_min"]
+#             if coord is not None and np.min(coord) != coord_min:
+#                 td = coord - coord[0]
+#                 self.coords = self.coords.update(**{dim: coord_min + td})
+#
+#     @append_func(set_attr_funcs["*_max"])
+#     def _update_min_from_max(self, match_dims=()):
+#         """Update start based on new end."""
+#         if len(match_dims):
+#             assert len(match_dims) == 1
+#             dim = match_dims[0]
+#             td = self._original_attrs[f"{dim}_max"] - self._original_attrs[f"{dim}_min"]
+#             if not pd.isnull(td):
+#                 attrs = self.copied_attrs
+#                 attrs["time_min"] = self.attrs["time_max"] - td
+#
+#     @append_func(set_attr_funcs["*_max"])
+#     def _update_coords_from_max(self, match_dims=()):
+#         """Update coordinate for new start of dimension."""
+#         if len(match_dims):
+#             assert len(match_dims) == 1
+#             dim = match_dims[0]
+#             coord = self.coords.get(dim, None)
+#             time_max = self.attrs[f"{dim}_max"]
+#             if coord is not None and np.max(coord) != time_max:
+#                 td = coord - coord[-1]
+#                 self.coords = self.coords.update(**{dim: time_max + td})
+#
+#     @append_func(set_attr_funcs["d_*"])
+#     def _update_max_from_d(self, match_dims=()):
+#         """Update the ending attribute from updating dimension sampling."""
+#         if len(match_dims):
+#             assert len(match_dims) == 1
+#             dim = match_dims[0]
+#             coord = self.coords[dim]
+#             attrs = self.copied_attrs
+#             start = attrs.get(f"{dim}_min", None)
+#             if start:
+#                 new_end = start + (len(coord) - 1) * attrs[f"d_{dim}"]
+#                 self.copied_attrs[f"{dim}_max"] = new_end
+#
+#     @append_func(set_attr_funcs["d_*"])
+#     def _update_coords_from_d(self, match_dims=()):
+#         """Update coordinates for new d_dim."""
+#         if len(match_dims):
+#             assert len(match_dims) == 1
+#             dim = match_dims[0]
+#             coord = self.coords.get(dim, None)
+#             d_dim = self.copied_attrs[f"d_{dim}"]
+#             start = self.copied_attrs.get(f"{dim}_min", None)
+#             if coord is not None and start is not None:
+#                 new_coord = start + np.arange(len(coord)) * d_dim
+#                 self.coords = self.coords.update(**{dim: new_coord})
+#
+#     @functools.cached_property
+#     def copied_attrs(self):
+#         """Make a copy of the attrs before mutating."""
+#         self.attrs = copy_attrs(self.attrs)
+#         return self.attrs
+#
+#     @functools.cached_property
+#     def copied_coords(self):
+#         """Make a copy of the coords before mutating."""
+#         # TODO I don't like having this deep copy but shallow still caused
+#         return copy.deepcopy(self.coords)
+#
+#     def __call__(self, *args, **kwargs):
+#         return PatchAttrs(**self.attrs), self.coords
+#
+#     def _set_default_attrs(self):
+#         """Get the attribute dict, add required keys if not yet defined."""
+#         # add default values if they are not in out or attrs yet
+#         defaults = PatchAttrs.get_defaults()
+#         defaults.update(self.attrs)
+#         self.attrs = defaults
+#
+#     # --- Coordinate bits
+#
+#     def _update_attrs_from_coords(self, fill_keys=None):
+#         """Fill in missing attributes that can be inferred."""
+#         fill_keys = fill_keys if fill_keys else set(self.attrs)
+#         # iterate each dimension, fill in missing values with data from coords
+#         for dim in self.dims:
+#             array = self.coords[dim]
+#             # make sure its not an xarray thing
+#             array = getattr(array, "values", array)
+#             if f"{dim}_min" in fill_keys:
+#                 minval = np.min(array) if len(array) else np.NaN
+#                 self.copied_attrs[f"{dim}_min"] = minval
+#             if f"{dim}_max" in fill_keys:
+#                 maxval = np.max(array) if len(array) else np.NaN
+#                 self.copied_attrs[f"{dim}_max"] = maxval
+#         # add dims column
+#         if not len(self.attrs["dims"]):
+#             self.copied_attrs["dims"] = ",".join(self.dims)
+#
+#     def update_coords(self, **kwargs):
+#         """Update the coordinates based on kwarg inputs."""
+#         self.coords = self.coords.update(**kwargs)
+#         self._condition_coords()
+#         self._update_attrs_from_coords()
+#
+#     def _condition_coords(self):
+#         """
+#         Condition the coordinates before using them.
+#
+#         This is mainly to enforce common time conventions
+#         """
+#         coords = self.coords
+#         if coords is None or (time := coords.get("time")) is None:
+#             return
+#         start_time = self.attrs["time_min"]
+#         if pd.isnull(start_time):
+#             start_time = to_datetime64(0)
+#         # Convert non-datetime into time deltas
+#         if not np.issubdtype(time.dtype, np.datetime64):
+#             td = to_timedelta64(time)
+#             time = start_time + td
+#         self.coords = self.coords.update(time=time)
+#
+#     def _set_attr_types(self):
+#         """Make sure time attrs are expected types"""
+#         for key, (expected_type, func) in self._expected_types.items():
+#             val = self.attrs[key]
+#             if not isinstance(val, expected_type):
+#                 self.copied_attrs[key] = func(val)
 
 
 @compose_docstring(fields=PatchAttrs.__annotations__)
