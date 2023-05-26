@@ -25,13 +25,13 @@ def coord_manager():
 
 @pytest.fixture(scope="class")
 @register_func(COORD_MANAGERS)
-def coord_manager_multidim():
+def coord_manager_multidim() -> CoordManager:
     """The simplest coord manager"""
     COORDS = {
-        "time": to_datetime64(np.arange(10, 100, 10)),
-        "distance": get_coord(values=np.arange(0, 1_000, 10)),
-        "quality": (("time", "distance"), np.ones((100, 100))),
-        "latitude": ("distance", np.random.rand(10)),
+        "time": to_datetime64(np.arange(10, 110, 10)),
+        "distance": get_coord(values=np.arange(0, 1000, 10)),
+        "quality": (("time", "distance"), np.ones((10, 100))),
+        "latitude": ("distance", np.random.rand(100)),
     }
     DIMS = ("time", "distance")
 
@@ -104,15 +104,21 @@ class TestCoordManagerInputs:
     def test_secondary_coord_bad_lengths(self):
         """Ensure when coordinates don't line up an error is raised."""
         coords = dict(COORDS)
-        coords["bad"] = np.ones(len(coords["time"]))
-        with pytest.raises(CoordError, match=""):
+        coords["bad"] = ("time", np.ones(len(coords["time"]) - 1))
+        with pytest.raises(CoordError, match="does not match the dimension"):
             get_coord_manager(coords, DIMS)
-            pass
 
 
 class TestCoordManagerDrop:
     """Tests for dropping coords with coord manager."""
 
-    def test_drop(self):
+    def test_drop(self, coord_manager_multidim):
         """Ensure coordinates can be dropped."""
-        # assert False
+        dim = "distance"
+        index, coords = coord_manager_multidim.drop_dim(dim)
+        # ensure the index corresponding to distance is 0
+        ind = coord_manager_multidim.dims.index(dim)
+        assert index[ind] == 0
+        assert dim not in coords.dims
+        for name, dims in coords.dim_map.items():
+            assert dim not in dims

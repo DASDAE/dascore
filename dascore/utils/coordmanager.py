@@ -15,6 +15,8 @@ class CoordManager(DascoreBaseModel):
 
     Attributes
     ----------
+    dims
+        A tuple of dimension names.
     coord_map
         A mapping of {coord_name: Coord}
     dim_map
@@ -45,11 +47,11 @@ class CoordManager(DascoreBaseModel):
         out = dict(coord_map=coords, dim_map=self.dim_map, dims=self.dims)
         return self.__class__(**out)
 
-    def drop_dim(self, dim: Union[str, Sequence[str]]) -> Self:
+    def drop_dim(self, dim: Union[str, Sequence[str]]) -> Tuple[Tuple, Self]:
         """Drop one or more dimension."""
         coord_name_to_kill = []
         dims_to_kill = set(iterate(dim))
-        for name, dims in self.dims.items():
+        for name, dims in self.dim_map.items():
             if dims_to_kill & set(dims):
                 coord_name_to_kill.append(name)
         coord_map = {
@@ -57,7 +59,11 @@ class CoordManager(DascoreBaseModel):
         }
         dim_map = {i: v for i, v in self.dim_map.items() if i not in coord_name_to_kill}
         dims = tuple(x for x in self.dims if x not in dims_to_kill)
-        return self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
+        index = tuple(
+            slice(None, None) if x not in dims_to_kill else 0 for x in self.dims
+        )
+        new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
+        return index, new
 
     def __rich__(self) -> str:
         out = ["[bold] Coordinates [/bold]"]
@@ -79,7 +85,7 @@ def get_coord_manager(coord_dict, dims) -> CoordManager:
         """
         if name not in dims:
             msg = (
-                "Coordinates that are not named the same as dimensions"
+                "Coordinates that are not named the same as dimensions "
                 "must be passed as a tuple of the form: "
                 "(dimension, coord) "
             )
@@ -110,8 +116,20 @@ def get_coord_manager(coord_dict, dims) -> CoordManager:
         coord_out = get_coord(values=coord[1])
         return coord_out, dim_names
 
-    def _validate_coords(coord_map, dim_map, dim):
+    def _validate_coords(coord_map, dim_map, dims):
         """Validate the coordinates and dimensions."""
+        dim_shapes = {dim: coord_map[dim].shape for dim in dims}
+        for name, coord_dims in dim_map.items():
+            expected_shape = tuple(dim_shapes[x][0] for x in coord_dims)
+            shape = coord_map[name].shape
+            if tuple(expected_shape) == shape:
+                continue
+            msg = (
+                f"coordinate: {name} has a shape of {shape} which does not "
+                f"match the dimension(s) of {coord_dims} which have a shape "
+                f"of {expected_shape}"
+            )
+            raise CoordError(msg)
 
     # each dimension must have a coordinate
     if not (cset := set(coord_dict)).issuperset((dset := set(dims))):

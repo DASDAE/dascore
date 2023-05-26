@@ -98,6 +98,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def dtype(self) -> DTypeLike:
         """Returns a numpy datatype"""
 
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        return (len(self),)
+
     def set_units(self, units) -> Self:
         """Set new units on coordinates."""
         new = dict(self)
@@ -346,6 +350,11 @@ class CoordArray(BaseCoord):
     def dtype(self):
         """Returns datatype."""
         return self.values.dtype
+
+    @property
+    @cache
+    def shape(self):
+        return np.shape(self.values)
 
     def __eq__(self, other):
         try:
