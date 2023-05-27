@@ -196,7 +196,13 @@ class CoordRange(BaseCoord):
         return values
 
     def __getitem__(self, item):
-        return self.values[item]
+        if isinstance(item, int):
+            if item > len(self):
+                raise IndexError(f"{item} exceeds coord length of {self}")
+            return self.start + item * self.step
+        # Todo we can probably add more intelligent logic for slices.
+        out = self.values[item]
+        return get_coord(values=out, units=self.units)
 
     @cache
     def __len__(self):
@@ -221,9 +227,11 @@ class CoordRange(BaseCoord):
             assert len(args) == 2, "Only length two sequence allowed for indexing."
             start = self._get_index(args[0])
             stop = self._get_index(args[1], forward=False)
+            if stop is not None and stop != len(self):
+                stop += 1
             out = slice(start, stop)
-            new_start = self[start] if start else self.start
-            new_end = self[stop] if stop else self.stop
+            new_start = self[start] if start is not None else self.start
+            new_end = self[stop] if stop is not None else self.stop
             new = self.update(start=new_start, stop=new_end)
             return new, out
 
@@ -324,7 +332,10 @@ class CoordArray(BaseCoord):
         return CoordRange(start=min_v, stop=max_v, step=step, units=self.units)
 
     def __getitem__(self, item):
-        return self.values[item]
+        out = self.values[item]
+        if not np.ndim(out):
+            return out
+        return self.__class__(out, units=self.units)
 
     def __hash__(self):
         return hash(id(self))

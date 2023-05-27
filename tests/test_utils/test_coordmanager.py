@@ -1,5 +1,9 @@
+"""
+Tests for coordinate managerment.
+"""
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from dascore import to_datetime64
 from dascore.exceptions import CoordError
@@ -105,20 +109,42 @@ class TestCoordManagerInputs:
         """Ensure when coordinates don't line up an error is raised."""
         coords = dict(COORDS)
         coords["bad"] = ("time", np.ones(len(coords["time"]) - 1))
-        with pytest.raises(CoordError, match="does not match the dimension"):
+        with pytest.raises(ValidationError, match="does not match the dimension"):
             get_coord_manager(coords, DIMS)
 
 
-class TestCoordManagerDrop:
+class TestDrop:
     """Tests for dropping coords with coord manager."""
 
     def test_drop(self, coord_manager_multidim):
         """Ensure coordinates can be dropped."""
         dim = "distance"
-        index, coords = coord_manager_multidim.drop_dim(dim)
+        coords, index = coord_manager_multidim.drop_dim(dim)
         # ensure the index corresponding to distance is 0
         ind = coord_manager_multidim.dims.index(dim)
         assert index[ind] == 0
         assert dim not in coords.dims
         for name, dims in coords.dim_map.items():
             assert dim not in dims
+
+
+class TestSelect:
+    """Tests for filtering coordinates."""
+
+    def test_2d_coord_raises(self, coord_manager_multidim):
+        """Select shouldn't work on 2D coordinates."""
+        with pytest.raises(CoordError, match='Only 1 dimensional'):
+            coord_manager_multidim.select(quality=(1, 2))
+
+    def test_select_coord_dim(self, coord_manager):
+        """Simple test for filtering dimension coord."""
+        new, inds = coord_manager.select(distance=(100, 400))
+        dist_ind = coord_manager.dims.index("distance")
+        assert len(inds) == len(coord_manager.dims)
+        assert inds[dist_ind] != slice(None, None)
+
+
+
+
+
+

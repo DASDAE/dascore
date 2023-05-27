@@ -139,6 +139,15 @@ class TestBasics:
         """A coordinate should be valid input."""
         assert get_coord(values=coord) == coord
 
+    def test_filter_inclusive(self, coord):
+        """Ensure filtering is inclusive on both ends."""
+        values = np.sort(coord.values)
+        assert len(values) > 7
+        args = (values[3], values[-3])
+        new, _ = coord.filter(args)
+        assert len(new) == (len(coord) - 5)
+        assert {values[3], values[-3]}.issubset(set(new.values))
+
     def test_get_range(self, coord):
         """Basic tests for range of coords."""
         start = coord.min
@@ -176,17 +185,14 @@ class TestBasics:
         assert len(coord.values) == len(coord)
         # test end index
         new, sliced = coord.filter((..., value1))
-        assert sliced.stop == 10
+        assert sliced.stop == 11
         new, sliced = coord.filter((..., value2))
-        assert sliced.stop == 20
+        assert sliced.stop == 21
         assert len(coord.values) == len(coord)
         # test range
         new, sliced = coord.filter((value1, value2))
-        if not len(new) == 10:
-            new1, sliced = coord.filter((value1, value2))
-            len(new1)
-        assert len(new.values) == 10 == len(new)
-        assert slice(10, 20) == sliced
+        assert len(new.values) == 11 == len(new)
+        assert slice(10, 21) == sliced
 
 
 class TestCoordRange:

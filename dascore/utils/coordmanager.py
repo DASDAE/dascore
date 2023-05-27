@@ -2,6 +2,7 @@ from typing import Dict, Sequence, Tuple, Union
 
 import numpy as np
 from typing_extensions import Self
+from pydantic import root_validator, ValidationError
 
 from dascore.exceptions import CoordError
 from dascore.utils.coords import BaseCoord, get_coord
@@ -47,7 +48,7 @@ class CoordManager(DascoreBaseModel):
         out = dict(coord_map=coords, dim_map=self.dim_map, dims=self.dims)
         return self.__class__(**out)
 
-    def drop_dim(self, dim: Union[str, Sequence[str]]) -> Tuple[Tuple, Self]:
+    def drop_dim(self, dim: Union[str, Sequence[str]]) -> Tuple[Self, Tuple]:
         """Drop one or more dimension."""
         coord_name_to_kill = []
         dims_to_kill = set(iterate(dim))
@@ -63,7 +64,48 @@ class CoordManager(DascoreBaseModel):
             slice(None, None) if x not in dims_to_kill else 0 for x in self.dims
         )
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
-        return index, new
+        return new, index
+
+    def select(self, **kwargs) -> Tuple[Self, Tuple]:
+        """
+        Perform selection on coordinates.
+
+        Parameters
+        ----------
+        **kwargs
+            Used to specify select arguments. Can be of the form
+            {coord_name: (lower_limit, upper_limit)}.
+        """
+        def _validate_coords(coord):
+            """Ensure multi-dims are not used."""
+            if not len(coord.shape) == 1:
+                msg = (
+                    "Only 1 dimensional coordinates can be used for selection "
+                    f"{coord_name} has {len(coord.shape)} dimensions."
+                )
+                raise CoordError(msg)
+
+        # iterate each input and apply reductions.
+        dim_reductions = {}
+        new_coords = dict(self.coord_map)
+        for coord_name, limits in kwargs.items():
+            coord = self.coord_map[coord_name]
+            _validate_coords(coord)
+            dim_name = self.dim_map[coord_name][0]
+            _, reductions = coord.filter(limits)
+            dim_reductions[dim_name] = reductions
+        # now iterate each dimension and update.
+        for coord_name, dims in self.dim_map.items():
+            if not set(dims) & set(kwargs):
+                continue  # no overlap, dont redo coord.
+            inds = tuple(
+                slice(None, None) if x not in dim_reductions else dim_reductions[x]
+                for x in dims
+            )
+            coord = self.coord_map[coord_name]
+            new_coords[coord_name] = coord[inds]
+        inds = tuple(slice(None) for _ in self.dims)
+        return self, inds
 
     def __rich__(self) -> str:
         out = ["[bold] Coordinates [/bold]"]
@@ -72,6 +114,26 @@ class CoordManager(DascoreBaseModel):
             new = f"    {name}: {dims}: {coord}"
             out.append(new)
         return "\n".join(out)
+
+    @root_validator(pre=True)
+    def _validate_coords(cls, values):
+        """Validate the coordinates and dimensions."""
+        coord_map, dim_map = values['coord_map'], values['dim_map']
+        dims = values['dims']
+        dim_shapes = {dim: coord_map[dim].shape for dim in dims}
+        for name, coord_dims in dim_map.items():
+            expected_shape = tuple(dim_shapes[x][0] for x in coord_dims)
+            shape = coord_map[name].shape
+            if tuple(expected_shape) == shape:
+                continue
+            msg = (
+                f"coordinate: {name} has a shape of {shape} which does not "
+                f"match the dimension(s) of {coord_dims} which have a shape "
+                f"of {expected_shape}"
+            )
+            # TODO should we raise a pydantic.ValidatorError directly?
+            raise CoordError(msg)
+        return values
 
 
 def get_coord_manager(coord_dict, dims) -> CoordManager:
@@ -116,21 +178,6 @@ def get_coord_manager(coord_dict, dims) -> CoordManager:
         coord_out = get_coord(values=coord[1])
         return coord_out, dim_names
 
-    def _validate_coords(coord_map, dim_map, dims):
-        """Validate the coordinates and dimensions."""
-        dim_shapes = {dim: coord_map[dim].shape for dim in dims}
-        for name, coord_dims in dim_map.items():
-            expected_shape = tuple(dim_shapes[x][0] for x in coord_dims)
-            shape = coord_map[name].shape
-            if tuple(expected_shape) == shape:
-                continue
-            msg = (
-                f"coordinate: {name} has a shape of {shape} which does not "
-                f"match the dimension(s) of {coord_dims} which have a shape "
-                f"of {expected_shape}"
-            )
-            raise CoordError(msg)
-
     # each dimension must have a coordinate
     if not (cset := set(coord_dict)).issuperset((dset := set(dims))):
         missing = cset - dset
@@ -146,5 +193,4 @@ def get_coord_manager(coord_dict, dims) -> CoordManager:
             coord_map[name], dim_map[name] = _coord_from_simple(name, coord)
         else:
             coord_map[name], dim_map[name] = _coord_from_nested(coord)
-    _validate_coords(coord_map, dim_map, dims)
     return CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)

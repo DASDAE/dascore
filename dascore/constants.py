@@ -152,10 +152,6 @@ cable_id
     A Unique identifier of the cable, or composition of cables.
 distance_units
     The units of distance, defaults to m.
-data_units
-    units
-category
-    The category
 network
     The network code an ascii-compatible string up to 2 characters.
 station
