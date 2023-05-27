@@ -492,12 +492,12 @@ def merge_patches(
         example, prevent merging filtered and unfiltered data together.
     tolerance
         The upper limit of a gap to tolerate in terms of the sampling
-        along the desired dimension. E.G., the default value means any patches
+        along the desired dimension. e.g., the default value means any patches
         with gaps <= 1.5 * dt will be merged.
     """
     msg = (
-        "merge_patches is deprecated. Use spool.chunk instead."
-        "For example, to merge a list of patches you can use:"
+        "merge_patches is deprecated. Use spool.chunk instead. "
+        "For example, to merge a list of patches you can use: "
         "dascore.spool(patch_list).chunk(time=None) to merge on the time "
         "dimension"
     )

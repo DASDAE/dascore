@@ -199,7 +199,7 @@ class CoordRange(BaseCoord):
         if isinstance(item, int):
             if item > len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
-            return self.start + item * self.step
+            return self.values[item]
         # Todo we can probably add more intelligent logic for slices.
         out = self.values[item]
         return get_coord(values=out, units=self.units)
@@ -249,6 +249,7 @@ class CoordRange(BaseCoord):
         return out
 
     @property
+    @cache
     def values(self) -> ArrayLike:
         """Return the values of the coordinate as an array."""
         # note: linspace works better for floats that might have slightly
@@ -292,17 +293,18 @@ class CoordArray(BaseCoord):
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
-        if isinstance(args, Sequence):
-            assert len(args) == 2, "Only length two sequence allowed for indexing."
-            values = self.values
-            out = np.ones_like(values, dtype=np.bool_)
-            val1 = self._get_value_for_indexing(args[0])
-            val2 = self._get_value_for_indexing(args[1])
-            if val1 is not None:
-                out = out & (values >= val1)
-            if val2 is not None:
-                out = out & (values <= val2)
-            return self.update(values=values[out]), out
+        if not (isinstance(args, Sequence) and len(args) == 2):
+            msg = "Only length two sequence allowed for filtering coords."
+            raise CoordError(msg)
+        values = self.values
+        out = np.ones_like(values, dtype=np.bool_)
+        val1 = self._get_value_for_indexing(args[0])
+        val2 = self._get_value_for_indexing(args[1])
+        if val1 is not None:
+            out = out & (values >= val1)
+        if val2 is not None:
+            out = out & (values <= val2)
+        return self.update(values=values[out]), out
 
     def sort(self) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
         """Sort the coord to be monotonic (maybe range)."""
@@ -389,14 +391,19 @@ class CoordMonotonicArray(CoordArray):
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
-        if isinstance(args, Sequence):
-            assert len(args) == 2, "Only length two sequence allowed for indexing."
-            start = self._get_index(args[0])
-            new_start = start if start is not None and start > 0 else None
-            stop = self._get_index(args[1], forward=False)
-            new_stop = stop if stop is not None and stop < len(self) else None
-            out = slice(new_start, new_stop)
-            return self.update(values=self.values[out]), out
+        if not (isinstance(args, Sequence) and len(args) == 2):
+            msg = "Only length two sequence allowed for filtering coords."
+            raise CoordError(msg)
+        v1, v2 = args
+        # swap indices if start>stop. This happens for decreasing arrays.
+        if self._is_reversed and v1 is not None and v2 is not None and v1 < v2:
+            v1, v2 = v2, v1
+        start = self._get_index(v1)
+        new_start = start if start is not None and start > 0 else None
+        stop = self._get_index(v2, forward=False)
+        new_stop = stop if stop is not None and stop < len(self) else None
+        out = slice(new_start, new_stop)
+        return self.update(values=self.values[out]), out
 
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""
@@ -412,6 +419,12 @@ class CoordMonotonicArray(CoordArray):
             value = value * -1
         out = np.searchsorted(values, value, side=side_dict[forward])
         return out + mod
+
+    @property
+    @cache
+    def _is_reversed(self):
+        vals = self.values
+        return (vals[1] - vals[0]) < 0
 
 
 def get_coord(
@@ -472,3 +485,20 @@ def get_coord(
         return CoordArray(values=values, units=units)
     else:
         return CoordRange(start=start, stop=stop, step=step, units=units)
+
+
+def get_coord_from_attrs(attrs, name):
+    """
+    Try to get a coordinate from an attributes dict.
+
+    For this to work, attrs must have {name}_min, {name}_max, d_{name}
+    and optionally {name}_units. If the requirements are not met a
+    CoordError is raised.
+    """
+    start, stop = attrs.get(f"{name}_min"), attrs.get(f"{name}_max")
+    step = attrs.get(f"d_{name}")
+    units = attrs.get(f"{name}_units")
+    if all([x is not None for x in [start, stop, step]]):
+        return get_coord(start=start, stop=stop + step, step=step, units=units)
+    msg = f"Could not get coordinate from {attrs}"
+    raise CoordError(msg)

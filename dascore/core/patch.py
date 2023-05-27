@@ -7,10 +7,10 @@ from typing import Callable, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-from xarray import DataArray
 
 import dascore.proc
 from dascore.constants import PatchType
+from dascore.compat import DataArray
 from dascore.core.schema import PatchAttrs
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
@@ -58,6 +58,7 @@ class Patch:
         attrs: Optional[Mapping] = None,
     ):
         if isinstance(data, (DataArray, self.__class__)):
+
             dar = data if isinstance(data, DataArray) else data._data_array
             self._data_array = dar
             return

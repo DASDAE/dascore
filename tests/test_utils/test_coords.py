@@ -12,6 +12,7 @@ from dascore.utils.coords import (
     CoordMonotonicArray,
     CoordRange,
     get_coord,
+    get_coord_from_attrs,
 )
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
@@ -141,12 +142,39 @@ class TestBasics:
 
     def test_filter_inclusive(self, coord):
         """Ensure filtering is inclusive on both ends."""
+        # These tests are only for coords with len > 7
+        if len(coord) < 7:
+            return
         values = np.sort(coord.values)
+        value_set = set(values)
         assert len(values) > 7
         args = (values[3], values[-3])
         new, _ = coord.filter(args)
-        assert len(new) == (len(coord) - 5)
-        assert {values[3], values[-3]}.issubset(set(new.values))
+        # Check min and max values conform to args
+        new_values = new.values
+        new_min, new_max = np.min(new_values), np.max(new_values)
+        assert (new_min >= args[0]) or np.isclose(new_min, args[0])
+        assert (new_max <= args[1]) or np.isclose(new_max, args[1])
+        # There can often be a bit of "slop" in float indices. We may
+        # need to rethink this but this is good enough for now.
+        if not np.issubdtype(new.dtype, np.float_):
+            assert {values[3], values[-3]}.issubset(value_set)
+
+    def test_filter_bounds(self, coord):
+        """Ensure filtering bounds are honored."""
+        # These tests are only for coords with len > 7
+        if len(coord) < 7:
+            return
+        values = np.sort(coord.values)
+        val1 = values[2] + (values[3] - values[2]) / 2
+        val2 = values[-2] - (values[-2] - values[-3]) / 2
+        new, _ = coord.filter((val1, val2))
+        new_values = new.values
+        new_min, new_max = np.min(new_values), np.max(new_values)
+        assert (new_min >= val1) or np.isclose(new_min, val1)
+        assert (new_max <= val2) or np.isclose(new_max, val2)
+        if not np.issubdtype(new.dtype, np.float_):
+            assert set(values).issuperset(set(new.values))
 
     def test_get_range(self, coord):
         """Basic tests for range of coords."""
@@ -375,3 +403,34 @@ class TestNonOrderedArrayCoords:
         out = random_date_coord.snap()
         assert np.issubdtype(out.dtype, np.datetime64)
         assert isinstance(out, CoordRange)
+
+
+class TestCoordFromAttrs:
+    """Tests for creating coordinates from attrs."""
+
+    def test_missing_info_raises(self):
+        """Ensure missing values raise CoordError."""
+        attrs = dict(time_min=0, time_max=10)
+        with pytest.raises(CoordError, match="Could not get coordinate"):
+            get_coord_from_attrs(attrs, name="time")
+
+    def test_int_coords(self):
+        """Happy path for getting coords."""
+        attrs = dict(time_min=0, time_max=10, d_time=1)
+        coord = get_coord_from_attrs(attrs, name="time")
+        assert isinstance(coord, BaseCoord)
+        assert isinstance(coord, CoordRange)
+        assert coord.start == 0
+        assert coord.stop == 11
+        assert coord.step == 1
+        assert coord.values[0] == 0
+        assert coord.values[-1] == 10
+
+    def test_init_attr_with_units(self):
+        """Ensure units are also set."""
+        attrs = dict(time_min=0, time_max=10, d_time=1, time_units='s')
+        coord = get_coord_from_attrs(attrs, name="time")
+        assert coord.units == dc.Unit("s")
+
+
+

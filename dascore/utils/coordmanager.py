@@ -1,11 +1,15 @@
+"""
+Module for managing coordinates.
+"""
 from typing import Dict, Sequence, Tuple, Union
 
 import numpy as np
+from contextlib import suppress
 from typing_extensions import Self
 from pydantic import root_validator, ValidationError
 
 from dascore.exceptions import CoordError
-from dascore.utils.coords import BaseCoord, get_coord
+from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel
 
@@ -37,7 +41,6 @@ class CoordManager(DascoreBaseModel):
 
         Input values can be of the same form as initialization.
         To drop coordinates, simply pass {coord_name: None}
-
         """
         coords = dict(self.coord_map)
         for item, value in kwargs.items():
@@ -76,7 +79,7 @@ class CoordManager(DascoreBaseModel):
             Used to specify select arguments. Can be of the form
             {coord_name: (lower_limit, upper_limit)}.
         """
-        def _validate_coords(coord):
+        def _validate_coords(coord, coord_name):
             """Ensure multi-dims are not used."""
             if not len(coord.shape) == 1:
                 msg = (
@@ -85,27 +88,38 @@ class CoordManager(DascoreBaseModel):
                 )
                 raise CoordError(msg)
 
+        def _get_dim_reductions():
+            """Function to get reductions for each dimension. """
+            dim_reductions = {}
+            for coord_name, limits in kwargs.items():
+                coord = self.coord_map[coord_name]
+                _validate_coords(coord, coord_name)
+                dim_name = self.dim_map[coord_name][0]
+                _, reductions = coord.filter(limits)
+                dim_reductions[dim_name] = reductions
+            return dim_reductions
+
+        def _get_new_coords(dim_reductions):
+            """Function to create dict of trimmed coordinates."""
+            new_coords = dict(self.coord_map)
+            for coord_name, dims in self.dim_map.items():
+                if not set(dims) & set(kwargs):
+                    continue  # no overlap, dont redo coord.
+                inds = tuple(
+                    slice(None, None) if x not in dim_reductions else dim_reductions[x]
+                    for x in dims
+                )
+                coord = self.coord_map[coord_name]
+                new_coords[coord_name] = coord[inds]
+            return new_coords
+
+        dim_reductions = _get_dim_reductions()
+        new_coords = _get_new_coords(dim_reductions)
         # iterate each input and apply reductions.
-        dim_reductions = {}
-        new_coords = dict(self.coord_map)
-        for coord_name, limits in kwargs.items():
-            coord = self.coord_map[coord_name]
-            _validate_coords(coord)
-            dim_name = self.dim_map[coord_name][0]
-            _, reductions = coord.filter(limits)
-            dim_reductions[dim_name] = reductions
         # now iterate each dimension and update.
-        for coord_name, dims in self.dim_map.items():
-            if not set(dims) & set(kwargs):
-                continue  # no overlap, dont redo coord.
-            inds = tuple(
-                slice(None, None) if x not in dim_reductions else dim_reductions[x]
-                for x in dims
-            )
-            coord = self.coord_map[coord_name]
-            new_coords[coord_name] = coord[inds]
-        inds = tuple(slice(None) for _ in self.dims)
-        return self, inds
+        inds = tuple(dim_reductions.get(x, slice(None, None)) for x in self.dims)
+        new = self.__class__(dims=self.dims, dim_map=self.dim_map, coord_map=new_coords)
+        return new, inds
 
     def __rich__(self) -> str:
         out = ["[bold] Coordinates [/bold]"]
@@ -135,11 +149,42 @@ class CoordManager(DascoreBaseModel):
             raise CoordError(msg)
         return values
 
+    @property
+    def shape(self):
+        """Return the shape of the dimensions."""
+        return tuple(len(self.coord_map[x]) for x in self.dims)
 
-def get_coord_manager(coord_dict, dims) -> CoordManager:
+
+def get_coord_manager(coord_dict, dims, attrs=None) -> CoordManager:
     """
     Create a coordinate manager.
     """
+
+    def _coord_from_attrs(attrs, names):
+        """Try to get coordinates from attributes."""
+        out = {}
+        for name in names:
+            with suppress(CoordError):
+                out[name] = get_coord_from_attrs(attrs, name)
+        return out
+
+    def _check_n_fill_coords(coord_dict, dims, attrs):
+        coord_set = set(coord_dict)
+        dim_set = set(dims)
+        missing = dim_set - coord_set
+        if not missing:
+            return coord_dict
+        # we have missing dimensional coordinates.
+        if attrs is None:
+            msg = (
+                f"All dimensions must have coordinates. The following "
+                f"are missing {missing}"
+            )
+            raise CoordError(msg)
+        # Try to fill in data from attributes, recurse to raise error if any missed.
+        out = dict(coord_dict)
+        out.update(_coord_from_attrs(attrs, missing))
+        return _check_n_fill_coords(out, dims, attrs=None)
 
     def _coord_from_simple(name, coord):
         """
@@ -178,15 +223,7 @@ def get_coord_manager(coord_dict, dims) -> CoordManager:
         coord_out = get_coord(values=coord[1])
         return coord_out, dim_names
 
-    # each dimension must have a coordinate
-    if not (cset := set(coord_dict)).issuperset((dset := set(dims))):
-        missing = cset - dset
-        msg = (
-            f"All dimensions must have coordinates. The following "
-            f"are missing {missing}"
-        )
-        raise CoordError(msg)
-
+    coord_dict = _check_n_fill_coords(coord_dict, dims, attrs)
     coord_map, dim_map = {}, {}
     for name, coord in coord_dict.items():
         if isinstance(coord, (BaseCoord, ArrayLike, np.ndarray)):
