@@ -32,22 +32,6 @@ from dascore.utils.time import to_timedelta64
 attr_type = Union[Dict[str, Any], str, Sequence[str], None]
 
 
-def _shallow_copy(patch: PatchType) -> PatchType:
-    """
-    Shallow copy patch so data array, attrs, and history can be changed.
-
-    Note
-    ----
-    This is an internal function because Patch should be immutable with
-    the public APIs.
-    """
-    dar = patch._data_array.copy(deep=False)  # dont copy data and such
-    attrs = dict(dar.attrs)
-    attrs["history"] = list(attrs.get("history", []))
-    dar.attrs = attrs
-    return patch.__class__(dar)
-
-
 def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
     """
     Get a str rep of the function and input args.
@@ -197,8 +181,9 @@ def patch_function(
             out: PatchType = func(patch, *args, **kwargs)
             # attach history string. Consider something a bit less hacky.
             if hist_str and hasattr(out, "attrs"):
-                out = _shallow_copy(out)
-                out._data_array.attrs["history"].append(hist_str)
+                attrs = dict(out.attrs)
+                attrs["history"].append(hist_str)
+                out = out.new(attrs=attrs)
             return out
 
         _func.func = func  # attach original function

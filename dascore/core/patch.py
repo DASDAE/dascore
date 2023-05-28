@@ -68,10 +68,10 @@ class Patch:
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
+        self._coords = get_coord_manager(coords, dims, attrs)
+        self._attrs = PatchAttrs.new(attrs, self.coords)
+        self._data = array(self.coords.validate_data(data))
 
-        self.coords = get_coord_manager(coords, dims, attrs)
-        self.attrs = PatchAttrs.new(attrs, self.coords)
-        self.data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):
         """
@@ -167,12 +167,10 @@ class Patch:
         """
         data = data if data is not None else self.data
         attrs = attrs if attrs is not None else self.attrs
-        if coords is None:
-            coords = getattr(self.coords, "_coords", self.coords)
-            dims = self.dims
-        else:
-            dims = dims or list(coords)
-        return self.__class__(data=data, coords=coords, attrs=attrs, dims=dims)
+        coords = coords if coords is not None else self.coords
+        if dims:
+            coords = coords.rename_dims(dims)
+        return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 
     def update_attrs(self: PatchType, **attrs) -> PatchType:
         """
@@ -198,6 +196,21 @@ class Patch:
     def dims(self) -> tuple[str, ...]:
         """Return the dimensions contained in patch."""
         return self.coords.dims
+
+    @property
+    def attrs(self) -> PatchAttrs:
+        """Return the dimensions contained in patch."""
+        return self._attrs
+
+    @property
+    def coords(self) -> CoordManager:
+        """Return the dimensions contained in patch."""
+        return self._coords
+
+    @property
+    def data(self) -> ArrayLike:
+        """Return the dimensions contained in patch."""
+        return self._data
 
     @property
     def shape(self) -> tuple[int, ...]:

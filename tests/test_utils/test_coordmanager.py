@@ -161,6 +161,34 @@ class TestSelect:
         assert inds[dist_ind] != slice(None, None)
 
 
+class TestTranspose:
+    """Test suite for transposing dimensions."""
+
+    def test_missing_dim_raises(self, coord_manager):
+        """All dimensions must be specified, else raise."""
+        with pytest.raises(CoordError, match="specify all dimensions"):
+            coord_manager.transpose(["time"])
+
+    def test_simple_transpose(self, coord_manager):
+        """Ensure the coord manager can be transposed"""
+        dims = coord_manager.dims
+        new_dims = dims[::-1]
+        tran = coord_manager.transpose(new_dims)
+        assert tran.dims == new_dims
+        assert tran.shape != coord_manager.shape
+        assert tran.shape == coord_manager.shape[::-1]
+
+
+class TestRenameDims:
+    """Test case for renaming dimensions."""
+
+    def test_rename_dims(self, coord_manager):
+        """Ensure dimensions can be renamed."""
+        rename_map = {x: x[:2] for x in coord_manager.dims}
+        out = coord_manager.rename_dims(**rename_map)
+        assert set(out.dims) == set(rename_map.values())
+
+
 class TestUpdateFromAttrs:
     """Tests to ensure updating attrs can update coordinates."""
 

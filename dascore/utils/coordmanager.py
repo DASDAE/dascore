@@ -35,7 +35,7 @@ class CoordManager(DascoreBaseModel):
     def __getitem__(self, item):
         return self.coord_map[item]
 
-    def update(self, **kwargs) -> Self:
+    def update_coords(self, **kwargs) -> Self:
         """
         Update the coordinates, return a new Coordinate Manager.
 
@@ -184,8 +184,39 @@ class CoordManager(DascoreBaseModel):
         # filtered = fnmatch.filter(lst, "th?s")
         assert False
 
+    def transpose(self, dims: Tuple[str, ...]) -> Self:
+        """Transpose the coordinates."""
+        if set(dims) != set(self.dims):
+            msg = (
+                "You must specify all dimensions in a transpose operation. "
+                f"You passed {dims} but dimensions are {self.dims}"
+            )
+            raise CoordError(msg)
+        assert set(dims) == set(self.dims), "You must pass all dimensions."
+        return self.update(dims=dims)
 
-def get_coord_manager(coord_dict, dims, attrs=None) -> CoordManager:
+    def rename_dims(self, **kwargs) -> Self:
+        """
+        Rename dimensions.
+
+        Parameters
+        ----------
+        **kwargs
+            Used to rename dimensions {old_dim_name: new_dim_name}
+        """
+        dims, coord_map = list(self.dims), dict(self.coord_map)
+        dim_map = dict(self.dim_map)
+        for old_name, new_name in kwargs.items():
+            dims[dims.index(old_name)] = new_name
+            coord_map[new_name] = coord_map.pop(old_name)
+            dim_map[new_name] = tuple(kwargs.get(x, x) for x in self.dim_map[old_name])
+            dim_map.pop(old_name)
+
+        out = dict(dims=dims, coord_map=coord_map, dim_map=dim_map)
+        return self.__class__(**out)
+
+
+def get_coord_manager(coord_dict, dims=None, attrs=None) -> CoordManager:
     """
     Create a coordinate manager.
     """
@@ -263,7 +294,9 @@ def get_coord_manager(coord_dict, dims, attrs=None) -> CoordManager:
         coord_out = get_coord(values=coord[1])
         return coord_out, dim_names
 
-    coord_dict = dict(coord_dict)
+    if isinstance(coord_dict, CoordManager):
+        return coord_dict
+    coord_dict = _check_and_fill_coords(coord_dict, dims, attrs)
     coord_map, dim_map = {}, {}
     for name, coord in coord_dict.items():
         if isinstance(coord, (BaseCoord, ArrayLike, np.ndarray)):
