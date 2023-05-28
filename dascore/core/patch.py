@@ -126,13 +126,8 @@ class Patch:
             if not_equal:
                 return False
         # check coords, names and values
-        coord1 = {x: self.coords[x] for x in self.coords}
-        coord2 = {x: other.coords[x] for x in other.coords}
-        if not set(coord2) == set(coord1):
+        if not self.coords == other.coords:
             return False
-        for name in coord1:
-            if not np.all(coord1[name] == coord2[name]):
-                return False
         # handle transposed case; patches that are identical but transposed
         # should still be equal.
         if self.dims != other.dims and set(self.dims) == set(other.dims):

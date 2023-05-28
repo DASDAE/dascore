@@ -150,6 +150,21 @@ class CoordManager(DascoreBaseModel):
             raise CoordError(msg)
         return values
 
+    def equals(self, other) -> bool:
+        """Return True if other coordinates are approx equal."""
+        if not isinstance(other, self.__class__):
+            return False
+        if not set(self.coord_map) == set(other.coord_map):
+            return False
+        coord_1, coord_2 = self.coord_map, other.coord_map
+        for name, coord in self.coord_map.items():
+            if not np.all(coord_1[name] == coord_2[name]):
+                if not np.allclose(coord_1[name], coord_2[name]):
+                    return False
+        return True
+
+    __eq__ = equals
+
     @property
     def shape(self):
         """Return the shape of the dimensions."""
