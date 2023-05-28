@@ -2,7 +2,7 @@
 Function for querying Patchs
 """
 from dascore.constants import PatchType
-from dascore.utils.patch import _get_history_str, patch_function
+from dascore.utils.patch import patch_function
 from dascore.utils.time import get_select_time
 
 
@@ -53,6 +53,7 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     >>> tr = get_example_patch()
     >>> new = tr._get_select_inds(distance=(50,300))
     """
+    raise NotImplementedError("Need to rework this!")
     kwargs = _prepare_kwargs(patch, kwargs)
     # convert tuples into slices
     new = patch._data_array.sel(**kwargs)

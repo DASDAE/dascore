@@ -77,7 +77,7 @@ class TestInit:
         Ensure the time_min and time_max attrs can be inferred from coord time.
         """
         patch = random_dt_coord
-        time = patch.coords["time"].max()
+        time = patch.coords["time"].max
         assert patch.attrs["time_max"] == time
 
     def test_init_from_array(self, random_patch):
@@ -93,7 +93,9 @@ class TestInit:
         """The min/max values of the distance attrs should have been populated."""
         attrs = random_patch.attrs
         expected_filled_in = [
-            x for x in list(attrs.__fields__) if x.startswith("distance")
+            x
+            for x in list(attrs.__fields__)
+            if x.startswith("distance") and "units" not in x
         ]
         for attr in expected_filled_in:
             assert not pd.isnull(attrs[attr])

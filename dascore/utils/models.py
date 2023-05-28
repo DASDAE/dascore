@@ -9,6 +9,7 @@ import pint
 from pydantic import BaseModel
 from typing_extensions import Self
 
+from dascore.compat import array
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -73,7 +74,7 @@ class ArrayLike(np.ndarray, SimpleValidator):
     def func(cls, object):
         """Ensure an object is array-like."""
         assert isinstance(object, np.ndarray)
-        return object
+        return array(object)
 
 
 class DTypeLike(SimpleValidator):
@@ -90,3 +91,14 @@ class Unit(pint.Unit, SimpleValidator):
     """A pint unit which can be used by pydantic."""
 
     func = pint.Unit
+
+
+class UnitStr(str, SimpleValidator):
+    """A string which can be converted to a Unit (e.g, m)."""
+
+    @classmethod
+    def func(cls, value):
+        """validate that a string can be converted to a unit."""
+        if value:
+            Unit(value)
+        return value

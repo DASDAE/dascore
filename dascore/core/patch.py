@@ -9,13 +9,14 @@ import numpy as np
 import pandas as pd
 
 import dascore.proc
+from dascore.compat import DataArray, array
 from dascore.constants import PatchType
-from dascore.compat import DataArray
 from dascore.core.schema import PatchAttrs
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
-from dascore.utils.coordmanager import CoordManager
+from dascore.utils.coordmanager import CoordManager, get_coord_manager
 from dascore.utils.coords import assign_coords
+from dascore.utils.misc import optional_import
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
 
@@ -46,7 +47,7 @@ class Patch:
     """
 
     data: ArrayLike
-    coords: Mapping[str, ArrayLike]
+    coords: CoordManager
     dims: tuple[str, ...]
     attrs: PatchAttrs
 
@@ -58,9 +59,7 @@ class Patch:
         attrs: Optional[Mapping] = None,
     ):
         if isinstance(data, (DataArray, self.__class__)):
-
-            dar = data if isinstance(data, DataArray) else data._data_array
-            self._data_array = dar
+            # dar = data if isinstance(data, DataArray) else data._data_array
             return
         # Try to generate coords from ranges in attrs
         if coords is None and attrs is not None:
@@ -70,13 +69,9 @@ class Patch:
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
 
-        mixer = _AttrsCoordsMixer(attrs, coords, dims)
-        attrs, coords = mixer()
-        # get xarray coords from custom coords object
-        xr_coords = coords.to_nested_dict()
-        self._data_array = DataArray(
-            data=data, dims=dims, coords=xr_coords, attrs=attrs
-        )
+        self.coords = get_coord_manager(coords, dims, attrs)
+        self.attrs = PatchAttrs.new(attrs, self.coords)
+        self.data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):
         """
@@ -188,49 +183,36 @@ class Patch:
         **attrs
             attrs to add/update.
         """
-        dar = self._data_array
-        mixer = _AttrsCoordsMixer(dar.attrs, dar.coords, dar.dims)
-        mixer.update_attrs(**attrs)
-        attrs, coords = mixer()
-        return self.__class__(self.data, coords=coords, attrs=attrs, dims=self.dims)
-
-    @property
-    def data(self):
-        """Return the data array."""
-        return self._data_array.data
-
-    @property
-    def coords(self):
-        """Return a dict of coordinate data {coord_name: data}"""
-        return Coords(self._data_array.coords, dims=self.dims).array_dict
+        new_attrs = dict(self.attrs)
+        new_attrs.update(attrs)
+        new_coords = self.coords.update_from_attrs(attrs)
+        out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
+        return self.__class__(self.data, **out)
 
     @property
     def coord_dims(self):
         """Return a dict of coordinate dimensions {coord_name: (**dims)}"""
-        return Coords(self._data_array.coords, dims=self.dims).dims_dict
+        return self.coords.dim_map
 
     @property
     def dims(self) -> tuple[str, ...]:
         """Return the dimensions contained in patch."""
-        return self._data_array.dims
-
-    @property
-    def attrs(self) -> PatchAttrs:
-        """Return the attributes of the trace."""
-        return PatchAttrs(**self._data_array.attrs)
+        return self.coords.dims
 
     @property
     def shape(self) -> tuple[int, ...]:
         """Return the shape of the data array."""
-        return self._data_array.shape
+        return self.coords.shape
 
     def to_xarray(self):
         """
         Return a data array with patch contents.
         """
-        # Note this is here in case we decide to remove xarray there will
-        # still be a way to get a DataArray object with an optional import
-        return self._data_array
+        xr = optional_import("xarray")
+        attrs = dict(self.attrs)
+        dims = self.dims
+        coords = self.coords._to_xarray_input()
+        return xr.DataArray(self.data, attrs=attrs, dims=dims, coords=coords)
 
     squeeze = dascore.proc.squeeze
     rename = dascore.proc.rename

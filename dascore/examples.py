@@ -86,10 +86,11 @@ def _random_patch(
     )
     coords = dict(
         distance=np.arange(array.shape[0]) * attrs["d_distance"],
-        time=np.arange(array.shape[1]) * attrs["d_time"],
+        time=t1 + np.arange(array.shape[1]) * attrs["d_time"],
     )
     out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
-    return dc.Patch(**out)
+    patch = dc.Patch(**out)
+    return patch
 
 
 @register_func(EXAMPLE_PATCHES, key="sin_wav")

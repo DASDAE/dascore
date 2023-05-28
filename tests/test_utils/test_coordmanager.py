@@ -2,8 +2,6 @@
 Tests for coordinate managerment.
 """
 import numpy as np
-
-import pandas as pd
 import pytest
 from pydantic import ValidationError
 
@@ -12,7 +10,6 @@ from dascore.exceptions import CoordError
 from dascore.utils.coordmanager import CoordManager, get_coord_manager
 from dascore.utils.coords import BaseCoord, get_coord
 from dascore.utils.misc import register_func
-
 
 COORD_MANAGERS = []
 
@@ -115,6 +112,11 @@ class TestCoordManagerInputs:
         with pytest.raises(ValidationError, match="does not match the dimension"):
             get_coord_manager(coords, DIMS)
 
+    def test_mappings_immutable(self, coord):
+        """Ensure the mappings are immutable."""
+        with pytest.raises(Exception):
+            coord.coord_map["bob"]
+
 
 class TestCoordManagerWithAttrs:
     """Tests for initing coord managing with attribute dict."""
@@ -147,7 +149,7 @@ class TestSelect:
 
     def test_2d_coord_raises(self, coord_manager_multidim):
         """Select shouldn't work on 2D coordinates."""
-        with pytest.raises(CoordError, match='Only 1 dimensional'):
+        with pytest.raises(CoordError, match="Only 1 dimensional"):
             coord_manager_multidim.select(quality=(1, 2))
 
     def test_select_coord_dim(self, coord_manager):
@@ -157,6 +159,19 @@ class TestSelect:
         assert new.shape[dist_ind] < coord_manager.shape[dist_ind]
         assert len(inds) == len(coord_manager.dims)
         assert inds[dist_ind] != slice(None, None)
+
+
+class TestUpdateFromAttrs:
+    """Tests to ensure updating attrs can update coordinates."""
+
+    def test_update_min(self, coord_manager):
+        """Ensure min time in attrs updates appropriate coord."""
+        for dim in coord_manager.dims:
+            coord = coord_manager.coord_map[dim]
+            attrs = {f"{dim}_max": coord.min}
+            new = coord_manager.update_from_attrs(attrs)
+            assert new.coord_map[dim].max == coord.min
+
 
 #
 #

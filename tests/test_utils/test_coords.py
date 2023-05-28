@@ -222,6 +222,21 @@ class TestBasics:
         assert len(new.values) == 11 == len(new)
         assert slice(10, 21) == sliced
 
+    def test_cant_add_extra_fields(self, evenly_sampled_coord):
+        """Ensure coordinates are immutable."""
+        with pytest.raises(ValueError, match="has no field"):
+            evenly_sampled_coord.bob = 1
+
+    def test_immutable(self, evenly_sampled_coord):
+        """Fields can't change once created."""
+        with pytest.raises(TypeError, match="is immutable"):
+            evenly_sampled_coord.start = 10
+
+    def test_values_immutable(self, coord):
+        """Values should all be immutable arrays."""
+        with pytest.raises(ValueError, match="assignment destination is read-only"):
+            coord.data[0] = coord.data[1]
+
 
 class TestCoordRange:
     """Tests for coords from array."""
@@ -312,6 +327,46 @@ class TestCoordRange:
         out, _ = evenly_sampled_coord.sort()
         assert out == evenly_sampled_coord
 
+    def test_update_limits_too_many_params(self, evenly_sampled_coord):
+        """Update limits should raise if too many parameters are specified."""
+        with pytest.raises(ValueError, match="At most two parameters"):
+            evenly_sampled_coord.update_limits(1, 10, 1)
+
+    def test_update_limits_start(self, evenly_sampled_coord):
+        """Ensure start can be updated."""
+        new_start = evenly_sampled_coord.start + 2 * evenly_sampled_coord.step
+        new = evenly_sampled_coord.update_limits(start=new_start)
+        assert len(new) == len(evenly_sampled_coord)
+        assert new.start == new_start
+
+    def test_update_limits_end(self, evenly_sampled_coord):
+        """Ensure end can be updated."""
+        new_stop = evenly_sampled_coord.start - 2 * evenly_sampled_coord.step
+        new = evenly_sampled_coord.update_limits(stop=new_stop)
+        assert len(new) == len(evenly_sampled_coord)
+        assert new.stop == new_stop
+
+    def test_update_limits_step(self, evenly_sampled_coord):
+        """Ensure the step can be updated."""
+        coord = evenly_sampled_coord
+        new_step = coord.step * 2
+        new = coord.update_limits(step=new_step)
+        assert np.all(new.values == coord.values * 2)
+
+    def test_update_limits_start_stop(self, evenly_sampled_coord):
+        """Ensure both start/stop can be updated."""
+        coord = evenly_sampled_coord
+        start, stop = coord.values[2], coord.values[-2]
+        new = coord.update_limits(start=start, stop=stop)
+        assert len(new) == len(coord)
+        assert new.start == start
+        assert new.stop == stop
+
+    def test_update_limits_no_args(self, evenly_sampled_coord):
+        """Ensure both start/stop can be updated."""
+        coords = evenly_sampled_coord
+        assert coords == coords.update_limits()
+
 
 class TestMonoTonicCoord:
     """Tests for monotonic array coords."""
@@ -374,6 +429,41 @@ class TestMonoTonicCoord:
         assert len(new) == 10
         assert slice(10, 20) == sliced
 
+    def test_update_limits_too_many_params(self, monotonic_float_coord):
+        """Update limits should raise if too many parameters are specified."""
+        coords = monotonic_float_coord
+        start, stop = coords.min + 1, coords.max - 1
+        with pytest.raises(ValueError, match="At most one parameter"):
+            coords.update_limits(start, stop)
+
+    def test_update_limits_step(self, monotonic_float_coord):
+        """Ensure step can be updated."""
+        coord = monotonic_float_coord
+        new = coord.update_limits(step=1.5)
+        assert np.isclose(new.step, 1.5)
+        assert new.min == coord.min
+
+    def test_update_limits_end(self, monotonic_float_coord):
+        """Ensure end can be updated."""
+        coord = monotonic_float_coord
+        new_stop = coord.max - 10
+        new = coord.update_limits(stop=new_stop)
+        assert len(new) == len(coord)
+        assert new.max == new_stop
+
+    def test_update_limits_start(self, monotonic_float_coord):
+        """Ensure the start can be updated."""
+        coord = monotonic_float_coord
+        new_start = coord.min - 100
+        new = coord.update_limits(start=new_start)
+        assert len(new) == len(coord)
+        assert np.isclose(new.min, new_start)
+
+    def test_update_limits_no_args(self, monotonic_float_coord):
+        """Ensure both start/stop can be updated."""
+        coords = monotonic_float_coord
+        assert coords == coords.update_limits()
+
 
 class TestNonOrderedArrayCoords:
     """Tests for non-ordered array coords."""
@@ -428,9 +518,6 @@ class TestCoordFromAttrs:
 
     def test_init_attr_with_units(self):
         """Ensure units are also set."""
-        attrs = dict(time_min=0, time_max=10, d_time=1, time_units='s')
+        attrs = dict(time_min=0, time_max=10, d_time=1, time_units="s")
         coord = get_coord_from_attrs(attrs, name="time")
         assert coord.units == dc.Unit("s")
-
-
-

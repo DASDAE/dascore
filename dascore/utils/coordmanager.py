@@ -1,12 +1,12 @@
 """
 Module for managing coordinates.
 """
-from typing import Dict, Sequence, Tuple, Union
+from contextlib import suppress
+from typing import Mapping, Sequence, Tuple, Union
 
 import numpy as np
-from contextlib import suppress
+from pydantic import root_validator
 from typing_extensions import Self
-from pydantic import root_validator, ValidationError
 
 from dascore.exceptions import CoordError
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
@@ -29,8 +29,8 @@ class CoordManager(DascoreBaseModel):
     """
 
     dims: Tuple[str, ...]
-    coord_map: Dict[str, BaseCoord]
-    dim_map: Dict[str, Tuple[str, ...]]
+    coord_map: Mapping[str, BaseCoord]
+    dim_map: Mapping[str, Tuple[str, ...]]
 
     def __getitem__(self, item):
         return self.coord_map[item]
@@ -79,6 +79,7 @@ class CoordManager(DascoreBaseModel):
             Used to specify select arguments. Can be of the form
             {coord_name: (lower_limit, upper_limit)}.
         """
+
         def _validate_coords(coord, coord_name):
             """Ensure multi-dims are not used."""
             if not len(coord.shape) == 1:
@@ -89,7 +90,7 @@ class CoordManager(DascoreBaseModel):
                 raise CoordError(msg)
 
         def _get_dim_reductions():
-            """Function to get reductions for each dimension. """
+            """Function to get reductions for each dimension."""
             dim_reductions = {}
             for coord_name, limits in kwargs.items():
                 coord = self.coord_map[coord_name]
@@ -132,8 +133,8 @@ class CoordManager(DascoreBaseModel):
     @root_validator(pre=True)
     def _validate_coords(cls, values):
         """Validate the coordinates and dimensions."""
-        coord_map, dim_map = values['coord_map'], values['dim_map']
-        dims = values['dims']
+        coord_map, dim_map = values["coord_map"], values["dim_map"]
+        dims = values["dims"]
         dim_shapes = {dim: coord_map[dim].shape for dim in dims}
         for name, coord_dims in dim_map.items():
             expected_shape = tuple(dim_shapes[x][0] for x in coord_dims)
@@ -154,6 +155,35 @@ class CoordManager(DascoreBaseModel):
         """Return the shape of the dimensions."""
         return tuple(len(self.coord_map[x]) for x in self.dims)
 
+    def validate_data(self, data):
+        """Ensure data conforms to coordinates."""
+        assert self.shape == data.shape
+        return data
+
+    def _to_xarray_input(self):
+        """Convert to an input xarray can understand."""
+        out = {}
+        for name, coord in self.coord_map.items():
+            dims = self.dim_map[name]
+            out[name] = (dims, coord.data)
+        return out
+
+    def set_units(self, **kwargs):
+        """Set the units of the coordinate manager."""
+        new_coords = dict(self.coord_map)
+        for name, units in kwargs.items():
+            new_coords[name] = new_coords[name].set_units(units)
+        out = dict(dims=self.dims, coord_map=new_coords, dim_map=self.dim_map)
+        return self.__class__(**out)
+
+    def update_from_attrs(self, attrs) -> Self:
+        """Update coordinates based on new attributes."""
+        # first get only attrs that will affect coordinates
+
+        # lst = ["this", "is", "just", "a", "test"]
+        # filtered = fnmatch.filter(lst, "th?s")
+        assert False
+
 
 def get_coord_manager(coord_dict, dims, attrs=None) -> CoordManager:
     """
@@ -168,7 +198,18 @@ def get_coord_manager(coord_dict, dims, attrs=None) -> CoordManager:
                 out[name] = get_coord_from_attrs(attrs, name)
         return out
 
-    def _check_n_fill_coords(coord_dict, dims, attrs):
+    def _update_units(coord_manager, attrs):
+        """Update coordinates to include units from attrs."""
+        if attrs is None:
+            return coord_manager
+        kwargs = {}
+        for name, coord in coord_manager.coord_map.items():
+            attrs_units = attrs.get(f"{name}_units")
+            if coord.units is None and attrs_units is not None:
+                kwargs[name] = attrs_units
+        return coord_manager.set_units(**kwargs)
+
+    def _check_and_fill_coords(coord_dict, dims, attrs):
         coord_set = set(coord_dict)
         dim_set = set(dims)
         missing = dim_set - coord_set
@@ -182,9 +223,8 @@ def get_coord_manager(coord_dict, dims, attrs=None) -> CoordManager:
             )
             raise CoordError(msg)
         # Try to fill in data from attributes, recurse to raise error if any missed.
-        out = dict(coord_dict)
-        out.update(_coord_from_attrs(attrs, missing))
-        return _check_n_fill_coords(out, dims, attrs=None)
+        coord_dict.update(_coord_from_attrs(attrs, missing))
+        return _check_and_fill_coords(coord_dict, dims, attrs=None)
 
     def _coord_from_simple(name, coord):
         """
@@ -223,11 +263,13 @@ def get_coord_manager(coord_dict, dims, attrs=None) -> CoordManager:
         coord_out = get_coord(values=coord[1])
         return coord_out, dim_names
 
-    coord_dict = _check_n_fill_coords(coord_dict, dims, attrs)
+    coord_dict = dict(coord_dict)
     coord_map, dim_map = {}, {}
     for name, coord in coord_dict.items():
         if isinstance(coord, (BaseCoord, ArrayLike, np.ndarray)):
             coord_map[name], dim_map[name] = _coord_from_simple(name, coord)
         else:
             coord_map[name], dim_map[name] = _coord_from_nested(coord)
-    return CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
+    out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
+    out = _update_units(out, attrs)
+    return out

@@ -10,6 +10,7 @@ import pandas as pd
 from pydantic import root_validator
 from typing_extensions import Self
 
+from dascore.compat import array
 from dascore.constants import PatchType
 from dascore.exceptions import CoordError
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
@@ -100,6 +101,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     @property
     def shape(self) -> Tuple[int, ...]:
+        """Return the shape of the coordinate data."""
         return (len(self),)
 
     def set_units(self, units) -> Self:
@@ -173,6 +175,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if not any(pd.isnull(out)):
             return tuple(sorted(out))
         return tuple(out)
+
+    @abc.abstractmethod
+    def update_limits(self, start=None, stop=None, step=None) -> Self:
+        """Update the limits or sampling of the coordinates."""
 
     @property
     def data(self):
@@ -248,6 +254,37 @@ class CoordRange(BaseCoord):
             return None
         return out
 
+    def update_limits(self, start=None, stop=None, step=None) -> Self:
+        """
+        Update the limits or sampling of the coordinates.
+
+        If start and stop are defined a new step is determined and returned.
+        Next, the step size is updated changing only the end. Then the start
+        is updated changing the start/end. Then the end is updated changing
+        the start/end.
+        """
+        if all(x is not None for x in [start, stop, step]):
+            msg = "At most two parameters can be specified in update_limits."
+            raise ValueError(msg)
+        # first case, we need to determine new dt.
+        if start is not None and stop is not None:
+            new_step = (stop - start) / len(self)
+            return get_coord(start=start, stop=stop, step=new_step, units=self.units)
+        # for other combinations we just apply adjustments sequentially.
+        out = self
+        if step is not None:
+            new_stop = out.start + step * len(out)
+            out = out.update(stop=new_stop, step=step)
+        if start is not None:
+            diff = start - out.start
+            new_stop = out.stop + diff
+            out = out.update(start=start, stop=new_stop)
+        if stop is not None:
+            diff = stop - out.stop
+            new_start = out.start + diff
+            out = out.update(start=new_start, stop=stop)
+        return out
+
     @property
     @cache
     def values(self) -> ArrayLike:
@@ -256,8 +293,10 @@ class CoordRange(BaseCoord):
         # uneven spacing. It ensures the length of the output array is robust
         # to small deviations in spacing. However, this doesnt work for datetimes.
         if is_datetime64(self.start):
-            return np.arange(self.start, self.stop, self.step)
-        return np.linspace(self.start, self.stop - self.step, num=len(self))
+            out = np.arange(self.start, self.stop, self.step)
+        else:
+            out = np.linspace(self.start, self.stop - self.step, num=len(self))
+        return array(out)
 
     @property
     def min(self):
@@ -333,6 +372,30 @@ class CoordArray(BaseCoord):
             step = np.timedelta64(int(np.round(step)), "ns")
         return CoordRange(start=min_v, stop=max_v, step=step, units=self.units)
 
+    def update_limits(self, start=None, stop=None, step=None) -> Self:
+        """
+        Update the limits or sampling of the coordinates.
+
+        This is more limited than with CoordRange since the data are not
+        evenly sampled. In order to change the step, you must first call
+        [snap](`dascore.utils.coords
+        """
+        if sum(x is not None for x in [start, stop, step]) > 1:
+            msg = "At most one parameter can be specified in update_limits."
+            raise ValueError(msg)
+        out = self
+        if step is not None:
+            out = self.snap().update_limits(step=step)
+        elif start is not None:
+            diff = start - self.min
+            vals = self.values + diff
+            out = get_coord(values=vals, units=self.units)
+        elif stop is not None:
+            diff = stop - self.max
+            vals = self.values + diff
+            out = get_coord(values=vals, units=self.units)
+        return out
+
     def __getitem__(self, item):
         out = self.values[item]
         if not np.ndim(out):
@@ -367,6 +430,7 @@ class CoordArray(BaseCoord):
     @property
     @cache
     def shape(self):
+        """Return the shape of the coordinate."""
         return np.shape(self.values)
 
     def __eq__(self, other):
