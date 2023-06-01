@@ -3,7 +3,6 @@ Utilities for plotting with matplotlib.
 """
 
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import numpy as np
 import pandas as pd
 
@@ -72,7 +71,7 @@ def _strip_labels(labels, redundants=("0", ":", "T", ".")):
     """Strip all the trailing zeros from labels."""
     ar = np.array([list(x) for x in labels])
     redundant = (np.isin(ar, redundants)).all(axis=0)
-    ind2keep = np.argmax(np.cumsum((~redundant).astype(int))) + 1
+    ind2keep = np.argmax(np.cumsum((~redundant).astype(np.int64))) + 1
     return labels.str[:ind2keep].str.rstrip(".").str.rstrip(":").str.rstrip("T")
 
 
@@ -95,7 +94,7 @@ def _format_time_axis(ax, patch, dims_r, time_fmt, extents=None):
     if not time_fmt:
         time_fmt = _get_format_string(time)
     approx_dt = ((time[1:] - time[:-1]) / dc.to_timedelta64(1)).mean()
-    dt_ns = np.round(approx_dt * ONE_BILLION, 6).astype(int)
+    dt_ns = np.round(approx_dt * ONE_BILLION, 6).astype(np.int64)
     # determine which axis is x, tell mpl it's a date, get date axis
     axis_name = "x" if dims_r[0] == "time" else "y"
     # getattr(ax, f"{axis_name}axis_date")()

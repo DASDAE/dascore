@@ -582,7 +582,7 @@ def _merge_patches(
         no_merge = ~(dist_to_previous <= merge_dist)
         sub_df["_dist_to_previous"] = dist_to_previous
         # determine if each patch should be merged with the previous one
-        for _, merge_patch_df in sub_df.groupby(no_merge.astype(int).cumsum()):
+        for _, merge_patch_df in sub_df.groupby(no_merge.astype(np.int64).cumsum()):
             out.append(_merge_compatible_patches(merge_patch_df))
     return out
 
