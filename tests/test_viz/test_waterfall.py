@@ -2,6 +2,7 @@
 Tests for waterfall plots.
 """
 import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -58,3 +59,14 @@ class TestWaterfall:
         patch = event_patch_1.pass_filter(time=(None, 300))
         _ = patch.viz.waterfall(scale=0.04)
         _ = patch.transpose("distance", "time").viz.waterfall(scale=0.04)
+
+    def test_time_axis_label_int_overflow(self, random_patch):
+        """Make sure the time axis labels are correct (windows compatibility)"""
+        ax = random_patch.viz.waterfall()
+        expected_starttime = random_patch.attrs["time_min"]
+        xtext = ax.xaxis.get_label_text()
+        # Get the piece of the label corresponding to the starttime
+        # A little bit on the brittle side, but better than nothing
+        starttime = xtext.split()[-1][:-1]
+        starttime = np.datetime64(starttime)
+        assert abs(starttime - expected_starttime) < np.timedelta64(1, "ns")

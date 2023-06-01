@@ -60,6 +60,8 @@ def _get_extents(dims_r, coords):
         denom = ONE_BILLION
         time_min = to_number(lims["time"][0]) / denom
         time_max = to_number(lims["time"][1]) / denom
+        # convert to julian date to appease matplotlib
+
         lims["time"] = [time_min, time_max]
     out = [x for dim in dims_r for x in lims[dim]]
     return out
@@ -69,14 +71,14 @@ def _strip_labels(labels, redundants=("0", ":", "T", ".")):
     """Strip all the trailing zeros from labels."""
     ar = np.array([list(x) for x in labels])
     redundant = (np.isin(ar, redundants)).all(axis=0)
-    ind2keep = np.argmax(np.cumsum((~redundant).astype(int))) + 1
+    ind2keep = np.argmax(np.cumsum((~redundant).astype(np.int64))) + 1
     return labels.str[:ind2keep].str.rstrip(".").str.rstrip(":").str.rstrip("T")
 
 
 def _get_labels(ticks, time_fmt, dt_ns):
     """Get sensible labels for plots."""
     ticks_ns = dc.to_datetime64(ticks).astype(np.int64)
-    out = np.round(ticks_ns / dt_ns).astype(int) * dt_ns
+    out = np.round(ticks_ns / dt_ns).astype(np.int64) * dt_ns
     labels = pd.to_datetime(out.astype("datetime64[ns]")).strftime(time_fmt)
     return labels
 
@@ -92,7 +94,7 @@ def _format_time_axis(ax, patch, dims_r, time_fmt, extents=None):
     if not time_fmt:
         time_fmt = _get_format_string(time)
     approx_dt = ((time[1:] - time[:-1]) / dc.to_timedelta64(1)).mean()
-    dt_ns = np.round(approx_dt * ONE_BILLION, 6).astype(int)
+    dt_ns = np.round(approx_dt * ONE_BILLION, 6).astype(np.int64)
     # determine which axis is x, tell mpl it's a date, get date axis
     axis_name = "x" if dims_r[0] == "time" else "y"
     # getattr(ax, f"{axis_name}axis_date")()
@@ -115,8 +117,8 @@ def _add_time_axis_label(ax, patch, dims_r, dt_ns):
     if pd.isnull(start) or pd.isnull(end):
         return  # nothing to do if no start/end times in attrs
     # round start label to within 1 dt.
-    start_ns = start.astype(int)
-    new_start_ns = np.round(start_ns / dt_ns).astype(int) * dt_ns
+    start_ns = start.astype(np.int64)
+    new_start_ns = np.round(start_ns / dt_ns).astype(np.int64) * dt_ns
     ser = pd.Series(str(new_start_ns.astype("datetime64[ns]")))
     new_start = _strip_labels(ser).iloc[0]
     x_or_y = ["x", "y"][dims_r.index("time")]

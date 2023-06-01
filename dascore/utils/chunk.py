@@ -150,7 +150,7 @@ class ChunkManager:
         stop_cum_max = stop_sorted.cummax()
         end_markers = stop_cum_max.shift() + step_sorted * self._tolerance
         has_gap = start_sorted > end_markers
-        group_num = has_gap.astype(int).cumsum()
+        group_num = has_gap.astype(np.int64).cumsum()
         return group_num[start.index]
 
     def _get_duration_overlap(self, duration, start, step, overlap=None):

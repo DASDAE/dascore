@@ -50,7 +50,7 @@ def aggregate(
     # update coords with new dimension (use mean)
     coords = patch.coords
     if dim == "time":  # need to convert time to ints
-        ns = patch.coords[dim].astype(int) / 1_000_000_000
+        ns = patch.coords[dim].astype(np.int64) / 1_000_000_000
         new_coord_val = to_datetime64(np.mean(ns))
     else:
         new_coord_val = np.mean(patch.coords[dim])
