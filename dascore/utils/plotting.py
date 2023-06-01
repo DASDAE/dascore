@@ -3,6 +3,7 @@ Utilities for plotting with matplotlib.
 """
 
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import numpy as np
 import pandas as pd
 
@@ -60,6 +61,8 @@ def _get_extents(dims_r, coords):
         denom = ONE_BILLION
         time_min = to_number(lims["time"][0]) / denom
         time_max = to_number(lims["time"][1]) / denom
+        # convert to julian date to appease matplotlib
+
         lims["time"] = [time_min, time_max]
     out = [x for dim in dims_r for x in lims[dim]]
     return out
@@ -76,7 +79,7 @@ def _strip_labels(labels, redundants=("0", ":", "T", ".")):
 def _get_labels(ticks, time_fmt, dt_ns):
     """Get sensible labels for plots."""
     ticks_ns = dc.to_datetime64(ticks).astype(np.int64)
-    out = np.round(ticks_ns / dt_ns).astype(int) * dt_ns
+    out = np.round(ticks_ns / dt_ns).astype(np.int64) * dt_ns
     labels = pd.to_datetime(out.astype("datetime64[ns]")).strftime(time_fmt)
     return labels
 
@@ -115,8 +118,8 @@ def _add_time_axis_label(ax, patch, dims_r, dt_ns):
     if pd.isnull(start) or pd.isnull(end):
         return  # nothing to do if no start/end times in attrs
     # round start label to within 1 dt.
-    start_ns = start.astype(int)
-    new_start_ns = np.round(start_ns / dt_ns).astype(int) * dt_ns
+    start_ns = start.astype(np.int64)
+    new_start_ns = np.round(start_ns / dt_ns).astype(np.int64) * dt_ns
     ser = pd.Series(str(new_start_ns.astype("datetime64[ns]")))
     new_start = _strip_labels(ser).iloc[0]
     x_or_y = ["x", "y"][dims_r.index("time")]
