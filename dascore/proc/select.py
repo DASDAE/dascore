@@ -2,7 +2,7 @@
 Function for querying Patchs
 """
 from dascore.constants import PatchType
-from dascore.utils.patch import _AttrsCoordsMixer, _get_history_str, patch_function
+from dascore.utils.patch import _AttrsCoordsMixer, patch_function
 from dascore.utils.time import get_select_time
 
 
@@ -62,6 +62,7 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     # prepare outputs
     data = new.data if not copy else new.data.copy()
     attrs = dict(new.attrs)
-    attrs["history"] = _get_history_str(patch, select, **kwargs)
+    # Select should no longer show up in the history attribute.
+    # attrs["history"] = _get_history_str(patch, select, **kwargs)
     attrs, coords = _AttrsCoordsMixer(attrs, new.coords, new.dims)()
     return patch.__class__(data, attrs=attrs, coords=coords, dims=patch.dims)
