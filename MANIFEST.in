@@ -1,0 +1,17 @@
+# This file controls the contents of the created distribution
+# https://packaging.python.org/en/latest/guides/using-manifest-in/
+
+# by default exclude everything
+exclude *
+prune *
+
+# Then add only the needed things to distribution (including tests)
+include pyproject.toml
+include README.md
+include docs/LICENSE
+graft src
+graft dascore
+graft tests
+
+# now re-remove compiled files
+global-exclude __pycache__ *pyc
