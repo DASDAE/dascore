@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
+from dascore.exceptions import ParameterError
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -70,15 +71,20 @@ def _add_range_query(kwargs, df, ignore_bad_kwargs=False):
     for key in unknown_cols:
         min_key, max_key = f"{key}_min", f"{key}_max"
         val = kwargs[key]
-        if {min_key, max_key}.issubset(col_set) and len(val) == 2:
+        subset = {min_key, max_key}.issubset(col_set)
+        if subset and val is not None and len(val) == 2:
             range_query[key] = val
             kwargs.pop(key, None)
         else:
             bad_keys.add(key)
     if len(bad_keys):
         if not ignore_bad_kwargs:
-            msg = f"columns: {bad_keys} are not found in df"
-            raise KeyError(msg)
+            bad_dict = {x: kwargs[x] for x in bad_keys}
+            msg = (
+                "Bad filter parameter found. Either the column does not "
+                f"exist or it's value is invalid. Keys/values are: {bad_dict}"
+            )
+            raise ParameterError(msg)
         else:
             for key in bad_keys:
                 kwargs.pop(key, None)

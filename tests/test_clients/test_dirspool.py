@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
 from dascore.core.schema import PatchFileSummary
+from dascore.exceptions import ParameterError
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func
 
@@ -193,6 +194,23 @@ class TestSelect:
         assert len(sub) == 1
         patch = sub[0]
         assert isinstance(patch, dc.Patch)
+
+    def test_nice_error_message_bad_select(self, diverse_directory_spool):
+        """Ensure a nice error message is raised for bad"""
+        with pytest.raises(ParameterError, match="Bad filter parameter"):
+            _ = diverse_directory_spool.select(time=None)[0]
+
+    def test_select_correct_history_str(self, diverse_directory_spool):
+        """
+        Ensure no history string is added for selecting. See #142/#147.
+        """
+        spool = diverse_directory_spool
+        t1 = spool[0].attrs.time_min
+        dt = spool[0].attrs.d_time
+        selected_spool = spool.select(time=(t1, t1 + 30 * dt))
+        patch = selected_spool[0]
+        history = patch.attrs.history
+        assert len(history) <= 1
 
 
 class TestBasicChunk:

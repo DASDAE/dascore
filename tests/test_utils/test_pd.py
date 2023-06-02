@@ -4,6 +4,7 @@ import pandas as pd
 import pydantic
 import pytest
 
+from dascore.exceptions import ParameterError
 from dascore.utils.pd import adjust_segments, fill_defaults_from_pydantic, filter_df
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -78,7 +79,7 @@ class TestFilterDfBasic:
 
     def test_bad_parameter_raises(self, example_df):
         """ensure passing a parameter that doesn't have a column raises."""
-        with pytest.raises(KeyError, match="not found in df"):
+        with pytest.raises(ParameterError, match="the column does not"):
             filter_df(example_df, bad_column=2)
 
     def test_bad_parameter_doesnt_raise(self, example_df):
@@ -198,7 +199,7 @@ class TestAdjustSegments:
     def test_missing_interval_col_raises_keyerro(self, adjacent_df):
         """Ensure if an interval column is missing a KeyError is raised."""
         df = adjacent_df.drop(columns=["distance_min"])
-        with pytest.raises(KeyError):
+        with pytest.raises(ParameterError):
             _ = adjust_segments(df, distance=(100, 200))
 
     class TestFillDefaultsFromPydantic:
