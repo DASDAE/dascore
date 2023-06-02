@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.examples
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
 from dascore.core.schema import PatchFileSummary
@@ -107,6 +108,29 @@ class TestDirectoryIndex:
         patch = spool3[0]
         assert isinstance(patch, dc.Patch)
         assert not default_index_path.exists()
+
+    def test_nested_directories(self, diverse_spool, tmp_path_factory):
+        """Ensure files in nested directories work up to 3 levels."""
+        # split the spool into 3
+        sp_len = len(diverse_spool)
+        num = 3
+        spools = [
+            diverse_spool[int((x / num) * sp_len) : int(((x + 1) / num) * sp_len)]
+            for x in range(num)
+        ]
+        # write each group to a different sub path
+        base_path = tmp_path_factory.mktemp("nested_dir")
+        path = base_path
+        for num, spool in enumerate(spools):
+            path = path / f"sub_{num}"
+            path.mkdir(exist_ok=True, parents=True)
+            dascore.examples.spool_to_directory(spool, path)
+        df = dc.spool(base_path).update().get_contents()
+        # ensure each sub-directory is represented
+        paths = df["path"]
+        assert any(paths.str.startswith("/sub_0"))
+        assert any(paths.str.startswith("/sub_0/sub_1"))
+        assert any(paths.str.startswith("/sub_0/sub_1/sub_2"))
 
 
 class TestSelect:
