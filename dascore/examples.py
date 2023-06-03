@@ -153,7 +153,11 @@ def _random_patch_lat_lon():
 
 @register_func(EXAMPLE_PATCHES, key="example_event_1")
 def _example_event_1():
-    """Returns an example of a passive event recorded by DAS."""
+    """
+    Returns an example of a passive event recorded by DAS.
+
+    This event is from @stanvek2022fracture.
+    """
     path = fetch("example_dasdae_event_1.h5")
     return dc.spool(path)[0]
 

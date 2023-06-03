@@ -142,6 +142,27 @@ def get_slice(array, cond=Optional[tuple]) -> slice:
     return slice(start, stop)
 
 
+def broadcast_for_index(
+    n_dims: int, axis: int, value: Union[slice, int], fill_none=False
+):
+    """
+    For a given shape of array, return empty slices except for slice axis.
+
+    Parameters
+    ----------
+    n_dims
+        The number of dimensions in the array that will be indexed.
+    axis
+        The axis number.
+    value
+        A slice object.
+    fill_none
+        If True, fill non axis dims with None, else slice(None)
+    """
+    fill = None if fill_none else slice(None)
+    return tuple(fill if x != axis else value for x in range(n_dims))
+
+
 def _get_sampling_rate(sampling_period):
     """
     Get a sampling rate as a float.

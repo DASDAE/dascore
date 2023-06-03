@@ -248,6 +248,7 @@ class Patch:
     interpolate = dascore.proc.interpolate
     normalize = dascore.proc.normalize
     standardize = dascore.proc.standardize
+    taper = dascore.proc.taper
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
