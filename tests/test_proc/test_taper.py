@@ -78,3 +78,10 @@ class TestTaperBasics:
             patch_ones.taper(time=(None, 1.01))
         with pytest.raises(ParameterError, match="taper lengths exceed"):
             patch_ones.taper(time=(1.01, None))
+
+    def test_doc_example(self, random_patch):
+        """Tests the doc example case."""
+        patch = random_patch
+        patch_taper1 = patch.taper(time=0.05, type="hann")
+        patch_taper2 = patch.taper(distance=(0.10, None), type="triang")
+        assert patch_taper1.shape == patch_taper2.shape
