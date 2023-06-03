@@ -9,7 +9,7 @@ from scipy.signal import windows  # the best operating system?
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import broadcast_slice
+from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_value_from_kwargs, patch_function
 
 TAPER_FUNCTIONS = dict(
@@ -18,8 +18,6 @@ TAPER_FUNCTIONS = dict(
     blackman=windows.blackman,
     blackmanharris=windows.blackmanharris,
     bohman=windows.bohman,
-    boxcar=windows.boxcar,
-    flattop=windows.flattop,
     hamming=windows.hamming,
     hann=windows.hann,
     nuttall=windows.nuttall,
@@ -32,11 +30,40 @@ def _get_taper_slices(patch, kwargs):
     """Get slice for start/end of patch."""
     dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
     d_len = patch.shape[axis]
-    # TODO add unit support once patch_refactor lands
-    start, stop = np.broadcast_to(np.array(value), (2,)) * d_len
-    slice_1 = slice(None, int(start)) if not pd.isnull(start) else slice(None)
-    slice_2 = slice(d_len - int(stop), None) if not pd.isnull(stop) else slice(None)
-    return axis, (int(start), int(stop)), slice_1, slice_2
+    # TODO add unit support once patch_refactor branch lands
+    start, stop = np.broadcast_to(np.array(value), (2,))
+    slice1, slice2 = slice(None), slice(None)
+    if not pd.isnull(start):
+        start = int(start * d_len)
+        slice1 = slice(None, start)
+    if not pd.isnull(stop):
+        stop = int(d_len - stop * d_len)
+        slice2 = slice(stop, None)
+    return axis, (start, stop), slice1, slice2
+
+
+def _get_window_function(taper_type):
+    """Get the window function to use for taper."""
+    # get taper function or raise if it isn't known.
+    if taper_type not in TAPER_FUNCTIONS:
+        msg = (
+            f"{type} is not a known taper function. "
+            f"Options are: {sorted(TAPER_FUNCTIONS)}"
+        )
+        raise ParameterError(msg)
+    func = TAPER_FUNCTIONS[taper_type]
+    return func
+
+
+def _validate_windows(samps, shape, axis):
+    """Validate the the windows don't overlap or exceed dim len."""
+    samps = np.array([x for x in samps if not pd.isnull(x)])
+    if len(samps) > 1 and samps[0] > samps[1]:
+        msg = "Taper windows cannot overlap"
+        raise ParameterError(msg)
+    elif np.any(samps < 0) or np.any(samps > shape[axis]):
+        msg = "Total taper lengths exceed total dim length"
+        raise ParameterError(msg)
 
 
 @patch_function()
@@ -54,7 +81,7 @@ def taper(
     patch
         The patch instance.
     type
-        The type of taper to use. Options are:
+        The type of window to use For tapering. Supported Options are:
             {taper_type}.
     **kwargs
         Used to specify the dimension along which to taper and the percentage
@@ -69,29 +96,23 @@ def taper(
     Examples
     --------
     """
-    # get taper function or raise if it isn't known.
-    if type not in TAPER_FUNCTIONS:
-        msg = (
-            f"{type} is not a known taper function. "
-            f"Options are: {sorted(TAPER_FUNCTIONS)}"
-        )
-        raise ParameterError(msg)
-    func = TAPER_FUNCTIONS[type]
+    func = _get_window_function(type)
     # get taper values in samples.
     out = np.array(patch.data)
+    shape = out.shape
     n_dims = len(out.shape)
     axis, samps, start_slice, end_slice = _get_taper_slices(patch, kwargs)
-    # we can't taper more than the length of the patch.
-    assert np.sum(samps) <= out.shape[axis]
-    if start_slice is not None:
+    _validate_windows(samps, shape, axis)
+    if samps[0] is not None:
         window = func(2 * int(samps[0]))[: samps[0]]
         # get indices window (which will broadcast) and data
-        data_inds = broadcast_slice(n_dims, axis, start_slice)
-        window_inds = broadcast_slice(n_dims, axis, slice(None), fill_none=True)
+        data_inds = broadcast_for_index(n_dims, axis, start_slice)
+        window_inds = broadcast_for_index(n_dims, axis, slice(None), fill_none=True)
         out[data_inds] = out[data_inds] * window[window_inds]
-    if end_slice is not None:
-        window = func(2 * int(samps[0]))[samps[1] :]
-        data_inds = broadcast_slice(n_dims, axis, end_slice)
-        window_inds = broadcast_slice(n_dims, axis, slice(None), fill_none=True)
+    if samps[1] is not None:
+        diff = shape[axis] - samps[1]
+        window = func(2 * diff)[diff:]
+        data_inds = broadcast_for_index(n_dims, axis, end_slice)
+        window_inds = broadcast_for_index(n_dims, axis, slice(None), fill_none=True)
         out[data_inds] = out[data_inds] * window[window_inds]
     return patch.new(data=out)
