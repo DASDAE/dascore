@@ -42,16 +42,16 @@ def _get_taper_slices(patch, kwargs):
     return axis, (start, stop), slice1, slice2
 
 
-def _get_window_function(taper_type):
+def _get_window_function(window_type):
     """Get the window function to use for taper."""
     # get taper function or raise if it isn't known.
-    if taper_type not in TAPER_FUNCTIONS:
+    if window_type not in TAPER_FUNCTIONS:
         msg = (
-            f"{type} is not a known taper function. "
+            f"'{window_type}' is not a known window type. "
             f"Options are: {sorted(TAPER_FUNCTIONS)}"
         )
         raise ParameterError(msg)
-    func = TAPER_FUNCTIONS[taper_type]
+    func = TAPER_FUNCTIONS[window_type]
     return func
 
 
@@ -70,7 +70,7 @@ def _validate_windows(samps, shape, axis):
 @compose_docstring(taper_type=sorted(TAPER_FUNCTIONS))
 def taper(
     patch: PatchType,
-    type: str = "hann",
+    window_type: str = "hann",
     **kwargs,
 ) -> PatchType:
     """
@@ -80,7 +80,7 @@ def taper(
     ----------
     patch
         The patch instance.
-    type
+    window_type
         The type of window to use For tapering. Supported Options are:
             {taper_type}.
     **kwargs
@@ -98,11 +98,11 @@ def taper(
     >>> import dascore as dc
     >>> patch = dc.get_example_patch() # generate example patch
     >>> # Apply an Hanning taper to 5% of each end for time dimension.
-    >>> patch_taper1 = patch.taper(time=0.05, type="hann")
+    >>> patch_taper1 = patch.taper(time=0.05, window_type="hann")
     >>> # Apply a triangular taper to 10% of the start of the distance dimension.
-    >>> patch_taper2 = patch.taper(distance=(0.10, None), type='triang')
+    >>> patch_taper2 = patch.taper(distance=(0.10, None), window_type='triang')
     """
-    func = _get_window_function(type)
+    func = _get_window_function(window_type)
     # get taper values in samples.
     out = np.array(patch.data)
     shape = out.shape

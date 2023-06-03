@@ -22,7 +22,7 @@ def time_tapered_patch(request, patch_ones):
     """Return a tapered trace."""
     # first get a patch with all ones for easy testing
     patch = patch_ones.new(data=np.ones_like(patch_ones.data))
-    out = taper(patch, time=0.05, type=request.param)
+    out = taper(patch, time=0.05, window_type=request.param)
     return out
 
 
@@ -82,6 +82,12 @@ class TestTaperBasics:
     def test_doc_example(self, random_patch):
         """Tests the doc example case."""
         patch = random_patch
-        patch_taper1 = patch.taper(time=0.05, type="hann")
-        patch_taper2 = patch.taper(distance=(0.10, None), type="triang")
+        patch_taper1 = patch.taper(time=0.05, window_type="hann")
+        patch_taper2 = patch.taper(distance=(0.10, None), window_type="triang")
         assert patch_taper1.shape == patch_taper2.shape
+
+    def test_bad_taper_str_raises(self, random_patch):
+        """Test that an invalid taper function raises nice message."""
+        with pytest.raises(ParameterError, match="not a known window"):
+            random_patch.taper(time=(0.1, 0.1), window_type="windowsXP")
+            # the only good one...
