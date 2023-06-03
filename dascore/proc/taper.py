@@ -96,7 +96,7 @@ def taper(
     Examples
     --------
     >>> import dascore as dc
-    >>> patch = dascore.get_example_patch() # generate example patch
+    >>> patch = dc.get_example_patch() # generate example patch
     >>> # Apply an Hanning taper to 5% of each end for time dimension.
     >>> patch_taper1 = patch.taper(time=0.05, type="hann")
     >>> # Apply a triangular taper to 10% of the start of the distance dimension.

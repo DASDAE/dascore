@@ -25,7 +25,7 @@ patch = dc.examples.sin_wave_patch(
     frequency=[200, 10],
     channel_count=2,
 )
-_ = patch.viz.wiggle(show=True)
+patch.viz.wiggle(show=True);
 ```
 
 ## IIR filter
@@ -34,7 +34,7 @@ Next we decimate by 10x using IIR filter
 
 ```{python}
 decimated_iir = patch.decimate(time=10, filter_type='iir')
-_ = decimated_iir.viz.wiggle(show=True)
+decimated_iir.viz.wiggle(show=True);
 ```
 
 Notice the lowpass filter removed the 200 Hz signal and only
@@ -46,7 +46,7 @@ Next we decimate by 10x using FIR filter.
 
 ```{python}
 decimated_fir = patch.decimate(time=10, filter_type='fir')
-_ = decimated_fir.viz.wiggle(show=True)
+decimated_fir.viz.wiggle(show=True);
 ```
 
 ## No Filter
@@ -55,5 +55,75 @@ Next, we decimate without a filter to purposely induce aliasing.
 
 ```{python}
 decimated_no_filt = patch.decimate(time=10, filter_type=None)
-_ = decimated_no_filt.viz.wiggle(show=True)
+decimated_no_filt.viz.wiggle(show=True);
+```
+
+# Taper
+
+The [taper function](`dascore.Patch.taper`) is used to gently taper the edges of
+a patch dimension to zero. To see this, let's create a patch of all 1s and apply
+the taper function
+
+```{python}
+import numpy as np
+import dascore as dc
+
+_patch = dc.get_example_patch()
+patch_ones = _patch.new(data=np.ones_like(_patch.data))
+```
+
+The following code will apply a 10% taper, meaning the first and last 10% of the
+samples, along the time dimension.
+
+```{python}
+patch_ones.taper(time=0.1).viz.waterfall();
+```
+
+Of course, any dimensions works, and passing a tuple of values enables
+different amounts of tapering for each end of the dimension.
+
+
+```{python}
+patch_ones.taper(distance=(0.1, 0.3)).viz.waterfall();
+```
+
+Either end can also be `None` to indicated tapering on a single side of the patch
+dimension.
+
+```{python}
+patch_ones.taper(distance=(None, 0.1)).viz.waterfall();
+```
+
+
+## Managing Edge Effects
+One of the main applications of tapering is to mitigate edge artefacts, or "edge effects"
+associated with several other types of processing, including filtering. Consider the
+following:
+
+### Bandpass filtering without tapering
+
+```{python}
+import dascore as dc
+
+patch = (
+    dc.get_example_patch('example_event_1')
+    .pass_filter(time=(None, 300))
+)
+
+patch.viz.waterfall(show=True, scale=0.04);
+
+```
+
+### Bandpass filtering with tapering
+
+```{python}
+import dascore as dc
+
+patch = (
+    dc.get_example_patch('example_event_1')
+    .taper(time=0.05)
+    .pass_filter(time=(None, 300))
+)
+
+patch.viz.waterfall(show=True, scale=0.15);
 ```
