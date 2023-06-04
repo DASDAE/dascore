@@ -39,12 +39,10 @@ def waterfall(
     patch: PatchType,
     ax: Optional[plt.Axes] = None,
     cmap="bwr",
-    timefmt=None,
     scale: Optional[Union[float, Sequence[float]]] = None,
     scale_type: Literal["relative", "absolute"] = "relative",
-    colorbar=True,
     show=False,
-) -> plt.Figure:
+) -> plt.Axes:
     """
     Parameters
     ----------
@@ -54,9 +52,6 @@ def waterfall(
         A matplotlib object, if None create one.
     cmap
         A matplotlib colormap string or instance.
-    timefmt
-        The format for the time axis (e.g., "%H:%M:%S"). If None,
-        try to automatically determine the most clear format.
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
@@ -68,8 +63,6 @@ def waterfall(
         are:
             relative - scale based on half the dynamic range in patch
             absolute - scale based on absolute values provided to `scale`
-    colorbar
-        If True, show the color bar.
     show
         If True, show the plot, else just return axis.
 
@@ -95,10 +88,9 @@ def waterfall(
     for dim, x in zip(dims_r, ["x", "y"]):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
     if "time" in dims_r:
-        _format_time_axis(ax, patch, dims_r, timefmt, extents)
+        _format_time_axis(ax, dims_r)
     # add color bar
-    if colorbar:
-        ax.get_figure().colorbar(im)
+    ax.get_figure().colorbar(im)
     ax.invert_yaxis()  # invert y axis so origin is at top
     if show:
         plt.show()
