@@ -81,6 +81,7 @@ patch = spool[0]
 
 ```{python}
 import dascore as dc
+
 patch = dc.get_example_patch('random_das')
 
 out = (
@@ -94,6 +95,7 @@ out = (
 
 ```{python}
 import dascore as dc
+
 patch = (
     dc.get_example_patch('example_event_1')
     .taper(time=0.05)
