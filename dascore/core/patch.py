@@ -72,7 +72,6 @@ class Patch:
         self._attrs = PatchAttrs.new(attrs, self.coords)
         self._data = array(self.coords.validate_data(data))
 
-
     def __eq__(self, other):
         """
         Compare one Trace2D to another.

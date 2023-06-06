@@ -198,4 +198,32 @@ class TestUpdateFromAttrs:
             coord = coord_manager.coord_map[dim]
             attrs = {f"{dim}_max": coord.min}
             new = coord_manager.update_from_attrs(attrs)
-            assert new.coord_map[dim].max == coord.min
+            new_coord = new.coord_map[dim]
+            assert len(new_coord) == len(coord)
+            assert new_coord.max == coord.min
+
+    def test_update_max(self, coord_manager):
+        """Ensure max time in attrs updates appropriate coord."""
+        for dim in coord_manager.dims:
+            coord = coord_manager.coord_map[dim]
+            attrs = {f"{dim}_min": coord.max}
+            dist = coord.max - coord.min
+            new = coord_manager.update_from_attrs(attrs)
+            new_coord = new.coord_map[dim]
+            new_dist = new_coord.max - new_coord.min
+            assert dist == new_dist
+            assert len(new_coord) == len(coord)
+            assert new_coord.min == coord.max
+
+    def test_update_step(self, coord_manager):
+        """Ensure the step can be updated which changes endtime."""
+        for dim in coord_manager.dims:
+            coord = coord_manager.coord_map[dim]
+            attrs = {f"d_{dim}": coord.step * 10}
+            dist = coord.max - coord.min
+            new = coord_manager.update_from_attrs(attrs)
+            new_coord = new.coord_map[dim]
+            new_dist = new_coord.max - new_coord.min
+            assert (dist * 10) == new_dist
+            assert len(new_coord) == len(coord)
+            assert new_coord.min == coord.min

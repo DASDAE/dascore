@@ -337,13 +337,16 @@ class TestCoordRange:
         new_start = evenly_sampled_coord.start + 2 * evenly_sampled_coord.step
         new = evenly_sampled_coord.update_limits(start=new_start)
         assert len(new) == len(evenly_sampled_coord)
+        assert new.step == evenly_sampled_coord.step
         assert new.start == new_start
 
     def test_update_limits_end(self, evenly_sampled_coord):
         """Ensure end can be updated."""
         new_stop = evenly_sampled_coord.start - 2 * evenly_sampled_coord.step
-        new = evenly_sampled_coord.update_limits(stop=new_stop)
+        step = evenly_sampled_coord.step
+        new = evenly_sampled_coord.update_limits(stop=new_stop - step)
         assert len(new) == len(evenly_sampled_coord)
+        assert new.step == evenly_sampled_coord.step
         assert new.stop == new_stop
 
     def test_update_limits_step(self, evenly_sampled_coord):

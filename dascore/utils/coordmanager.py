@@ -51,6 +51,26 @@ class CoordManager(DascoreBaseModel):
         out = dict(coord_map=coords, dim_map=self.dim_map, dims=self.dims)
         return self.__class__(**out)
 
+    def new(self, dims=None, coord_map=None, dim_map=None) -> Self:
+        """
+        Return a new coordmanager with specified attributes replaced.
+
+        Parameters
+        ----------
+        dims
+            A tuple of dimension strings.
+        coord_map
+            A mapping of {name: coord}
+        dim_map
+            A mapping of {coord_name:
+        """
+        out = self.__class__(
+            dims=dims if dims is not None else self.dims,
+            coord_map=coord_map if coord_map is not None else self.coord_map,
+            dim_map=dim_map if dim_map is not None else self.dim_map,
+        )
+        return out
+
     def drop_dim(self, dim: Union[str, Sequence[str]]) -> Tuple[Self, Tuple]:
         """Drop one or more dimension."""
         coord_name_to_kill = []
@@ -193,11 +213,13 @@ class CoordManager(DascoreBaseModel):
 
     def update_from_attrs(self, attrs) -> Self:
         """Update coordinates based on new attributes."""
-        # first get only attrs that will affect coordinates
-
-        # lst = ["this", "is", "just", "a", "test"]
-        # filtered = fnmatch.filter(lst, "th?s")
-        assert False
+        attrs = dict(attrs)
+        out = {}
+        for name, coord in self.coord_map.items():
+            start, stop = attrs.get(f"{name}_min"), attrs.get(f"{name}_max")
+            step = attrs.get(f"d_{name}")
+            out[name] = coord.update_limits(start, stop, step)
+        return self.new(coord_map=out)
 
     def transpose(self, dims: Tuple[str, ...]) -> Self:
         """Transpose the coordinates."""
@@ -208,7 +230,7 @@ class CoordManager(DascoreBaseModel):
             )
             raise CoordError(msg)
         assert set(dims) == set(self.dims), "You must pass all dimensions."
-        return self.update(dims=dims)
+        return self.new(dims=dims)
 
     def rename_dims(self, **kwargs) -> Self:
         """

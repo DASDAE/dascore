@@ -1,6 +1,6 @@
 """Pydantic schemas used by DASCore."""
 from pathlib import Path
-from typing import Literal, Optional, Mapping, Sequence, Union
+from typing import Literal, Mapping, Optional, Sequence, Union
 
 import numpy as np
 
@@ -14,6 +14,7 @@ from dascore.constants import (
     basic_summary_attrs,
     max_lens,
 )
+from dascore.utils.coords import BaseCoord, CoordRange
 from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DateTime64, TimeDelta64, UnitStr
 
@@ -83,19 +84,13 @@ class PatchAttrs(BaseModel):
         new = cls()
         return new.dict()
 
-    def coords_from_dims(self) -> Mapping[str, np.ndarray]:
+    def coords_from_dims(self) -> Mapping[str, BaseCoord]:
         """Return coordinates from dimensions assuming evenly sampled."""
         out = {}
         for dim in self.dim_tuple:
-            # TODO replace this with simple coords
             start, stop = self[f"{dim}_min"], self[f"{dim}_max"]
             step = self[f"d_{dim}"]
-            ar = np.arange(start, stop + step, step)
-            # due to float imprecision the last value can be slightly larger
-            # than stop, just trim
-            if ar[-1] > stop:
-                ar = ar[:-1]
-            out[dim] = ar
+            out[dim] = CoordRange(start=start, stop=stop, step=step)
         return out
 
     @classmethod

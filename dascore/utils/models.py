@@ -24,8 +24,8 @@ class DascoreBaseModel(BaseModel):
         keep_untouched = (cached_property,)
         frozen = True
 
-    def update(self, **kwargs) -> Self:
-        """Update some attribute in the model."""
+    def new(self, **kwargs) -> Self:
+        """Create new instance with some attributed updated."""
         out = dict(self)
         for item, value in kwargs.items():
             out[item] = value

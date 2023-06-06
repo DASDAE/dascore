@@ -187,7 +187,22 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
 
 class CoordRange(BaseCoord):
-    """A coordinate represent a range of evenly sampled data."""
+    """
+    A coordinate represent a range of evenly sampled data.
+
+    Parameters
+    ----------
+    start
+        The starting value
+    stop
+        The ending value
+    step
+        The step between start and stop.
+
+    Notes
+    -----
+    Like range and slice, CoordRange is exclusive of stop value.
+    """
 
     start: Any
     stop: Any
@@ -218,14 +233,16 @@ class CoordRange(BaseCoord):
         return int(np.round(out))
 
     def convert_units(self, units) -> Self:
-        """Convert units, or set units if none exist."""
+        """
+        Convert units, or set units if none exist.
+        """
         if self.units is None:
             return self.set_units(units)
         out = dict(units=units)
         factor = get_conversion_factor(self.units, units)
         for name in ["start", "stop", "step"]:
             out[name] = getattr(self, name) * factor
-        return self.update(**out)
+        return self.new(**out)
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
@@ -238,7 +255,7 @@ class CoordRange(BaseCoord):
             out = slice(start, stop)
             new_start = self[start] if start is not None else self.start
             new_end = self[stop] if stop is not None else self.stop
-            new = self.update(start=new_start, stop=new_end)
+            new = self.new(start=new_start, stop=new_end)
             return new, out
 
     def _get_index(self, value, forward=True):
@@ -262,6 +279,11 @@ class CoordRange(BaseCoord):
         Next, the step size is updated changing only the end. Then the start
         is updated changing the start/end. Then the end is updated changing
         the start/end.
+
+        Notes
+        -----
+        For ease of use, stop is considered inclusive, meaning the real stop
+        value in the output will be stop + step.
         """
         if all(x is not None for x in [start, stop, step]):
             msg = "At most two parameters can be specified in update_limits."
@@ -274,15 +296,16 @@ class CoordRange(BaseCoord):
         out = self
         if step is not None:
             new_stop = out.start + step * len(out)
-            out = out.update(stop=new_stop, step=step)
+            out = out.new(stop=new_stop, step=step)
         if start is not None:
             diff = start - out.start
             new_stop = out.stop + diff
-            out = out.update(start=start, stop=new_stop)
+            out = out.new(start=start, stop=new_stop)
         if stop is not None:
-            diff = stop - out.stop
-            new_start = out.start + diff
-            out = out.update(start=new_start, stop=stop)
+            translation = (stop + out.step) - out.stop
+            new_start = self.start + translation
+            # we add step so the new range is inclusive of stop.
+            out = out.new(start=new_start, stop=stop + out.step)
         return out
 
     @property
@@ -328,7 +351,7 @@ class CoordArray(BaseCoord):
         if self.units is None:
             return self.set_units(units)
         factor = get_conversion_factor(self.units, units)
-        return self.update(units=units, values=self.values * factor)
+        return self.new(units=units, values=self.values * factor)
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
@@ -343,7 +366,7 @@ class CoordArray(BaseCoord):
             out = out & (values >= val1)
         if val2 is not None:
             out = out & (values <= val2)
-        return self.update(values=values[out]), out
+        return self.new(values=values[out]), out
 
     def sort(self) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
         """Sort the coord to be monotonic (maybe range)."""
@@ -467,7 +490,7 @@ class CoordMonotonicArray(CoordArray):
         stop = self._get_index(v2, forward=False)
         new_stop = stop if stop is not None and stop < len(self) else None
         out = slice(new_start, new_stop)
-        return self.update(values=self.values[out]), out
+        return self.new(values=self.values[out]), out
 
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""
