@@ -8,3 +8,5 @@ iDAS005_tdms_example.626.tdms 0c31f75015bc671d958967c7fdf32e2e64fdb467f997d331ae
 sample_tdms_file_v4713.tdms 22a79c4c3166ce3cc8467265540cdb3ad2b54460209d39641c1e8f20e64eca65 https://github.com/dasdae/test_data/raw/master/das/sample_tdms_file_v4713.tdms
 example_dasdae_event_1.h5 854530af7ea10bab54dd0f6458c5d67d8b334ee6e4032b75702fa408352b5007 https://github.com/dasdae/test_data/raw/master/das/example_dasdae_event_1.h5
 opta_sense_quantx_v2.h5 fca8c8b19a9e253f9252c14de3f2a7778391a763f39142fffc63ab0cc3fa9cc7 https://github.com/dasdae/test_data/raw/master/das/opta_sense_quantx_v2.h5
+prodml_2.0.h5 8f8eded106acab0b4266c5c752cc702363cb09391f5fddf1534429e94e4e9ab2 https://github.com/dasdae/test_data/raw/master/das/prodml_2.0.h5
+prodml_2.1.h5 47875ae1fa17d99849cdb595e9fa6853d162605c1556be90225f37aaa123dded https://github.com/dasdae/test_data/raw/master/das/prodml_2.1.h5

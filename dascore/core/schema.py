@@ -1,6 +1,6 @@
 """Pydantic schemas used by DASCore."""
 from pathlib import Path
-from typing import Literal, Sequence, Union
+from typing import Literal, Mapping, Sequence, Union
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -116,6 +116,21 @@ class PatchAttrs(BaseModel):
         """return a dict of default values"""
         new = cls()
         return new.dict()
+
+    def coords_from_dims(self) -> Mapping[str, np.ndarray]:
+        """Return coordinates from dimensions assuming evenly sampled."""
+        out = {}
+        for dim in self.dims:
+            # TODO replace this with simple coords
+            start, stop = self[f"{dim}_min"], self[f"{dim}_max"]
+            step = self[f"d_{dim}"]
+            ar = np.arange(start, stop + step, step)
+            # due to float imprecision the last value can be slightly larger
+            # than stop, just trim
+            if ar[-1] > stop:
+                ar = ar[:-1]
+            out[dim] = ar
+        return out
 
     class Config:
         """Configuration for Patch Summary"""

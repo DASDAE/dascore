@@ -27,7 +27,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.hdf5 import HDF5ExtError
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import scan_patches
-from dascore.utils.pd import list_ser_to_str
+from dascore.utils.pd import _model_list_to_df
 
 
 class _FiberIOManager:
@@ -377,9 +377,7 @@ def scan_to_df(
         file_version=file_version,
         ignore=ignore,
     )
-    df = pd.DataFrame([dict(x) for x in info]).assign(
-        dims=lambda x: list_ser_to_str(x["dims"])
-    )
+    df = _model_list_to_df(info)
     return df[list(PatchFileSummary.get_index_columns())]
 
 
