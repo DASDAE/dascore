@@ -239,6 +239,12 @@ class TestIterFiles:
         has_hidden_by_parent = ["hidden_by_parent" in x for x in out2]
         assert sum(has_hidden_by_parent) == 1
 
+    def test_pass_file(self, dummy_text_file):
+        """Just pass a single file and ensure it gets returned."""
+        out = list(iter_files(dummy_text_file))
+        assert len(out) == 1
+        assert out[0] == dummy_text_file
+
 
 class TestIterate:
     """Test case for iterate."""

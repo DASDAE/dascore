@@ -109,6 +109,30 @@ def terra15_v6_path():
     return fetch("terra15_v6_test_file.hdf5")
 
 
+@pytest.fixture(scope="session")
+def prodml_v2_0_example_path():
+    """Return the path to the prodml v2.0 file."""
+    out = fetch("prodml_2.0.h5")
+    assert out.exists()
+    return out
+
+
+@pytest.fixture(scope="session")
+def prodml_v2_1_example_path():
+    """Return the path to the prodml v2.1 file."""
+    out = fetch("prodml_2.1.h5")
+    assert out.exists()
+    return out
+
+
+@pytest.fixture(scope="session")
+def idas_h5_example_path():
+    """Return the path to the example terra15 file."""
+    out = fetch("iDAS005_hdf5_example.626.h5")
+    assert out.exists()
+    return out
+
+
 @pytest.fixture()
 @register_func(SPOOL_FIXTURES)
 def terra15_das_spool(terra15_das_example_path) -> SpoolType:
@@ -127,6 +151,22 @@ def terra15_das_patch(terra15_das_example_path) -> Patch:
     attr_time = out.attrs["time_max"]
     coord_time = out.coords["time"].max()
     assert attr_time == coord_time
+    return out
+
+
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def prodml_v2_0_patch(prodml_v2_0_example_path) -> Patch:
+    """Read the prodML v2.0 patch"""
+    out = read(prodml_v2_0_example_path, "prodml")[0]
+    return out
+
+
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def prodml_v2_1_patch(prodml_v2_1_example_path) -> Patch:
+    """Read the prodML v2.1 patch"""
+    out = read(prodml_v2_1_example_path, "prodml")[0]
     return out
 
 

@@ -371,3 +371,11 @@ def list_ser_to_str(ser: pd.Series) -> pd.Series:
     """
     values = [",".join(x) if not isinstance(x, str) else x for x in ser.values]
     return pd.Series(values, index=ser.index, dtype=object)
+
+
+def _model_list_to_df(mod_list: Sequence[BaseModel]) -> pd.DataFrame:
+    """Get a dataframe from a sequence of pydantic models."""
+    df = pd.DataFrame([dict(x) for x in mod_list])
+    if "dims" in df.columns:
+        df["dims"] = list_ser_to_str(df["dims"])
+    return df

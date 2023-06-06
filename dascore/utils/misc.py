@@ -325,3 +325,65 @@ def optional_import(package_name: str) -> ModuleType:
         )
         raise MissingOptionalDependency(msg)
     return mod
+
+
+def _query_trims_range(query_tuple, lim1, lim2, spacing):
+    """
+    Return True if a query tuple should trim the range of limits.
+
+    Parameters
+    ----------
+    query_tuple
+        A tuple of (min, max) where both min and max are defined or
+        one is None.
+    lim1
+        The lower limit.
+    lim2
+        The upper limit.
+    spacing
+        The spacing along dimension.
+    """
+    assert len(query_tuple) == 2, "only length two sequence allowed to specify range"
+    q1, q2 = query_tuple
+    if q1 is not None and q1 >= (lim1 + spacing):
+        return True
+    if q2 is not None and q2 <= (lim2 - spacing):
+        return True
+    return False
+
+
+def trim_attrs_get_inds(attrs, dim_length, **kwargs):
+    """
+    Trim a dimension in attrs and get a slice for trimming data.
+
+    Parameters
+    ----------
+    attrs
+        A dict-able object which contains {dim}_min, {dim}_max, d_{dim}.
+    dim_length
+        The length of the data along the specified dimension.
+    **kwargs
+        Used to specify which dimension to trim (dim=(start, stop)).
+    """
+    if not kwargs:
+        return attrs, dim_length
+    assert len(kwargs) == 1, "exactly one dimension allowed."
+    dim = list(kwargs)[0]
+    value = kwargs[dim]
+    old_start, old_stop = attrs[f"{dim}_min"], attrs[f"{dim}_max"]
+    spacing = attrs[f"d_{dim}"]
+    if not _query_trims_range(value, old_start, old_stop, spacing):
+        return slice(None), attrs
+    out = dict(attrs)
+    # get new start/stop values
+    start_ind, stop_ind = 0, dim_length
+    if value[0] is not None and value[0] > old_start:
+        diff = value[0] - old_start
+        start_ind = np.ceil(diff / spacing)
+        out[f"{dim}_min"] = start_ind * spacing + old_start
+    if value[1] is not None and value[1] < old_stop:
+        diff = old_stop - value[1]
+        diff_samples = -np.floor(diff / spacing)
+        stop_ind = dim_length + diff_samples
+        out[f"{dim}_max"] = old_stop + diff_samples * spacing
+    return slice(int(start_ind), int(stop_ind)), attrs.__class__(**out)

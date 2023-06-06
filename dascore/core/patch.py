@@ -59,14 +59,18 @@ class Patch:
         dims: Sequence[str] | None = None,
         attrs: Optional[Mapping] = None,
     ):
-        non_attrs = [x is None for x in [data, coords, dims]]
         if isinstance(data, (DataArray, self.__class__)):
             dar = data if isinstance(data, DataArray) else data._data_array
             self._data_array = dar
             return
-        elif any(non_attrs) and not all(non_attrs):
+        # Try to generate coords from ranges in attrs
+        if coords is None and attrs is not None:
+            coords = PatchAttrs(**dict(attrs)).coords_from_dims()
+        non_attrs = [x is None for x in [data, coords, dims]]
+        if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
+
         mixer = _AttrsCoordsMixer(attrs, coords, dims)
         attrs, coords = mixer()
         # get xarray coords from custom coords object

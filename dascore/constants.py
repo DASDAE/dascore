@@ -1,6 +1,6 @@
 """Constants used throughout obsplus."""
 from pathlib import Path
-from typing import TypeVar, Union
+from typing import Optional, TypeVar, Union
 
 import numpy as np
 import pandas as pd
@@ -16,6 +16,7 @@ DATA_VERSION = "0.0.0"
 
 # Types dascore can convert into time representations
 timeable_types = Union[int, float, str, np.datetime64, pd.Timestamp]
+opt_timeable_types = Optional[timeable_types]
 
 # Number types
 numeric_types = Union[int, float]
