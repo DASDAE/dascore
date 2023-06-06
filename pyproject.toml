@@ -83,8 +83,8 @@ dev = ["dascore[test]", "dascore[docs]"]
 [project.entry-points."dascore.fiber_io"]
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
 PICKLE = "dascore.io.pickle.core:PickleIO"
-PRODMLV2_0 = "dascore.io.prodml.core:PRODMLV2_0"
-PRODMLV2_1 = "dascore.io.prodml.core:PRODMLV2_1"
+PRODMLV2_0 = "dascore.io.prodml.core:ProdMLV2_0"
+PRODMLV2_1 = "dascore.io.prodml.core:ProdMLV2_1"
 TDMS__V4713 = "dascore.io.tdms.core:TDMSFormatterV4713"
 TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
 TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
