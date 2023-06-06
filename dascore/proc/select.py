@@ -54,16 +54,16 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     >>> new = tr._get_select_inds(distance=(50,300))
     """
     raise NotImplementedError("Need to rework this!")
-    kwargs = _prepare_kwargs(patch, kwargs)
-    # convert tuples into slices
-    new = patch._data_array.sel(**kwargs)
-    # no slicing was performed, just return original.
-    if new.data.shape == patch.data.shape:
-        return patch
-    # prepare outputs
-    data = new.data if not copy else new.data.copy()
-    attrs = dict(new.attrs)
-    # Select should no longer show up in the history attribute.
-    # attrs["history"] = _get_history_str(patch, select, **kwargs)
-    attrs, coords = _AttrsCoordsMixer(attrs, new.coords, new.dims)()
-    return patch.__class__(data, attrs=attrs, coords=coords, dims=patch.dims)
+    # kwargs = _prepare_kwargs(patch, kwargs)
+    # # convert tuples into slices
+    # new = patch._data_array.sel(**kwargs)
+    # # no slicing was performed, just return original.
+    # if new.data.shape == patch.data.shape:
+    #     return patch
+    # # prepare outputs
+    # data = new.data if not copy else new.data.copy()
+    # attrs = dict(new.attrs)
+    # # Select should no longer show up in the history attribute.
+    # # attrs["history"] = _get_history_str(patch, select, **kwargs)
+    # attrs, coords = _AttrsCoordsMixer(attrs, new.coords, new.dims)()
+    # return patch.__class__(data, attrs=attrs, coords=coords, dims=patch.dims)
