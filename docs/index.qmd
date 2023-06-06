@@ -67,6 +67,7 @@ spool = (
 
 ```{python}
 import dascore as dc
+
 spool = dc.get_example_spool('diverse_das')
 
 # get patches through iteration
