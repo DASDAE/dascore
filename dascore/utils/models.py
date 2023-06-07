@@ -23,6 +23,7 @@ class DascoreBaseModel(BaseModel):
         validate_assignment = True  # validators run on assignment
         keep_untouched = (cached_property,)
         frozen = True
+        validate_all = True
 
     def new(self, **kwargs) -> Self:
         """Create new instance with some attributed updated."""
@@ -101,4 +102,6 @@ class UnitStr(str, SimpleValidator):
         """validate that a string can be converted to a unit."""
         if value:
             Unit(value)
+            # don't leave as a unit; pydantic doesnt know how to serialize it.
+            value = str(value)
         return value

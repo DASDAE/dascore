@@ -3,7 +3,7 @@ A 2D trace object.
 """
 from __future__ import annotations
 
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -39,37 +39,46 @@ class Patch:
         A sequence of dimension strings. The first entry corresponds to the
         first axis of data, the second to the second dimension, and so on.
     attrs
-        Optional attributes (non-coordinate metadata) passed as a dict.
+        Optional attributes (non-coordinate metadata) passed as a dict or
+        [PatchAttrs](`dascore.core.schema.PatchAttrs')
 
     Notes
     -----
-    Unless data is a DataArray or Patch, data, coords, and dims are required.
+    - If coordinates and dims are not provided, they will be extracted from
+    attrs, if possible.
+
+    - If coords and attrs are provided, attrs will have priority. This means
+    if there is a conflict between information contained in both, the coords
+    will be recalculated. However, any missing data in attrs will be filled in
+    if available in coords.
     """
 
     data: ArrayLike
     coords: CoordManager
     dims: tuple[str, ...]
-    attrs: PatchAttrs
+    attrs: Union[PatchAttrs, Mapping]
 
     def __init__(
         self,
         data: ArrayLike | DataArray | None = None,
         coords: Mapping[str, ArrayLike] | None = None,
         dims: Sequence[str] | None = None,
-        attrs: Optional[Mapping] = None,
+        attrs: Optional[Union[Mapping, PatchAttrs]] = None,
     ):
         if isinstance(data, (DataArray, self.__class__)):
             # dar = data if isinstance(data, DataArray) else data._data_array
             return
         # Try to generate coords from ranges in attrs
         if coords is None and attrs is not None:
-            coords = PatchAttrs(**dict(attrs)).coords_from_dims()
+            coords = PatchAttrs.coords_from_dims(attrs)
+            dims = dims if dims is not None else attrs.dims
+        # Ensure required info is here
         non_attrs = [x is None for x in [data, coords, dims]]
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
         self._coords = get_coord_manager(coords, dims, attrs)
-        self._attrs = PatchAttrs.new(attrs, self.coords)
+        self._attrs = PatchAttrs.from_dict(attrs, self.coords)
         self._data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):
@@ -163,6 +172,7 @@ class Patch:
         attrs = attrs if attrs is not None else self.attrs
         coords = coords if coords is not None else self.coords
         if dims:
+            coords = get_coord_manager(coords, dims, attrs)
             coords = coords.rename_dims(dims)
         return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 

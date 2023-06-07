@@ -90,11 +90,11 @@ class PatchAttrs(BaseModel):
         for dim in self.dim_tuple:
             start, stop = self[f"{dim}_min"], self[f"{dim}_max"]
             step = self[f"d_{dim}"]
-            out[dim] = CoordRange(start=start, stop=stop, step=step)
+            out[dim] = CoordRange(start=start, stop=stop + step, step=step)
         return out
 
     @classmethod
-    def new(
+    def from_dict(
         cls,
         args,
         coord_manager: Optional["dc.utils.coordmanager.CoordManager"] = None,
@@ -106,7 +106,7 @@ class PatchAttrs(BaseModel):
         [`CoordManager`](`dascore.utils.coordmanager.CoordManager`).
 
         """
-        if isinstance(args, cls):
+        if isinstance(args, cls) and coord_manager is None:
             return args
         out = dict(args)
         if coord_manager is None:
@@ -114,7 +114,11 @@ class PatchAttrs(BaseModel):
         for name in coord_manager.dims:
             coord = coord_manager.coord_map[name]
             out[f"{name}_min"], out[f"{name}_max"] = coord.min, coord.max
-            out[f"d_{name}"], out[f"{name}_units"] = coord.step, coord.units
+            if coord.step is not None:
+                out[f"d_{name}"] = coord.step
+            if coord.units is not None:
+                out[f"{name}_units"] = coord.units
+        out["dims"] = coord_manager.dims
         return cls(**out)
 
     class Config:

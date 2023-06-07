@@ -7,7 +7,7 @@ import importlib
 import os
 import warnings
 from types import ModuleType
-from typing import Iterable, Optional, Union
+from typing import Any, Iterable, Optional, Tuple, Union
 
 import numpy as np
 import numpy.typing as nt
@@ -387,3 +387,25 @@ def trim_attrs_get_inds(attrs, dim_length, **kwargs):
         stop_ind = dim_length + diff_samples
         out[f"{dim}_max"] = old_stop + diff_samples * spacing
     return slice(int(start_ind), int(stop_ind)), attrs.__class__(**out)
+
+
+def get_slice_tuple(arg, check_oder=True) -> Tuple[Any, Any]:
+    """Get a tuple with start,stop. Perform basic checks."""
+    if isinstance(arg, slice):
+        if arg.step is not None:
+            msg = "step not supported in select/filtering."
+            raise ParameterError(msg)
+        arg = (arg.start, arg.stop)
+    if arg is None or arg is Ellipsis:
+        arg = (None, None)
+    if len(arg) != 2:
+        msg = "Slice indices must be length 2 sequence."
+        raise ParameterError(msg)
+    p1, p2 = arg
+    # support for ...
+    p1 = None if p1 is None or p1 is Ellipsis else p1
+    p2 = None if p2 is None or p2 is Ellipsis else p2
+    if check_oder and p1 is not None and p2 is not None and p2 < p1:
+        msg = "second element must be greater than first!"
+        raise ParameterError(msg)
+    return p1, p2

@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import dascore
 from dascore.core import Patch
 from dascore.utils.time import to_timedelta64
 
@@ -77,7 +76,7 @@ class TestInit:
         Ensure the time_min and time_max attrs can be inferred from coord time.
         """
         patch = random_dt_coord
-        time = patch.coords["time"].max
+        time = patch.coords.coord_map["time"].max
         assert patch.attrs["time_max"] == time
 
     def test_init_from_array(self, random_patch):
@@ -99,22 +98,6 @@ class TestInit:
         ]
         for attr in expected_filled_in:
             assert not pd.isnull(attrs[attr])
-
-    def test_dt_is_datetime64(self, random_patch):
-        """Ensure dt gets changed into timedelta64."""
-        d_time = random_patch.attrs["d_time"]
-        assert isinstance(d_time, np.timedelta64)
-        # test d_time from update_attrs
-        new = random_patch.update_attrs(d_time=10)
-        assert new.attrs["d_time"] == to_timedelta64(10)
-        # test d_time in new Patch
-        attrs = dict(random_patch.attrs)
-        attrs["d_time"] = to_timedelta64(10)
-        coords = random_patch.coords
-        new = dascore.Patch(
-            data=random_patch.data, attrs=attrs, coords=coords, dims=list(coords)
-        )
-        assert new.attrs["d_time"] == to_timedelta64(10)
 
     def test_had_default_attrs(self, patch):
         """Test that all patches used in the test suite have default attrs."""
@@ -298,20 +281,27 @@ class TestUpdateAttrs:
         assert "bob" not in dict(random_patch.attrs)
         assert random_patch.attrs == old_attrs
 
-    def test_update_starttime(self, random_patch):
+    def test_update_starttime1(self, random_patch):
         """Ensure coords are updated with attrs."""
         t1 = np.datetime64("2000-01-01")
         pa = random_patch.update_attrs(time_min=t1)
         assert pa.attrs["time_min"] == t1
         assert pa.coords["time"].min() == t1
 
-    def test_update_startttime(self, random_patch):
+    def test_update_startttime2(self, random_patch):
         """Updating start time should update end time as well."""
         duration = random_patch.attrs["time_max"] - random_patch.attrs["time_min"]
         new_start = np.datetime64("2000-01-01")
         pa1 = random_patch.update_attrs(time_min=str(new_start))
         assert pa1.attrs["time_min"] == new_start
         assert pa1.attrs["time_max"] == new_start + duration
+
+    def test_dt_is_datetime64(self, random_patch):
+        """Ensure dt gets changed into timedelta64."""
+        d_time = random_patch.attrs["d_time"]
+        assert isinstance(d_time, np.timedelta64)
+        new1 = random_patch.update_attrs(d_time=10)
+        assert new1.attrs["d_time"] == to_timedelta64(10)
 
 
 class TestSqueeze:

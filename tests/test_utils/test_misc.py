@@ -13,6 +13,7 @@ from dascore.utils.misc import (
     MethodNameSpace,
     check_evenly_sampled,
     get_slice,
+    get_slice_tuple,
     iter_files,
     iterate,
     optional_import,
@@ -278,3 +279,36 @@ class TestOptionalImport:
         """Ensure a module which is missing raises the appropriate Error."""
         with pytest.raises(MissingOptionalDependency, match="boblib4"):
             optional_import("boblib4")
+
+
+class TestGetSliceTuple:
+    """Tests for getting/validating slice tuples."""
+
+    def test_bad_slice(self):
+        """Step slice should raise."""
+        with pytest.raises(ParameterError, match="step not supported"):
+            get_slice_tuple(slice(1, 10, 2))
+
+    def test_null_input(self):
+        """None or ... should return tuple of None."""
+        out1 = get_slice_tuple(None)
+        out2 = get_slice_tuple(...)
+        assert out1 == out2 == (None, None)
+
+    def test_bad_length(self):
+        """Passing a sequence with the wrong length should raise."""
+        with pytest.raises(ParameterError, match="length 2 sequence."):
+            get_slice_tuple([1])
+        with pytest.raises(ParameterError, match="length 2 sequence."):
+            get_slice_tuple([1, 2, 3])
+
+    def test_ellipses_convert(self):
+        """Ensure ellipses are converted."""
+        assert get_slice_tuple([..., 2]) == (None, 2)
+        assert get_slice_tuple([2, ...]) == (2, None)
+        assert get_slice_tuple([..., ...]) == (None, None)
+
+    def test_wrong_order(self):
+        """Ensure v2 < v1 raises."""
+        with pytest.raises(ParameterError, match="must be greater"):
+            get_slice_tuple([2, 1])

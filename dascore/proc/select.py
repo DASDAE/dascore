@@ -47,23 +47,20 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
 
     Examples
     --------
-    >>> # select meters 50 to 300
     >>> import numpy as np
     >>> from dascore.examples import get_example_patch
     >>> tr = get_example_patch()
-    >>> new = tr._get_select_inds(distance=(50,300))
+    >>> # select meters 50 to 300
+    >>> new = tr.select(distance=(50, 300))
     """
-    raise NotImplementedError("Need to rework this!")
-    # kwargs = _prepare_kwargs(patch, kwargs)
-    # # convert tuples into slices
-    # new = patch._data_array.sel(**kwargs)
-    # # no slicing was performed, just return original.
-    # if new.data.shape == patch.data.shape:
-    #     return patch
-    # # prepare outputs
-    # data = new.data if not copy else new.data.copy()
-    # attrs = dict(new.attrs)
-    # # Select should no longer show up in the history attribute.
-    # # attrs["history"] = _get_history_str(patch, select, **kwargs)
-    # attrs, coords = _AttrsCoordsMixer(attrs, new.coords, new.dims)()
-    # return patch.__class__(data, attrs=attrs, coords=coords, dims=patch.dims)
+    kwargs = _prepare_kwargs(patch, kwargs)
+    # convert tuples into slices
+    new_coords, inds = patch.coords.select(**kwargs)
+    data = patch.data[inds]
+    # no slicing was performed, just return original.
+    if data.shape == patch.data.shape:
+        return patch
+    if copy:
+        data = data.copy()
+    attrs, dims = patch.attrs, patch.dims
+    return patch.__class__(data, attrs=attrs, coords=new_coords, dims=dims)

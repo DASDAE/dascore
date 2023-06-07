@@ -220,7 +220,7 @@ class TestBasics:
         # test range
         new, sliced = coord.filter((value1, value2))
         assert len(new.values) == 11 == len(new)
-        assert slice(10, 21) == sliced
+        assert sliced == slice(10, 21)
 
     def test_cant_add_extra_fields(self, evenly_sampled_coord):
         """Ensure coordinates are immutable."""
@@ -370,12 +370,19 @@ class TestCoordRange:
         coords = evenly_sampled_coord
         assert coords == coords.update_limits()
 
+    def test_test_filter_end_floats(self, evenly_sampled_float_coord_with_units):
+        """Ensure we can filter right up to the end of the array."""
+        coord = evenly_sampled_float_coord_with_units
+        new_coord, out = coord.filter((coord.min, coord.max))
+        assert len(new_coord) == len(coord)
+        assert np.allclose(new_coord.values, coord.values)
 
-class TestMonoTonicCoord:
+
+class TestMonotonicCoord:
     """Tests for monotonic array coords."""
 
-    def test_slice(self, monotonic_float_coord):
-        """Basic slice tests for monotonic array."""
+    def test_filter_basic(self, monotonic_float_coord):
+        """Basic filter tests for monotonic array."""
         coord = monotonic_float_coord
         # test start only
         new, sliced = coord.filter((5, ...))
@@ -466,6 +473,12 @@ class TestMonoTonicCoord:
         """Ensure both start/stop can be updated."""
         coords = monotonic_float_coord
         assert coords == coords.update_limits()
+
+    def test_getitem_slice(self, monotonic_float_coord):
+        """Ensure get_item_slice returns another coord."""
+        new = monotonic_float_coord[slice(1, -1)]
+        assert isinstance(new, monotonic_float_coord.__class__)
+        assert (len(new) + 2) == len(monotonic_float_coord)
 
 
 class TestNonOrderedArrayCoords:

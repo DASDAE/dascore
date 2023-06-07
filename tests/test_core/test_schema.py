@@ -61,13 +61,13 @@ class TestSummarySchema:
         # data_type is one of the parameters inserted into docstring.
         assert "data_type" in docstr
 
-    def test_new(self, random_attrs):
+    def test_from_dict(self, random_attrs):
         """Test new method for more intuitive init."""
-        out = PatchAttrs.new(random_attrs)
+        out = PatchAttrs.from_dict(random_attrs)
         assert out == random_attrs
         new_dict = dict(random_attrs)
         new_dict["data_units"] = "m/s"
-        out = PatchAttrs.new(new_dict)
+        out = PatchAttrs.from_dict(new_dict)
         assert isinstance(out, PatchAttrs)
 
 

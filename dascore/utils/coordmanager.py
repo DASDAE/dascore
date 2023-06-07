@@ -2,12 +2,13 @@
 Module for managing coordinates.
 """
 from contextlib import suppress
-from typing import Mapping, Sequence, Tuple, Union
+from typing import Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from pydantic import root_validator
 from typing_extensions import Self
 
+from dascore.core.schema import PatchAttrs
 from dascore.exceptions import CoordError
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.utils.misc import iterate
@@ -32,8 +33,14 @@ class CoordManager(DascoreBaseModel):
     coord_map: Mapping[str, BaseCoord]
     dim_map: Mapping[str, Tuple[str, ...]]
 
-    def __getitem__(self, item):
-        return self.coord_map[item]
+    def __getitem__(self, item) -> np.ndarray:
+        # in order to not break backward compatibility, we need to return
+        # the array. However, using coords.coord_map[item] gives us the
+        # coordinate.
+        return self.coord_map[item].values
+
+    def __iter__(self):
+        return self.coord_map.__iter__()
 
     def update_coords(self, **kwargs) -> Self:
         """
@@ -211,15 +218,31 @@ class CoordManager(DascoreBaseModel):
         out = dict(dims=self.dims, coord_map=new_coords, dim_map=self.dim_map)
         return self.__class__(**out)
 
-    def update_from_attrs(self, attrs) -> Self:
+    def update_from_attrs(self, attrs: Mapping) -> Self:
         """Update coordinates based on new attributes."""
-        attrs = dict(attrs)
+        # a bit wasteful, but we need the coercion from initing a PatchAttrs.
+        # this enables, for example, conversion of specified fields to datetime
+        validated_attrs = PatchAttrs(**dict(attrs))
+        attrs = {i: v for i, v in validated_attrs.items() if i in dict(attrs)}
         out = {}
         for name, coord in self.coord_map.items():
             start, stop = attrs.get(f"{name}_min"), attrs.get(f"{name}_max")
             step = attrs.get(f"d_{name}")
             out[name] = coord.update_limits(start, stop, step)
         return self.new(coord_map=out)
+
+    def update_to_attrs(self, attrs: PatchAttrs = None) -> PatchAttrs:
+        """Update attrs from information in coordinates."""
+        attr_dict = {} if attrs is None else dict(attrs)
+        attr_dict["dims"] = self.dims
+        for dim in self.dims:
+            coord = self.coord_map[dim]
+            attr_dict[f"{dim}_min"] = coord.min
+            attr_dict[f"{dim}_max"] = coord.max
+            # passing None messes up the validation for d_{dim}
+            if coord.step is not None:
+                attr_dict[f"d_{dim}"] = coord.step
+        return PatchAttrs(**attr_dict)
 
     def transpose(self, dims: Tuple[str, ...]) -> Self:
         """Transpose the coordinates."""
@@ -253,9 +276,22 @@ class CoordManager(DascoreBaseModel):
         return self.__class__(**out)
 
 
-def get_coord_manager(coord_dict, dims=None, attrs=None) -> CoordManager:
+def get_coord_manager(
+    coords: Mapping[str, Union[BaseCoord, np.ndarray]],
+    dims: Optional[Tuple[str, ...]] = None,
+    attrs: Optional[PatchAttrs] = None,
+) -> CoordManager:
     """
     Create a coordinate manager.
+
+    Parameters
+    ----------
+    coords
+        A mapping with coordinates.
+    dims
+        Tuple specify dimension names
+    attrs
+        Attributes which can be used to augment/create coordinates.
     """
 
     def _coord_from_attrs(attrs, names):
@@ -331,11 +367,11 @@ def get_coord_manager(coord_dict, dims=None, attrs=None) -> CoordManager:
         coord_out = get_coord(values=coord[1])
         return coord_out, dim_names
 
-    if isinstance(coord_dict, CoordManager):
-        return coord_dict
-    coord_dict = _check_and_fill_coords(coord_dict, dims, attrs)
+    if isinstance(coords, CoordManager):
+        return coords
+    coords = _check_and_fill_coords(coords, dims, attrs)
     coord_map, dim_map = {}, {}
-    for name, coord in coord_dict.items():
+    for name, coord in coords.items():
         if isinstance(coord, (BaseCoord, ArrayLike, np.ndarray)):
             coord_map[name], dim_map[name] = _coord_from_simple(name, coord)
         else:

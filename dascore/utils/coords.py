@@ -3,7 +3,7 @@ Machinery for coordinates.
 """
 import abc
 from functools import cache
-from typing import Any, Optional, Sequence, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -13,6 +13,7 @@ from typing_extensions import Self
 from dascore.compat import array
 from dascore.constants import PatchType
 from dascore.exceptions import CoordError
+from dascore.utils.misc import get_slice_tuple
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
 from dascore.utils.time import is_datetime64, to_datetime64, to_number
 from dascore.utils.units import get_conversion_factor
@@ -53,9 +54,7 @@ def assign_coords(patch: PatchType, **kwargs) -> PatchType:
     ...     quality=(patch_1.dims, quality)
     ... )
     """
-    coords = {x: patch.coords[x] for x in patch.coords}
-    for coord_key, (dimension, value) in kwargs.items():
-        coords[coord_key] = (dimension, value)
+    coords = patch.coords.update_coords(**kwargs)
     return patch.new(coords=coords, dims=patch.dims)
 
 
@@ -63,6 +62,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     """Coordinate interface."""
 
     units: Optional[Unit]
+    step: Any
     _even_sampling = False
 
     @abc.abstractmethod
@@ -218,7 +218,7 @@ class CoordRange(BaseCoord):
 
     def __getitem__(self, item):
         if isinstance(item, int):
-            if item > len(self):
+            if item >= len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
             return self.values[item]
         # Todo we can probably add more intelligent logic for slices.
@@ -246,17 +246,17 @@ class CoordRange(BaseCoord):
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
-        if isinstance(args, Sequence):
-            assert len(args) == 2, "Only length two sequence allowed for indexing."
-            start = self._get_index(args[0])
-            stop = self._get_index(args[1], forward=False)
-            if stop is not None and stop != len(self):
-                stop += 1
-            out = slice(start, stop)
-            new_start = self[start] if start is not None else self.start
-            new_end = self[stop] if stop is not None else self.stop
-            new = self.new(start=new_start, stop=new_end)
-            return new, out
+        args = get_slice_tuple(args)
+        start = self._get_index(args[0])
+        stop = self._get_index(args[1], forward=False)
+        # if stop is not None and stop < len(self):
+        #     stop += 1
+        # we add 1 to stop in slice since its upper limit is exclusive
+        out = slice(start, (stop + 1) if stop is not None else stop)
+        new_start = self[start] if start is not None else self.start
+        new_end = self[stop] + self.step if stop is not None else self.stop
+        new = self.new(start=new_start, stop=new_end)
+        return new, out
 
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""
@@ -355,9 +355,7 @@ class CoordArray(BaseCoord):
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
-        if not (isinstance(args, Sequence) and len(args) == 2):
-            msg = "Only length two sequence allowed for filtering coords."
-            raise CoordError(msg)
+        args = get_slice_tuple(args)
         values = self.values
         out = np.ones_like(values, dtype=np.bool_)
         val1 = self._get_value_for_indexing(args[0])
@@ -419,11 +417,11 @@ class CoordArray(BaseCoord):
             out = get_coord(values=vals, units=self.units)
         return out
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> Self:
         out = self.values[item]
         if not np.ndim(out):
             return out
-        return self.__class__(out, units=self.units)
+        return self.__class__(values=out, units=self.units)
 
     def __hash__(self):
         return hash(id(self))
@@ -478,10 +476,7 @@ class CoordMonotonicArray(CoordArray):
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
-        if not (isinstance(args, Sequence) and len(args) == 2):
-            msg = "Only length two sequence allowed for filtering coords."
-            raise CoordError(msg)
-        v1, v2 = args
+        v1, v2 = get_slice_tuple(args, check_oder=False)
         # swap indices if start>stop. This happens for decreasing arrays.
         if self._is_reversed and v1 is not None and v2 is not None and v1 < v2:
             v1, v2 = v2, v1

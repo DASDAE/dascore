@@ -1,14 +1,17 @@
 """
 Tests for coordinate managerment.
 """
+from typing import Sequence
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
 from dascore import to_datetime64
+from dascore.core.schema import PatchAttrs
 from dascore.exceptions import CoordError
 from dascore.utils.coordmanager import CoordManager, get_coord_manager
-from dascore.utils.coords import BaseCoord, get_coord
+from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.utils.misc import register_func
 
 COORD_MANAGERS = []
@@ -70,7 +73,7 @@ class TestCoordManagerInputs:
         lats = np.random.rand(len(COORDS["distance"]))
         coords["latitude"] = ("distance", lats)
         out = get_coord_manager(coords, DIMS)
-        assert isinstance(out["latitude"], BaseCoord)
+        assert isinstance(out.coord_map["latitude"], BaseCoord)
 
     def test_str(self, coord_manager):
         """Ensure a custom (readable) str is returned."""
@@ -227,3 +230,46 @@ class TestUpdateFromAttrs:
             assert (dist * 10) == new_dist
             assert len(new_coord) == len(coord)
             assert new_coord.min == coord.min
+
+
+class TestUpdateToAttrs:
+    """Tests to ensure coordinate manager can update attributes."""
+
+    def assert_dim_coords_consistent(self, coord_manager, attrs):
+        """Ensure attrs are consistent with coords."""
+        for dim in coord_manager.dims:
+            coord = coord_manager.coord_map[dim]
+            start = getattr(attrs, f"{dim}_min")
+            stop = getattr(attrs, f"{dim}_max")
+            step = getattr(attrs, f"d_{dim}")
+            assert start == coord.min
+            assert stop == coord.max
+            assert step == coord.step
+            vals_from_coord = coord.values
+            vals_from_attrs = get_coord_from_attrs(attrs, dim).values
+            eqs = np.all(np.equal(vals_from_coord, vals_from_attrs))
+            assert eqs or np.allclose(vals_from_attrs, vals_from_coord)
+
+    def test_empty(self, coord_manager):
+        """Ensure attributes can be generated coords."""
+        attrs = coord_manager.update_to_attrs()
+        assert isinstance(attrs, PatchAttrs)
+        self.assert_dim_coords_consistent(coord_manager, attrs)
+
+    def test_unrelated(self, coord_manager, random_patch):
+        """Passing an unrelated attrs should wipe relevant fields."""
+        old_attrs = random_patch.attrs
+        attrs = coord_manager.update_to_attrs(old_attrs)
+        assert isinstance(attrs, PatchAttrs)
+        self.assert_dim_coords_consistent(coord_manager, attrs)
+        non_dim_keys = set(
+            x
+            for x in dict(attrs)
+            if not (x.endswith("_max") or x.endswith("_min") or x.startswith("d_"))
+        )
+        for key in non_dim_keys:
+            v1, v2 = getattr(old_attrs, key), getattr(attrs, key)
+            if isinstance(v1, Sequence):
+                assert set(v1) == set(v2)
+            else:
+                assert v1 == v2
