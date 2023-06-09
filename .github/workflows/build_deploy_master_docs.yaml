@@ -70,4 +70,4 @@ jobs:
           QUARTO_PRINT_STACK: true
           QUARTO_PUB_AUTH_TOKEN: ${{ secrets.QUARTO_PUB_AUTH_TOKEN }}
         run: |
-            quarto publish docs --no-render --no-browser
+            quarto publish docs --no-prompt --no-browser
