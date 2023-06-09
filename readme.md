@@ -9,8 +9,10 @@ A python library for distributed fiber optic sensing.
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7373559.svg)](https://doi.org/10.5281/zenodo.7373559)
 [![Licence](https://www.gnu.org/graphics/lgplv3-88x31.png)](https://www.gnu.org/licenses/lgpl.html)
 
+[Code](https://github.com/DASDAE/dascore)
+
 [Documentation](https://dascore.org)
 
-[Code](https://github.com/DASDAE/dascore)
+[Documentation (Dev version)](https://dascore.quarto.pub/dascore/)
 
 **WARNING**: dascore is still very new. There will be bugs and API changes.
