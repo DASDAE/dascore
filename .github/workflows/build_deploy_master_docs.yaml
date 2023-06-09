@@ -1,5 +1,7 @@
-# Create documentation and deploy
-name: BuildDeployDocs
+# This action renders and publishes the development docs whenever
+# new commits are added to the master bracnh.
+
+name: BuildDeployDevDocs
 
 on:
   # Runs on pushes targeting the default branch
@@ -61,16 +63,10 @@ jobs:
         shell: bash -l {0}
         run: |
           python scripts/build_api_docs.py
-          quarto render docs
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v2
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+      - name: Render and Publish
+        uses: quarto-dev/quarto-actions/publish@v2
         with:
-          path: 'docs/_site'
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v1
+          target: quarto-pub
+          path: docs
+          QUARTO_PUB_AUTH_TOKEN: ${{ secrets.QUARTO_PUB_AUTH_TOKEN }}
