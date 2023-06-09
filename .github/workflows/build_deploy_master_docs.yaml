@@ -64,9 +64,10 @@ jobs:
         run: |
           python scripts/build_api_docs.py
 
-      - name: Render and Publish
-        uses: quarto-dev/quarto-actions/publish@v2
-        with:
-          target: quarto-pub
-          path: docs
+      - name: Publish Quarto
+        shell: bash -l {0}
+        env:
+          QUARTO_PRINT_STACK: true
           QUARTO_PUB_AUTH_TOKEN: ${{ secrets.QUARTO_PUB_AUTH_TOKEN }}
+        run: |
+            quarto publish docs --no-render --no-browser
