@@ -49,3 +49,13 @@ class TestBasic:
         """Simply ensures a bad file will raise."""
         with pytest.raises(FileNotFoundError, match="does not exist"):
             FileSpool("/not/a/directory")
+
+    def test_chunk(self, terra15_file_spool):
+        """Ensure chunking along time axis works with FileSpool."""
+        spool = terra15_file_spool
+        duration = spool.attrs.time_max - spool.attrs.time_max
+        dt = duration / 3
+        spool = terra15_file_spool.chunk(time=dt, keep_partials=True)
+        assert len(spool) == 3
+        for patch in spool:
+            assert isinstance(patch, spool)
