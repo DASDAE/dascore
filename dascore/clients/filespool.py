@@ -1,7 +1,7 @@
 """
 A spool for working with a single file.
 """
-
+import copy
 from pathlib import Path
 from typing import Optional, Union
 
@@ -39,6 +39,10 @@ class FileSpool(DataFrameSpool):
         file_version: Optional[str] = None,
     ):
         super().__init__()
+        # Init file spool from another file spool
+        if isinstance(path, self.__class__):
+            self.__dict__.update(copy.deepcopy(path.__dict__))
+            return
         self._path = Path(path)
         if not self._path.exists() or self._path.is_dir():
             msg = f"{path} does not exist or is a directory"

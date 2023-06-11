@@ -155,10 +155,24 @@ class TestBasicChunkDF:
         _, out2 = chunker2.chunk(contiguous_df)
         assert out.equals(out2)
 
+
+class TestChunkExceptions:
+    """Tests for various exceptions from the chunk manager."""
+
     def test_raises_overlap_no_chunksize(self):
         """Specifying an overlap and no chunk size should raise."""
         with pytest.raises(ParameterError, match="used for merging"):
             ChunkManager(time=None, overlap=10)
+
+    def test_raises_zero_length_multiple_kwargs(self):
+        """Ensure multiple kwargs raises nice error."""
+        with pytest.raises(ParameterError, match="along one dimension"):
+            ChunkManager(time=10, distance=1)
+
+    def test_raises_zero_length_chunk(self):
+        """Ensure zero length chunk raises."""
+        with pytest.raises(ParameterError, match="must be greater than 0"):
+            ChunkManager(time=0)
 
 
 class TestChunkToMerge:

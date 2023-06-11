@@ -27,6 +27,11 @@ class TestBasic:
         patch = terra15_file_spool[0]
         assert isinstance(patch, dc.Patch)
 
+    def test_init_from_filespool(self, terra15_file_spool):
+        """Ensure FileSpool can init from FileSPool."""
+        new = FileSpool(terra15_file_spool)
+        assert isinstance(new, FileSpool)
+
     def test_str(self, terra15_file_spool):
         """Ensure file spool works."""
         out = str(terra15_file_spool)
@@ -53,9 +58,10 @@ class TestBasic:
     def test_chunk(self, terra15_file_spool):
         """Ensure chunking along time axis works with FileSpool."""
         spool = terra15_file_spool
-        duration = spool.attrs.time_max - spool.attrs.time_max
+        attrs = spool[0].attrs
+        duration = attrs.time_max - attrs.time_min
         dt = duration / 3
-        spool = terra15_file_spool.chunk(time=dt, keep_partials=True)
-        assert len(spool) == 3
+        spool = terra15_file_spool.chunk(time=dt, keep_partial=True)
         for patch in spool:
-            assert isinstance(patch, spool)
+            assert isinstance(patch, dc.Patch)
+        assert len(spool) == 3
