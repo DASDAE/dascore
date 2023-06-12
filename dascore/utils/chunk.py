@@ -13,7 +13,12 @@ from dascore.utils.pd import (
     get_dim_names_from_columns,
     get_interval_columns,
 )
-from dascore.utils.time import is_datetime64, to_datetime64, to_timedelta64
+from dascore.utils.time import (
+    is_datetime64,
+    is_timedelta64,
+    to_datetime64,
+    to_timedelta64,
+)
 
 
 def get_intervals(
@@ -56,6 +61,8 @@ def get_intervals(
         return np.atleast_2d(out)
 
     if is_datetime64(start):
+        # need to ensure we have numpy datetimes, not pandas
+        start, stop = to_datetime64(start), to_datetime64(stop)
         length = to_timedelta64(length)
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
@@ -65,12 +72,17 @@ def get_intervals(
     # reference with no overlap
     new_step = length - overlap
     reference = np.arange(start, stop + new_step, step=new_step)
-    ends = reference[:-1] + length - step
-    starts = reference[:-1]
+    # no need to keep any reference starts within 1 sample of end
+    reference = reference[(reference + step) <= stop]
+
+    ends = reference + length - step
+    starts = reference
+
     # trim end to not surpass stop
     if ends[-1] > stop:
         if not keep_partials:
-            ends, starts = ends[:-1], starts[:-1]
+            ends_filt = ends <= stop
+            ends, starts = ends[ends_filt], starts[ends_filt]
         else:
             ends[-1] = stop
     return np.stack([starts, ends]).T
@@ -146,7 +158,7 @@ class ChunkManager:
                 raise ParameterError(msg)
             return
         # ensure chunk values are greater than 0
-        zero = to_timedelta64(0) if is_datetime64(self._value) else 0
+        zero = to_timedelta64(0) if is_timedelta64(self._value) else 0
         if self._value <= zero:
             msg = "Chunk value must be greater than 0."
             raise ParameterError(msg)

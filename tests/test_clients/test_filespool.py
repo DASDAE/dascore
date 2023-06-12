@@ -8,12 +8,6 @@ from dascore.clients.filespool import FileSpool
 from dascore.utils.hdf5 import HDFPatchIndexManager
 
 
-@pytest.fixture(scope="class")
-def terra15_file_spool(terra15_v5_path):
-    """A file spool for terra15."""
-    return dc.spool(terra15_v5_path)
-
-
 class TestBasic:
     """Basic tests for the filespool."""
 

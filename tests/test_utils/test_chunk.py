@@ -44,8 +44,8 @@ def contiguous_df_two_stations(contiguous_df):
     return pd.concat([df1, df2], axis=0, ignore_index=True)
 
 
-class TestArrange:
-    """Tests for custom arrange function."""
+class TestGetIntervals:
+    """Tests for generating intervals along some continuous dimension."""
 
     def test_numbers_no_overlap(self):
         """Ensure simple ints with no overlap work."""
@@ -154,6 +154,18 @@ class TestBasicChunkDF:
         chunker2 = ChunkManager(overlap=10, time=20)
         _, out2 = chunker2.chunk(contiguous_df)
         assert out.equals(out2)
+
+    def test_chunk_on_split(self, terra15_file_spool):
+        """Ensure chunking which creates a slice at the end time works."""
+        # this spool was selected because I first observed the issue in it.
+        df = terra15_file_spool.get_contents()
+        dur = (df["time_max"] - df["time_min"]).iloc[0]
+        dt = dur / 3
+        chunker = ChunkManager(keep_partial=True, time=dt)
+        _, chunk_df = chunker.chunk(df)
+        duration = chunk_df["time_max"] - chunk_df["time_min"]
+        assert duration.sum() == (dt * 3)
+        assert (duration > np.timedelta64(0, "s")).all()
 
 
 class TestChunkExceptions:

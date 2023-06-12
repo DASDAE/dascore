@@ -310,13 +310,29 @@ def _pandas_timestamp_to_num(ser: pd.Series):
 
 
 def is_datetime64(obj) -> bool:
-    """Return True if object is a timedelta object or array of such."""
+    """
+    Return True if object is a datetime64 (or equivalent) or an array of such.
+    """
     if isinstance(obj, np.datetime64):
         return True
     if isinstance(obj, (np.ndarray, list, tuple, pd.Series)):
         if np.issubdtype(np.array(obj).dtype, np.datetime64):
             return True
     if isinstance(obj, pd.Timestamp):
+        return True
+    return False
+
+
+def is_timedelta64(obj) -> bool:
+    """
+    Return True if object is a timedelta64 (or equivalent) or an array of such.
+    """
+    if isinstance(obj, np.datetime64):
+        return True
+    if isinstance(obj, (np.ndarray, list, tuple, pd.Series)):
+        if np.issubdtype(np.array(obj).dtype, np.timedelta64):
+            return True
+    if isinstance(obj, pd.Timedelta):
         return True
     return False
 

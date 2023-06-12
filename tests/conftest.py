@@ -317,6 +317,13 @@ def basic_file_spool(two_patch_directory):
     return out.update()
 
 
+@pytest.fixture(scope="class")
+@register_func(SPOOL_FIXTURES)
+def terra15_file_spool(terra15_v5_path):
+    """A file spool for terra15."""
+    return dc.spool(terra15_v5_path)
+
+
 @pytest.fixture(scope="class", params=SPOOL_FIXTURES)
 def spool(request):
     """A meta-fixtures for collecting all spools used in testing."""
