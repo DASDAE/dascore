@@ -13,7 +13,12 @@ from dascore.utils.pd import (
     get_dim_names_from_columns,
     get_interval_columns,
 )
-from dascore.utils.time import is_datetime64, to_datetime64, to_timedelta64
+from dascore.utils.time import (
+    is_datetime64,
+    is_timedelta64,
+    to_datetime64,
+    to_timedelta64,
+)
 
 
 def get_intervals(
@@ -56,6 +61,8 @@ def get_intervals(
         return np.atleast_2d(out)
 
     if is_datetime64(start):
+        # need to ensure we have numpy datetimes, not pandas
+        start, stop = to_datetime64(start), to_datetime64(stop)
         length = to_timedelta64(length)
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
@@ -65,12 +72,18 @@ def get_intervals(
     # reference with no overlap
     new_step = length - overlap
     reference = np.arange(start, stop + new_step, step=new_step)
-    ends = reference[:-1] + length - step
-    starts = reference[:-1]
+    # Since we just add to get stop values we need to remove anything
+    # that is within a sample of stopping value (otherwise that segment
+    # will have no data).
+    reference = reference[(reference + step) <= stop]
+    # we subtract step to avoid overlaps in segments.
+    ends = reference + length - step
+    starts = reference
     # trim end to not surpass stop
     if ends[-1] > stop:
         if not keep_partials:
-            ends, starts = ends[:-1], starts[:-1]
+            ends_filt = ends <= stop
+            ends, starts = ends[ends_filt], starts[ends_filt]
         else:
             ends[-1] = stop
     return np.stack([starts, ends]).T
@@ -125,7 +138,12 @@ class ChunkManager:
 
     def _validate_kwargs(self, kwargs):
         """Ensure kwargs is len one and has a valid"""
-        assert len(kwargs) == 1
+        if not len(kwargs) == 1:
+            msg = (
+                f"Chunking only supported along one dimension. You passed "
+                f"You passed kwargs: {kwargs}"
+            )
+            raise ParameterError(msg)
         ((key, value),) = kwargs.items()
         return key, value
 
@@ -139,6 +157,12 @@ class ChunkManager:
                     "both _keep_partials and self._overlap must not be selected."
                 )
                 raise ParameterError(msg)
+            return
+        # ensure chunk values are greater than 0
+        zero = to_timedelta64(0) if is_timedelta64(self._value) else 0
+        if self._value <= zero:
+            msg = "Chunk value must be greater than 0."
+            raise ParameterError(msg)
 
     def _get_continuity_group_number(self, start, stop, step) -> pd.Series:
         """Return a series of ints indicating continuity group."""

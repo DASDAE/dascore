@@ -10,7 +10,7 @@ import pandas as pd
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import PatchType, SpoolType, numeric_types, timeable_types
+from dascore.constants import PatchType, numeric_types, timeable_types
 from dascore.exceptions import InvalidSpoolError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.docs import compose_docstring
@@ -39,7 +39,7 @@ class BaseSpool(abc.ABC):
     def __iter__(self) -> PatchType:
         """Iterate through the Patches in the spool."""
 
-    def update(self: SpoolType) -> Self:
+    def update(self) -> Self:
         """
         Updates the contents of the spool and returns a spool.
         """
@@ -47,7 +47,7 @@ class BaseSpool(abc.ABC):
 
     @abc.abstractmethod
     def chunk(
-        self: SpoolType,
+        self,
         overlap: Optional[Union[numeric_types, timeable_types]] = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
@@ -77,13 +77,13 @@ class BaseSpool(abc.ABC):
         """
 
     @abc.abstractmethod
-    def select(self: SpoolType, **kwargs) -> Self:
+    def select(self, **kwargs) -> Self:
         """
         Select only part of the data.
         """
 
     @abc.abstractmethod
-    def get_contents(self: SpoolType) -> pd.DataFrame:
+    def get_contents(self) -> pd.DataFrame:
         """
         Get a dataframe of the patches that will be returned by the spool.
         """
@@ -213,7 +213,7 @@ class DataFrameSpool(BaseSpool):
 
     @compose_docstring(doc=BaseSpool.chunk.__doc__)
     def chunk(
-        self: SpoolType,
+        self,
         overlap: Optional[Union[numeric_types, timeable_types]] = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
@@ -296,7 +296,7 @@ class MemorySpool(DataFrameSpool):
 
 
 @singledispatch
-def spool(obj: Union[Path, str, BaseSpool, Sequence[PatchType]], **kwargs) -> SpoolType:
+def spool(obj: Union[Path, str, BaseSpool, Sequence[PatchType]], **kwargs) -> BaseSpool:
     """
     Load a spool from some data source.
 

@@ -8,12 +8,6 @@ from dascore.clients.filespool import FileSpool
 from dascore.utils.hdf5 import HDFPatchIndexManager
 
 
-@pytest.fixture(scope="class")
-def terra15_file_spool(terra15_v5_path):
-    """A file spool for terra15."""
-    return dc.spool(terra15_v5_path)
-
-
 class TestBasic:
     """Basic tests for the filespool."""
 
@@ -26,6 +20,11 @@ class TestBasic:
         """Ensure the patch is returned."""
         patch = terra15_file_spool[0]
         assert isinstance(patch, dc.Patch)
+
+    def test_init_from_filespool(self, terra15_file_spool):
+        """Ensure FileSpool can init from FileSPool."""
+        new = FileSpool(terra15_file_spool)
+        assert isinstance(new, FileSpool)
 
     def test_str(self, terra15_file_spool):
         """Ensure file spool works."""
@@ -49,3 +48,14 @@ class TestBasic:
         """Simply ensures a bad file will raise."""
         with pytest.raises(FileNotFoundError, match="does not exist"):
             FileSpool("/not/a/directory")
+
+    def test_chunk(self, terra15_file_spool):
+        """Ensure chunking along time axis works with FileSpool."""
+        spool = terra15_file_spool
+        attrs = spool[0].attrs
+        duration = attrs.time_max - attrs.time_min
+        dt = duration / 3
+        spool = terra15_file_spool.chunk(time=dt, keep_partial=True)
+        for patch in spool:
+            assert isinstance(patch, dc.Patch)
+        assert len(spool) == 3
