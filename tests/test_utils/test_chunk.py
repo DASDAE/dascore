@@ -160,11 +160,13 @@ class TestBasicChunkDF:
         # this spool was selected because I first observed the issue in it.
         df = terra15_file_spool.get_contents()
         dur = (df["time_max"] - df["time_min"]).iloc[0]
-        dt = dur / 3
-        chunker = ChunkManager(keep_partial=True, time=dt)
+        seg_len = dur / 3
+        dt = df["d_time"].iloc[0]
+        chunker = ChunkManager(keep_partial=True, time=seg_len)
         _, chunk_df = chunker.chunk(df)
         duration = chunk_df["time_max"] - chunk_df["time_min"]
-        assert duration.sum() == (dt * 3)
+        assert duration.sum() == ((seg_len - dt) * 3)
+        assert len(duration) == 3
         assert (duration > np.timedelta64(0, "s")).all()
 
 

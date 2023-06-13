@@ -72,12 +72,13 @@ def get_intervals(
     # reference with no overlap
     new_step = length - overlap
     reference = np.arange(start, stop + new_step, step=new_step)
-    # no need to keep any reference starts within 1 sample of end
+    # Since we just add to get stop values we need to remove anything
+    # that is within a sample of stopping value (otherwise that segment
+    # will have no data).
     reference = reference[(reference + step) <= stop]
-
+    # we subtract step to avoid overlaps in segments.
     ends = reference + length - step
     starts = reference
-
     # trim end to not surpass stop
     if ends[-1] > stop:
         if not keep_partials:
