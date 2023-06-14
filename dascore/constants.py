@@ -45,6 +45,11 @@ ONE_BILLION = 1_000_000_000
 # One second with a precision of nano seconds
 ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
 
+# Colors used by dascore
+DC_BLUE = "#002868"
+DC_RED = "#cf0029"
+DC_YELLOW = "#ffc934"
+
 # Valid strings for "datatype" attribute
 VALID_DATA_TYPES = (
     "",  # unspecified

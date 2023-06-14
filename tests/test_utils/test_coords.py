@@ -3,6 +3,7 @@ Tests for coordinate object.
 """
 import numpy as np
 import pytest
+import rich.text
 
 import dascore as dc
 from dascore.exceptions import CoordError
@@ -236,6 +237,16 @@ class TestBasics:
         """Values should all be immutable arrays."""
         with pytest.raises(ValueError, match="assignment destination is read-only"):
             coord.data[0] = coord.data[1]
+
+    def test_str(self, coord):
+        """All coords should be convertible to str."""
+        out = str(coord)
+        assert isinstance(out, str)
+
+    def test_rich(self, coord):
+        """Each coord should have nice rich printing."""
+        out = coord.__rich__()
+        assert isinstance(out, rich.text.Text)
 
 
 class TestCoordRange:
@@ -537,3 +548,7 @@ class TestCoordFromAttrs:
         attrs = dict(time_min=0, time_max=10, d_time=1, time_units="s")
         coord = get_coord_from_attrs(attrs, name="time")
         assert coord.units == dc.Unit("s")
+
+
+class TestTextOutput:
+    """Tests for converting coordinate to nice textual outputs."""

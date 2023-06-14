@@ -8,11 +8,13 @@ from typing import Any, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from pydantic import root_validator
+from rich.text import Text
 from typing_extensions import Self
 
 from dascore.compat import array
 from dascore.constants import PatchType
 from dascore.exceptions import CoordError
+from dascore.utils.display import get_nice_string
 from dascore.utils.misc import get_slice_tuple
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
 from dascore.utils.time import is_datetime64, to_datetime64, to_number
@@ -64,6 +66,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     units: Optional[Unit]
     step: Any
     _even_sampling = False
+    _rich_style = "bold white"
 
     @abc.abstractmethod
     def convert_units(self, unit) -> Self:
@@ -185,6 +188,22 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Return the internal data. Same as values attribute."""
         return self.values
 
+    def __rich__(self):
+        t1 = Text(self.__class__.__name__, style=self._rich_style)
+        min_str = get_nice_string(self.min)
+        max_str = get_nice_string(self.max)
+        t2 = f"min={min_str} max={max_str}"
+        if not pd.isnull(self.step):
+            t2 = t2 + f" step={get_nice_string(self.step)}"
+        t2 = t2 + f" shape={self.shape}"
+        if not pd.isnull(self.units):
+            t2 = t2 + f" units={get_nice_string(self.units)}"
+        out = Text.assemble(t1, f"({t2})")
+        return out
+
+    def __str__(self):
+        return str(self.__rich__())
+
 
 class CoordRange(BaseCoord):
     """
@@ -208,6 +227,7 @@ class CoordRange(BaseCoord):
     stop: Any
     step: Any
     _even_sampling = True
+    _rich_style = "bold green"
 
     @root_validator()
     def ensure_all_attrs_set(cls, values):
@@ -345,6 +365,7 @@ class CoordArray(BaseCoord):
     """
 
     values: ArrayLike
+    _rich_style = "bold red"
 
     def convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
@@ -473,6 +494,7 @@ class CoordMonotonicArray(CoordArray):
     """
 
     values: ArrayLike
+    _rich_style = "bold orange"
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""

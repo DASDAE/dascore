@@ -6,6 +6,7 @@ import weakref
 import numpy as np
 import pandas as pd
 import pytest
+from rich.text import Text
 
 from dascore.core import Patch
 from dascore.utils.time import to_timedelta64
@@ -52,10 +53,11 @@ class TestInit:
         """Create a patch with 'complex' (non-dimensional) coords."""
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 100))
-        attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
+        dt = 1 / 250.0
+        attrs = dict(d_distance=1, d_time=dt, category="DAS", id="test_data1")
         time_deltas = to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
         coords = dict(
-            distance=np.arange(array.shape[0]) * attrs["dx"],
+            distance=np.arange(array.shape[0]) * attrs["d_distance"],
             time=self.time1 + time_deltas,
             latitude=("distance", array[:, 0]),
             quality=(("distance", "time"), array),
@@ -151,14 +153,29 @@ class TestNew:
         assert not new_patch.attrs.history
 
 
-class TestEmptyPatch:
-    """Tests for empty patch objects."""
+class TestDisplay:
+    """Tests for displaying patches."""
+
+    def test_str(self, patch):
+        """All patches should have str rep."""
+        out = str(patch)
+        assert isinstance(out, str)
+        assert len(out)
+
+    def test_rich(self, patch):
+        """Patches should also have rich representation."""
+        out = patch.__rich__()
+        assert isinstance(out, Text)
 
     def test_empty_patch_str(self):
         """An empty patch should have both a str and repr of nonzero length."""
         patch = Patch()
         assert len(str(patch))
         assert len(repr(patch))
+
+
+class TestEmptyPatch:
+    """Tests for empty patch objects."""
 
     def test_has_attrs(self):
         """An empty test patch should have attrs with null(ish) values."""

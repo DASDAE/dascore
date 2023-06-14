@@ -7,6 +7,7 @@ from typing import Callable, Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
+from rich.text import Text
 
 import dascore.proc
 from dascore.compat import DataArray, array
@@ -16,6 +17,7 @@ from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.coordmanager import CoordManager, get_coord_manager
 from dascore.utils.coords import assign_coords
+from dascore.utils.display import array_to_text, get_dascore_text
 from dascore.utils.misc import optional_import
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
@@ -95,10 +97,26 @@ class Patch:
         """
         return self.equals(other)
 
+    def __rich__(self):
+
+        dascore_text = get_dascore_text()
+        patch_text = Text("Patch", style="bold")
+        header = Text.assemble(dascore_text, " ", patch_text)
+
+        coords = self.coords.__rich__()
+
+        data = array_to_text(self.data)
+
+        attrs = Text(str(self.attrs))
+
+        out = Text("\n").join([header, coords, data, attrs])
+        return out
+
+        pass
+
     def __str__(self):
-        xarray_str = str(self._data_array)
-        class_name = self.__class__.__name__
-        return xarray_str.replace("xarray.DataArray", f"dascore.{class_name}")
+        out = self.__rich__()
+        return str(out)
 
     __repr__ = __str__
 
@@ -173,7 +191,8 @@ class Patch:
         coords = coords if coords is not None else self.coords
         if dims:
             coords = get_coord_manager(coords, dims, attrs)
-            coords = coords.rename_dims(dims)
+            dim_map = {old: new for old, new in zip(self.dims, dims)}
+            coords = coords.rename_dims(**dim_map)
         return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 
     def update_attrs(self: PatchType, **attrs) -> PatchType:

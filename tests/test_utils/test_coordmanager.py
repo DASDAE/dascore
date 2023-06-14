@@ -6,6 +6,7 @@ from typing import Sequence
 import numpy as np
 import pytest
 from pydantic import ValidationError
+from rich.text import Text
 
 from dascore import to_datetime64
 from dascore.core.schema import PatchAttrs
@@ -46,7 +47,7 @@ def coord_manager_multidim() -> CoordManager:
 
 
 @pytest.fixture(scope="class", params=COORD_MANAGERS)
-def coord(request):
+def coord(request) -> CoordManager:
     """Meta fixture for aggregating coordinates."""
     return request.getfixturevalue(request.param)
 
@@ -57,6 +58,37 @@ class TestBasicCoordManager:
     def test_init(self, coord):
         """Ensure values can be init'ed."""
         assert isinstance(coord, CoordManager)
+
+    def test_to_dict(self, coord):
+        """CoordManager should be convertible to dict."""
+        c_dict = dict(coord)
+        assert c_dict == {x: coord[x] for x in coord.coord_map}
+
+    def test_membership(self, coord):
+        """Coord membership should work for coord names."""
+        coords = list(coord.coord_map)
+        for name in coords:
+            assert name in coords
+
+    def test_empty(self):
+        """And empty coord manager should be possible."""
+        coord = get_coord_manager()
+        assert isinstance(coord, CoordManager)
+        assert dict(coord) == {}
+        # shape should be the same as an empty array.
+        assert coord.shape == np.array([]).shape
+
+    def test_str(self, coord):
+        """Tests the str output for coord manager."""
+        out = str(coord)
+        assert isinstance(out, str)
+        assert len(out)
+
+    def test_rich(self, coord):
+        """Tests the str output for coord manager."""
+        out = coord.__rich__()
+        assert isinstance(out, Text)
+        assert len(out)
 
 
 class TestCoordManagerInputs:
@@ -273,3 +305,37 @@ class TestUpdateToAttrs:
                 assert set(v1) == set(v2)
             else:
                 assert v1 == v2
+
+
+class TestNonDimCoords:
+    """Tests for adding non-dimensional coordinates."""
+
+    def test_update_with_1d_coordinate(self, coord_manager):
+        """Ensure we can add coordinates."""
+        lat = np.ones_like(coord_manager["distance"])
+        out = coord_manager.update_coords(latitude=("distance", lat))
+        assert out is not coord_manager
+        assert out.dims == coord_manager.dims, "dims shouldn't change"
+        assert np.all(out["latitude"] == lat)
+        assert out.dim_map["latitude"] == out.dim_map["distance"]
+
+    def test_init_with_1d_coordinate(self, coord_manager):
+        """Ensure initing with 1D non-dim coords works."""
+        coords = dict(coord_manager)
+        lat = np.ones_like(coord_manager["distance"])
+        coords["latitude"] = ("distance", lat)
+        out = get_coord_manager(coords, dims=coord_manager.dims)
+        assert out is not coord_manager
+        assert out.dims == coord_manager.dims, "dims shouldn't change"
+        assert np.all(out["latitude"] == lat)
+        assert out.dim_map["latitude"] == out.dim_map["distance"]
+
+    def test_update_2d_coord(self, coord_manager):
+        """Ensure updating can be done with 2D coordinate."""
+        dist, time = coord_manager["distance"], coord_manager["time"]
+        quality = np.ones((len(dist), len(time)))
+        dims = ("distance", "time")
+        new = coord_manager.update_coords(qual=(dims, quality))
+        assert new.dims == coord_manager.dims
+        assert new.dim_map["qual"] == dims
+        assert "qual" in new

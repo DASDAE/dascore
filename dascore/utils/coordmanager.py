@@ -6,8 +6,10 @@ from typing import Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from pydantic import root_validator
+from rich.text import Text
 from typing_extensions import Self
 
+from dascore.constants import DC_BLUE
 from dascore.core.schema import PatchAttrs
 from dascore.exceptions import CoordError
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
@@ -40,7 +42,11 @@ class CoordManager(DascoreBaseModel):
         return self.coord_map[item].values
 
     def __iter__(self):
-        return self.coord_map.__iter__()
+        for key in self.coord_map:
+            yield (key, self[key])
+
+    def __contains__(self, key):
+        return key in self.coord_map
 
     def update_coords(self, **kwargs) -> Self:
         """
@@ -55,8 +61,7 @@ class CoordManager(DascoreBaseModel):
                 coords.pop(item, None)
             else:
                 coords[item] = value
-        out = dict(coord_map=coords, dim_map=self.dim_map, dims=self.dims)
-        return self.__class__(**out)
+        return get_coord_manager(coords, dims=self.dims)
 
     def new(self, dims=None, coord_map=None, dim_map=None) -> Self:
         """
@@ -150,12 +155,30 @@ class CoordManager(DascoreBaseModel):
         return new, inds
 
     def __rich__(self) -> str:
-        out = ["[bold] Coordinates [/bold]"]
+        header_text = Text("➤ ") + Text("Coordinates", style=DC_BLUE) + Text(" (")
+        lens = {x: self.coord_map[x].shape[0] for x in self.dims}
+        dim_texts = Text(", ").join(
+            [
+                Text(x, style="bold")
+                + Text(": ")
+                + Text(f"{lens[x]}", style="underline")
+                for x in self.dims
+            ]
+        )
+
+        out = [header_text] + [dim_texts] + [")"]
         for name, coord in self.coord_map.items():
-            dims = self.dim_map[name]
-            new = f"    {name}: {dims}: {coord}"
-            out.append(new)
-        return "\n".join(out)
+            coord_dims = self.dim_map[name]
+            if name in self.dims:
+                base = Text.assemble("\n    ", Text(name, style="bold"), ": ")
+            else:
+                base = Text(f"\n    {name} {coord_dims}: ")
+            text = Text.assemble(base, coord.__rich__())
+            out.append(text)
+        return Text.assemble(*out)
+
+    def __str__(self):
+        return str(self.__rich__())
 
     @root_validator(pre=True)
     def _validate_coords(cls, values):
@@ -195,10 +218,15 @@ class CoordManager(DascoreBaseModel):
     @property
     def shape(self):
         """Return the shape of the dimensions."""
-        return tuple(len(self.coord_map[x]) for x in self.dims)
+        out = tuple(len(self.coord_map[x]) for x in self.dims)
+        # empty arrays return (0,) as their shape, so we must do the same.
+        if not out:
+            return (0,)
+        return out
 
     def validate_data(self, data):
         """Ensure data conforms to coordinates."""
+        data = np.array([]) if data is None else data
         assert self.shape == data.shape
         return data
 
@@ -277,7 +305,7 @@ class CoordManager(DascoreBaseModel):
 
 
 def get_coord_manager(
-    coords: Mapping[str, Union[BaseCoord, np.ndarray]],
+    coords: Optional[Mapping[str, Union[BaseCoord, np.ndarray]]] = None,
     dims: Optional[Tuple[str, ...]] = None,
     attrs: Optional[PatchAttrs] = None,
 ) -> CoordManager:
@@ -369,6 +397,8 @@ def get_coord_manager(
 
     if isinstance(coords, CoordManager):
         return coords
+    coords = {} if coords is None else coords
+    dims = () if dims is None else dims
     coords = _check_and_fill_coords(coords, dims, attrs)
     coord_map, dim_map = {}, {}
     for name, coord in coords.items():

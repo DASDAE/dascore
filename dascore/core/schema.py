@@ -108,7 +108,7 @@ class PatchAttrs(BaseModel):
         """
         if isinstance(args, cls) and coord_manager is None:
             return args
-        out = dict(args)
+        out = {} if args is None else dict(args)
         if coord_manager is None:
             return cls(**out)
         for name in coord_manager.dims:
