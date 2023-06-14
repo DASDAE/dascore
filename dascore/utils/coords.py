@@ -365,7 +365,7 @@ class CoordArray(BaseCoord):
     """
 
     values: ArrayLike
-    _rich_style = "bold red"
+    _rich_style = "bold #cd0000"
 
     def convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
@@ -494,7 +494,7 @@ class CoordMonotonicArray(CoordArray):
     """
 
     values: ArrayLike
-    _rich_style = "bold orange"
+    _rich_style = "bold #d64806"
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""

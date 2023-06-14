@@ -166,7 +166,6 @@ class TestDisplay:
         """Patches should also have rich representation."""
         out = patch.__rich__()
         assert isinstance(out, Text)
-        from rich import print as rprint
 
     def test_empty_patch_str(self):
         """An empty patch should have both a str and repr of nonzero length."""

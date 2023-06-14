@@ -10,7 +10,7 @@ from rich.style import Style
 from rich.text import Text
 
 import dascore as dc
-from dascore.constants import DC_BLUE, DC_RED, DC_YELLOW, NUMPY_PRECISION
+from dascore.constants import DC_BLUE, DC_RED, DC_YELLOW, FLOAT_PRECISION
 
 
 @singledispatch
@@ -25,7 +25,8 @@ def get_nice_string(value):
 @get_nice_string.register(np.float_)
 def _nice_float_string(value):
     """Nice print value for floats."""
-    return f"{float(value):.7}"
+    fmt_str = f".{FLOAT_PRECISION}"
+    return f"{float(value):{fmt_str}}"
 
 
 @get_nice_string.register(np.timedelta64)
@@ -63,7 +64,7 @@ def get_dascore_text():
 def array_to_text(data) -> Text:
     """Convert a coordinate to string."""
     header = Text("➤ ") + Text("Data", style=DC_RED) + Text(f" ({data.dtype})")
-    np_str = np.array_str(data, precision=NUMPY_PRECISION, suppress_small=True)
+    np_str = np.array_str(data, precision=FLOAT_PRECISION, suppress_small=True)
     numpy_format = textwrap.indent(np_str, "   ")
     return header + Text("\n") + Text(numpy_format)
 
@@ -75,7 +76,7 @@ def attrs_to_text(attrs) -> Text:
     default = dc.PatchAttrs()
     txt = Text("➤ ") + Text("Attributes", style=DC_YELLOW) + Text("\n")
     for name, attr in dict(attrs).items():
-        if default[name] == attr or not (attr):
+        if default.get(name, None) == attr or not (attr):
             continue
         txt += Text(f"    {name}: {get_nice_string(attr)}\n")
     return txt
