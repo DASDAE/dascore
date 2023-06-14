@@ -5,7 +5,7 @@ from contextlib import suppress
 from typing import Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
-from pydantic import root_validator
+from pydantic import root_validator, validator
 from rich.text import Text
 from typing_extensions import Self
 
@@ -13,6 +13,7 @@ from dascore.constants import DC_BLUE
 from dascore.core.schema import PatchAttrs
 from dascore.exceptions import CoordError
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel
 
@@ -32,8 +33,8 @@ class CoordManager(DascoreBaseModel):
     """
 
     dims: Tuple[str, ...]
-    coord_map: Mapping[str, BaseCoord]
-    dim_map: Mapping[str, Tuple[str, ...]]
+    coord_map: FrozenDict[str, BaseCoord]
+    dim_map: FrozenDict[str, Tuple[str, ...]]
 
     def __getitem__(self, item) -> np.ndarray:
         # in order to not break backward compatibility, we need to return
@@ -47,6 +48,11 @@ class CoordManager(DascoreBaseModel):
 
     def __contains__(self, key):
         return key in self.coord_map
+
+    @validator("coord_map", "dim_map")
+    def _convert_to_frozen_dicts(cls, v):
+        """Ensure mapping fields are immutable."""
+        return FrozenDict(v)
 
     def update_coords(self, **kwargs) -> Self:
         """

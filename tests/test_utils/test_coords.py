@@ -16,7 +16,6 @@ from dascore.utils.coords import (
     get_coord_from_attrs,
 )
 from dascore.utils.misc import register_func
-from dascore.utils.time import to_datetime64
 
 COORDS = []
 
@@ -41,7 +40,15 @@ def evenly_sampled_float_coord_with_units():
 @register_func(COORDS)
 def evenly_sampled_date_coord():
     """Create coordinates which are evenly sampled."""
-    ar = to_datetime64(np.arange(1, 100_000, 1_000))
+    ar = dc.to_datetime64(np.arange(1, 100_000, 1_000))
+    return get_coord(values=ar)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORDS)
+def evenly_sampled_time_delta_coord():
+    """Create coordinates which are evenly sampled."""
+    ar = dc.to_timedelta64(np.arange(1, 100_000, 1_000))
     return get_coord(values=ar)
 
 
@@ -66,7 +73,7 @@ def reverse_monotonic_float_coord():
 def monotonic_datetime_coord():
     """Create coordinates which are evenly sampled."""
     ar = np.cumsum(np.abs(np.random.rand(100) * 1_000))
-    return get_coord(values=to_datetime64(ar))
+    return get_coord(values=dc.to_datetime64(ar))
 
 
 @pytest.fixture(scope="class")
@@ -82,7 +89,7 @@ def random_coord():
 def random_date_coord():
     """Create coordinates which are evenly sampled."""
     ar = np.random.rand(100) * 1_000
-    return get_coord(values=to_datetime64(ar))
+    return get_coord(values=dc.to_datetime64(ar))
 
 
 @pytest.fixture(scope="class", params=COORDS)
@@ -329,7 +336,7 @@ class TestCoordRange:
         coord = evenly_sampled_date_coord
         date_str = "1970-01-01T12"
         new, sliced = coord.filter((date_str, ...))
-        datetime = to_datetime64(date_str)
+        datetime = dc.to_datetime64(date_str)
         assert new.start + new.step >= datetime
         assert new.start - new.step <= datetime
 
@@ -550,5 +557,20 @@ class TestCoordFromAttrs:
         assert coord.units == dc.Unit("s")
 
 
-class TestTextOutput:
-    """Tests for converting coordinate to nice textual outputs."""
+class TestCoercion:
+    """Some data types should support coercion in filtering (eg dates)."""
+
+    def test_date_str(self, evenly_sampled_date_coord):
+        """Ensure date strings get coerced."""
+        drange = ("1970-01-01T00:00:01", 10)
+        out, indexer = evenly_sampled_date_coord.filter(drange)
+        assert isinstance(out, evenly_sampled_date_coord.__class__)
+        assert out.dtype == evenly_sampled_date_coord.dtype
+
+    def test_time_delta(self, evenly_sampled_time_delta_coord):
+        """Ensure date strings get coerced."""
+        coord = evenly_sampled_time_delta_coord
+        drange = (10, 100)
+        out, indexer = coord.filter(drange)
+        assert isinstance(out, coord.__class__)
+        assert out.dtype == coord.dtype

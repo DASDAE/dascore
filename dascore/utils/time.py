@@ -327,7 +327,7 @@ def is_timedelta64(obj) -> bool:
     """
     Return True if object is a timedelta64 (or equivalent) or an array of such.
     """
-    if isinstance(obj, np.datetime64):
+    if isinstance(obj, np.timedelta64):
         return True
     if isinstance(obj, (np.ndarray, list, tuple, pd.Series)):
         if np.issubdtype(np.array(obj).dtype, np.timedelta64):

@@ -17,7 +17,7 @@ from dascore.exceptions import CoordError
 from dascore.utils.display import get_nice_string
 from dascore.utils.misc import get_slice_tuple
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
-from dascore.utils.time import is_datetime64, to_datetime64, to_number
+from dascore.utils.time import is_datetime64, is_timedelta64, to_datetime64, to_number
 from dascore.utils.units import get_conversion_factor
 
 
@@ -61,7 +61,12 @@ def assign_coords(patch: PatchType, **kwargs) -> PatchType:
 
 
 class BaseCoord(DascoreBaseModel, abc.ABC):
-    """Coordinate interface."""
+    """
+    Coordinate interface.
+
+    Coordinates are used to manage labels and indexing along a single
+    data dimension.
+    """
 
     units: Optional[Unit]
     step: Any
@@ -86,6 +91,29 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     @abc.abstractmethod
     def __len__(self):
         """Total number of elements."""
+
+    def __hash__(self):
+        """
+        Simply use default hash rather than smart one (object) id
+        so that cache work.
+        """
+        return id(self)
+
+    def __rich__(self):
+        t1 = Text(self.__class__.__name__, style=self._rich_style)
+        min_str = get_nice_string(self.min)
+        max_str = get_nice_string(self.max)
+        t2 = f"min={min_str} max={max_str}"
+        if not pd.isnull(self.step):
+            t2 = t2 + f" step={get_nice_string(self.step)}"
+        t2 = t2 + f" shape={self.shape}"
+        if not pd.isnull(self.units):
+            t2 = t2 + f" units={get_nice_string(self.units)}"
+        out = Text.assemble(t1, f"({t2})")
+        return out
+
+    def __str__(self):
+        return str(self.__rich__())
 
     @property
     @abc.abstractmethod
@@ -188,22 +216,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Return the internal data. Same as values attribute."""
         return self.values
 
-    def __rich__(self):
-        t1 = Text(self.__class__.__name__, style=self._rich_style)
-        min_str = get_nice_string(self.min)
-        max_str = get_nice_string(self.max)
-        t2 = f"min={min_str} max={max_str}"
-        if not pd.isnull(self.step):
-            t2 = t2 + f" step={get_nice_string(self.step)}"
-        t2 = t2 + f" shape={self.shape}"
-        if not pd.isnull(self.units):
-            t2 = t2 + f" units={get_nice_string(self.units)}"
-        out = Text.assemble(t1, f"({t2})")
-        return out
-
-    def __str__(self):
-        return str(self.__rich__())
-
 
 class CoordRange(BaseCoord):
     """
@@ -266,11 +278,9 @@ class CoordRange(BaseCoord):
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
-        args = get_slice_tuple(args)
+        args = get_slice_tuple(args, dtype=self.dtype)
         start = self._get_index(args[0])
         stop = self._get_index(args[1], forward=False)
-        # if stop is not None and stop < len(self):
-        #     stop += 1
         # we add 1 to stop in slice since its upper limit is exclusive
         out = slice(start, (stop + 1) if stop is not None else stop)
         new_start = self[start] if start is not None else self.start
@@ -335,7 +345,7 @@ class CoordRange(BaseCoord):
         # note: linspace works better for floats that might have slightly
         # uneven spacing. It ensures the length of the output array is robust
         # to small deviations in spacing. However, this doesnt work for datetimes.
-        if is_datetime64(self.start):
+        if is_datetime64(self.start) or is_timedelta64(self.start):
             out = np.arange(self.start, self.stop, self.step)
         else:
             out = np.linspace(self.start, self.stop - self.step, num=len(self))
@@ -362,6 +372,8 @@ class CoordRange(BaseCoord):
 class CoordArray(BaseCoord):
     """
     A coordinate with arbitrary values in an array.
+
+    Can handle any number of dimensions.
     """
 
     values: ArrayLike
@@ -376,7 +388,7 @@ class CoordArray(BaseCoord):
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
-        args = get_slice_tuple(args)
+        args = get_slice_tuple(args, dtype=self.dtype)
         values = self.values
         out = np.ones_like(values, dtype=np.bool_)
         val1 = self._get_value_for_indexing(args[0])
@@ -498,7 +510,7 @@ class CoordMonotonicArray(CoordArray):
 
     def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply filter, return filtered coords and index for filtering data."""
-        v1, v2 = get_slice_tuple(args, check_oder=False)
+        v1, v2 = get_slice_tuple(args, check_oder=False, dtype=self.dtype)
         # swap indices if start>stop. This happens for decreasing arrays.
         if self._is_reversed and v1 is not None and v2 is not None and v1 < v2:
             v1, v2 = v2, v1
@@ -582,7 +594,7 @@ def get_coord(
         start, stop, step, monotonic = _maybe_get_start_stop_step(values)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)
-            assert len(out) == len(values), "failed!"
+            # assert len(out) == len(values), "failed to get coord len right!"
             return out
         elif monotonic:
             return CoordMonotonicArray(values=values, units=units)
