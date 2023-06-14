@@ -50,6 +50,9 @@ DC_BLUE = "#002868"
 DC_RED = "#cf0029"
 DC_YELLOW = "#ffc934"
 
+# numpy printing precision
+NUMPY_PRECISION = 5
+
 # Valid strings for "datatype" attribute
 VALID_DATA_TYPES = (
     "",  # unspecified

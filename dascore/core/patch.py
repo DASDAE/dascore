@@ -17,7 +17,7 @@ from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.coordmanager import CoordManager, get_coord_manager
 from dascore.utils.coords import assign_coords
-from dascore.utils.display import array_to_text, get_dascore_text
+from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.misc import optional_import
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
@@ -102,14 +102,11 @@ class Patch:
         dascore_text = get_dascore_text()
         patch_text = Text("Patch", style="bold")
         header = Text.assemble(dascore_text, " ", patch_text)
-
+        line = Text("-" * len(header))
         coords = self.coords.__rich__()
-
         data = array_to_text(self.data)
-
-        attrs = Text(str(self.attrs))
-
-        out = Text("\n").join([header, coords, data, attrs])
+        attrs = attrs_to_text(self.attrs)
+        out = Text("\n").join([header, line, coords, data, attrs])
         return out
 
         pass
