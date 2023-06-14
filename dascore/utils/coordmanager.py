@@ -61,13 +61,37 @@ class CoordManager(DascoreBaseModel):
         Input values can be of the same form as initialization.
         To drop coordinates, simply pass {coord_name: None}
         """
-        coords = dict(self.coord_map)
-        for item, value in kwargs.items():
-            if value is None:
-                coords.pop(item, None)
-            else:
-                coords[item] = value
-        return get_coord_manager(coords, dims=self.dims)
+
+        def _get_dim_change_drop(coord_map, dim_map):
+            """
+            Determine which coords must be dropped because their corresponding
+            dimension size changed.
+            """
+            out = []
+            for i, v in coord_map.items():
+                # we treat non-dimensional coords elsewhere.
+                if i not in self.dims:
+                    continue
+                assert len(dim_map[i]) == 1, "only dealing with 1D dimensions"
+                if len(coord_map[i]) == len(self.coord_map[i]):
+                    continue
+                for coord_name, dims in self.dim_map.items():
+                    if i in dims:
+                        out.append(coord_name)
+            return out
+
+        # get coords to drop from selecting None
+        coords_to_drop = [i for i, v in kwargs.items() if i is None]
+        # convert input to coord_map/dim_map
+        _coords_to_add = {i: v for i, v in kwargs.items() if i is not None}
+        coord_map, dim_map = _get_coord_dim_map(_coords_to_add, self.dims)
+        # find coords to drop because their dimension changed.
+        dim_change_drops = _get_dim_change_drop(coord_map, dim_map)
+        # drop coords then call get_coords to handle adding new ones.
+        coords, _ = self.drop_coord(coords_to_drop + dim_change_drops)
+        out = coords._get_dim_array_dict()
+        out.update(kwargs)
+        return get_coord_manager(out, dims=self.dims)
 
     def new(self, dims=None, coord_map=None, dim_map=None) -> Self:
         """
@@ -89,20 +113,32 @@ class CoordManager(DascoreBaseModel):
         )
         return out
 
-    def drop_dim(self, dim: Union[str, Sequence[str]]) -> Tuple[Self, Tuple]:
-        """Drop one or more dimension."""
+    def drop_coord(self, coord: Union[str, Sequence[str]]) -> Tuple[Self, Tuple]:
+        """
+        Drop one or more coordinates.
+
+        If the coordinate is a dimension, also drop other coords that depend
+        on that dimension.
+
+        Parameters
+        ----------
+        coord
+            The name of the coordinate or dimension.
+        """
         coord_name_to_kill = []
-        dims_to_kill = set(iterate(dim))
+        coords_to_kill = set(iterate(coord))
+        if not coords_to_kill:
+            return self, tuple(slice(None, None) for _ in self.dims)
         for name, dims in self.dim_map.items():
-            if dims_to_kill & set(dims):
+            if coords_to_kill & set(dims):
                 coord_name_to_kill.append(name)
         coord_map = {
             i: v for i, v in self.coord_map.items() if i not in coord_name_to_kill
         }
         dim_map = {i: v for i, v in self.dim_map.items() if i not in coord_name_to_kill}
-        dims = tuple(x for x in self.dims if x not in dims_to_kill)
+        dims = tuple(x for x in self.dims if x not in coords_to_kill)
         index = tuple(
-            slice(None, None) if x not in dims_to_kill else 0 for x in self.dims
+            slice(None, None) if x not in coords_to_kill else 0 for x in self.dims
         )
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
         return new, index
@@ -202,7 +238,6 @@ class CoordManager(DascoreBaseModel):
                 f"match the dimension(s) of {coord_dims} which have a shape "
                 f"of {expected_shape}"
             )
-            # TODO should we raise a pydantic.ValidatorError directly?
             raise CoordError(msg)
         return values
 
@@ -236,8 +271,11 @@ class CoordManager(DascoreBaseModel):
         assert self.shape == data.shape
         return data
 
-    def _to_xarray_input(self):
-        """Convert to an input xarray can understand."""
+    def _get_dim_array_dict(self):
+        """
+        Get the coord map in the form:
+        {coord_name = ((dims,), array)}
+        """
         out = {}
         for name, coord in self.coord_map.items():
             dims = self.dim_map[name]
@@ -258,10 +296,15 @@ class CoordManager(DascoreBaseModel):
         # this enables, for example, conversion of specified fields to datetime
         validated_attrs = PatchAttrs(**dict(attrs))
         attrs = {i: v for i, v in validated_attrs.items() if i in dict(attrs)}
-        out = {}
+        out = dict(self.coord_map)
         for name, coord in self.coord_map.items():
             start, stop = attrs.get(f"{name}_min"), attrs.get(f"{name}_max")
             step = attrs.get(f"d_{name}")
+            # quick path for not updating.
+            all_none = all([x is None for x in (start, stop, step)])
+            limits_equal = coord.max == stop and coord.min == start
+            if all_none or limits_equal:
+                continue
             out[name] = coord.update_limits(start, stop, step)
         return self.new(coord_map=out)
 
@@ -289,25 +332,70 @@ class CoordManager(DascoreBaseModel):
         assert set(dims) == set(self.dims), "You must pass all dimensions."
         return self.new(dims=dims)
 
-    def rename_dims(self, **kwargs) -> Self:
+    def rename_coord(self, **kwargs) -> Self:
         """
-        Rename dimensions.
+        Rename the coordinates or dimensions.
 
         Parameters
         ----------
         **kwargs
-            Used to rename dimensions {old_dim_name: new_dim_name}
+            Used to rename coord {old_coord_name: new_coord_name}
         """
+
+        def _adjust_dim_map_to_new_dim(dim_map, old_name, new_name):
+            """Get the updated dim map"""
+            out = dim_map
+            # replace all mentions of
+            for key, value in out.items():
+                if old_name not in value:
+                    continue
+                new_value = tuple(x if x != old_name else new_name for x in value)
+                out[key] = new_value
+
+            return out
+
         dims, coord_map = list(self.dims), dict(self.coord_map)
         dim_map = dict(self.dim_map)
         for old_name, new_name in kwargs.items():
-            dims[dims.index(old_name)] = new_name
+            if old_name == new_name:
+                continue
+            if old_name in dims:  # only
+                dims[dims.index(old_name)] = new_name
+                dim_map = _adjust_dim_map_to_new_dim(dim_map, old_name, new_name)
             coord_map[new_name] = coord_map.pop(old_name)
-            dim_map[new_name] = tuple(kwargs.get(x, x) for x in self.dim_map[old_name])
-            dim_map.pop(old_name)
+            dim_map[new_name] = dim_map.pop(old_name)
 
         out = dict(dims=dims, coord_map=coord_map, dim_map=dim_map)
         return self.__class__(**out)
+
+    def squeeze(self, dim: Optional[Sequence[str]] = None) -> Self:
+        """
+        Squeeze length one dimensions.
+
+        Parameters
+        ----------
+        dim
+            The dimension name, or sequence of dimension names, to drop.
+
+        Raises
+        ------
+        CoordError if the selected dimension has a length gt 1.
+        """
+        to_drop = []
+        bad_dim = set(iterate(dim)) - set(self.dims)
+        if bad_dim:
+            msg = (
+                f"The following dims cannot be dropped because they don't "
+                f"exist in the coordinate manager {bad_dim}"
+            )
+            raise CoordError(msg)
+        for name in iterate(dim):
+            coord = self.coord_map[name]
+            if len(coord) > 1:
+                msg = f"cant squeeze dim {name} because it has non-zero length"
+                raise CoordError(msg)
+            to_drop.append(name)
+        return self.drop_coord(to_drop)[0]
 
 
 def get_coord_manager(
@@ -328,13 +416,13 @@ def get_coord_manager(
         Attributes which can be used to augment/create coordinates.
     """
 
-    def _coord_from_attrs(attrs, names):
+    def _coord_from_attrs(coord_map, dim_map, attrs, names):
         """Try to get coordinates from attributes."""
-        out = {}
         for name in names:
             with suppress(CoordError):
-                out[name] = get_coord_from_attrs(attrs, name)
-        return out
+                coord = get_coord_from_attrs(attrs, name)
+                coord_map[name] = coord
+                dim_map[name] = (name,)
 
     def _update_units(coord_manager, attrs):
         """Update coordinates to include units from attrs."""
@@ -347,12 +435,13 @@ def get_coord_manager(
                 kwargs[name] = attrs_units
         return coord_manager.set_units(**kwargs)
 
-    def _check_and_fill_coords(coord_dict, dims, attrs):
-        coord_set = set(coord_dict)
+    def _check_and_fill_coords(coord_map, dim_map, dims, attrs):
+        """Ensure dims are here and fill missing values from attrs if needed."""
+        coord_set = set(coord_map)
         dim_set = set(dims)
         missing = dim_set - coord_set
         if not missing:
-            return coord_dict
+            return
         # we have missing dimensional coordinates.
         if attrs is None:
             msg = (
@@ -361,8 +450,25 @@ def get_coord_manager(
             )
             raise CoordError(msg)
         # Try to fill in data from attributes, recurse to raise error if any missed.
-        coord_dict.update(_coord_from_attrs(attrs, missing))
-        return _check_and_fill_coords(coord_dict, dims, attrs=None)
+        _coord_from_attrs(coord_map, dim_map, attrs, missing)
+        return _check_and_fill_coords(coord_map, dim_map, dims, attrs=None)
+
+    # nothing to do but return coords if not other info provided.
+    if isinstance(coords, CoordManager) and dims is None and attrs is None:
+        return coords
+    coords = {} if coords is None else coords
+    dims = () if dims is None else dims
+    coord_map, dim_map = _get_coord_dim_map(coords, dims)
+    _check_and_fill_coords(coord_map, dim_map, dims, attrs)
+    out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
+    out = _update_units(out, attrs)
+    return out
+
+
+def _get_coord_dim_map(coords, dims):
+    """
+    Get coord_map and dim_map from coord input.
+    """
 
     def _coord_from_simple(name, coord):
         """
@@ -401,17 +507,14 @@ def get_coord_manager(
         coord_out = get_coord(values=coord[1])
         return coord_out, dim_names
 
+    # no need to do anything if we already have coord manager.
     if isinstance(coords, CoordManager):
-        return coords
-    coords = {} if coords is None else coords
-    dims = () if dims is None else dims
-    coords = _check_and_fill_coords(coords, dims, attrs)
+        return dict(coords.coord_map), dict(coords.dim_map)
+    # otherwise create coord and dim maps.
     coord_map, dim_map = {}, {}
     for name, coord in coords.items():
         if isinstance(coord, (BaseCoord, ArrayLike, np.ndarray)):
             coord_map[name], dim_map[name] = _coord_from_simple(name, coord)
         else:
             coord_map[name], dim_map[name] = _coord_from_nested(coord)
-    out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
-    out = _update_units(out, attrs)
-    return out
+    return coord_map, dim_map

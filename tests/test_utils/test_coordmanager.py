@@ -34,7 +34,7 @@ def basic_coord_manager():
 @pytest.fixture(scope="class")
 @register_func(COORD_MANAGERS)
 def coord_manager_multidim() -> CoordManager:
-    """The simplest coord manager"""
+    """The simplest coord manager with several coords added."""
     COORDS = {
         "time": to_datetime64(np.arange(10, 110, 10)),
         "distance": get_coord(values=np.arange(0, 1000, 10)),
@@ -50,6 +50,15 @@ def coord_manager_multidim() -> CoordManager:
 def coord_manager(request) -> CoordManager:
     """Meta fixture for aggregating coordinates."""
     return request.getfixturevalue(request.param)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def coord_manager_degenerate_time(coord_manager_multidim) -> CoordManager:
+    """A coordinate manager with degenerate (length 1) time array."""
+    new_time = to_datetime64(["2017-09-18T01:00:01"])
+    out = coord_manager_multidim.update_coords(time=new_time)
+    return out
 
 
 class TestBasicCoordManager:
@@ -122,6 +131,16 @@ class TestBasicCoordManager:
         # test existing key
         with pytest.raises(TypeError, match=expected_str):
             coord_map[basic_coord_manager.dims[0]] = 10  # NOQA
+
+    def test_init_with_coord_manager(self, basic_coord_manager):
+        """Ensure initing coord manager works with a single coord manager"""
+        out = get_coord_manager(basic_coord_manager)
+        assert out == basic_coord_manager
+
+    def test_init_with_cm_and_dims(self, basic_coord_manager):
+        """Ensure cm can be init'ed with coord manager and dims."""
+        out = get_coord_manager(basic_coord_manager, dims=basic_coord_manager.dims)
+        assert out == basic_coord_manager
 
 
 class TestCoordManagerInputs:
@@ -203,7 +222,7 @@ class TestDrop:
     def test_drop(self, coord_manager_multidim):
         """Ensure coordinates can be dropped."""
         dim = "distance"
-        coords, index = coord_manager_multidim.drop_dim(dim)
+        coords, index = coord_manager_multidim.drop_coord(dim)
         # ensure the index corresponding to distance is 0
         ind = coord_manager_multidim.dims.index(dim)
         assert index[ind] == 0
@@ -253,8 +272,25 @@ class TestRenameDims:
     def test_rename_dims(self, basic_coord_manager):
         """Ensure dimensions can be renamed."""
         rename_map = {x: x[:2] for x in basic_coord_manager.dims}
-        out = basic_coord_manager.rename_dims(**rename_map)
+        out = basic_coord_manager.rename_coord(**rename_map)
         assert set(out.dims) == set(rename_map.values())
+
+    def test_rename_extra_coords_kept(self, coord_manager_multidim):
+        """Ensure the extra dims are not dropped when a coord is renamed."""
+        cm = coord_manager_multidim
+        # we should be able to rename distance to dist and
+        # distance just gets swapped for dist
+        out = cm.rename_coord(distance="dist")
+        assert "dist" in out.dim_map
+        assert "dist" in out.coord_map
+        assert "dist" in out.dim_map["latitude"]
+
+    def test_rename_same_dims_extra_coords(self, coord_manager_multidim):
+        """Ensure renaming dims the same doesn't mess with multidims"""
+        cm = coord_manager_multidim
+        dim_map = {x: x for x in cm.dims}
+        out = cm.rename_coord(**dim_map)
+        assert set(out.dim_map) == set(cm.dim_map)
 
 
 class TestUpdateFromAttrs:
@@ -340,6 +376,58 @@ class TestUpdateToAttrs:
                 assert v1 == v2
 
 
+class TestUpdateCoords:
+    """Tests for updating coordinates."""
+
+    def test_simple(self, basic_coord_manager):
+        """Ensure coordinates can be updated (replaced)."""
+        new_time = basic_coord_manager["time"] + np.timedelta64(1, "s")
+        out = basic_coord_manager.update_coords(time=new_time)
+        assert np.all(np.equal(out["time"], new_time))
+
+    def test_extra_coords_kept(self, coord_manager_multidim):
+        """Ensure extra coordinates are kept."""
+        cm = coord_manager_multidim
+        new_time = cm["time"] + np.timedelta64(1, "s")
+        out = cm.update_coords(time=new_time)
+        assert set(out.coord_map) == set(coord_manager_multidim.coord_map)
+        assert set(out.coord_map) == set(coord_manager_multidim.coord_map)
+
+    def test_size_change(self, basic_coord_manager):
+        """Ensure sizes of dimensions can be changed."""
+        new_time = basic_coord_manager["time"][:10]
+        out = basic_coord_manager.update_coords(time=new_time)
+        assert np.all(np.equal(out["time"], new_time))
+
+    def test_size_change_drops_old_coords(self, coord_manager_multidim):
+        """When the size changes on multidim, dims should be dropped."""
+        cm = coord_manager_multidim
+        new_dist = cm["distance"][:10]
+        dropped_coords = set(cm.coord_map) - set(cm.dims)
+        out = cm.update_coords(distance=new_dist)
+        assert dropped_coords.isdisjoint(set(out.coord_map))
+
+
+class TestSqueeze:
+    """Tests for squeezing degenerate dimensions."""
+
+    def test_bad_dim_raises(self, coord_manager_degenerate_time):
+        """Ensure a bad dimension will raise CoordError."""
+        with pytest.raises(CoordError, match="they don't exist"):
+            coord_manager_degenerate_time.squeeze("is_money")
+
+    def test_non_zero_length_dim_raises(self, coord_manager_degenerate_time):
+        """Ensure a dim with length > 0 can't be squeezed."""
+        with pytest.raises(CoordError, match="non-zero length"):
+            coord_manager_degenerate_time.squeeze("distance")
+
+    def test_squeeze_single_degenerate(self, coord_manager_degenerate_time):
+        """Ensure a single degenerate dimension can be squeezed out."""
+        cm = coord_manager_degenerate_time
+        out = cm.squeeze("time")
+        assert "time" not in out.dims
+
+
 class TestNonDimCoords:
     """Tests for adding non-dimensional coordinates."""
 
@@ -351,6 +439,8 @@ class TestNonDimCoords:
         assert out.dims == basic_coord_manager.dims, "dims shouldn't change"
         assert np.all(out["latitude"] == lat)
         assert out.dim_map["latitude"] == out.dim_map["distance"]
+        # the dim map shouldn't shrink; only things get added.
+        assert set(out.dim_map).issuperset(set(basic_coord_manager.dim_map))
 
     def test_init_with_1d_coordinate(self, basic_coord_manager):
         """Ensure initing with 1D non-dim coords works."""
@@ -362,6 +452,8 @@ class TestNonDimCoords:
         assert out.dims == basic_coord_manager.dims, "dims shouldn't change"
         assert np.all(out["latitude"] == lat)
         assert out.dim_map["latitude"] == out.dim_map["distance"]
+        # the dim map shouldn't shrink; only things get added.
+        assert set(out.dim_map).issuperset(set(basic_coord_manager.dim_map))
 
     def test_update_2d_coord(self, basic_coord_manager):
         """Ensure updating can be done with 2D coordinate."""

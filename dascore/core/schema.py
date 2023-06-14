@@ -104,7 +104,6 @@ class PatchAttrs(BaseModel):
 
         Optionally, give preference to data contained in a
         [`CoordManager`](`dascore.utils.coordmanager.CoordManager`).
-
         """
         if isinstance(args, cls) and coord_manager is None:
             return args

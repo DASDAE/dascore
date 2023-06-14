@@ -16,7 +16,8 @@ def get_simple_patch() -> Patch:
     """
     Return a small simple array for memory testing.
 
-    Note: This cant be a fixture as pytest holds a reference.
+    Note: This cant be a fixture as pytest seems to hold a reference,
+    even for function scoped outputs.
     """
     attrs = {"d_time": 1}
     pa = Patch(
@@ -205,16 +206,14 @@ class TestEquals:
         assert not new.equals(random_patch)
 
     def test_coords_named_differently(self, random_patch):
-        """Ensure if the coords are not equal neither are the arrays."""
+        """Ensure if the coords are named differently patches are not equal."""
         dims = random_patch.dims
-        new_coords = {x: random_patch.coords[x] for x in random_patch.coords}
-        new_coords["bob"] = new_coords.pop(dims[-1])
-        patch_2 = random_patch.new(coords=new_coords)
+        patch_2 = random_patch.rename(**{dims[-1]: "bob"})
         assert not patch_2.equals(random_patch)
 
     def test_coords_not_equal(self, random_patch):
         """Ensure if the coords are not equal neither are the arrays."""
-        new_coords = {x: random_patch.coords[x] for x in random_patch.coords}
+        new_coords = dict(random_patch.coords)
         new_coords["distance"] = new_coords["distance"] + 10
         patch_2 = random_patch.new(coords=new_coords)
         assert not patch_2.equals(random_patch)
@@ -223,6 +222,7 @@ class TestEquals:
         """Ensure if the attributes are not equal the arrays are not equal"""
         attrs = dict(random_patch.attrs)
         attrs["d_time"] = attrs["d_time"] - np.timedelta64(10, "s")
+        attrs.pop("time_max")  # need to remove time for this to be valid.
         patch2 = random_patch.new(attrs=attrs)
         assert not patch2.equals(random_patch)
 
@@ -338,10 +338,10 @@ class TestReleaseMemory:
         """
         Ensure a single patch is gc'ed when it leaves scope.
         """
-        simple_array = get_simple_patch()
-        wr = weakref.ref(simple_array.data)
+        simple_patch = get_simple_patch()
+        wr = weakref.ref(simple_patch.data)
         # delete pa and ensure the array was collected.
-        del simple_array
+        del simple_patch
         assert wr() is None
 
     def test_decimated_patch(self):
@@ -422,7 +422,7 @@ class TestAddCoords:
     def test_add_single_dim_two_coord2(self, random_patch_with_lat_lon):
         """Ensure multiple coords can be added to patch."""
         out2 = random_patch_with_lat_lon
-        assert {"latitude", "longitude"}.issubset(set(out2.coords))
+        assert {"latitude", "longitude"}.issubset(set(out2.coords.coord_map))
         assert out2.coords["longitude"].shape
         assert out2.coords["latitude"].shape
 

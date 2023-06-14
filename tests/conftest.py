@@ -183,7 +183,8 @@ def random_patch() -> Patch:
 @register_func(PATCH_FIXTURES)
 def random_patch_with_lat_lon(random_patch):
     """Get a random patch with added lat/lon coordinates."""
-    return dc.get_example_patch("random_patch_with_lat_lon")
+    out = dc.get_example_patch("random_patch_with_lat_lon")
+    return out
 
 
 @pytest.fixture(scope="class")

@@ -178,19 +178,31 @@ class Patch:
             {coord_name: ((dimensions,), data)}
             {coord_name: (dimensions, data)}
         dims
-            A sequence of dimension strings. The first entry cooresponds to the
+            A sequence of dimension strings. The first entry corresponds to the
             first axis of data, the second to the second dimension, and so on.
         attrs
             Optional attributes (non-coordinate metadata) passed as a dict.
         """
         data = data if data is not None else self.data
-        attrs = attrs if attrs is not None else self.attrs
         coords = coords if coords is not None else self.coords
-        if dims:
-            coords = get_coord_manager(coords, dims, attrs)
+        if dims is None:
+            dims = coords.dims if isinstance(coords, CoordManager) else self.dims
+        coords = get_coord_manager(coords, dims)
+        if dims and dims != coords.dims:
+            # coords = get_coord_manager(coords, dims, attrs)
             dim_map = {old: new for old, new in zip(self.dims, dims)}
-            coords = coords.rename_dims(**dim_map)
+            coords = coords.rename_coord(**dim_map)
+        if attrs:
+            coords = coords.update_from_attrs(attrs)
         return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
+
+    def _fast_attr_update(self, attrs):
+        """A fast method for just squashing the attrs and returning new patch."""
+        new = self.__new__(self.__class__)
+        new._data = self.data
+        new._attrs = attrs
+        new._coords = self.coords
+        return new
 
     def update_attrs(self: PatchType, **attrs) -> PatchType:
         """
@@ -201,8 +213,11 @@ class Patch:
         **attrs
             attrs to add/update.
         """
+        # since we update history so often, we make a fast track for it.
         new_attrs = dict(self.attrs)
         new_attrs.update(attrs)
+        if len(attrs) == 1 and "history" in attrs:
+            return self._fast_attr_update(PatchAttrs(**new_attrs))
         new_coords = self.coords.update_from_attrs(attrs)
         out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
         return self.__class__(self.data, **out)
@@ -244,7 +259,7 @@ class Patch:
         xr = optional_import("xarray")
         attrs = dict(self.attrs)
         dims = self.dims
-        coords = self.coords._to_xarray_input()
+        coords = self.coords._get_dim_array_dict()
         return xr.DataArray(self.data, attrs=attrs, dims=dims, coords=coords)
 
     squeeze = dascore.proc.squeeze

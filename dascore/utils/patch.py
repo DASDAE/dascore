@@ -181,9 +181,9 @@ def patch_function(
             out: PatchType = func(patch, *args, **kwargs)
             # attach history string. Consider something a bit less hacky.
             if hist_str and hasattr(out, "attrs"):
-                attrs = dict(out.attrs)
-                attrs["history"].append(hist_str)
-                out = out.new(attrs=attrs)
+                hist = list(out.attrs.history)
+                hist.append(hist_str)
+                out = out.update_attrs(history=hist)
             return out
 
         _func.func = func  # attach original function
