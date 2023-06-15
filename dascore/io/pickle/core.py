@@ -55,6 +55,6 @@ class PickleIO(FiberIO):
         return dascore.spool(out)
 
     def write(self, patch, path, **kwargs):
-        """Read a Patch/Spool from disk."""
+        """Write a Patch/Spool to disk."""
         with open(path, "wb") as fi:
             pickle.dump(patch, fi)
