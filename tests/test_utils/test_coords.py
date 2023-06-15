@@ -184,6 +184,24 @@ class TestBasics:
         if not np.issubdtype(new.dtype, np.float_):
             assert set(values).issuperset(set(new.values))
 
+    def test_filter_out_of_bounds(self, coord):
+        """Applying a filter out of bounds should raise an Error."""
+        assert False
+        # values = np.sort(coord.values)
+        # diff = np.abs(values[1] - values[0])
+        # v1 = np.min(values) - 100 * diff
+
+        # # v
+        # val1 = values[2] + (values[3] - values[2]) / 2
+        # val2 = values[-2] - (values[-2] - values[-3]) / 2
+        # new, _ = coord.filter((val1, val2))
+        # new_values = new.values
+        # new_min, new_max = np.min(new_values), np.max(new_values)
+        # assert (new_min >= val1) or np.isclose(new_min, val1)
+        # assert (new_max <= val2) or np.isclose(new_max, val2)
+        # if not np.issubdtype(new.dtype, np.float_):
+        #     assert set(values).issuperset(set(new.values))
+
     def test_get_range(self, coord):
         """Basic tests for range of coords."""
         start = coord.min

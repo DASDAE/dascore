@@ -2,7 +2,7 @@
 Module for managing coordinates.
 """
 from contextlib import suppress
-from typing import Mapping, Optional, Sequence, Tuple, Union
+from typing import Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
 import numpy as np
 from pydantic import root_validator, validator
@@ -15,7 +15,9 @@ from dascore.exceptions import CoordError
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate
-from dascore.utils.models import DascoreBaseModel
+from dascore.utils.models import ArrayLike, DascoreBaseModel
+
+MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
 
 
 class CoordManager(DascoreBaseModel):
@@ -143,12 +145,14 @@ class CoordManager(DascoreBaseModel):
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
         return new, index
 
-    def select(self, **kwargs) -> Tuple[Self, Tuple]:
+    def select(self, array: MaybeArray = None, **kwargs) -> Tuple[Self, MaybeArray]:
         """
         Perform selection on coordinates.
 
         Parameters
         ----------
+        array
+            An array to which the selection will be applied.
         **kwargs
             Used to specify select arguments. Can be of the form
             {coord_name: (lower_limit, upper_limit)}.
@@ -192,9 +196,11 @@ class CoordManager(DascoreBaseModel):
         new_coords = _get_new_coords(dim_reductions)
         # iterate each input and apply reductions.
         # now iterate each dimension and update.
-        inds = tuple(dim_reductions.get(x, slice(None, None)) for x in self.dims)
         new = self.__class__(dims=self.dims, dim_map=self.dim_map, coord_map=new_coords)
-        return new, inds
+        if array is not None:
+            inds = tuple(dim_reductions.get(x, slice(None, None)) for x in self.dims)
+            array = array[inds]
+        return new, array
 
     def __rich__(self) -> str:
         header_text = Text("➤ ") + Text("Coordinates", style=DC_BLUE) + Text(" (")

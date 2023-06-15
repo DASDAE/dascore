@@ -39,8 +39,7 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     >>> t2 = patch.attrs.time_max - dc.to_timedelta64(1)
     >>> new_time = patch.select(time=(t1, t2))
     """
-    new_coords, inds = patch.coords.select(**kwargs)
-    data = patch.data[inds]
+    new_coords, data = patch.coords.select(**kwargs, array=patch.data)
     # no slicing was performed, just return original.
     if data.shape == patch.data.shape:
         return patch

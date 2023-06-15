@@ -251,14 +251,20 @@ class TestSelect:
 
     def test_select_coord_dim(self, basic_coord_manager):
         """Simple test for filtering dimension coord."""
-        new, inds = basic_coord_manager.select(distance=(100, 400))
+        new, _ = basic_coord_manager.select(distance=(100, 400))
         dist_ind = basic_coord_manager.dims.index("distance")
         assert new.shape[dist_ind] < basic_coord_manager.shape[dist_ind]
-        assert len(inds) == len(basic_coord_manager.dims)
-        assert inds[dist_ind] != slice(None, None)
+
+    def test_filter_array(self, basic_coord_manager):
+        """Ensure an array can be filtered."""
+        data = np.ones(basic_coord_manager.shape)
+        new, trim = basic_coord_manager.select(distance=(100, 400), array=data)
+        assert trim.shape == trim.shape
 
     def test_select_emptying_dim(self, basic_coord_manager):
         """Selecting a range outside of dim should empty the manager."""
+        # data = np.ones(basic_coord_manager.shape)
+        # new, trim = basic_coord_manager.select(distance=(-100, -10), array=data)
         assert False
 
 
