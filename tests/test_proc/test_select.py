@@ -1,19 +1,18 @@
 """
-Tests for selecting data from traces.
+Tests for selecting data from patches.
 """
 
 import numpy as np
 
 import dascore as dc
-from dascore.utils.time import to_timedelta64
 
 
 class TestSelect:
-    """Tests for selecting data from Trace."""
+    """Tests for selecting data from patch."""
 
     def test_select_by_distance(self, random_patch):
         """
-        Ensure distance can be used to filter trace.
+        Ensure distance can be used to filter patch.
         """
         dmin, dmax = 100, 200
         pa = random_patch.select(distance=(dmin, dmax))
@@ -43,22 +42,15 @@ class TestSelect:
         assert tr3.attrs["time_max"] <= t2
         assert tr3.data.shape < shape
 
-    def test_select_by_positive_float(self, random_patch):
-        """Floats in time dim should usable to reference start of the trace."""
-        shape = random_patch.data.shape
-        t1 = random_patch.attrs["time_min"]
+    def test_select_out_of_bounds_time(self, random_patch):
+        """Selecting out of coordinate range should leave patch unchanged."""
+        # this equates to a timestamp of 1 (eg 1 sec after 1970)
         pa1 = random_patch.select(time=(1, None))
-        expected_start = t1 + to_timedelta64(1)
-        assert pa1.attrs["time_min"] <= expected_start
-        assert pa1.data.shape < shape
-
-    def test_select_by_negative_float(self, random_patch):
-        """Ensure negative floats reference end of trace."""
-        shape = random_patch.data.shape
-        pa1 = random_patch.select(time=(None, -2))
-        expected_end = random_patch.attrs["time_max"] - to_timedelta64(2)
-        assert pa1.attrs["time_max"] >= expected_end
-        assert pa1.data.shape < shape
+        assert pa1 == random_patch
+        # it should also work with proper datetimes.
+        t1 = random_patch.attrs["time_min"] - dc.to_timedelta64(1)
+        pa2 = random_patch.select(time=(t1, None))
+        assert pa2 == random_patch
 
     def test_select_distance_leaves_time_attr_unchanged(self, random_patch):
         """Ensure selecting on distance doesn't change time"""
@@ -66,6 +58,13 @@ class TestSelect:
         dist_max, dist_mean = np.max(dist), np.mean(dist)
         out = random_patch.select(distance=(dist_mean, dist_max - 1))
         assert out.attrs["time_max"] == out.coords["time"].max()
+
+    def test_select_emptify_array(self, random_patch):
+        """If select range excludes data range patch should be emptied."""
+        out = random_patch.select(distance=(-100, -10))
+        shape = out.data
+        assert len(shape) == 1
+        assert shape[0] == 0
 
 
 class TestSelectHistory:

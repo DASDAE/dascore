@@ -570,6 +570,7 @@ def get_coord(
 
     def _maybe_get_start_stop_step(data):
         """Get start, stop, step, is_monotonic"""
+        data = np.array(data)
         view2 = data[1:]
         view1 = data[:-1]
         is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)
@@ -594,7 +595,6 @@ def get_coord(
         start, stop, step, monotonic = _maybe_get_start_stop_step(values)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)
-            # assert len(out) == len(values), "failed to get coord len right!"
             return out
         elif monotonic:
             return CoordMonotonicArray(values=values, units=units)

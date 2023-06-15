@@ -15,7 +15,7 @@ from dascore.exceptions import CoordError
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate
-from dascore.utils.models import ArrayLike, DascoreBaseModel
+from dascore.utils.models import DascoreBaseModel
 
 
 class CoordManager(DascoreBaseModel):
@@ -397,6 +397,31 @@ class CoordManager(DascoreBaseModel):
             to_drop.append(name)
         return self.drop_coord(to_drop)[0]
 
+    def decimate(self, **kwargs) -> Tuple[Self, Tuple[slice, ...]]:
+        """
+        Evenly subsample along some dimension.
+
+        Parameters
+        ----------
+        **kwargs
+            Used to specify the dimension to decimate.
+
+        Notes
+        -----
+        Removes any coordinate which depended on the decimated dimension.
+        """
+        assert len(kwargs) == 1
+        (dim, value) = tuple(kwargs.items())[0]
+        assert dim in self.dims
+        dim_slice = slice(None, None, int(value))
+        new_array = self.coord_map[dim][dim_slice]
+        new = self.update_coords(**{dim: new_array})
+        slices = tuple(
+            slice(None, None) if d != dim else slice(None, None, value)
+            for d in new.dims
+        )
+        return new, slices
+
 
 def get_coord_manager(
     coords: Optional[Mapping[str, Union[BaseCoord, np.ndarray]]] = None,
@@ -409,7 +434,8 @@ def get_coord_manager(
     Parameters
     ----------
     coords
-        A mapping with coordinates.
+        A mapping with coordinates. These can be of the form: {name, array},
+        {name: (dim_name, array)}, or {name: ((dim_names,) array.
     dims
         Tuple specify dimension names
     attrs
@@ -484,7 +510,7 @@ def _get_coord_dim_map(coords, dims):
         assert name in dims
         return get_coord(values=coord), (name,)
 
-    def _coord_from_nested(coord):
+    def _maybe_coord_from_nested(coord):
         """
         Get coordinates from {coord_name: (dim_name, coord)} or
         {coord_name: ((dim_names...,), coord)}
@@ -513,8 +539,8 @@ def _get_coord_dim_map(coords, dims):
     # otherwise create coord and dim maps.
     coord_map, dim_map = {}, {}
     for name, coord in coords.items():
-        if isinstance(coord, (BaseCoord, ArrayLike, np.ndarray)):
+        if not isinstance(coord, tuple):
             coord_map[name], dim_map[name] = _coord_from_simple(name, coord)
         else:
-            coord_map[name], dim_map[name] = _coord_from_nested(coord)
+            coord_map[name], dim_map[name] = _maybe_coord_from_nested(coord)
     return coord_map, dim_map

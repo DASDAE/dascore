@@ -29,10 +29,15 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     Examples
     --------
     >>> import numpy as np
+    >>> import dascore as dc
     >>> from dascore.examples import get_example_patch
-    >>> tr = get_example_patch()
+    >>> patch = get_example_patch()
     >>> # select meters 50 to 300
-    >>> new = tr.select(distance=(50, 300))
+    >>> new_distance = patch.select(distance=(50, 300))
+    >>> # select time (1 second from start to -1 second from end)
+    >>> t1 = patch.attrs.time_min + dc.to_timedelta64(1)
+    >>> t2 = patch.attrs.time_max - dc.to_timedelta64(1)
+    >>> new_time = patch.select(time=(t1, t2))
     """
     new_coords, inds = patch.coords.select(**kwargs)
     data = patch.data[inds]

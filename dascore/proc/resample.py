@@ -59,7 +59,8 @@ def decimate(
     >>> decimated_fir = patch.decimate(distance=10, filter_type='fir')
     """
     dim, axis, factor = get_dim_value_from_kwargs(patch, kwargs)
-    # Apply scipy.signal.decimate and geet new coords
+    coords, slices = patch.coords.decimate(**{dim: int(factor)})
+    # Apply scipy.signal.decimate and get new coords
     if filter_type:
         if filter_type == "IRR" and factor > 13:
             msg = (
@@ -68,13 +69,10 @@ def decimate(
             )
             raise FilterValueError(msg)
         data = scipy_decimate(patch.data, factor, ftype=filter_type, axis=axis)
-        coords = {x: patch.coords[x] for x in patch.dims}
-        coords[dim] = coords[dim][::factor]
     else:  # No filter, simply slice along specified dimension.
-        dar = patch._data_array.sel(**{dim: slice(None, None, factor)})
+        data = patch.data[slices]
         # Need to copy so array isn't a slice and holds onto reference of parent
-        data = dar.data if not copy else dar.data.copy()
-        coords = dar.coords
+        data = np.array(data) if copy else data
     # Update delta_dim since spacing along dimension has changed.
     attrs = dict(patch.attrs)
     attrs[f"d_{dim}"] = patch.attrs[f"d_{dim}"] * factor

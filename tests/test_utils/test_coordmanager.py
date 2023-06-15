@@ -142,6 +142,16 @@ class TestBasicCoordManager:
         out = get_coord_manager(basic_coord_manager, dims=basic_coord_manager.dims)
         assert out == basic_coord_manager
 
+    def test_init_list_range(self):
+        """Ensure the coord manager can be init'ed with a list and no dims."""
+        input_dict = {
+            "time": [10, 11, 12],
+            "distance": ("distance", range(100)),
+            "space": range(100),
+        }
+        out = get_coord_manager(input_dict, dims=list(input_dict))
+        assert set(out.dims) == set(input_dict)
+
 
 class TestCoordManagerInputs:
     """Tests for coordinates management."""
@@ -246,6 +256,10 @@ class TestSelect:
         assert new.shape[dist_ind] < basic_coord_manager.shape[dist_ind]
         assert len(inds) == len(basic_coord_manager.dims)
         assert inds[dist_ind] != slice(None, None)
+
+    def test_select_emptying_dim(self, basic_coord_manager):
+        """Selecting a range outside of dim should empty the manager."""
+        assert False
 
 
 class TestTranspose:
@@ -464,3 +478,15 @@ class TestNonDimCoords:
         assert new.dims == basic_coord_manager.dims
         assert new.dim_map["qual"] == dims
         assert "qual" in new
+
+
+class TestDecimate:
+    """Tests for evenly subsampling along a dimension."""
+
+    def test_decimate_along_time(self, basic_coord_manager):
+        """Simply ensure decimation reduces shape."""
+        cm = basic_coord_manager
+        ind = cm.dims.index("distance")
+        out, _ = cm.decimate(distance=2)
+        assert len(out.coord_map["distance"]) < len(cm.coord_map["distance"])
+        assert (out.shape[ind] * 2) == cm.shape[ind]
