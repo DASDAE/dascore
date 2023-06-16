@@ -3,8 +3,9 @@ Module for managing coordinates.
 """
 from collections import defaultdict
 from contextlib import suppress
-from functools import cache
-from typing import Mapping, Optional, Sequence, Tuple, TypeVar, Union
+from functools import cache, reduce
+from operator import and_, or_
+from typing import Dict, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
 import numpy as np
 from pydantic import root_validator, validator
@@ -13,8 +14,9 @@ from typing_extensions import Self
 
 from dascore.constants import DC_BLUE, _DegenerateDimension
 from dascore.core.schema import PatchAttrs
-from dascore.exceptions import CoordError, SelectRangeError
+from dascore.exceptions import CoordError, CoordMergeError, SelectRangeError
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
+from dascore.utils.display import get_nice_string
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel
@@ -116,7 +118,11 @@ class CoordManager(DascoreBaseModel):
         )
         return out
 
-    def drop_coord(self, coord: Union[str, Sequence[str]]) -> Tuple[Self, Tuple]:
+    def drop_coord(
+        self,
+        coord: Union[str, Sequence[str]],
+        array: MaybeArray = None,
+    ) -> Tuple[Self, MaybeArray]:
         """
         Drop one or more coordinates.
 
@@ -128,23 +134,27 @@ class CoordManager(DascoreBaseModel):
         coord
             The name of the coordinate or dimension.
         """
-        coord_name_to_kill = []
-        coords_to_kill = set(iterate(coord))
-        if not coords_to_kill:
-            return self, tuple(slice(None, None) for _ in self.dims)
+        dim_drop_list = []
+        coords_to_drop = set(iterate(coord))
+        # If there are either no coords to drop or this cm doesn't have them.
+        if not coords_to_drop or not (set(self.coord_map) & coords_to_drop):
+            return self, array
+        # figure out which coords to drop are dimensional coordinates.
         for name, dims in self.dim_map.items():
-            if coords_to_kill & set(dims):
-                coord_name_to_kill.append(name)
-        coord_map = {
-            i: v for i, v in self.coord_map.items() if i not in coord_name_to_kill
-        }
-        dim_map = {i: v for i, v in self.dim_map.items() if i not in coord_name_to_kill}
-        dims = tuple(x for x in self.dims if x not in coords_to_kill)
+            if coords_to_drop & set(dims):
+                dim_drop_list.append(name)
+        dims_to_drop = set(dim_drop_list)
+        # combine dims and plain coordinates that should be dropped.
+        total_drops = dims_to_drop | coords_to_drop
+        coord_map = {i: v for i, v in self.coord_map.items() if i not in total_drops}
+        dim_map = {i: v for i, v in self.dim_map.items() if i not in total_drops}
+        dims = tuple(x for x in self.dims if x not in dims_to_drop)
         index = tuple(
-            slice(None, None) if x not in coords_to_kill else 0 for x in self.dims
+            slice(None, None) if x not in coords_to_drop else _DegenerateDimension
+            for x in self.dims
         )
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
-        return new, index
+        return new, self._get_new_data(index, array)
 
     def select(self, array: MaybeArray = None, **kwargs) -> Tuple[Self, MaybeArray]:
         """
@@ -468,6 +478,11 @@ class CoordManager(DascoreBaseModel):
                 out[dim].append(coord)
         return FrozenDict({i: tuple(v) for i, v in out.items()})
 
+    def _get_coord_dims_tuple(self):
+        """Return a tuple of ((coord, dims...,), ...)"""
+        dim_map = self.dim_map
+        return tuple(((name, *dim_map[name]) for name in self.coord_map))
+
 
 def get_coord_manager(
     coords: Optional[Mapping[str, Union[BaseCoord, np.ndarray]]] = None,
@@ -590,3 +605,125 @@ def _get_coord_dim_map(coords, dims):
         else:
             coord_map[name], dim_map[name] = _maybe_coord_from_nested(coord)
     return coord_map, dim_map
+
+
+def merge_coord_managers(
+    coord_managers: Sequence[CoordManager],
+    dim: str,
+    snap_tolerance: Optional[float] = None,
+) -> CoordManager:
+    """
+    Merger coordinate managers along a specified dimension.
+
+    Parameters
+    ----------
+    coord_managers
+        A sequence of coord_managers to merge.
+    dim
+        The dimension along which to merge.
+    snap_tolerance
+        The tolerance for snapping CoordRanges together. E.G, allows
+        coord ranges that have snap_tolerances differences from their
+        start/end to be joined together. If they don't meet this requirement
+        an [CoordMergeError](`dascore.exceptions.CoordMergeError`) is raised.
+        If None, no checks are performed.
+    """
+
+    def _get_dims(managers):
+        """Ensure all managers have same dimensions."""
+        dims = {x.dims for x in managers}
+        if len(dims) != 1:
+            msg = (
+                "Can't merge coord managers, they don't all have the "
+                "same dimensions!"
+            )
+            raise CoordMergeError(msg)
+        return managers[0].dims
+
+    def _drop_unshared_coordinates(managers):
+        """Any coordinates not shared between managers should be dropped."""
+        # gets [{(coord, dims, ...), (coord, dims, ...)}, ...] to ensure
+        # both the coords name and their dimensions are common between managers
+        coord_sets = [set(x._get_coord_dims_tuple()) for x in managers]
+        common_coords = reduce(and_, coord_sets)
+        all_coords = reduce(or_, coord_sets)
+        if not (drop_coords := all_coords - common_coords):
+            return managers
+        coords_to_drop = [x[0] for x in drop_coords]
+        return [x.drop_coord(coords_to_drop)[0] for x in managers]
+
+    def _get_non_merge_coords(managers, non_merger_names):
+        """Ensure all non-merge coords are equal."""
+        out = {}
+        for coord_name in non_merger_names:
+            first = managers[0].coord_map[coord_name]
+            if all([first == x.coord_map[coord_name] for x in managers]):
+                dims = managers[0].dim_map[coord_name]
+                out[coord_name] = (dims, first)
+                continue
+            msg = (
+                f"Non merging coordinates {coord_name} are not equal. "
+                "Coordinate managers cannot be merged."
+            )
+            raise CoordMergeError(msg)
+        return out
+
+    def _snap_coords(coord_list):
+        """Snap coordinates together."""
+        if snap_tolerance is None:
+            return coord_list  # skip snapping if no snap tolerance.
+        for ind in range(1, len(coord_list)):
+            c_coord = coord_list[ind - 1]
+            n_coord = coord_list[ind]
+            tolerance = snap_tolerance * c_coord.step
+            assumed_start = c_coord.max + c_coord.step
+            diff = np.abs(assumed_start - n_coord.min)
+            # snap is close enough, update coord.
+            if diff > 0 and diff <= tolerance:
+                coord_list[ind] = n_coord.update_limits(start=assumed_start)
+            # snap is too far off, bail out.
+            elif diff > tolerance:
+                msg = (
+                    f"Cannot merge. Snap tolerance: {get_nice_string(tolerance)}"
+                    f" not met"
+                )
+                raise CoordMergeError(msg)
+        return coord_list
+
+    def _get_merged_coords(managers, coords_to_merge):
+        """Get the merged coordinates."""
+        out = {}
+        for coord_name in coords_to_merge:
+            merge_coords = [x.coord_map[dim] for x in managers]
+            axis = managers[0].dims.index(dim)
+            if len((units := set([x.units for x in merge_coords]))) != 1:
+                # TODO: we might try to convert all the units to a common
+                # unit in the future.
+                msg = (
+                    f"Cannot merge coordinates {coord_name}, they dont all "
+                    f"share the same units. Units found are: {set(units)}"
+                )
+                raise CoordMergeError(msg)
+            snap_coords = _snap_coords(merge_coords)
+            datas = [x.data for x in snap_coords]
+            dims = managers[0].dim_map[dim]
+            new_data = np.concatenate(datas, axis=axis)
+            out[coord_name] = (dims, new_data)
+        return out
+
+    def _get_new_coords(managers) -> Dict[str, Tuple[Tuple[str, ...], ArrayLike]]:
+        """Merge relevant coordinates together."""
+        # build up merged coords.
+        coords_to_merge = managers[0].dim_to_coord_map[dim]
+        coords_not_to_merge = set(managers[0].coord_map) - set(coords_to_merge)
+        # non-merging coordinates should be identical.
+        coords_dict = _get_non_merge_coords(managers, coords_not_to_merge)
+        # merge coordinates
+        coords_dict.update(_get_merged_coords(managers, coords_to_merge))
+        return coords_dict
+
+    dims = _get_dims(coord_managers)
+    coord_managers = _drop_unshared_coordinates(coord_managers)
+    sort_managers = sorted(coord_managers, key=lambda x: x.coord_map[dim].min)
+    merged_coords = _get_new_coords(sort_managers)
+    return get_coord_manager(merged_coords, dims=dims)

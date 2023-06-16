@@ -2,9 +2,11 @@
 Module for testing units.
 """
 import numpy as np
+import pytest
 
 import dascore as dc
-from dascore.utils.units import get_conversion_factor, invert_unit
+from dascore.exceptions import UnitError
+from dascore.utils.units import get_conversion_factor, invert_unit, validate_units
 
 
 class TestUnitInit:
@@ -33,3 +35,26 @@ class TestUnitInit:
         assert get_conversion_factor(None, None) == 1
         assert get_conversion_factor(None, "m") == 1
         assert get_conversion_factor("m", None) == 1
+
+
+class TestValidateUnits:
+    """Ensure units can be validated."""
+
+    valid = ("m", "s", "Hz", "1/s", "1/m", "feet", "furlongs", "km", "fortnight")
+    invalid = ("bob", "gerbil inches", "farsee")
+
+    @pytest.mark.parametrize("in_str", valid)
+    def test_validate_units_good_input(self, in_str):
+        """Ensure units can be validated from various inputs."""
+        assert validate_units(in_str)
+
+    @pytest.mark.parametrize("in_str", invalid)
+    def test_validate_units_bad_input(self, in_str):
+        """Ensure units can be validated from various inputs."""
+        with pytest.raises(UnitError):
+            validate_units(in_str)
+
+    def test_none(self):
+        """Ensure none and empty str also works."""
+        assert validate_units(None) is None
+        assert validate_units("") == ""

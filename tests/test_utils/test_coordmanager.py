@@ -10,9 +10,20 @@ from rich.text import Text
 
 from dascore import to_datetime64
 from dascore.core.schema import PatchAttrs
-from dascore.exceptions import CoordError
-from dascore.utils.coordmanager import CoordManager, get_coord_manager
-from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
+from dascore.exceptions import CoordError, CoordMergeError
+from dascore.utils.coordmanager import (
+    CoordManager,
+    get_coord_manager,
+    merge_coord_managers,
+)
+from dascore.utils.coords import (
+    BaseCoord,
+    CoordArray,
+    CoordMonotonicArray,
+    CoordRange,
+    get_coord,
+    get_coord_from_attrs,
+)
 from dascore.utils.misc import register_func
 
 COORD_MANAGERS = []
@@ -240,13 +251,34 @@ class TestDrop:
     def test_drop(self, coord_manager_multidim):
         """Ensure coordinates can be dropped."""
         dim = "distance"
-        coords, index = coord_manager_multidim.drop_coord(dim)
-        # ensure the index corresponding to distance is 0
-        ind = coord_manager_multidim.dims.index(dim)
-        assert index[ind] == 0
+        coords, _ = coord_manager_multidim.drop_coord(dim)
         assert dim not in coords.dims
         for name, dims in coords.dim_map.items():
             assert dim not in dims
+
+    def test_drop_doesnt_have_coord(self, coord_manager_multidim):
+        """Trying to drop a dim that doesnt exist should just return."""
+        out, _ = coord_manager_multidim.drop_coord("bob")
+        assert out == coord_manager_multidim
+
+    def test_trims_array(self, coord_manager_multidim):
+        """Trying to drop a dim that doesnt exist should just return."""
+        array = np.ones(coord_manager_multidim.shape)
+        axis = coord_manager_multidim.dims.index("time")
+        cm, new_array = coord_manager_multidim.drop_coord("time", array)
+        assert new_array.shape[axis] == 0
+
+    def test_drop_non_dim_coord(self, coord_manager_multidim):
+        """Dropping a non-dim coord should not affect shape/dimensions."""
+        cm = coord_manager_multidim
+        array = np.ones(cm.shape)
+        coords_to_drop = set(cm.coord_map) - set(cm.dims)
+        for coord in coords_to_drop:
+            cm_new, array_new = cm.drop_coord(coord, array=array)
+            # array should not have changed.
+            assert array.shape == array_new.shape
+            assert np.all(np.equal(array, array_new))
+            assert coord not in set(cm_new.coord_map)
 
 
 class TestSelect:
@@ -293,6 +325,7 @@ class TestSelect:
 
     def test_select_trims_associated_coords_2(self, coord_manager_multidim):
         """Same as test #1, but now we check for trimming none dimension coord"""
+        # TODO: write this test ;)
 
 
 class TestTranspose:
@@ -543,3 +576,124 @@ class TestDecimate:
         out, _ = cm.decimate(distance=2)
         assert len(out.coord_map["distance"]) < len(cm.coord_map["distance"])
         assert (out.shape[ind] * 2) == cm.shape[ind]
+
+
+class TestMergeCoordManagers:
+    """Tests for merging coord managers together."""
+
+    def _get_offset_coord_manager(self, cm, from_max=True, **kwargs):
+        """Get a new coord manager offset by some amount along a dim."""
+        name, value = list(kwargs.items())[0]
+        coord = cm.coord_map[name]
+        start = coord.max if from_max else coord.min
+        attr_name = f"{name}_min"
+        new = cm.update_from_attrs({attr_name: start + value})
+        return new
+
+    def test_merge_simple(self, basic_coord_manager):
+        """Ensure we can merge simple, contiguous, coordinates together."""
+        cm1 = basic_coord_manager
+        time = cm1.coord_map["time"]
+        cm2 = self._get_offset_coord_manager(cm1, time=time.step)
+        out = merge_coord_managers([cm1, cm2], dim="time")
+        new_time = out.coord_map["time"]
+        assert isinstance(new_time, CoordRange)
+        assert new_time.min == time.min
+        assert new_time.max == cm2.coord_map["time"].max
+
+    def test_merge_offset_close_no_snap(self, basic_coord_manager):
+        """When the coordinate don't line up, it should produce monotonic Coord."""
+        cm1 = basic_coord_manager
+        dt = cm1.coord_map["time"].step
+        # try a little more than dt
+        cm2 = self._get_offset_coord_manager(cm1, time=dt * 1.1)
+        out = merge_coord_managers([cm1, cm2], dim="time")
+        assert isinstance(out.coord_map["time"], CoordMonotonicArray)
+        # try a little less
+        cm2 = self._get_offset_coord_manager(cm1, time=dt * 0.9)
+        out = merge_coord_managers([cm1, cm2], dim="time")
+        assert isinstance(out.coord_map["time"], CoordMonotonicArray)
+
+    def test_merge_offset_overlap(self, basic_coord_manager):
+        """Ensure coordinates that have overlap produce Coord Array."""
+        cm1 = basic_coord_manager
+        dt = cm1.coord_map["time"].step
+        cm2 = self._get_offset_coord_manager(cm1, time=-dt * 1.1)
+        out = merge_coord_managers([cm1, cm2], dim="time")
+        assert isinstance(out.coord_map["time"], CoordArray)
+
+    def test_merge_snap_but_not_needed(self, basic_coord_manager):
+        """Specifying a snap tolerance even if coords line up should work."""
+        cm1 = basic_coord_manager
+        time = cm1.coord_map["time"]
+        cm2 = self._get_offset_coord_manager(cm1, time=time.step)
+        out = merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
+        new_time = out.coord_map["time"]
+        assert isinstance(new_time, CoordRange)
+        assert new_time.min == time.min
+        assert new_time.max == cm2.coord_map["time"].max
+
+    @pytest.mark.parametrize("factor", (1.1, 0.9, 1.3, 1.01, 0))
+    def test_merge_snap_when_needed(self, basic_coord_manager, factor):
+        """snap should be applied because when other cm is close expected."""
+        cm1 = basic_coord_manager
+        time = cm1.coord_map["time"]
+        nt = time.step * factor
+        cm2 = self._get_offset_coord_manager(cm1, time=nt)
+        out = merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
+        new_time = out.coord_map["time"]
+        assert isinstance(new_time, CoordRange)
+        assert new_time.min == time.min
+        new_dim_len = out.shape[cm1.dims.index("time")]
+        expected_end = time.min + (new_dim_len - 1) * time.step
+        assert new_time.max == expected_end
+
+    @pytest.mark.parametrize("factor", (10, -10, 6, -6))
+    def test_merge_raise_snap_too_big(self, basic_coord_manager, factor):
+        """When snap is too big, an error should be raised."""
+        cm1 = basic_coord_manager
+        time = cm1.coord_map["time"]
+        nt = time.step * factor
+        cm2 = self._get_offset_coord_manager(cm1, time=nt)
+        with pytest.raises(CoordMergeError, match="Snap tolerance"):
+            merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
+
+    def test_different_dims_raises(self, basic_coord_manager):
+        """When dimensions differ merge should raise."""
+        cm1 = basic_coord_manager
+        cm2 = cm1.rename_coord(distance="dist")
+        with pytest.raises(CoordMergeError, match="same dimensions"):
+            merge_coord_managers([cm1, cm2], "time")
+        with pytest.raises(CoordMergeError, match="same dimensions"):
+            merge_coord_managers([cm1, cm2], "distance")
+
+    def test_different_units_raises(self, basic_coord_manager):
+        """When dimensions differ merge should raise."""
+        cm1 = basic_coord_manager
+        cm2 = cm1.set_units(distance="furlong")
+        with pytest.raises(CoordMergeError, match="share the same units"):
+            merge_coord_managers([cm1, cm2], "distance")
+
+    def test_unequal_non_merge_coords(self, basic_coord_manager):
+        """When coords that won't be merged arent equal merge should fail."""
+        cm1 = basic_coord_manager
+        dist = cm1.coord_map["distance"]
+        new_dist = dist.update_limits(start=dist.max)
+        cm2 = cm1.update_coords(distance=new_dist)
+        with pytest.raises(CoordMergeError, match="Non merging coordinates"):
+            merge_coord_managers([cm1, cm2], "time")
+
+    def test_unshared_coord_dropped(self, basic_coord_manager):
+        """
+        When one coord manager has coords the other doesn't they should
+        be dropped.
+        """
+        cm1 = basic_coord_manager
+        time = cm1.coord_map["time"]
+        cm2 = self._get_offset_coord_manager(cm1, time=-time.step * 1.1).update_coords(
+            time2=("time", cm1["time"])
+        )
+        out_no_range = merge_coord_managers([cm1, cm2], "time")
+        assert "time2" not in out_no_range.coord_map
+        out_with_range = merge_coord_managers([cm1, cm2], "time")
+        assert "time2" not in out_with_range.coord_map

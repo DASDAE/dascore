@@ -305,6 +305,13 @@ class TestBasics:
         out = coord.__rich__()
         assert isinstance(out, rich.text.Text)
 
+    def test_different_units_not_equal(self, coord):
+        """When different units are set the coords should not be equal."""
+        if coord.units == "furlongs":
+            return
+        new = coord.set_units("furlongs")
+        assert new != coord
+
 
 class TestCoordRange:
     """Tests for coords from array."""

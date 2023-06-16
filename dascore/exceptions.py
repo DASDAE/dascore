@@ -33,6 +33,10 @@ class CoordError(ValueError, PatchError):
     """Raised when something is wrong with a Coordinate."""
 
 
+class CoordMergeError(CoordError):
+    """Raised when coordinates cannot be merged."""
+
+
 class PatchDimError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's dimension."""
 
@@ -75,3 +79,7 @@ class MissingOptionalDependency(ImportError, DASCoreError):
 
 class InvalidSpoolError(ValueError, DASCoreError):
     """Raised when something is wrong with a spool."""
+
+
+class UnitError(ValueError, DASCoreError):
+    """Raised when"""

@@ -17,6 +17,7 @@ from dascore.constants import (
 from dascore.utils.coords import BaseCoord, CoordRange
 from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DateTime64, TimeDelta64, UnitStr
+from dascore.utils.units import validate_units
 
 
 @compose_docstring(basic_params=basic_summary_attrs)
@@ -53,6 +54,29 @@ class PatchAttrs(BaseModel):
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
     history: Union[str, Sequence[str]] = Field(default_factory=list)
+
+    class Config:
+        """Configuration for Patch Summary"""
+
+        title = "Patch Summary"
+        extra = "allow"
+        allow_mutation = False
+        json_encoders = {
+            np.datetime64: lambda x: str(x),
+            np.timedelta64: lambda x: str(x),
+        }
+
+    @validator("data_units", "time_units", "distance_units")
+    def _validate_units(cls, value):
+        """Ensure the units are valid."""
+        return validate_units(value)
+
+    @validator("dims", pre=True)
+    def _flatten_dims(cls, value):
+        """Some dims are passed as a tuple; we just want str"""
+        if not isinstance(value, str):
+            value = ",".join(value)
+        return value
 
     # In order to maintain backward compatibility, these dunders make the
     # class also behave like a dict.
@@ -120,16 +144,10 @@ class PatchAttrs(BaseModel):
         out["dims"] = coord_manager.dims
         return cls(**out)
 
-    class Config:
-        """Configuration for Patch Summary"""
-
-        title = "Patch Summary"
-        extra = "allow"
-        allow_mutation = False
-        json_encoders = {
-            np.datetime64: lambda x: str(x),
-            np.timedelta64: lambda x: str(x),
-        }
+    @property
+    def dim_tuple(self):
+        """Return a tuple of dimensions. The dims attr is a string."""
+        return tuple(self.dims.split(","))
 
     @property
     def dim_tuple(self):

@@ -5,6 +5,9 @@ from functools import cache
 from typing import Union
 
 import pint
+from pint import UndefinedUnitError
+
+from dascore.exceptions import UnitError
 
 
 @cache
@@ -30,3 +33,22 @@ def invert_unit(unit: Union[pint.Unit, str]) -> pint.Unit:
     """Invert a unit"""
     out = 1 / pint.Unit(unit)
     return out.units
+
+
+def validate_units(unit_str) -> str:
+    """
+    Ensure a unit string is valid and return it.
+
+    If it is not valid raise a [UnitError](`dascore.execptions.UnitError`).
+
+    Parameters
+    ----------
+    unit_str
+        A string input specifying units.
+    """
+    try:
+        unit(unit_str)
+    except UndefinedUnitError:
+        msg = f"{unit_str} is not a unit supported by DASCore"
+        raise UnitError(msg)
+    return unit_str
