@@ -1,7 +1,9 @@
 """
 Module for managing coordinates.
 """
+from collections import defaultdict
 from contextlib import suppress
+from functools import cache
 from typing import Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
 import numpy as np
@@ -9,9 +11,9 @@ from pydantic import root_validator, validator
 from rich.text import Text
 from typing_extensions import Self
 
-from dascore.constants import DC_BLUE
+from dascore.constants import DC_BLUE, _DegenerateDimension
 from dascore.core.schema import PatchAttrs
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, SelectRangeError
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate
@@ -71,7 +73,6 @@ class CoordManager(DascoreBaseModel):
             """
             out = []
             for i, v in coord_map.items():
-                # we treat non-dimensional coords elsewhere.
                 if i not in self.dims:
                     continue
                 assert len(dim_map[i]) == 1, "only dealing with 1D dimensions"
@@ -88,9 +89,9 @@ class CoordManager(DascoreBaseModel):
         _coords_to_add = {i: v for i, v in kwargs.items() if i is not None}
         coord_map, dim_map = _get_coord_dim_map(_coords_to_add, self.dims)
         # find coords to drop because their dimension changed.
-        dim_change_drops = _get_dim_change_drop(coord_map, dim_map)
+        coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
-        coords, _ = self.drop_coord(coords_to_drop + dim_change_drops)
+        coords, _ = self.drop_coord(coords_to_drop + coord_drops)
         out = coords._get_dim_array_dict()
         out.update(kwargs)
         return get_coord_manager(out, dims=self.dims)
@@ -167,40 +168,64 @@ class CoordManager(DascoreBaseModel):
                 )
                 raise CoordError(msg)
 
-        def _get_dim_reductions():
+        def _indirect_coord_updates(dim_name, coord_name, reduction, new_coords):
+            """
+            Applies trim to coordinates when other associated coordinates
+            Are trimmed.
+            """
+            other_coords = set(self.dim_to_coord_map[dim_name]) - {coord_name}
+            # perform indirect updates.
+            for icoord in other_coords:
+                dims, coord = new_coords[icoord]
+                axis = self.dim_map[icoord].index(dim_name)
+                if isinstance(reduction, _DegenerateDimension):
+                    new = coord.empty(axes=axis)
+                else:
+                    new = coord.index(reduction, axis=axis)
+                new_coords[icoord] = (dims, new)
+
+        def _get_indexers_and_new_coords_dict():
             """Function to get reductions for each dimension."""
-            dim_reductions = {}
+            dim_reductions = {x: slice(None, None) for x in self.dims}
+            dimap = self.dim_map
+            new_coords = dict(self._get_dim_array_dict(keep_coord=True))
             for coord_name, limits in kwargs.items():
                 coord = self.coord_map[coord_name]
                 _validate_coords(coord, coord_name)
-                dim_name = self.dim_map[coord_name][0]
-                _, reductions = coord.filter(limits)
+                dim_name = dimap[coord_name][0]
+                # this handles the case of out-of-bound selections.
+                # These should be converted to degenerate coords.
+                try:
+                    new_coord, reductions = coord.select(limits)
+                except SelectRangeError:
+                    reductions = _DegenerateDimension
+                    new_coord = coord.empty()
                 dim_reductions[dim_name] = reductions
-            return dim_reductions
+                new_coords[coord_name] = (dimap[coord_name], new_coord)
+                # update other coords affected by change.
+                _indirect_coord_updates(dim_name, coord_name, reductions, new_coords)
+            indexers = tuple(dim_reductions[x] for x in self.dims)
+            return new_coords, indexers
 
-        def _get_new_coords(dim_reductions):
-            """Function to create dict of trimmed coordinates."""
-            new_coords = dict(self.coord_map)
-            for coord_name, dims in self.dim_map.items():
-                if not set(dims) & set(kwargs):
-                    continue  # no overlap, dont redo coord.
-                inds = tuple(
-                    slice(None, None) if x not in dim_reductions else dim_reductions[x]
-                    for x in dims
-                )
-                coord = self.coord_map[coord_name]
-                new_coords[coord_name] = coord[inds]
-            return new_coords
+        new_coords, indexers = _get_indexers_and_new_coords_dict()
+        new_cm = self.update_coords(**new_coords)
+        return new_cm, self._get_new_data(indexers, array)
 
-        dim_reductions = _get_dim_reductions()
-        new_coords = _get_new_coords(dim_reductions)
-        # iterate each input and apply reductions.
-        # now iterate each dimension and update.
-        new = self.__class__(dims=self.dims, dim_map=self.dim_map, coord_map=new_coords)
-        if array is not None:
-            inds = tuple(dim_reductions.get(x, slice(None, None)) for x in self.dims)
-            array = array[inds]
-        return new, array
+    def _get_new_data(self, indexer, array: MaybeArray) -> MaybeArray:
+        """
+        Get new data array after applying some trimming.
+        """
+        if array is None:  # no array passed, just return.
+            return array
+        # a dimension has collapsed, get to the 🚁!
+        if np.any([x is _DegenerateDimension for x in indexer]):
+            new_shape = tuple(
+                x if y is not _DegenerateDimension else 0
+                for x, y in zip(array.shape, indexer)
+            )
+            return np.empty(new_shape, dtype=array.dtype)
+        # everything should be ok; just let numpy do the indexing here.
+        return array[indexer]
 
     def __rich__(self) -> str:
         header_text = Text("➤ ") + Text("Coordinates", style=DC_BLUE) + Text(" (")
@@ -213,9 +238,12 @@ class CoordManager(DascoreBaseModel):
                 for x in self.dims
             ]
         )
-
         out = [header_text] + [dim_texts] + [")"]
-        for name, coord in self.coord_map.items():
+        # sort coords by dims, coords
+        non_dim_coords = sorted(set(self.coord_map) - set(self.dims))
+        names = list(self.dims) + non_dim_coords
+        for name in names:
+            coord = self.coord_map[name]
             coord_dims = self.dim_map[name]
             if name in self.dims:
                 base = Text.assemble("\n    ", Text(name, style="bold"), ": ")
@@ -277,15 +305,17 @@ class CoordManager(DascoreBaseModel):
         assert self.shape == data.shape
         return data
 
-    def _get_dim_array_dict(self):
+    def _get_dim_array_dict(self, keep_coord=False):
         """
         Get the coord map in the form:
         {coord_name = ((dims,), array)}
+
+        if keep_coord, just keep the coordinate as second arg.
         """
         out = {}
         for name, coord in self.coord_map.items():
             dims = self.dim_map[name]
-            out[name] = (dims, coord.data)
+            out[name] = (dims, coord if keep_coord else coord.data)
         return out
 
     def set_units(self, **kwargs):
@@ -427,6 +457,16 @@ class CoordManager(DascoreBaseModel):
             for d in new.dims
         )
         return new, slices
+
+    @property
+    @cache
+    def dim_to_coord_map(self) -> FrozenDict[str, Tuple[str, ...]]:
+        """Get a dimension to coordinate map."""
+        out = defaultdict(list)
+        for coord, dims in self.dim_map.items():
+            for dim in dims:
+                out[dim].append(coord)
+        return FrozenDict({i: tuple(v) for i, v in out.items()})
 
 
 def get_coord_manager(

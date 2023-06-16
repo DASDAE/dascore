@@ -75,8 +75,9 @@ def attrs_to_text(attrs) -> Text:
     """
     default = dc.PatchAttrs()
     txt = Text("➤ ") + Text("Attributes", style=DC_YELLOW) + Text("\n")
+    attrs_strs = []
     for name, attr in dict(attrs).items():
         if default.get(name, None) == attr or not (attr):
             continue
-        txt += Text(f"    {name}: {get_nice_string(attr)}\n")
-    return txt
+        attrs_strs.append(Text(f"    {name}: {get_nice_string(attr)}"))
+    return txt + Text("\n").join(attrs_strs)

@@ -6,15 +6,13 @@ import functools
 import importlib
 import os
 import warnings
-from contextlib import suppress
 from types import ModuleType
-from typing import Any, Iterable, Optional, Tuple, Union
+from typing import Iterable, Optional, Union
 
 import numpy as np
 import numpy.typing as nt
 import pandas as pd
 
-import dascore as dc
 from dascore.exceptions import MissingOptionalDependency, ParameterError
 
 
@@ -389,63 +387,3 @@ def trim_attrs_get_inds(attrs, dim_length, **kwargs):
         stop_ind = dim_length + diff_samples
         out[f"{dim}_max"] = old_stop + diff_samples * spacing
     return slice(int(start_ind), int(stop_ind)), attrs.__class__(**out)
-
-
-@functools.cache
-def _get_coord_filter_validators(dtype):
-    """Get filter validators for a given input type."""
-
-    def _is_sub_dtype(dtype1, dtype2):
-        """helper function to get sub dtypes."""
-        with suppress(TypeError):
-            if issubclass(dtype1, dtype2):
-                return True
-        if np.issubdtype(dtype1, dtype2):
-            return True
-        return False
-
-    # A list of dtype, func for validating/coercing single filter inputs.
-    validators = (
-        (pd.Timestamp, dc.to_datetime64),
-        (np.datetime64, dc.to_datetime64),
-        (pd.Timedelta, dc.to_timedelta64),
-        (np.timedelta64, dc.to_timedelta64),
-    )
-
-    out = []
-    for (cls, func) in validators:
-        if _is_sub_dtype(dtype, cls):
-            out.append(func)
-    return tuple(out)
-
-
-def _validate_coord_filter_input(value, dtype):
-    """Validate the filter input."""
-    # bail early on none or ellipses; just use None
-    if (value is None) or (value is Ellipsis):
-        return None
-    validators = _get_coord_filter_validators(dtype)
-    out = value
-    for func in validators:
-        if out is not None:
-            out = func(out)
-    return out
-
-
-def get_slice_tuple(arg, check_oder=True, dtype=None) -> Tuple[Any, Any]:
-    """Get a tuple with start,stop. Perform basic checks."""
-    if isinstance(arg, slice):
-        if arg.step is not None:
-            msg = "step not supported in select/filtering."
-            raise ParameterError(msg)
-        arg = (arg.start, arg.stop)
-    if arg is None or arg is Ellipsis:
-        arg = (None, None)
-    if len(arg) != 2:
-        msg = "Slice indices must be length 2 sequence."
-        raise ParameterError(msg)
-    p1, p2 = (_validate_coord_filter_input(x, dtype) for x in arg)
-    if check_oder and p1 is not None and p2 is not None and p2 < p1:
-        msg = "second element must be greater than first!"
-        raise ParameterError(msg)
-    return p1, p2

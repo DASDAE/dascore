@@ -122,6 +122,10 @@ NUMPY_TIME_UNIT_MAPPING = {
 }
 
 
+class _DegenerateDimension:
+    """Used to mark which dimensions of an array have gone to 0."""
+
+
 # A description of basic patch metadata.
 basic_summary_attrs = f"""
 data_type

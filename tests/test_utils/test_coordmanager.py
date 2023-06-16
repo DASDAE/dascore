@@ -33,6 +33,14 @@ def basic_coord_manager():
 
 @pytest.fixture(scope="class")
 @register_func(COORD_MANAGERS)
+def basic_degenerate_coord_manager(basic_coord_manager):
+    """A degenerate coord manager on time axis."""
+    time_coord = basic_coord_manager.coord_map["time"]
+    return basic_coord_manager.update_coords(time=time_coord.empty())
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
 def coord_manager_multidim() -> CoordManager:
     """The simplest coord manager with several coords added."""
     COORDS = {
@@ -263,9 +271,28 @@ class TestSelect:
 
     def test_select_emptying_dim(self, basic_coord_manager):
         """Selecting a range outside of dim should empty the manager."""
-        # data = np.ones(basic_coord_manager.shape)
-        # new, trim = basic_coord_manager.select(distance=(-100, -10), array=data)
-        assert False
+        data = np.ones(basic_coord_manager.shape)
+        cm, trim = basic_coord_manager.select(distance=(-100, -10), array=data)
+        assert trim.shape[cm.dims.index("distance")] == 0
+        assert "distance" in cm.dims
+        assert len(cm["distance"]) == 0
+        assert len(cm.coord_map["distance"]) == 0
+
+    def test_select_trims_associated_coord_1(self, coord_manager_multidim):
+        """Ensure trimming a dimension also trims associated coordinate."""
+        cm = coord_manager_multidim
+        coord_to_trim = "distance"
+        distance = cm[coord_to_trim]
+        out, _ = cm.select(distance=(distance[1], distance[-2]))
+        # ensure all attrs with "distance" have been trimmed.
+        expected_len = len(out.coord_map[coord_to_trim])
+        for name in cm.dim_to_coord_map[coord_to_trim]:
+            coord = out.coord_map[name]
+            axis = cm.dim_map[name].index(coord_to_trim)
+            assert coord.shape[axis] == expected_len
+
+    def test_select_trims_associated_coords_2(self, coord_manager_multidim):
+        """Same as test #1, but now we check for trimming none dimension coord"""
 
 
 class TestTranspose:
@@ -426,6 +453,26 @@ class TestUpdateCoords:
         dropped_coords = set(cm.coord_map) - set(cm.dims)
         out = cm.update_coords(distance=new_dist)
         assert dropped_coords.isdisjoint(set(out.coord_map))
+
+    def test_update_degenerate(self, coord_manager):
+        """Tests for updating coord with degenerate coordinates."""
+        cm = coord_manager
+        out = cm.update_coords(time=cm.coord_map["time"].empty())
+        assert out.shape[out.dims.index("time")] == 0
+        assert len(out.coord_map["time"]) == 0
+
+    def test_update_degenerate_dim_multicoord(self, coord_manager_multidim):
+        """
+        If one dim is degenerate all associated coords should be
+        dropped.
+        """
+        cm = coord_manager_multidim
+        degen_time = cm.coord_map["time"].empty()
+        new = cm.update_coords(time=degen_time)
+        assert new != cm
+        # any coords with time as a dim (but not time itself) should be gone.
+        has_time = [i for i, v in cm.dim_map.items() if ("time" in v and i != "time")]
+        assert set(has_time).isdisjoint(set(new.coord_map))
 
 
 class TestSqueeze:

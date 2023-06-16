@@ -422,7 +422,7 @@ class TestAddCoords:
     def test_add_single_dim_two_coord2(self, random_patch_with_lat_lon):
         """Ensure multiple coords can be added to patch."""
         out2 = random_patch_with_lat_lon
-        assert {"latitudme", "longitude"}.issubset(set(out2.coords.coord_map))
+        assert {"latitude", "longitude"}.issubset(set(out2.coords.coord_map))
         assert out2.coords["longitude"].shape
         assert out2.coords["latitude"].shape
 

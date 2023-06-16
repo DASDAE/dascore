@@ -2,14 +2,16 @@
 Tests for coordinate object.
 """
 import numpy as np
+import pandas as pd
 import pytest
 import rich.text
 
 import dascore as dc
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, SelectRangeError
 from dascore.utils.coords import (
     BaseCoord,
     CoordArray,
+    CoordDegenerate,
     CoordMonotonicArray,
     CoordRange,
     get_coord,
@@ -148,8 +150,8 @@ class TestBasics:
         """A coordinate should be valid input."""
         assert get_coord(values=coord) == coord
 
-    def test_filter_inclusive(self, coord):
-        """Ensure filtering is inclusive on both ends."""
+    def test_select_inclusive(self, coord):
+        """Ensure selecting is inclusive on both ends."""
         # These tests are only for coords with len > 7
         if len(coord) < 7:
             return
@@ -157,7 +159,7 @@ class TestBasics:
         value_set = set(values)
         assert len(values) > 7
         args = (values[3], values[-3])
-        new, _ = coord.filter(args)
+        new, _ = coord.select(args)
         # Check min and max values conform to args
         new_values = new.values
         new_min, new_max = np.min(new_values), np.max(new_values)
@@ -168,15 +170,15 @@ class TestBasics:
         if not np.issubdtype(new.dtype, np.float_):
             assert {values[3], values[-3]}.issubset(value_set)
 
-    def test_filter_bounds(self, coord):
-        """Ensure filtering bounds are honored."""
+    def test_select_bounds(self, coord):
+        """Ensure selecting bounds are honored."""
         # These tests are only for coords with len > 7
         if len(coord) < 7:
             return
         values = np.sort(coord.values)
         val1 = values[2] + (values[3] - values[2]) / 2
         val2 = values[-2] - (values[-2] - values[-3]) / 2
-        new, _ = coord.filter((val1, val2))
+        new, _ = coord.select((val1, val2))
         new_values = new.values
         new_min, new_max = np.min(new_values), np.max(new_values)
         assert (new_min >= val1) or np.isclose(new_min, val1)
@@ -184,67 +186,97 @@ class TestBasics:
         if not np.issubdtype(new.dtype, np.float_):
             assert set(values).issuperset(set(new.values))
 
-    def test_filter_out_of_bounds(self, coord):
-        """Applying a filter out of bounds should raise an Error."""
-        assert False
-        # values = np.sort(coord.values)
-        # diff = np.abs(values[1] - values[0])
-        # v1 = np.min(values) - 100 * diff
+    def test_select_out_of_bounds_too_early(self, coord):
+        """Applying a select out of bounds (too early) should raise an Error."""
+        diff = (coord.max - coord.min) / (len(coord) - 1)
+        # get a range which is for sure before data.
+        v1 = coord.min - 100 * diff
+        v2 = v1 + 30 * diff
+        # it should raise because select range is not contained by coord.
+        with pytest.raises(SelectRangeError, match="is out of bounds"):
+            coord.select((v1, v2))
+        # Same thing if endtime is too early
+        with pytest.raises(SelectRangeError, match="is out of bounds"):
+            coord.select((None, v2))
+        # but this should be fine
+        assert coord.select((v1, None))[0] == coord
 
-        # # v
-        # val1 = values[2] + (values[3] - values[2]) / 2
-        # val2 = values[-2] - (values[-2] - values[-3]) / 2
-        # new, _ = coord.filter((val1, val2))
-        # new_values = new.values
-        # new_min, new_max = np.min(new_values), np.max(new_values)
-        # assert (new_min >= val1) or np.isclose(new_min, val1)
-        # assert (new_max <= val2) or np.isclose(new_max, val2)
-        # if not np.issubdtype(new.dtype, np.float_):
-        #     assert set(values).issuperset(set(new.values))
+    def test_select_out_of_bounds_too_late(self, coord):
+        """Applying a select out of bounds (too late) should raise an Error."""
+        diff = (coord.max - coord.min) / (len(coord) - 1)
+        # get a range which is for sure after data.
+        v1 = coord.max + 100 * diff
+        v2 = v1 + 30 * diff
+        # it should raise because select range is not contained by coord.
+        with pytest.raises(SelectRangeError, match="is out of bounds"):
+            coord.select((v1, v2))
+        # Same thing if starttime is too early
+        with pytest.raises(SelectRangeError, match="is out of bounds"):
+            coord.select((v1, None))
+        assert coord.select((None, v2))[0] == coord
+
+    def test_wide_select_bounds(self, coord):
+        """Wide (lt and gt limits) select bounds should be fine"""
+
+        def _is_equal(coord1, coord2, indexer):
+            """Assert coord and indexer are equal."""
+            assert coord1 == coord2
+            if isinstance(indexer, slice):
+                assert indexer == slice(None, None)
+            elif isinstance(indexer, np.ndarray):
+                assert np.all(indexer)
+
+        diff = (coord.max - coord.min) / (len(coord) - 1)
+        v1 = coord.min - 10 * diff
+        v2 = coord.max + 10 * diff
+        out, slice_thing = coord.select((v1, v2))
+        _is_equal(coord, out, slice_thing)
+        out, slice_thing = coord.select((None, v2))
+        _is_equal(coord, out, slice_thing)
+        out, slice_thing = coord.select((v1, None))
+        _is_equal(coord, out, slice_thing)
 
     def test_get_range(self, coord):
         """Basic tests for range of coords."""
         start = coord.min
         end = coord.max
-        out = coord.get_query_range(start, end)
+        out = coord.get_slice_tuple((start, end))
         assert out == (start, end)
-        assert coord.get_query_range(start, None) == (start, None)
-        assert coord.get_query_range(None, end) == (None, end)
+        assert coord.get_slice_tuple((start, None)) == (start, None)
+        assert coord.get_slice_tuple((None, end)) == (None, end)
         # if units aren't none, ensure they work.
         if not (unit := coord.units):
             return
         start_unit = start * unit
         end_unit = end * unit
-        assert coord.get_query_range(start_unit, None) == (start, None)
-        assert coord.get_query_range(start_unit, end_unit) == (start, end)
-        assert coord.get_query_range(1 / end_unit, 1 / start_unit) == (start, end)
-        # test inverse units
+        assert coord.get_slice_tuple((start_unit, None)) == (start, None)
+        assert coord.get_slice_tuple((start_unit, end_unit)) == (start, end)
 
-    def test_filter_ordered_coords(self, coord):
-        """Basic filter tests all coords should pass."""
+    def test_select_ordered_coords(self, coord):
+        """Basic select tests all coords should pass."""
         if isinstance(coord, CoordArray):
             return
         assert len(coord.values) == len(coord)
         value1 = coord.values[10]
-        new, sliced = coord.filter((value1, ...))
+        new, sliced = coord.select((value1, ...))
         assert_value_in_one_step(coord, sliced.start, value1, greater=True)
         assert new.values is not coord.values, "new data should be made"
         assert sliced.start == 10
         assert len(coord.values) == len(coord)
         # now test exact value
         value2 = coord.values[20]
-        new, sliced = coord.filter((value2, ...))
+        new, sliced = coord.select((value2, ...))
         assert_value_in_one_step(coord, sliced.start, value2, greater=True)
         assert sliced.start == 20
         assert len(coord.values) == len(coord)
         # test end index
-        new, sliced = coord.filter((..., value1))
+        new, sliced = coord.select((..., value1))
         assert sliced.stop == 11
-        new, sliced = coord.filter((..., value2))
+        new, sliced = coord.select((..., value2))
         assert sliced.stop == 21
         assert len(coord.values) == len(coord)
         # test range
-        new, sliced = coord.filter((value1, value2))
+        new, sliced = coord.select((value1, value2))
         assert len(new.values) == 11 == len(new)
         assert sliced == slice(10, 21)
 
@@ -312,22 +344,22 @@ class TestCoordRange:
 
     def test_select_tuple_ints(self, evenly_sampled_coord):
         """Ensure a tuple works as a limit."""
-        assert evenly_sampled_coord.filter((50, None))[1] == slice(50, None)
-        assert evenly_sampled_coord.filter((0, None))[1] == slice(None, None)
-        assert evenly_sampled_coord.filter((-10, None))[1] == slice(None, None)
-        assert evenly_sampled_coord.filter((None, None))[1] == slice(None, None)
-        assert evenly_sampled_coord.filter((None, 1_000_000))[1] == slice(None, None)
+        assert evenly_sampled_coord.select((50, None))[1] == slice(50, None)
+        assert evenly_sampled_coord.select((0, None))[1] == slice(None, None)
+        assert evenly_sampled_coord.select((-10, None))[1] == slice(None, None)
+        assert evenly_sampled_coord.select((None, None))[1] == slice(None, None)
+        assert evenly_sampled_coord.select((None, 1_000_000))[1] == slice(None, None)
 
     def test_identity_slice_ints(self, evenly_sampled_coord):
         """Ensure slice with exact start/end gives same coord."""
         coord = evenly_sampled_coord
-        new, sliced = coord.filter((coord.start, coord.stop))
+        new, sliced = coord.select((coord.start, coord.stop))
         assert new == coord
 
     def test_identity_slice_floats(self, evenly_sampled_float_coord_with_units):
         """Ensure slice with exact start/end gives same coord."""
         coord = evenly_sampled_float_coord_with_units
-        new, sliced = coord.filter((coord.start, coord.stop))
+        new, sliced = coord.select((coord.start, coord.stop))
         assert new == coord
 
     def test_float_basics(self):
@@ -342,7 +374,7 @@ class TestCoordRange:
         coord = evenly_sampled_float_coord_with_units
         value_ft = 100
         value_m = value_ft * 0.3048
-        new, sliced = coord.filter((value_ft * dc.Unit("ft"), ...))
+        new, sliced = coord.select((value_ft * dc.Unit("ft"), ...))
         # ensure value is surrounded.
         assert new.start + new.step >= value_m
         assert new.start - new.step <= value_m
@@ -353,7 +385,7 @@ class TestCoordRange:
         """Ensure string selection works with datetime objects."""
         coord = evenly_sampled_date_coord
         date_str = "1970-01-01T12"
-        new, sliced = coord.filter((date_str, ...))
+        new, sliced = coord.select((date_str, ...))
         datetime = dc.to_datetime64(date_str)
         assert new.start + new.step >= datetime
         assert new.start - new.step <= datetime
@@ -406,26 +438,32 @@ class TestCoordRange:
         coords = evenly_sampled_coord
         assert coords == coords.update_limits()
 
-    def test_test_filter_end_floats(self, evenly_sampled_float_coord_with_units):
-        """Ensure we can filter right up to the end of the array."""
+    def test_test_select_end_floats(self, evenly_sampled_float_coord_with_units):
+        """Ensure we can select right up to the end of the array."""
         coord = evenly_sampled_float_coord_with_units
-        new_coord, out = coord.filter((coord.min, coord.max))
+        new_coord, out = coord.select((coord.min, coord.max))
         assert len(new_coord) == len(coord)
         assert np.allclose(new_coord.values, coord.values)
+
+    def test_empty(self, coord):
+        """Ensure coords can be emptied out."""
+        new = coord.empty()
+        assert isinstance(new, CoordDegenerate)
+        assert new.dtype == coord.dtype
 
 
 class TestMonotonicCoord:
     """Tests for monotonic array coords."""
 
-    def test_filter_basic(self, monotonic_float_coord):
-        """Basic filter tests for monotonic array."""
+    def test_select_basic(self, monotonic_float_coord):
+        """Basic select tests for monotonic array."""
         coord = monotonic_float_coord
         # test start only
-        new, sliced = coord.filter((5, ...))
+        new, sliced = coord.select((5, ...))
         assert_value_in_one_step(coord, sliced.start, 5)
         assert new.min >= 5
         # test stop only
-        new, sliced = coord.filter((..., 40))
+        new, sliced = coord.select((..., 40))
         assert_value_in_one_step(coord, sliced.stop, 40, greater=False)
         assert new.max <= 40
 
@@ -439,16 +477,16 @@ class TestMonotonicCoord:
         ar = np.cumsum(np.abs(np.random.rand(100)))[::-1]
         coord = get_coord(values=ar)
         assert np.allclose(coord.values, ar)
-        new, sliced = coord.filter((ar[10], ar[20]))
+        new, sliced = coord.select((ar[10], ar[20]))
         assert len(new) == 10 == len(new.values)
         assert np.allclose(new.values, coord.values[10:20])
         # test edges
         eps = 0.000000001
-        new, sliced = coord.filter((ar[0] + eps, ar[20] - eps))
+        new, sliced = coord.select((ar[0] + eps, ar[20] - eps))
         assert sliced.start is None
         # ensure messing with the ends keeps the order
         val1, val2 = ar[10] - eps, ar[20] + eps
-        new, sliced = coord.filter((val1, val2))
+        new, sliced = coord.select((val1, val2))
         assert sliced == slice(11, 19)
         assert new[0] <= val1
         assert new[-1] >= val2
@@ -457,21 +495,21 @@ class TestMonotonicCoord:
         """Ensure indexing works with date string."""
         coord = monotonic_datetime_coord
         value1 = coord.values[12] + np.timedelta64(1, "ns")
-        new, sliced = coord.filter((value1, ...))
+        new, sliced = coord.select((value1, ...))
         assert_value_in_one_step(coord, sliced.start, value1, greater=True)
         assert sliced.start == 13
         # now test exact value
         value2 = coord.values[12]
-        new, sliced = coord.filter((value2, ...))
+        new, sliced = coord.select((value2, ...))
         assert_value_in_one_step(coord, sliced.start, value2, greater=True)
         assert sliced.start == 12
         # test end index
-        new, sliced = coord.filter((..., value1))
+        new, sliced = coord.select((..., value1))
         assert sliced.stop == 12
-        new, sliced = coord.filter((..., value2 - np.timedelta64(1, "ns")))
+        new, sliced = coord.select((..., value2 - np.timedelta64(1, "ns")))
         assert sliced.stop == 11
         # test range
-        new, sliced = coord.filter((coord.values[10], coord.values[20]))
+        new, sliced = coord.select((coord.values[10], coord.values[20]))
         assert len(new) == 10
         assert slice(10, 20) == sliced
 
@@ -516,16 +554,31 @@ class TestMonotonicCoord:
         assert isinstance(new, monotonic_float_coord.__class__)
         assert (len(new) + 2) == len(monotonic_float_coord)
 
+    def test_wide_filter_doesnt_change_size(self, monotonic_float_coord):
+        """Ensure filtering outside data range doesn't change array size."""
+        coord = monotonic_float_coord
+        lims = coord.limits
+        dur = lims[1] - lims[0]
+        select_range = (lims[0] - 2 * dur, lims[1] + dur)
+        wide_coord, inds = coord.select(select_range)
+        # coord should be unchanged
+        assert len(wide_coord) == len(coord)
+        assert wide_coord == coord
+        wide_coord, inds = coord.select((select_range[0], None))
+        assert wide_coord == coord
+        wide_coord, inds = coord.select((None, select_range[1]))
+        assert wide_coord == coord
+
 
 class TestNonOrderedArrayCoords:
     """Tests for non-ordered array coords."""
 
-    def test_filter(self, random_coord):
-        """Ensure filtering returns an ndarray"""
+    def test_select(self, random_coord):
+        """Ensure selecting returns an ndarray"""
         min_v, max_v = np.min(random_coord.values), np.max(random_coord.values)
         dist = max_v - min_v
         val1, val2 = min_v + 0.2 * dist, max_v - 0.2 * dist
-        new, bool_array = random_coord.filter((val1, val2))
+        new, bool_array = random_coord.select((val1, val2))
         assert np.all(new.values >= val1)
         assert np.all(new.values <= val2)
         assert bool_array.sum() == len(new)
@@ -575,13 +628,53 @@ class TestCoordFromAttrs:
         assert coord.units == dc.Unit("s")
 
 
+class TestDegenerateCoords:
+    """Tests for degenerate coordinates."""
+
+    @pytest.fixture()
+    def basic_degenerate(self):
+        """Return a simply degenerate coord."""
+        ar = np.empty((0, 10), dtype="datetime64[ns]")
+        return get_coord(values=ar)
+
+    def test_init_degen(self):
+        """Ensure degen is inited by any sort of empty array."""
+        arrays = [
+            np.empty((0,), dtype=np.float64),
+            np.empty((0,), dtype=np.int_),
+            np.empty((0, 10), dtype="datetime64[ns]"),
+        ]
+        for ar in arrays:
+            out = get_coord(values=ar)
+            assert isinstance(out, CoordDegenerate)
+            assert out.dtype == ar.dtype
+            assert len(out) == 0
+
+    def test_select(self, basic_degenerate):
+        """Selecting should simply return the same degenerate."""
+        coord = basic_degenerate
+        assert coord.select((10, 100))[0] == coord
+        assert coord.select((None, 100))[0] == coord
+        assert coord.select((10, None))[0] == coord
+        assert coord.select((None, None))[0] == coord
+
+    def test_empty(self, basic_degenerate):
+        """Ensure empty just returns self."""
+        assert basic_degenerate.empty() == basic_degenerate
+
+    def test_min_max(self, basic_degenerate):
+        """Ensure min/max are nullish"""
+        assert pd.isnull(basic_degenerate.min)
+        assert pd.isnull(basic_degenerate.max)
+
+
 class TestCoercion:
-    """Some data types should support coercion in filtering (eg dates)."""
+    """Some data types should support coercion in selecting (eg dates)."""
 
     def test_date_str(self, evenly_sampled_date_coord):
         """Ensure date strings get coerced."""
         drange = ("1970-01-01T00:00:01", 10)
-        out, indexer = evenly_sampled_date_coord.filter(drange)
+        out, indexer = evenly_sampled_date_coord.select(drange)
         assert isinstance(out, evenly_sampled_date_coord.__class__)
         assert out.dtype == evenly_sampled_date_coord.dtype
 
@@ -589,6 +682,6 @@ class TestCoercion:
         """Ensure date strings get coerced."""
         coord = evenly_sampled_time_delta_coord
         drange = (10, 100)
-        out, indexer = coord.filter(drange)
+        out, indexer = coord.select(drange)
         assert isinstance(out, coord.__class__)
         assert out.dtype == coord.dtype

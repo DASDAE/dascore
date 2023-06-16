@@ -100,7 +100,7 @@ class Patch:
     def __rich__(self):
 
         dascore_text = get_dascore_text()
-        patch_text = Text("Patch", style="bold")
+        patch_text = Text("Patch ⚡", style="bold")
         header = Text.assemble(dascore_text, " ", patch_text)
         line = Text("-" * len(header))
         coords = self.coords.__rich__()

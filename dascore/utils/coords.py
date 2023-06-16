@@ -2,6 +2,7 @@
 Machinery for coordinates.
 """
 import abc
+from contextlib import suppress
 from functools import cache
 from typing import Any, Optional, Tuple, Union
 
@@ -11,14 +12,43 @@ from pydantic import root_validator
 from rich.text import Text
 from typing_extensions import Self
 
+import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, ParameterError, SelectRangeError
 from dascore.utils.display import get_nice_string
-from dascore.utils.misc import get_slice_tuple
+from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
-from dascore.utils.time import is_datetime64, is_timedelta64, to_datetime64, to_number
+from dascore.utils.time import is_datetime64, is_timedelta64, to_number
 from dascore.utils.units import get_conversion_factor
+
+
+@cache
+def _get_coord_filter_validators(dtype):
+    """Get filter validators for a given input type."""
+
+    def _is_sub_dtype(dtype1, dtype2):
+        """helper function to get sub dtypes."""
+        with suppress(TypeError):
+            if issubclass(dtype1, dtype2):
+                return True
+        if np.issubdtype(dtype1, dtype2):
+            return True
+        return False
+
+    # A list of dtype, func for validating/coercing single filter inputs.
+    validators = (
+        (pd.Timestamp, dc.to_datetime64),
+        (np.datetime64, dc.to_datetime64),
+        (pd.Timedelta, dc.to_timedelta64),
+        (np.timedelta64, dc.to_timedelta64),
+    )
+
+    out = []
+    for (cls, func) in validators:
+        if _is_sub_dtype(dtype, cls):
+            out.append(func)
+    return tuple(out)
 
 
 def assign_coords(patch: PatchType, **kwargs) -> PatchType:
@@ -78,10 +108,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Convert from one unit to another. Set units if None are set."""
 
     @abc.abstractmethod
-    def filter(self, arg) -> Tuple[Self, Union[slice, ArrayLike]]:
+    def select(self, arg) -> Tuple[Self, Union[slice, ArrayLike]]:
         """
         Returns an entity that can be used in a list for numpy indexing
-        and filtered coord.
+        and selected coord.
         """
 
     @abc.abstractmethod
@@ -100,16 +130,19 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return id(self)
 
     def __rich__(self):
-        t1 = Text(self.__class__.__name__, style=self._rich_style)
-        min_str = get_nice_string(self.min)
-        max_str = get_nice_string(self.max)
-        t2 = f"min={min_str} max={max_str}"
+        base = Text(self.__class__.__name__, style=self._rich_style)
+        t1 = Text("")
+        if not pd.isnull(self.min):
+            t1 += Text(f" min={get_nice_string(self.min)}")
+        if not pd.isnull(self.max):
+            t1 += Text(f" max={get_nice_string(self.max)}")
         if not pd.isnull(self.step):
-            t2 = t2 + f" step={get_nice_string(self.step)}"
-        t2 = t2 + f" shape={self.shape}"
+            t1 += f" step={get_nice_string(self.step)}"
+        t1 += f" shape={self.shape}"
+        t1 += f" dtype={self.dtype}"
         if not pd.isnull(self.units):
-            t2 = t2 + f" units={get_nice_string(self.units)}"
-        out = Text.assemble(t1, f"({t2})")
+            t1 += f" units={get_nice_string(self.units)}"
+        out = Text.assemble(base, f"({t1[1:]})")
         return out
 
     def __str__(self):
@@ -126,6 +159,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Returns (or generates) the array data."""
 
     @property
+    @cache
+    def limits(self) -> Tuple[Any, Any]:
+        """Returns a numpy datatype"""
+        return self.min, self.max
+
+    @property
     @abc.abstractmethod
     def dtype(self) -> DTypeLike:
         """Returns a numpy datatype"""
@@ -133,39 +172,13 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     @property
     def shape(self) -> Tuple[int, ...]:
         """Return the shape of the coordinate data."""
-        return (len(self),)
+        return self.data.shape
 
     def set_units(self, units) -> Self:
         """Set new units on coordinates."""
         new = dict(self)
         new["units"] = units
         return self.__class__(**new)
-
-    def _cast_values(self, value):
-        """
-        Function to cast input values to current dtype.
-
-        Used, for example, to allow strings to represent dates.
-        """
-        if np.issubdtype(self.dtype, np.datetime64):
-            return to_datetime64(value)
-        return value
-
-    def _get_value_for_indexing(self, value, invert=False):
-        """Function to get a value for indexing."""
-        # strip units and v
-        if hasattr(value, "units"):
-            unit = value.units
-            i_unit = (1 / unit).units
-            if i_unit == self.units:
-                value = 1 / value
-                unit = i_unit
-            uf = get_conversion_factor(unit, self.units)
-            value = value.magnitude * uf
-        # if null or ... just return None
-        if pd.isnull(value) or value is Ellipsis:
-            return None
-        return self._cast_values(value if not invert else 1 / value)
 
     def sort(self) -> Tuple["BaseCoord", Union[slice, ArrayLike]]:
         """
@@ -182,31 +195,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         return self
 
-    def get_query_range(
-        self, start, end, invert=False
-    ) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Get a tuple of query ranges normalized to coordinate units.
-
-        Parameters
-        ----------
-        start
-            The starting value of the query.
-        end
-            The ending value of the query.
-        invert
-            If true, return the inverted range, meaning 1/end, 1/start.
-            This is useful, for example, for getting frequencies (1/s) when
-            coordinates are in s.
-        """
-        out = [
-            self._get_value_for_indexing(start, invert=invert),
-            self._get_value_for_indexing(end, invert=invert),
-        ]
-        if not any(pd.isnull(out)):
-            return tuple(sorted(out))
-        return tuple(out)
-
     @abc.abstractmethod
     def update_limits(self, start=None, stop=None, step=None) -> Self:
         """Update the limits or sampling of the coordinates."""
@@ -215,6 +203,143 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def data(self):
         """Return the internal data. Same as values attribute."""
         return self.values
+
+    def _get_compatible_value(self, value, invert=False):
+        """
+        Return values that are compatible with dtype/units of coord.
+
+        This is used, for example, to coerce values in select tuple
+        so direct comparison with coord values is possible.
+        """
+        # strip units and v
+        if hasattr(value, "units"):
+            unit = value.units
+            i_unit = (1 / unit).units
+            if i_unit == self.units:
+                value = 1 / value
+                unit = i_unit
+            uf = get_conversion_factor(unit, self.units)
+            value = value.magnitude * uf
+        # if null or ... just return None
+        if pd.isnull(value) or value is Ellipsis:
+            return None
+        # apply validators. These can, eg, coerce to correct dtype.
+        validators = _get_coord_filter_validators(self.dtype)
+        out = value
+        for func in validators:
+            if out is not None:
+                out = func(out)
+        return out if not invert else 1 / out
+
+    def get_slice_tuple(
+        self,
+        select: Union[slice, None, type(Ellipsis), Tuple[Any, Any]],
+        check_oder: bool = True,
+        invert=False,
+    ) -> Tuple[Any, Any]:
+        """
+        Get a tuple with (start, stop) and perform basic checks.
+
+        Parameters
+        ----------
+        select
+            An object for determining select range.
+        check_oder
+            Ensure select[0] <= select[1]
+        invert
+            If true, return the inverted range, meaning 1/end, 1/start.
+            This is useful, for example, for getting frequencies (1/s) when
+            coordinates are in s.
+        """
+
+        def _validate_slice(select):
+            """Validation for slices."""
+            if not isinstance(select, slice):
+                return select
+            if select.step is not None:
+                msg = (
+                    "Step not supported in select/filtering. Use decimate for "
+                    "proper down-sampling."
+                )
+                raise ParameterError(msg)
+            return (select.start, select.stop)
+
+        def _validate_none_or_ellipsis(select):
+            """Ensure None, ... are converted to tuple."""
+            if select is None or select is Ellipsis:
+                select = (None, None)
+            return select
+
+        def _validate_len(select):
+            """Ensure select is a tuple of proper length."""
+            if len(select) != 2:
+                msg = "Slice indices must be length 2 sequence."
+                raise ParameterError(msg)
+            return select
+
+        limits = self.limits
+        # apply simple checks; ensure we have a len 2 tuple.
+        for func in [_validate_slice, _validate_none_or_ellipsis, _validate_len]:
+            select = func(select)
+        p1, p2 = (self._get_compatible_value(x, invert=invert) for x in select)
+        if check_oder and p1 is not None and p2 is not None and p2 < p1:
+            msg = "second element must be greater than first!"
+            raise ParameterError(msg)
+        # Perform check that the requested select range isn't out of bounds
+        if limits is not None:
+            start, stop = p1, p2
+            # we need to reverse here for reverse monotonic coord (an ugly hack)
+            if start is not None and stop is not None and start > stop:
+                start, stop = stop, start
+            bad_start = start is not None and start > limits[1]
+            bad_end = stop is not None and stop < limits[0]
+            if bad_end or bad_start:
+                msg = (
+                    f"The select range ({start}, {stop}) is out of bounds for "
+                    f"data with limits {limits}"
+                )
+                raise SelectRangeError(msg)
+        return p1, p2
+
+    def empty(self, axes=None) -> Self:
+        """
+        Empty out the coordinate.
+
+        Parameters
+        ----------
+        axes
+            The axis to empty, if None empty all.
+        """
+        if axes is None:
+            new_shape = np.zeros(len(self.shape), dtype=np.int_)
+        else:
+            assert np.max(axes) <= (len(self) - 1)
+            new_shape = np.array(self.shape)
+            for ind in iterate(axes):
+                new_shape[ind] = 0
+        data = np.empty(tuple(new_shape), dtype=self.dtype)
+        return get_coord(values=data)
+
+    def index(self, indexer, axis: Optional[int] = None) -> Self:
+        """
+        Index the coordinate and return new coordinate.
+
+        Parameters
+        ----------
+        indexer
+            Anything that can be used in numpy indexing.
+        axis
+            The axis along which to apply the indexer. If None,
+            just apply indexer to numpy array.
+        """
+        if axis:
+            ndims = len(self.shape)
+            assert ndims >= (axis + 1)
+            indexer = tuple(
+                slice(None, None) if i != axis else indexer for i in range(ndims)
+            )
+        array = self.data[indexer]
+        return get_coord(values=array, units=self.units)
 
 
 class CoordRange(BaseCoord):
@@ -276,9 +401,9 @@ class CoordRange(BaseCoord):
             out[name] = getattr(self, name) * factor
         return self.new(**out)
 
-    def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
-        """Apply filter, return filtered coords and index for filtering data."""
-        args = get_slice_tuple(args, dtype=self.dtype)
+    def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+        """Apply select, return selected coords and index for selecting data."""
+        args = self.get_slice_tuple(args)
         start = self._get_index(args[0])
         stop = self._get_index(args[1], forward=False)
         # we add 1 to stop in slice since its upper limit is exclusive
@@ -290,7 +415,7 @@ class CoordRange(BaseCoord):
 
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""
-        if (value := self._get_value_for_indexing(value)) is None:
+        if (value := self._get_compatible_value(value)) is None:
             return value
         func = np.ceil if forward else np.floor
         start, _, step = self.start, self.stop, self.step
@@ -386,13 +511,13 @@ class CoordArray(BaseCoord):
         factor = get_conversion_factor(self.units, units)
         return self.new(units=units, values=self.values * factor)
 
-    def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
-        """Apply filter, return filtered coords and index for filtering data."""
-        args = get_slice_tuple(args, dtype=self.dtype)
+    def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+        """Apply select, return selected coords and index for selecting data."""
+        args = self.get_slice_tuple(args)
         values = self.values
         out = np.ones_like(values, dtype=np.bool_)
-        val1 = self._get_value_for_indexing(args[0])
-        val2 = self._get_value_for_indexing(args[1])
+        val1 = self._get_compatible_value(args[0])
+        val2 = self._get_compatible_value(args[1])
         if val1 is not None:
             out = out & (values >= val1)
         if val2 is not None:
@@ -467,13 +592,19 @@ class CoordArray(BaseCoord):
     @cache
     def min(self):
         """Return min value"""
-        return np.min(self.values)
+        try:
+            return np.min(self.values)
+        except ValueError:  # degenerate data case
+            return None
 
     @property
     @cache
     def max(self):
         """Return max value in range."""
-        return np.max(self.values)
+        try:
+            return np.max(self.values)
+        except ValueError:  # degenerate data case
+            return None
 
     @property
     @cache
@@ -490,12 +621,14 @@ class CoordArray(BaseCoord):
     def __eq__(self, other):
         try:
             self_d, other_d = dict(self), dict(other)
-        except TypeError:
+        except (TypeError, ValueError):
             return False
         v1, v2 = self_d.pop("values", None), other_d.pop("values", None)
-        # Frustratingly, allcose doesn't work with datetime64 so we we need
+        shapes_same = v1.shape == v2.shape
+        # Frustratingly, all cose doesn't work with datetime64 so we we need
         # this short-circuiting equality check.
-        if self_d == other_d and (np.all(v1 == v2) or np.allclose(v1, v2)):
+        values_same = shapes_same and ((np.all(v1 == v2) or np.allclose(v1, v2)))
+        if values_same and self_d == other_d and values_same:
             return True
         return False
 
@@ -508,9 +641,9 @@ class CoordMonotonicArray(CoordArray):
     values: ArrayLike
     _rich_style = "bold #d64806"
 
-    def filter(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
-        """Apply filter, return filtered coords and index for filtering data."""
-        v1, v2 = get_slice_tuple(args, check_oder=False, dtype=self.dtype)
+    def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+        """Apply select, return selected coords and index for selecting data."""
+        v1, v2 = self.get_slice_tuple(args, check_oder=False)
         # swap indices if start>stop. This happens for decreasing arrays.
         if self._is_reversed and v1 is not None and v2 is not None and v1 < v2:
             v1, v2 = v2, v1
@@ -523,17 +656,19 @@ class CoordMonotonicArray(CoordArray):
 
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""
-        if (value := self._get_value_for_indexing(value)) is None:
+        if (value := self._get_compatible_value(value)) is None:
             return value
         side_dict = {True: "left", False: "right"}
         values = self.values
         mod = 0 if forward else -1
         # since search sorted only works on ascending monotonic arrays we
-        # can negative descending arrays to get the same effect.
+        # negative descending arrays to get the same effect.
         if values[0] > values[1]:
             values = values * -1
             value = value * -1
         out = np.searchsorted(values, value, side=side_dict[forward])
+        if out == 0 or out == len(values):
+            return None
         return out + mod
 
     @property
@@ -543,9 +678,26 @@ class CoordMonotonicArray(CoordArray):
         return (vals[1] - vals[0]) < 0
 
 
+class CoordDegenerate(CoordArray):
+    """
+    A coordinate with degenerate (empty on one axis) data.
+    """
+
+    values: ArrayLike
+    _rich_style = "bold #d40000"
+
+    def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+        """Select for Degenerate coords does nothing."""
+        return self, slice(None, None)
+
+    def empty(self, axes=None) -> Self:
+        """Empty simply returns self."""
+        return self
+
+
 def get_coord(
     *,
-    values: Optional[ArrayLike] = None,
+    values: Union[ArrayLike, None, np.ndarray] = None,
     start=None,
     stop=None,
     step=None,
@@ -592,6 +744,8 @@ def get_coord(
     if values is not None:
         if isinstance(values, BaseCoord):  # just return coordinate
             return values
+        if np.size(values) == 0:
+            return CoordDegenerate(values=values, units=units)
         start, stop, step, monotonic = _maybe_get_start_stop_step(values)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)
