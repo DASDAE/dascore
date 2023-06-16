@@ -101,7 +101,7 @@ def _pass_through_method(func):
     return _func
 
 
-def get_slice(array, cond=Optional[tuple]) -> slice:
+def get_slice_from_monotonic(array, cond=Optional[tuple]) -> slice:
     """
     Return a slice object which meets conditions in cond on array.
 
@@ -120,10 +120,11 @@ def get_slice(array, cond=Optional[tuple]) -> slice:
     Examples
     --------
     >>> import numpy as np
-    >>> from dascore.utils.misc import get_slice
+    >>> from dascore.utils.misc import get_slice_from_monotonic
     >>> ar = np.arange(100)
-    >>> array_slice = get_slice(ar, cond=(1, 10))
+    >>> array_slice = get_slice_from_monotonic(ar, cond=(1, 10))
     """
+    # TODO do we still need this or can we just use coordinates?
     if cond is None:
         return slice(None, None)
     assert len(cond) == 2, "you must pass a length 2 tuple to get_slice."
@@ -137,7 +138,7 @@ def get_slice(array, cond=Optional[tuple]) -> slice:
     # check for and handle zeroed end values
     if array[-1] <= array[0]:
         increasing_segment_end = np.argmin(np.diff(array))
-        out = get_slice(array[:increasing_segment_end], cond)
+        out = get_slice_from_monotonic(array[:increasing_segment_end], cond)
         stop = np.min([out.stop or len(array), increasing_segment_end])
     return slice(start, stop)
 
@@ -365,6 +366,7 @@ def trim_attrs_get_inds(attrs, dim_length, **kwargs):
     **kwargs
         Used to specify which dimension to trim (dim=(start, stop)).
     """
+    # TODO Do we still need this or can we just use Coords?
     if not kwargs:
         return attrs, dim_length
     assert len(kwargs) == 1, "exactly one dimension allowed."

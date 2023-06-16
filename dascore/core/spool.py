@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Mapping, Optional, Sequence, Union
 
 import pandas as pd
+from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PatchType, numeric_types, timeable_types
 from dascore.exceptions import InvalidSpoolError
 from dascore.utils.chunk import ChunkManager
+from dascore.utils.display import get_dascore_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor
@@ -30,6 +32,8 @@ class BaseSpool(abc.ABC):
     """
     Spool Abstract Base Class (ABC) for defining Spool interface.
     """
+
+    _rich_style = "bold"
 
     @abc.abstractmethod
     def __getitem__(self, item: int) -> PatchType:
@@ -90,6 +94,19 @@ class BaseSpool(abc.ABC):
 
     def __len__(self):
         pass
+
+    def __rich__(self):
+        """Rich rep. of spool."""
+        text = get_dascore_text() + Text(" ")
+        text += Text(self.__class__.__name__, style=self._rich_style)
+        text += Text(f" 🧵 ({len(self):d} Patches)")
+        return text
+
+    def __str__(self):
+        return str(self.__rich__())
+
+    def __repr__(self):
+        return self.__str__()
 
 
 class DataFrameSpool(BaseSpool):
@@ -280,17 +297,12 @@ class MemorySpool(DataFrameSpool):
             dfs = self._get_dummy_dataframes(patches_to_df(data))
             self._df, self._source_df, self._instruction_df = dfs
 
-    def __str__(self):
-        """Returns a (hopefully) useful string rep of spool."""
+    def __rich__(self):
+        base = super().__rich__()
         df = self._df
         tmin, tmax = df["time_min"].min(), df["time_max"].max()
-        out = (
-            f"MemorySpool object managing {len(self)} patches spanning:"
-            f" {tmin} to {tmax}"
-        )
-        return out
-
-    __repr__ = __str__
+        base += Text(f"\n    Time Span: {tmin} to {tmax}")
+        return base
 
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory"""

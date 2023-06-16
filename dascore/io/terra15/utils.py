@@ -8,7 +8,7 @@ from tables.exceptions import NoSuchNodeError
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.schema import PatchFileSummary
-from dascore.utils.misc import get_slice
+from dascore.utils.misc import get_slice_from_monotonic
 from dascore.utils.time import datetime_to_float, to_datetime64
 
 # --- Getting format/version
@@ -164,7 +164,7 @@ def _read_terra15(
     time_inds = (start_ind, stop_ind)
     # get data and sliced distance coord
     dist_ar = _get_distance_array(root)
-    dslice = get_slice(dist_ar, distance)
+    dslice = get_slice_from_monotonic(dist_ar, distance)
     dist_ar_trimmed = dist_ar[dslice]
     data = data_node.data[slice(*time_inds), dslice]
     coords = {"time": time_ar, "distance": dist_ar_trimmed}

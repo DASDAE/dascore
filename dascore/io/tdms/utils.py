@@ -9,7 +9,7 @@ import struct
 import numpy as np
 
 from dascore.core.schema import PatchAttrs
-from dascore.utils.misc import get_slice
+from dascore.utils.misc import get_slice_from_monotonic
 from dascore.utils.time import to_datetime64
 
 DEFAULT_ATTRS = tuple(PatchAttrs.__fields__)
@@ -372,6 +372,6 @@ def _get_data(time, distance, time_array, dist_array, data_node):
     # recording before the pre-allocated file is filled.
     if time_array[-1] < time_array[0]:
         time = (time[0], time_array.max())
-    tslice = get_slice(time_array, time)
-    dslice = get_slice(dist_array, distance)
+    tslice = get_slice_from_monotonic(time_array, time)
+    dslice = get_slice_from_monotonic(dist_array, distance)
     return data_node[tslice, dslice], time_array[tslice], dist_array[dslice]

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 import pandas as pd
+from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
@@ -60,14 +61,15 @@ class DirectorySpool(DataFrameSpool):
         self._preferred_format = preferred_format
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
 
-    def __str__(self):
-        out = (
-            f"DirectorySpool object managing: {self.spool_path}"
-            f" with select kwargs: {self._select_kwargs}"
-        )
+    def __rich__(self):
+        """Augment rich string directory spool stuff."""
+        base = super().__rich__()
+        path = self.indexer.path
+        kwargs = self._select_kwargs
+        out = base + Text(f"\n    Path: {path}")
+        if kwargs:
+            out += Text(f"\n    Select kwargs: {kwargs}")
         return out
-
-    __repr__ = __str__
 
     def _get_df(self):
         """Get the dataframe of current contents."""

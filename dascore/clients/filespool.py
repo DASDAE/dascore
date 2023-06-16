@@ -5,6 +5,7 @@ import copy
 from pathlib import Path
 from typing import Optional, Union
 
+from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
@@ -55,12 +56,11 @@ class FileSpool(DataFrameSpool):
         self._file_format = _format
         self._file_version = _version
 
-    def __str__(self):
-        """Returns a (hopefully) useful string rep of spool."""
-        out = f"FileSpool object managing {self._path}"
+    def __rich__(self):
+        """Augment rich string with path."""
+        base = super().__rich__()
+        out = base + Text(f" Path: {self._path}")
         return out
-
-    __repr__ = __str__
 
     def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""

@@ -12,8 +12,7 @@ from dascore.exceptions import MissingOptionalDependency, ParameterError
 from dascore.utils.misc import (
     MethodNameSpace,
     check_evenly_sampled,
-    get_slice,
-    get_slice_tuple,
+    get_slice_from_monotonic,
     iter_files,
     iterate,
     optional_import,
@@ -63,37 +62,37 @@ class TestGetSlice:
 
     def test_two_intervals(self):
         """test get slice for two intervals"""
-        array_slice = get_slice(self.ar, cond=(1, 10))
+        array_slice = get_slice_from_monotonic(self.ar, cond=(1, 10))
         expected = slice(1, 11, None)
         assert array_slice == expected
 
     def test_right_side(self):
         """test for only right interval"""
-        array_slice = get_slice(self.ar, cond=(None, 10))
+        array_slice = get_slice_from_monotonic(self.ar, cond=(None, 10))
         expected = slice(None, 11, None)
         assert array_slice == expected
 
     def test_left_side(self):
         """Ensure left side interval works."""
-        array_slice = get_slice(self.ar, cond=(1, None))
+        array_slice = get_slice_from_monotonic(self.ar, cond=(1, None))
         expected = slice(1, None, None)
         assert array_slice == expected
 
     def test_no_bounds(self):
         """Empty slice should be returned when no bounds specified."""
-        array_slice = get_slice(self.ar, cond=(None, None))
+        array_slice = get_slice_from_monotonic(self.ar, cond=(None, None))
         expected = slice(None, None, None)
         assert array_slice == expected
 
     def test_out_of_bounds(self):
         """When out of bounds, non should be returned."""
-        array_slice = get_slice(self.ar, cond=(-100, 1_000))
+        array_slice = get_slice_from_monotonic(self.ar, cond=(-100, 1_000))
         expected = slice(None, None, None)
         assert array_slice == expected
 
     def test_cond_is_none(self):
         """Ensure None is a valid input, returns empty slice"""
-        array_slice = get_slice(self.ar, cond=None)
+        array_slice = get_slice_from_monotonic(self.ar, cond=None)
         expected = slice(None, None, None)
         assert array_slice == expected
 
@@ -103,7 +102,7 @@ class TestGetSlice:
         """
         ar = np.arange(100)
         ar[-20:] = 0
-        sliced = get_slice(ar, (None, ar.max()))
+        sliced = get_slice_from_monotonic(ar, (None, ar.max()))
         assert sliced.stop is not None
         assert sliced.stop == ar.max()
 
@@ -113,7 +112,7 @@ class TestGetSlice:
         """
         ar = np.arange(100)
         ar[-20:] = 0
-        sliced = get_slice(ar, (None, ar.max() - 10))
+        sliced = get_slice_from_monotonic(ar, (None, ar.max() - 10))
         assert sliced.stop is not None
         assert ar[sliced].max() == (ar.max() - 10)
 
@@ -279,36 +278,3 @@ class TestOptionalImport:
         """Ensure a module which is missing raises the appropriate Error."""
         with pytest.raises(MissingOptionalDependency, match="boblib4"):
             optional_import("boblib4")
-
-
-class TestGetSliceTuple:
-    """Tests for getting/validating slice tuples."""
-
-    def test_bad_slice(self):
-        """Step slice should raise."""
-        with pytest.raises(ParameterError, match="step not supported"):
-            get_slice_tuple(slice(1, 10, 2))
-
-    def test_null_input(self):
-        """None or ... should return tuple of None."""
-        out1 = get_slice_tuple(None)
-        out2 = get_slice_tuple(...)
-        assert out1 == out2 == (None, None)
-
-    def test_bad_length(self):
-        """Passing a sequence with the wrong length should raise."""
-        with pytest.raises(ParameterError, match="length 2 sequence."):
-            get_slice_tuple([1])
-        with pytest.raises(ParameterError, match="length 2 sequence."):
-            get_slice_tuple([1, 2, 3])
-
-    def test_ellipses_convert(self):
-        """Ensure ellipses are converted."""
-        assert get_slice_tuple([..., 2]) == (None, 2)
-        assert get_slice_tuple([2, ...]) == (2, None)
-        assert get_slice_tuple([..., ...]) == (None, None)
-
-    def test_wrong_order(self):
-        """Ensure v2 < v1 raises."""
-        with pytest.raises(ParameterError, match="must be greater"):
-            get_slice_tuple([2, 1])

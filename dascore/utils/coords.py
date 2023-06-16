@@ -51,6 +51,18 @@ def _get_coord_filter_validators(dtype):
     return tuple(out)
 
 
+def _get_nullish_for_type(dtype):
+    """Returns an appropriate null value for a given numpy type."""
+    if np.issubdtype(dtype, np.datetime64):
+        return np.datetime64("NaT")
+    if np.issubdtype(dtype, np.timedelta64):
+        return np.timedelta("NaT")
+    # everything else should be a NaN (which is a float). This is
+    # a bit of a problem for ints, which have no null rep., but upcasting
+    # to float will probably cause less damage then using None
+    return np.NaN
+
+
 def assign_coords(patch: PatchType, **kwargs) -> PatchType:
     """
     Add non-dimensional coordinates to a patch.
@@ -595,7 +607,7 @@ class CoordArray(BaseCoord):
         try:
             return np.min(self.values)
         except ValueError:  # degenerate data case
-            return None
+            return _get_nullish_for_type(self.dtype)
 
     @property
     @cache
@@ -604,7 +616,7 @@ class CoordArray(BaseCoord):
         try:
             return np.max(self.values)
         except ValueError:  # degenerate data case
-            return None
+            return _get_nullish_for_type(self.dtype)
 
     @property
     @cache
