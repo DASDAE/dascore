@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal, Mapping, Sequence, Union
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from dascore.constants import (
     VALID_DATA_CATEGORIES,
@@ -81,7 +81,7 @@ class PatchAttrs(BaseModel):
     distance_units: str = ""
     instrument_id: str = Field("", max_length=max_lens["instrument_id"])
     cable_id: str = Field("", max_length=max_lens["cable_id"])
-    dims: Union[tuple[str, ...], str] = tuple()
+    dims: str = Field("", max_length=max_lens["dims"])
     tag: str = Field("", max_length=max_lens["tag"])
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
@@ -120,7 +120,7 @@ class PatchAttrs(BaseModel):
     def coords_from_dims(self) -> Mapping[str, np.ndarray]:
         """Return coordinates from dimensions assuming evenly sampled."""
         out = {}
-        for dim in self.dims:
+        for dim in self.dim_tuple:
             # TODO replace this with simple coords
             start, stop = self[f"{dim}_min"], self[f"{dim}_max"]
             step = self[f"d_{dim}"]
@@ -142,6 +142,18 @@ class PatchAttrs(BaseModel):
             np.datetime64: lambda x: str(x),
             np.timedelta64: lambda x: str(x),
         }
+
+    @property
+    def dim_tuple(self):
+        """Return a tuple of dimensions. The dims attr is a string."""
+        return tuple(self.dims.split(","))
+
+    @validator("dims", pre=True)
+    def _flatten_dims(cls, value):
+        """Some dims are passed as a tuple; we just want str"""
+        if not isinstance(value, str):
+            value = ",".join(value)
+        return value
 
 
 class PatchFileSummary(PatchAttrs):
