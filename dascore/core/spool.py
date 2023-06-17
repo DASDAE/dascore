@@ -188,7 +188,9 @@ class DataFrameSpool(BaseSpool):
             kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
             patch = self._load_patch(kwargs)
             select_kwargs = {
-                i: v for i, v in kwargs.items() if i in patch.dims or i in patch.coords
+                i: v
+                for i, v in kwargs.items()
+                if i in patch.dims or i in patch.coords.coord_map
             }
             out_list.append(patch.select(**select_kwargs))
         if len(out_list) > expected_len:
@@ -300,9 +302,11 @@ class MemorySpool(DataFrameSpool):
     def __rich__(self):
         base = super().__rich__()
         df = self._df
-        tmin = get_nice_string(df["time_min"].min())
-        tmax = get_nice_string(df["time_max"].max())
-        base += Text(f"\n    Time Span: {tmin} to {tmax}")
+        t1, t2 = df["time_min"].min(), df["time_max"].max()
+        tmin = get_nice_string(t1)
+        tmax = get_nice_string(t2)
+        duration = get_nice_string(t2 - t1)
+        base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
         return base
 
     def _load_patch(self, kwargs) -> Self:

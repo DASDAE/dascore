@@ -63,13 +63,15 @@ class Patch:
     def __init__(
         self,
         data: ArrayLike | DataArray | None = None,
-        coords: Mapping[str, ArrayLike] | None = None,
+        coords: Mapping[str, ArrayLike] | None | CoordManager = None,
         dims: Sequence[str] | None = None,
         attrs: Optional[Union[Mapping, PatchAttrs]] = None,
     ):
         if isinstance(data, (DataArray, self.__class__)):
             # dar = data if isinstance(data, DataArray) else data._data_array
             return
+        if dims is None and isinstance(coords, CoordManager):
+            dims = coords.dims
         # Try to generate coords from ranges in attrs
         if coords is None and attrs is not None:
             coords = PatchAttrs.coords_from_dims(attrs)

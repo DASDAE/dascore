@@ -34,7 +34,7 @@ class CoordError(ValueError, PatchError):
 
 
 class CoordMergeError(CoordError):
-    """Raised when coordinates cannot be merged."""
+    """Raised when something is wrong with requested merge operation."""
 
 
 class PatchDimError(ValueError, PatchError):
@@ -82,4 +82,8 @@ class InvalidSpoolError(ValueError, DASCoreError):
 
 
 class UnitError(ValueError, DASCoreError):
-    """Raised when"""
+    """Raised when an issue is encountered with unit handling."""
+
+
+class AttributeMergeError(ValueError, DASCoreError):
+    """Raised when something is wrong with combining attributes."""

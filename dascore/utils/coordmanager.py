@@ -695,7 +695,7 @@ def merge_coord_managers(
         out = {}
         for coord_name in coords_to_merge:
             merge_coords = [x.coord_map[dim] for x in managers]
-            axis = managers[0].dims.index(dim)
+            axis = managers[0].dim_map[coord_name].index(dim)
             if len((units := set([x.units for x in merge_coords]))) != 1:
                 # TODO: we might try to convert all the units to a common
                 # unit in the future.

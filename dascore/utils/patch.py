@@ -23,9 +23,9 @@ import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
 from dascore.core.schema import PatchAttrs, PatchFileSummary
 from dascore.exceptions import PatchAttributeError, PatchDimError
-
-# from dascore.utils.coords import Coords
+from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.docs import compose_docstring, format_dtypes
+from dascore.utils.models import merge_models
 from dascore.utils.time import to_timedelta64
 
 attr_type = Union[Dict[str, Any], str, Sequence[str], None]
@@ -312,6 +312,17 @@ def _merge_patches(
             patches = patches.assign(history=lambda x: x["history"].apply(str))
         return patches.sort_values(sort_names), sort_names, group_names
 
+    def _merge_trimmed_patches(trimmed_patches):
+        """Merge trimmed patches together."""
+        axis = trimmed_patches[0].dims.index(dim)
+        datas = [x.data for x in trimmed_patches]
+        coords = [x.coords for x in trimmed_patches]
+        attrs = [x.attrs for x in trimmed_patches]
+        new_array = np.concatenate(datas, axis=axis)
+        new_coord = merge_coord_managers(coords, dim=dim, snap_tolerance=tolerance)
+        new_attrs = merge_models(attrs, dim)
+        return dc.Patch(data=new_array, coords=new_coord, attrs=new_attrs)
+
     def _merge_compatible_patches(patch_df, dim):
         """perform merging after patch compatibility has been confirmed."""
         has_overlap = patch_df["_dist_to_previous"] <= to_timedelta64(0)
@@ -322,12 +333,12 @@ def _merge_patches(
             _trim_or_fill(x, start) if needs_action else x
             for x, start, needs_action in zip(patches, overlap_start, has_overlap)
         ]
-        return _merge_trimmed_patches(trimmed_patches, dim)
+        return _merge_trimmed_patches(trimmed_patches)
 
     def _trim_or_fill(patch, new_start):
         """Trim or fill data array."""
-        assert False  # TODO start here
-        # return dar.loc[{dim: dar.coords[dim] > new_start}]
+        out = patch.select(**{dim: (new_start, ...)})
+        return out
 
     # get a dataframe
     if not isinstance(patches, pd.DataFrame):
@@ -353,25 +364,6 @@ def _merge_patches(
             out.append(_merge_compatible_patches(merge_patch_df, dim))
     return out
 
-
-def _merge_trimmed_patches(trimmed_patches, dim):
-    """Merge trimmed patches together."""
-    #
-    # def _check_dims(patches):
-    #     """Ensure the dims are all aligned else transpose patches."""
-    #     dims = {x.dims for x in patches}
-    #     assert len(dims) == 1
-    #     return patches
-
-    # def _get_composite_coords(cm_list):
-    #     """Get the merged coordinate manager."""
-    #
-    # out = _check_dims(trimmed_patches)
-    # axis = trimmed_patches[0].dims.index(dim)
-    # datas = [x.data for x in trimmed_patches]
-    # coords = [x.coords for x in trimmed_patches]
-    # attrs = [x.attrs for x in trimmed_patches]
-    # new_array = np.concatenate(datas, axis=axis)
     assert False
 
 

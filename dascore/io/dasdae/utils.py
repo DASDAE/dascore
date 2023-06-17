@@ -47,14 +47,16 @@ def _save_array(data, name, group, h5):
 
 def _save_coords(patch, patch_group, h5):
     """Save coordinates"""
-    for name, coord in patch._data_array.coords.items():
+    cm = patch.coords
+    for name, coord in cm.coord_map.items():
+        dims = cm.dim_map[name]
         # First save coordinate arrays
         data = coord.values
         save_name = f"_coord_{name}"
         _save_array(data, save_name, patch_group, h5)
         # then save dimensions of coordinates
         save_name = f"_cdims_{name}"
-        patch_group._v_attrs[save_name] = ",".join(coord.dims)
+        patch_group._v_attrs[save_name] = ",".join(dims)
 
 
 def _save_patch(patch, wave_group, h5):

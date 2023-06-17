@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Literal, Mapping, Optional, Sequence, Union
 
 import numpy as np
-
 from pydantic import BaseModel, Field, validator
 from typing_extensions import Self
 
@@ -38,15 +37,15 @@ class PatchAttrs(BaseModel):
 
     data_type: Literal[VALID_DATA_TYPES] = ""
     data_category: Literal[VALID_DATA_CATEGORIES] = ""
-    data_units: Optional[UnitStr] = None
+    data_units: UnitStr = ""
     time_min: DateTime64 = np.datetime64("NaT")
     time_max: DateTime64 = np.datetime64("NaT")
     d_time: TimeDelta64 = np.timedelta64("NaT")
-    time_units: Optional[UnitStr] = None
+    time_units: UnitStr = ""
     distance_min: float = np.NaN
     distance_max: float = np.NaN
     d_distance: float = np.NaN
-    distance_units: Optional[UnitStr] = None
+    distance_units: UnitStr = ""
     instrument_id: str = Field("", max_length=max_lens["instrument_id"])
     cable_id: str = Field("", max_length=max_lens["cable_id"])
     dims: str = Field("", max_length=max_lens["dims"])
@@ -148,18 +147,6 @@ class PatchAttrs(BaseModel):
     def dim_tuple(self):
         """Return a tuple of dimensions. The dims attr is a string."""
         return tuple(self.dims.split(","))
-
-    @property
-    def dim_tuple(self):
-        """Return a tuple of dimensions. The dims attr is a string."""
-        return tuple(self.dims.split(","))
-
-    @validator("dims", pre=True)
-    def _flatten_dims(cls, value):
-        """Some dims are passed as a tuple; we just want str"""
-        if not isinstance(value, str):
-            value = ",".join(value)
-        return value
 
 
 class PatchFileSummary(PatchAttrs):

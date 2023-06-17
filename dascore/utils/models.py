@@ -1,15 +1,19 @@
 """
 Utilities for models.
 """
-from functools import cached_property
+from functools import cached_property, reduce
+from typing import Optional, Sequence
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import pint
 from pydantic import BaseModel
-from typing_extensions import Self
+from typing_extensions import Literal, Self
 
 from dascore.compat import array
+from dascore.exceptions import AttributeMergeError
+from dascore.utils.misc import iterate
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -105,3 +109,100 @@ class UnitStr(str, SimpleValidator):
             # don't leave as a unit; pydantic doesnt know how to serialize it.
             value = str(value)
         return value
+
+
+def merge_models(
+    model_list: Sequence[BaseModel],
+    dim: Optional[str] = None,
+    conflicts: Literal["drop", "raise"] = "raise",
+    drop_attrs: Optional[Sequence[str]] = None,
+):
+    """
+    Merge base models along a dimension.
+
+    Parameters
+    ----------
+    model_list
+        A list of models.
+    dim
+        The dimension along which to merge. If provided, the models must
+        all have "{dim}_min" and "{dim}_max" attributes.
+    conflicts
+        Indicates how to handle conflicts in attributes other than those
+        indicated by dim. If "drop" simply drop conflicting attributes,
+        or attributes not shared by all models. If "raise" raise an
+        [AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when
+        issues are encountered.
+    drop_attrs
+        If provided, attributes which should be dropped.
+    """
+
+    def _check_class(mod_list):
+        """Convert models to dictionaries."""
+        if not len({x.__class__ for x in model_list}) == 1:
+            msg = "Models must all be the same class to merge"
+            raise AttributeMergeError(msg)
+
+    def _get_model_dict_list(mod_list):
+        """Get list of model_dict, merge along dim if specified."""
+        model_dicts = [dict(x) for x in model_list]
+        # drop attributes specified.
+        if drop := set(iterate(drop_attrs)):
+            model_dicts = [
+                {i: v for i, v in x.items() if i not in drop} for x in model_dicts
+            ]
+        model_sets = [set(x) for x in model_dicts]
+        if not dim:
+            return model_dicts
+        dmin, dmax = f"{dim}_min", f"{dim}_max"
+        expected_attrs = {dmin, dmax}
+        if not all([x.issuperset(expected_attrs) for x in model_sets]):
+            msg = f"All models do not have required attributes: {expected_attrs}"
+            raise AttributeMergeError(msg)
+        # now all model dicts just have min/max values set
+        min_start = min([x[f"{dim}_min"] for x in model_dicts])
+        max_end = max([x[f"{dim}_max"] for x in model_dicts])
+        for mod in model_dicts:
+            mod[dmin], mod[dmax] = min_start, max_end
+        return model_dicts
+
+    def _replace_null_with_None(mod_dict_list):
+        """Because NaN != NaN we need to replace those values so == works."""
+        out = []
+        for mod in mod_dict_list:
+            out.append(
+                {
+                    i: (v if (isinstance(v, Sequence) or not pd.isnull(v)) else None)
+                    for i, v in mod.items()
+                }
+            )
+        return out
+
+    def _keep_eq(d1, d2):
+        """Keep only the values that are equal between d1/d2."""
+        out = {}
+        for i in set(d1) | set(d2):
+            if not d1[i] == d2[i]:
+                continue
+            out[i] = d1[i]
+        return out
+
+    def _handle_other_attrs(mod_dict_list):
+        """Check the other attributes and handle based on conflicts param."""
+        no_null_ = _replace_null_with_None(mod_dict_list)
+        all_eq = all(no_null_[0] == x for x in no_null_)
+        if all_eq:
+            return mod_dict_list
+        # now the fun part.
+        if conflicts == "raise":
+            msg = "Cannot merge models, not all of their non-dim attrs are equal."
+            raise AttributeMergeError(msg)
+        final_dict = reduce(_keep_eq, mod_dict_list)
+        return [final_dict]
+
+    _check_class(model_list)
+    _get_model_dict_list(model_list)
+    mod_dict_list = _get_model_dict_list(model_list)
+    mod_dict_list = _handle_other_attrs(mod_dict_list)
+    cls = model_list[0].__class__
+    return cls(**mod_dict_list[0])
