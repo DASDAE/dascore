@@ -231,9 +231,6 @@ class TestChunk:
         new = random_spool.chunk(time=2)
         # get contents of chunked spool
         chunk_df = new.get_contents()
-        # index 3 has a problem; select isn't working when the slice
-        # range starts/ends on the same sample.
-        assert False
         new_patches = list(new)
         new_spool = dc.spool(new_patches)
         # get content of spool created from patches in chunked spool.

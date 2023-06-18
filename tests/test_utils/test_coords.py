@@ -312,6 +312,17 @@ class TestBasics:
         new = coord.set_units("furlongs")
         assert new != coord
 
+    def test_start_start_time(self, coord):
+        """Ensure when time range is == (start, start) that dim has len 1."""
+        assert False
+        out = coord.select((coord.min, coord.min))[0]
+        assert len(out) == 1
+
+    def test_end_end_time(self, coord):
+        """Ensure when time range is == (end, end) that dim has len 1."""
+        out = coord.select((coord.max, coord.max))[0]
+        assert len(out) == 1
+
 
 class TestCoordRange:
     """Tests for coords from array."""
