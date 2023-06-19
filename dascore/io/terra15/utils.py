@@ -5,9 +5,11 @@ from typing import Optional
 import numpy as np
 from tables.exceptions import NoSuchNodeError
 
+import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.schema import PatchFileSummary
+from dascore.utils.coords import get_coord
 from dascore.utils.misc import get_slice_from_monotonic
 from dascore.utils.time import datetime_to_float, to_datetime64
 
@@ -119,10 +121,24 @@ def _get_dar_attrs(data_node, root, tar, dar):
     return attrs
 
 
+def _get_time_coord(starttime, start_ind, stop_ind, dt, snap):
+    """Get the time coordinate."""
+    t1 = to_datetime64(starttime)
+    if snap:
+        dt = dc.to_timedelta64(dt)
+        stop = stop_ind * dt + t1
+        time = get_coord(start=t1, stop=stop, step=dt)
+    else:
+        t_float = starttime + np.arange(start_ind, stop_ind) * dt
+        time = get_coord(dc.to_datetime64(t_float))
+    return time
+
+
 def _read_terra15(
     root,
     time: Optional[tuple[timeable_types, timeable_types]] = None,
     distance: Optional[tuple[float, float]] = None,
+    snap_dims: bool = True,
 ) -> Patch:
     """
     Read a terra15 file.
@@ -159,17 +175,16 @@ def _read_terra15(
     )
     assert req_t_max > req_t_min
     # calculate time array, convert to datetime64
-    t_float = file_t_min + np.arange(start_ind, stop_ind) * dt
-    time_ar = to_datetime64(t_float)
+    time_coord = _get_time_coord(file_t_min, start_ind, stop_ind, dt, snap_dims)
     time_inds = (start_ind, stop_ind)
     # get data and sliced distance coord
     dist_ar = _get_distance_array(root)
     dslice = get_slice_from_monotonic(dist_ar, distance)
     dist_ar_trimmed = dist_ar[dslice]
     data = data_node.data[slice(*time_inds), dslice]
-    coords = {"time": time_ar, "distance": dist_ar_trimmed}
+    coords = {"time": time_coord, "distance": dist_ar_trimmed}
     dims = ("time", "distance")
-    attrs = _get_dar_attrs(data_node, root, time_ar, dist_ar_trimmed)
+    attrs = _get_dar_attrs(data_node, root, time_coord, dist_ar_trimmed)
     return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
 
 

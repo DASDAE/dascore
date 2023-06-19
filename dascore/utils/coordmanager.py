@@ -348,7 +348,7 @@ class CoordManager(DascoreBaseModel):
             step = attrs.get(f"d_{name}")
             # quick path for not updating.
             all_none = all([x is None for x in (start, stop, step)])
-            limits_equal = coord.max == stop and coord.min == start
+            limits_equal = coord.max() == stop and coord.min() == start
             if all_none or limits_equal:
                 continue
             out[name] = coord.update_limits(start, stop, step)
@@ -360,8 +360,8 @@ class CoordManager(DascoreBaseModel):
         attr_dict["dims"] = self.dims
         for dim in self.dims:
             coord = self.coord_map[dim]
-            attr_dict[f"{dim}_min"] = coord.min
-            attr_dict[f"{dim}_max"] = coord.max
+            attr_dict[f"{dim}_min"] = coord.min()
+            attr_dict[f"{dim}_max"] = coord.max()
             # passing None messes up the validation for d_{dim}
             if coord.step is not None:
                 attr_dict[f"d_{dim}"] = coord.step
@@ -545,19 +545,19 @@ def get_coord_manager(
         return coords
     coords = {} if coords is None else coords
     dims = () if dims is None else dims
-    coord_map, dim_map = _get_coord_dim_map(coords, dims)
+    coord_map, dim_map = _get_coord_dim_map(coords, dims, attrs)
     _check_and_fill_coords(coord_map, dim_map, dims, attrs)
     out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
     out = _update_units(out, attrs)
     return out
 
 
-def _get_coord_dim_map(coords, dims):
+def _get_coord_dim_map(coords, dims, attrs=None):
     """
     Get coord_map and dim_map from coord input.
     """
 
-    def _coord_from_simple(name, coord):
+    def _coord_from_simple(name, coord, attrs):
         """
         Get coordinates from {coord_name: coord} where coord_name is dim name.
         """
@@ -569,7 +569,8 @@ def _get_coord_dim_map(coords, dims):
             )
             raise CoordError(msg)
         assert name in dims
-        return get_coord(values=coord), (name,)
+        step = attrs.get(f"d_{name}") if attrs is not None else None
+        return get_coord(values=coord, step=step), (name,)
 
     def _maybe_coord_from_nested(coord):
         """
@@ -598,13 +599,13 @@ def _get_coord_dim_map(coords, dims):
     if isinstance(coords, CoordManager):
         return dict(coords.coord_map), dict(coords.dim_map)
     # otherwise create coord and dim maps.
-    coord_map, dim_map = {}, {}
+    c_map, d_map = {}, {}
     for name, coord in coords.items():
         if not isinstance(coord, tuple):
-            coord_map[name], dim_map[name] = _coord_from_simple(name, coord)
+            c_map[name], d_map[name] = _coord_from_simple(name, coord, attrs)
         else:
-            coord_map[name], dim_map[name] = _maybe_coord_from_nested(coord)
-    return coord_map, dim_map
+            c_map[name], d_map[name] = _maybe_coord_from_nested(coord)
+    return c_map, d_map
 
 
 def merge_coord_managers(
@@ -670,14 +671,14 @@ def merge_coord_managers(
 
     def _snap_coords(coord_list):
         """Snap coordinates together."""
-        if snap_tolerance:
+        if snap_tolerance is None:
             return coord_list  # skip snapping if no snap tolerance.
         for ind in range(1, len(coord_list)):
             c_coord = coord_list[ind - 1]
             n_coord = coord_list[ind]
             tolerance = snap_tolerance * c_coord.step
-            assumed_start = c_coord.max + c_coord.step
-            diff = np.abs(assumed_start - n_coord.min)
+            assumed_start = c_coord.max() + c_coord.step
+            diff = np.abs(assumed_start - n_coord.min())
             # snap is close enough, update coord.
             if diff > 0 and diff <= tolerance:
                 coord_list[ind] = n_coord.update_limits(start=assumed_start)
@@ -724,6 +725,6 @@ def merge_coord_managers(
 
     dims = _get_dims(coord_managers)
     coord_managers = _drop_unshared_coordinates(coord_managers)
-    sort_managers = sorted(coord_managers, key=lambda x: x.coord_map[dim].min)
+    sort_managers = sorted(coord_managers, key=lambda x: x.coord_map[dim].min())
     merged_coords = _get_new_coords(sort_managers)
     return get_coord_manager(merged_coords, dims=dims)

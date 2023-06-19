@@ -1,7 +1,7 @@
 """
 Utilities for models.
 """
-from functools import cached_property, reduce
+from functools import _lru_cache_wrapper, cached_property, reduce
 from typing import Optional, Sequence
 
 import numpy as np
@@ -25,7 +25,7 @@ class DascoreBaseModel(BaseModel):
 
         extra = "ignore"
         validate_assignment = True  # validators run on assignment
-        keep_untouched = (cached_property,)
+        keep_untouched = (cached_property, _lru_cache_wrapper)
         frozen = True
         validate_all = True
 

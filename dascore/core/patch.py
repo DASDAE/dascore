@@ -190,7 +190,6 @@ class Patch:
             dims = coords.dims if isinstance(coords, CoordManager) else self.dims
         coords = get_coord_manager(coords, dims)
         if dims and dims != coords.dims:
-            # coords = get_coord_manager(coords, dims, attrs)
             dim_map = {old: new for old, new in zip(self.dims, dims)}
             coords = coords.rename_coord(**dim_map)
         if attrs:

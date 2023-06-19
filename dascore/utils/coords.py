@@ -56,7 +56,7 @@ def _get_nullish_for_type(dtype):
     if np.issubdtype(dtype, np.datetime64):
         return np.datetime64("NaT")
     if np.issubdtype(dtype, np.timedelta64):
-        return np.timedelta("NaT")
+        return np.timedelta64("NaT")
     # everything else should be a NaN (which is a float). This is
     # a bit of a problem for ints, which have no null rep., but upcasting
     # to float will probably cause less damage then using None
@@ -144,10 +144,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __rich__(self):
         base = Text(self.__class__.__name__, style=self._rich_style)
         t1 = Text("")
-        if not pd.isnull(self.min):
-            t1 += Text(f" min={get_nice_string(self.min)}")
-        if not pd.isnull(self.max):
-            t1 += Text(f" max={get_nice_string(self.max)}")
+        if not pd.isnull(self.min()):
+            t1 += Text(f" min={get_nice_string(self.min())}")
+        if not pd.isnull(self.max()):
+            t1 += Text(f" max={get_nice_string(self.max())}")
         if not pd.isnull(self.step):
             t1 += f" step={get_nice_string(self.step)}"
         t1 += f" shape={self.shape}"
@@ -160,21 +160,29 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __str__(self):
         return str(self.__rich__())
 
-    @property
-    @abc.abstractmethod
+    @cache
     def min(self):
+        """return min value"""
+        return self._min()
+
+    @cache
+    def max(self):
+        """return max value"""
+        return self._max()
+
+    @abc.abstractmethod
+    def _min(self):
         """Returns (or generates) the array data."""
 
-    @property
     @abc.abstractmethod
-    def max(self):
+    def _max(self):
         """Returns (or generates) the array data."""
 
     @property
     @cache
     def limits(self) -> Tuple[Any, Any]:
         """Returns a numpy datatype"""
-        return self.min, self.max
+        return self.min(), self.max()
 
     @property
     @abc.abstractmethod
@@ -492,13 +500,11 @@ class CoordRange(BaseCoord):
             out = np.linspace(self.start, self.stop - self.step, num=len(self))
         return array(out)
 
-    @property
-    def min(self):
+    def _min(self):
         """Return min value"""
         return self.start
 
-    @property
-    def max(self):
+    def _max(self):
         """Return max value in range."""
         # like range, coord range is exclusive of final value.
         return self.stop - self.step
@@ -584,11 +590,11 @@ class CoordArray(BaseCoord):
         if step is not None:
             out = self.snap().update_limits(step=step)
         elif start is not None:
-            diff = start - self.min
+            diff = start - self.min()
             vals = self.values + diff
             out = get_coord(values=vals, units=self.units)
         elif stop is not None:
-            diff = stop - self.max
+            diff = stop - self.max()
             vals = self.values + diff
             out = get_coord(values=vals, units=self.units)
         return out
@@ -606,18 +612,14 @@ class CoordArray(BaseCoord):
     def __len__(self):
         return len(self.values)
 
-    @property
-    @cache
-    def min(self):
+    def _min(self):
         """Return min value"""
         try:
             return np.min(self.values)
         except ValueError:  # degenerate data case
             return _get_nullish_for_type(self.dtype)
 
-    @property
-    @cache
-    def max(self):
+    def _max(self):
         """Return max value in range."""
         try:
             return np.max(self.values)
@@ -768,6 +770,10 @@ def get_coord(
             return values
         if np.size(values) == 0:
             return CoordDegenerate(values=values, units=units)
+        # special case of len 1 array that specify step
+        elif len(values) == 1 and step is not None:
+            val = values[0]
+            return CoordRange(start=val, stop=val, step=step, units=units)
         start, stop, step, monotonic = _maybe_get_start_stop_step(values)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)

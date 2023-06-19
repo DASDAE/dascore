@@ -8,8 +8,9 @@ import pandas as pd
 import pytest
 from rich.text import Text
 
+import dascore as dc
 from dascore.core import Patch
-from dascore.utils.time import to_timedelta64
+from dascore.utils.coords import CoordRange
 
 
 def get_simple_patch() -> Patch:
@@ -40,7 +41,7 @@ class TestInit:
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 200))
         attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
-        time_deltas = to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
+        time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
         coords = dict(
             distance=np.arange(array.shape[0]) * attrs["dx"],
             time=self.time1 + time_deltas,
@@ -56,7 +57,7 @@ class TestInit:
         array = rand.random(size=(20, 100))
         dt = 1 / 250.0
         attrs = dict(d_distance=1, d_time=dt, category="DAS", id="test_data1")
-        time_deltas = to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
+        time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
         coords = dict(
             distance=np.arange(array.shape[0]) * attrs["d_distance"],
             time=self.time1 + time_deltas,
@@ -79,7 +80,7 @@ class TestInit:
         Ensure the time_min and time_max attrs can be inferred from coord time.
         """
         patch = random_dt_coord
-        time = patch.coords.coord_map["time"].max
+        time = patch.coords.coord_map["time"].max()
         assert patch.attrs["time_max"] == time
 
     def test_init_from_array(self, random_patch):
@@ -138,6 +139,12 @@ class TestInit:
         data = np.ones((10, 10))
         with pytest.raises(ValueError, match="data, coords, and dims"):
             Patch(data=data)
+
+    def test_coords_from_1_element_array(self):
+        """Ensure CoordRange is still returned despite 1D array in time."""
+        patch = dc.get_example_patch("random_das", shape=(100, 1))
+        time_coord = patch.coords.coord_map["time"]
+        assert isinstance(time_coord, CoordRange)
 
 
 class TestNew:
@@ -318,7 +325,7 @@ class TestUpdateAttrs:
         d_time = random_patch.attrs["d_time"]
         assert isinstance(d_time, np.timedelta64)
         new1 = random_patch.update_attrs(d_time=10)
-        assert new1.attrs["d_time"] == to_timedelta64(10)
+        assert new1.attrs["d_time"] == dc.to_timedelta64(10)
 
 
 class TestSqueeze:
@@ -403,8 +410,8 @@ class TestPipe:
         assert out.attrs["keyword_arg"] == "bob"
 
 
-class TestAddCoords:
-    """Tests for adding non-standard coords to patches."""
+class TestCoords:
+    """Test various things about patch coordinates."""
 
     @pytest.fixture(scope="class")
     def random_patch_with_lat(self, random_patch):
@@ -432,3 +439,12 @@ class TestAddCoords:
         assert "quality" in out1.coords
         assert out1.coords["quality"].shape
         assert np.all(out1.coords["quality"] == 1)
+
+    def test_coord_time_narrow_select(self, multi_dim_coords_patch):
+        """Ensure the coord type doesn't change in narrow slice."""
+        patch = multi_dim_coords_patch
+        time = patch.coords.coord_map["time"]
+        new = patch.select(time=(time.min(), time.min()))
+        assert 1 in new.shape
+        new_coords = new.coords.coord_map
+        assert isinstance(new_coords["time"], CoordRange)

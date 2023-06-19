@@ -380,37 +380,37 @@ class TestUpdateFromAttrs:
         """Ensure min time in attrs updates appropriate coord."""
         for dim in basic_coord_manager.dims:
             coord = basic_coord_manager.coord_map[dim]
-            attrs = {f"{dim}_max": coord.min}
+            attrs = {f"{dim}_max": coord.min()}
             new = basic_coord_manager.update_from_attrs(attrs)
             new_coord = new.coord_map[dim]
             assert len(new_coord) == len(coord)
-            assert new_coord.max == coord.min
+            assert new_coord.max() == coord.min()
 
     def test_update_max(self, basic_coord_manager):
         """Ensure max time in attrs updates appropriate coord."""
         for dim in basic_coord_manager.dims:
             coord = basic_coord_manager.coord_map[dim]
-            attrs = {f"{dim}_min": coord.max}
-            dist = coord.max - coord.min
+            attrs = {f"{dim}_min": coord.max()}
+            dist = coord.max() - coord.min()
             new = basic_coord_manager.update_from_attrs(attrs)
             new_coord = new.coord_map[dim]
-            new_dist = new_coord.max - new_coord.min
+            new_dist = new_coord.max() - new_coord.min()
             assert dist == new_dist
             assert len(new_coord) == len(coord)
-            assert new_coord.min == coord.max
+            assert new_coord.min() == coord.max()
 
     def test_update_step(self, basic_coord_manager):
         """Ensure the step can be updated which changes endtime."""
         for dim in basic_coord_manager.dims:
             coord = basic_coord_manager.coord_map[dim]
             attrs = {f"d_{dim}": coord.step * 10}
-            dist = coord.max - coord.min
+            dist = coord.max() - coord.min()
             new = basic_coord_manager.update_from_attrs(attrs)
             new_coord = new.coord_map[dim]
-            new_dist = new_coord.max - new_coord.min
+            new_dist = new_coord.max() - new_coord.min()
             assert (dist * 10) == new_dist
             assert len(new_coord) == len(coord)
-            assert new_coord.min == coord.min
+            assert new_coord.min() == coord.min()
 
 
 class TestUpdateToAttrs:
@@ -423,8 +423,8 @@ class TestUpdateToAttrs:
             start = getattr(attrs, f"{dim}_min")
             stop = getattr(attrs, f"{dim}_max")
             step = getattr(attrs, f"d_{dim}")
-            assert start == coord.min
-            assert stop == coord.max
+            assert start == coord.min()
+            assert stop == coord.max()
             assert step == coord.step
             vals_from_coord = coord.values
             vals_from_attrs = get_coord_from_attrs(attrs, dim).values
@@ -585,7 +585,7 @@ class TestMergeCoordManagers:
         """Get a new coord manager offset by some amount along a dim."""
         name, value = list(kwargs.items())[0]
         coord = cm.coord_map[name]
-        start = coord.max if from_max else coord.min
+        start = coord.max() if from_max else coord.min()
         attr_name = f"{name}_min"
         new = cm.update_from_attrs({attr_name: start + value})
         return new
@@ -598,8 +598,8 @@ class TestMergeCoordManagers:
         out = merge_coord_managers([cm1, cm2], dim="time")
         new_time = out.coord_map["time"]
         assert isinstance(new_time, CoordRange)
-        assert new_time.min == time.min
-        assert new_time.max == cm2.coord_map["time"].max
+        assert new_time.min() == time.min()
+        assert new_time.max() == cm2.coord_map["time"].max()
 
     def test_merge_offset_close_no_snap(self, basic_coord_manager):
         """When the coordinate don't line up, it should produce monotonic Coord."""
@@ -630,8 +630,8 @@ class TestMergeCoordManagers:
         out = merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
         new_time = out.coord_map["time"]
         assert isinstance(new_time, CoordRange)
-        assert new_time.min == time.min
-        assert new_time.max == cm2.coord_map["time"].max
+        assert new_time.min() == time.min()
+        assert new_time.max() == cm2.coord_map["time"].max()
 
     @pytest.mark.parametrize("factor", (1.1, 0.9, 1.3, 1.01, 0))
     def test_merge_snap_when_needed(self, basic_coord_manager, factor):
@@ -643,10 +643,10 @@ class TestMergeCoordManagers:
         out = merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
         new_time = out.coord_map["time"]
         assert isinstance(new_time, CoordRange)
-        assert new_time.min == time.min
+        assert new_time.min() == time.min()
         new_dim_len = out.shape[cm1.dims.index("time")]
-        expected_end = time.min + (new_dim_len - 1) * time.step
-        assert new_time.max == expected_end
+        expected_end = time.min() + (new_dim_len - 1) * time.step
+        assert new_time.max() == expected_end
 
     @pytest.mark.parametrize("factor", (10, -10, 6, -6))
     def test_merge_raise_snap_too_big(self, basic_coord_manager, factor):
@@ -678,7 +678,7 @@ class TestMergeCoordManagers:
         """When coords that won't be merged arent equal merge should fail."""
         cm1 = basic_coord_manager
         dist = cm1.coord_map["distance"]
-        new_dist = dist.update_limits(start=dist.max)
+        new_dist = dist.update_limits(start=dist.max())
         cm2 = cm1.update_coords(distance=new_dist)
         with pytest.raises(CoordMergeError, match="Non merging coordinates"):
             merge_coord_managers([cm1, cm2], "time")

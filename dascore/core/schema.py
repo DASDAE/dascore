@@ -135,7 +135,7 @@ class PatchAttrs(BaseModel):
             return cls(**out)
         for name in coord_manager.dims:
             coord = coord_manager.coord_map[name]
-            out[f"{name}_min"], out[f"{name}_max"] = coord.min, coord.max
+            out[f"{name}_min"], out[f"{name}_max"] = coord.min(), coord.max()
             if coord.step is not None:
                 out[f"d_{name}"] = coord.step
             if coord.units is not None:

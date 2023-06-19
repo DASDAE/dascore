@@ -189,9 +189,9 @@ class TestBasics:
 
     def test_select_out_of_bounds_too_early(self, coord):
         """Applying a select out of bounds (too early) should raise an Error."""
-        diff = (coord.max - coord.min) / (len(coord) - 1)
+        diff = (coord.max() - coord.min()) / (len(coord) - 1)
         # get a range which is for sure before data.
-        v1 = coord.min - 100 * diff
+        v1 = coord.min() - 100 * diff
         v2 = v1 + 30 * diff
         # it should raise because select range is not contained by coord.
         with pytest.raises(SelectRangeError, match="is out of bounds"):
@@ -204,9 +204,9 @@ class TestBasics:
 
     def test_select_out_of_bounds_too_late(self, coord):
         """Applying a select out of bounds (too late) should raise an Error."""
-        diff = (coord.max - coord.min) / (len(coord) - 1)
+        diff = (coord.max() - coord.min()) / (len(coord) - 1)
         # get a range which is for sure after data.
-        v1 = coord.max + 100 * diff
+        v1 = coord.max() + 100 * diff
         v2 = v1 + 30 * diff
         # it should raise because select range is not contained by coord.
         with pytest.raises(SelectRangeError, match="is out of bounds"):
@@ -227,9 +227,9 @@ class TestBasics:
             elif isinstance(indexer, np.ndarray):
                 assert np.all(indexer)
 
-        diff = (coord.max - coord.min) / (len(coord) - 1)
-        v1 = coord.min - 10 * diff
-        v2 = coord.max + 10 * diff
+        diff = (coord.max() - coord.min()) / (len(coord) - 1)
+        v1 = coord.min() - 10 * diff
+        v2 = coord.max() + 10 * diff
         out, slice_thing = coord.select((v1, v2))
         _is_equal(coord, out, slice_thing)
         out, slice_thing = coord.select((None, v2))
@@ -239,8 +239,8 @@ class TestBasics:
 
     def test_get_range(self, coord):
         """Basic tests for range of coords."""
-        start = coord.min
-        end = coord.max
+        start = coord.min()
+        end = coord.max()
         out = coord.get_slice_tuple((start, end))
         assert out == (start, end)
         assert coord.get_slice_tuple((start, None)) == (start, None)
@@ -315,7 +315,7 @@ class TestBasics:
 
     def test_select_start_start_time(self, coord):
         """Ensure when time range is == (start, start) that dim has len 1."""
-        out = coord.select((coord.min, coord.min))[0]
+        out = coord.select((coord.min(), coord.min()))[0]
         assert len(out) == 1
 
     def test_intra_sample_select(self, coord):
@@ -333,7 +333,7 @@ class TestBasics:
 
     def test_select_end_end_time(self, coord):
         """Ensure when time range is == (end, end) that dim has len 1."""
-        out = coord.select((coord.max, coord.max))[0]
+        out = coord.select((coord.max(), coord.max()))[0]
         assert len(out) == 1
 
 
@@ -472,7 +472,7 @@ class TestCoordRange:
     def test_test_select_end_floats(self, evenly_sampled_float_coord_with_units):
         """Ensure we can select right up to the end of the array."""
         coord = evenly_sampled_float_coord_with_units
-        new_coord, out = coord.select((coord.min, coord.max))
+        new_coord, out = coord.select((coord.min(), coord.max()))
         assert len(new_coord) == len(coord)
         assert np.allclose(new_coord.values, coord.values)
 
@@ -481,6 +481,15 @@ class TestCoordRange:
         new = coord.empty()
         assert isinstance(new, CoordDegenerate)
         assert new.dtype == coord.dtype
+
+    def test_init_length_one(self):
+        """Ensure len 1 coord can be inited provided step is supplied."""
+        time = dc.to_datetime64(["2020-01-01"])
+        dt = dc.to_timedelta64(0.09999)
+        coord1 = get_coord(start=time[0], stop=time[0], step=dt)
+        coord2 = get_coord(values=time, step=dt)
+        assert isinstance(coord1, CoordRange)
+        assert coord1 == coord2
 
 
 class TestMonotonicCoord:
@@ -492,11 +501,11 @@ class TestMonotonicCoord:
         # test start only
         new, sliced = coord.select((5, ...))
         assert_value_in_one_step(coord, sliced.start, 5)
-        assert new.min >= 5
+        assert new.min() >= 5
         # test stop only
         new, sliced = coord.select((..., 40))
         assert_value_in_one_step(coord, sliced.stop - 1, 40, greater=False)
-        assert new.max <= 40
+        assert new.max() <= 40
 
     def test_sort(self, monotonic_float_coord):
         """Ensure sort returns equal coord"""
@@ -550,7 +559,7 @@ class TestMonotonicCoord:
     def test_update_limits_too_many_params(self, monotonic_float_coord):
         """Update limits should raise if too many parameters are specified."""
         coords = monotonic_float_coord
-        start, stop = coords.min + 1, coords.max - 1
+        start, stop = coords.min() + 1, coords.max() - 1
         with pytest.raises(ValueError, match="At most one parameter"):
             coords.update_limits(start, stop)
 
@@ -559,23 +568,23 @@ class TestMonotonicCoord:
         coord = monotonic_float_coord
         new = coord.update_limits(step=1.5)
         assert np.isclose(new.step, 1.5)
-        assert new.min == coord.min
+        assert new.min() == coord.min()
 
     def test_update_limits_end(self, monotonic_float_coord):
         """Ensure end can be updated."""
         coord = monotonic_float_coord
-        new_stop = coord.max - 10
+        new_stop = coord.max() - 10
         new = coord.update_limits(stop=new_stop)
         assert len(new) == len(coord)
-        assert new.max == new_stop
+        assert new.max() == new_stop
 
     def test_update_limits_start(self, monotonic_float_coord):
         """Ensure the start can be updated."""
         coord = monotonic_float_coord
-        new_start = coord.min - 100
+        new_start = coord.min() - 100
         new = coord.update_limits(start=new_start)
         assert len(new) == len(coord)
-        assert np.isclose(new.min, new_start)
+        assert np.isclose(new.min(), new_start)
 
     def test_update_limits_no_args(self, monotonic_float_coord):
         """Ensure both start/stop can be updated."""
@@ -698,8 +707,8 @@ class TestDegenerateCoords:
 
     def test_min_max(self, basic_degenerate):
         """Ensure min/max are nullish"""
-        assert pd.isnull(basic_degenerate.min)
-        assert pd.isnull(basic_degenerate.max)
+        assert pd.isnull(basic_degenerate.min())
+        assert pd.isnull(basic_degenerate.max())
 
 
 class TestCoercion:

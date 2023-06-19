@@ -313,7 +313,7 @@ def diverse_directory_spool(diverse_spool_directory):
 @register_func(SPOOL_FIXTURES)
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
-    out = DirectorySpool(two_patch_directory)
+    out = DirectorySpool(two_patch_directory).update()
     return out.update()
 
 

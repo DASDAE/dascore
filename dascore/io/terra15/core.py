@@ -51,14 +51,28 @@ class Terra15FormatterV4(FiberIO):
         path: Union[str, Path],
         time: Optional[tuple[timeable_types, timeable_types]] = None,
         distance: Optional[tuple[float, float]] = None,
+        snap_dims: bool = True,
         **kwargs
     ) -> dc.BaseSpool:
         """
         Read a terra15 file.
+
+        Parameters
+        ----------
+        path
+            The path to the file.
+        time
+            A tuple for filtering time.
+        distance
+            A tuple for filtering distance.
+        snap_dims
+            If True, ensure the coordinates are evenly sampled monotonic.
+            This will cause some loss in precision but it is usually
+            negligible.
         """
         # TODO need to create h5 file decorator to avoid too many open/close files.
         with open_hdf5_file(path) as fi:
-            patch = _read_terra15(fi.root, time, distance)
+            patch = _read_terra15(fi.root, time, distance, snap_dims=snap_dims)
         return dc.spool(patch)
 
 
