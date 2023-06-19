@@ -58,14 +58,24 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
 
 
 @register_func(EXAMPLE_PATCHES, key="random_das")
-def _random_patch(starttime="2017-09-18", network="", station="", tag="random"):
-    """Generate a random DAS Patch."""
+def _random_patch(
+    starttime="2017-09-18",
+    network="",
+    station="",
+    tag="random",
+    shape=(300, 2_000),
+    d_time=to_timedelta64(1 / 250),
+    d_distance=1,
+):
+    """
+    Generate a random DAS Patch.
+    """
     rand = np.random.RandomState(13)
-    array = rand.random(size=(300, 2_000))
+    array = rand.random(shape)
     t1 = np.datetime64(starttime)
     attrs = dict(
-        d_distance=1,
-        d_time=to_timedelta64(1 / 250),
+        d_distance=d_distance,
+        d_time=d_time,
         category="DAS",
         time_min=t1,
         network=network,
@@ -164,29 +174,30 @@ def _example_event_1():
 
 @register_func(EXAMPLE_SPOOLS, key="random_das")
 def _random_spool(
-    d_time=0,
-    length=3,
-    starttime=np.datetime64("2020-01-03"),
-    network="",
-    station="",
-    tag="random",
+    time_gap=0, length=3, starttime=np.datetime64("2020-01-03"), **kwargs
 ):
     """
     Generate several random patches in the spool.
 
     Parameters
     ----------
-    d_time
-        The difference in time between each patch.
+    time_gap
+        The difference in time between each patch. Use a negative
+        number to create overlap.
     length
+        The number of patches to generate.
+    starttime
+        The starttime of the first patch. Subsequent patches have startimes
+        after the endtime of the previous patch, plus the time_gap.
+    **kwargs
+        Passed to the [_random_patch](`dasocre.examples._random_patch`) function.
     """
     out = []
     for _ in range(length):
-        patch = _random_patch(
-            starttime=starttime, network=network, station=station, tag=tag
-        )
+        patch = _random_patch(starttime=starttime, **kwargs)
         out.append(patch)
-        starttime = patch.attrs["time_max"] + to_timedelta64(d_time)
+        diff = to_timedelta64(time_gap) + patch.attrs.d_time
+        starttime = patch.attrs["time_max"] + diff
     return dc.spool(out)
 
 
@@ -199,10 +210,12 @@ def _diverse_spool():
     """
     spool_no_gaps = _random_spool()
     spool_no_gaps_different_network = _random_spool(network="das2")
-    spool_big_gaps = _random_spool(d_time=np.timedelta64(1, "s"), station="big_gaps")
-    spool_overlaps = _random_spool(d_time=-np.timedelta64(10, "ms"), station="overlaps")
+    spool_big_gaps = _random_spool(time_gap=np.timedelta64(1, "s"), station="big_gaps")
+    spool_overlaps = _random_spool(
+        time_gap=-np.timedelta64(10, "ms"), station="overlaps"
+    )
     dt = to_timedelta64(spool_big_gaps[0].attrs["d_time"] / np.timedelta64(1, "s"))
-    spool_small_gaps = _random_spool(d_time=dt, station="smallg")
+    spool_small_gaps = _random_spool(time_gap=dt, station="smallg")
     spool_way_late = _random_spool(
         length=1, starttime=np.datetime64("2030-01-01"), station="wayout"
     )
