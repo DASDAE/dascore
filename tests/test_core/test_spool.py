@@ -28,8 +28,43 @@ class TestSpoolBasics:
         assert len(out) == 0
 
 
+class TestIndexing:
+    """Tests for indexing spools to retrieve patches."""
+
+    def test_simple_index(self, random_spool):
+        """Ensure indexing a spool returns a patch"""
+        for ind in range(len(random_spool)):
+            patch = random_spool[ind]
+            assert isinstance(patch, dc.Patch)
+
+    def test_negative_index_random_spool(self, random_spool):
+        """Like lists, negative index should start from end."""
+        for ind in range(1, len(random_spool) + 1):
+            patch1 = random_spool[-ind]
+            patch2 = random_spool[-ind + len(random_spool)]
+            assert isinstance(patch1, dc.Patch)
+            assert patch1 == patch2
+
+
 class TestSlicing:
     """Tests for slicing spools to get sub-spools."""
+
+    slices = (
+        slice(None, None),
+        slice(1, 2),
+        slice(1, -1),
+        slice(2),
+        slice(None, 2),
+    )
+
+    @pytest.mark.parametrize("sliz", slices)
+    def test_slice_behaves_like_list(self, random_spool, sliz):
+        """Ensure slicing as spool behaves like list."""
+        patch_list = list(random_spool)[sliz]
+        sub_spool = random_spool[sliz]
+        assert len(sub_spool) == len(patch_list)
+        for pa1, pa2 in zip(patch_list, sub_spool):
+            assert pa1 == pa2
 
     def test_simple_slice(self, random_spool):
         """Ensure a slice works with get_item, should return spool."""
@@ -44,8 +79,8 @@ class TestSlicing:
         assert new_spool[1].equals(random_spool[2])
 
 
-class TestSpoolIterablity:
-    """Tests for indexing/iterating Spools"""
+class TestSpoolIterable:
+    """Tests for iterating Spools"""
 
     def test_len(self, random_spool):
         """Ensure the spool has a length"""
@@ -238,6 +273,16 @@ class TestChunk:
         assert len(set(durations)) == 1
         duration = durations[0] / one_sec
         assert np.abs(duration - 1) <= (2.2 * dt / one_sec)
+
+    def test_merge_1_dim_patches(self, memory_spool_dim_1_patches):
+        """Ensure patches with one sample in time can be merged."""
+        spool = memory_spool_dim_1_patches
+        new = spool.chunk(time=None)
+        assert len(new) == 1
+        patch = new[0]
+        assert patch.attrs.time_min == spool[0].attrs.time_min
+        assert patch.attrs.time_max == spool[-1].attrs.time_max
+        assert patch.attrs.d_time == spool[0].attrs.d_time
 
 
 class TestMergePatchesWithChunk:

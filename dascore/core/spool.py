@@ -152,6 +152,8 @@ class DataFrameSpool(BaseSpool):
         if isinstance(df_ind, slice):  # handle slicing
             df1 = instruction.loc[instruction["current_index"].values[df_ind]]
         else:  # Filter instruction df to only include current index.
+            # handle negative index.
+            df_ind = df_ind if df_ind >= 0 else len(self._df) + df_ind
             df1 = instruction[instruction["current_index"] == df_ind]
         if df1.empty:
             msg = f"index of [{df_ind}] is out of bounds for spool."

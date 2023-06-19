@@ -201,8 +201,7 @@ def multi_dim_coords_patch(random_patch):
 @register_func(PATCH_FIXTURES)
 def event_patch_1():
     """Fetch event patch 1."""
-    path = fetch("example_dasdae_event_1.h5")
-    return dc.spool(path)[0]
+    return dc.get_example_patch("example_event_1")
 
 
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)
@@ -322,6 +321,23 @@ def basic_file_spool(two_patch_directory):
 def terra15_file_spool(terra15_v5_path):
     """A file spool for terra15."""
     return dc.spool(terra15_v5_path)
+
+
+@pytest.fixture(scope="class")
+@register_func(SPOOL_FIXTURES)
+def memory_spool_dim_1_patches():
+    """
+    Memory spool with patches that have length 1 in one dimension.
+    Related to #171.
+    """
+    spool = dc.get_example_spool(
+        "random_das",
+        d_time=0.999767552,
+        shape=(100, 1),
+        length=10,
+        starttime="2023-06-13T15:38:00.49953408",
+    )
+    return spool
 
 
 @pytest.fixture(scope="class", params=SPOOL_FIXTURES)

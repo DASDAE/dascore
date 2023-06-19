@@ -240,6 +240,13 @@ class TestSelect:
 class TestBasicChunk:
     """Tests for chunking filespool."""
 
+    @pytest.fixture(scope="class")
+    def dir_spool_1_dim_patches(self, memory_spool_dim_1_patches, tmp_path_factory):
+        """Create a directory with patches that have 1 dim in time."""
+        path = tmp_path_factory.mktemp("dir_spool_1_dim_patches")
+        out = dc.examples.spool_to_directory(memory_spool_dim_1_patches, path)
+        return dc.spool(out).update()
+
     def test_directory_path_doesnt_change(self, one_file_directory_spool):
         """Chunking shouldn't change the path to the managed directory."""
         out = one_file_directory_spool.chunk(time=1)
@@ -267,6 +274,17 @@ class TestBasicChunk:
         patch_list = list(new_spool)
         for patch in patch_list:
             assert isinstance(patch, dc.Patch)
+
+    def test_merge_1_dim_patches(self, dir_spool_1_dim_patches):
+        """Ensure patches with one sample in time can be merged."""
+        spool = dir_spool_1_dim_patches
+        new = spool.chunk(time=None)
+        assert len(new) == 1
+        patch = new[0]
+        content = spool.get_contents()
+        assert patch.attrs.time_min == content["time_min"].min()
+        assert patch.attrs.time_max == content["time_max"].max()
+        assert patch.attrs.d_time == spool[0].attrs.d_time
 
 
 class TestGetContents:
