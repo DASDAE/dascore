@@ -100,7 +100,6 @@ class Patch:
         return self.equals(other)
 
     def __rich__(self):
-
         dascore_text = get_dascore_text()
         patch_text = Text("Patch ⚡", style="bold")
         header = Text.assemble(dascore_text, " ", patch_text)
@@ -195,7 +194,10 @@ class Patch:
             dim_map = {old: new for old, new in zip(self.dims, dims)}
             coords = coords.rename_coord(**dim_map)
         if attrs:
-            coords = coords.update_from_attrs(attrs)
+            # need to figure out what changed and just pass that.
+            new, old = dict(attrs), dict(self.attrs)
+            diffs = {i: v for i, v in new.items() if new[i] != old.get(i, type)}
+            coords = coords.update_from_attrs(diffs)
         return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 
     def _fast_attr_update(self, attrs):

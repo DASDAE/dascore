@@ -670,7 +670,7 @@ def merge_coord_managers(
 
     def _snap_coords(coord_list):
         """Snap coordinates together."""
-        if snap_tolerance is None:
+        if snap_tolerance:
             return coord_list  # skip snapping if no snap tolerance.
         for ind in range(1, len(coord_list)):
             c_coord = coord_list[ind - 1]

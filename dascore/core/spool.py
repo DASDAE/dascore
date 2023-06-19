@@ -92,14 +92,17 @@ class BaseSpool(abc.ABC):
         Get a dataframe of the patches that will be returned by the spool.
         """
 
-    def __len__(self):
+    def __len__(self) -> int:
         pass
 
     def __rich__(self):
         """Rich rep. of spool."""
         text = get_dascore_text() + Text(" ")
         text += Text(self.__class__.__name__, style=self._rich_style)
-        text += Text(f" 🧵 ({len(self):d} Patches)")
+        text += Text(" 🧵 ")
+        patch_len = len(self)
+        text += Text(f"({patch_len:d}")
+        text += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
         return text
 
     def __str__(self):

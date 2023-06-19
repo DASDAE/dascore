@@ -74,8 +74,8 @@ def _random_patch(
     array = rand.random(shape)
     t1 = np.datetime64(starttime)
     attrs = dict(
-        d_distance=d_distance,
-        d_time=d_time,
+        d_distance=dc.to_timedelta64(d_distance),
+        d_time=to_timedelta64(d_time),
         category="DAS",
         time_min=t1,
         network=network,

@@ -326,7 +326,8 @@ def _merge_patches(
     def _merge_compatible_patches(patch_df, dim):
         """perform merging after patch compatibility has been confirmed."""
         has_overlap = patch_df["_dist_to_previous"] <= to_timedelta64(0)
-        overlap_start = patch_df[min_name] - patch_df["_dist_to_previous"]
+        dist = patch_df["_dist_to_previous"] - df[f"d_{dim}"]
+        overlap_start = patch_df[min_name] - dist
         patches = list(patch_df["patch"])
         # this handles removing overlap in patches.
         trimmed_patches = [
