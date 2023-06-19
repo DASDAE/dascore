@@ -176,6 +176,7 @@ class TestBasics:
         if len(coord) < 7:
             return
         values = np.sort(coord.values)
+        # get a little more than and little less than 2 and -2 index vals
         val1 = values[2] + (values[3] - values[2]) / 2
         val2 = values[-2] - (values[-2] - values[-3]) / 2
         new, _ = coord.select((val1, val2))
@@ -312,13 +313,25 @@ class TestBasics:
         new = coord.set_units("furlongs")
         assert new != coord
 
-    def test_start_start_time(self, coord):
+    def test_select_start_start_time(self, coord):
         """Ensure when time range is == (start, start) that dim has len 1."""
-        assert False
         out = coord.select((coord.min, coord.min))[0]
         assert len(out) == 1
 
-    def test_end_end_time(self, coord):
+    def test_intra_sample_select(self, coord):
+        """
+        Selecting ranges that fall within samples should raise.
+
+        This is consistent with pandas indices.
+        """
+        values = coord.values
+        # get value between first/second sample
+        arg = values[0] + (values[1] - values[0]) / 2
+        assert arg not in np.unique(values)
+        with pytest.raises(SelectRangeError, match="between samples"):
+            coord.select((arg, arg))
+
+    def test_select_end_end_time(self, coord):
         """Ensure when time range is == (end, end) that dim has len 1."""
         out = coord.select((coord.max, coord.max))[0]
         assert len(out) == 1
@@ -482,7 +495,7 @@ class TestMonotonicCoord:
         assert new.min >= 5
         # test stop only
         new, sliced = coord.select((..., 40))
-        assert_value_in_one_step(coord, sliced.stop, 40, greater=False)
+        assert_value_in_one_step(coord, sliced.stop - 1, 40, greater=False)
         assert new.max <= 40
 
     def test_sort(self, monotonic_float_coord):
@@ -496,8 +509,8 @@ class TestMonotonicCoord:
         coord = get_coord(values=ar)
         assert np.allclose(coord.values, ar)
         new, sliced = coord.select((ar[10], ar[20]))
-        assert len(new) == 10 == len(new.values)
-        assert np.allclose(new.values, coord.values[10:20])
+        assert len(new) == 11 == len(new.values)
+        assert np.allclose(new.values, coord.values[10:21])
         # test edges
         eps = 0.000000001
         new, sliced = coord.select((ar[0] + eps, ar[20] - eps))
@@ -505,7 +518,7 @@ class TestMonotonicCoord:
         # ensure messing with the ends keeps the order
         val1, val2 = ar[10] - eps, ar[20] + eps
         new, sliced = coord.select((val1, val2))
-        assert sliced == slice(11, 19)
+        assert sliced == slice(11, 20)
         assert new[0] <= val1
         assert new[-1] >= val2
 
@@ -523,13 +536,16 @@ class TestMonotonicCoord:
         assert sliced.start == 12
         # test end index
         new, sliced = coord.select((..., value1))
-        assert sliced.stop == 12
+        assert sliced.stop == 13
         new, sliced = coord.select((..., value2 - np.timedelta64(1, "ns")))
-        assert sliced.stop == 11
+        assert sliced.stop == 12
         # test range
         new, sliced = coord.select((coord.values[10], coord.values[20]))
-        assert len(new) == 10
-        assert slice(10, 20) == sliced
+        new_vals = new.values
+        assert coord.values[10] == new_vals[0]
+        assert coord.values[20] == new_vals[-1]
+        assert len(new) == 11
+        assert slice(10, 21) == sliced
 
     def test_update_limits_too_many_params(self, monotonic_float_coord):
         """Update limits should raise if too many parameters are specified."""
@@ -699,7 +715,7 @@ class TestCoercion:
     def test_time_delta(self, evenly_sampled_time_delta_coord):
         """Ensure date strings get coerced."""
         coord = evenly_sampled_time_delta_coord
-        drange = (10, 100)
+        drange = (10, 2_000)
         out, indexer = coord.select(drange)
         assert isinstance(out, coord.__class__)
         assert out.dtype == coord.dtype

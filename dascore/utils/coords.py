@@ -243,6 +243,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 out = func(out)
         return out if not invert else 1 / out
 
+    def _validate_slice(self, sliz, args):
+        """Validate that the slice is not empty, else raise."""
+        if sliz.start is not None and sliz.start == sliz.stop:
+            msg = f"{args} selects a region between samples, no data to return."
+            raise SelectRangeError(msg)
+
     def get_slice_tuple(
         self,
         select: Union[slice, None, type(Ellipsis), Tuple[Any, Any]],
@@ -294,15 +300,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         for func in [_validate_slice, _validate_none_or_ellipsis, _validate_len]:
             select = func(select)
         p1, p2 = (self._get_compatible_value(x, invert=invert) for x in select)
-        if check_oder and p1 is not None and p2 is not None and p2 < p1:
-            msg = "second element must be greater than first!"
-            raise ParameterError(msg)
+        # reverse order if needed.
+        if p1 is not None and p2 is not None and p2 < p1:
+            p1, p2 = p2, p1
         # Perform check that the requested select range isn't out of bounds
         if limits is not None:
             start, stop = p1, p2
-            # we need to reverse here for reverse monotonic coord (an ugly hack)
-            if start is not None and stop is not None and start > stop:
-                start, stop = stop, start
             bad_start = start is not None and start > limits[1]
             bad_end = stop is not None and stop < limits[0]
             if bad_end or bad_start:
@@ -420,6 +423,7 @@ class CoordRange(BaseCoord):
         stop = self._get_index(args[1], forward=False)
         # we add 1 to stop in slice since its upper limit is exclusive
         out = slice(start, (stop + 1) if stop is not None else stop)
+        self._validate_slice(out, args)
         new_start = self[start] if start is not None else self.start
         new_end = self[stop] + self.step if stop is not None else self.stop
         new = self.new(start=new_start, stop=new_end)
@@ -434,7 +438,7 @@ class CoordRange(BaseCoord):
         # Due to float weirdness we need a little bit of a fudge factor here.
         fraction = func(np.round((value - start) / step, decimals=10))
         out = int(fraction)
-        if out <= 0 or out >= len(self):
+        if (out <= 0 and forward) or out >= len(self):
             return None
         return out
 
@@ -534,6 +538,8 @@ class CoordArray(BaseCoord):
             out = out & (values >= val1)
         if val2 is not None:
             out = out & (values <= val2)
+        if not np.any(out):
+            self._validate_slice(slice(0, 0), args)
         return self.new(values=values[out]), out
 
     def sort(self) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
@@ -656,32 +662,36 @@ class CoordMonotonicArray(CoordArray):
     def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply select, return selected coords and index for selecting data."""
         v1, v2 = self.get_slice_tuple(args, check_oder=False)
-        # swap indices if start>stop. This happens for decreasing arrays.
-        if self._is_reversed and v1 is not None and v2 is not None and v1 < v2:
+        # reverse order if reverse monotonic. This is done so when we mult
+        # by -1 in _get_index the inverted range is used.
+        if self._is_reversed:
             v1, v2 = v2, v1
-        start = self._get_index(v1)
+        # start_forward = False if self._is_reversed else True
+        start = self._get_index(v1, left=True)
         new_start = start if start is not None and start > 0 else None
-        stop = self._get_index(v2, forward=False)
+        stop = self._get_index(v2, left=False)
         new_stop = stop if stop is not None and stop < len(self) else None
         out = slice(new_start, new_stop)
+        self._validate_slice(out, args)
         return self.new(values=self.values[out]), out
 
-    def _get_index(self, value, forward=True):
-        """Get the index corresponding to a value."""
+    def _get_index(self, value, left=True):
+        """
+        Get the index corresponding to a value.
+
+        Left indicates if this is the min value.
+        """
         if (value := self._get_compatible_value(value)) is None:
             return value
-        side_dict = {True: "left", False: "right"}
         values = self.values
-        mod = 0 if forward else -1
+        side_dict = {True: "left", False: "right"}
         # since search sorted only works on ascending monotonic arrays we
         # negative descending arrays to get the same effect.
-        if values[0] > values[1]:
+        if self._is_reversed:
             values = values * -1
             value = value * -1
-        out = np.searchsorted(values, value, side=side_dict[forward])
-        if out == 0 or out == len(values):
-            return None
-        return out + mod
+        ind = np.searchsorted(values, value, side=side_dict[left])
+        return ind
 
     @property
     @cache
