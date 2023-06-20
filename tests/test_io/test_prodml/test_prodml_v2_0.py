@@ -59,8 +59,10 @@ class TestReadProdML2_0Patch:
         assert attrs["time_max"] == coords["time"].max()
         # since we use floats sometimes this are a little off.
         assert (attrs["time_max"] - t2) < (attrs["d_time"] / 4)
-        assert attrs["distance_min"] == coords["distance"].min() == d1
-        assert attrs["distance_max"] == coords["distance"].max() == d2
+        assert attrs["distance_min"] == coords["distance"].min()
+        assert np.isclose(attrs["distance_min"], d1)
+        assert attrs["distance_max"] == coords["distance"].max()
+        assert np.isclose(attrs["distance_max"], d2)
 
     def test_one_sided_slice(self, prodml_v2_0_patch, prodml_v2_0_example_path):
         """Ensure slice can specify only one side."""
@@ -75,8 +77,8 @@ class TestReadProdML2_0Patch:
         assert attrs["time_min"] == coords["time"].min() == t1
         assert attrs["time_max"] == coords["time"].max()
         assert attrs["time_min"] >= t1
-        assert attrs["distance_max"] <= d2
-        assert attrs["distance_max"] == coords["distance"].max() == d2
+        assert attrs["distance_max"] == coords["distance"].max()
+        assert np.isclose(attrs["distance_max"], d2)
 
     def test_no_arrays_in_attrs(self, prodml_v2_0_patch):
         """

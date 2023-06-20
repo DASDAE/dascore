@@ -381,11 +381,13 @@ def trim_attrs_get_inds(attrs, dim_length, **kwargs):
     start_ind, stop_ind = 0, dim_length
     if value[0] is not None and value[0] > old_start:
         diff = value[0] - old_start
-        start_ind = np.ceil(diff / spacing)
+        # float fudge factor here again; if 5% near int round up/down.
+        start_ind = np.ceil(np.round(diff / spacing, 1))
         out[f"{dim}_min"] = start_ind * spacing + old_start
     if value[1] is not None and value[1] < old_stop:
         diff = old_stop - value[1]
-        diff_samples = -np.floor(diff / spacing)
+        # here it is again :(
+        diff_samples = -np.floor(np.round(diff / spacing, 1))
         stop_ind = dim_length + diff_samples
         out[f"{dim}_max"] = old_stop + diff_samples * spacing
     return slice(int(start_ind), int(stop_ind)), attrs.__class__(**out)
