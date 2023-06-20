@@ -2,8 +2,9 @@
 Implements logic to apply formatting changes to patches from transformations.
 """
 import abc
-import fnmatch
 from abc import abstractmethod
+
+from dascore.utils.units import get_quantity
 
 
 class BaseTransformatter(abc.ABC):
@@ -71,11 +72,8 @@ class FourierTransformatter(BaseTransformatter):
 
     def _toggle_unit_str(self, unit_str):
         """Toggle the unit string."""
-        if fnmatch.fnmatch(unit_str, "1/(*)"):
-            out = unit_str[3:-1]
-        else:
-            out = f"1/({unit_str})"
-        return out
+        quantity = get_quantity(unit_str)
+        return str(1 / quantity)
 
     def _forward_unit_label(self, unit_name):
         """Adjust the unit label for forward transform."""

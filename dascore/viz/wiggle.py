@@ -19,7 +19,6 @@ def wiggle(
     dim="time",
     color="black",
     ax: Optional[plt.Axes] = None,
-    timefmt=None,
     show=False,
 ) -> plt.Figure:
     """

@@ -6,7 +6,12 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import UnitError
-from dascore.utils.units import get_conversion_factor, invert_unit, validate_units
+from dascore.utils.units import (
+    get_conversion_factor,
+    get_unit_and_factor,
+    invert_unit,
+    validate_quantity,
+)
 
 
 class TestUnitInit:
@@ -46,15 +51,25 @@ class TestValidateUnits:
     @pytest.mark.parametrize("in_str", valid)
     def test_validate_units_good_input(self, in_str):
         """Ensure units can be validated from various inputs."""
-        assert validate_units(in_str)
+        assert validate_quantity(in_str)
 
     @pytest.mark.parametrize("in_str", invalid)
     def test_validate_units_bad_input(self, in_str):
         """Ensure units can be validated from various inputs."""
         with pytest.raises(UnitError):
-            validate_units(in_str)
+            validate_quantity(in_str)
 
     def test_none(self):
         """Ensure none and empty str also works."""
-        assert validate_units(None) is None
-        assert validate_units("") == ""
+        assert validate_quantity(None) is None
+        assert validate_quantity("") is None
+
+
+class TestUnitAndFactor:
+    """tests for returning units and scaling factor"""
+
+    def test_quantx_units(self):
+        """tests for the quantx unit str."""
+        mag, ustr = get_unit_and_factor("rad * 2pi/2^16")
+        assert ustr == "pi * radian"
+        assert np.isclose(mag, (2 / (2**16)))

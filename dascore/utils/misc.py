@@ -389,3 +389,10 @@ def trim_attrs_get_inds(attrs, dim_length, **kwargs):
         stop_ind = dim_length + diff_samples
         out[f"{dim}_max"] = old_stop + diff_samples * spacing
     return slice(int(start_ind), int(stop_ind)), attrs.__class__(**out)
+
+
+def unbyte(byte_or_str: Union[bytes, str]) -> str:
+    """Ensure a string is given by str or possibly bytes."""
+    if isinstance(byte_or_str, (bytes, np.bytes_)):
+        byte_or_str = byte_or_str.decode("utf8")
+    return byte_or_str

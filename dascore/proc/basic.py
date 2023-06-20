@@ -45,7 +45,7 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     if not dims:
         return self
     old_dims = self.coords.dims
-    new_coord = self.coords.transpose(dims)
+    new_coord = self.coords.transpose(*dims)
     new_dims = new_coord.dims
     axes = tuple(old_dims.index(x) for x in new_dims)
     new_data = np.transpose(self.data, axes)

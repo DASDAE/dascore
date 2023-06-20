@@ -10,7 +10,7 @@ from rich.text import Text
 
 from dascore import to_datetime64
 from dascore.core.schema import PatchAttrs
-from dascore.exceptions import CoordError, CoordMergeError
+from dascore.exceptions import CoordError, CoordMergeError, ParameterError
 from dascore.utils.coordmanager import (
     CoordManager,
     get_coord_manager,
@@ -331,19 +331,55 @@ class TestSelect:
 class TestTranspose:
     """Test suite for transposing dimensions."""
 
-    def test_missing_dim_raises(self, basic_coord_manager):
-        """All dimensions must be specified, else raise."""
-        with pytest.raises(CoordError, match="specify all dimensions"):
-            basic_coord_manager.transpose(["time"])
+    @pytest.fixture(scope="class")
+    def many_dims_cm(self):
+        """Create a coordmanager with many dimensions."""
+        dims = ("one", "two", "three", "four")
+        coords = {x: np.arange(10) for x in dims}
+        many_dims = get_coord_manager(coords, dims=dims)
+        return many_dims
 
     def test_simple_transpose(self, basic_coord_manager):
         """Ensure the coord manager can be transposed"""
         dims = basic_coord_manager.dims
         new_dims = dims[::-1]
-        tran = basic_coord_manager.transpose(new_dims)
+        tran = basic_coord_manager.transpose(*new_dims)
         assert tran.dims == new_dims
         assert tran.shape != basic_coord_manager.shape
         assert tran.shape == basic_coord_manager.shape[::-1]
+
+    def test_empty_ellipses(self, many_dims_cm):
+        """Ensure ellipses works to just stick things at start/end."""
+        assert many_dims_cm == many_dims_cm.transpose()
+
+    def test_ellipses_at_start(self, many_dims_cm):
+        """Ensure ellipses works to just stick things at start/end."""
+        new = many_dims_cm.transpose(..., "one", "two")
+        assert new.dims == ("three", "four", "one", "two")
+
+    def test_ellipses_at_end(self, many_dims_cm):
+        """Ensure ellipses works to just stick things at start/end."""
+        new = many_dims_cm.transpose("four", "two", ...)
+        assert new.dims == ("four", "two", "one", "three")
+
+    def test_ellipses_in_middle(self, many_dims_cm):
+        """Ensure ellipses works to just stick things at start/end."""
+        new = many_dims_cm.transpose("four", ..., "one")
+        assert new.dims == ("four", "two", "three", "one")
+
+    def test_duplicate_raises(self, many_dims_cm):
+        """... can only be used once, and repeat dimensions must raise."""
+        with pytest.raises(ParameterError, match="duplicate dimensions"):
+            many_dims_cm.transpose(..., "two", ...)
+        with pytest.raises(ParameterError, match="duplicate dimensions"):
+            many_dims_cm.transpose("one", "one", "two", "three", "four")
+
+    def test_raises_no_ellipses_missing_dim(self, many_dims_cm):
+        """When ... is not used all dims must appear in args."""
+        with pytest.raises(ParameterError, match="specify all dimensions"):
+            many_dims_cm.transpose("one", "three", "four")
+        with pytest.raises(ParameterError, match="specify all dimensions"):
+            many_dims_cm.transpose("one")
 
 
 class TestRenameDims:

@@ -2,6 +2,7 @@
 Tests for waterfall plots.
 """
 import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -27,7 +28,7 @@ class TestWaterfall:
     def test_returns_axes(self, random_patch):
         """Call waterfall plot, return."""
         # modify patch to include line at start
-        data = random_patch.data
+        data = np.array(random_patch.data)
         data[:100, :100] = 2.0  # create an origin block for testing axis line up
         data[:100, -100:] = -2.0  #
         out = random_patch.new(data=data)

@@ -2,6 +2,7 @@
 Tests for wiggle plots.
 """
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 class TestWiggle:
@@ -10,7 +11,7 @@ class TestWiggle:
     def test_returns_axes(self, random_patch):
         """Call waterfall plot, return."""
         # modify patch to include line at start
-        data = random_patch.data
+        data = np.array(random_patch.data)
         data[:100, :100] = 2.0  # create an origin block for testing axis line up
         data[:100, -100:] = -2.0  #
         out = random_patch.new(data=data)

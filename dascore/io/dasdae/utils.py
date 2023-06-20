@@ -84,7 +84,6 @@ def _get_attrs(patch_group):
         if isinstance(val, np.ndarray) and not val.shape:
             val = np.array([val])[0]
         out[key] = val
-        #
     return out
 
 

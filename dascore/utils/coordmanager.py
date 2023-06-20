@@ -14,7 +14,12 @@ from typing_extensions import Self
 
 from dascore.constants import DC_BLUE, _DegenerateDimension
 from dascore.core.schema import PatchAttrs
-from dascore.exceptions import CoordError, CoordMergeError, SelectRangeError
+from dascore.exceptions import (
+    CoordError,
+    CoordMergeError,
+    ParameterError,
+    SelectRangeError,
+)
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.utils.display import get_nice_string
 from dascore.utils.mapping import FrozenDict
@@ -367,15 +372,35 @@ class CoordManager(DascoreBaseModel):
                 attr_dict[f"d_{dim}"] = coord.step
         return PatchAttrs(**attr_dict)
 
-    def transpose(self, dims: Tuple[str, ...]) -> Self:
+    def transpose(self, *dims: Union[str, type(Ellipsis)]) -> Self:
         """Transpose the coordinates."""
-        if set(dims) != set(self.dims):
-            msg = (
-                "You must specify all dimensions in a transpose operation. "
-                f"You passed {dims} but dimensions are {self.dims}"
-            )
-            raise CoordError(msg)
-        assert set(dims) == set(self.dims), "You must pass all dimensions."
+
+        def _get_transpose_dims(new, old):
+            """Get a full tuple of dimensions for transpose, allowing for ..."""
+            new_set = set(new)
+            new_list, old_list = list(new), list(old)
+            if len(new_set) != len(new):
+                msg = "Transpose cannot use duplicate dimensions or ... more than once."
+                raise ParameterError(msg)
+            # iterate new list, pop out values from old list.
+            for value in new_set - {...}:
+                old_list.remove(value)
+            # sub in remaining values for ...
+            if ... in new_set:
+                ind = new_list.index(...)
+                new_list = new_list[:ind] + old_list + new_list[ind + 1 :]
+            # ensure all values are accounted for
+            if set(new_list) != set(old):
+                msg = (
+                    "You must specify all dimensions in a transpose operation "
+                    f"or use ... You passed {new} but dimensions are {old}"
+                )
+                raise ParameterError(msg)
+            return tuple(new_list)
+
+        if not dims:
+            return self
+        dims = _get_transpose_dims(new=dims, old=self.dims)
         return self.new(dims=dims)
 
     def rename_coord(self, **kwargs) -> Self:
@@ -568,11 +593,12 @@ def _get_coord_dim_map(coords, dims, attrs=None):
                 "(dimension, coord) "
             )
             raise CoordError(msg)
-        assert name in dims
         step = attrs.get(f"d_{name}") if attrs is not None else None
-        return get_coord(values=coord, step=step), (name,)
+        out = get_coord(values=coord, step=step)
+        # assert out.shape == np.shape(coord)
+        return out, (name,)
 
-    def _maybe_coord_from_nested(coord):
+    def _maybe_coord_from_nested(name, coord, attrs):
         """
         Get coordinates from {coord_name: (dim_name, coord)} or
         {coord_name: ((dim_names...,), coord)}
@@ -592,7 +618,12 @@ def _get_coord_dim_map(coords, dims, attrs=None):
                 f" Valid dimensions are {dims}"
             )
             raise CoordError(msg)
-        coord_out = get_coord(values=coord[1])
+        # pull out any relevant info from attrs.
+        maybe_attrs = attrs or {}
+        units = maybe_attrs.get(f"{name}_units", None)
+        d_time = maybe_attrs.get(f"d_{name}", None)
+        coord_out = get_coord(values=coord[1], units=units, step=d_time)
+        assert coord_out.shape == np.shape(coord[1])
         return coord_out, dim_names
 
     # no need to do anything if we already have coord manager.
@@ -604,7 +635,7 @@ def _get_coord_dim_map(coords, dims, attrs=None):
         if not isinstance(coord, tuple):
             c_map[name], d_map[name] = _coord_from_simple(name, coord, attrs)
         else:
-            c_map[name], d_map[name] = _maybe_coord_from_nested(coord)
+            c_map[name], d_map[name] = _maybe_coord_from_nested(name, coord, attrs)
     return c_map, d_map
 
 

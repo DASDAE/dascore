@@ -15,8 +15,7 @@ from dascore.constants import (
 )
 from dascore.utils.coords import BaseCoord, CoordRange
 from dascore.utils.docs import compose_docstring
-from dascore.utils.models import DateTime64, TimeDelta64, UnitStr
-from dascore.utils.units import validate_units
+from dascore.utils.models import DateTime64, TimeDelta64, UnitQuantity
 
 
 @compose_docstring(basic_params=basic_summary_attrs)
@@ -37,15 +36,15 @@ class PatchAttrs(BaseModel):
 
     data_type: Literal[VALID_DATA_TYPES] = ""
     data_category: Literal[VALID_DATA_CATEGORIES] = ""
-    data_units: UnitStr = ""
+    data_units: Optional[UnitQuantity] = None
     time_min: DateTime64 = np.datetime64("NaT")
     time_max: DateTime64 = np.datetime64("NaT")
     d_time: TimeDelta64 = np.timedelta64("NaT")
-    time_units: UnitStr = ""
+    time_units: Optional[UnitQuantity] = None
     distance_min: float = np.NaN
     distance_max: float = np.NaN
     d_distance: float = np.NaN
-    distance_units: UnitStr = ""
+    distance_units: Optional[UnitQuantity] = None
     instrument_id: str = Field("", max_length=max_lens["instrument_id"])
     cable_id: str = Field("", max_length=max_lens["cable_id"])
     dims: str = Field("", max_length=max_lens["dims"])
@@ -64,11 +63,6 @@ class PatchAttrs(BaseModel):
             np.datetime64: lambda x: str(x),
             np.timedelta64: lambda x: str(x),
         }
-
-    @validator("data_units", "time_units", "distance_units")
-    def _validate_units(cls, value):
-        """Ensure the units are valid."""
-        return validate_units(value)
 
     @validator("dims", pre=True)
     def _flatten_dims(cls, value):

@@ -336,6 +336,11 @@ class TestBasics:
         out = coord.select((coord.max(), coord.max()))[0]
         assert len(out) == 1
 
+    def test_default_units(self):
+        """Default units should be None"""
+        out = get_coord(values=np.arange(10))
+        assert out.units is None
+
 
 class TestCoordRange:
     """Tests for coords from array."""
@@ -493,6 +498,14 @@ class TestCoordRange:
         # both length and shape should be 1
         assert len(coord1) == 1
         assert coord1.shape == (1,)
+
+    def test_monotonic_with_sampling(self):
+        """Ensure initing monotonic array with sampling also works."""
+        sample_rate = 1_000
+        t_array = np.linspace(0.0, 1, 1000)
+        sample_rate = 1 / sample_rate
+        out = get_coord(values=t_array, step=sample_rate)
+        assert out.shape == out.data.shape == (len(out),)
 
 
 class TestMonotonicCoord:

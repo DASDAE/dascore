@@ -4,6 +4,7 @@ Tests for transformatter.
 import pytest
 
 from dascore.utils.transformatter import FourierTransformatter
+from dascore.utils.units import get_quantity
 
 
 @pytest.fixture()
@@ -56,14 +57,17 @@ class TestFTUnitRename:
     """Ensure units can be renamed."""
 
     dims = ("distance", "time")
-    attrs = {"distance_units": "m", "time_units": "s"}
+    attrs = {
+        "distance_units": str(get_quantity("1.0 m")),
+        "time_units": str(get_quantity("1.0 s")),
+    }
 
     def test_forward_unit_transform(self, ft_reformatter):
         """Simple forward unit transformation"""
         out = ft_reformatter.rename_attrs(self.dims, self.attrs, index=0)
         key = f"{self.dims[0]}_units"
         value = self.attrs[key]
-        assert f"1/({value})" == out[key]
+        assert get_quantity(f"1/({value})") == get_quantity(out[key])
         out_2 = ft_reformatter.rename_attrs(self.dims, out, index=0)
         assert out_2 == self.attrs
 
@@ -72,6 +76,6 @@ class TestFTUnitRename:
         out = ft_reformatter.rename_attrs(self.dims, self.attrs, index=0, forward=False)
         key = f"{self.dims[0]}_units"
         value = self.attrs[key]
-        assert f"1/({value})" == out[key]
+        assert 1 / get_quantity(value) == get_quantity(out[key])
         out_2 = ft_reformatter.rename_attrs(self.dims, out, index=0, forward=False)
         assert out_2 == self.attrs

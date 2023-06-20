@@ -110,7 +110,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     data dimension.
     """
 
-    units: Optional[Unit]
+    units: Optional[Unit] = None
     step: Any
     _even_sampling = False
     _rich_style = "bold white"
@@ -498,7 +498,9 @@ class CoordRange(BaseCoord):
             out = np.arange(self.start, self.stop, self.step)
         else:
             out = np.linspace(self.start, self.stop - self.step, num=len(self))
-        return array(out)
+        # again, due to roundoff error the array can one element longer than
+        # anticipated. The slice here just ensures shape and len match.
+        return array(out[: len(self)])
 
     def _min(self):
         """Return min value"""
@@ -729,6 +731,26 @@ def get_coord(
 ) -> BaseCoord:
     """
     Given multiple types of input, return a coordinate.
+
+    Parameters
+    ----------
+    values
+        An array of values.
+    start
+        The start value of the array, inclusive.
+    stop
+        The stopping value of an array, exclusive.
+    step
+        The sampling spacing of an array.
+    units
+        Indication of units.
+
+    Notes
+    -----
+    The following combinations of input parameters are typical:
+        (start, stop, step)
+        (values)
+        (values, step) - useful for length 1 arrays.
     """
 
     def _check_inputs(data, start, stop, step):

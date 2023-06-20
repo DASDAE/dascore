@@ -2,23 +2,40 @@
 Module for handling units.
 """
 from functools import cache
-from typing import Union
+from typing import Optional, Tuple, Union
 
 import pint
 from pint import UndefinedUnitError
 
 from dascore.exceptions import UnitError
+from dascore.utils.misc import unbyte
 
 
 @cache
 def get_registry():
     """Get the pint unit registery."""
-    return pint.UnitRegistry()
+    ureg = pint.UnitRegistry()
+    # a few custom defs, we may need our own unit registry if this
+    # gets too long.
+    ureg.define("PI=pi")
+    return ureg
 
 
-def unit(value):
-    """Convert a value to a unit."""
-    return get_registry()(value)
+def get_unit(value):
+    """Convert a value to a pint unit."""
+    return get_registry().Unit(value)
+
+
+def get_quantity(value):
+    """Convert a value to a pint quantity."""
+    ureg = get_registry()
+    return ureg.Quantity(value)
+
+
+def get_unit_and_factor(value: str) -> Tuple[float, str]:
+    """Convert a mixed unit/scaling factor to scale_factor and unit str"""
+    quant = get_quantity(value)
+    return quant.magnitude, str(quant.units)
 
 
 def get_conversion_factor(from_unit, to_unit) -> float:
@@ -35,7 +52,7 @@ def invert_unit(unit: Union[pint.Unit, str]) -> pint.Unit:
     return out.units
 
 
-def validate_units(unit_str) -> str:
+def validate_quantity(quant_str) -> Optional[str]:
     """
     Ensure a unit string is valid and return it.
 
@@ -43,12 +60,15 @@ def validate_units(unit_str) -> str:
 
     Parameters
     ----------
-    unit_str
-        A string input specifying units.
+    quant_str
+        A string input specifying a quantity (unit + scaling factors).
     """
+    quant_str = unbyte(quant_str)
+    if quant_str is None or quant_str == "":
+        return None
     try:
-        unit(unit_str)
+        get_quantity(quant_str)
     except UndefinedUnitError:
-        msg = f"{unit_str} is not a unit supported by DASCore"
+        msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
         raise UnitError(msg)
-    return unit_str
+    return str(quant_str)

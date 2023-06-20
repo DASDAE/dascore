@@ -146,6 +146,19 @@ class TestInit:
         time_coord = patch.coords.coord_map["time"]
         assert isinstance(time_coord, CoordRange)
 
+    def test_sin_wave_patch(self):
+        """Ensure the sin wave patch is consistent with its coord dims."""
+        # For some reason this combination can make coords with wrong shape.
+        patch = dc.examples.sin_wave_patch(
+            sample_rate=1000,
+            frequency=[200, 10],
+            channel_count=2,
+        )
+        assert patch.shape == patch.coords.shape == patch.data.shape
+        time_shape = patch.shape[patch.dims.index("time")]
+        assert time_shape == len(patch.coords["time"])
+        assert time_shape == len(patch.coords["time"])
+
 
 class TestNew:
     """Tests for `Patch.new` method."""

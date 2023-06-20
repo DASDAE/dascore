@@ -38,12 +38,22 @@ def _get_terra15_version_str(hdf_fi) -> str:
 # --- Getting File summaries
 
 
-def _get_scanned_time_min_max(data_node):
-    """Get the min/max time from time array."""
+def _get_time_node(data_node):
+    """
+    Get the time node from data.
+
+    This will prefer GPS time but gets posix time if it is missing.
+    """
     try:
         time = data_node["gps_time"]
     except (NoSuchNodeError, IndexError):
         time = data_node["posix_time"]
+    return time
+
+
+def _get_scanned_time_min_max(data_node):
+    """Get the min/max time from time array."""
+    time = _get_time_node(data_node)
     t_len = len(time)
     # first try fast path by tacking first/last of time
     tmin, tmax = time[0], time[-1]
@@ -102,8 +112,14 @@ def _get_start_stop(time_len, time_lims, file_tmin, dt):
     # sst start index
     tmin = time_lims[0] or file_tmin
     tmax = time_lims[1] or dt * (time_len - 1) + file_tmin
-    start_ind = int(np.round((tmin - file_tmin) / dt))
-    stop_ind = int(np.round((tmax - file_tmin) / dt)) + 1
+    # Because float issues we need to round the ratio a bit. The result of
+    # this is that if the ratio is within 5% of an int, that int is used.
+    # Otherwise floor/ceil will snap to the appropriate int.
+    tmin_rounded = np.round((tmin - file_tmin) / dt, 1)
+    tmax_rounded = np.round((tmax - file_tmin) / dt, 1)
+    # then use floor/ceil to get nearest value.
+    start_ind = int(np.ceil(tmin_rounded))
+    stop_ind = int(np.floor(tmax_rounded)) + 1
     # enforce upper limit on time end index.
     if stop_ind > time_len:
         stop_ind = time_len
@@ -121,17 +137,18 @@ def _get_dar_attrs(data_node, root, tar, dar):
     return attrs
 
 
-def _get_time_coord(starttime, start_ind, stop_ind, dt, snap):
-    """Get the time coordinate."""
-    t1 = to_datetime64(starttime)
-    if snap:
-        dt = dc.to_timedelta64(dt)
-        stop = stop_ind * dt + t1
-        time = get_coord(start=t1, stop=stop, step=dt)
-    else:
-        t_float = starttime + np.arange(start_ind, stop_ind) * dt
-        time = get_coord(dc.to_datetime64(t_float))
-    return time
+def _get_snapped_time_coord(file_start, start_ind, stop_ind, dt):
+    """Get a snapped coordinate (user wants evenly sampled coord)"""
+    dt = dc.to_timedelta64(dt)
+    t1 = to_datetime64(file_start) + dt * start_ind
+    t2 = t1 + dt * (stop_ind - start_ind)
+    return get_coord(start=t1, stop=t2, step=dt)
+
+
+def _get_raw_time_coord(data_node, start_ind, stop_ind):
+    """Read the time from the data node and return it."""
+    time = _get_time_node(data_node)[start_ind:stop_ind]
+    return get_coord(values=to_datetime64(time))
 
 
 def _read_terra15(
@@ -174,8 +191,11 @@ def _read_terra15(
         time_lims[-1] if stop_ind < time_len else file_t_min + (stop_ind - 1) * dt
     )
     assert req_t_max > req_t_min
-    # calculate time array, convert to datetime64
-    time_coord = _get_time_coord(file_t_min, start_ind, stop_ind, dt, snap_dims)
+    # get time coord
+    if snap_dims:
+        time_coord = _get_snapped_time_coord(file_t_min, start_ind, stop_ind, dt)
+    else:
+        time_coord = _get_raw_time_coord(data_node, start_ind, stop_ind)
     time_inds = (start_ind, stop_ind)
     # get data and sliced distance coord
     dist_ar = _get_distance_array(root)

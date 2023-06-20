@@ -15,6 +15,7 @@ from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
 from dascore.utils.misc import iterate
 from dascore.utils.time import to_datetime64, to_timedelta64
+from dascore.utils.units import validate_quantity
 
 
 class DascoreBaseModel(BaseModel):
@@ -98,17 +99,13 @@ class Unit(pint.Unit, SimpleValidator):
     func = pint.Unit
 
 
-class UnitStr(str, SimpleValidator):
+class UnitQuantity(str, SimpleValidator):
     """A string which can be converted to a Unit (e.g, m)."""
 
     @classmethod
     def func(cls, value):
         """validate that a string can be converted to a unit."""
-        if value:
-            Unit(value)
-            # don't leave as a unit; pydantic doesnt know how to serialize it.
-            value = str(value)
-        return value
+        return validate_quantity(value)
 
 
 def merge_models(

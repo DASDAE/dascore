@@ -277,6 +277,7 @@ class TestChunk:
     def test_merge_1_dim_patches(self, memory_spool_dim_1_patches):
         """Ensure patches with one sample in time can be merged."""
         spool = memory_spool_dim_1_patches
+        # patches should have
         new = spool.chunk(time=None)
         assert len(new) == 1
         patch = new[0]
