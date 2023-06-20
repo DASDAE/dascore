@@ -486,10 +486,13 @@ class TestCoordRange:
         """Ensure len 1 coord can be inited provided step is supplied."""
         time = dc.to_datetime64(["2020-01-01"])
         dt = dc.to_timedelta64(0.09999)
-        coord1 = get_coord(start=time[0], stop=time[0], step=dt)
+        coord1 = get_coord(start=time[0], stop=time[0] + dt, step=dt)
         coord2 = get_coord(values=time, step=dt)
         assert isinstance(coord1, CoordRange)
         assert coord1 == coord2
+        # both length and shape should be 1
+        assert len(coord1) == 1
+        assert coord1.shape == (1,)
 
 
 class TestMonotonicCoord:

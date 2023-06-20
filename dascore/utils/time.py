@@ -73,7 +73,7 @@ def _array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
         if not array.shape:  # dealing with degenerate (0-D( array
             out = np.datetime64(array)
         else:
-            out = array
+            out = array.astype("datetime64[ns]")
     # dealing with numerical data
     elif not np.issubdtype(array.dtype, np.datetime64) and np.isreal(array[0]):
         with np.errstate(divide="ignore", invalid="ignore"):

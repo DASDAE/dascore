@@ -72,7 +72,7 @@ def _random_patch(
     """
     rand = np.random.RandomState(13)
     array = rand.random(shape)
-    t1 = np.datetime64(starttime)
+    t1 = np.atleast_1d(np.datetime64(starttime))
     attrs = dict(
         d_distance=d_distance,
         d_time=to_timedelta64(d_time),

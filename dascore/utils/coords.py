@@ -771,9 +771,9 @@ def get_coord(
         if np.size(values) == 0:
             return CoordDegenerate(values=values, units=units)
         # special case of len 1 array that specify step
-        elif len(values) == 1 and step is not None:
+        elif len(values) == 1 and not pd.isnull(step):
             val = values[0]
-            return CoordRange(start=val, stop=val, step=step, units=units)
+            return CoordRange(start=val, stop=val + step, step=step, units=units)
         start, stop, step, monotonic = _maybe_get_start_stop_step(values)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)
