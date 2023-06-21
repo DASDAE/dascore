@@ -50,7 +50,7 @@ def sha_256(path_or_str: Path | str) -> str:
     if isinstance(path_or_str, Path) and Path(path_or_str).exists():
         with open(path_or_str) as fi:
             path_or_str = fi.read()
-    return hashlib.sha256(str(path_or_str).encode('utf-8')).hexdigest()
+    return hashlib.sha256(str(path_or_str).encode("utf-8")).hexdigest()
 
 
 def build_table(df: pd.DataFrame, caption=None):
@@ -94,10 +94,10 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
         name = key.split(".")[-1]
         return f"[{name}](`{key}`)"
     # Array-like thing from numpy #TODO improve this
-    elif 'numpy.typing' in str_rep:
-        return 'ArrayLike'
+    elif "numpy.typing" in str_rep:
+        return "ArrayLike"
     # this is a union, unpack it
-    elif str_rep.startswith("typing.Union") or str_rep.startswith('typing.Optional'):
+    elif str_rep.startswith("typing.Union") or str_rep.startswith("typing.Optional"):
         annos = [unpact_annotation(x, data_dict, address_dict) for x in obj.__args__]
         out = " | ".join(_deduplicate_list(annos))
     # This is a Dict, List, Tuple, etc. Just unpack.
@@ -125,8 +125,8 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
     elif str_rep.startswith("<class"):
         out = str_rep.split(".")[-1].replace("'>", "")
     # return a self type.
-    elif str_rep.endswith('.Self'):
-        out = 'Self'
+    elif str_rep.endswith(".Self"):
+        out = "Self"
     # probably a literal, just give up here
     else:
         if isinstance(obj, str):  # make str look like str
@@ -149,10 +149,10 @@ def build_signature(data, data_dict, address_dict):
     def get_param_prefix(kind):
         """Get the prefix for a parameter (eg ** in **kwargs)"""
         if kind == inspect.Parameter.VAR_POSITIONAL:
-            return '*'
+            return "*"
         elif kind == inspect.Parameter.VAR_KEYWORD:
-            return '**'
-        return ''
+            return "**"
+        return ""
 
     def get_default_value(param, sig):
         """Get the default value for a parameter."""
@@ -212,23 +212,24 @@ class NumpyDocStrParser:
         self._data = data
 
     def parse_sections(self, docstr):
+        """Parse the sections of the docstring"""
         out = {}
         doc_lines = docstr.split("\n")
         dividers = (
-                [0]
-                + [
-                    num
-                    for num, x in enumerate(doc_lines)
-                    if (set(x).issubset({" ", "-", "\t"}) and ("-" in x))
-                ]
-                + [len(doc_lines) + 2]
+            [0]
+            + [
+                num
+                for num, x in enumerate(doc_lines)
+                if (set(x).issubset({" ", "-", "\t"}) and ("-" in x))
+            ]
+            + [len(doc_lines) + 2]
         )
         for start, stop in zip(dividers[:-1], dividers[1:]):
             # determine header or just use 'pre' for txt before headings
             header = "pre" if start == 0 else doc_lines[start - 1].strip()
             # skips the ----- line where applicable
             lstart = start if header == "pre" else start + 1
-            out[header] = "\n".join(doc_lines[lstart: stop - 2]).strip()
+            out[header] = "\n".join(doc_lines[lstart : stop - 2]).strip()
         return out
 
     def style_parameters(self, param_str):
@@ -241,7 +242,7 @@ class NumpyDocStrParser:
         param_desc = []
         for ind_num, ind in enumerate(param_start[:-1]):
             key = lines[ind].strip()
-            vals = [x.strip() for x in lines[ind + 1: param_start[ind_num + 1]]]
+            vals = [x.strip() for x in lines[ind + 1 : param_start[ind_num + 1]]]
             param_desc.append((key, "\n".join(vals)))
         table = pd.DataFrame(param_desc, columns=["Parameter", "Description"])
         return build_table(table)
@@ -374,7 +375,7 @@ class Render:
 
     def _get_parent_source_block(self, data):
         """Create a parent block with a link."""
-        parent = data['key'].removesuffix(f".{data['name']}")
+        parent = data["key"].removesuffix(f".{data['name']}")
         if parent:
             parent_str = f" of [{parent}](`{parent}`)"
         else:
@@ -429,7 +430,7 @@ def create_json_mapping(data_dict, obj_dict, api_path):
 
 def write_api_markdown(data_dict, api_path, address_dict, debug=False):
     """write all the markdown to disk."""
-    files_to_delete = set(Path(api_path).rglob('*.qmd'))
+    files_to_delete = set(Path(api_path).rglob("*.qmd"))
     for obj_id, data in data_dict.items():
         # get path and ensure parents exist
         sub_dir = api_path / "/".join(data["key"].split(".")[:-1])
@@ -439,7 +440,7 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
         if path in files_to_delete:
             files_to_delete.remove(path)
         # dont render non-target file if debugging
-        if debug and data['name'] != 'read':
+        if debug and data["name"] != "read":
             continue
         # render and write
         render = Render(data_dict, obj_id, address_dict)
