@@ -1,10 +1,10 @@
 """
 Script to build the API docs for dascore.
 """
-import dascore
-from _index_api import parse_project, get_alias_mapping
+from _index_api import get_alias_mapping, parse_project
 from _render_api import render_project
 
+import dascore
 
 if __name__ == "__main__":
     data_dict = parse_project(dascore)

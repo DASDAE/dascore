@@ -133,6 +133,9 @@ website:
         - text: Documentation
           href: contributing/documentation.qmd
 
+        - text: Profiling and Benchmarks
+          href: contributing/profiling_benchmarks.qmd
+
         - text: General Guidelines
           href: contributing/general_guidelines.qmd
 

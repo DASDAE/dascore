@@ -8,7 +8,7 @@ import os
 from collections import defaultdict
 from importlib import import_module
 from pathlib import Path
-from types import MethodType, ModuleType, FunctionType
+from types import FunctionType, MethodType, ModuleType
 from typing import Literal
 
 
@@ -45,7 +45,7 @@ def _get_base_address(path, base_path):
     return new.replace("/", ".")
 
 
-def parse_project(obj, key=None):
+def parse_project(obj, key=None):  # NOQA
     """Parse the project create dict of data and data_type"""
 
     def yield_get_submodules(obj, base_path):
@@ -121,9 +121,9 @@ def parse_project(obj, key=None):
             sub_obj = _unwrap_obj(sub_obj)
             sub_dtype = get_type(sub_obj, dtype == "class")
             # for modules, skip entities that aren't children
-            if dtype == 'module':
+            if dtype == "module":
                 path, sub_path = _get_file_path(obj), _get_file_path(sub_obj)
-                if not str(path).replace('/__init__.py', '') in str(sub_path):
+                if not str(path).replace("/__init__.py", "") in str(sub_path):
                     continue
             data[sub_dtype].append(str(id(sub_obj)))
 
