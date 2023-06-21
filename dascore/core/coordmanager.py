@@ -13,9 +13,9 @@ from rich.text import Text
 from typing_extensions import Self
 
 from dascore.constants import DC_BLUE
+from dascore.core.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.core.schema import PatchAttrs
 from dascore.exceptions import CoordError, CoordMergeError, ParameterError
-from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.utils.display import get_nice_string
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate

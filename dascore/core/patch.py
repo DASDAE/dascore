@@ -12,11 +12,11 @@ from rich.text import Text
 import dascore.proc
 from dascore.compat import DataArray, array
 from dascore.constants import PatchType
+from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coords import assign_coords
 from dascore.core.schema import PatchAttrs
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
-from dascore.utils.coordmanager import CoordManager, get_coord_manager
-from dascore.utils.coords import assign_coords
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.misc import optional_import
 from dascore.utils.models import ArrayLike

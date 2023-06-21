@@ -10,7 +10,7 @@ from rich.text import Text
 
 import dascore as dc
 from dascore.core import Patch
-from dascore.utils.coords import CoordRange
+from dascore.core.coords import CoordRange
 
 
 def get_simple_patch() -> Patch:

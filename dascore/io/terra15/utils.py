@@ -8,8 +8,8 @@ from tables.exceptions import NoSuchNodeError
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
+from dascore.core.coords import get_coord
 from dascore.core.schema import PatchFileSummary
-from dascore.utils.coords import get_coord
 from dascore.utils.misc import get_slice_from_monotonic
 from dascore.utils.time import datetime_to_float, to_datetime64
 

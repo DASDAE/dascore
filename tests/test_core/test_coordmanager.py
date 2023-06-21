@@ -9,14 +9,12 @@ from pydantic import ValidationError
 from rich.text import Text
 
 from dascore import to_datetime64
-from dascore.core.schema import PatchAttrs
-from dascore.exceptions import CoordError, CoordMergeError, ParameterError
-from dascore.utils.coordmanager import (
+from dascore.core.coordmanager import (
     CoordManager,
     get_coord_manager,
     merge_coord_managers,
 )
-from dascore.utils.coords import (
+from dascore.core.coords import (
     BaseCoord,
     CoordArray,
     CoordMonotonicArray,
@@ -24,6 +22,8 @@ from dascore.utils.coords import (
     get_coord,
     get_coord_from_attrs,
 )
+from dascore.core.schema import PatchAttrs
+from dascore.exceptions import CoordError, CoordMergeError, ParameterError
 from dascore.utils.misc import register_func
 
 COORD_MANAGERS = []

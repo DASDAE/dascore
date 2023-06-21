@@ -13,7 +13,7 @@ from dascore.constants import (
     basic_summary_attrs,
     max_lens,
 )
-from dascore.utils.coords import BaseCoord, CoordRange
+from dascore.core.coords import BaseCoord, CoordRange
 from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DateTime64, TimeDelta64, UnitQuantity
 
@@ -114,13 +114,13 @@ class PatchAttrs(BaseModel):
     def from_dict(
         cls,
         args,
-        coord_manager: Optional["dc.utils.coordmanager.CoordManager"] = None,
+        coord_manager: Optional["dc.core.coordmanager.CoordManager"] = None,
     ) -> Self:
         """
         Get a new instance of the PatchAttrs.
 
         Optionally, give preference to data contained in a
-        [`CoordManager`](`dascore.utils.coordmanager.CoordManager`).
+        [`CoordManager`](`dascore.core.coordmanager.CoordManager`).
         """
         if isinstance(args, cls) and coord_manager is None:
             return args

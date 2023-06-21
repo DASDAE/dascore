@@ -592,7 +592,7 @@ class CoordArray(BaseCoord):
 
         This is more limited than with CoordRange since the data are not
         evenly sampled. In order to change the step, you must first call
-        [snap](`dascore.utils.coords
+        [snap](`dascore.core.coords
         """
         if sum(x is not None for x in [start, stop, step]) > 1:
             msg = "At most one parameter can be specified in update_limits."

@@ -7,8 +7,7 @@ import pytest
 import rich.text
 
 import dascore as dc
-from dascore.exceptions import CoordError
-from dascore.utils.coords import (
+from dascore.core.coords import (
     BaseCoord,
     CoordArray,
     CoordDegenerate,
@@ -17,6 +16,7 @@ from dascore.utils.coords import (
     get_coord,
     get_coord_from_attrs,
 )
+from dascore.exceptions import CoordError
 from dascore.utils.misc import register_func
 
 COORDS = []

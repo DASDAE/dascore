@@ -6,9 +6,9 @@ import pytest
 
 import dascore as dc
 from dascore.constants import REQUIRED_DAS_ATTRS
+from dascore.core.coords import CoordRange
 from dascore.core.schema import PatchFileSummary
 from dascore.io.terra15.core import Terra15FormatterV6
-from dascore.utils.coords import CoordRange
 
 
 @pytest.fixture(scope="class")
