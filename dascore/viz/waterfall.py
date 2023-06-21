@@ -44,6 +44,8 @@ def waterfall(
     show=False,
 ) -> plt.Axes:
     """
+    Create a waterfall plot of the Patch data.
+
     Parameters
     ----------
     patch
@@ -51,7 +53,8 @@ def waterfall(
     ax
         A matplotlib object, if None create one.
     cmap
-        A matplotlib colormap string or instance.
+        A matplotlib colormap string or instance. Set to None to not plot the
+        colorbar.
     scale
         If not None, controls the saturation level of the colorbar.
         Values can either be a float, to set upper and lower limit to the same
@@ -90,7 +93,8 @@ def waterfall(
     if "time" in dims_r:
         _format_time_axis(ax, dims_r)
     # add color bar
-    ax.get_figure().colorbar(im)
+    if cmap is not None:
+        ax.get_figure().colorbar(im)
     ax.invert_yaxis()  # invert y axis so origin is at top
     if show:
         plt.show()

@@ -61,8 +61,6 @@ def _format_time_axis(ax, dims_r):
     axis_name = "x" if dims_r[0] == "time" else "y"
     # set date time formatting so MPL knows this axis is a date
     getattr(ax, f"{axis_name}axis_date")()
-    # Set number of date ticks, even when zooming in
-    getattr(ax, f"{axis_name}axis").set_major_locator(plt.MaxNLocator(4))
     # Set intelligent, zoom-in-able date formatter
     locator = getattr(ax, f"{axis_name}axis").get_major_locator()
     off_formats = ["", "%Y", "%Y-%m", "%Y-%m-%d", "%Y-%m-%d", "%Y-%m-%dT%H:%M"]

@@ -71,6 +71,8 @@ class TestWaterfall:
         min_time = random_patch.coords["time"].min()
         assert str(min_time).startswith(offset_str)
 
-
-class TestTimeFormatting:
-    """Tests for formatting time axis."""
+    def test_no_colorbar(self, random_patch):
+        """Ensure the colorbar can be disabled."""
+        ax = random_patch.viz.waterfall(cmap=None)
+        # ensure no colorbar was created.
+        assert ax.images[-1].colorbar is None
