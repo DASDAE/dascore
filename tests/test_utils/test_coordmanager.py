@@ -1,5 +1,5 @@
 """
-Tests for coordinate managerment.
+Tests for coordinate manager.
 """
 from typing import Sequence
 

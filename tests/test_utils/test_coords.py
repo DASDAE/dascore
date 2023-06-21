@@ -7,7 +7,7 @@ import pytest
 import rich.text
 
 import dascore as dc
-from dascore.exceptions import CoordError, SelectRangeError
+from dascore.exceptions import CoordError
 from dascore.utils.coords import (
     BaseCoord,
     CoordArray,
@@ -193,12 +193,14 @@ class TestBasics:
         # get a range which is for sure before data.
         v1 = coord.min() - 100 * diff
         v2 = v1 + 30 * diff
-        # it should raise because select range is not contained by coord.
-        with pytest.raises(SelectRangeError, match="is out of bounds"):
-            coord.select((v1, v2))
-        # Same thing if endtime is too early
-        with pytest.raises(SelectRangeError, match="is out of bounds"):
-            coord.select((None, v2))
+        # it should return a degenerate because range not contained by coord.
+        new, indexer = coord.select((v1, v2))
+        assert isinstance(new, CoordDegenerate)
+        assert np.size(coord.data[indexer]) == 0
+        # Same thing if end time is too early
+        new, indexer = coord.select((None, v2))
+        assert isinstance(new, CoordDegenerate)
+        assert np.size(coord.data[indexer]) == 0
         # but this should be fine
         assert coord.select((v1, None))[0] == coord
 
@@ -208,12 +210,14 @@ class TestBasics:
         # get a range which is for sure after data.
         v1 = coord.max() + 100 * diff
         v2 = v1 + 30 * diff
-        # it should raise because select range is not contained by coord.
-        with pytest.raises(SelectRangeError, match="is out of bounds"):
-            coord.select((v1, v2))
-        # Same thing if starttime is too early
-        with pytest.raises(SelectRangeError, match="is out of bounds"):
-            coord.select((v1, None))
+        # it should return a degenerate since out of range
+        new, indexer = coord.select((v1, v2))
+        assert isinstance(new, CoordDegenerate)
+        assert np.size(coord.data[indexer]) == 0
+        # Same thing if start time is too late
+        new, indexer = coord.select((v1, None))
+        assert isinstance(new, CoordDegenerate)
+        assert np.size(coord.data[indexer]) == 0
         assert coord.select((None, v2))[0] == coord
 
     def test_wide_select_bounds(self, coord):
@@ -328,8 +332,9 @@ class TestBasics:
         # get value between first/second sample
         arg = values[0] + (values[1] - values[0]) / 2
         assert arg not in np.unique(values)
-        with pytest.raises(SelectRangeError, match="between samples"):
-            coord.select((arg, arg))
+        out, indexer = coord.select((arg, arg))
+        assert isinstance(out, CoordDegenerate)
+        assert np.size(coord.data[indexer]) == 0
 
     def test_select_end_end_time(self, coord):
         """Ensure when time range is == (end, end) that dim has len 1."""
@@ -725,6 +730,13 @@ class TestDegenerateCoords:
         """Ensure min/max are nullish"""
         assert pd.isnull(basic_degenerate.min())
         assert pd.isnull(basic_degenerate.max())
+
+    def test_degenerate_with_step_from_array(self):
+        """CoordRange should be possible empty."""
+        ar = np.empty(0, dtype=int)
+        coord = get_coord(values=ar, step=1)
+        assert coord.step == 1
+        assert coord.dtype == ar.dtype
 
 
 class TestCoercion:

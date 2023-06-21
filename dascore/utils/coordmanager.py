@@ -12,14 +12,9 @@ from pydantic import root_validator, validator
 from rich.text import Text
 from typing_extensions import Self
 
-from dascore.constants import DC_BLUE, _DegenerateDimension
+from dascore.constants import DC_BLUE
 from dascore.core.schema import PatchAttrs
-from dascore.exceptions import (
-    CoordError,
-    CoordMergeError,
-    ParameterError,
-    SelectRangeError,
-)
+from dascore.exceptions import CoordError, CoordMergeError, ParameterError
 from dascore.utils.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.utils.display import get_nice_string
 from dascore.utils.mapping import FrozenDict
@@ -155,7 +150,7 @@ class CoordManager(DascoreBaseModel):
         dim_map = {i: v for i, v in self.dim_map.items() if i not in total_drops}
         dims = tuple(x for x in self.dims if x not in dims_to_drop)
         index = tuple(
-            slice(None, None) if x not in coords_to_drop else _DegenerateDimension
+            slice(None, None) if x not in coords_to_drop else slice(0, 0)
             for x in self.dims
         )
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
@@ -193,10 +188,7 @@ class CoordManager(DascoreBaseModel):
             for icoord in other_coords:
                 dims, coord = new_coords[icoord]
                 axis = self.dim_map[icoord].index(dim_name)
-                if isinstance(reduction, _DegenerateDimension):
-                    new = coord.empty(axes=axis)
-                else:
-                    new = coord.index(reduction, axis=axis)
+                new = coord.index(reduction, axis=axis)
                 new_coords[icoord] = (dims, new)
 
         def _get_indexers_and_new_coords_dict():
@@ -210,11 +202,7 @@ class CoordManager(DascoreBaseModel):
                 dim_name = dimap[coord_name][0]
                 # this handles the case of out-of-bound selections.
                 # These should be converted to degenerate coords.
-                try:
-                    new_coord, reductions = coord.select(limits)
-                except SelectRangeError:
-                    reductions = _DegenerateDimension
-                    new_coord = coord.empty()
+                new_coord, reductions = coord.select(limits)
                 dim_reductions[dim_name] = reductions
                 new_coords[coord_name] = (dimap[coord_name], new_coord)
                 # update other coords affected by change.
@@ -232,14 +220,6 @@ class CoordManager(DascoreBaseModel):
         """
         if array is None:  # no array passed, just return.
             return array
-        # a dimension has collapsed, get to the 🚁!
-        if np.any([x is _DegenerateDimension for x in indexer]):
-            new_shape = tuple(
-                x if y is not _DegenerateDimension else 0
-                for x, y in zip(array.shape, indexer)
-            )
-            return np.empty(new_shape, dtype=array.dtype)
-        # everything should be ok; just let numpy do the indexing here.
         return array[indexer]
 
     def __rich__(self) -> str:

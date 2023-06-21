@@ -15,7 +15,7 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType
-from dascore.exceptions import CoordError, ParameterError, SelectRangeError
+from dascore.exceptions import CoordError, ParameterError
 from dascore.utils.display import get_nice_string
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
@@ -251,16 +251,22 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 out = func(out)
         return out if not invert else 1 / out
 
-    def _validate_slice(self, sliz, args):
-        """Validate that the slice is not empty, else raise."""
-        if sliz.start is not None and sliz.start == sliz.stop:
-            msg = f"{args} selects a region between samples, no data to return."
-            raise SelectRangeError(msg)
+    def _slice_degenerate(self, sliz):
+        """
+        Return bool indicating if the slice should yeild degenerate
+        (empty array).
+        """
+        start, stop = sliz.start, sliz.stop
+        # check if slice is between samples
+        between = start is not None and start == stop
+        # check if slice is outside of range
+        bad_start = start is not None and (start < 0 or start >= len(self))
+        bad_stop = stop is not None and (stop <= 0)
+        return between or bad_start or bad_stop
 
     def get_slice_tuple(
         self,
         select: Union[slice, None, type(Ellipsis), Tuple[Any, Any]],
-        check_oder: bool = True,
         invert=False,
     ) -> Tuple[Any, Any]:
         """
@@ -270,8 +276,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         ----------
         select
             An object for determining select range.
-        check_oder
-            Ensure select[0] <= select[1]
         invert
             If true, return the inverted range, meaning 1/end, 1/start.
             This is useful, for example, for getting frequencies (1/s) when
@@ -303,7 +307,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 raise ParameterError(msg)
             return select
 
-        limits = self.limits
+        # limits = self.limits
         # apply simple checks; ensure we have a len 2 tuple.
         for func in [_validate_slice, _validate_none_or_ellipsis, _validate_len]:
             select = func(select)
@@ -311,17 +315,17 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # reverse order if needed.
         if p1 is not None and p2 is not None and p2 < p1:
             p1, p2 = p2, p1
-        # Perform check that the requested select range isn't out of bounds
-        if limits is not None:
-            start, stop = p1, p2
-            bad_start = start is not None and start > limits[1]
-            bad_end = stop is not None and stop < limits[0]
-            if bad_end or bad_start:
-                msg = (
-                    f"The select range ({start}, {stop}) is out of bounds for "
-                    f"data with limits {limits}"
-                )
-                raise SelectRangeError(msg)
+        # # Perform check that the requested select range isn't out of bounds
+        # if limits is not None:
+        #     start, stop = p1, p2
+        #     bad_start = start is not None and start > limits[1]
+        #     bad_end = stop is not None and stop < limits[0]
+        #     if bad_end or bad_start:
+        #         msg = (
+        #             f"The select range ({start}, {stop}) is out of bounds for "
+        #             f"data with limits {limits}"
+        #         )
+        #         raise SelectRangeError(msg)
         return p1, p2
 
     def empty(self, axes=None) -> Self:
@@ -424,14 +428,19 @@ class CoordRange(BaseCoord):
             out[name] = getattr(self, name) * factor
         return self.new(**out)
 
-    def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
-        """Apply select, return selected coords and index for selecting data."""
+    def select(self, args) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
+        """
+        Apply select, return selected coords and index to apply to array.
+
+        Can return a CoordDegenerate if selection is outside of range.
+        """
         args = self.get_slice_tuple(args)
         start = self._get_index(args[0])
         stop = self._get_index(args[1], forward=False)
         # we add 1 to stop in slice since its upper limit is exclusive
         out = slice(start, (stop + 1) if stop is not None else stop)
-        self._validate_slice(out, args)
+        if self._slice_degenerate(out):
+            return self.empty(), slice(0, 0)
         new_start = self[start] if start is not None else self.start
         new_end = self[stop] + self.step if stop is not None else self.stop
         new = self.new(start=new_start, stop=new_end)
@@ -446,7 +455,7 @@ class CoordRange(BaseCoord):
         # Due to float weirdness we need a little bit of a fudge factor here.
         fraction = func(np.round((value - start) / step, decimals=10))
         out = int(fraction)
-        if (out <= 0 and forward) or out >= len(self):
+        if (out <= 0 and forward) or (out >= len(self) and not forward):
             return None
         return out
 
@@ -547,7 +556,7 @@ class CoordArray(BaseCoord):
         if val2 is not None:
             out = out & (values <= val2)
         if not np.any(out):
-            self._validate_slice(slice(0, 0), args)
+            return self.empty(), out
         return self.new(values=values[out]), out
 
     def sort(self) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
@@ -665,7 +674,7 @@ class CoordMonotonicArray(CoordArray):
 
     def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply select, return selected coords and index for selecting data."""
-        v1, v2 = self.get_slice_tuple(args, check_oder=False)
+        v1, v2 = self.get_slice_tuple(args)
         # reverse order if reverse monotonic. This is done so when we mult
         # by -1 in _get_index the inverted range is used.
         if self._is_reversed:
@@ -676,7 +685,8 @@ class CoordMonotonicArray(CoordArray):
         stop = self._get_index(v2, left=False)
         new_stop = stop if stop is not None and stop < len(self) else None
         out = slice(new_start, new_stop)
-        self._validate_slice(out, args)
+        if self._slice_degenerate(out):
+            return self.empty(), slice(0, 0)
         return self.new(values=self.values[out]), out
 
     def _get_index(self, value, left=True):
@@ -710,6 +720,7 @@ class CoordDegenerate(CoordArray):
     """
 
     values: ArrayLike
+    step: Any
     _rich_style = "bold #d40000"
 
     def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
@@ -791,7 +802,7 @@ def get_coord(
         if isinstance(values, BaseCoord):  # just return coordinate
             return values
         if np.size(values) == 0:
-            return CoordDegenerate(values=values, units=units)
+            return CoordDegenerate(values=values, units=units, step=step)
         # special case of len 1 array that specify step
         elif len(values) == 1 and not pd.isnull(step):
             val = values[0]

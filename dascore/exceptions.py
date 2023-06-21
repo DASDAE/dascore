@@ -53,10 +53,6 @@ class InvalidTimeRange(TimeError):
     """Raised when an invalid time range is encountered."""
 
 
-class SelectRangeError(ValueError, DASCoreError):
-    """Raised when the select range is invalid."""
-
-
 class FilterValueError(ValueError, DASCoreError):
     """Raise when something goes wrong with filtering or filter inputs."""
 
