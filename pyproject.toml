@@ -57,9 +57,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+
 docs = [
     "jinja2",
 ]
+
 test = [
     "coverage",
     "coveralls",
@@ -69,7 +71,13 @@ test = [
     "pytest-cov",
     "twine",
 ]
-dev = ["dascore[test]", "dascore[docs]"]
+
+profile = [
+    "asv",
+    "typer",
+]
+
+dev = ["dascore[test]", "dascore[docs]", "dascore[profile]"]
 
 # --- URLs for project
 

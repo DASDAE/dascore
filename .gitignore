@@ -65,9 +65,8 @@ target/
 .idea
 
 # Ipython stuff
-# Dont commit ipython notebooks, just use md.
 .ipynb_checkpoints
-*.ipynb
+docs/*.ipynb
 
 # linux/osx garbage
 *~
@@ -79,3 +78,6 @@ docs/api/*
 _autosummary
 .quarto/
 docs/site_libs
+
+# profile stuff from asv
+.asv
