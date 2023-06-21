@@ -1,4 +1,4 @@
-exclude: scripts/
+#exclude: scripts/
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v2.3.0
@@ -32,9 +32,7 @@ repos:
       - id: isort
         name: isort (pyi)
         types: [pyi]
-#-   repo: https://github.com/pycqa/pydocstyle
-#    rev: 6.1.1  # pick a git hash / tag to point to
-#    hooks:
-#      - id: pydocstyle
-#        args:
-#          - --ignore=D105,D106,D107,D200,D400,D203,D212
+- repo: https://github.com/kynan/nbstripout
+  rev: 0.6.1
+  hooks:
+    - id: nbstripout
