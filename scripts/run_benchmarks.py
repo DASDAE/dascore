@@ -56,9 +56,10 @@ def run_asv(name):
     console.rule(f"[bold red]Running benchmarks for {name}")
     console.print()
     # run benchmarks
-    run("asv run -E existing -e", check=True, shell=True)
+    hash = git_hash()
+    run(f"asv dev -e --set-commit-hash {hash}", check=True, shell=True)
     assert expected_output_file.exists()
-    expected_output_file.rename(expected_output_file.parent / f"{name}.json")
+    # expected_output_file.rename(expected_output_file.parent / f"{name}.json")
     return
 
 
@@ -66,6 +67,13 @@ def git_branch_name():
     """Return the current branch name."""
     kwargs = dict(check=True, shell=True, capture_output=True, text=True)
     out = run("git branch --show-current", **kwargs)
+    return out.stdout.strip()
+
+
+def git_hash():
+    """Return the current git hash name."""
+    kwargs = dict(check=True, shell=True, capture_output=True, text=True)
+    out = run("git rev-parse --short HEAD", **kwargs)
     return out.stdout.strip()
 
 
@@ -93,7 +101,7 @@ if __name__ == "__main__":
     with cd(BASE_PATH):
         current_name = git_branch_name()
         # first run benchmarks of reference.
-        # with git_checkout(REFERENCE_BRANCH):
-        #     run_asv(REFERENCE_BRANCH)
+        with git_checkout(REFERENCE_BRANCH):
+            run_asv(REFERENCE_BRANCH)
         # now run benchmarks on current branch.
         run_asv(current_name)
