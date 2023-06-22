@@ -14,9 +14,9 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.compat import array
-from dascore.constants import PatchType
+from dascore.constants import PatchType, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
-from dascore.utils.display import get_nice_string
+from dascore.utils.display import get_nice_style
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
 from dascore.utils.time import is_datetime64, is_timedelta64, to_number
@@ -113,7 +113,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     units: Optional[Unit] = None
     step: Any
     _even_sampling = False
-    _rich_style = "bold white"
+    _rich_style = dascore_styles["default_coord"]
 
     @abc.abstractmethod
     def convert_units(self, unit) -> Self:
@@ -142,20 +142,28 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return id(self)
 
     def __rich__(self):
-        base = Text(self.__class__.__name__, style=self._rich_style)
-        t1 = Text("")
+        key_style = dascore_styles["keys"]
+        base = Text("", "default")
+        base += Text(self.__class__.__name__, style=self._rich_style)
+        base += Text("(")
         if not pd.isnull(self.min()):
-            t1 += Text(f" min={get_nice_string(self.min())}")
+            base += Text(" min: ", key_style)
+            base += get_nice_style(self.min())
         if not pd.isnull(self.max()):
-            t1 += Text(f" max={get_nice_string(self.max())}")
+            base += Text(" max: ", key_style)
+            base += get_nice_style(self.max())
         if not pd.isnull(self.step):
-            t1 += f" step={get_nice_string(self.step)}"
-        t1 += f" shape={self.shape}"
-        t1 += f" dtype={self.dtype}"
+            base += Text(" step: ", key_style)
+            base += get_nice_style(self.step)
+        base += Text(" shape: ", key_style)
+        base += get_nice_style(self.shape)
+        base += Text(" dtype: ", key_style)
+        base += get_nice_style(self.dtype)
         if not pd.isnull(self.units):
-            t1 += f" units={get_nice_string(self.units)}"
-        out = Text.assemble(base, f"({t1[1:]})")
-        return out
+            base += Text(" units: ", key_style)
+            base += get_nice_style(self.units)
+        base += Text(" )")
+        return base
 
     def __str__(self):
         return str(self.__rich__())
@@ -315,17 +323,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # reverse order if needed.
         if p1 is not None and p2 is not None and p2 < p1:
             p1, p2 = p2, p1
-        # # Perform check that the requested select range isn't out of bounds
-        # if limits is not None:
-        #     start, stop = p1, p2
-        #     bad_start = start is not None and start > limits[1]
-        #     bad_end = stop is not None and stop < limits[0]
-        #     if bad_end or bad_start:
-        #         msg = (
-        #             f"The select range ({start}, {stop}) is out of bounds for "
-        #             f"data with limits {limits}"
-        #         )
-        #         raise SelectRangeError(msg)
         return p1, p2
 
     def empty(self, axes=None) -> Self:
@@ -391,7 +388,7 @@ class CoordRange(BaseCoord):
     stop: Any
     step: Any
     _even_sampling = True
-    _rich_style = "bold green"
+    _rich_style = dascore_styles["coord_range"]
 
     @root_validator()
     def ensure_all_attrs_set(cls, values):
@@ -535,7 +532,7 @@ class CoordArray(BaseCoord):
     """
 
     values: ArrayLike
-    _rich_style = "bold #cd0000"
+    _rich_style = dascore_styles["coord_array"]
 
     def convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
@@ -670,7 +667,7 @@ class CoordMonotonicArray(CoordArray):
     """
 
     values: ArrayLike
-    _rich_style = "bold #d64806"
+    _rich_style = dascore_styles["coord_monotonic"]
 
     def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply select, return selected coords and index for selecting data."""
@@ -721,7 +718,7 @@ class CoordDegenerate(CoordArray):
 
     values: ArrayLike
     step: Any
-    _rich_style = "bold #d40000"
+    _rich_style = dascore_styles["coord_degenerate"]
 
     def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Select for Degenerate coords does nothing."""
