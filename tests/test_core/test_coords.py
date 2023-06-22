@@ -290,6 +290,31 @@ class TestBasics:
         with pytest.raises(ValueError, match="has no field"):
             evenly_sampled_coord.bob = 1
 
+    def test_sort(self, coord):
+        """Ensure every coord can be sorted."""
+        if coord.degenerate or len(coord.shape) > 1:
+            return  # no need to test degenerate coord or multidim
+        data = coord.data
+        new, indexer = coord.sort()
+        assert new.dtype == coord.dtype
+        assert new.sorted
+        assert not new.degenerate
+        assert not new.reverse_sorted
+        assert len(new) == len(coord)
+        assert data[indexer] is not None
+
+    def test_reverse_sort(self, coord):
+        """Ensure every coord can be reverse sorted."""
+        if coord.degenerate or len(coord.shape) > 1:
+            return  # no need to test degenerate coord or multidim
+        data = coord.data
+        new, indexer = coord.sort(reverse=True)
+        assert new.dtype == coord.dtype
+        assert not new.sorted
+        assert new.reverse_sorted
+        assert len(new) == len(coord)
+        assert data[indexer] is not None
+
     def test_immutable(self, evenly_sampled_coord):
         """Fields can't change once created."""
         with pytest.raises(TypeError, match="is immutable"):

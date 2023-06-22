@@ -232,7 +232,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         new["units"] = units
         return self.__class__(**new)
 
-    def sort(self) -> Tuple["BaseCoord", Union[slice, ArrayLike]]:
+    @abc.abstractmethod
+    def sort(self, reverse=False) -> Tuple["BaseCoord", Union[slice, ArrayLike]]:
         """
         Sort the contents of the coord. Return new coord and slice for sorting.
         """
@@ -467,6 +468,20 @@ class CoordRange(BaseCoord):
         new = self.new(start=new_start, stop=new_end)
         return new, out
 
+    def sort(self, reverse=False) -> Tuple["BaseCoord", Union[slice, ArrayLike]]:
+        """
+        Sort the contents of the coord. Return new coord and slice for sorting.
+        """
+        #
+        forward_forward = not reverse and self.sorted
+        reverse_reverse = reverse and self.reverse_sorted
+        if forward_forward or reverse_reverse:
+            return self, slice(None)
+        new_step = -self.step
+        new_start, new_stop = self.max(), self.min() + new_step
+        out = self.new(start=new_start, stop=new_stop, step=new_step)
+        return out, slice(None, None, -1)
+
     def _get_index(self, value, forward=True):
         """Get the index corresponding to a value."""
         if (value := self._get_compatible_value(value)) is None:
@@ -544,12 +559,12 @@ class CoordRange(BaseCoord):
     @property
     def sorted(self):
         """Returns true if sorted in ascending order."""
-        return self.step >= self._get_compatible_value(0)
+        return self.step >= 0
 
     @property
     def reverse_sorted(self):
         """Returns true if sorted in ascending order."""
-        return self.step < self._get_compatible_value(0)
+        return self.step < 0
 
     @property
     @cache
@@ -593,9 +608,9 @@ class CoordArray(BaseCoord):
             return self.empty(), out
         return self.new(values=values[out]), out
 
-    def sort(self) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
+    def sort(self, reverse=False) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
         """Sort the coord to be monotonic (maybe range)."""
-        argsort: ArrayLike = np.argsort(self.values)
+        argsort: ArrayLike = np.argsort(self.values)[:: -1 if reverse else 1]
         arg_dict = dict(self)
         arg_dict["values"] = self.values[argsort]
         new = get_coord(**arg_dict)

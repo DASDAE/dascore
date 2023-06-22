@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 from rich.text import Text
 
+import dascore as dc
 from dascore import to_datetime64
 from dascore.core.coordmanager import (
     CoordManager,
@@ -23,7 +24,12 @@ from dascore.core.coords import (
     get_coord_from_attrs,
 )
 from dascore.core.schema import PatchAttrs
-from dascore.exceptions import CoordError, CoordMergeError, ParameterError
+from dascore.exceptions import (
+    CoordError,
+    CoordMergeError,
+    CoordSortError,
+    ParameterError,
+)
 from dascore.utils.misc import register_func
 
 COORD_MANAGERS = []
@@ -65,12 +71,6 @@ def coord_manager_multidim() -> CoordManager:
     return get_coord_manager(COORDS, DIMS)
 
 
-@pytest.fixture(scope="class", params=COORD_MANAGERS)
-def coord_manager(request) -> CoordManager:
-    """Meta fixture for aggregating coordinates."""
-    return request.getfixturevalue(request.param)
-
-
 @pytest.fixture(scope="class")
 @register_func(COORD_MANAGERS)
 def coord_manager_degenerate_time(coord_manager_multidim) -> CoordManager:
@@ -78,6 +78,20 @@ def coord_manager_degenerate_time(coord_manager_multidim) -> CoordManager:
     new_time = to_datetime64(["2017-09-18T01:00:01"])
     out = coord_manager_multidim.update_coords(time=new_time)
     return out
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def coord_manager_wacky_dims() -> CoordManager:
+    """A coordinate manager with non evenly sampled dims."""
+    patch = dc.get_example_patch("wacky_dim_coords_patch")
+    return patch.coords
+
+
+@pytest.fixture(scope="class", params=COORD_MANAGERS)
+def coord_manager(request) -> CoordManager:
+    """Meta fixture for aggregating coordinates."""
+    return request.getfixturevalue(request.param)
 
 
 class TestBasicCoordManager:
@@ -733,3 +747,89 @@ class TestMergeCoordManagers:
         assert "time2" not in out_no_range.coord_map
         out_with_range = merge_coord_managers([cm1, cm2], "time")
         assert "time2" not in out_with_range.coord_map
+
+
+class TestSort:
+    """Tests for sorting coord managers."""
+
+    def test_sort_unsorted_dim_coord(self, coord_manager_wacky_dims):
+        """Simple test for single dim sort."""
+        cm = coord_manager_wacky_dims
+        sorted_cm, _ = cm.sort("distance")
+        assert sorted_cm.coord_map["distance"].sorted
+
+    def test_sort_sorted_dim_coord(self, coord_manager_wacky_dims):
+        """Ensure sorting a sorted dim coord does nothing."""
+        cm = coord_manager_wacky_dims
+        sorted_cm, _ = cm.sort("time")
+        assert sorted_cm.coord_map["time"].sorted
+
+    def test_r_sort_unsorted_dim_coord(self, coord_manager_wacky_dims):
+        """Simple test for single dim sort."""
+        cm = coord_manager_wacky_dims
+        sorted_cm, _ = cm.sort("distance", reverse=True)
+        assert sorted_cm.coord_map["distance"].reverse_sorted
+
+    def test_r_sort_sorted_dim_coord(self, coord_manager_wacky_dims):
+        """Ensure sorting a sorted dim coord does nothing."""
+        cm = coord_manager_wacky_dims
+        sorted_cm, _ = cm.sort("time", reverse=True)
+        assert sorted_cm.coord_map["time"].reverse_sorted
+
+    def test_simultaneous_sort(self, coord_manager_wacky_dims):
+        """Ensure all dimensions can be sorted at once."""
+        sorted_cm, _ = coord_manager_wacky_dims.sort()
+        for _, coord in sorted_cm.coord_map.items():
+            assert coord.sorted
+
+    def test_simultaneous_r_sort(self, coord_manager_wacky_dims):
+        """Ensure all dimensions can be reverse sorted at once."""
+        sorted_cm, _ = coord_manager_wacky_dims.sort(reverse=True)
+        for _, coord in sorted_cm.coord_map.items():
+            assert coord.reverse_sorted
+
+    def test_sort_sorted_cm(self, basic_coord_manager):
+        """Sorting a coord manager that is already sorted should do nothing."""
+        cm = basic_coord_manager
+        cm_sorted, _ = cm.sort()
+        assert cm == cm_sorted
+
+    def test_sort_2d_coord_raises(self, coord_manager_multidim):
+        """Sorting on 2D coord is ambiguous, it should raise."""
+        cm = coord_manager_multidim
+        with pytest.raises(CoordSortError, match="more than one dimension"):
+            cm.sort("quality")
+
+    def test_sort_two_coords_same_dim_raises(self, coord_manager_multidim):
+        """Trying to sort on two coords which share a dim should raise."""
+        # need to make distance un sorted.
+        cm, _ = coord_manager_multidim.sort("distance", reverse=True)
+        with pytest.raises(CoordSortError, match="they share a dimension"):
+            cm.sort("latitude", "distance")
+        # this should also raise since sorting latitude could unsort distance
+        with pytest.raises(CoordSortError, match="they share a dimension"):
+            coord_manager_multidim.sort("distance", "latitude")
+
+    def test_related_coords(self, coord_manager_multidim):
+        """Sorting on one coordinate should also sort others that share a dim"""
+        cm = coord_manager_multidim
+        cm_sorted, _ = cm.sort("latitude")
+        assert cm_sorted.coord_map["latitude"].sorted
+        # distance should now be unsorted.
+        assert not cm_sorted.coord_map["distance"].sorted
+
+
+class TestSnap:
+    """Tests for snapping coordinates."""
+
+    def test_snap_dims(self, coord_manager_wacky_dims):
+        """Happy path for snapping dimensions."""
+        cm = coord_manager_wacky_dims
+        data = np.ones(cm.shape)
+        out, out_data = cm.snap(array=data)
+        for coord_name in out.coord_map:
+            coord1 = cm.coord_map[coord_name]
+            coord2 = out.coord_map[coord_name]
+            assert coord1.dtype == coord2.dtype
+            assert len(coord1) == len(coord2)
+        assert out_data.shape == data.shape

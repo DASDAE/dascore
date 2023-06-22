@@ -15,7 +15,12 @@ from typing_extensions import Self
 from dascore.constants import dascore_styles
 from dascore.core.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.core.schema import PatchAttrs
-from dascore.exceptions import CoordError, CoordMergeError, ParameterError
+from dascore.exceptions import (
+    CoordError,
+    CoordMergeError,
+    CoordSortError,
+    ParameterError,
+)
 from dascore.utils.display import get_nice_text
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate
@@ -35,7 +40,7 @@ class CoordManager(DascoreBaseModel):
     coord_map
         A mapping of {coord_name: Coord}
     dim_map
-        A mapping of {coord_name: (dimensions, )
+        A mapping of {coord_name: (dimensions, ...)}
     """
 
     dims: Tuple[str, ...]
@@ -97,6 +102,106 @@ class CoordManager(DascoreBaseModel):
         out = coords._get_dim_array_dict()
         out.update(kwargs)
         return get_coord_manager(out, dims=self.dims)
+
+    def sort(
+        self, *coords, array: MaybeArray = None, reverse: bool = False
+    ) -> Tuple[Self, MaybeArray]:
+        """
+        Sort coordinates.
+
+        Parameters
+        ----------
+        *coords
+            Specify which dimensions to sort. If None, sort along dimensional
+            coordinates.
+        array
+            The array to sort.
+        reverse
+            If true, sort in descending order, else ascending.
+
+        Raises
+        ------
+        CoordSortError if sorting is not possible.
+        """
+
+        def _validate_coords(coords):
+            """Coordinates should be one dimensional."""
+            dims = [self.dim_map[x] for x in coords]
+            if any(len(x) > 1 for x in dims):
+                bad_coord = [y for x, y in zip(dims, coords) if len(y) > 1]
+                msg = (
+                    f"cannot simultaneously sort coordinate(s) {bad_coord}"
+                    f" because they are associated with more than one dimension."
+                )
+                raise CoordSortError(msg)
+            if len(coords) == 1:  # no need to check conflict if one dim
+                return
+            flat_dims = [x for y in dims for x in y]
+            if len(flat_dims) != len(set(flat_dims)):
+                msg = f"cannot merge {coords} because they share a dimension"
+                raise CoordSortError(msg)
+
+        def _get_dimensional_sorts(coords2sort):
+            """Create the indexer for each coord."""
+            new_coords = dict(self.coord_map)
+            indexes = []
+            for name, coord in coords2sort.items():
+                dim = self.dim_map[name][0]
+                new_coord, indexer = coord.sort(reverse=reverse)
+                new_coords[name] = new_coord
+                indexes.append(self._get_indexer(self.dims.index(dim), indexer))
+                # also sort related coords.
+                _sort_related(name, dim, indexer, new_coords)
+            return new_coords, tuple(indexes)
+
+        def _sort_related(name, dim, indexer, new_coords):
+            """Find and apply sorting to related coords."""
+            related_coords = set(self.dim_to_coord_map[dim]) - {name}
+            for r_coord_name in related_coords:
+                coord = new_coords[r_coord_name]
+                ind = self.dim_map[r_coord_name].index(dim)
+                slicer = [slice(None, None) for _ in coord.shape]
+                slicer[ind] = indexer
+                new_coords[r_coord_name] = coord[tuple(slicer)]
+
+        # get coords that need sorting
+        attr = "reverse_sorted" if reverse else "sorted"
+        coords = coords if coords else self.dims
+        _validate_coords(coords)
+        cmap = self.coord_map
+        assert set(coords).issubset(set(cmap))
+        coords2sort = {x: cmap[x] for x in coords if not getattr(cmap[x], attr)}
+        new_coords, indexers = _get_dimensional_sorts(coords2sort)
+        if array is not None:
+            for index in indexers:
+                array = array[index]
+        return self.new(coord_map=new_coords), array
+
+    def snap(
+        self, *coords, array: MaybeArray = None, reverse: bool = False
+    ) -> Tuple[Self, MaybeArray]:
+        """
+        Force the specified coordinates to be monotonic and evenly sampled.
+
+        Coordinates are first sorted, then snapped.
+
+        Parameters
+        ----------
+        *coords
+            Specify which dimensions to sort. If None, sort along dimensional
+            coordinates.
+        array
+            The array to sort/snap.
+        reverse
+            If true, sort in descending order, else ascending.
+        """
+        cm, array = self.sort(*coords, array=array, reverse=reverse)
+        # now the arrays are sorted it should be correct to snap dimensions.
+        cmap = dict(cm.coord_map)
+        for coord_name in coords:
+            cmap[coord_name] = cmap[coord_name].snap()
+        out = cm.new(coord_map=cmap)
+        return out, array
 
     def new(self, dims=None, coord_map=None, dim_map=None) -> Self:
         """
@@ -489,6 +594,18 @@ class CoordManager(DascoreBaseModel):
         """Return a tuple of ((coord, dims...,), ...)"""
         dim_map = self.dim_map
         return tuple(((name, *dim_map[name]) for name in self.coord_map))
+
+    def _get_indexer(self, ind: Optional[int] = None, value=None):
+        """
+        Get an indexer for the appropriate data shape.
+
+        This is useful for generating a tuple that can be used
+
+        ind is a list of indices to substitute in values.
+        """
+        out = [slice(None, None) for _ in self.shape]
+        out[ind] = value
+        return tuple(out)
 
 
 def get_coord_manager(
