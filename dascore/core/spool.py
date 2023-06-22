@@ -14,7 +14,7 @@ import dascore as dc
 from dascore.constants import PatchType, numeric_types, timeable_types
 from dascore.exceptions import InvalidSpoolError
 from dascore.utils.chunk import ChunkManager
-from dascore.utils.display import get_dascore_text, get_nice_string
+from dascore.utils.display import get_dascore_text, get_nice_style
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor
@@ -306,9 +306,9 @@ class MemorySpool(DataFrameSpool):
         base = super().__rich__()
         df = self._df
         t1, t2 = df["time_min"].min(), df["time_max"].max()
-        tmin = get_nice_string(t1)
-        tmax = get_nice_string(t2)
-        duration = get_nice_string(t2 - t1)
+        tmin = get_nice_style(t1)
+        tmax = get_nice_style(t2)
+        duration = get_nice_style(t2 - t1)
         base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
         return base
 

@@ -45,11 +45,6 @@ ONE_BILLION = 1_000_000_000
 # One second with a precision of nano seconds
 ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
 
-# Colors used by dascore
-DC_BLUE = "#002868"
-DC_RED = "#cf0029"
-DC_YELLOW = "#ffc934"
-
 # Float printing precision
 FLOAT_PRECISION = 5
 
@@ -67,7 +62,6 @@ VALID_DATA_TYPES = (
 # Valid categories (of instruments)
 VALID_DATA_CATEGORIES = ("", "DAS", "DTS", "DSS")
 
-
 max_lens = {
     "path": 120,
     "file_format": 15,
@@ -79,7 +73,6 @@ max_lens = {
     "cable_id": 50,
     "instrument_id": 50,
 }
-
 
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
@@ -102,7 +95,6 @@ LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 
 # Required shared attributes to merge patches together
 PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "data_category")
-
 
 # A map from the unit name to the code used in numpy.timedelta64
 NUMPY_TIME_UNIT_MAPPING = {
@@ -181,3 +173,21 @@ network
 history
     A list of strings indicating what processing has occurred on the patch.
 """
+
+# Rich styles for various object displays.
+dascore_styles = dict(
+    dc_blue="#002868",
+    dc_red="#cf0029",
+    dc_yellow="#ffc934",
+    default_coord="bold white",
+    coord_range="bold green",
+    coord_array="bold #cd0000",
+    coord_monotonic="bold #d64806",
+    coord_degenerate="bold #d40000",
+    units="#cca3e1",
+    keys="#f2e3c6",
+    # these are for formatting datetimes
+    ymd="#e96baa",
+    hms="#a8dbd6",
+    dec="#a2bf48",
+)
