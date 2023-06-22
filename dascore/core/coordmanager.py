@@ -16,7 +16,7 @@ from dascore.constants import dascore_styles
 from dascore.core.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.core.schema import PatchAttrs
 from dascore.exceptions import CoordError, CoordMergeError, ParameterError
-from dascore.utils.display import get_nice_style
+from dascore.utils.display import get_nice_text
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel
@@ -223,6 +223,7 @@ class CoordManager(DascoreBaseModel):
         return array[indexer]
 
     def __rich__(self) -> str:
+        """Rich formatting for the coordinate manager"""
         dc_blue = dascore_styles["dc_blue"]
         header_text = Text("➤ ") + Text("Coordinates", style=dc_blue) + Text(" (")
         lens = {x: self.coord_map[x].shape[0] for x in self.dims}
@@ -697,7 +698,7 @@ def merge_coord_managers(
             # snap is too far off, bail out.
             elif diff > tolerance:
                 msg = (
-                    f"Cannot merge. Snap tolerance: {get_nice_style(tolerance)}"
+                    f"Cannot merge. Snap tolerance: {get_nice_text(tolerance)}"
                     f" not met"
                 )
                 raise CoordMergeError(msg)

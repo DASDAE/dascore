@@ -59,20 +59,27 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
 
 @register_func(EXAMPLE_PATCHES, key="random_das")
 def _random_patch(
+    *,
     starttime="2017-09-18",
+    start_distance=0,
     network="",
     station="",
     tag="random",
     shape=(300, 2_000),
     d_time=to_timedelta64(1 / 250),
     d_distance=1,
+    time_array=None,
+    dist_array=None,
 ):
     """
     Generate a random DAS Patch.
     """
+    # get input data
     rand = np.random.RandomState(13)
     array = rand.random(shape)
+    # create attrs
     t1 = np.atleast_1d(np.datetime64(starttime))
+    d1 = np.atleast_1d(start_distance)
     attrs = dict(
         d_distance=d_distance,
         d_time=to_timedelta64(d_time),
@@ -84,12 +91,28 @@ def _random_patch(
         time_units="s",
         distance_units="m",
     )
+    # create coords
+    time_array = np.arange(array.shape[1]) if time_array is None else time_array
+    dist_array = np.arange(array.shape[0]) if dist_array is None else dist_array
     coords = dict(
-        distance=np.arange(array.shape[0]) * attrs["d_distance"],
-        time=t1 + np.arange(array.shape[1]) * attrs["d_time"],
+        distance=d1 + dist_array * attrs["d_distance"],
+        time=t1 + time_array * attrs["d_time"],
     )
+    # assemble and output.
     out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
     patch = dc.Patch(**out)
+    return patch
+
+
+@register_func(EXAMPLE_PATCHES, key="wacky_dim_coords_patch")
+def _wacky_dim_coord_patch():
+    """Creates a patch with one Monotonic and one Array coord."""
+    shape = (100, 1_000)
+    # distance is neither monotonic nor evenly sampled.
+    dist_ar = np.random.random(100) + np.arange(100) * 0.3
+    # time is monotonic, not evenly sampled.
+    time_ar = np.cumsum(np.random.random(1_000))
+    patch = _random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
     return patch
 
 
@@ -173,6 +196,7 @@ def _example_event_1():
     return dc.spool(path)[0]
 
 
+@register_func(EXAMPLE_PATCHES, key="random_das_non_")
 @register_func(EXAMPLE_SPOOLS, key="random_das")
 def _random_spool(
     time_gap=0, length=3, starttime=np.datetime64("2020-01-03"), **kwargs

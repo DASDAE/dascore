@@ -71,6 +71,84 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
 
 
 @patch_function()
+def snap_dims(patch: PatchType, *dims, max_shift: float = 2.0):
+    """
+    Snap dimensions to evenly spaced samples.
+
+    More formally, this ensures all of the patches dimensional coordinates
+    are converted to (CoordRange)[`dascore.core.coords.CoordRange`] instances
+    which ensures they are monotonic and evenly sampled.
+
+    Parameters
+    ----------
+    *args
+        Used to specify the dimension names to convert to CoordRanges. If not
+        specified convert all dimensional coordinates.
+    max_shift
+        If any sample is shifted by more than this amount raise an Error.
+
+    Notes
+    -----
+    This method does not use interpolation, which can result in non-negligable
+    errors in some cases. To snap coordinates with data interpolation see
+    [interpolate](`dascore.Patch.interpolate`).
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> # get an example patch which has unevenly sampled coords time, distance
+    >>> patch = dc.get_example_patch("wacky_dim_coords_patch")
+    >>> # snap time dimension
+    >>> time_snap = patch.snap_dims("time", interpolate=False)
+    >>> # snap the distance dimension
+    >>> dist_snap = patch.snap_dims("distance", interpolate=True)
+    """
+    # first make sure all coordinates are sorted. This usually avoids the
+    # introduction of large errors from snap operation.
+    cman, data = patch.coords.sort(dims, patch.data)
+    cman = cman.snap_dims(dims)
+    return patch.new(data=data, coords=cman)
+
+
+@patch_function()
+def sort_cords(patch: PatchType, *coords):
+    """
+    Sort one or more coordinates.
+
+    Sorts the specified coordinates in the patch. An error will be raised
+    if the coordinates have overlapping dimensions since it may not be
+    possible to sort each. An error is also raised in any of the coordinates
+    are multidimensional.
+
+    Parameters
+    ----------
+    *coords
+        Used to specify the coordinates to sort.
+
+    Notes
+    -----
+    This method does not use interpolation, which can result in non-negligable
+    errors in some cases. To snap coordinates with data interpolation see
+    [interpolate](`dascore.Patch.interpolate`).
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> # get an example patch which has unevenly sampled coords time, distance
+    >>> patch = dc.get_example_patch("wacky_dim_coords_patch")
+    >>> # snap time dimension
+    >>> time_snap = patch.snap_dims("time", interpolate=False)
+    >>> # snap the distance dimension
+    >>> dist_snap = patch.snap_dims("distance", interpolate=True)
+    """
+    # first make sure all coordinates are sorted. This usually avoids the
+    # introduction of large errors from snap operation.
+    cman, data = patch.coords.sort(coords, patch.data)
+    cman = cman.snap_dims(coords)
+    return patch.new(data=data, coords=cman)
+
+
+@patch_function()
 def rename(self: PatchType, **names) -> PatchType:
     """
     Rename coordinate or dimensions of Patch.

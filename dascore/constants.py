@@ -185,6 +185,7 @@ dascore_styles = dict(
     coord_monotonic="bold #d64806",
     coord_degenerate="bold #d40000",
     units="#cca3e1",
+    dtypes="#a2bf48",
     keys="#f2e3c6",
     # these are for formatting datetimes
     ymd="#e96baa",

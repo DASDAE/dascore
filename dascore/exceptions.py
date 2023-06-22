@@ -37,6 +37,10 @@ class CoordMergeError(CoordError):
     """Raised when something is wrong with requested merge operation."""
 
 
+class CoordSortError(CoordError):
+    """Raised when coordinates cannot be sorted."""
+
+
 class PatchDimError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's dimension."""
 

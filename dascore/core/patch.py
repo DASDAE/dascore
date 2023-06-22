@@ -268,6 +268,8 @@ class Patch:
     squeeze = dascore.proc.squeeze
     rename = dascore.proc.rename
     transpose = dascore.proc.transpose
+    snap_dims = dascore.proc.snap_dims
+    sort_dims = dascore.proc.sort_cords
 
     # --- processing funcs
 

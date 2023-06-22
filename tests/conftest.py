@@ -205,6 +205,13 @@ def event_patch_1():
     return dc.get_example_patch("example_event_1")
 
 
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def wacky_dim_patch():
+    """Fetch event patch 1."""
+    return dc.get_example_patch("wacky_dim_coords_patch")
+
+
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)
 def patch(request):
     """A meta-fixtures for collecting all patches used in testing."""

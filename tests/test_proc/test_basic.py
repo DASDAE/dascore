@@ -112,3 +112,21 @@ class TestStandarize:
         assert np.allclose(
             np.round(np.mean(out.data, axis=axis, keepdims=True), decimals=1), 0.0
         )
+
+
+class TestSnapDims:
+    """Tests for snapping dimensions."""
+
+    def test_snap_monotonic(self, wacky_dim_patch):
+        """Ensure we can snap a single monotonic coordinate."""
+        out = wacky_dim_patch.snap_dims("time")
+        coord = out.coords.coord_map["time"]
+        assert coord.sorted
+        assert coord.evenly_sampled
+
+    def test_snap_array(self, wacky_dim_patch):
+        """Ensure we can snap a non monotonic coordinate."""
+        out = wacky_dim_patch.snap_dims("distance")
+        coord = out.coords.coord_map["distance"]
+        assert coord.sorted
+        assert coord.evenly_sampled

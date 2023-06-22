@@ -512,6 +512,14 @@ class TestCoordRange:
         out = get_coord(values=t_array, step=sample_rate)
         assert out.shape == out.data.shape == (len(out),)
 
+    def test_properties_coord_range(self, evenly_sampled_coord):
+        """Test key properties for evenly sampled."""
+        coord = evenly_sampled_coord
+        assert coord.evenly_sampled
+        assert coord.sorted
+        assert not coord.reverse_sorted
+        assert not coord.degenerate
+
 
 class TestMonotonicCoord:
     """Tests for monotonic array coords."""
@@ -633,6 +641,22 @@ class TestMonotonicCoord:
         wide_coord, inds = coord.select((None, select_range[1]))
         assert wide_coord == coord
 
+    def test_properties_mono(self, monotonic_float_coord):
+        """check a few properties for monotonic float coord."""
+        coord = monotonic_float_coord
+        assert coord.sorted
+        assert not coord.evenly_sampled
+        assert not coord.reverse_sorted
+        assert not coord.degenerate
+
+    def test_properties_reverse_mono(self, reverse_monotonic_float_coord):
+        """check a few properties for reverse monotonic float coord."""
+        coord = reverse_monotonic_float_coord
+        assert not coord.sorted
+        assert not coord.evenly_sampled
+        assert coord.reverse_sorted
+        assert not coord.degenerate
+
 
 class TestNonOrderedArrayCoords:
     """Tests for non-ordered array coords."""
@@ -663,33 +687,13 @@ class TestNonOrderedArrayCoords:
         assert np.issubdtype(out.dtype, np.datetime64)
         assert isinstance(out, CoordRange)
 
-
-class TestCoordFromAttrs:
-    """Tests for creating coordinates from attrs."""
-
-    def test_missing_info_raises(self):
-        """Ensure missing values raise CoordError."""
-        attrs = dict(time_min=0, time_max=10)
-        with pytest.raises(CoordError, match="Could not get coordinate"):
-            get_coord_from_attrs(attrs, name="time")
-
-    def test_int_coords(self):
-        """Happy path for getting coords."""
-        attrs = dict(time_min=0, time_max=10, d_time=1)
-        coord = get_coord_from_attrs(attrs, name="time")
-        assert isinstance(coord, BaseCoord)
-        assert isinstance(coord, CoordRange)
-        assert coord.start == 0
-        assert coord.stop == 11
-        assert coord.step == 1
-        assert coord.values[0] == 0
-        assert coord.values[-1] == 10
-
-    def test_init_attr_with_units(self):
-        """Ensure units are also set."""
-        attrs = dict(time_min=0, time_max=10, d_time=1, time_units="s")
-        coord = get_coord_from_attrs(attrs, name="time")
-        assert coord.units == dc.Unit("s")
+    def test_properties_random(self, random_coord):
+        """Test key properties for evenly sampled."""
+        coord = random_coord
+        assert not coord.evenly_sampled
+        assert not coord.sorted
+        assert not coord.reverse_sorted
+        assert not coord.degenerate
 
 
 class TestDegenerateCoords:
@@ -737,6 +741,42 @@ class TestDegenerateCoords:
         coord = get_coord(values=ar, step=1)
         assert coord.step == 1
         assert coord.dtype == ar.dtype
+
+    def test_properties_degenerate_from_coord_range(self, evenly_sampled_coord):
+        """Test key properties for degenerate coord."""
+        coord = evenly_sampled_coord.empty()
+        assert not coord.evenly_sampled
+        assert not coord.sorted
+        assert not coord.reverse_sorted
+        assert coord.degenerate
+
+
+class TestCoordFromAttrs:
+    """Tests for creating coordinates from attrs."""
+
+    def test_missing_info_raises(self):
+        """Ensure missing values raise CoordError."""
+        attrs = dict(time_min=0, time_max=10)
+        with pytest.raises(CoordError, match="Could not get coordinate"):
+            get_coord_from_attrs(attrs, name="time")
+
+    def test_int_coords(self):
+        """Happy path for getting coords."""
+        attrs = dict(time_min=0, time_max=10, d_time=1)
+        coord = get_coord_from_attrs(attrs, name="time")
+        assert isinstance(coord, BaseCoord)
+        assert isinstance(coord, CoordRange)
+        assert coord.start == 0
+        assert coord.stop == 11
+        assert coord.step == 1
+        assert coord.values[0] == 0
+        assert coord.values[-1] == 10
+
+    def test_init_attr_with_units(self):
+        """Ensure units are also set."""
+        attrs = dict(time_min=0, time_max=10, d_time=1, time_units="s")
+        coord = get_coord_from_attrs(attrs, name="time")
+        assert coord.units == dc.Unit("s")
 
 
 class TestCoercion:

@@ -4,6 +4,7 @@ Machinery for coordinates.
 import abc
 from contextlib import suppress
 from functools import cache
+from operator import gt, lt
 from typing import Any, Optional, Tuple, Union
 
 import numpy as np
@@ -16,7 +17,7 @@ import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
-from dascore.utils.display import get_nice_style
+from dascore.utils.display import get_nice_text
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
 from dascore.utils.time import is_datetime64, is_timedelta64, to_number
@@ -112,8 +113,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     units: Optional[Unit] = None
     step: Any
-    _even_sampling = False
+
     _rich_style = dascore_styles["default_coord"]
+    _evenly_sampled = False
+    _sorted = False
+    _reverse_sorted = False
 
     @abc.abstractmethod
     def convert_units(self, unit) -> Self:
@@ -148,20 +152,20 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         base += Text("(")
         if not pd.isnull(self.min()):
             base += Text(" min: ", key_style)
-            base += get_nice_style(self.min())
+            base += get_nice_text(self.min())
         if not pd.isnull(self.max()):
             base += Text(" max: ", key_style)
-            base += get_nice_style(self.max())
+            base += get_nice_text(self.max())
         if not pd.isnull(self.step):
             base += Text(" step: ", key_style)
-            base += get_nice_style(self.step)
+            base += get_nice_text(self.step)
         base += Text(" shape: ", key_style)
-        base += get_nice_style(self.shape)
+        base += get_nice_text(self.shape)
         base += Text(" dtype: ", key_style)
-        base += get_nice_style(self.dtype)
+        base += get_nice_text(self.dtype)
         if not pd.isnull(self.units):
             base += Text(" units: ", key_style)
-            base += get_nice_style(self.units)
+            base += get_nice_text(self.units, style="units")
         base += Text(" )")
         return base
 
@@ -177,6 +181,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def max(self):
         """return max value"""
         return self._max()
+
+    @property
+    def degenerate(self):
+        """Returns true if coord is degenerate (empty)"""
+        return not bool(len(self))
 
     @abc.abstractmethod
     def _min(self):
@@ -201,6 +210,21 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def shape(self) -> Tuple[int, ...]:
         """Return the shape of the coordinate data."""
         return self.data.shape
+
+    @property
+    def evenly_sampled(self) -> Tuple[int, ...]:
+        """Returns True if the coord is evenly sampled."""
+        return self._evenly_sampled
+
+    @property
+    def sorted(self) -> Tuple[int, ...]:
+        """Returns True if the coord in sorted."""
+        return self._sorted
+
+    @property
+    def reverse_sorted(self) -> Tuple[int, ...]:
+        """Returns True if the coord in sorted in reverse order."""
+        return self._reverse_sorted
 
     def set_units(self, units) -> Self:
         """Set new units on coordinates."""
@@ -387,7 +411,7 @@ class CoordRange(BaseCoord):
     start: Any
     stop: Any
     step: Any
-    _even_sampling = True
+    _evenly_sampled = True
     _rich_style = dascore_styles["coord_range"]
 
     @root_validator()
@@ -518,9 +542,22 @@ class CoordRange(BaseCoord):
         return self.stop - self.step
 
     @property
+    def sorted(self):
+        """Returns true if sorted in ascending order."""
+        return self.step >= self._get_compatible_value(0)
+
+    @property
+    def reverse_sorted(self):
+        """Returns true if sorted in ascending order."""
+        return self.step < self._get_compatible_value(0)
+
+    @property
     @cache
     def dtype(self):
         """Returns datatype."""
+        # some types are weird so we create a small array here to let
+        # numpy determine its dtype. It should only be 1 element long
+        # so not expensive to do.
         return np.arange(self.start, self.start + self.step, self.step).dtype
 
 
@@ -668,13 +705,14 @@ class CoordMonotonicArray(CoordArray):
 
     values: ArrayLike
     _rich_style = dascore_styles["coord_monotonic"]
+    _sorted = True
 
     def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply select, return selected coords and index for selecting data."""
         v1, v2 = self.get_slice_tuple(args)
         # reverse order if reverse monotonic. This is done so when we mult
         # by -1 in _get_index the inverted range is used.
-        if self._is_reversed:
+        if self.reverse_sorted:
             v1, v2 = v2, v1
         # start_forward = False if self._is_reversed else True
         start = self._get_index(v1, left=True)
@@ -698,17 +736,32 @@ class CoordMonotonicArray(CoordArray):
         side_dict = {True: "left", False: "right"}
         # since search sorted only works on ascending monotonic arrays we
         # negative descending arrays to get the same effect.
-        if self._is_reversed:
+        if self.reverse_sorted:
             values = values * -1
             value = value * -1
         ind = np.searchsorted(values, value, side=side_dict[left])
         return ind
 
+    def _step_meets_requirement(self, op):
+        """Return True is any data increment meets the comp. requirement."""
+        vals = self.values
+        # we must iterate because first two elements might be equal.
+        for ind in range(1, len(self)):
+            if op(vals[ind], vals[ind - 1]):
+                return True
+        return False
+
     @property
     @cache
-    def _is_reversed(self):
-        vals = self.values
-        return (vals[1] - vals[0]) < 0
+    def sorted(self):
+        """Determine is coord array is sorted in ascending order."""
+        return self._step_meets_requirement(gt)
+
+    @property
+    @cache
+    def reverse_sorted(self):
+        """Determine is coord array is sorted in descending order."""
+        return self._step_meets_requirement(lt)
 
 
 class CoordDegenerate(CoordArray):
@@ -717,7 +770,7 @@ class CoordDegenerate(CoordArray):
     """
 
     values: ArrayLike
-    step: Any
+    step: Any = None
     _rich_style = dascore_styles["coord_degenerate"]
 
     def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
@@ -727,6 +780,11 @@ class CoordDegenerate(CoordArray):
     def empty(self, axes=None) -> Self:
         """Empty simply returns self."""
         return self
+
+    @property
+    def evenly_sampled(self):
+        """If the degenerate was evenly sampled."""
+        return self.step is not None
 
 
 def get_coord(
