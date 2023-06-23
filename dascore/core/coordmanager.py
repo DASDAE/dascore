@@ -16,6 +16,7 @@ from dascore.constants import dascore_styles
 from dascore.core.coords import BaseCoord, get_coord, get_coord_from_attrs
 from dascore.core.schema import PatchAttrs
 from dascore.exceptions import (
+    CoordDataError,
     CoordError,
     CoordMergeError,
     CoordSortError,
@@ -175,7 +176,9 @@ class CoordManager(DascoreBaseModel):
         if array is not None:
             for index in indexers:
                 array = array[index]
-        return self.new(coord_map=new_coords), array
+        out = self.new(coord_map=new_coords)
+        assert out.shape == self.shape
+        return out, array
 
     def snap(
         self, *coords, array: MaybeArray = None, reverse: bool = False
@@ -201,6 +204,7 @@ class CoordManager(DascoreBaseModel):
         for coord_name in coords:
             cmap[coord_name] = cmap[coord_name].snap()
         out = cm.new(coord_map=cmap)
+        assert out.shape == self.shape
         return out, array
 
     def new(self, dims=None, coord_map=None, dim_map=None) -> Self:
@@ -404,7 +408,12 @@ class CoordManager(DascoreBaseModel):
     def validate_data(self, data):
         """Ensure data conforms to coordinates."""
         data = np.array([]) if data is None else data
-        assert self.shape == data.shape
+        if self.shape != data.shape:
+            msg = (
+                f"Data array has a shape of {data.shape} which doesnt match "
+                f"the coordinate manager shape of {self.shape}."
+            )
+            raise CoordDataError(msg)
         return data
 
     def _get_dim_array_dict(self, keep_coord=False):

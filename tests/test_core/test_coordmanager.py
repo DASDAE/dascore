@@ -25,6 +25,7 @@ from dascore.core.coords import (
 )
 from dascore.core.schema import PatchAttrs
 from dascore.exceptions import (
+    CoordDataError,
     CoordError,
     CoordMergeError,
     CoordSortError,
@@ -185,6 +186,14 @@ class TestBasicCoordManager:
         out = get_coord_manager(input_dict, dims=list(input_dict))
         assert set(out.dims) == set(input_dict)
 
+    def test_bad_datashape_raises(self, basic_coord_manager):
+        """Ensure a bad datashape raises."""
+        match = "match the coordinate manager shape"
+        cm = basic_coord_manager
+        data = np.ones((cm.shape[0], cm.shape[1] - 1))
+        with pytest.raises(CoordDataError, match=match):
+            cm.validate_data(data)
+
 
 class TestCoordManagerInputs:
     """Tests for coordinates management."""
@@ -338,8 +347,18 @@ class TestSelect:
             assert coord.shape[axis] == expected_len
 
     def test_select_trims_associated_coords_2(self, coord_manager_multidim):
-        """Same as test #1, but now we check for trimming none dimension coord"""
-        # TODO: write this test ;)
+        """Same as test #1, but now we check for trimming non-dimension coord"""
+        cm = coord_manager_multidim
+        coord_to_trim = "latitude"
+        array = cm[coord_to_trim]
+        out, _ = cm.select(**{coord_to_trim: (array[1], array[-2])})
+        dim = cm.dim_map[coord_to_trim][0]
+        # ensure all attrs with shared dim have been trimmed.
+        expected_len = len(out.coord_map[coord_to_trim])
+        for name in cm.dim_to_coord_map[dim]:
+            coord = out.coord_map[name]
+            axis = cm.dim_map[name].index(dim)
+            assert coord.shape[axis] == expected_len
 
 
 class TestTranspose:

@@ -347,6 +347,12 @@ class TestBasics:
         out = coord.select((coord.min(), coord.min()))[0]
         assert len(out) == 1
 
+    def test_snap(self, coord):
+        """Tests for snapping coordinates."""
+        out = coord.snap()
+        assert isinstance(out, BaseCoord)
+        assert out.shape == coord.shape
+
     def test_intra_sample_select(self, coord):
         """
         Selecting ranges that fall within samples should raise.

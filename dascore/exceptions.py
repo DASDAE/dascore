@@ -41,6 +41,10 @@ class CoordSortError(CoordError):
     """Raised when coordinates cannot be sorted."""
 
 
+class CoordDataError(CoordError):
+    """Raised when the data shape doesn't match the coordinates."""
+
+
 class PatchDimError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's dimension."""
 

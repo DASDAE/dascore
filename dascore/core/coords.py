@@ -633,7 +633,7 @@ class CoordArray(BaseCoord):
             max_v = np.datetime64(int(max_v), "ns")
             min_v = np.datetime64(int(min_v), "ns")
             step = np.timedelta64(int(np.round(step)), "ns")
-        return CoordRange(start=min_v, stop=max_v, step=step, units=self.units)
+        return CoordRange(start=min_v, stop=max_v + step, step=step, units=self.units)
 
     def update_limits(self, start=None, stop=None, step=None) -> Self:
         """
