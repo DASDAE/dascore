@@ -270,6 +270,9 @@ class Patch:
     transpose = dascore.proc.transpose
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_cords
+    set_units = dascore.proc.set_units
+    convert_units = dascore.proc.convert_units
+    simplify_units = dascore.proc.simplify_units
 
     # --- processing funcs
 

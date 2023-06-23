@@ -5,7 +5,7 @@ from functools import cache
 from typing import Optional, Tuple, Union
 
 import pint
-from pint import UndefinedUnitError
+from pint import Quantity, UndefinedUnitError, Unit  # noqa
 
 from dascore.exceptions import UnitError
 from dascore.utils.misc import unbyte
@@ -13,7 +13,7 @@ from dascore.utils.misc import unbyte
 
 @cache
 def get_registry():
-    """Get the pint unit registery."""
+    """Get the pint unit registry."""
     ureg = pint.UnitRegistry()
     # a few custom defs, we may need our own unit registry if this
     # gets too long.

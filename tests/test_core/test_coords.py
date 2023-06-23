@@ -17,6 +17,7 @@ from dascore.core.coords import (
 )
 from dascore.exceptions import CoordError
 from dascore.utils.misc import register_func
+from dascore.utils.units import get_quantity
 
 COORDS = []
 
@@ -267,8 +268,8 @@ class TestBasics:
         # if units aren't none, ensure they work.
         if not (unit := coord.units):
             return
-        start_unit = start * unit
-        end_unit = end * unit
+        start_unit = start * get_quantity(unit)
+        end_unit = end * get_quantity(unit)
         assert coord.get_slice_tuple((start_unit, None)) == (start, None)
         assert coord.get_slice_tuple((start_unit, end_unit)) == (start, end)
 
@@ -423,16 +424,22 @@ class TestCoordRange:
     def test_set_units(self, evenly_sampled_coord):
         """Ensure units can be set."""
         out = evenly_sampled_coord.set_units("m")
-        assert out.units == dc.Unit("m")
+        assert out.units == "m"
+        assert out is not evenly_sampled_coord
+
+    def test_set_quantity(self, evenly_sampled_coord):
+        """Ensure units can be set."""
+        out = evenly_sampled_coord.set_units("10 m")
+        assert out.units == "10 m"
         assert out is not evenly_sampled_coord
 
     def test_convert_units(self, evenly_sampled_coord):
         """Ensure units can be converted/set."""
         # if units are not set convert_units should set them.
         out_m = evenly_sampled_coord.convert_units("m")
-        assert out_m.units == dc.Unit("m")
+        assert dc.Unit(out_m.units) == dc.Unit("m")
         out_mm = out_m.convert_units("mm")
-        assert out_mm.units == dc.Unit("mm")
+        assert dc.Unit(out_mm.units) == dc.Unit("mm")
         assert len(out_mm) == len(out_m)
         assert np.allclose(out_mm.values / 1000, out_m.values)
 
@@ -850,7 +857,7 @@ class TestCoordFromAttrs:
         """Ensure units are also set."""
         attrs = dict(time_min=0, time_max=10, d_time=1, time_units="s")
         coord = get_coord_from_attrs(attrs, name="time")
-        assert coord.units == dc.Unit("s")
+        assert dc.Unit(coord.units) == dc.Unit("s")
 
 
 class TestCoercion:

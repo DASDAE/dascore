@@ -19,9 +19,9 @@ from dascore.constants import PatchType, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.utils.display import get_nice_text
 from dascore.utils.misc import iterate
-from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
+from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, UnitQuantity
 from dascore.utils.time import is_datetime64, is_timedelta64
-from dascore.utils.units import get_conversion_factor
+from dascore.utils.units import Quantity, Unit, get_conversion_factor
 
 
 @cache
@@ -111,7 +111,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     data dimension.
     """
 
-    units: Optional[Unit] = None
+    units: Optional[UnitQuantity] = None
     step: Any
 
     _rich_style = dascore_styles["default_coord"]
@@ -823,7 +823,7 @@ def get_coord(
     start=None,
     stop=None,
     step=None,
-    units: Union[None, Unit, str] = None,
+    units: Union[None, Unit, Quantity, str] = None,
 ) -> BaseCoord:
     """
     Given multiple types of input, return a coordinate.
