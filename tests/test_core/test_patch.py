@@ -165,6 +165,20 @@ class TestNew:
         new_patch = patch.new(attrs=new_attrs)
         assert not new_patch.attrs.history
 
+    def test_new_coord_dict_order(self, random_patch):
+        """Ensure data can be init'ed with a dict of coords in any orientation"""
+        patch = random_patch
+        axis = patch.dims.index("time")
+        data = np.std(patch.data, axis=axis, keepdims=True)
+        new_time = patch.coords["time"][0:1]
+        new_dist = patch.coords["distance"]
+        coords_1 = {"time": new_time, "distance": new_dist}
+        coords_2 = {"distance": new_dist, "time": new_time}
+        # the order the coords are defined shouldn't matter
+        out_1 = patch.new(data=data, coords=coords_1)
+        out_2 = patch.new(data=data, coords=coords_2)
+        assert out_1 == out_2
+
 
 class TestEmptyPatch:
     """Tests for empty patch objects."""
@@ -207,7 +221,8 @@ class TestEquals:
         dims = random_patch.dims
         new_coords = {x: random_patch.coords[x] for x in random_patch.coords}
         new_coords["bob"] = new_coords.pop(dims[-1])
-        patch_2 = random_patch.new(coords=new_coords)
+        new_dims = tuple(list(dims)[:-1] + ["bob"])
+        patch_2 = random_patch.new(coords=new_coords, dims=new_dims)
         assert not patch_2.equals(random_patch)
 
     def test_coords_not_equal(self, random_patch):
