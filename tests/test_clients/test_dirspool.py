@@ -21,6 +21,24 @@ DIRECTORY_SPOOLS = []
 
 @pytest.fixture(scope="class")
 @register_func(DIRECTORY_SPOOLS)
+def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
+    """Create an index that isn't order chronologically."""
+    path = tmp_path_factory.mktemp("out_of_order_index")
+    spool = dc.spool(path)
+    # sort patches by starttime
+    patch_list = sorted(random_spool, key=lambda x: x.attrs.time_min)
+    # write patches to disk out of order.
+    patch_list[-1].io.write(path / "patch_3.h5", "dasdae")
+    spool.update()
+    patch_list[0].io.write(path / "patch_1.h5", "dasdae")
+    spool.update()
+    patch_list[1].io.write(path / "patch_2.h5", "dasdae")
+    spool.update()
+    return spool
+
+
+@pytest.fixture(scope="class")
+@register_func(DIRECTORY_SPOOLS)
 def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     spool = DirectorySpool(one_file_dir)
@@ -285,6 +303,19 @@ class TestBasicChunk:
         assert patch.attrs.time_min == content["time_min"].min()
         assert patch.attrs.time_max == content["time_max"].max()
         assert patch.attrs.d_time == spool[0].attrs.d_time
+
+    def test_chunk_out_of_order_index(self, dir_spool_index_out_of_order):
+        """Ensure when the index isn't ordered chunk can still work."""
+        spool = dir_spool_index_out_of_order
+        time = 4.25
+        chunk = spool.chunk(time=time)
+        for patch in chunk:
+            assert isinstance(patch, dc.Patch)
+            dur = (patch.attrs.time_max - patch.attrs.time_min) / ONE_SECOND
+            diff = np.abs(dur - time)
+            # because we try to avoid overlaps, the segments can be up to 2
+            # samples shorter than what was asked for. Maybe revisit this?
+            assert diff <= 2 * (patch.attrs.d_time / ONE_SECOND)
 
 
 class TestGetContents:

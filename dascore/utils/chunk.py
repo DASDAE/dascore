@@ -76,7 +76,8 @@ def get_intervals(
     # that is within a sample of stopping value (otherwise that segment
     # will have no data).
     reference = reference[(reference + step) <= stop]
-    # we subtract step to avoid overlaps in segments.
+    # we subtract step to avoid overlaps in segments. This can mean segments
+    # are ~ one sample shorter than those requested.
     ends = reference + length - step
     starts = reference
     # trim end to not surpass stop
