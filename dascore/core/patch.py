@@ -173,11 +173,9 @@ class Patch:
         """
         data = data if data is not None else self.data
         attrs = attrs if attrs is not None else self.attrs
+        dims = dims or self.dims
         if coords is None:
             coords = getattr(self.coords, "_coords", self.coords)
-            dims = self.dims
-        else:
-            dims = dims or list(coords)
         return self.__class__(data=data, coords=coords, attrs=attrs, dims=dims)
 
     def update_attrs(self: PatchType, **attrs) -> PatchType:
