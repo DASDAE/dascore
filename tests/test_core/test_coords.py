@@ -9,7 +9,6 @@ import rich.text
 import dascore as dc
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
     CoordDegenerate,
     CoordMonotonicArray,
     CoordRange,
@@ -32,9 +31,25 @@ def evenly_sampled_coord():
 
 @pytest.fixture(scope="class")
 @register_func(COORDS)
+def evenly_sampled_reversed_coord():
+    """Create coordinates which are evenly sampled."""
+    ar = np.arange(0, -100, -1)
+    return get_coord(values=ar)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORDS)
 def evenly_sampled_float_coord_with_units():
     """Create coordinates which are evenly sampled and have units."""
     ar = np.arange(1, 100, 1 / 3)
+    return get_coord(values=ar, units="m")
+
+
+@pytest.fixture(scope="class")
+@register_func(COORDS)
+def evenly_sampled_float_reverse_units_coord():
+    """Create coordinates which are evenly sampled and have units."""
+    ar = np.arange(-1, -100, -1 / 3)
     return get_coord(values=ar, units="m")
 
 
@@ -191,15 +206,15 @@ class TestBasics:
         """Applying a select out of bounds (too early) should raise an Error."""
         diff = (coord.max() - coord.min()) / (len(coord) - 1)
         # get a range which is for sure before data.
-        v1 = coord.min() - 100 * diff
-        v2 = v1 + 30 * diff
+        v1 = coord.min() - np.abs(100 * diff)
+        v2 = v1 + np.abs(30 * diff)
         # it should return a degenerate because range not contained by coord.
         new, indexer = coord.select((v1, v2))
-        assert isinstance(new, CoordDegenerate)
+        assert new.degenerate
         assert np.size(coord.data[indexer]) == 0
         # Same thing if end time is too early
         new, indexer = coord.select((None, v2))
-        assert isinstance(new, CoordDegenerate)
+        assert new.degenerate
         assert np.size(coord.data[indexer]) == 0
         # but this should be fine
         assert coord.select((v1, None))[0] == coord
@@ -208,15 +223,15 @@ class TestBasics:
         """Applying a select out of bounds (too late) should raise an Error."""
         diff = (coord.max() - coord.min()) / (len(coord) - 1)
         # get a range which is for sure after data.
-        v1 = coord.max() + 100 * diff
-        v2 = v1 + 30 * diff
+        v1 = coord.max() + np.abs(100 * diff)
+        v2 = v1 + np.abs(30 * diff)
         # it should return a degenerate since out of range
         new, indexer = coord.select((v1, v2))
-        assert isinstance(new, CoordDegenerate)
+        assert new.degenerate
         assert np.size(coord.data[indexer]) == 0
         # Same thing if start time is too late
         new, indexer = coord.select((v1, None))
-        assert isinstance(new, CoordDegenerate)
+        assert new.degenerate
         assert np.size(coord.data[indexer]) == 0
         assert coord.select((None, v2))[0] == coord
 
@@ -259,27 +274,27 @@ class TestBasics:
 
     def test_select_ordered_coords(self, coord):
         """Basic select tests all coords should pass."""
-        if isinstance(coord, CoordArray):
+        if not (coord.sorted or coord.reverse_sorted):
             return
         assert len(coord.values) == len(coord)
         value1 = coord.values[10]
         new, sliced = coord.select((value1, ...))
-        assert_value_in_one_step(coord, sliced.start, value1, greater=True)
+        # this accounts for reverse sorted coords
+        slice_value = sliced.start if coord.sorted else sliced.stop - 1
+        assert_value_in_one_step(coord, slice_value, value1, greater=True)
         assert new.values is not coord.values, "new data should be made"
-        assert sliced.start == 10
-        assert len(coord.values) == len(coord)
+        assert slice_value == 10
         # now test exact value
         value2 = coord.values[20]
         new, sliced = coord.select((value2, ...))
-        assert_value_in_one_step(coord, sliced.start, value2, greater=True)
-        assert sliced.start == 20
-        assert len(coord.values) == len(coord)
+        slice_value = sliced.start if coord.sorted else sliced.stop - 1
+        assert_value_in_one_step(coord, slice_value, value2, greater=True)
+        assert slice_value == 20
         # test end index
         new, sliced = coord.select((..., value1))
-        assert sliced.stop == 11
+        assert sliced.stop == 11 if new.sorted else sliced.start == 10
         new, sliced = coord.select((..., value2))
-        assert sliced.stop == 21
-        assert len(coord.values) == len(coord)
+        assert sliced.stop == 21 if new.sorted else sliced.start == 20
         # test range
         new, sliced = coord.select((value1, value2))
         assert len(new.values) == 11 == len(new)
@@ -352,6 +367,11 @@ class TestBasics:
         out = coord.snap()
         assert isinstance(out, BaseCoord)
         assert out.shape == coord.shape
+        # sort order should stay the same
+        if coord.reverse_sorted:
+            assert out.reverse_sorted
+        if coord.sorted:
+            assert out.sorted
 
     def test_intra_sample_select(self, coord):
         """
@@ -376,6 +396,15 @@ class TestBasics:
         """Default units should be None"""
         out = get_coord(values=np.arange(10))
         assert out.units is None
+
+    def test_min_max_align_with_array(self, coord):
+        """Min/max values should match the same operation on data."""
+        if coord.degenerate:
+            return
+        values = coord.values
+        assert coord.min() == np.min(values)
+        assert coord.max() == np.max(values)
+        assert coord.max() > coord.min()
 
 
 class TestCoordRange:
@@ -536,7 +565,7 @@ class TestCoordRange:
         assert coord1.shape == (1,)
 
     def test_monotonic_with_sampling(self):
-        """Ensure initing monotonic array with sampling also works."""
+        """Ensure init'ing monotonic array with sampling also works."""
         sample_rate = 1_000
         t_array = np.linspace(0.0, 1, 1000)
         sample_rate = 1 / sample_rate
@@ -550,6 +579,20 @@ class TestCoordRange:
         assert coord.sorted
         assert not coord.reverse_sorted
         assert not coord.degenerate
+
+    def test_coord_range_len_1(self):
+        """Ensure coord range can have step size of 0."""
+        new = CoordRange(start=0, stop=0, step=0)
+        assert len(new) == 1
+        assert np.all(new.values == np.zeros(0))
+
+    def test_reversed_coord(self, evenly_sampled_reversed_coord):
+        """Ensure reverse sampling works for evenly sampled coord."""
+        coord = evenly_sampled_reversed_coord
+        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
+        assert coord.reverse_sorted
+        assert not coord.sorted
 
 
 class TestMonotonicCoord:

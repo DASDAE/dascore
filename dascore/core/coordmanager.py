@@ -198,6 +198,7 @@ class CoordManager(DascoreBaseModel):
         reverse
             If true, sort in descending order, else ascending.
         """
+        coords = self.dims if len(coords) == 0 else coords
         cm, array = self.sort(*coords, array=array, reverse=reverse)
         # now the arrays are sorted it should be correct to snap dimensions.
         cmap = dict(cm.coord_map)

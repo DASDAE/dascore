@@ -59,3 +59,11 @@ class TestSnapDims:
         coord = out.coords.coord_map["distance"]
         assert coord.sorted
         assert coord.evenly_sampled
+
+    def test_snap_dims(self, wacky_dim_patch):
+        """Ensure we can snap a non monotonic coordinate."""
+        out = wacky_dim_patch.snap_coords()
+        for dim in out.dims:
+            coord = out.coords.coord_map[dim]
+            assert coord.sorted
+            assert coord.evenly_sampled

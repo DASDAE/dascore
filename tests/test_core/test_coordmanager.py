@@ -841,6 +841,28 @@ class TestSort:
 class TestSnap:
     """Tests for snapping coordinates."""
 
+    def test_generic_snap(self, coord_manager):
+        """All coord managers should support snap."""
+        cm, _ = coord_manager.snap()
+        for dim in cm.dims:
+            coord = cm.coord_map[dim]
+            if coord.degenerate or len(coord) < 2:
+                continue
+            assert coord.sorted
+            assert not coord.reverse_sorted
+            assert coord.evenly_sampled
+
+    def test_generic_snap_reverse(self, coord_manager):
+        """All coord managers should support snap in reverse direction."""
+        cm, _ = coord_manager.snap(reverse=True)
+        for dim in cm.dims:
+            coord = cm.coord_map[dim]
+            if coord.degenerate or len(coord) < 2:
+                continue
+            assert not coord.sorted
+            assert coord.reverse_sorted
+            assert coord.evenly_sampled
+
     def test_snap_dims(self, coord_manager_wacky_dims):
         """Happy path for snapping dimensions."""
         cm = coord_manager_wacky_dims

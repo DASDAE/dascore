@@ -20,7 +20,7 @@ from dascore.exceptions import CoordError, ParameterError
 from dascore.utils.display import get_nice_text
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, Unit
-from dascore.utils.time import is_datetime64, is_timedelta64, to_number
+from dascore.utils.time import is_datetime64, is_timedelta64
 from dascore.utils.units import get_conversion_factor
 
 
@@ -433,6 +433,8 @@ class CoordRange(BaseCoord):
 
     @cache
     def __len__(self):
+        if self.start == self.stop:
+            return 1
         out = abs((self.stop - self.start) / self.step)
         # due to floating point weirdness this can sometimes be very close
         # but not exactly an int, so we need to round.
@@ -457,8 +459,10 @@ class CoordRange(BaseCoord):
         Can return a CoordDegenerate if selection is outside of range.
         """
         args = self.get_slice_tuple(args)
-        start = self._get_index(args[0])
-        stop = self._get_index(args[1], forward=False)
+        start = self._get_index(args[0], forward=self.sorted)
+        stop = self._get_index(args[1], forward=self.reverse_sorted)
+        if self.reverse_sorted:
+            start, stop = stop, start
         # we add 1 to stop in slice since its upper limit is exclusive
         out = slice(start, (stop + 1) if stop is not None else stop)
         if self._slice_degenerate(out):
@@ -478,7 +482,10 @@ class CoordRange(BaseCoord):
         if forward_forward or reverse_reverse:
             return self, slice(None)
         new_step = -self.step
-        new_start, new_stop = self.max(), self.min() + new_step
+        if reverse:  # reversing a forward sorted Coordrange
+            new_start, new_stop = self.max(), self.min() + new_step
+        else:  # order a reverse sorted one
+            new_start, new_stop = self.min(), self.max() + new_step
         out = self.new(start=new_start, stop=new_stop, step=new_step)
         return out, slice(None, None, -1)
 
@@ -536,6 +543,8 @@ class CoordRange(BaseCoord):
     @cache
     def values(self) -> ArrayLike:
         """Return the values of the coordinate as an array."""
+        if len(self) == 1:
+            return np.array([self.start])
         # note: linspace works better for floats that might have slightly
         # uneven spacing. It ensures the length of the output array is robust
         # to small deviations in spacing. However, this doesnt work for datetimes.
@@ -549,20 +558,21 @@ class CoordRange(BaseCoord):
 
     def _min(self):
         """Return min value"""
-        return self.start
+        return np.min([self.start, self.stop - self.step])
 
     def _max(self):
         """Return max value in range."""
         # like range, coord range is exclusive of final value.
-        return self.stop - self.step
+        # the min/max are needed for reverse sorted coord.
+        return np.max([self.stop - self.step, self.start])
 
     @property
-    def sorted(self):
+    def sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
         return self.step >= 0
 
     @property
-    def reverse_sorted(self):
+    def reverse_sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
         return self.step < 0
 
@@ -624,16 +634,18 @@ class CoordArray(BaseCoord):
         much easier to work with.
         """
         values = self.values
-        is_datetime = np.issubdtype(self.dtype, (np.datetime64, np.timedelta64))
-        if is_datetime:
-            values = to_number(self.values)
-        max_v, min_v = np.max(values), np.min(values)
+        min_v, max_v = np.min(values), np.max(values)
         step = (max_v - min_v) / (len(self) - 1)
-        if is_datetime:
-            max_v = np.datetime64(int(max_v), "ns")
-            min_v = np.datetime64(int(min_v), "ns")
-            step = np.timedelta64(int(np.round(step)), "ns")
-        return CoordRange(start=min_v, stop=max_v + step, step=step, units=self.units)
+        if pd.isnull(step):
+            # time deltas need to be generated
+            _zero = self._get_compatible_value(0)
+            step = _zero - _zero
+        if self.reverse_sorted:
+            step = -step
+            start, stop = max_v, min_v + step
+        else:
+            start, stop = min_v, max_v + step
+        return CoordRange(start=start, stop=stop, step=step, units=self.units)
 
     def update_limits(self, start=None, stop=None, step=None) -> Self:
         """
@@ -729,7 +741,6 @@ class CoordMonotonicArray(CoordArray):
         # by -1 in _get_index the inverted range is used.
         if self.reverse_sorted:
             v1, v2 = v2, v1
-        # start_forward = False if self._is_reversed else True
         start = self._get_index(v1, left=True)
         new_start = start if start is not None and start > 0 else None
         stop = self._get_index(v2, left=False)
@@ -793,6 +804,10 @@ class CoordDegenerate(CoordArray):
         return self, slice(None, None)
 
     def empty(self, axes=None) -> Self:
+        """Empty simply returns self."""
+        return self
+
+    def snap(self, axes=None) -> Self:
         """Empty simply returns self."""
         return self
 
