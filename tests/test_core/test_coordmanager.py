@@ -32,6 +32,7 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.utils.misc import register_func
+from dascore.utils.units import get_conversion_factor
 
 COORD_MANAGERS = []
 
@@ -47,6 +48,13 @@ DIMS = ("time", "distance")
 def basic_coord_manager():
     """The simplest coord manager"""
     return get_coord_manager(COORDS, DIMS)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def coord_manager_with_units(basic_coord_manager):
+    """The simplest coord manager"""
+    return basic_coord_manager.set_units(time="s", distance="m")
 
 
 @pytest.fixture(scope="class")
@@ -874,3 +882,33 @@ class TestSnap:
             assert coord1.dtype == coord2.dtype
             assert len(coord1) == len(coord2)
         assert out_data.shape == data.shape
+
+
+class TestConvertUnits:
+    """Tests for converting coordinate units."""
+
+    def test_convert_changes_labels(self, basic_coord_manager):
+        """Basic tests for converting units."""
+        cm = basic_coord_manager.convert_units(time="ms", distance="furlong")
+        time, dist = cm.coord_map["time"], cm.coord_map["distance"]
+        assert time.units == "ms"
+        assert dist.units == "furlong"
+
+    def test_convert_changes_values(self, coord_manager_with_units):
+        """Ensure values are scaled accordingly"""
+        conv = get_conversion_factor("m", "ft")
+        cm = coord_manager_with_units.convert_units(distance="ft")
+        dist1 = coord_manager_with_units.coord_map["distance"]
+        dist2 = cm.coord_map["distance"]
+        assert np.isclose(dist1.step, dist2.step / conv)
+        assert np.isclose(dist1.start, dist2.start / conv)
+        assert np.isclose(dist1.stop, dist2.stop / conv)
+
+    def test_convert_time(self, coord_manager_with_units):
+        """When time is already set and a datetime, units should just change."""
+        # TODO, reconsider this; i am not sure its right.
+        new = coord_manager_with_units.convert_units(time="ms")
+        time1 = coord_manager_with_units.coord_map["time"]
+        time2 = new.coord_map["time"]
+        assert time1.dtype == time2.dtype
+        assert np.all(np.equal(time1.values, time2.values))

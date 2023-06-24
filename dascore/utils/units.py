@@ -28,6 +28,8 @@ def get_unit(value):
 
 def get_quantity(value):
     """Convert a value to a pint quantity."""
+    if isinstance(value, Unit):
+        value = str(value)  # ensure unit is converted to quantity
     ureg = get_registry()
     return ureg.Quantity(value)
 
@@ -42,8 +44,11 @@ def get_conversion_factor(from_unit, to_unit) -> float:
     """Get a conversion factor for converting from one unit to another."""
     if from_unit is None or to_unit is None:
         return 1
-    unit1, unit2 = pint.Unit(from_unit), pint.Unit(to_unit)
-    return unit2.from_(unit1).magnitude
+    from_quant, to_quant = get_quantity(from_unit), get_quantity(to_unit)
+    mag1, mag2 = from_quant.magnitude, to_quant.magnitude
+    mag_ratio = mag1 / mag2
+    unit_ratio = to_quant.units.from_(from_quant.units).magnitude
+    return mag_ratio * unit_ratio
 
 
 def invert_unit(unit: Union[pint.Unit, str]) -> pint.Unit:

@@ -8,6 +8,20 @@ from dascore.utils.patch import patch_function
 from dascore.utils.units import Quantity, Unit, get_conversion_factor
 
 
+def _get_updated_attrs(patch, data_units, coord_unit_dict):
+    """Update attributes with new units."""
+    new_attrs = dict(patch.attrs)
+    # set data units
+    if data_units is not None:
+        new_attrs["data_units"] = data_units
+    # loop and set attribute units, if they already exist in attrs
+    for name, unit_val in coord_unit_dict.items():
+        expected_attr = f"{name}_units"
+        if expected_attr in new_attrs:
+            new_attrs[expected_attr] = unit_val
+    return new_attrs
+
+
 @patch_function()
 def set_units(
     patch: PatchType, data_units: Optional[Union[str, Quantity, Unit]] = None, **kwargs
@@ -38,20 +52,7 @@ def set_units(
     >>> # set the units of the distance coordinate
     >>> patch_feet = patch.set_units(distance='feet')
     """
-
-    def _get_updated_attrs():
-        new_attrs = dict(patch.attrs)
-        # set data units
-        if data_units is not None:
-            new_attrs["data_units"] = data_units
-        # loop and set attribute units, if they already exist in attrs
-        for name, unit_val in kwargs.items():
-            expected_attr = f"{name}_units"
-            if expected_attr in new_attrs:
-                new_attrs[expected_attr] = unit_val
-        return new_attrs
-
-    new_attrs = _get_updated_attrs()
+    new_attrs = _get_updated_attrs(patch, data_units, kwargs)
     new_coords = patch.coords.set_units(**kwargs)
     return patch.new(attrs=new_attrs, coords=new_coords)
 
@@ -92,7 +93,9 @@ def convert_units(
         return patch.data * factor
 
     data = convert_data()
-    return patch.new(data=data)
+    new_attrs = _get_updated_attrs(patch, data_units, kwargs)
+    coords = patch.coords.convert_units(**kwargs)
+    return patch.new(data=data, attrs=new_attrs, coords=coords)
 
 
 @patch_function()

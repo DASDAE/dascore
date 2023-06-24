@@ -1,7 +1,9 @@
 """
 Tests for unit dealings on patches.
 """
+import numpy as np
 import pytest
+from pint import DimensionalityError
 
 
 class TestSetUnits:
@@ -55,5 +57,27 @@ class TestConvertUnits:
         unit_patch = patch.set_units("m/s", distance="m", time="s")
         return unit_patch
 
-    def test_convert_data_units(self, random_patch_with_lat_lon):
+    def test_convert_data_units(self, unit_patch):
         """Ensure simple conversions work."""
+        out_km = unit_patch.convert_units("km/s")
+        assert np.allclose(out_km.data * 1_000, unit_patch.data)
+        assert out_km.attrs.data_units == "km/s"
+        out_mm = unit_patch.convert_units("mm/s")
+        assert np.allclose(out_mm.data / 1_000, unit_patch.data)
+        assert out_mm.attrs.data_units == "mm/s"
+
+    def test_convert_data_quantity(self, unit_patch):
+        """Ensure quantities can be used for units."""
+        unit_str = "10 m/s"
+        out = unit_patch.convert_units(unit_str)
+        assert out.attrs.data_units == unit_str
+        assert np.allclose(out.data * 10, unit_patch.data)
+
+    def test_bad_data_conversion_raises(self, unit_patch):
+        """Ensure asking for incompatible units raises."""
+        with pytest.raises(DimensionalityError):
+            unit_patch.convert_units("degC")
+        with pytest.raises(DimensionalityError):
+            unit_patch.convert_units("M")
+        with pytest.raises(DimensionalityError):
+            unit_patch.convert_units("s")

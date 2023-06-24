@@ -444,7 +444,9 @@ class CoordRange(BaseCoord):
         """
         Convert units, or set units if none exist.
         """
-        if self.units is None:
+        is_time = np.issubdtype(self.dtype, np.datetime64)
+        is_time_delta = np.issubdtype(self.dtype, np.timedelta64)
+        if self.units is None or is_time or is_time_delta:
             return self.set_units(units)
         out = dict(units=units)
         factor = get_conversion_factor(self.units, units)
@@ -598,7 +600,9 @@ class CoordArray(BaseCoord):
 
     def convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
-        if self.units is None:
+        is_time = np.issubdtype(self.dtype, np.datetime64)
+        is_time_delta = np.issubdtype(self.dtype, np.timedelta64)
+        if self.units is None or is_time or is_time_delta:
             return self.set_units(units)
         factor = get_conversion_factor(self.units, units)
         return self.new(units=units, values=self.values * factor)
@@ -635,11 +639,12 @@ class CoordArray(BaseCoord):
         """
         values = self.values
         min_v, max_v = np.min(values), np.max(values)
-        step = (max_v - min_v) / (len(self) - 1)
-        if pd.isnull(step):
-            # time deltas need to be generated
+        if len(self) == 1:
+            # time deltas need to be generated for dt case, hence the subtract
             _zero = self._get_compatible_value(0)
             step = _zero - _zero
+        else:
+            step = (max_v - min_v) / (len(self) - 1)
         if self.reverse_sorted:
             step = -step
             start, stop = max_v, min_v + step

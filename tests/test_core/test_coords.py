@@ -17,7 +17,8 @@ from dascore.core.coords import (
 )
 from dascore.exceptions import CoordError
 from dascore.utils.misc import register_func
-from dascore.utils.units import get_quantity
+from dascore.utils.time import is_datetime64, is_timedelta64
+from dascore.utils.units import get_conversion_factor, get_quantity
 
 COORDS = []
 
@@ -488,6 +489,22 @@ class TestCoordRange:
         assert new.start - new.step <= value_m
         # units should also not change
         assert new.units == coord.units
+
+    def test_set_convert_units(self, coord):
+        """Simple test for setting and converting units."""
+        factor = get_conversion_factor("m", "ft")
+        c1 = coord.set_units("m")
+        c2 = c1.convert_units("ft")
+        assert c2.units == "ft"
+        if c2.degenerate:
+            return
+        values1 = c1.values
+        values2 = c2.values
+        # for datetime and timedelta no conversion should happen
+        if is_datetime64(values1[0]) or is_timedelta64(values1[0]):
+            assert np.all(np.equal(values1, values2))
+        else:
+            np.allclose(values1, values2 / factor)
 
     def test_select_date_string(self, evenly_sampled_date_coord):
         """Ensure string selection works with datetime objects."""

@@ -373,6 +373,11 @@ class TestMergePatchesWithChunk:
         assert len(new_merged) == len(old_merged) == 1
         assert new_merged[0].equals(old_merged[0])
 
+    def test_merge_patches_different_dt(self, memory_spool_small_dt_differences):
+        """Slightly different dt values should still merge."""
+        spool = memory_spool_small_dt_differences.chunk(time=None)
+        assert len(spool) == 1
+
 
 class TestGetSpool:
     """Test getting spool from various sources."""

@@ -438,6 +438,17 @@ class CoordManager(DascoreBaseModel):
         out = dict(dims=self.dims, coord_map=new_coords, dim_map=self.dim_map)
         return self.__class__(**out)
 
+    def convert_units(self, **kwargs):
+        """
+        Convert units in coords according to kwargs. Will raise if incompatible
+        Coordinates are specified.
+        """
+        new_coords = dict(self.coord_map)
+        for name, units in kwargs.items():
+            new_coords[name] = new_coords[name].convert_units(units)
+        out = dict(dims=self.dims, coord_map=new_coords, dim_map=self.dim_map)
+        return self.__class__(**out)
+
     def update_from_attrs(self, attrs: Mapping) -> Self:
         """Update coordinates based on new attributes."""
         # a bit wasteful, but we need the coercion from initing a PatchAttrs.

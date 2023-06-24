@@ -356,6 +356,18 @@ def all_examples_spool(terra15_das_example_path):
     return spool
 
 
+@pytest.fixture(scope="class")
+@register_func(SPOOL_FIXTURES)
+def memory_spool_small_dt_differences(random_spool):
+    """Create a memory spool with slightly different d_times"""
+    out = []
+    for num, patch in enumerate(random_spool):
+        dt = patch.attrs.d_time + num * np.timedelta64(1, "ns")
+        new = patch.update_attrs(d_time=dt)
+        out.append(new)
+    return dc.spool(out)
+
+
 @pytest.fixture(scope="class", params=SPOOL_FIXTURES)
 def spool(request):
     """A meta-fixtures for collecting all spools used in testing."""
