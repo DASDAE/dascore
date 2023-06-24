@@ -88,15 +88,6 @@ def terra15_das_example_path():
     return out
 
 
-@pytest.fixture(scope="session")
-@register_func(SPOOL_FIXTURES)
-def terra15_das_unfinished_path() -> Path:
-    """Return the spool of Terra15 Das Array"""
-    out = fetch("terra15_das_unfinished.hdf5")
-    assert out.exists()
-    return out
-
-
 @pytest.fixture(scope="class")
 def terra15_v5_path():
     """Get the path to terra15 V5 file, download if not cached."""
@@ -131,13 +122,6 @@ def idas_h5_example_path():
     out = fetch("iDAS005_hdf5_example.626.h5")
     assert out.exists()
     return out
-
-
-@pytest.fixture()
-@register_func(SPOOL_FIXTURES)
-def terra15_das_spool(terra15_das_example_path) -> SpoolType:
-    """Return the spool of Terra15 Das Array"""
-    return read(terra15_das_example_path, file_format="terra15")
 
 
 # --- Patch fixtures
@@ -218,9 +202,6 @@ def patch(request):
     return request.getfixturevalue(request.param)
 
 
-# --- Spool setup fixtures
-
-
 @pytest.fixture(scope="class")
 def one_file_dir(tmp_path_factory, random_patch):
     """Create a directory with a single DAS file."""
@@ -261,6 +242,22 @@ def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
 
 
 # --- Spool fixtures
+
+
+@pytest.fixture()
+@register_func(SPOOL_FIXTURES)
+def terra15_das_spool(terra15_das_example_path) -> SpoolType:
+    """Return the spool of Terra15 Das Array"""
+    return read(terra15_das_example_path, file_format="terra15")
+
+
+@pytest.fixture(scope="session")
+@register_func(SPOOL_FIXTURES)
+def terra15_das_unfinished_path() -> Path:
+    """Return the spool of Terra15 Das Array"""
+    out = fetch("terra15_das_unfinished.hdf5")
+    assert out.exists()
+    return out
 
 
 @pytest.fixture(scope="session")
@@ -345,6 +342,17 @@ def memory_spool_dim_1_patches():
         length=10,
         starttime="2023-06-13T15:38:00.49953408",
     )
+    return spool
+
+
+@pytest.fixture(scope="class")
+@register_func(SPOOL_FIXTURES)
+def all_examples_spool(terra15_das_example_path):
+    """
+    Create a spool from all the examples.
+    """
+    parent = terra15_das_example_path.parent
+    spool = dc.spool(parent).update()
     return spool
 
 
