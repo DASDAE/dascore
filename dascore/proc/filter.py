@@ -7,7 +7,6 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 
 from typing import Sequence
 
-import numpy as np
 import pandas as pd
 from scipy import ndimage
 from scipy.signal import iirfilter, medfilt2d, sosfilt, sosfiltfilt, zpk2sos
@@ -15,7 +14,8 @@ from scipy.signal import iirfilter, medfilt2d, sosfilt, sosfiltfilt, zpk2sos
 import dascore
 from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
-from dascore.utils.patch import patch_function
+from dascore.units import get_filter_units
+from dascore.utils.patch import get_dim_sampling_rate, patch_function
 
 
 def _check_filter_kwargs(kwargs):
@@ -28,7 +28,6 @@ def _check_filter_kwargs(kwargs):
     if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
         msg = f"filter range must be a length two sequence not {filt_range}"
         raise FilterValueError(msg)
-    filt1, filt2 = filt_range
     if all([pd.isnull(x) for x in filt_range]):
         msg = (
             f"pass filter requires at least one filter limit, "
@@ -36,7 +35,7 @@ def _check_filter_kwargs(kwargs):
         )
         raise FilterValueError(msg)
 
-    return dim, filt1, filt2
+    return dim, filt_range
 
 
 def _check_sobel_args(dim, mode, cval):
@@ -65,14 +64,6 @@ def _check_sobel_args(dim, mode, cval):
         raise FilterValueError(msg)
 
     return dim, mode, cval
-
-
-def _get_sampling_rate(patch, dim):
-    """Get sampling rate, as a float from sampling period along a dimension."""
-    d_dim = patch.attrs[f"d_{dim}"]
-    if dim == "time":  # get time in to seconds
-        d_dim = d_dim / np.timedelta64(1, "s")
-    return 1.0 / d_dim
 
 
 def _check_filter_range(niquest, low, high, filt_min, filt_max):
@@ -141,9 +132,12 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     >>>  # 2. Apply lowpass filter along distance axis for wavelengths less than 100m
     >>> lowpassed = pa.pass_filter(distance=(None, 1/100))
     """
-    dim, filt_min, filt_max = _check_filter_kwargs(kwargs)
+    dim, (arg1, arg2) = _check_filter_kwargs(kwargs)
     axis = patch.dims.index(dim)
-    sr = _get_sampling_rate(patch, dim)
+    coord_units = patch.coords.coord_map[dim].units
+    filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units)
+
+    sr = get_dim_sampling_rate(patch, dim)
     # get niquest and low/high in terms of niquest
     sos = _get_sos(sr, filt_min, filt_max, corners)
     if zerophase:

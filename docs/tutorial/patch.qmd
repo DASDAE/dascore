@@ -22,6 +22,7 @@ for simple demonstrations or testing.
 
 ```{python}
 import dascore as dc
+from dascore import print
 
 pa = dc.get_example_patch()
 ```
@@ -76,12 +77,13 @@ attrs = dict(
     category="DAS",
     id="test_data1",
     time_min=t1,
+    data_units="um/(m * s)"
 )
 
 # Create coordinates, labels for each axis in the array.
 coords = dict(
     distance=np.arange(array.shape[0]) * attrs["d_distance"],
-    time=np.arange(array.shape[1]) * attrs["d_time"],
+    time=t1 + np.arange(array.shape[1]) * attrs["d_time"],
 )
 
 # define dimensions (first label corresponds to data axis 0)
@@ -134,12 +136,14 @@ based visualizations but other DASDAE packages will do more interesting visualiz
 
 ```{python}
 import dascore as dc
+
 patch = (
     dc.get_example_patch('example_event_1')
+    .taper(time=0.05)
     .pass_filter(time=(None, 300))
 )
 
-patch.viz.waterfall(show=True, scale=0.04);
+patch.viz.waterfall(show=True, scale=0.2);
 ```
 
 # Modifying Patches

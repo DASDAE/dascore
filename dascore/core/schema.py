@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Literal, Mapping, Optional, Sequence, Union
 
 import numpy as np
+import pandas as pd
 from pydantic import BaseModel, Field, validator
 from typing_extensions import Self
 
@@ -113,7 +114,7 @@ class PatchAttrs(BaseModel):
     @classmethod
     def from_dict(
         cls,
-        args,
+        attr_map,
         coord_manager: Optional["dc.core.coordmanager.CoordManager"] = None,
     ) -> Self:
         """
@@ -121,19 +122,25 @@ class PatchAttrs(BaseModel):
 
         Optionally, give preference to data contained in a
         [`CoordManager`](`dascore.core.coordmanager.CoordManager`).
+
+        Parameters
+        ----------
+        attr_map
+            Anything convertible to a dict that contains the attr info.
+        coord_manager
+            A coordinate manager to fill in/overite attributes.
+
         """
-        if isinstance(args, cls) and coord_manager is None:
-            return args
-        out = {} if args is None else dict(args)
+        if isinstance(attr_map, cls) and coord_manager is None:
+            return attr_map
+        out = {} if attr_map is None else dict(attr_map)
         if coord_manager is None:
             return cls(**out)
         for name in coord_manager.dims:
             coord = coord_manager.coord_map[name]
             out[f"{name}_min"], out[f"{name}_max"] = coord.min(), coord.max()
-            if coord.step is not None:
-                out[f"d_{name}"] = coord.step
-            if coord.units is not None:
-                out[f"{name}_units"] = coord.units
+            out[f"d_{name}"] = np.NaN if pd.isnull(coord.step) else coord.step
+            out[f"{name}_units"] = coord.units
         out["dims"] = coord_manager.dims
         return cls(**out)
 
@@ -149,7 +156,12 @@ class PatchFileSummary(PatchAttrs):
     """
 
     # These attributes are excluded from the HDF index.
-    _excluded_index = ("data_units", "time_units", "distance_units", "history")
+    _excluded_index = (
+        "data_units",
+        "time_units",
+        "distance_units",
+        "history",
+    )
 
     file_version: str = ""
     file_format: str = ""

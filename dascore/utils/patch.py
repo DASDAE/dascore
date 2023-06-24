@@ -3,6 +3,7 @@ Utilities for working with the Patch class.
 """
 import functools
 import inspect
+import sys
 import warnings
 from typing import (
     Any,
@@ -23,7 +24,7 @@ import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
 from dascore.core.coordmanager import merge_coord_managers
 from dascore.core.schema import PatchAttrs, PatchFileSummary
-from dascore.exceptions import PatchAttributeError, PatchDimError
+from dascore.exceptions import CoordDataError, PatchAttributeError, PatchDimError
 from dascore.utils.docs import compose_docstring, format_dtypes
 from dascore.utils.models import merge_models
 from dascore.utils.time import to_timedelta64
@@ -438,3 +439,34 @@ def get_dim_value_from_kwargs(patch, kwargs):
     dim = list(overlap)[0]
     axis = dims.index(dim)
     return dim, axis, kwargs[dim]
+
+
+def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
+    """
+    Get sampling rate, as a float from sampling period along a dimension.
+
+    Parameters
+    ----------
+    patch
+        The imput patch.
+    dim
+        Dimension to extract.
+
+    Raises
+    ------
+    [CoordDataError](`dascore.exceptions.CoordDataError`) if patch is not
+    evenly sampled along desired dimension.
+    """
+    d_dim = patch.coords.coord_map[dim].step
+    if isinstance(d_dim, np.timedelta64):
+        d_dim = d_dim / np.timedelta64(1, "s")
+    if pd.isnull(d_dim):
+        # get the name of the calling function
+        calling_function = inspect.getframeinfo(sys._getframe(1))[2]
+        msg = (
+            f"Patch coordinate {dim} is not evenly sampled as required by "
+            f"{calling_function}. This can be fixed with Patch.snap or "
+            f"Patch.extrapolate. "
+        )
+        raise CoordDataError(msg)
+    return 1.0 / d_dim

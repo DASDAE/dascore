@@ -866,11 +866,20 @@ def get_coord(
                 msg = "When data is not defined, start, stop, and step must be."
                 raise CoordError(msg)
 
+    def _get_middle_value(diffs):
+        """Get the middle value in the differences array without changing dtype."""
+        last_ind = len(diffs) - 1
+        ind = int(np.floor(last_ind / 2))
+        return diffs[ind]
+
     def _all_diffs_close(diffs):
         """Check if all the diffs are 'close' handling timedeltas."""
-        if np.issubdtype(diffs.dtype, np.timedelta64):
+        is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
+        is_td = np.issubdtype(diffs.dtype, np.datetime64)
+        if is_td or is_dt:
             diffs = diffs.astype(np.int64)
-        return np.allclose(diffs, diffs[0])
+        med = np.median(diffs)
+        return np.allclose(diffs, med)
 
     def _maybe_get_start_stop_step(data):
         """Get start, stop, step, is_monotonic"""
@@ -887,7 +896,7 @@ def get_coord(
             if len(unique_diff) == 1 or _all_diffs_close(unique_diff):
                 _min = data[0]
                 _max = data[-1]
-                _step = unique_diff[0]
+                _step = _get_middle_value(unique_diff)
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 

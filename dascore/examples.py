@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Sequence, Union
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.exceptions import UnknownExample
@@ -113,6 +114,10 @@ def _wacky_dim_coord_patch():
     # time is monotonic, not evenly sampled.
     time_ar = np.cumsum(np.random.random(1_000))
     patch = _random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
+    # check attrs
+    attrs = patch.attrs
+    assert pd.isnull(attrs.d_time)
+    assert pd.isnull(attrs.d_distance)
     return patch
 
 

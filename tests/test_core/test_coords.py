@@ -438,9 +438,9 @@ class TestCoordRange:
         """Ensure units can be converted/set."""
         # if units are not set convert_units should set them.
         out_m = evenly_sampled_coord.convert_units("m")
-        assert dc.Unit(out_m.units) == dc.Unit("m")
+        assert dc.get_unit(out_m.units) == dc.get_unit("m")
         out_mm = out_m.convert_units("mm")
-        assert dc.Unit(out_mm.units) == dc.Unit("mm")
+        assert dc.get_unit(out_mm.units) == dc.get_unit("mm")
         assert len(out_mm) == len(out_m)
         assert np.allclose(out_mm.values / 1000, out_m.values)
 
@@ -483,7 +483,7 @@ class TestCoordRange:
         coord = evenly_sampled_float_coord_with_units
         value_ft = 100
         value_m = value_ft * 0.3048
-        new, sliced = coord.select((value_ft * dc.Unit("ft"), ...))
+        new, sliced = coord.select((value_ft * dc.get_unit("ft"), ...))
         # ensure value is surrounded.
         assert new.start + new.step >= value_m
         assert new.start - new.step <= value_m
@@ -874,7 +874,7 @@ class TestCoordFromAttrs:
         """Ensure units are also set."""
         attrs = dict(time_min=0, time_max=10, d_time=1, time_units="s")
         coord = get_coord_from_attrs(attrs, name="time")
-        assert dc.Unit(coord.units) == dc.Unit("s")
+        assert dc.get_unit(coord.units) == dc.get_unit("s")
 
 
 class TestCoercion:
@@ -894,3 +894,13 @@ class TestCoercion:
         out, indexer = coord.select(drange)
         assert isinstance(out, coord.__class__)
         assert out.dtype == coord.dtype
+
+
+class TestIssues:
+    """Tests for special issues related to coords."""
+
+    def test_event_1_gives_coord_range(self, event_patch_1):
+        """Ensure patch1 gives the coord range."""
+        time_vals = event_patch_1.coords["time"]
+        coord = get_coord(values=time_vals)
+        assert coord.evenly_sampled

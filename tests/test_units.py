@@ -9,6 +9,7 @@ from dascore.exceptions import UnitError
 from dascore.units import (
     get_conversion_factor,
     get_factor_and_unit,
+    get_filter_units,
     get_unit,
     invert_unit,
     validate_quantity,
@@ -20,7 +21,7 @@ class TestUnitInit:
 
     def test_time(self):
         """Tests for time units"""
-        sec = dc.Unit("s")
+        sec = dc.get_unit("s")
         assert str(sec.dimensionality) == "[time]"
 
     def test_conversion_factor(self):
@@ -31,7 +32,7 @@ class TestUnitInit:
 
     def test_invert(self):
         """Ensure a unit can be inverted."""
-        unit = dc.Unit("s")
+        unit = dc.get_unit("s")
         inverted = invert_unit(unit)
         reverted = invert_unit(inverted)
         assert unit == reverted
@@ -105,3 +106,38 @@ class TestConvenientImport:
         """An import error should be raised if the unit isn't valid."""
         with pytest.raises(ImportError):
             from dascore.utils import bob  # noqa
+
+
+class TestGetFilterUnits:
+    """Tests for getting units that can be used for filtering."""
+
+    def test_no_units(self):
+        """Tests for when no units are specified."""
+        assert get_filter_units(1, 10, "m") == (1, 10)
+        assert get_filter_units(None, 10, "s") == (None, 10)
+        assert get_filter_units(1, None, "s") == (1, None)
+
+    def test_filter_units(self):
+        """Tests for when filter units are already those selected."""
+        Hz = get_unit("Hz")
+        s = get_unit("s")
+        assert get_filter_units(1 * Hz, 10 * Hz, s) == (1, 10)
+        assert get_filter_units(None, 10 * Hz, s) == (None, 10)
+        assert get_filter_units(1 * Hz, 10 * Hz, s) == (1, 10)
+
+    def test_same_units(self):
+        """Tests for when filter units are already those selected."""
+        s = get_unit("s")
+        assert get_filter_units(1 * s, 10 * s, s) == (0.1, 1)
+        assert get_filter_units(None, 10 * s, s) == (None, 0.1)
+        assert get_filter_units(10 * s, None, s) == (0.1, None)
+
+    def test_check_different_nits_raises(self):
+        """The units must be the same or it should raise."""
+        s, Hz = get_unit("s"), get_unit("Hz")
+
+        with pytest.raises(UnitError):
+            get_filter_units(1, 10 * s, s)
+
+        with pytest.raises(UnitError):
+            get_filter_units(1 * s, 10 * Hz, s)

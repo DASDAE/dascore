@@ -67,7 +67,7 @@ def sort_cords(patch: PatchType, *coords, reverse=False):
     >>> assert time_snap.coords.coord_map['time'].sorted
     >>> # sort distance coordinate (dimension) in descending order
     >>> dist_snap = patch.sort_coords("distance", reverse=True)
-    >>> assert time_snap.coords.coord_map['distance'].reverse_sorted
+    >>> assert dist_snap.coords.coord_map['distance'].reverse_sorted
     """
     cman, data = patch.coords.sort(*coords, array=patch.data, reverse=reverse)
     return patch.new(data=data, coords=cman)

@@ -6,10 +6,11 @@ import pandas as pd
 import pytest
 
 import dascore
-from dascore.exceptions import FilterValueError
+from dascore.exceptions import CoordDataError, FilterValueError
+from dascore.units import Hz
 
 
-class TestFilterChecks:
+class TestPassFilterChecks:
     """Test that bad filter checks raise appropriate errors."""
 
     def test_no_kwargs_raises(self, random_patch):
@@ -49,8 +50,12 @@ class TestFilterChecks:
         with pytest.raises(FilterValueError, match="possible filter bounds"):
             _ = random_patch.pass_filter(distance=[None, -10])
 
+    def test_bad_units_error(self, random_patch):
+        """Ensure incompatible units raise an Error."""
+        # out = random_patch.pass_filter(time=(1*m, 10*m))
 
-class TestFilterBasics:
+
+class TestPassFilter:
     """Simple tests to make sure filter logic runs."""
 
     def test_time_bandpass_runs(self, random_patch):
@@ -76,6 +81,19 @@ class TestFilterBasics:
         out = random_patch.pass_filter(distance=(0.1, 0.2))
         assert isinstance(out, dascore.Patch)
         assert not np.any(pd.isnull(out.data))
+
+    def test_uneven_sampling_raises(self, wacky_dim_patch):
+        """A nice error message should be raised if the samples arent even."""
+        match = "is not evenly sampled"
+        with pytest.raises(CoordDataError, match=match):
+            wacky_dim_patch.pass_filter(time=(10, 100))
+
+    def test_specify_units(self, random_patch):
+        """Ensure units can be specified in patch arguments."""
+        # breakpoint()
+        assert False
+        out = random_patch.pass_filter(time=(1 * Hz, 10 * Hz))
+        assert out
 
 
 class TestSobelFilter:

@@ -7,7 +7,6 @@ from typing import Optional, Sequence
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import pint
 from pydantic import BaseModel
 from typing_extensions import Literal, Self
 
@@ -91,12 +90,6 @@ class DTypeLike(SimpleValidator):
         """Assert an object is datatype-like"""
         assert isinstance(object, npt.DTypeLike)
         return object
-
-
-class Unit(pint.Unit, SimpleValidator):
-    """A pint unit which can be used by pydantic."""
-
-    func = pint.Unit
 
 
 class UnitQuantity(str, SimpleValidator):

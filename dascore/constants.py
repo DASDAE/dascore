@@ -66,12 +66,14 @@ max_lens = {
     "path": 120,
     "file_format": 15,
     "tag": 100,
-    "network": 8,
-    "station": 8,
+    "network": 12,
+    "station": 12,
     "dims": 40,
     "file_version": 9,
     "cable_id": 50,
     "instrument_id": 50,
+    "data_type": 20,
+    "data_category": 4,
 }
 
 # Methods FileFormatter needs to support
@@ -186,9 +188,9 @@ dascore_styles = dict(
     coord_degenerate="bold #d40000",
     units="#cca3e1",
     dtypes="#a2bf48",
-    keys="#f2e3c6",
+    keys="#a2bf48",
     # these are for formatting datetimes
     ymd="#e96baa",
-    hms="#a8dbd6",
-    dec="#a2bf48",
+    hms="#e96baa",
+    dec="#e96baa",
 )

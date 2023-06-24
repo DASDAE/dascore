@@ -16,10 +16,11 @@ str_or_none = TypeVar("str_or_none", None, str)
 @cache
 def get_registry():
     """Get the pint unit registry."""
-    ureg = pint.UnitRegistry()
+    ureg = pint.UnitRegistry(cache_folder=":auto:")
     # a few custom defs, we may need our own unit registry if this
     # gets too long.
     ureg.define("PI=pi")
+    pint.set_application_registry(ureg)
     return ureg
 
 
@@ -90,6 +91,61 @@ def validate_quantity(quant_str) -> Optional[str]:
         msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
         raise UnitError(msg)
     return str(quant_str)
+
+
+def get_filter_units(
+    arg1: Union[Quantity, float], arg2: Union[Quantity, float], to_unit: str
+) -> Tuple[float, float]:
+    """
+    Get a tuple for applying filter based on dimension coordinates.
+
+    Parameters
+    ----------
+    input_value
+        An array of
+    data_unit
+
+    Returns
+    -------
+    """
+
+    def _check_args(arg1_compat, arg2_compat):
+        """Ensure the arguments ar ok."""
+        if not arg1_compat and arg2_compat:
+            msg = (
+                "Both inputs must be quantities to get filter parameters. "
+                f"You passed ({arg1}, {arg2})"
+            )
+            raise UnitError(msg)
+
+    def get_inverted_quant(quant, data_units):
+        """Convert to inverted units."""
+        quant = get_quantity(quant)
+        if quant.units == get_unit("dimensionless"):
+            msg = (
+                "Both inputs must be quantities to get filter parameters. "
+                f"You passed ({arg1}, {arg2})"
+            )
+            raise UnitError(msg)
+        data_units = get_unit(data_units)
+        inverted_units = (1 / data_units).units
+        inversed_units = True
+        if data_units.dimensionality == quant.units.dimensionality:
+            quant, inversed_units = 1 / quant, False
+        fact, unit = get_factor_and_unit(quant, inverted_units)
+        return quant.magnitude * fact, inversed_units
+
+    # fast-path for non-unit, non-quantity inputs.
+    unitable = (Quantity, Unit)
+    if not (isinstance(arg1, unitable) and isinstance(arg2, unitable)):
+        return arg1, arg2
+    to_units = get_unit(to_unit)
+    out1, inverted = get_inverted_quant(arg1, to_units)
+    out2, inverted = get_inverted_quant(arg2, to_units)
+    return out2, out1, inverted
+    # _check_args(arg1, arg2)
+    #
+    # out_unit = get_quantity(to_unit)
 
 
 def __getattr__(name):

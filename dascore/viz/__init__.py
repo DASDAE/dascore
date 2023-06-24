@@ -1,7 +1,5 @@
 """
-Module for static visualizations and figure generation.
-
-For interactive visualizations see :module:`dascore.workbench`
+Module for static, matplotlib-based visualizations and figure generation.
 """
 from dascore.utils.misc import MethodNameSpace
 

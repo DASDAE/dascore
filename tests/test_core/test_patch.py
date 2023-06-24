@@ -68,6 +68,30 @@ class TestInit:
         out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
 
+    @pytest.fixture(scope="class")
+    def patch_conflicting_attrs_coords(self):
+        """Patch for testing conflicting coordinates/attributes"""
+        array = np.random.random((10, 10))
+        # create attrs, these should all get overwritten by coords.
+        attrs = dict(
+            d_distance=10,
+            d_time=dc.to_timedelta64(1),
+            distance_min=1000,
+            distance_max=2002,
+            time_min=dc.to_datetime64("2017-01-01"),
+            time_max=dc.to_datetime64("2019-01-01"),
+        )
+        # create coords
+        coords = dict(
+            time=dc.to_datetime64(np.cumsum(np.random.random(10))),
+            distance=np.random.random(10),
+        )
+        # assemble and output.
+        dims = ("distance", "time")
+        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
+        patch = dc.Patch(**out)
+        return patch
+
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
         """
         Ensure the time_min and time_max attrs can be inferred from coord time.
@@ -158,6 +182,19 @@ class TestInit:
         time_shape = patch.shape[patch.dims.index("time")]
         assert time_shape == len(patch.coords["time"])
         assert time_shape == len(patch.coords["time"])
+
+    def test_init_conflicting_coord_dims(self, patch_conflicting_attrs_coords):
+        """Test initing a patch which has conflicting info in coords/dims."""
+        patch = patch_conflicting_attrs_coords
+        coords = patch.coords.coord_map
+        attrs = patch.attrs
+        for name, coord in coords.items():
+            assert getattr(attrs, f"{name}_min") == coord.min()
+            assert getattr(attrs, f"{name}_max") == coord.max()
+            if pd.isnull(coord.step):
+                assert pd.isnull(getattr(attrs, f"d_{name}"))
+            else:
+                assert getattr(attrs, f"d_{name}") == coord.step
 
 
 class TestNew:
