@@ -16,9 +16,9 @@ from dascore.core.coords import (
     get_coord_from_attrs,
 )
 from dascore.exceptions import CoordError
+from dascore.units import get_conversion_factor, get_quantity
 from dascore.utils.misc import register_func
 from dascore.utils.time import is_datetime64, is_timedelta64
-from dascore.utils.units import get_conversion_factor, get_quantity
 
 COORDS = []
 

@@ -3,8 +3,8 @@ Tests for transformatter.
 """
 import pytest
 
+from dascore.units import get_quantity
 from dascore.utils.transformatter import FourierTransformatter
-from dascore.utils.units import get_quantity
 
 
 @pytest.fixture()

@@ -6,9 +6,10 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import UnitError
-from dascore.utils.units import (
+from dascore.units import (
     get_conversion_factor,
-    get_unit_and_factor,
+    get_factor_and_unit,
+    get_unit,
     invert_unit,
     validate_quantity,
 )
@@ -70,6 +71,37 @@ class TestUnitAndFactor:
 
     def test_quantx_units(self):
         """tests for the quantx unit str."""
-        mag, ustr = get_unit_and_factor("rad * 2pi/2^16")
+        mag, ustr = get_factor_and_unit("rad * 2pi/2^16")
         assert ustr == "pi * radian"
         assert np.isclose(mag, (2 / (2**16)))
+
+    def test_simplify_units(self):
+        """test for reducing units."""
+        mag, ustr = get_factor_and_unit("rad * (km/m)", simplify=True)
+        assert get_unit(ustr) == get_unit("radian")
+        assert np.isclose(mag, 1000)
+
+    def test_none(self):
+        """Ensure none returns a None and string"""
+        factor, unit = get_factor_and_unit(None)
+        assert factor == 1
+        assert unit is None
+
+
+class TestConvenientImport:
+    """Tests for conveniently importing units for dascore.units"""
+
+    def test_import_common(self):
+        """Ensure common units are importable"""
+        from dascore.units import Hz, ft, km, m, miles  # noqa
+
+        assert m == get_unit("m")
+        assert ft == get_unit("ft")
+        assert miles == get_unit("miles")
+        assert km == get_unit("km")
+        assert Hz == get_unit("Hz")
+
+    def test_bad_import_error_msg(self):
+        """An import error should be raised if the unit isn't valid."""
+        with pytest.raises(ImportError):
+            from dascore.utils import bob  # noqa

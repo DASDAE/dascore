@@ -13,9 +13,9 @@ from typing_extensions import Literal, Self
 
 from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
+from dascore.units import validate_quantity
 from dascore.utils.misc import iterate
 from dascore.utils.time import to_datetime64, to_timedelta64
-from dascore.utils.units import validate_quantity
 
 
 class DascoreBaseModel(BaseModel):

@@ -17,11 +17,11 @@ import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
+from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit
 from dascore.utils.display import get_nice_text
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, UnitQuantity
 from dascore.utils.time import is_datetime64, is_timedelta64
-from dascore.utils.units import Quantity, Unit, get_conversion_factor
 
 
 @cache
@@ -231,6 +231,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         new = dict(self)
         new["units"] = units
         return self.__class__(**new)
+
+    def simplify_units(self) -> Self:
+        """Simplify the coordinate units."""
+        _, unit = get_factor_and_unit(self.units, simplify=True)
+        return self.convert_units(unit)
 
     @abc.abstractmethod
     def sort(self, reverse=False) -> Tuple["BaseCoord", Union[slice, ArrayLike]]:

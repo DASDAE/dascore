@@ -31,8 +31,8 @@ from dascore.exceptions import (
     CoordSortError,
     ParameterError,
 )
+from dascore.units import get_conversion_factor
 from dascore.utils.misc import register_func
-from dascore.utils.units import get_conversion_factor
 
 COORD_MANAGERS = []
 

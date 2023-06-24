@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from dascore.transform.fft import rfft
-from dascore.utils.units import get_quantity
+from dascore.units import get_quantity
 
 
 class TestRfft:

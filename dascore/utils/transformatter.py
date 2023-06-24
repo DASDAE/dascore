@@ -4,7 +4,7 @@ Implements logic to apply formatting changes to patches from transformations.
 import abc
 from abc import abstractmethod
 
-from dascore.utils.units import get_quantity
+from dascore.units import get_quantity
 
 
 class BaseTransformatter(abc.ABC):

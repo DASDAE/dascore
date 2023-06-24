@@ -242,7 +242,7 @@ class TestEquals:
     def test_coords_named_differently(self, random_patch):
         """Ensure if the coords are named differently patches are not equal."""
         dims = random_patch.dims
-        new_coords = {x: random_patch.coords[x] for x in random_patch.coords}
+        new_coords = dict(random_patch.coords)
         new_coords["bob"] = new_coords.pop(dims[-1])
         new_dims = tuple(list(dims)[:-1] + ["bob"])
         patch_2 = random_patch.new(coords=new_coords, dims=new_dims)

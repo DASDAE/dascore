@@ -5,6 +5,9 @@ import numpy as np
 import pytest
 from pint import DimensionalityError
 
+import dascore as dc
+from dascore.units import get_quantity
+
 
 class TestSetUnits:
     """Tests for setting units without conversions."""
@@ -81,3 +84,27 @@ class TestConvertUnits:
             unit_patch.convert_units("M")
         with pytest.raises(DimensionalityError):
             unit_patch.convert_units("s")
+
+
+class TestSimplifyUnits:
+    """ "Ensure units can be simplified."""
+
+    @pytest.fixture(scope="class")
+    def patch_complicated_units(self, random_patch):
+        """Get a patch with very complicated units for simplifying."""
+        out = random_patch.set_units(
+            "km/us * (rad/degrees)",
+            time="s * (kfurlongs)/(furlongs)",
+            distance="miles",
+        )
+        return out
+
+    def test_simplify_everything(self, patch_complicated_units):
+        """Test to simplify all parts of the patch."""
+        out = patch_complicated_units.simplify_units()
+        attrs = out.attrs
+        assert isinstance(out, dc.Patch)
+        # test attrs
+        assert get_quantity(attrs.data_units) == get_quantity("m/s")
+        assert get_quantity(attrs.time_units) == get_quantity("s")
+        assert get_quantity(attrs.distance_units) == get_quantity("m")

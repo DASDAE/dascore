@@ -435,8 +435,7 @@ class CoordManager(DascoreBaseModel):
         new_coords = dict(self.coord_map)
         for name, units in kwargs.items():
             new_coords[name] = new_coords[name].set_units(units)
-        out = dict(dims=self.dims, coord_map=new_coords, dim_map=self.dim_map)
-        return self.__class__(**out)
+        return self.new(coord_map=new_coords)
 
     def convert_units(self, **kwargs):
         """
@@ -446,8 +445,14 @@ class CoordManager(DascoreBaseModel):
         new_coords = dict(self.coord_map)
         for name, units in kwargs.items():
             new_coords[name] = new_coords[name].convert_units(units)
-        out = dict(dims=self.dims, coord_map=new_coords, dim_map=self.dim_map)
-        return self.__class__(**out)
+        return self.new(coord_map=new_coords)
+
+    def simplify_units(self):
+        """Simplify all units in the coordinates."""
+        new_coords = dict(self.coord_map)
+        for name, coord in new_coords.items():
+            new_coords[name] = coord.simplify_units()
+        return self.new(coord_map=new_coords)
 
     def update_from_attrs(self, attrs: Mapping) -> Self:
         """Update coordinates based on new attributes."""

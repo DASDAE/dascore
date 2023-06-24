@@ -4,8 +4,8 @@ Processing functions dealing with units and unit conversions.
 from typing import Optional, Union
 
 from dascore.constants import PatchType
+from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit
 from dascore.utils.patch import patch_function
-from dascore.utils.units import Quantity, Unit, get_conversion_factor
 
 
 def _get_updated_attrs(patch, data_units, coord_unit_dict):
@@ -100,8 +100,23 @@ def convert_units(
 
 @patch_function()
 def simplify_units(
-    patch: PatchType, data_units: Optional[Union[str, Quantity, Unit]] = None, **kwargs
+    patch: PatchType,
 ) -> PatchType:
     """
-    Simplify the units contained by the patch.
+    Simplify the units contained by the patch to base metric units.
+
+    All data and coordinate units will be converted to their
+    base units and corresponding data/labels multiplied by a conversion factor.
     """
+    # get data and data units
+    attrs = dict(patch.attrs)
+    d_factor, d_units = get_factor_and_unit(attrs.get("data_units"), simplify=True)
+    data = patch.data * d_factor if d_factor != 1 else patch.data
+    attrs["data_units"] = d_units
+    # update coords and coord units in attrs
+    coords = patch.coords.simplify_units()
+    for name, coord in coords.coord_map.items():
+        label = f"{name}_units"
+        if label in attrs:
+            attrs[label] = coord.units
+    return patch.new(data=data, coords=coords, attrs=attrs, dims=patch.dims)
