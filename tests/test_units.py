@@ -113,31 +113,41 @@ class TestGetFilterUnits:
 
     def test_no_units(self):
         """Tests for when no units are specified."""
-        assert get_filter_units(1, 10, "m") == (1, 10)
-        assert get_filter_units(None, 10, "s") == (None, 10)
-        assert get_filter_units(1, None, "s") == (1, None)
+        assert get_filter_units(1, 10, "m") == (1.0, 10.0)
+        assert get_filter_units(None, 10, "s") == (None, 10.0)
+        assert get_filter_units(1, None, "s") == (1.0, None)
 
     def test_filter_units(self):
         """Tests for when filter units are already those selected."""
         Hz = get_unit("Hz")
         s = get_unit("s")
-        assert get_filter_units(1 * Hz, 10 * Hz, s) == (1, 10)
-        assert get_filter_units(None, 10 * Hz, s) == (None, 10)
-        assert get_filter_units(1 * Hz, 10 * Hz, s) == (1, 10)
+        assert get_filter_units(1 * Hz, 10 * Hz, s) == (1.0, 10.0)
+        assert get_filter_units(None, 10 * Hz, s) == (None, 10.0)
+        assert get_filter_units(1 * Hz, 10 * Hz, s) == (1.0, 10.0)
 
     def test_same_units(self):
         """Tests for when filter units are already those selected."""
         s = get_unit("s")
-        assert get_filter_units(1 * s, 10 * s, s) == (0.1, 1)
+        assert get_filter_units(1 * s, 10 * s, s) == (0.1, 1.0)
         assert get_filter_units(None, 10 * s, s) == (None, 0.1)
         assert get_filter_units(10 * s, None, s) == (0.1, None)
 
-    def test_check_different_nits_raises(self):
+    def test_different_units_raises(self):
         """The units must be the same or it should raise."""
         s, Hz = get_unit("s"), get_unit("Hz")
 
         with pytest.raises(UnitError):
-            get_filter_units(1, 10 * s, s)
+            get_filter_units(1.0, 10.0 * s, s)
 
         with pytest.raises(UnitError):
-            get_filter_units(1 * s, 10 * Hz, s)
+            get_filter_units(1.0 * s, 10.0 * Hz, s)
+
+    def test_incompatible_units_raise(self):
+        """The units must be the same or it should raise."""
+        s, m = get_unit("s"), get_unit("m")
+        match = "Cannot convert from"
+        with pytest.raises(UnitError, match=match):
+            get_filter_units(1.0 * s, 10.0 * s, m)
+
+        with pytest.raises(UnitError, match=match):
+            get_filter_units(1.0 * m, 10.0 * m, s)

@@ -126,17 +126,25 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     >>> import dascore
     >>> pa = dascore.get_example_patch()
 
-    >>>  # 1. Apply bandpass filter along time axis from 1 to 100 Hz
+    >>>  # Apply bandpass filter along time axis from 1 to 100 Hz
     >>> bandpassed = pa.pass_filter(time=(1, 100))
 
-    >>>  # 2. Apply lowpass filter along distance axis for wavelengths less than 100m
+    >>>  # Apply lowpass filter along distance axis for wavelengths less than 100m
     >>> lowpassed = pa.pass_filter(distance=(None, 1/100))
+
+    >>>  # Optionally, units can be specified for a more expressive API.
+    >>> from dascore.units import m, ft, s, Hz
+    >>> # Filter from 1 Hz to 10 Hz in time dimension
+    >>> pa.pass_filter(time=(1* Hz, 10 * Hz))
+    >>> # Filter wavelengths 50m to 100m
+    >>> pa.pass_filter(distance=(50*m, 100 * m))
+    >>> # filter wavelengths less than 200 ft
+    >>> pa.pass_filter(distance=(200 * ft, None))
     """
     dim, (arg1, arg2) = _check_filter_kwargs(kwargs)
     axis = patch.dims.index(dim)
     coord_units = patch.coords.coord_map[dim].units
     filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units)
-
     sr = get_dim_sampling_rate(patch, dim)
     # get niquest and low/high in terms of niquest
     sos = _get_sos(sr, filt_min, filt_max, corners)
