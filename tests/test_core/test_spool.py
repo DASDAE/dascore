@@ -10,6 +10,8 @@ import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
 from dascore.exceptions import InvalidSpoolError
+
+# from dascore.utils.misc import get_middle_value
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -373,10 +375,27 @@ class TestMergePatchesWithChunk:
         assert len(new_merged) == len(old_merged) == 1
         assert new_merged[0].equals(old_merged[0])
 
-    def test_merge_patches_different_dt(self, memory_spool_small_dt_differences):
+    def test_merge_patches_close_dt(self, memory_spool_small_dt_differences):
         """Slightly different dt values should still merge."""
-        spool = memory_spool_small_dt_differences.chunk(time=None)
-        assert len(spool) == 1
+        # old_spool = memory_spool_small_dt_differences
+        # new_spool = old_spool.chunk(time=None)
+        # old_contents = old_spool.get_contents()
+        # d_time_expected = get_middle_value(old_contents["d_time"])
+        assert False
+        # assert len(new_spool) == 1
+        # # need to iterate to make sure patch can be loaded.
+        # for patch in new_spool:
+        #     assert isinstance(patch, dc.Patch)
+        #     assert patch.attrs.d_time == d_time_expected
+
+    def test_merge_patches_very_different_dt(self, memory_spool_small_dt_differences):
+        """Slightly different dt values should still merge."""
+        # spool = memory_spool_small_dt_differences
+        # patches_2 = [x.update_attrs(d_time=x.d_time * 10) for x in spool]
+        # new_spool = dc.spool(list(spool) + list(patches_2))
+        assert False
+        # spool = memory_spool_small_dt_differences.chunk(time=None)
+        # assert len(spool) == 1
 
 
 class TestGetSpool:

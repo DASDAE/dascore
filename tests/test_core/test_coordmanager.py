@@ -775,6 +775,16 @@ class TestMergeCoordManagers:
         out_with_range = merge_coord_managers([cm1, cm2], "time")
         assert "time2" not in out_with_range.coord_map
 
+    def test_slightly_different_dt(self, memory_spool_small_dt_differences):
+        """
+        Ensure coord managers with slightly different dt can still merge
+        but produce uneven sampled dimension.
+        """
+        spool = memory_spool_small_dt_differences
+        coords = [x.coords for x in spool]
+        out = merge_coord_managers(coords, dim="time")
+        assert not out.coord_map["time"].evenly_sampled
+
 
 class TestSort:
     """Tests for sorting coord managers."""

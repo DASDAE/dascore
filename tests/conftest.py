@@ -365,7 +365,9 @@ def memory_spool_small_dt_differences(random_spool):
         dt = patch.attrs.d_time + num * np.timedelta64(1, "ns")
         new = patch.update_attrs(d_time=dt)
         out.append(new)
-    return dc.spool(out)
+    spool = dc.spool(out)
+    assert len(out) == len(spool)
+    return spool
 
 
 @pytest.fixture(scope="class", params=SPOOL_FIXTURES)

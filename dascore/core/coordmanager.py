@@ -406,6 +406,11 @@ class CoordManager(DascoreBaseModel):
             return (0,)
         return out
 
+    @property
+    def size(self):
+        """Return the shape of the dimensions."""
+        return np.prod(self.shape)
+
     def validate_data(self, data):
         """Ensure data conforms to coordinates."""
         data = np.array([]) if data is None else data

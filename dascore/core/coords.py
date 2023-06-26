@@ -19,7 +19,7 @@ from dascore.constants import PatchType, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit
 from dascore.utils.display import get_nice_text
-from dascore.utils.misc import iterate
+from dascore.utils.misc import all_diffs_close, get_middle_value, iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, UnitQuantity
 from dascore.utils.time import is_datetime64, is_timedelta64
 
@@ -866,21 +866,6 @@ def get_coord(
                 msg = "When data is not defined, start, stop, and step must be."
                 raise CoordError(msg)
 
-    def _get_middle_value(diffs):
-        """Get the middle value in the differences array without changing dtype."""
-        last_ind = len(diffs) - 1
-        ind = int(np.floor(last_ind / 2))
-        return diffs[ind]
-
-    def _all_diffs_close(diffs):
-        """Check if all the diffs are 'close' handling timedeltas."""
-        is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
-        is_td = np.issubdtype(diffs.dtype, np.datetime64)
-        if is_td or is_dt:
-            diffs = diffs.astype(np.int64)
-        med = np.median(diffs)
-        return np.allclose(diffs, med)
-
     def _maybe_get_start_stop_step(data):
         """Get start, stop, step, is_monotonic"""
         data = np.array(data)
@@ -893,10 +878,10 @@ def get_coord(
             # here we are dealing with a length 0 or 1 array.
             if not len(unique_diff):
                 return None, None, None, False
-            if len(unique_diff) == 1 or _all_diffs_close(unique_diff):
+            if len(unique_diff) == 1 or all_diffs_close(unique_diff):
                 _min = data[0]
                 _max = data[-1]
-                _step = _get_middle_value(unique_diff)
+                _step = get_middle_value(unique_diff)
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 

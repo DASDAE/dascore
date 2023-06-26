@@ -1,13 +1,16 @@
 """
 Utilities for chunking dataframes.
 """
+from functools import reduce
 from typing import Collection, Optional, Union
 
+import numpy
 import numpy as np
 import pandas as pd
 
 from dascore.constants import numeric_types, timeable_types
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import get_middle_value
 from dascore.utils.pd import (
     get_column_names_from_dim,
     get_dim_names_from_columns,
@@ -178,6 +181,25 @@ class ChunkManager:
         group_num = has_gap.astype(np.int64).cumsum()
         return group_num[start.index]
 
+    def _get_sampling_group_num(self, df, tolerance=0.05) -> pd.Series:
+        """
+        Because sampling can be off a little, this adds some tolerance for
+        how sampling affects groups.
+
+        Tolerance affects how close samples have to be to be considered
+        the same. 5% is used here.
+        """
+        col = df[f"d_{self._name}"].values
+        sort_args = np.argsort(col)
+        sorted_col = col[sort_args]
+        roll_forward = np.roll(sorted_col, shift=1)
+        diff = (sorted_col - roll_forward) / sorted_col
+        out_of_threshold = diff > tolerance
+        group_number = numpy.cumsum(out_of_threshold)
+        # undo sorting
+        out = pd.Series(group_number[sort_args], index=df.index)
+        return out
+
     def _get_duration_overlap(self, duration, start, step, overlap=None):
         """
         Get duration and overlap from kwargs.
@@ -192,7 +214,9 @@ class ChunkManager:
 
     def _create_df(self, df, name, start_stop, gnum):
         """Reconstruct the dataframe."""
-        out = pd.DataFrame(start_stop, columns=[f"{name}_min", f"{name}_max"])
+        cols = f"{name}_min", f"{name}_max"
+        out = pd.DataFrame(start_stop, columns=list(cols))
+        out[f"d_{name}"] = get_middle_value(df[f"d_{name}"].values)
         merger = df.drop(columns=out.columns)
         for col in merger:
             vals = merger[col].unique()
@@ -253,12 +277,14 @@ class ChunkManager:
         Get the group designation for df. This accounts for both time intervals
         being consistent and group columns matching.
         """
-        # TODO: Test if different stations bridge time span
-        group_cont = self._get_continuity_group_number(start, stop, step)
-        cols = [f"d_{self._name}"] + list(self._group_columns or [])
+        cont_g = self._get_continuity_group_number(start, stop, step)
+        samp_g = self._get_sampling_group_num(df)
+        cols = list(self._group_columns or [])
         columns = [x for x in cols if x in df.columns]
-        col_groups = df.groupby(columns).ngroup()
-        group = group_cont.astype(str) + "_" + col_groups.astype(str)
+        col_g = df.groupby(columns).ngroup()
+        group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
+        group = reduce(lambda x, y: x + "_" + y, group_series)
+
         return group
 
     def chunk(
@@ -295,12 +321,12 @@ class ChunkManager:
         # split/group dataframe into new chunks by iterating over each group.
         out = []
         for gnum in group.unique():
-            start, stop = group_mins[gnum], group_maxs[gnum]
+            g_start, g_stop = group_mins[gnum], group_maxs[gnum]
             current_df = df.loc[group[group == gnum].index]
             # reconstruct DF
             new_start_stop = get_intervals(
-                start,
-                stop,
+                g_start,
+                g_stop,
                 dur,
                 overlap=overlap,
                 step=step.iloc[0],

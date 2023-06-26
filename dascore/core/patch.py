@@ -255,6 +255,11 @@ class Patch:
         """Return the shape of the data array."""
         return self.coords.shape
 
+    @property
+    def size(self) -> tuple[int, ...]:
+        """Return the shape of the data array."""
+        return self.coords.size
+
     def to_xarray(self):
         """
         Return a data array with patch contents.

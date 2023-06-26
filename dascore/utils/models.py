@@ -13,7 +13,7 @@ from typing_extensions import Literal, Self
 from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
 from dascore.units import validate_quantity
-from dascore.utils.misc import iterate
+from dascore.utils.misc import all_diffs_close, get_middle_value, iterate
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -129,13 +129,13 @@ def merge_models(
 
     def _check_class(mod_list):
         """Convert models to dictionaries."""
-        if not len({x.__class__ for x in model_list}) == 1:
+        if not len({x.__class__ for x in mod_list}) == 1:
             msg = "Models must all be the same class to merge"
             raise AttributeMergeError(msg)
 
     def _get_model_dict_list(mod_list):
         """Get list of model_dict, merge along dim if specified."""
-        model_dicts = [dict(x) for x in model_list]
+        model_dicts = [dict(x) for x in mod_list]
         # drop attributes specified.
         if drop := set(iterate(drop_attrs)):
             model_dicts = [
@@ -144,16 +144,23 @@ def merge_models(
         model_sets = [set(x) for x in model_dicts]
         if not dim:
             return model_dicts
-        dmin, dmax = f"{dim}_min", f"{dim}_max"
+        dmin, dmax, dstep = f"{dim}_min", f"{dim}_max", f"d_{dim}"
         expected_attrs = {dmin, dmax}
         if not all([x.issuperset(expected_attrs) for x in model_sets]):
             msg = f"All models do not have required attributes: {expected_attrs}"
             raise AttributeMergeError(msg)
         # now all model dicts just have min/max values set
-        min_start = min([x[f"{dim}_min"] for x in model_dicts])
-        max_end = max([x[f"{dim}_max"] for x in model_dicts])
+        min_start = min([x[dmin] for x in model_dicts])
+        max_end = max([x[dmax] for x in model_dicts])
+        steps = [x[dstep] for x in model_dicts]
+        step = None
+        # if the steps are "close" we allow them to merge
+        if all_diffs_close(steps):
+            step = get_middle_value(steps)
         for mod in model_dicts:
             mod[dmin], mod[dmax] = min_start, max_end
+            # we allow
+            mod[dstep] = step or mod[dstep]
         return model_dicts
 
     def _replace_null_with_None(mod_dict_list):

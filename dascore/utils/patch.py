@@ -26,6 +26,7 @@ from dascore.core.coordmanager import merge_coord_managers
 from dascore.core.schema import PatchAttrs, PatchFileSummary
 from dascore.exceptions import CoordDataError, PatchAttributeError, PatchDimError
 from dascore.utils.docs import compose_docstring, format_dtypes
+from dascore.utils.misc import all_diffs_close
 from dascore.utils.models import merge_models
 from dascore.utils.time import to_timedelta64
 
@@ -335,7 +336,9 @@ def _merge_patches(
             _trim_or_fill(x, start) if needs_action else x
             for x, start, needs_action in zip(patches, overlap_start, has_overlap)
         ]
-        return _merge_trimmed_patches(trimmed_patches)
+        # some patches can be degenerate; just remove those
+        valid_patches = [x for x in trimmed_patches if x.size > 0]
+        return _merge_trimmed_patches(valid_patches)
 
     def _trim_or_fill(patch, new_start):
         """Trim or fill data array."""
@@ -366,7 +369,55 @@ def _merge_patches(
             out.append(_merge_compatible_patches(merge_patch_df, dim))
     return out
 
-    assert False
+
+def _force_patch_merge(patch_dict_list):
+    """
+    Force a merge of the patches along a dimension.
+
+    This function is used in conjunction with `spool.chunk`, which
+    does all the compatibility checks beforehand.
+    """
+
+    def _get_merge_col(df):
+        dims = df["dims"].unique()
+        assert len(dims) == 1
+        dims = dims[0].split(",")
+        dims_vary = pd.Series({x: False for x in dims})
+        for dim in dims:
+            cols = [f"{dim}_min", f"{dim}_max", f"d_{dim}"]
+            vals = df[cols].values
+            columns_equal = (vals == vals[[0], :]).all(axis=1)
+            dims_vary[dim] = not np.all(columns_equal)
+        assert dims_vary.sum() <= 1, "Only one dimension can vary for forced merge"
+        if not dims_vary.any():  # the case of complete overlap.
+            return None
+        return dims_vary[dims_vary].index[0]
+
+    def _steps_close(df, dim):
+        """If true, the step size along dimension is close."""
+        col = df[f"d_{dim}"].values
+        return all_diffs_close(col)
+
+    df = pd.DataFrame(patch_dict_list)
+    merge_dim = _get_merge_col(df)
+    if merge_dim is None:  # nothing to merge, complete overlap
+        return [patch_dict_list[0]]
+    dims = df["dims"].iloc[0].split(",")
+    # get patches, ensure they are oriented the same.
+    patches = [x.transpose(*dims) for x in df["patch"]]
+    axis = patches[0].dims.index(merge_dim)
+    datas = [x.data for x in patches]
+    coords = [x.coords for x in patches]
+    attrs = [x.attrs for x in patches]
+
+    new_data = np.concatenate(datas, axis=axis)
+    new_coord = merge_coord_managers(coords, dim=merge_dim)
+    if _steps_close(df, merge_dim):
+        new_coord = new_coord.snap(merge_dim)[0]
+    new_attrs = merge_models(attrs, merge_dim)
+    patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
+    new_dict = {"patch": patch}
+    return [new_dict]
 
 
 @compose_docstring(fields=format_dtypes(PatchFileSummary.__annotations__))

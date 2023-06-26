@@ -18,7 +18,7 @@ from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor
-from dascore.utils.patch import _merge_patches, patches_to_df
+from dascore.utils.patch import _force_patch_merge, patches_to_df
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     adjust_segments,
@@ -184,24 +184,22 @@ class DataFrameSpool(BaseSpool):
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
         df_dict_list = self._df_to_dict_list(joined)
-        out_list = []
         expected_len = len(joined["current_index"].unique())
         for patch_kwargs in df_dict_list:
             # convert kwargs to format understood by parser/patch.select
             kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
             patch = self._load_patch(kwargs)
+            # apply any trimming needed on patch
             select_kwargs = {
                 i: v
                 for i, v in kwargs.items()
                 if i in patch.dims or i in patch.coords.coord_map
             }
-            out_list.append(patch.select(**select_kwargs))
-        if len(out_list) > expected_len:
-            patch_df = patches_to_df(out_list)
-            # Tolerance should be high since the dataframe chunker has
-            # already determined these rows should be merged together.
-            out_list = _merge_patches(patch_df, tolerance=1_000_000)
-        return out_list
+            patch_kwargs["patch"] = patch.select(**select_kwargs)
+            # out_list.append(patch.select(**select_kwargs))
+        if len(df_dict_list) > expected_len:
+            df_dict_list = _force_patch_merge(df_dict_list)
+        return [x["patch"] for x in df_dict_list]
 
     @staticmethod
     def _get_dummy_dataframes(input_df):

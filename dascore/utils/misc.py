@@ -393,6 +393,25 @@ def trim_attrs_get_inds(attrs, dim_length, **kwargs):
     return slice(int(start_ind), int(stop_ind)), attrs.__class__(**out)
 
 
+def get_middle_value(array):
+    """Get the middle value in the differences array without changing dtype."""
+    array = np.sort(np.array(array))
+    last_ind = len(array) - 1
+    ind = int(np.floor(last_ind / 2))
+    return np.sort(array)[ind]
+
+
+def all_diffs_close(diffs):
+    """Check if all the diffs are 'close' handling timedeltas."""
+    diffs = np.array(diffs)
+    is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
+    is_td = np.issubdtype(diffs.dtype, np.datetime64)
+    if is_td or is_dt:
+        diffs = diffs.astype(np.int64)
+    med = np.median(diffs)
+    return np.allclose(diffs, med)
+
+
 def unbyte(byte_or_str: Union[bytes, str]) -> str:
     """Ensure a string is given by str or possibly bytes."""
     if isinstance(byte_or_str, (bytes, np.bytes_)):
