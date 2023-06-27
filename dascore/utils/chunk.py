@@ -234,18 +234,28 @@ class ChunkManager:
         # add 1 to end so it is an exclusive end range
         return np.stack([chunk_starts, chunk_ends + 1], axis=1)
 
-    def _get_source_and_chunk_inds(self, chunk2src_inds):
+    def _get_source_and_chunk_inds(self, chunk2src_inds, s_index, c_index):
         """Get ndarrays of chunk index, source index."""
-        source_inds = np.concatenate(
+        # get indices for sorted arrays
+        source_inds_ = np.concatenate(
             [np.arange(x[0], x[1], dtype=np.int64) for x in chunk2src_inds]
         )
-        chunk_inds = np.concatenate(
+        chunk_inds_ = np.concatenate(
             [
                 np.ones((x[1] - x[0]), dtype=np.int64) * num
                 for num, x in enumerate(chunk2src_inds)
             ]
         )
-        return source_inds, chunk_inds
+        # use pandex index to map back to actual indices
+        source_inds = s_index.values[source_inds_]
+        chunk_inds = c_index.values[chunk_inds_]
+        out = {
+            "source_sorted": source_inds_,
+            "source": source_inds,
+            "chunk_sorted": chunk_inds_,
+            "chunk": chunk_inds,
+        }
+        return out
 
     def _get_instructions(self, sub_source, sub_chunk):
         """get source mapping to chunk."""
@@ -264,43 +274,31 @@ class ChunkManager:
         # next get index range for which chunk times belong to.
         chunk2src_inds = self._get_chunk_overlap_inds(src1, src2, chu1, chu2)
         # total length of source to chunk mapping
-        source_inds, chunk_inds = self._get_source_and_chunk_inds(chunk2src_inds)
+        inds = self._get_source_and_chunk_inds(
+            chunk2src_inds,
+            sub_source.index,
+            sub_chunk.index,
+        )
+        source_inds, chunk_inds = inds['source_sorted'], inds['chunk_sorted']
+
         # get potential start/stop times.
         starts = np.stack([src1[source_inds], chu1[chunk_inds]], axis=1)
         ends = np.stack([src2[source_inds], chu2[chunk_inds]], axis=1)
         end_time = np.min(ends, axis=1)
         start_times = np.max(starts, axis=1)
-        out = pd.DataFrame(
-            {
-                min_name: start_times,
-                max_name: end_time,
-                "source_index": source_inds,
-                "current_index": chunk_inds,
-            }
-        )
+        data_dict = {
+            min_name: start_times,
+            max_name: end_time,
+            "source_index": inds['source'],
+            "current_index": inds['chunk'],
+        }
+        out = pd.DataFrame(data_dict, index=sub_source.index)
         # populate the rest of the columns needed in instruction df.
         for col in cols2keep:
             if col in out.columns:
                 continue
             out[col] = get_middle_value(sub_source[col])
-        assert False  # just a note to cleanup this stuff
-        return out
-        #
-        # # TODO need to think more about this, a naive implementation for now
-        # for start, stop, ind in zip(
-        #         new_start.values, new_stop.values, new_stop.index
-        # ):
-        #     too_late = source_start > stop
-        #     too_early = c_stop < start
-        #     in_range = ~(too_early | too_late)
-        #     assert in_range.sum() > 0, "no original data source found!"
-        #     sub_df = sub_source[in_range][cols2keep]
-        #     # trim intervals to existing values
-        #     sub_df.loc[sub_df[min_name] < start, min_name] = start
-        #     sub_df.loc[sub_df[max_name] > stop, max_name] = stop
-        #     sub_df.loc[:, "source_index"] = sub_df.index.values
-        #     sub_df.loc[:, "current_index"] = ind
-        #     out.append(sub_df)
+        return out.sort_index()
 
     def get_instruction_df(self, source_df, chunked_df):
         """
@@ -328,7 +326,6 @@ class ChunkManager:
             sub_source = source_df[source_df["_group"] == group]
             sub_chunk = chunked_df[chunked_df["_group"] == group]
             out.append(self._get_instructions(sub_source, sub_chunk))
-
         df = pd.concat(out, axis=0).reset_index(drop=True).set_index("source_index")
         return df
 

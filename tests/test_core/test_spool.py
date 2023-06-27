@@ -231,9 +231,11 @@ class TestChunk:
 
     def test_patches_match_df_contents(self, random_spool):
         """Ensure the patch content matches the dataframe."""
+        breakpoint()
         new = random_spool.chunk(time=2)
         # get contents of chunked spool
         chunk_df = new.get_contents()
+        new[1]
         new_patches = list(new)
         new_spool = dc.spool(new_patches)
         # get content of spool created from patches in chunked spool.
