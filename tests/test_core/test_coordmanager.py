@@ -32,7 +32,7 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.units import get_conversion_factor
-from dascore.utils.misc import register_func
+from dascore.utils.misc import get_middle_value, register_func
 
 COORD_MANAGERS = []
 
@@ -95,6 +95,16 @@ def coord_manager_wacky_dims() -> CoordManager:
     """A coordinate manager with non evenly sampled dims."""
     patch = dc.get_example_patch("wacky_dim_coords_patch")
     return patch.coords
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def coord_dt_small_diff(memory_spool_small_dt_differences):
+    """A list of coordinate managers with differences in dt merged."""
+    spool = memory_spool_small_dt_differences
+    coords = [x.coords for x in spool]
+    out = merge_coord_managers(coords, dim="time")
+    return out
 
 
 @pytest.fixture(scope="class", params=COORD_MANAGERS)
@@ -775,15 +785,14 @@ class TestMergeCoordManagers:
         out_with_range = merge_coord_managers([cm1, cm2], "time")
         assert "time2" not in out_with_range.coord_map
 
-    def test_slightly_different_dt(self, memory_spool_small_dt_differences):
+    def test_slightly_different_dt(self, coord_dt_small_diff):
         """
         Ensure coord managers with slightly different dt can still merge
         but produce uneven sampled dimension.
         """
-        spool = memory_spool_small_dt_differences
-        coords = [x.coords for x in spool]
-        out = merge_coord_managers(coords, dim="time")
-        assert not out.coord_map["time"].evenly_sampled
+        cm = coord_dt_small_diff
+        coord = cm.coord_map["time"]
+        assert coord.sorted
 
 
 class TestSort:
@@ -892,6 +901,15 @@ class TestSnap:
             assert coord1.dtype == coord2.dtype
             assert len(coord1) == len(coord2)
         assert out_data.shape == data.shape
+
+    def test_snap_expected_dt(
+        self, coord_dt_small_diff, memory_spool_small_dt_differences
+    ):
+        """Ensure snapping creates expected dt from merged df."""
+        spool = memory_spool_small_dt_differences
+        expected_dt = get_middle_value([x.attrs.d_time for x in spool])
+        snapped = coord_dt_small_diff.snap()[0]
+        assert snapped.coord_map["time"].step == expected_dt
 
 
 class TestConvertUnits:

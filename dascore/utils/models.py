@@ -13,7 +13,7 @@ from typing_extensions import Literal, Self
 from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
 from dascore.units import validate_quantity
-from dascore.utils.misc import all_diffs_close, get_middle_value, iterate
+from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -155,7 +155,7 @@ def merge_models(
         steps = [x[dstep] for x in model_dicts]
         step = None
         # if the steps are "close" we allow them to merge
-        if all_diffs_close(steps):
+        if all_diffs_close_enough(steps):
             step = get_middle_value(steps)
         for mod in model_dicts:
             mod[dmin], mod[dmax] = min_start, max_end

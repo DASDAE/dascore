@@ -19,7 +19,7 @@ from dascore.constants import PatchType, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit
 from dascore.utils.display import get_nice_text
-from dascore.utils.misc import all_diffs_close, get_middle_value, iterate
+from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, UnitQuantity
 from dascore.utils.time import is_datetime64, is_timedelta64
 
@@ -649,7 +649,15 @@ class CoordArray(BaseCoord):
             _zero = self._get_compatible_value(0)
             step = _zero - _zero
         else:
-            step = (max_v - min_v) / (len(self) - 1)
+            dur = max_v - min_v
+            is_dt = is_timedelta64(dur)
+            # hack to handle dts int division.
+            if is_dt:
+                _step = float(dur.astype(np.int64)) / (len(self) - 1)
+                step = np.timedelta64(int(np.round(_step)), "ns")
+            else:
+                step = dur / (len(self) - 1)
+            assert step > 0
         if self.reverse_sorted:
             step = -step
             start, stop = max_v, min_v + step
@@ -878,7 +886,7 @@ def get_coord(
             # here we are dealing with a length 0 or 1 array.
             if not len(unique_diff):
                 return None, None, None, False
-            if len(unique_diff) == 1 or all_diffs_close(unique_diff):
+            if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
                 _min = data[0]
                 _max = data[-1]
                 _step = get_middle_value(unique_diff)

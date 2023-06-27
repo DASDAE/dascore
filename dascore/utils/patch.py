@@ -26,7 +26,7 @@ from dascore.core.coordmanager import merge_coord_managers
 from dascore.core.schema import PatchAttrs, PatchFileSummary
 from dascore.exceptions import CoordDataError, PatchAttributeError, PatchDimError
 from dascore.utils.docs import compose_docstring, format_dtypes
-from dascore.utils.misc import all_diffs_close
+from dascore.utils.misc import all_diffs_close_enough
 from dascore.utils.models import merge_models
 from dascore.utils.time import to_timedelta64
 
@@ -396,7 +396,7 @@ def _force_patch_merge(patch_dict_list):
     def _steps_close(df, dim):
         """If true, the step size along dimension is close."""
         col = df[f"d_{dim}"].values
-        return all_diffs_close(col)
+        return all_diffs_close_enough(col)
 
     df = pd.DataFrame(patch_dict_list)
     merge_dim = _get_merge_col(df)

@@ -12,6 +12,7 @@ from dascore.constants import numeric_types, timeable_types
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import get_middle_value
 from dascore.utils.pd import (
+    _remove_overlaps,
     get_column_names_from_dim,
     get_dim_names_from_columns,
     get_interval_columns,
@@ -197,7 +198,7 @@ class ChunkManager:
         out_of_threshold = diff > tolerance
         group_number = numpy.cumsum(out_of_threshold)
         # undo sorting
-        out = pd.Series(group_number[sort_args], index=df.index)
+        out = pd.Series(group_number[np.argsort(sort_args)], index=df.index)
         return out
 
     def _get_duration_overlap(self, duration, start, step, overlap=None):
@@ -226,6 +227,81 @@ class ChunkManager:
         out["_group"] = gnum
         return out
 
+    def _get_chunk_overlap_inds(self, src1, src2, chu1, chu2):
+        """Get an index mapping from source to chunk."""
+        chunk_starts = np.searchsorted(src1, chu1)
+        chunk_ends = np.searchsorted(src2, chu2)
+        # add 1 to end so it is an exclusive end range
+        return np.stack([chunk_starts, chunk_ends + 1], axis=1)
+
+    def _get_source_and_chunk_inds(self, chunk2src_inds):
+        """Get ndarrays of chunk index, source index."""
+        source_inds = np.concatenate(
+            [np.arange(x[0], x[1], dtype=np.int64) for x in chunk2src_inds]
+        )
+        chunk_inds = np.concatenate(
+            [
+                np.ones((x[1] - x[0]), dtype=np.int64) * num
+                for num, x in enumerate(chunk2src_inds)
+            ]
+        )
+        return source_inds, chunk_inds
+
+    def _get_instructions(self, sub_source, sub_chunk):
+        """get source mapping to chunk."""
+        min_name, max_name = f"{self._name}_min", f"{self._name}_max"
+        # sort inputs based on start of range, as long as we don't reset index
+        # we should be ok.
+        sub_source = sub_source.sort_values(min_name)
+        sub_chunk = sub_chunk.sort_values(min_name)
+        # need to make sure we don't have overlaps in source df. This implicitly
+        # handles merging.
+        sub_source = _remove_overlaps(sub_source, self._name)
+        src1, src2, src_step = get_interval_columns(sub_source, self._name, arrays=True)
+        chu1, chu2, chu_step = get_interval_columns(sub_chunk, self._name, arrays=True)
+        dims = get_dim_names_from_columns(sub_source)
+        cols2keep = get_column_names_from_dim(dims)
+        # next get index range for which chunk times belong to.
+        chunk2src_inds = self._get_chunk_overlap_inds(src1, src2, chu1, chu2)
+        # total length of source to chunk mapping
+        source_inds, chunk_inds = self._get_source_and_chunk_inds(chunk2src_inds)
+        # get potential start/stop times.
+        starts = np.stack([src1[source_inds], chu1[chunk_inds]], axis=1)
+        ends = np.stack([src2[source_inds], chu2[chunk_inds]], axis=1)
+        end_time = np.min(ends, axis=1)
+        start_times = np.max(starts, axis=1)
+        out = pd.DataFrame(
+            {
+                min_name: start_times,
+                max_name: end_time,
+                "source_index": source_inds,
+                "current_index": chunk_inds,
+            }
+        )
+        # populate the rest of the columns needed in instruction df.
+        for col in cols2keep:
+            if col in out.columns:
+                continue
+            out[col] = get_middle_value(sub_source[col])
+        assert False  # just a note to cleanup this stuff
+        return out
+        #
+        # # TODO need to think more about this, a naive implementation for now
+        # for start, stop, ind in zip(
+        #         new_start.values, new_stop.values, new_stop.index
+        # ):
+        #     too_late = source_start > stop
+        #     too_early = c_stop < start
+        #     in_range = ~(too_early | too_late)
+        #     assert in_range.sum() > 0, "no original data source found!"
+        #     sub_df = sub_source[in_range][cols2keep]
+        #     # trim intervals to existing values
+        #     sub_df.loc[sub_df[min_name] < start, min_name] = start
+        #     sub_df.loc[sub_df[max_name] > stop, max_name] = stop
+        #     sub_df.loc[:, "source_index"] = sub_df.index.values
+        #     sub_df.loc[:, "current_index"] = ind
+        #     out.append(sub_df)
+
     def get_instruction_df(self, source_df, chunked_df):
         """
         Get a dataframe connecting the chunked dataframe to its origin.
@@ -244,31 +320,15 @@ class ChunkManager:
         # of the source groups
         assert "_group" in source_df.columns and "_group" in chunked_df.columns
         chunked_groups = set(chunked_df["_group"])
+        # chunk groups should be a subset of source groups
         assert chunked_groups.issubset(set(source_df["_group"]))
-        min_name, max_name = f"{self._name}_min", f"{self._name}_max"
         # iterate each group and create instruction df
         out = []
-        for group, sub_chunk in chunked_df.groupby("_group"):
+        for group in chunked_groups:
             sub_source = source_df[source_df["_group"] == group]
-            c_start, c_stop, c_step = get_interval_columns(sub_source, self._name)
-            new_start, new_stop, new_step = get_interval_columns(sub_chunk, self._name)
-            dims = get_dim_names_from_columns(sub_source)
-            cols2keep = get_column_names_from_dim(dims)
-            # TODO need to think more about this, a naive implementation for now
-            for start, stop, ind in zip(
-                new_start.values, new_stop.values, new_stop.index
-            ):
-                too_late = c_start > stop
-                too_early = c_stop < start
-                in_range = ~(too_early | too_late)
-                assert in_range.sum() > 0, "no original data source found!"
-                sub_df = sub_source[in_range][cols2keep]
-                # trim intervals to existing values
-                sub_df.loc[sub_df[min_name] < start, min_name] = start
-                sub_df.loc[sub_df[max_name] > stop, max_name] = stop
-                sub_df.loc[:, "source_index"] = sub_df.index.values
-                sub_df.loc[:, "current_index"] = ind
-                out.append(sub_df)
+            sub_chunk = chunked_df[chunked_df["_group"] == group]
+            out.append(self._get_instructions(sub_source, sub_chunk))
+
         df = pd.concat(out, axis=0).reset_index(drop=True).set_index("source_index")
         return df
 
@@ -338,3 +398,5 @@ class ChunkManager:
 
         out = pd.concat(out, axis=0).reset_index(drop=True)
         return df.assign(_group=group), out
+
+        pass

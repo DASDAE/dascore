@@ -170,14 +170,17 @@ def _convert_times(df, some_dict):
     return some_dict
 
 
-def get_interval_columns(df, name):
+def get_interval_columns(df, name, arrays=False):
     """Return a series of start, stop, step for columns."""
     names = f"{name}_min", f"{name}_max", f"d_{name}"
     missing_cols = set(names) - set(df.columns)
     if missing_cols:
         msg = f"Dataframe is missing {missing_cols} to chunk on {name}"
         raise KeyError(msg)
-    return df[names[0]], df[names[1]], df[names[2]]
+    if not arrays:
+        return df[names[0]], df[names[1]], df[names[2]]
+    else:
+        return df[names[0]].values, df[names[1]].values, df[names[2]].values
 
 
 def yield_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
@@ -379,3 +382,18 @@ def _model_list_to_df(mod_list: Sequence[BaseModel]) -> pd.DataFrame:
     if "dims" in df.columns:
         df["dims"] = list_ser_to_str(df["dims"])
     return df
+
+
+def _remove_overlaps(df, col):
+    """Remove overlaps in col, where col_min and col_max should exist in df."""
+    start = df[f"{col}_min"].values
+    stop = df[f"{col}_max"].values
+    sort_args = np.argsort(start)
+    start_sorted = start[sort_args]
+    stop_roll = np.roll(stop[sort_args], 1)
+    potential_starts = np.stack([stop_roll, start_sorted], axis=1)
+    correct_start = np.max(potential_starts, axis=1)
+    # wrap around in roll gives wrong start value, correct it.
+    correct_start[0] = start_sorted[0]
+    correct_start_df_sorted = correct_start[np.argsort(sort_args)]
+    return df.assign(**{f"{col}_min": correct_start_df_sorted})

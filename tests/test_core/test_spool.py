@@ -2,6 +2,8 @@
 Test for spool functions.
 """
 
+import random
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,8 +12,7 @@ import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
 from dascore.exceptions import InvalidSpoolError
-
-# from dascore.utils.misc import get_middle_value
+from dascore.utils.misc import get_middle_value
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -377,25 +378,32 @@ class TestMergePatchesWithChunk:
 
     def test_merge_patches_close_dt(self, memory_spool_small_dt_differences):
         """Slightly different dt values should still merge."""
-        # old_spool = memory_spool_small_dt_differences
-        # new_spool = old_spool.chunk(time=None)
-        # old_contents = old_spool.get_contents()
-        # d_time_expected = get_middle_value(old_contents["d_time"])
-        assert False
-        # assert len(new_spool) == 1
-        # # need to iterate to make sure patch can be loaded.
-        # for patch in new_spool:
-        #     assert isinstance(patch, dc.Patch)
-        #     assert patch.attrs.d_time == d_time_expected
+        old_spool = memory_spool_small_dt_differences
+        new_spool = old_spool.chunk(time=None)
+        old_contents = old_spool.get_contents()
+        d_time_expected = get_middle_value(old_contents["d_time"])
+        assert len(new_spool) == 1
+        # need to iterate to make sure patch can be loaded.
+        for patch in new_spool:
+            assert isinstance(patch, dc.Patch)
+            assert patch.attrs.d_time == d_time_expected
 
     def test_merge_patches_very_different_dt(self, memory_spool_small_dt_differences):
         """Slightly different dt values should still merge."""
-        # spool = memory_spool_small_dt_differences
-        # patches_2 = [x.update_attrs(d_time=x.d_time * 10) for x in spool]
-        # new_spool = dc.spool(list(spool) + list(patches_2))
-        assert False
-        # spool = memory_spool_small_dt_differences.chunk(time=None)
-        # assert len(spool) == 1
+        spool = memory_spool_small_dt_differences
+        patches_1 = [x for x in spool]
+        patches_2 = [x.update_attrs(d_time=x.attrs.d_time * 33) for x in spool]
+        patches = patches_2 + patches_1
+        random.shuffle(patches)  # mix the patches, ensure order isnt required.
+        # determine what the d_time should be
+        dts = {
+            get_middle_value([x.attrs.d_time for x in patches_1]),
+            get_middle_value([x.attrs.d_time for x in patches_2]),
+        }
+        new_spool = dc.spool(patches).chunk(time=None)
+        assert len(new_spool) == 2
+        for patch in new_spool:
+            assert patch.attrs.d_time in dts
 
 
 class TestGetSpool:

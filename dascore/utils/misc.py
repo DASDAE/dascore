@@ -401,13 +401,13 @@ def get_middle_value(array):
     return np.sort(array)[ind]
 
 
-def all_diffs_close(diffs):
+def all_diffs_close_enough(diffs):
     """Check if all the diffs are 'close' handling timedeltas."""
     diffs = np.array(diffs)
     is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
     is_td = np.issubdtype(diffs.dtype, np.datetime64)
     if is_td or is_dt:
-        diffs = diffs.astype(np.int64)
+        diffs = diffs.astype(np.int64).astype(np.float64)
     med = np.median(diffs)
     return np.allclose(diffs, med)
 
