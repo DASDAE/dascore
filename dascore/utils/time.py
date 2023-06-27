@@ -181,8 +181,8 @@ def _series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
 
 @to_timedelta64.register(np.timedelta64)
 def _pass_time_delta(time_delta):
-    """simply return the time delta."""
-    return to_timedelta64(time_delta / np.timedelta64(1, "s"))
+    """simply return the time delta as ns precision."""
+    return time_delta.astype("<m8[ns]")
 
 
 @to_timedelta64.register(pd.Timedelta)

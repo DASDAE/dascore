@@ -8,7 +8,7 @@ from dascore.utils.patch import patch_function
 @patch_function(history=None)
 def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     """
-    Return a subset of the trace based on query parameters.
+    Return a subset of the patch based on query parameters.
 
     Any dimension of the data can be passed as key, and the values
     should either be a Slice or a tuple of (min, max) for that

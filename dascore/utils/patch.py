@@ -26,7 +26,7 @@ from dascore.core.coordmanager import merge_coord_managers
 from dascore.core.schema import PatchAttrs, PatchFileSummary
 from dascore.exceptions import CoordDataError, PatchAttributeError, PatchDimError
 from dascore.utils.docs import compose_docstring, format_dtypes
-from dascore.utils.misc import all_diffs_close_enough
+from dascore.utils.misc import all_diffs_close_enough, get_middle_value
 from dascore.utils.models import merge_models
 from dascore.utils.time import to_timedelta64
 
@@ -393,10 +393,24 @@ def _force_patch_merge(patch_dict_list):
             return None
         return dims_vary[dims_vary].index[0]
 
-    def _steps_close(df, dim):
-        """If true, the step size along dimension is close."""
+    def _maybe_step(df, dim):
+        """Get the expected step if all steps are close, else None."""
         col = df[f"d_{dim}"].values
-        return all_diffs_close_enough(col)
+        if all_diffs_close_enough(col):
+            return get_middle_value(col)
+        return None
+
+    def _get_new_coord(df, merge_dim, coords):
+        """Get new coordinates, also validate anticipated sampling."""
+        new_coord = merge_coord_managers(coords, dim=merge_dim)
+        expected_step = _maybe_step(df, merge_dim)
+        if expected_step is not None:
+            new_coord = new_coord.snap(merge_dim)[0]
+            # TODO slightly different dt can be produced, let pass for now
+            # need to think more about how the merging should work.
+            # coord = new_coord.coord_map[merge_dim]
+            # assert coord.step == expected_step, "incorrect sampling produced"
+        return new_coord
 
     df = pd.DataFrame(patch_dict_list)
     merge_dim = _get_merge_col(df)
@@ -406,14 +420,12 @@ def _force_patch_merge(patch_dict_list):
     # get patches, ensure they are oriented the same.
     patches = [x.transpose(*dims) for x in df["patch"]]
     axis = patches[0].dims.index(merge_dim)
+    # get data, coords, attrs for merging patch together.
     datas = [x.data for x in patches]
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
-
     new_data = np.concatenate(datas, axis=axis)
-    new_coord = merge_coord_managers(coords, dim=merge_dim)
-    if _steps_close(df, merge_dim):
-        new_coord = new_coord.snap(merge_dim)[0]
+    new_coord = _get_new_coord(df, merge_dim, coords)
     new_attrs = merge_models(attrs, merge_dim)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}

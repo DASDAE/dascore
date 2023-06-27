@@ -68,7 +68,6 @@ class Patch:
         attrs: Optional[Union[Mapping, PatchAttrs]] = None,
     ):
         if isinstance(data, (DataArray, self.__class__)):
-            # dar = data if isinstance(data, DataArray) else data._data_array
             return
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
@@ -120,7 +119,7 @@ class Patch:
 
     def equals(self, other: PatchType, only_required_attrs=True) -> bool:
         """
-        Determine if the current trace equals the other trace.
+        Determine if the current patch equals the other patch.
 
         Parameters
         ----------

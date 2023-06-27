@@ -231,11 +231,9 @@ class TestChunk:
 
     def test_patches_match_df_contents(self, random_spool):
         """Ensure the patch content matches the dataframe."""
-        breakpoint()
         new = random_spool.chunk(time=2)
         # get contents of chunked spool
         chunk_df = new.get_contents()
-        new[1]
         new_patches = list(new)
         new_spool = dc.spool(new_patches)
         # get content of spool created from patches in chunked spool.
@@ -290,6 +288,11 @@ class TestChunk:
         assert patch.attrs.time_max == spool[-1].attrs.time_max
         assert patch.attrs.d_time == spool[0].attrs.d_time
 
+    def test_merge_with_trim_doesnt_change_dt(
+        self,
+    ):
+        """Ensure"""
+
 
 class TestMergePatchesWithChunk:
     """Tests for merging patches together using chunk method."""
@@ -327,6 +330,20 @@ class TestMergePatchesWithChunk:
         t3 = pa2.attrs["time_max"]
         pa3 = pa2.update_attrs(time_min=t3 + dt * 1.1)
         return dc.spool([pa2, pa1, pa3])
+
+    @pytest.fixture(scope="class")
+    def adjacent_spool_overlap(self, adjacent_spool_no_overlap):
+        """
+        Create a spool with several patches that have 50% overlap.
+        """
+        patches = list(adjacent_spool_no_overlap)
+        out = [patches[0]]
+        for ind in range(1, len(patches)):
+            previous = patches[ind - 1]
+            current = patches[ind]
+            new_time = previous.coords["time"][40]
+            out.append(current.update_attrs(time_min=new_time))
+        return dc.spool(out)
 
     def test_merge_adjacent(self, adjacent_spool_no_overlap):
         """Test simple merge of patches."""
@@ -394,18 +411,27 @@ class TestMergePatchesWithChunk:
         """Slightly different dt values should still merge."""
         spool = memory_spool_small_dt_differences
         patches_1 = [x for x in spool]
+        # create new patches with higher dt, this creates overlap that should
+        # be trimmed out.
         patches_2 = [x.update_attrs(d_time=x.attrs.d_time * 33) for x in spool]
         patches = patches_2 + patches_1
         random.shuffle(patches)  # mix the patches, ensure order isnt required.
-        # determine what the d_time should be
-        dts = {
-            get_middle_value([x.attrs.d_time for x in patches_1]),
-            get_middle_value([x.attrs.d_time for x in patches_2]),
-        }
         new_spool = dc.spool(patches).chunk(time=None)
         assert len(new_spool) == 2
-        for patch in new_spool:
-            assert patch.attrs.d_time in dts
+        time_steps = new_spool.get_contents()["d_time"]
+        for patch, time_step in zip(new_spool, time_steps):
+            diff = np.abs(patch.attrs.d_time - time_step)
+            assert diff / time_step < 0.01
+
+    def test_overlap_merge_doesnt_change_dt(self, adjacent_spool_overlap):
+        """Trimming overlap shouldn't change dt."""
+        spool = adjacent_spool_overlap.chunk(time=None)
+        contents = spool.get_contents()
+        assert len(spool) == 1
+        patch_new, patch_old = spool[0], adjacent_spool_overlap[0]
+        new_at, old_at = patch_new.attrs, patch_old.attrs
+        assert new_at["time_max"] == contents["time_max"].max()
+        assert new_at["d_time"] == old_at["d_time"] == contents["d_time"].iloc[0]
 
 
 class TestGetSpool:

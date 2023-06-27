@@ -229,8 +229,8 @@ class ChunkManager:
 
     def _get_chunk_overlap_inds(self, src1, src2, chu1, chu2):
         """Get an index mapping from source to chunk."""
-        chunk_starts = np.searchsorted(src1, chu1)
-        chunk_ends = np.searchsorted(src2, chu2)
+        chunk_starts = np.searchsorted(src1, chu1, side="right") - 1
+        chunk_ends = np.searchsorted(src2, chu2, side="left")
         # add 1 to end so it is an exclusive end range
         return np.stack([chunk_starts, chunk_ends + 1], axis=1)
 
@@ -279,25 +279,24 @@ class ChunkManager:
             sub_source.index,
             sub_chunk.index,
         )
-        source_inds, chunk_inds = inds['source_sorted'], inds['chunk_sorted']
-
+        source_inds, chunk_inds = inds["source_sorted"], inds["chunk_sorted"]
         # get potential start/stop times.
         starts = np.stack([src1[source_inds], chu1[chunk_inds]], axis=1)
         ends = np.stack([src2[source_inds], chu2[chunk_inds]], axis=1)
-        end_time = np.min(ends, axis=1)
-        start_times = np.max(starts, axis=1)
+        end_values = np.min(ends, axis=1)
+        start_values = np.max(starts, axis=1)
         data_dict = {
-            min_name: start_times,
-            max_name: end_time,
-            "source_index": inds['source'],
-            "current_index": inds['chunk'],
+            min_name: start_values,
+            max_name: end_values,
+            "source_index": inds["source"],
+            "current_index": inds["chunk"],
         }
-        out = pd.DataFrame(data_dict, index=sub_source.index)
+        out = pd.DataFrame(data_dict)
         # populate the rest of the columns needed in instruction df.
         for col in cols2keep:
             if col in out.columns:
                 continue
-            out[col] = get_middle_value(sub_source[col])
+            out[col] = sub_source[col].values[source_inds]
         return out.sort_index()
 
     def get_instruction_df(self, source_df, chunked_df):
@@ -338,7 +337,7 @@ class ChunkManager:
         samp_g = self._get_sampling_group_num(df)
         cols = list(self._group_columns or [])
         columns = [x for x in cols if x in df.columns]
-        col_g = df.groupby(columns).ngroup()
+        col_g = cont_g * 0 if not columns else df.groupby(columns).ngroup()
         group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
         group = reduce(lambda x, y: x + "_" + y, group_series)
 
