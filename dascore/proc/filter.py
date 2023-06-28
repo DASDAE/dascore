@@ -25,10 +25,12 @@ def _check_filter_kwargs(kwargs):
         raise FilterValueError(msg)
     dim = list(kwargs.keys())[0]
     filt_range = kwargs[dim]
+    # strip out units if used.
+    mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
     if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
         msg = f"filter range must be a length two sequence not {filt_range}"
         raise FilterValueError(msg)
-    if all([pd.isnull(x) for x in filt_range]):
+    if all([pd.isnull(x) for x in mags]):
         msg = (
             f"pass filter requires at least one filter limit, "
             f"you passed {filt_range}"

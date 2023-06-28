@@ -6,6 +6,7 @@ import pytest
 from pint import DimensionalityError
 
 import dascore as dc
+from dascore.exceptions import UnitError
 from dascore.units import get_quantity
 
 
@@ -78,11 +79,11 @@ class TestConvertUnits:
 
     def test_bad_data_conversion_raises(self, unit_patch):
         """Ensure asking for incompatible units raises."""
-        with pytest.raises(DimensionalityError):
+        with pytest.raises(UnitError):
             unit_patch.convert_units("degC")
-        with pytest.raises(DimensionalityError):
+        with pytest.raises(UnitError):
             unit_patch.convert_units("M")
-        with pytest.raises(DimensionalityError):
+        with pytest.raises(UnitError):
             unit_patch.convert_units("s")
 
 
