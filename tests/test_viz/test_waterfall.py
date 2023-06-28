@@ -6,6 +6,27 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.utils.time import is_datetime64
+
+
+def check_label_units(patch, ax):
+    """Ensure patch label units match axis."""
+    axis_dict = {0: "yaxis", 1: "xaxis"}
+    dims = patch.dims
+    # Check coord-inate names
+    for coord_name in dims:
+        coord = patch.coords.coord_map[coord_name]
+        if is_datetime64(coord[0]):
+            continue  # just skip datetimes for now.
+        index = dims.index(coord_name)
+        axis = getattr(ax, axis_dict[index])
+        label_text = axis.get_label().get_text().lower()
+        assert str(coord.units) in label_text
+        assert coord_name in label_text
+    # check colorbar labels
+    cax = ax.images[-1].colorbar
+    title = cax.ax.title.get_text()
+    assert str(patch.attrs.data_units) in title
 
 
 @pytest.fixture(scope="session")
@@ -77,3 +98,17 @@ class TestWaterfall:
         ax = random_patch.viz.waterfall(cmap=None)
         # ensure no colorbar was created.
         assert ax.images[-1].colorbar is None
+
+    def test_units(self, random_patch):
+        """Test that units show up in labels."""
+        # standard units
+        pa = random_patch.set_units("m/s")
+        ax = pa.viz.waterfall()
+        check_label_units(pa, ax)
+        # weird units
+        new = pa.set_units(
+            "furlongs/fortnight",
+            distance="feet",
+        )
+        ax = new.viz.waterfall()
+        check_label_units(new, ax)

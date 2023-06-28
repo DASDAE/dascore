@@ -92,9 +92,11 @@ def waterfall(
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
     if "time" in dims_r:
         _format_time_axis(ax, dims_r)
-    # add color bar
+    # add color bar with title
     if cmap is not None:
-        ax.get_figure().colorbar(im)
+        cb = ax.get_figure().colorbar(im)
+        data_units = patch.attrs.data_units or ""
+        cb.ax.set_title(data_units)
     ax.invert_yaxis()  # invert y axis so origin is at top
     if show:
         plt.show()
