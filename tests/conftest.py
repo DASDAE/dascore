@@ -352,7 +352,12 @@ def all_examples_spool(terra15_das_example_path):
     Create a spool from all the examples.
     """
     parent = terra15_das_example_path.parent
-    spool = dc.spool(parent).update()
+    spool = dc.spool(parent)
+    try:
+        spool = spool.update()
+    except Exception:  # noqa
+        spool.indexer.index_path.unlink()  # delete index if problems found
+        spool = spool.update()  # then re-index
     return spool
 
 

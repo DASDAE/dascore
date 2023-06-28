@@ -224,6 +224,12 @@ class TestNew:
         out_2 = patch.new(data=data, coords=coords_2)
         assert out_1 == out_2
 
+    def test_attrs_preserved_when_not_specified(self, random_patch):
+        """If attrs is not passed to new, old attrs should remain."""
+        pa = random_patch.update_attrs(network="bob", tag="2", station="10")
+        new_1 = pa.new(data=pa.data * 10)
+        assert new_1.attrs == pa.attrs
+
 
 class TestDisplay:
     """Tests for displaying patches."""
