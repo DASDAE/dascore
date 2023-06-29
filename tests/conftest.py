@@ -133,7 +133,7 @@ def terra15_das_patch(terra15_das_example_path) -> Patch:
     """Read the terra15 data, return contained DataArray"""
     out = read(terra15_das_example_path, "terra15")[0]
     attr_time = out.attrs["time_max"]
-    coord_time = out.coords["time"].max()
+    coord_time = out.coords.coord_map["time"].max()
     assert attr_time == coord_time
     return out
 

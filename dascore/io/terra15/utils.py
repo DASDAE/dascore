@@ -5,7 +5,6 @@ from typing import Optional
 import numpy as np
 from tables.exceptions import NoSuchNodeError
 
-import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.coords import get_coord
@@ -144,10 +143,11 @@ def _get_dar_attrs(data_node, root, tar, dar):
 
 def _get_snapped_time_coord(file_start, start_ind, stop_ind, dt):
     """Get a snapped coordinate (user wants evenly sampled coord)"""
-    dt = dc.to_timedelta64(dt)
-    t1 = to_datetime64(file_start) + dt * start_ind
-    t2 = t1 + dt * (stop_ind - start_ind)
-    return get_coord(start=t1, stop=t2, step=dt)
+    t2 = file_start + dt * (stop_ind - start_ind - 1)
+    start = to_datetime64(file_start)
+    step = to_timedelta64(dt)
+    stop = to_datetime64(t2)
+    return get_coord(start=start, stop=stop + step, step=step)
 
 
 def _get_raw_time_coord(data_node, start_ind, stop_ind):
@@ -188,9 +188,7 @@ def _read_terra15(
     # account for files that might not be full, adjust requested max time
     stop_ind = min(stop_ind, time_len)
     assert stop_ind > start_ind
-    req_t_max = (
-        time_lims[-1] if stop_ind < time_len else file_t_min + (stop_ind - 1) * dt
-    )
+    req_t_max = time_lims[-1] if stop_ind < time_len else file_t_max
     assert req_t_max > req_t_min
     # get time coord
     if snap_dims:

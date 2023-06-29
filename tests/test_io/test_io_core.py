@@ -233,4 +233,10 @@ class TestScan:
             for attr_name in comp_attrs:
                 attr1 = getattr(attrs1, attr_name)
                 attr2 = getattr(attrs2, attr_name)
+
+                if not attr2 == attr1:
+                    assert False
+                    scan_attrs = dc.scan(data_file_path)
+                    patch_attrs = [x.attrs for x in dc.read(data_file_path)]
+
                 assert attr1 == attr2

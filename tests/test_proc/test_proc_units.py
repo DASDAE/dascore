@@ -3,7 +3,6 @@ Tests for unit dealings on patches.
 """
 import numpy as np
 import pytest
-from pint import DimensionalityError
 
 import dascore as dc
 from dascore.exceptions import UnitError
