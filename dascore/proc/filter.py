@@ -137,11 +137,11 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     >>>  # Optionally, units can be specified for a more expressive API.
     >>> from dascore.units import m, ft, s, Hz
     >>> # Filter from 1 Hz to 10 Hz in time dimension
-    >>> pa.pass_filter(time=(1* Hz, 10 * Hz))
+    >>> lp_units = pa.pass_filter(time=(1 * Hz, 10 * Hz))
     >>> # Filter wavelengths 50m to 100m
-    >>> pa.pass_filter(distance=(50*m, 100 * m))
+    >>> bp_m = pa.pass_filter(distance=(50 * m, 100 * m))
     >>> # filter wavelengths less than 200 ft
-    >>> pa.pass_filter(distance=(200 * ft, None))
+    >>> lp_ft = pa.pass_filter(distance=(200 * ft, None))
     """
     dim, (arg1, arg2) = _check_filter_kwargs(kwargs)
     axis = patch.dims.index(dim)
