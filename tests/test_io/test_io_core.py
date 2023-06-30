@@ -214,6 +214,11 @@ class TestScan:
 
     def test_scan_attrs_match_patch_attrs(self, data_file_path):
         """We need to make sure scan and patch attrs are identical."""
+        # Since dasdae format stores attrs and coords, we need to
+        # skip events created before coords/attrs were more closely
+        # aligned.
+        if data_file_path.name == "example_dasdae_event_1.h5":
+            return
         comp_attrs = (
             "data_type",
             "data_units",
@@ -233,11 +238,4 @@ class TestScan:
             for attr_name in comp_attrs:
                 patch_attr = getattr(pat_attrs1, attr_name)
                 scan_attr = getattr(scan_attrs2, attr_name)
-
-                if not scan_attr == patch_attr:
-                    assert False
-                #     breakpoint()
-                #     scan_attrs = dc.scan(data_file_path)
-                #     patch_attrs = [x.attrs for x in dc.read(data_file_path)]
-
                 assert scan_attr == patch_attr

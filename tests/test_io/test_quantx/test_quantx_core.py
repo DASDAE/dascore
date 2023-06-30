@@ -72,7 +72,7 @@ class TestReadQuantXV2:
     def test_time_dist_slice(self, quantx_v2_das_patch, quantx_v2_example_path):
         """Ensure slicing distance and time works from read func."""
         time_array = quantx_v2_das_patch.coords["time"]
-        dist_array = quantx_v2_das_patch.coords["channel_number"]
+        dist_array = quantx_v2_das_patch.coords["distance"]
         t1, t2 = time_array[10], time_array[40]
         d1, d2 = dist_array[10], dist_array[40]
         patch = QuantXV2().read(
@@ -81,8 +81,8 @@ class TestReadQuantXV2:
         attrs, coords = patch.attrs, patch.coords
         assert attrs["time_min"] == coords["time"].min() == t1
         assert (attrs["time_max"] - t2) < (attrs["d_time"] / 4)
-        assert attrs["distance_min"] == coords["channel_number"].min() == d1
-        assert attrs["distance_max"] == coords["channel_number"].max() == d2
+        assert attrs["distance_min"] == coords["distance"].min() == d1
+        assert attrs["distance_max"] == coords["distance"].max() == d2
 
     def test_no_arrays_in_attrs(self, quantx_v2_das_patch):
         """
