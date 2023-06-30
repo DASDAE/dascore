@@ -116,12 +116,15 @@ jobs:
   min_deps:
     timeout-minutes: 25
     runs-on: ubuntu-latest
-    python-version: '3.11'
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     steps:
       - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
       - name: install dascore
         shell: bash -l {0}
@@ -141,7 +144,6 @@ jobs:
           conda info -a
           conda list
 
-      # Runs test suite and calculates coverage
       - name: run test suite
         shell: bash -l {0}
         run: |
