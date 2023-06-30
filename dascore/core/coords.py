@@ -427,6 +427,16 @@ class CoordRange(BaseCoord):
             assert values[name] is not None
         return values
 
+    @root_validator()
+    def _set_stop(cls, values):
+        """Set stop to integral value >= current stop."""
+        dur = values["stop"] - values["start"]
+        if values["step"] == 0:
+            return values
+        int_val = int(np.ceil(np.round(dur / values["step"], 1)))
+        values["stop"] = values["start"] + values["step"] * int_val
+        return values
+
     def __getitem__(self, item):
         if isinstance(item, int):
             if item >= len(self):

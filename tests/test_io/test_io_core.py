@@ -226,17 +226,17 @@ class TestScan:
             "tag",
             "network",
         )
-        scan_attrs = dc.scan(data_file_path)
-        patch_attrs = [x.attrs for x in dc.read(data_file_path)]
-        assert len(scan_attrs) == len(patch_attrs)
-        for attrs1, attrs2 in zip(patch_attrs, scan_attrs):
+        scan_attrs_list = dc.scan(data_file_path)
+        patch_attrs_list = [x.attrs for x in dc.read(data_file_path)]
+        assert len(scan_attrs_list) == len(patch_attrs_list)
+        for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
             for attr_name in comp_attrs:
-                attr1 = getattr(attrs1, attr_name)
-                attr2 = getattr(attrs2, attr_name)
+                patch_attr = getattr(pat_attrs1, attr_name)
+                scan_attr = getattr(scan_attrs2, attr_name)
 
-                if not attr2 == attr1:
-                    assert False
-                    scan_attrs = dc.scan(data_file_path)
-                    patch_attrs = [x.attrs for x in dc.read(data_file_path)]
+                # if not scan_attr == patch_attr:
+                #     breakpoint()
+                #     scan_attrs = dc.scan(data_file_path)
+                #     patch_attrs = [x.attrs for x in dc.read(data_file_path)]
 
-                assert attr1 == attr2
+                assert scan_attr == patch_attr

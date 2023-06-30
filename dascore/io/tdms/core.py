@@ -4,8 +4,6 @@ IO module for reading Silixa's TDMS DAS data format.
 from pathlib import Path
 from typing import List, Optional, Union
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
@@ -17,8 +15,8 @@ from .utils import (
     _get_data,
     _get_data_node,
     _get_default_attrs,
-    _get_distance_array,
-    _get_time_array,
+    _get_distance_coord,
+    _get_time_coord,
     _get_version_str,
 )
 
@@ -86,15 +84,11 @@ class TDMSFormatterV4713(FiberIO):
             data_node, channel_length, attrs = _get_data_node(
                 tdms_file, LEAD_IN_LENGTH=28
             )
-            # time_max scanned in attributes is updated after reading data
-            attrs["time_max"] = attrs["time_min"] + np.timedelta64(
-                int(1000 * channel_length * attrs["d_time"]), "ms"
-            )
             # get time and distance array.
-            time_ar = _get_time_array(tdms_file=None, attrs=attrs)
-            dist_ar = _get_distance_array(tdms_file=None, attrs=attrs)
+            time_ar = _get_time_coord(tdms_file=None, attrs=attrs)
+            dist_ar = _get_distance_coord(tdms_file=None, attrs=attrs)
 
-            # Get data in distance and time requested and assoociated time
+            # Get data in distance and time requested and associated time
             # and distance arrays
             data, tar, dar = _get_data(time, distance, time_ar, dist_ar, data_node)
             dims = ("time", "distance")

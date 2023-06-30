@@ -618,6 +618,15 @@ class TestCoordRange:
         assert coord.reverse_sorted
         assert not coord.sorted
 
+    def test_arrange_equiv(self):
+        """Ensure np.arange produces same len as get_coord, start, stop, step."""
+        start = -120.02095199999974
+        stop = 1055.2182894582486
+        step = 1.0209523838714072
+        ar = np.arange(start, stop, step)
+        coord = get_coord(start=start, stop=stop, step=step)
+        assert coord.shape == ar.shape
+
 
 class TestMonotonicCoord:
     """Tests for monotonic array coords."""

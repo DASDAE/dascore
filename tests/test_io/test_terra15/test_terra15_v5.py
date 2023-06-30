@@ -36,7 +36,7 @@ class TestReadTerra15V5:
     def test_coord_attr_time_equal(self, terra15_v5_patch):
         """The time reported in the attrs and coords should match"""
         attr_time = terra15_v5_patch.attrs["time_max"]
-        coord_time = terra15_v5_patch.coords["time"].max()
+        coord_time = terra15_v5_patch.coords.coord_map["time"].max()
         assert attr_time == coord_time
 
     def test_read_with_limits(self, terra15_v5_patch, terra15_v5_path):

@@ -8,9 +8,9 @@ import struct
 
 import numpy as np
 
+from dascore.core.coords import get_coord
 from dascore.core.schema import PatchAttrs
-from dascore.utils.misc import get_slice_from_monotonic
-from dascore.utils.time import to_datetime64
+from dascore.utils.time import to_datetime64, to_timedelta64
 
 DEFAULT_ATTRS = tuple(PatchAttrs.__fields__)
 
@@ -50,34 +50,29 @@ def _get_version_str(tdms_file, LEAD_IN_LENGTH=28) -> str:
         return False
 
 
-def _get_distance_array(tdms_file=None, attrs=None):
+def _get_distance_coord(tdms_file=None, attrs=None):
     """Get the distance (along fiber) array."""
-    # Note: At least for the test file, sensing_range_start, sensing_range_stop,
-    # nx, and dx are not consistent so I just used this method. We need to
-    # look more into this.
     if attrs is None:
         attrs, _ = _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28)
     zero_offset = attrs["distance_min"]
     channel_spacing = attrs["d_distance"] * attrs["Fibre Length Multiplier"]
-    max_dist = attrs["distance_max"]
     # Note: I found files where the end was slightly less than one channel spacing
     # as a result the distance array was one channels short. Adding 10% of the
     # channels spacing to distance_max fixes the issue without causing problems
     # for files that don't have this rounding error.
-    dist = np.arange(zero_offset, max_dist + channel_spacing / 10, channel_spacing)
-    return dist
+    max_dist = attrs["distance_max"] + channel_spacing / 10
+    kwargs = dict(start=zero_offset, stop=max_dist, step=channel_spacing)
+    return get_coord(units="m", **kwargs)
 
 
-def _get_time_array(tdms_file=None, attrs=None):
+def _get_time_coord(tdms_file=None, attrs=None):
     """Get the time array for the file."""
     if attrs is None:
         attrs, _ = _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28)
-    time_min = attrs["time_min"]
-    time_max = attrs["time_max"]
-    time_array = np.arange(
-        time_min, time_max, np.timedelta64(int(1000 * attrs["d_time"]), "ms")
-    )
-    return time_array
+    t_min = attrs["time_min"]
+    t_max = attrs["time_max"]
+    dt = attrs["d_time"]
+    return get_coord(start=t_min, stop=t_max + dt, step=dt, units="s")
 
 
 def _get_default_attrs(tdms_file, get_all_attrs=None):
@@ -220,7 +215,7 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
     out["data_type"] = "strain_rate"
     out["data_units"] = ""
     out["dims"] = "time, distance"
-    out["d_time"] = 1 / out["SamplingFrequency[Hz]"]
+    out["d_time"] = to_timedelta64(1 / out["SamplingFrequency[Hz]"])
     out["time_min"] = to_datetime64(str(out["GPSTimeStamp"]))
     # Rename some attributes to preferred names
     _root_attrs = {
@@ -256,10 +251,12 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
         / n_channels
         / np.dtype(fileinfo["data_type"]).itemsize
     )
-    out["time_max"] = out["time_min"] + np.timedelta64(
-        int(1000 * numofsamples * out["d_time"]), "ms"
-    )
-
+    # Note: Previously this was:
+    # out["time_min"] + np.timedelta64(
+    #         int(1000 * numofsamples * out["d_time"]), "ms"
+    # )
+    # but I changed it to this since the total time should be based on len -1
+    out["time_max"] = out["time_min"] + out["d_time"] * (numofsamples - 1)
     return out, fileinfo
 
 
@@ -363,15 +360,15 @@ def _get_data_node(tdms_file, LEAD_IN_LENGTH=28):
     return data_node, channel_length, attrs
 
 
-def _get_data(time, distance, time_array, dist_array, data_node):
+def _get_data(time, distance, time_coord, dist_coord, data_node):
     """
     Get the data array. Slice based on input and check for 0 blocks. Also
     return sliced coordinates.
     """
     # need to handle empty data blocks. This happens when data is stopped
     # recording before the pre-allocated file is filled.
-    if time_array[-1] < time_array[0]:
-        time = (time[0], time_array.max())
-    tslice = get_slice_from_monotonic(time_array, time)
-    dslice = get_slice_from_monotonic(dist_array, distance)
-    return data_node[tslice, dslice], time_array[tslice], dist_array[dslice]
+    if time_coord[-1] < time_coord[0]:
+        time = (time[0], time_coord.max())
+    time_new, t_ind = time_coord.select(time)
+    dist_new, d_ind = dist_coord.select(distance)
+    return data_node[t_ind, d_ind], time_new, dist_new
