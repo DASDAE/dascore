@@ -395,6 +395,15 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         array = self.data[indexer]
         return get_coord(values=array, units=self.units)
 
+    def get_attrs_dict(self, name):
+        """Get attrs dict."""
+        out = {f"{name}_min": self.min(), f"{name}_max": self.max()}
+        if self.step:
+            out[f"d_{name}"] = self.step
+        if self.units:
+            out[f"{name}_units"] = self.units
+        return out
+
 
 class CoordRange(BaseCoord):
     """

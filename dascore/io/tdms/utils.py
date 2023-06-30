@@ -20,6 +20,69 @@ def type_not_supported(vargin):
     raise NotImplementedError("Reading of this tdsDataType is not implemented")
 
 
+# Enum mapping TDM data types to description string, numpy type where exists
+# See Ref[2] for enum values
+TDS_DATA_TYPE = dict(
+    {
+        0x00: "void",  # tdsTypeVoid
+        0x01: "int8",  # tdsTypeI8
+        0x02: "int16",  # tdsTypeI16
+        0x03: "int32",  # tdsTypeI32
+        0x04: "int64",  # tdsTypeI64
+        0x05: "uint8",  # tdsTypeU8
+        0x06: "uint16",  # tdsTypeU16
+        0x07: "uint32",  # tdsTypeU32
+        0x08: "uint64",  # tdsTypeU64
+        0x09: "float32",  # tdsTypeSingleFloat
+        0x0A: "float64",  # tdsTypeDoubleFloat
+        0x0B: "float128",  # tdsTypeExtendedFloat
+        0x19: "singleFloatWithUnit",  # tdsTypeSingleFloatWithUnit
+        0x1A: "doubleFloatWithUnit",  # tdsTypeDoubleFloatWithUnit
+        0x1B: "extendedFloatWithUnit",  # tdsTypeExtendedFloatWithUnit
+        0x20: "str",  # tdsTypeString
+        0x21: "bool",  # tdsTypeBoolean
+        0x44: "datetime",  # tdsTypeTimeStamp
+        0xFFFFFFFF: "raw",  # tdsTypeDAQmxRawData
+    }
+)
+
+# Function mapping for reading TDMS data types
+TDS_READ_VAL = dict(
+    {
+        "void": lambda f: None,  # tdsTypeVoid
+        "int8": lambda f: struct.unpack("<b", f.read(1))[0],
+        "int16": lambda f: struct.unpack("<h", f.read(2))[0],
+        "int32": lambda f: struct.unpack("<i", f.read(4))[0],
+        "int64": lambda f: struct.unpack("<q", f.read(8))[0],
+        "uint8": lambda f: struct.unpack("<B", f.read(1))[0],
+        "uint16": lambda f: struct.unpack("<H", f.read(2))[0],
+        "uint32": lambda f: struct.unpack("<I", f.read(4))[0],
+        "uint64": lambda f: struct.unpack("<Q", f.read(8))[0],
+        "float32": lambda f: struct.unpack("<f", f.read(4))[0],
+        "float64": lambda f: struct.unpack("<d", f.read(8))[0],
+        "float128": type_not_supported,
+        "singleFloatWithUnit": type_not_supported,
+        "doubleFloatWithUnit": type_not_supported,
+        "extendedFloatWithUnit": type_not_supported,
+        "str": lambda f: f.read(struct.unpack("<i", f.read(4))[0]),
+        "bool": lambda f: struct.unpack("<?", f.read(1))[0],
+        "datetime": lambda f: parse_time_stamp(
+            struct.unpack("<Q", f.read(8))[0], struct.unpack("<q", f.read(8))[0]
+        ),
+        "raw": type_not_supported,
+    }
+)
+
+DECIMATE_MASK = 0b00100000
+FILEINFO_NAMES = (
+    "file_tag",
+    "toc",
+    "version",
+    "next_segment_offset",
+    "raw_data_offset",
+)
+
+
 def parse_time_stamp(fractions, seconds):
     """
     Convert time TDMS time representation to datetime
@@ -50,29 +113,17 @@ def _get_version_str(tdms_file, LEAD_IN_LENGTH=28) -> str:
         return False
 
 
-def _get_distance_coord(tdms_file=None, attrs=None):
-    """Get the distance (along fiber) array."""
-    if attrs is None:
-        attrs, _ = _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28)
-    zero_offset = attrs["distance_min"]
-    channel_spacing = attrs["d_distance"] * attrs["Fibre Length Multiplier"]
-    # Note: I found files where the end was slightly less than one channel spacing
-    # as a result the distance array was one channels short. Adding 10% of the
-    # channels spacing to distance_max fixes the issue without causing problems
-    # for files that don't have this rounding error.
-    max_dist = attrs["distance_max"] + channel_spacing / 10
-    kwargs = dict(start=zero_offset, stop=max_dist, step=channel_spacing)
-    return get_coord(units="m", **kwargs)
-
-
-def _get_time_coord(tdms_file=None, attrs=None):
+def _get_time_coord(attrs, num_samps):
     """Get the time array for the file."""
-    if attrs is None:
-        attrs, _ = _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28)
-    t_min = attrs["time_min"]
-    t_max = attrs["time_max"]
-    dt = attrs["d_time"]
-    return get_coord(start=t_min, stop=t_max + dt, step=dt, units="s")
+    dt = to_timedelta64(1 / attrs["SamplingFrequency[Hz]"])
+    t_min = to_datetime64(str(attrs["GPSTimeStamp"]))
+    # Note: Previously this was:
+    # out["time_min"] + np.timedelta64(
+    #         int(1000 * numofsamples * out["d_time"]), "ms"
+    # )
+    t_max = t_min + dt * (num_samps - 1)
+    coord = get_coord(start=t_min, stop=t_max + dt, step=dt, units="s")
+    return coord
 
 
 def _get_default_attrs(tdms_file, get_all_attrs=None):
@@ -92,78 +143,49 @@ def _get_default_attrs(tdms_file, get_all_attrs=None):
     return out
 
 
+def _read_attr(tdms_file):
+    """
+    Read a single property from the TDMS file.
+    Return the name, type and value of the property as a list.
+    """
+
+    # Read length of object path:
+    var = struct.unpack("<i", tdms_file.read(4))[0]
+    # Read property name and type:
+    name, data_type = struct.unpack("<{0}si".format(var), tdms_file.read(var + 4))
+    # Lookup function to read and parse property value based on type:
+    value = TDS_READ_VAL[TDS_DATA_TYPE[data_type]](tdms_file)
+    name = name.decode()
+    if data_type == 32:
+        value = value.decode()
+
+    return name, value  # data_type, value
+
+
+def _get_distance_coord(attr):
+    """Get distance coordinate from attribute."""
+    # get time/distance coords
+    d_start = attr.pop("Start Distance (m)")
+    d_step = attr.pop("SpatialResolution[m]") * attr["Fibre Length Multiplier"]
+    _stop = attr.pop("Stop Distance (m)")
+    # Note: I found files where the end was slightly less than one channel spacing
+    # as a result the distance array was one channels short. Adding 10% of the
+    # channels spacing to distance_max fixes the issue without causing problems
+    # for files that don't have this rounding error.
+    index = int(np.round((_stop - d_start) / d_step, 1))
+    stop = d_start + index * d_step + d_step / 10
+    d_coord = get_coord(start=d_start, stop=stop, step=d_step, units="m")
+    return d_coord
+
+
 def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
     """
     Return all the attributes which can be fetched from attributes.
-
     """
-    # Enum mapping TDM data types to description string, numpy type where exists
-    # See Ref[2] for enum values
-    TDS_DATA_TYPE = dict(
-        {
-            0x00: "void",  # tdsTypeVoid
-            0x01: "int8",  # tdsTypeI8
-            0x02: "int16",  # tdsTypeI16
-            0x03: "int32",  # tdsTypeI32
-            0x04: "int64",  # tdsTypeI64
-            0x05: "uint8",  # tdsTypeU8
-            0x06: "uint16",  # tdsTypeU16
-            0x07: "uint32",  # tdsTypeU32
-            0x08: "uint64",  # tdsTypeU64
-            0x09: "float32",  # tdsTypeSingleFloat
-            0x0A: "float64",  # tdsTypeDoubleFloat
-            0x0B: "float128",  # tdsTypeExtendedFloat
-            0x19: "singleFloatWithUnit",  # tdsTypeSingleFloatWithUnit
-            0x1A: "doubleFloatWithUnit",  # tdsTypeDoubleFloatWithUnit
-            0x1B: "extendedFloatWithUnit",  # tdsTypeExtendedFloatWithUnit
-            0x20: "str",  # tdsTypeString
-            0x21: "bool",  # tdsTypeBoolean
-            0x44: "datetime",  # tdsTypeTimeStamp
-            0xFFFFFFFF: "raw",  # tdsTypeDAQmxRawData
-        }
-    )
-
-    # Function mapping for reading TDMS data types
-    TDS_READ_VAL = dict(
-        {
-            "void": lambda f: None,  # tdsTypeVoid
-            "int8": lambda f: struct.unpack("<b", f.read(1))[0],
-            "int16": lambda f: struct.unpack("<h", f.read(2))[0],
-            "int32": lambda f: struct.unpack("<i", f.read(4))[0],
-            "int64": lambda f: struct.unpack("<q", f.read(8))[0],
-            "uint8": lambda f: struct.unpack("<B", f.read(1))[0],
-            "uint16": lambda f: struct.unpack("<H", f.read(2))[0],
-            "uint32": lambda f: struct.unpack("<I", f.read(4))[0],
-            "uint64": lambda f: struct.unpack("<Q", f.read(8))[0],
-            "float32": lambda f: struct.unpack("<f", f.read(4))[0],
-            "float64": lambda f: struct.unpack("<d", f.read(8))[0],
-            "float128": type_not_supported,
-            "singleFloatWithUnit": type_not_supported,
-            "doubleFloatWithUnit": type_not_supported,
-            "extendedFloatWithUnit": type_not_supported,
-            "str": lambda f: f.read(struct.unpack("<i", f.read(4))[0]),
-            "bool": lambda f: struct.unpack("<?", f.read(1))[0],
-            "datetime": lambda f: parse_time_stamp(
-                struct.unpack("<Q", f.read(8))[0], struct.unpack("<q", f.read(8))[0]
-            ),
-            "raw": type_not_supported,
-        }
-    )
-
-    DECIMATE_MASK = 0b00100000
-    FILEINFO_NAMES = (
-        "file_tag",
-        "toc",
-        "version",
-        "next_segment_offset",
-        "raw_data_offset",
-    )
-
     # read leadin infomation into fileinfo
     lead_in = tdms_file.read(LEAD_IN_LENGTH)
     # lead_in is 28 bytes:
     fields = struct.unpack("<4siiQQ", lead_in)
-
     # Keep track of information about file in fileinfo
     fileinfo = dict(zip(FILEINFO_NAMES, fields))
     fileinfo["decimated"] = not bool(fileinfo["toc"] & DECIMATE_MASK)
@@ -171,29 +193,9 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
     fileinfo["next_segment_offset"] += LEAD_IN_LENGTH
     fileinfo["raw_data_offset"] += LEAD_IN_LENGTH
     fileinfo["file_size"] = os.path.getsize(tdms_file.name)
-
     # Make sure next segment does not go beyond file capacity
     if fileinfo["next_segment_offset"] > fileinfo["file_size"]:
         fileinfo["next_segment_offset"] = fileinfo["file_size"]
-
-    def _read_attr(tdms_file):
-        """
-        Read a single property from the TDMS file.
-        Return the name, type and value of the property as a list.
-        """
-
-        # Read length of object path:
-        var = struct.unpack("<i", tdms_file.read(4))[0]
-        # Read property name and type:
-        name, data_type = struct.unpack("<{0}si".format(var), tdms_file.read(var + 4))
-        # Lookup function to read and parse property value based on type:
-        value = TDS_READ_VAL[TDS_DATA_TYPE[data_type]](tdms_file)
-        name = name.decode()
-        if data_type == 32:
-            value = value.decode()
-
-        return name, value  # data_type, value
-
     # navigate pointer to immediately after lead in data
     tdms_file.seek(LEAD_IN_LENGTH, 0)
     # Read number of channels
@@ -205,7 +207,6 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
     tdms_file.seek(var + 4, 1)
     # Read number of properties in this group:
     var = struct.unpack("<i", tdms_file.read(4))[0]
-
     # loop through and read each property
     out = [_read_attr(tdms_file) for _ in range(var)]
     # Returns a pandas dataframe that we convert to dictionary
@@ -214,34 +215,19 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
     out["n_channels"] = n_channels
     out["data_type"] = "strain_rate"
     out["data_units"] = ""
-    out["dims"] = "time, distance"
-    out["d_time"] = to_timedelta64(1 / out["SamplingFrequency[Hz]"])
-    out["time_min"] = to_datetime64(str(out["GPSTimeStamp"]))
+    out["dims"] = "time,distance"
+    out["instrument_id"] = out.get("SystemInfomation.Devices0.SerialNum")
     # Rename some attributes to preferred names
-    _root_attrs = {
-        "SpatialResolution[m]": "d_distance",
-        "SystemInfomation.Devices0.SerialNum": "instrument_id",
-        "Start Distance (m)": "distance_min",
-        "Stop Distance (m)": "distance_max",
-    }
-    for treble_name, out_name in _root_attrs.items():
-        out[out_name] = out[treble_name]
-        del out[treble_name]
-
+    d_coord = _get_distance_coord(out)
     fileinfo["end_of_properties_offset"] = tdms_file.tell()
-
     tdms_file.seek(fileinfo["end_of_properties_offset"], 0)
-
     # skip over Group Information:
     var = struct.unpack("<i", tdms_file.read(4))[0]
     tdms_file.seek(var + 8, 1)
-
     # skip over first channel path and length of index information:
     var = struct.unpack("<i", tdms_file.read(4))[0]
     tdms_file.seek(var + 4, 1)
-
     fileinfo["data_type"] = TDS_DATA_TYPE.get(struct.unpack("<i", tdms_file.read(4))[0])
-
     if fileinfo["data_type"] not in ("int16", "float32"):
         raise Exception("Unsupported TDMS data type: " + fileinfo["data_type"])
     # get number of samples by dividing amount of unread data by the
@@ -251,27 +237,22 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
         / n_channels
         / np.dtype(fileinfo["data_type"]).itemsize
     )
-    # Note: Previously this was:
-    # out["time_min"] + np.timedelta64(
-    #         int(1000 * numofsamples * out["d_time"]), "ms"
-    # )
-    # but I changed it to this since the total time should be based on len -1
-    out["time_max"] = out["time_min"] + out["d_time"] * (numofsamples - 1)
+    t_coord = _get_time_coord(out, numofsamples)
+    out["_time_coord"] = t_coord
+    out["_distance_coord"] = d_coord
+    out.update(t_coord.get_attrs_dict("time"))
+    out.update(d_coord.get_attrs_dict("distance"))
     return out, fileinfo
 
 
 def _get_fileinfo(tdms_file, LEAD_IN_LENGTH=28):
     """
     get info about file not included in the attributes
-
     """
     attrs, fileinfo = _get_all_attrs(tdms_file)
-
     # Read Dimension of the raw data array (has to be 1):
     _ = struct.unpack("<i", tdms_file.read(4))[0]
-
     fileinfo["chunk_size"] = struct.unpack("<i", tdms_file.read(4))[0]
-
     return fileinfo, attrs
 
 
@@ -367,8 +348,6 @@ def _get_data(time, distance, time_coord, dist_coord, data_node):
     """
     # need to handle empty data blocks. This happens when data is stopped
     # recording before the pre-allocated file is filled.
-    if time_coord[-1] < time_coord[0]:
-        time = (time[0], time_coord.max())
     time_new, t_ind = time_coord.select(time)
     dist_new, d_ind = dist_coord.select(distance)
     return data_node[t_ind, d_ind], time_new, dist_new

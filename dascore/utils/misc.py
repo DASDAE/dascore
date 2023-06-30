@@ -353,46 +353,6 @@ def _query_trims_range(query_tuple, lim1, lim2, spacing):
     return False
 
 
-def trim_attrs_get_inds(attrs, dim_length, **kwargs):
-    """
-    Trim a dimension in attrs and get a slice for trimming data.
-
-    Parameters
-    ----------
-    attrs
-        A dict-able object which contains {dim}_min, {dim}_max, d_{dim}.
-    dim_length
-        The length of the data along the specified dimension.
-    **kwargs
-        Used to specify which dimension to trim (dim=(start, stop)).
-    """
-    # TODO Do we still need this or can we just use Coords?
-    if not kwargs:
-        return attrs, dim_length
-    assert len(kwargs) == 1, "exactly one dimension allowed."
-    dim = list(kwargs)[0]
-    value = kwargs[dim]
-    old_start, old_stop = attrs[f"{dim}_min"], attrs[f"{dim}_max"]
-    spacing = attrs[f"d_{dim}"]
-    if not _query_trims_range(value, old_start, old_stop, spacing):
-        return slice(None), attrs
-    out = dict(attrs)
-    # get new start/stop values
-    start_ind, stop_ind = 0, dim_length
-    if value[0] is not None and value[0] > old_start:
-        diff = value[0] - old_start
-        # float fudge factor here again; if 5% near int round up/down.
-        start_ind = np.ceil(np.round(diff / spacing, 1))
-        out[f"{dim}_min"] = start_ind * spacing + old_start
-    if value[1] is not None and value[1] < old_stop:
-        diff = old_stop - value[1]
-        # here it is again :(
-        diff_samples = -np.floor(np.round(diff / spacing, 1))
-        stop_ind = dim_length + diff_samples
-        out[f"{dim}_max"] = old_stop + diff_samples * spacing
-    return slice(int(start_ind), int(stop_ind)), attrs.__class__(**out)
-
-
 def get_middle_value(array):
     """Get the middle value in the differences array without changing dtype."""
     array = np.sort(np.array(array))

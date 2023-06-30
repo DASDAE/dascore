@@ -234,7 +234,8 @@ class TestScan:
                 patch_attr = getattr(pat_attrs1, attr_name)
                 scan_attr = getattr(scan_attrs2, attr_name)
 
-                # if not scan_attr == patch_attr:
+                if not scan_attr == patch_attr:
+                    assert False
                 #     breakpoint()
                 #     scan_attrs = dc.scan(data_file_path)
                 #     patch_attrs = [x.attrs for x in dc.read(data_file_path)]
