@@ -59,7 +59,7 @@ dependencies = [
 [project.optional-dependencies]
 
 extras = [
-    "xarray"
+    "xarray",
 ]
 
 docs = [
@@ -83,7 +83,7 @@ profile = [
 
 all = ["dascore[extras]"]
 
-dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore['extras]"]
+dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore[extras]"]
 
 # --- URLs for project
 
