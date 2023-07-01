@@ -92,8 +92,9 @@ class BaseSpool(abc.ABC):
         Get a dataframe of the patches that will be returned by the spool.
         """
 
+    @abc.abstractmethod
     def __len__(self) -> int:
-        pass
+        """return len of spool."""
 
     def __rich__(self):
         """Rich rep. of spool."""
@@ -108,8 +109,7 @@ class BaseSpool(abc.ABC):
     def __str__(self):
         return str(self.__rich__())
 
-    def __repr__(self):
-        return self.__str__()
+    __repr__ = __str__
 
 
 class DataFrameSpool(BaseSpool):

@@ -115,6 +115,13 @@ class TestPassFilter:
         # filter wavelengths less than 200 ft
         patch.pass_filter(distance=(200 * ft, None))
 
+    def test_one_unit_raises(self, random_patch):
+        """When only one unit is specified it should raise."""
+        match = "Both inputs must be "
+        s = dc.units.get_quantity("1")
+        with pytest.raises(UnitError, match=match):
+            random_patch.pass_filter(time=(1 * s, 10 * s))
+
 
 class TestSobelFilter:
     """Simple tests to make sure Sobel filter runs."""

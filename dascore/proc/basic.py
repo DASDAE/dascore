@@ -42,8 +42,6 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     >>> out = dascore.proc.transpose(pa,"time", "distance")
     """
     dims = tuple(dims)
-    if not dims:
-        return self
     old_dims = self.coords.dims
     new_coord = self.coords.transpose(*dims)
     new_dims = new_coord.dims

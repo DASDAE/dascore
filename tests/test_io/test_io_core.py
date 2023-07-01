@@ -146,6 +146,11 @@ class TestGetFormat:
         with pytest.raises(UnknownFiberFormat):
             dc.get_format(dummy_text_file)
 
+    def test_missing_file(self):
+        """Ensure a missing file raises"""
+        with pytest.raises(FileNotFoundError):
+            dc.get_format("bad/file")
+
 
 class TestRead:
     """Basic tests for reading files."""

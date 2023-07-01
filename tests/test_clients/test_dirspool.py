@@ -51,12 +51,18 @@ def directory_spool(request):
     return request.getfixturevalue(request.param)
 
 
-class TestFileSpool:
-    """Test that the file spool works."""
+class TestDirectorySpoolBasics:
+    """Basic tests for the directory spool."""
 
     def test_isinstance(self, directory_spool):
         """Simply ensure expected type was returned."""
         assert isinstance(directory_spool, DirectorySpool)
+
+    def test_selected_str(self, directory_spool):
+        """Ensure select kwargs show up in str."""
+        new = directory_spool.select(tag="random")
+        out = str(new)
+        assert "Select kwargs" in str(out)
 
 
 class TestDirectoryIndex:

@@ -18,6 +18,16 @@ class TestAbs:
         assert np.all(out.data >= 0)
 
 
+class TestTranspose:
+    """Tests for transposing patch."""
+
+    def test_transpose_no_args(self, random_patch):
+        """Ensure transposing rotates dimensions."""
+        pa = random_patch.transpose()
+        assert pa.dims != random_patch.dims
+        assert pa.dims == random_patch.dims[::-1]
+
+
 class TestNormalize:
     """Tests for normalization."""
 

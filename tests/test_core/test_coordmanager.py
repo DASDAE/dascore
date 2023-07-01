@@ -379,6 +379,30 @@ class TestSelect:
             assert coord.shape[axis] == expected_len
 
 
+class TestEquals:
+    """Tests for coord manager equality"""
+
+    def test_basic_equals(self, coord_manager):
+        """All coord managers should equal themselves."""
+        assert coord_manager == coord_manager
+
+    def test_unequal_float_coords(self, coord_manager_multidim):
+        """Ensure if coordinates are not equal false is returned."""
+        coord = coord_manager_multidim.coord_map["latitude"]
+        new = get_coord(values=coord.values + 10)
+        args = dict(latitude=("distance", new))
+        new_coord = coord_manager_multidim.update_coords(**args)
+        assert new_coord != coord_manager_multidim
+
+    def test_unequal_wrong_type(self, basic_coord_manager):
+        """Non-coord managers should not be considered equal."""
+        cm = basic_coord_manager
+        assert cm != 10
+        assert cm != "bob"
+        assert cm != {1: 2, 2: 2}
+        assert cm != cm.coord_map["distance"]
+
+
 class TestTranspose:
     """Test suite for transposing dimensions."""
 
@@ -400,8 +424,9 @@ class TestTranspose:
         assert tran.shape == basic_coord_manager.shape[::-1]
 
     def test_empty_ellipses(self, many_dims_cm):
-        """Ensure ellipses works to just stick things at start/end."""
-        assert many_dims_cm == many_dims_cm.transpose()
+        """Empty transpose should just reverse order"""
+        out = many_dims_cm.transpose()
+        assert out.dims == many_dims_cm.dims[::-1]
 
     def test_ellipses_at_start(self, many_dims_cm):
         """Ensure ellipses works to just stick things at start/end."""

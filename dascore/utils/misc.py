@@ -328,31 +328,6 @@ def optional_import(package_name: str) -> ModuleType:
     return mod
 
 
-def _query_trims_range(query_tuple, lim1, lim2, spacing):
-    """
-    Return True if a query tuple should trim the range of limits.
-
-    Parameters
-    ----------
-    query_tuple
-        A tuple of (min, max) where both min and max are defined or
-        one is None.
-    lim1
-        The lower limit.
-    lim2
-        The upper limit.
-    spacing
-        The spacing along dimension.
-    """
-    assert len(query_tuple) == 2, "only length two sequence allowed to specify range"
-    q1, q2 = query_tuple
-    if q1 is not None and q1 >= (lim1 + spacing):
-        return True
-    if q2 is not None and q2 <= (lim2 - spacing):
-        return True
-    return False
-
-
 def get_middle_value(array):
     """Get the middle value in the differences array without changing dtype."""
     array = np.sort(np.array(array))

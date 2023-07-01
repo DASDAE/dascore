@@ -2,7 +2,6 @@
 Machinery for coordinates.
 """
 import abc
-from contextlib import suppress
 from functools import cache
 from operator import gt, lt
 from typing import Any, Optional, Tuple, Union
@@ -30,9 +29,10 @@ def _get_coord_filter_validators(dtype):
 
     def _is_sub_dtype(dtype1, dtype2):
         """helper function to get sub dtypes."""
-        with suppress(TypeError):
-            if issubclass(dtype1, dtype2):
-                return True
+        # uncomment these if validators that arent numpy types are needed.
+        # with suppress(TypeError):
+        #     if issubclass(dtype1, dtype2):
+        #         return True
         if np.issubdtype(dtype1, dtype2):
             return True
         return False
@@ -134,9 +134,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __getitem__(self, item) -> Self:
         """Should implement slicing and return new instance."""
 
-    @abc.abstractmethod
+    @cache
     def __len__(self):
         """Total number of elements."""
+        return np.prod(self.shape)
 
     def __hash__(self):
         """
@@ -242,7 +243,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         Sort the contents of the coord. Return new coord and slice for sorting.
         """
-        return self, slice(None)
 
     def snap(self) -> "CoordRange":
         """
@@ -262,7 +262,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Return the internal data. Same as values attribute."""
         return self.values
 
-    def _get_compatible_value(self, value, invert=False):
+    def _get_compatible_value(self, value):
         """
         Return values that are compatible with dtype/units of coord.
 
@@ -272,10 +272,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # strip units and v
         if hasattr(value, "units"):
             unit = value.units
-            i_unit = (1 / unit).units
-            if i_unit == self.units:
-                value = 1 / value
-                unit = i_unit
             uf = get_conversion_factor(unit, self.units)
             value = value.magnitude * uf
         # if null or ... just return None
@@ -287,7 +283,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         for func in validators:
             if out is not None:
                 out = func(out)
-        return out if not invert else 1 / out
+        return out
 
     def _slice_degenerate(self, sliz):
         """
@@ -305,7 +301,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def get_slice_tuple(
         self,
         select: Union[slice, None, type(Ellipsis), Tuple[Any, Any]],
-        invert=False,
     ) -> Tuple[Any, Any]:
         """
         Get a tuple with (start, stop) and perform basic checks.
@@ -314,10 +309,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         ----------
         select
             An object for determining select range.
-        invert
-            If true, return the inverted range, meaning 1/end, 1/start.
-            This is useful, for example, for getting frequencies (1/s) when
-            coordinates are in s.
         """
 
         def _validate_slice(select):
@@ -349,7 +340,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # apply simple checks; ensure we have a len 2 tuple.
         for func in [_validate_slice, _validate_none_or_ellipsis, _validate_len]:
             select = func(select)
-        p1, p2 = (self._get_compatible_value(x, invert=invert) for x in select)
+        p1, p2 = (self._get_compatible_value(x) for x in select)
         # reverse order if needed.
         if p1 is not None and p2 is not None and p2 < p1:
             p1, p2 = p2, p1
@@ -716,10 +707,6 @@ class CoordArray(BaseCoord):
 
     def __hash__(self):
         return hash(id(self))
-
-    @cache
-    def __len__(self):
-        return len(self.values)
 
     def _min(self):
         """Return min value"""

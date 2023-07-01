@@ -328,6 +328,13 @@ class ChunkManager:
         df = pd.concat(out, axis=0).reset_index(drop=True).set_index("source_index")
         return df
 
+    def _get_col_group(self, df, cont_g):
+        """Get group columns based on common columns."""
+        cols = list(self._group_columns or [])
+        columns = [x for x in cols if x in df.columns]
+        col_g = cont_g * 0 if not columns else df.groupby(columns).ngroup()
+        return col_g
+
     def _get_group(self, df, start, stop, step):
         """
         Get the group designation for df. This accounts for both time intervals
@@ -335,12 +342,9 @@ class ChunkManager:
         """
         cont_g = self._get_continuity_group_number(start, stop, step)
         samp_g = self._get_sampling_group_num(df)
-        cols = list(self._group_columns or [])
-        columns = [x for x in cols if x in df.columns]
-        col_g = cont_g * 0 if not columns else df.groupby(columns).ngroup()
+        col_g = self._get_col_group(df, cont_g)
         group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
         group = reduce(lambda x, y: x + "_" + y, group_series)
-
         return group
 
     def chunk(

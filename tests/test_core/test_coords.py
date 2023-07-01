@@ -15,7 +15,7 @@ from dascore.core.coords import (
     get_coord,
     get_coord_from_attrs,
 )
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_conversion_factor, get_quantity
 from dascore.utils.misc import register_func
 from dascore.utils.time import is_datetime64, is_timedelta64
@@ -117,6 +117,13 @@ def coord(request) -> BaseCoord:
     return request.getfixturevalue(request.param)
 
 
+@pytest.fixture(scope="class")
+def two_d_coord():
+    """ "return a 2D coordinate."""
+    ar = np.ones((10, 10))
+    return get_coord(values=ar, units="m/s")
+
+
 def assert_value_in_one_step(coord, index, value, greater=True):
     """Ensure value at index is within one step of value"""
     # reverse greater for reverse monotonic
@@ -166,6 +173,169 @@ class TestBasics:
     def test_coord_input(self, coord):
         """A coordinate should be valid input."""
         assert get_coord(values=coord) == coord
+
+    def test_cant_add_extra_fields(self, evenly_sampled_coord):
+        """Ensure coordinates are immutable."""
+        with pytest.raises(ValueError, match="has no field"):
+            evenly_sampled_coord.bob = 1
+
+    def test_sort(self, coord):
+        """Ensure every coord can be sorted."""
+        if coord.degenerate or len(coord.shape) > 1:
+            return  # no need to test degenerate coord or multidim
+        data = coord.data
+        new, indexer = coord.sort()
+        assert new.dtype == coord.dtype
+        assert new.sorted
+        assert not new.degenerate
+        assert not new.reverse_sorted
+        assert len(new) == len(coord)
+        assert data[indexer] is not None
+
+    def test_reverse_sort(self, coord):
+        """Ensure every coord can be reverse sorted."""
+        if coord.degenerate or len(coord.shape) > 1:
+            return  # no need to test degenerate coord or multidim
+        data = coord.data
+        new, indexer = coord.sort(reverse=True)
+        assert new.dtype == coord.dtype
+        assert not new.sorted
+        assert new.reverse_sorted
+        assert len(new) == len(coord)
+        assert data[indexer] is not None
+
+    def test_immutable(self, evenly_sampled_coord):
+        """Fields can't change once created."""
+        with pytest.raises(TypeError, match="is immutable"):
+            evenly_sampled_coord.start = 10
+
+    def test_values_immutable(self, coord):
+        """Values should all be immutable arrays."""
+        with pytest.raises(ValueError, match="assignment destination is read-only"):
+            coord.data[0] = coord.data[1]
+
+    def test_str(self, coord):
+        """All coords should be convertible to str."""
+        out = str(coord)
+        assert isinstance(out, str)
+
+    def test_rich(self, coord):
+        """Each coord should have nice rich printing."""
+        out = coord.__rich__()
+        assert isinstance(out, rich.text.Text)
+
+    def test_snap(self, coord):
+        """Tests for snapping coordinates."""
+        out = coord.snap()
+        assert isinstance(out, BaseCoord)
+        assert out.shape == coord.shape
+        # sort order should stay the same
+        if coord.reverse_sorted:
+            assert out.reverse_sorted
+        if coord.sorted:
+            assert out.sorted
+
+    def test_default_units(self):
+        """Default units should be None"""
+        out = get_coord(values=np.arange(10))
+        assert out.units is None
+
+    def test_min_max_align_with_array(self, coord):
+        """Min/max values should match the same operation on data."""
+        if coord.degenerate:
+            return
+        values = coord.values
+        assert coord.min() == np.min(values)
+        assert coord.max() == np.max(values)
+        assert coord.max() > coord.min()
+
+    def test_out_of_range_raises(self, evenly_sampled_coord):
+        """Accessing a value out of the range of array should raise."""
+        with pytest.raises(IndexError, match="exceeds coord length"):
+            _ = evenly_sampled_coord[len(evenly_sampled_coord)]
+
+
+class TestGetSliceTuple:
+    """Tests for getting slice tuples."""
+
+    def test_get_slice_tuple(self, coord):
+        """Basic tests for range of coords."""
+        start = coord.min()
+        end = coord.max()
+        out = coord.get_slice_tuple((start, end))
+        assert out == (start, end)
+        assert coord.get_slice_tuple((start, None)) == (start, None)
+        assert coord.get_slice_tuple((None, end)) == (None, end)
+        # if units aren't none, ensure they work.
+        if not (unit := coord.units):
+            return
+        start_unit = start * get_quantity(unit)
+        end_unit = end * get_quantity(unit)
+        assert coord.get_slice_tuple((start_unit, None)) == (start, None)
+        assert coord.get_slice_tuple((start_unit, end_unit)) == (start, end)
+
+    def test_get_slice_range_bad_values(self, evenly_sampled_coord):
+        """Ensure bad values raise helpful error."""
+        with pytest.raises(ParameterError, match="Slice indices must be"):
+            evenly_sampled_coord.get_slice_tuple((1, 2, 3))
+
+    def test_slice_with_step_raises(self, evenly_sampled_coord):
+        """A slice with a step shouldn't work."""
+        match = "Step not supported"
+        with pytest.raises(ParameterError, match=match):
+            evenly_sampled_coord.select(slice(1, 10, 2))
+
+    def test_slice_with_step(self, evenly_sampled_coord):
+        """Ensure slice works like tuple."""
+        coord = evenly_sampled_coord
+        vmin, vmax = coord.min(), coord.max()
+        sli = slice(vmin, vmax + 1)
+        out_sli = evenly_sampled_coord.get_slice_tuple(sli)
+        assert out_sli == (None, None) or out_sli == (0, len(coord))
+
+
+class TestNDCoords:
+    """Tests for multidimensional coordinates."""
+
+    def test_empty(self, two_d_coord):
+        """Ensure 2D coordinate can be emptied out."""
+        out = two_d_coord.empty()
+        assert out.degenerate
+        assert tuple([0] * 2) == out.shape
+
+    def test_empty_axis(self, two_d_coord):
+        """Ensure 2D coordinate can be emptied out."""
+        out = two_d_coord.empty(axes=1)
+        assert out.degenerate
+        assert (out.shape[0], 0) == out.shape
+
+
+class TestSelect:
+    """Generic tests for selecting values from coords."""
+
+    def test_select_end_end_time(self, coord):
+        """Ensure when time range is == (end, end) that dim has len 1."""
+        out = coord.select((coord.max(), coord.max()))[0]
+        assert len(out) == 1
+
+    def test_intra_sample_select(self, coord):
+        """
+        Selecting ranges that fall within samples should raise.
+
+        This is consistent with pandas indices.
+        """
+        values = coord.values
+        # get value between first/second sample
+        arg = values[0] + (values[1] - values[0]) / 2
+        assert arg not in np.unique(values)
+        out, indexer = coord.select((arg, arg))
+        assert isinstance(out, CoordDegenerate)
+        assert np.size(coord.data[indexer]) == 0
+
+    def test_select_start_start_time(self, coord):
+        """Ensure when time range is == (start, start) that dim has len 1."""
+        out = coord.select((coord.min(), coord.min()))[0]
+        assert len(out) == 1
 
     def test_select_inclusive(self, coord):
         """Ensure selecting is inclusive on both ends."""
@@ -258,22 +428,6 @@ class TestBasics:
         out, slice_thing = coord.select((v1, None))
         _is_equal(coord, out, slice_thing)
 
-    def test_get_range(self, coord):
-        """Basic tests for range of coords."""
-        start = coord.min()
-        end = coord.max()
-        out = coord.get_slice_tuple((start, end))
-        assert out == (start, end)
-        assert coord.get_slice_tuple((start, None)) == (start, None)
-        assert coord.get_slice_tuple((None, end)) == (None, end)
-        # if units aren't none, ensure they work.
-        if not (unit := coord.units):
-            return
-        start_unit = start * get_quantity(unit)
-        end_unit = end * get_quantity(unit)
-        assert coord.get_slice_tuple((start_unit, None)) == (start, None)
-        assert coord.get_slice_tuple((start_unit, end_unit)) == (start, end)
-
     def test_select_ordered_coords(self, coord):
         """Basic select tests all coords should pass."""
         if not (coord.sorted or coord.reverse_sorted):
@@ -302,55 +456,9 @@ class TestBasics:
         assert len(new.values) == 11 == len(new)
         assert sliced == slice(10, 21)
 
-    def test_cant_add_extra_fields(self, evenly_sampled_coord):
-        """Ensure coordinates are immutable."""
-        with pytest.raises(ValueError, match="has no field"):
-            evenly_sampled_coord.bob = 1
 
-    def test_sort(self, coord):
-        """Ensure every coord can be sorted."""
-        if coord.degenerate or len(coord.shape) > 1:
-            return  # no need to test degenerate coord or multidim
-        data = coord.data
-        new, indexer = coord.sort()
-        assert new.dtype == coord.dtype
-        assert new.sorted
-        assert not new.degenerate
-        assert not new.reverse_sorted
-        assert len(new) == len(coord)
-        assert data[indexer] is not None
-
-    def test_reverse_sort(self, coord):
-        """Ensure every coord can be reverse sorted."""
-        if coord.degenerate or len(coord.shape) > 1:
-            return  # no need to test degenerate coord or multidim
-        data = coord.data
-        new, indexer = coord.sort(reverse=True)
-        assert new.dtype == coord.dtype
-        assert not new.sorted
-        assert new.reverse_sorted
-        assert len(new) == len(coord)
-        assert data[indexer] is not None
-
-    def test_immutable(self, evenly_sampled_coord):
-        """Fields can't change once created."""
-        with pytest.raises(TypeError, match="is immutable"):
-            evenly_sampled_coord.start = 10
-
-    def test_values_immutable(self, coord):
-        """Values should all be immutable arrays."""
-        with pytest.raises(ValueError, match="assignment destination is read-only"):
-            coord.data[0] = coord.data[1]
-
-    def test_str(self, coord):
-        """All coords should be convertible to str."""
-        out = str(coord)
-        assert isinstance(out, str)
-
-    def test_rich(self, coord):
-        """Each coord should have nice rich printing."""
-        out = coord.__rich__()
-        assert isinstance(out, rich.text.Text)
+class TestEqual:
+    """Tests for comparing coord equality."""
 
     def test_different_units_not_equal(self, coord):
         """When different units are set the coords should not be equal."""
@@ -359,54 +467,15 @@ class TestBasics:
         new = coord.set_units("furlongs")
         assert new != coord
 
-    def test_select_start_start_time(self, coord):
-        """Ensure when time range is == (start, start) that dim has len 1."""
-        out = coord.select((coord.min(), coord.min()))[0]
-        assert len(out) == 1
+    def test_compare_non_coord_coord_range(self, evenly_sampled_coord):
+        """Ensure non-coords compare false."""
+        assert evenly_sampled_coord is not None
+        assert not evenly_sampled_coord == {1, 2}
 
-    def test_snap(self, coord):
-        """Tests for snapping coordinates."""
-        out = coord.snap()
-        assert isinstance(out, BaseCoord)
-        assert out.shape == coord.shape
-        # sort order should stay the same
-        if coord.reverse_sorted:
-            assert out.reverse_sorted
-        if coord.sorted:
-            assert out.sorted
-
-    def test_intra_sample_select(self, coord):
-        """
-        Selecting ranges that fall within samples should raise.
-
-        This is consistent with pandas indices.
-        """
-        values = coord.values
-        # get value between first/second sample
-        arg = values[0] + (values[1] - values[0]) / 2
-        assert arg not in np.unique(values)
-        out, indexer = coord.select((arg, arg))
-        assert isinstance(out, CoordDegenerate)
-        assert np.size(coord.data[indexer]) == 0
-
-    def test_select_end_end_time(self, coord):
-        """Ensure when time range is == (end, end) that dim has len 1."""
-        out = coord.select((coord.max(), coord.max()))[0]
-        assert len(out) == 1
-
-    def test_default_units(self):
-        """Default units should be None"""
-        out = get_coord(values=np.arange(10))
-        assert out.units is None
-
-    def test_min_max_align_with_array(self, coord):
-        """Min/max values should match the same operation on data."""
-        if coord.degenerate:
-            return
-        values = coord.values
-        assert coord.min() == np.min(values)
-        assert coord.max() == np.max(values)
-        assert coord.max() > coord.min()
+    def test_compare_non_coord_coord_array(self, random_coord):
+        """Ensure non-coords compare false."""
+        assert random_coord is not None
+        assert not random_coord == {1, 2}
 
 
 class TestCoordRange:
@@ -763,6 +832,11 @@ class TestMonotonicCoord:
         assert not coord.evenly_sampled
         assert coord.reverse_sorted
         assert not coord.degenerate
+
+    def test_max_degenerate(self, evenly_sampled_time_delta_coord):
+        """Ensure time delta produces nullish value."""
+        empty = evenly_sampled_time_delta_coord.empty()
+        assert pd.isnull(empty.max())
 
 
 class TestNonOrderedArrayCoords:

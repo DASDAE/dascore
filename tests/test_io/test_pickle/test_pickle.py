@@ -3,7 +3,7 @@ Tests for reading/writing pickles.
 """
 import pytest
 
-import dascore
+import dascore as dc
 from dascore.io.pickle.core import PickleIO
 
 
@@ -27,8 +27,36 @@ class TestIsPickle:
 
     def test_read_pickle(self, pickle_patch_path, random_patch):
         """Ensure a pickle file can be read."""
-        out = dascore.read(pickle_patch_path)
-        assert isinstance(out, dascore.BaseSpool)
+        out = dc.read(pickle_patch_path)
+        assert isinstance(out, dc.BaseSpool)
         assert len(out) == 1
-        assert isinstance(out[0], dascore.Patch)
+        assert isinstance(out[0], dc.Patch)
         assert random_patch == out[0]
+
+
+class TestScan:
+    """Tests for scanning pickle files/"""
+
+    comp_attrs = (
+        "data_type",
+        "data_units",
+        "d_time",
+        "time_min",
+        "time_max",
+        "distance_min",
+        "distance_max",
+        "d_distance",
+        "tag",
+        "network",
+    )
+
+    def test_scan_attrs_eq_read_attrs(self, pickle_patch_path):
+        """Ensure read/scan produce the same attrs."""
+        scan_list = dc.scan(pickle_patch_path)
+        patch_attrs_list = [x.attrs for x in dc.read(pickle_patch_path)]
+
+        for scan_attrs, patch_attrs in zip(scan_list, patch_attrs_list):
+            for attr in self.comp_attrs:
+                scan_attr = getattr(scan_attrs, attr)
+                patch_attr = getattr(patch_attrs, attr)
+                assert scan_attr == patch_attr

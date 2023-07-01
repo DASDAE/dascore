@@ -24,7 +24,7 @@ from dascore.exceptions import (
 )
 from dascore.utils.display import get_nice_text
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import iterate
+from dascore.utils.misc import all_close, iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel
 
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
@@ -390,9 +390,8 @@ class CoordManager(DascoreBaseModel):
             return False
         coord_1, coord_2 = self.coord_map, other.coord_map
         for name, coord in self.coord_map.items():
-            if not np.all(coord_1[name] == coord_2[name]):
-                if not np.allclose(coord_1[name], coord_2[name]):
-                    return False
+            if not all_close(coord_1[name].values, coord_2[name].values):
+                return False
         return True
 
     __eq__ = equals
@@ -516,9 +515,7 @@ class CoordManager(DascoreBaseModel):
                 raise ParameterError(msg)
             return tuple(new_list)
 
-        if not dims:
-            return self
-        dims = _get_transpose_dims(new=dims, old=self.dims)
+        dims = _get_transpose_dims(new=dims or self.dims[::-1], old=self.dims)
         return self.new(dims=dims)
 
     def rename_coord(self, **kwargs) -> Self:
@@ -700,6 +697,10 @@ def get_coord_manager(
         return coords
     coords = {} if coords is None else coords
     dims = () if dims is None else dims
+    # need to (try) rename coordinates
+    if isinstance(coords, CoordManager) and dims != coords.dims:
+        kwargs = {i: v for i, v in zip(coords.dims, dims)}
+        coords = coords.rename_coord(**kwargs)
     coord_map, dim_map = _get_coord_dim_map(coords, dims, attrs)
     _check_and_fill_coords(coord_map, dim_map, dims, attrs)
     out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)

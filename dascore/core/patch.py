@@ -68,13 +68,13 @@ class Patch:
         attrs: Optional[Union[Mapping, PatchAttrs]] = None,
     ):
         if isinstance(data, (DataArray, self.__class__)):
-            return
+            data, attrs, coords = data.data, data.attrs, data.coords
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
         # Try to generate coords from ranges in attrs
         if coords is None and attrs is not None:
             coords = PatchAttrs.coords_from_dims(attrs)
-            dims = dims if dims is not None else attrs.dims
+            dims = dims if dims is not None else attrs.dim_tuple
         # Ensure required info is here
         non_attrs = [x is None for x in [data, coords, dims]]
         if any(non_attrs) and not all(non_attrs):
@@ -151,10 +151,6 @@ class Patch:
         # check coords, names and values
         if not self.coords == other.coords:
             return False
-        # handle transposed case; patches that are identical but transposed
-        # should still be equal.
-        if self.dims != other.dims and set(self.dims) == set(other.dims):
-            other = other.transpose(*self.dims)
         return np.equal(self.data, other.data).all()
 
     def new(
@@ -188,9 +184,6 @@ class Patch:
         if dims is None:
             dims = coords.dims if isinstance(coords, CoordManager) else self.dims
         coords = get_coord_manager(coords, dims)
-        if dims and dims != coords.dims:
-            dim_map = {old: new for old, new in zip(self.dims, dims)}
-            coords = coords.rename_coord(**dim_map)
         if attrs:
             # need to figure out what changed and just pass that to update coords
             new, old = dict(attrs), dict(self.attrs)
@@ -224,11 +217,6 @@ class Patch:
         new_coords = self.coords.update_from_attrs(attrs)
         out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
         return self.__class__(self.data, **out)
-
-    @property
-    def coord_dims(self):
-        """Return a dict of coordinate dimensions {coord_name: (**dims)}"""
-        return self.coords.dim_map
 
     @property
     def dims(self) -> tuple[str, ...]:

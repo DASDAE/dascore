@@ -196,6 +196,17 @@ class TestInit:
             else:
                 assert getattr(attrs, f"d_{name}") == coord.step
 
+    def test_init_no_coords(self, random_patch):
+        """Ensure a new patch can be inited from only attrs."""
+        attrs = random_patch.attrs
+        new = random_patch.__class__(attrs=attrs, data=random_patch.data)
+        assert isinstance(new, dc.Patch)
+
+    def test_init_with_patch(self, random_patch):
+        """Ensure a patch inited on a patch just returns a patch."""
+        new = dc.Patch(random_patch)
+        assert new == random_patch
+
 
 class TestNew:
     """Tests for `Patch.new` method."""
@@ -229,6 +240,12 @@ class TestNew:
         pa = random_patch.update_attrs(network="bob", tag="2", station="10")
         new_1 = pa.new(data=pa.data * 10)
         assert new_1.attrs == pa.attrs
+
+    def test_new_dims_renames_dims(self, random_patch):
+        """Ensure new can rename dimensions."""
+        dims = ("tom", "jerry")
+        out = random_patch.new(dims=dims)
+        assert out.dims == dims
 
 
 class TestDisplay:
@@ -339,10 +356,22 @@ class TestEquals:
         patch2 = random_patch.new(attrs=attrs2)
         assert patch1.equals(patch2)
 
-    def test_transposed_patches_equal(self, random_patch):
-        """Transposed patches are still equal."""
+    def test_transposed_patches_not_equal(self, random_patch):
+        """Transposed patches are not considered equal."""
         transposed = random_patch.transpose()
-        assert random_patch.equals(transposed)
+        assert transposed.dims != random_patch.dims
+        assert not random_patch.equals(transposed)
+
+    def test_one_coord_not_equal(self, wacky_dim_patch):
+        """Ensure coords being close but not equals fails equality."""
+        patch = wacky_dim_patch
+        coords = patch.coords
+        coord_array = np.array(coords.coord_map["distance"].values)
+        coord_array[20:30] *= 0.9
+        assert not np.allclose(coord_array, coords["distance"])
+        new_coords = coords.update_coords(distance=coord_array)
+        new = patch.new(coords=new_coords)
+        assert new != patch
 
 
 class TestTranspose:
