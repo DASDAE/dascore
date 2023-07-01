@@ -80,9 +80,12 @@ class TestDirectoryIndex:
 
     def test_index_len(self, basic_index_df, two_patch_directory):
         """An index should be returned."""
+        spool = dc.spool(two_patch_directory)
+        spool.indexer.index_path.unlink()
+        df = spool.update().get_contents()
         bank_paths = list(Path(two_patch_directory).rglob("*hdf5"))
-        assert isinstance(basic_index_df, pd.DataFrame)
-        assert len(bank_paths) == len(basic_index_df)
+        assert isinstance(df, pd.DataFrame)
+        assert len(bank_paths) == len(df)
 
     def test_index_columns(self, basic_index_df):
         """Ensure expected columns show up in the index."""
