@@ -1,5 +1,42 @@
 """
 Module for managing coordinates.
+
+The coordmanager is a simple class for tracking multidimensional coordinates
+and labels of ndarrays. Various methods exist for trimming, sorting, and
+filtering the managed arrays based on coordinates.
+
+# Initializing CoordinateManagers
+
+Coordinate managers are initialized using the
+[get_coords](`dascore.core.coordmanager.get_coord_manager`) function. They take
+a combination of coordinate dictionaries, dimensions, and attributes. They can
+also be extracted from example patches.
+
+```{python}
+import dascore as dc
+from rich import print
+
+patch = dc.get_example_patch()
+data = patch.data
+cm = patch.coords
+print(cm)
+```
+
+```{python}
+import numpy as np
+# Get array of coordinate values
+time = cm['time']
+
+# Filter data array
+# this gets a new coord manager and a view of the trimmed data.
+_sorted_time = np.sort(time)
+t1 = _sorted_time[5]
+t2 = _sorted_time[-5]
+new_cm, new_data = cm.select(time=(t1, t2), array=data)
+print(f"Old data shape: {data.shape}")
+print(f"New data shape: {new_data.shape}")
+print(new_cm)
+```
 """
 from collections import defaultdict
 from contextlib import suppress
@@ -653,8 +690,32 @@ def get_coord_manager(
         Tuple specify dimension names
     attrs
         Attributes which can be used to augment/create coordinates.
-    """
 
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> from dascore.core.coordmanager import get_coord_manager
+    >>> # initialize coordinates from dict of arrays
+    >>> distance = np.arange(0, 100)
+    >>> time = dc.to_datetime64(np.arange(0, 100_000, 1_000))
+    >>> coords = {"distance": distance, "time": time}
+    >>> dims = ("time", "distance")
+    >>> cm = get_coord_manager(coords=coords, dims=dims)
+    >>> # add non-dimension 1D coordinate. Note the coord dict must be a tuple
+    >>> # with the first element specifying the dimensional coord the
+    >>> # non-dimensional coord is attached to.
+    >>> latitude = np.random.random(distance.shape)
+    >>> coords['latitude'] = ('distance', latitude)
+    >>> cm = get_coord_manager(coords=coords, dims=dims)
+    >>> # Add two-D non-dimensional coord.
+    >>> quality = np.random.random((len(distance), len(time)))
+    >>> coords['quality'] = (("distance", "time"), quality)
+    >>> cm = get_coord_manager(coords=coords, dims=dims)
+    >>> # Get coordinate manager from typical patch attribute dict
+    >>> attrs = dc.get_example_patch().attrs
+    >>> cm = get_coord_manager(attrs=attrs)
+    """
     def _coord_from_attrs(coord_map, dim_map, attrs, names):
         """Try to get coordinates from attributes."""
         for name in names:
