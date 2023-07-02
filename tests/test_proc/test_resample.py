@@ -3,10 +3,9 @@ Tests for decimation
 """
 import numpy as np
 import pandas as pd
-import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError
+from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
 
 
@@ -34,11 +33,11 @@ class TestInterpolate:
         assert np.all(out.coords["distance"] == new_coord)
 
     def test_uneven_sampling_rates(self, random_patch):
-        """Ensure uneven sampling raises an exception."""
+        """Uneven sampling should now work fine."""
         start, stop, step = get_start_stop_step(random_patch, "distance")
-        new = [start, start + step, start + 4 * step, stop]
-        with pytest.raises(ParameterError):
-            random_patch.interpolate(distance=new)
+        new_samps = np.array([start, start + step, start + 4 * step, stop])
+        out = random_patch.interpolate(distance=new_samps)
+        assert not out.coords.coord_map["distance"].evenly_sampled
 
     def test_upsample_time(self, random_patch):
         """Ensure time can be upsampled."""
@@ -59,6 +58,12 @@ class TestInterpolate:
         assert out.attrs["distance_max"] == coord.max()
         assert out.attrs["distance_min"] == coord.min()
         assert out.attrs["d_distance"] == np.median(np.diff(coord))
+
+    def test_snap_like(self, wacky_dim_patch):
+        """Ensure interpolate can be used to snapping coords."""
+        patch = wacky_dim_patch.interpolate(time=None)
+        time = patch.coords.coord_map["time"]
+        assert time.evenly_sampled and time.sorted
 
 
 class TestDecimate:
@@ -220,6 +225,20 @@ class TestResample:
         """Tests for greatly increasing the sampling_period."""
         out = random_patch.resample(distance=42)
         assert len(out.coords["distance"] == 42)
+
+    def test_resample_with_units_hz(self, random_patch):
+        """Ensure resample works with units."""
+        new1 = random_patch.resample(time=50 * Hz)
+        new2 = random_patch.resample(time=1 / 50)
+        new3 = random_patch.resample(time=1 / 50 * s)
+        assert new1 == new2 == new3
+
+    def test_resample_distance_with_units(self, random_patch):
+        """Ensure distance can be resampled with units as well."""
+        new1 = random_patch.resample(distance=5 * m)
+        new2 = random_patch.resample(distance=1 / 5 * (1 / m))
+        new3 = random_patch.resample(distance=5)
+        assert new1 == new2 == new3
 
 
 class TestIResample:

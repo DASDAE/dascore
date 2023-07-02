@@ -124,7 +124,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Convert from one unit to another. Set units if None are set."""
 
     @abc.abstractmethod
-    def select(self, arg) -> Tuple[Self, Union[slice, ArrayLike]]:
+    def select(self, arg, relative=False) -> Tuple[Self, Union[slice, ArrayLike]]:
         """
         Returns an entity that can be used in a list for numpy indexing
         and selected coord.
@@ -301,6 +301,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def get_slice_tuple(
         self,
         select: Union[slice, None, type(Ellipsis), Tuple[Any, Any]],
+        relative=False,
     ) -> Tuple[Any, Any]:
         """
         Get a tuple with (start, stop) and perform basic checks.
@@ -341,10 +342,22 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         for func in [_validate_slice, _validate_none_or_ellipsis, _validate_len]:
             select = func(select)
         p1, p2 = (self._get_compatible_value(x) for x in select)
-        # reverse order if needed.
+        # apply relative adjustment
+        if relative:
+            p1 = self._get_relative_values(p1)
+            p2 = self._get_relative_values(p2)
+        # reverse order if needed to ensure p1 < p2
         if p1 is not None and p2 is not None and p2 < p1:
             p1, p2 = p2, p1
+
         return p1, p2
+
+    def _get_relative_values(self, value):
+        """Get relative values based on start (pos) or stop (neg)"""
+        if value is None:
+            return None
+        pos = np.isclose(np.sign(value), 1.0)
+        return self.min() + value if pos else self.max() + value
 
     def empty(self, axes=None) -> Self:
         """
@@ -469,13 +482,13 @@ class CoordRange(BaseCoord):
             out[name] = getattr(self, name) * factor
         return self.new(**out)
 
-    def select(self, args) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
+    def select(self, args, relative=False) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
         """
         Apply select, return selected coords and index to apply to array.
 
         Can return a CoordDegenerate if selection is outside of range.
         """
-        args = self.get_slice_tuple(args)
+        args = self.get_slice_tuple(args, relative=relative)
         start = self._get_index(args[0], forward=self.sorted)
         stop = self._get_index(args[1], forward=self.reverse_sorted)
         if self.reverse_sorted:
@@ -622,9 +635,9 @@ class CoordArray(BaseCoord):
         factor = get_conversion_factor(self.units, units)
         return self.new(units=units, values=self.values * factor)
 
-    def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+    def select(self, args, relative=False) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply select, return selected coords and index for selecting data."""
-        args = self.get_slice_tuple(args)
+        args = self.get_slice_tuple(args, relative=relative)
         values = self.values
         out = np.ones_like(values, dtype=np.bool_)
         val1 = self._get_compatible_value(args[0])
@@ -758,9 +771,9 @@ class CoordMonotonicArray(CoordArray):
     _rich_style = dascore_styles["coord_monotonic"]
     _sorted = True
 
-    def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+    def select(self, args, relative=False) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Apply select, return selected coords and index for selecting data."""
-        v1, v2 = self.get_slice_tuple(args)
+        v1, v2 = self.get_slice_tuple(args, relative=relative)
         # reverse order if reverse monotonic. This is done so when we mult
         # by -1 in _get_index the inverted range is used.
         if self.reverse_sorted:
@@ -823,7 +836,7 @@ class CoordDegenerate(CoordArray):
     step: Any = None
     _rich_style = dascore_styles["coord_degenerate"]
 
-    def select(self, args) -> Tuple[Self, Union[slice, ArrayLike]]:
+    def select(self, args, relative=False) -> Tuple[Self, Union[slice, ArrayLike]]:
         """Select for Degenerate coords does nothing."""
         return self, slice(None, None)
 

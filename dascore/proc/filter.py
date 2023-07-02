@@ -68,14 +68,14 @@ def _check_sobel_args(dim, mode, cval):
     return dim, mode, cval
 
 
-def _check_filter_range(niquest, low, high, filt_min, filt_max):
+def _check_filter_range(nyquist, low, high, filt_min, filt_max):
     """Simple check on filter parameters."""
-    # ensure filter bounds are within niquest
+    # ensure filter bounds are within nyquist
     if low is not None and ((0 > low) or (low > 1)):
-        msg = f"possible filter bounds are [0, {niquest}] you passed {filt_min}"
+        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_min}"
         raise FilterValueError(msg)
     if high is not None and ((0 > high) or (high > 1)):
-        msg = f"possible filter bounds are [0, {niquest}] you passed {filt_max}"
+        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_max}"
         raise FilterValueError(msg)
     if high is not None and low is not None and high <= low:
         msg = (
@@ -87,10 +87,10 @@ def _check_filter_range(niquest, low, high, filt_min, filt_max):
 
 def _get_sos(sr, filt_min, filt_max, corners):
     """Get second order sections from sampling rate and filter bounds."""
-    niquest = 0.5 * sr
-    low = None if pd.isnull(filt_min) else filt_min / niquest
-    high = None if pd.isnull(filt_max) else filt_max / niquest
-    _check_filter_range(niquest, low, high, filt_min, filt_min)
+    nyquist = 0.5 * sr
+    low = None if pd.isnull(filt_min) else filt_min / nyquist
+    high = None if pd.isnull(filt_max) else filt_max / nyquist
+    _check_filter_range(nyquist, low, high, filt_min, filt_max)
 
     if (low is not None) and (high is not None):  # apply bandpass
         z, p, k = iirfilter(
@@ -148,7 +148,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     coord_units = patch.coords.coord_map[dim].units
     filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units)
     sr = get_dim_sampling_rate(patch, dim)
-    # get niquest and low/high in terms of niquest
+    # get nyquist and low/high in terms of nyquist
     sos = _get_sos(sr, filt_min, filt_max, corners)
     if zerophase:
         out = sosfiltfilt(sos, patch.data, axis=axis)
@@ -212,7 +212,7 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 #     dim, filt_min, filt_max = _check_filter_kwargs(kwargs)
 #     axis = patch.dims.index(dim)
 #     sr = _get_sampling_rate(patch, dim)
-#     # get niquest and low/high in terms of niquest
+#     # get nyquist and low/high in terms of nyquist
 #     sos = _get_sos(sr, filt_min, filt_max, corners)
 #     out = sosfilt(sos, patch.data, axis=axis)
 #     if zerophase:
@@ -244,7 +244,7 @@ def median_filter(patch: PatchType, kernel_size=3) -> PatchType:
     Written by Ge Jin (gjin@mines.edu)
 
     """
-    # get niquest and low/high in terms of niquest
+    # get nyquist and low/high in terms of nyquist
     out = medfilt2d(patch.data, kernel_size=kernel_size)
     return dascore.Patch(
         data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims

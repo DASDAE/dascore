@@ -35,17 +35,17 @@ class TestPassFilterChecks:
             _ = random_patch.pass_filter(time=[10, 1])
 
     def test_bad_low_param(self, random_patch):
-        """Ensure a low parameter above niquest raises."""
+        """Ensure a low parameter above nyquist raises."""
         with pytest.raises(FilterValueError, match="possible filter bounds"):
             _ = random_patch.pass_filter(time=[1000, None])
 
     def test_bad_high_param(self, random_patch):
-        """Ensure a high parameter above niquest raises."""
+        """Ensure a high parameter above nyquist raises."""
         with pytest.raises(FilterValueError, match="possible filter bounds"):
             _ = random_patch.pass_filter(distance=[None, 10])
 
     def test_filt_param_less_than_0(self, random_patch):
-        """Ensure a high parameter above niquest raises."""
+        """Ensure a high parameter above nyquist raises."""
         with pytest.raises(FilterValueError, match="possible filter bounds"):
             _ = random_patch.pass_filter(distance=[None, -10])
 
@@ -54,6 +54,24 @@ class TestPassFilterChecks:
         m = dc.units.get_quantity("m")
         with pytest.raises(UnitError):
             random_patch.pass_filter(time=(1 * m, 10 * m))
+
+    def test_units_dont_match(self, random_patch):
+        """Tests for Units matching."""
+        sec = dc.get_quantity("s")
+        m = dc.get_quantity("m")
+        filt = (1 * m, 10 * sec)
+        match = "Units must match"
+        with pytest.raises(UnitError, match=match):
+            random_patch.pass_filter(time=filt)
+
+    def test_high_time_raises(self, random_patch):
+        """Ensure too high freq band in time axis raises."""
+        nyquest = 0.5 / (random_patch.attrs.d_time / dc.to_timedelta64(1))
+        Hz = dc.get_quantity("Hz")
+        filt = (1 * Hz, nyquest * 1.1 * Hz)
+        match = "possible filter bounds are"
+        with pytest.raises(FilterValueError, match=match):
+            random_patch.pass_filter(time=filt)
 
 
 class TestPassFilter:

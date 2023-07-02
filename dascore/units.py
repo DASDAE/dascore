@@ -154,7 +154,7 @@ def get_filter_units(
     unitable = (Quantity, Unit)
     if not (isinstance(arg1, unitable) or isinstance(arg2, unitable)):
         return arg1, arg2
-    to_units = get_unit(to_unit)
+    to_units = get_quantity(to_unit).units
     quant1, quant2 = get_quantity(arg1), get_quantity(arg2)
     _ensure_same_units(quant1, quant2)
     out1, inverted1 = get_inverted_quant(quant1, to_units)

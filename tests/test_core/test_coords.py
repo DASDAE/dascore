@@ -456,6 +456,15 @@ class TestSelect:
         assert len(new.values) == 11 == len(new)
         assert sliced == slice(10, 21)
 
+    def test_select_relative(self, coord):
+        """Test relative select from start/end."""
+        dist = (coord.max() - coord.min()) / 4
+        abs1 = coord.min() + dist
+        abs2 = coord.max() - dist
+        out1 = coord.select((abs1, abs2))
+        out2 = coord.select((dist, -dist), relative=True)
+        assert out1 == out2
+
 
 class TestEqual:
     """Tests for comparing coord equality."""

@@ -10,7 +10,7 @@ import dascore as dc
 import dascore.compat as compat
 from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
-from dascore.utils.misc import check_evenly_sampled
+from dascore.units import get_filter_units
 from dascore.utils.patch import (
     get_dim_value_from_kwargs,
     get_start_stop_step,
@@ -100,34 +100,48 @@ def interpolate(
             spline, 2 is quadratic, 3 is cubic, etc.
 
     **kwargs
-        Used to specify dimension and interpolation values.
+        Used to specify dimension and interpolation values. Use a value of
+        None to "snap" coordinate to evenly sampled points along coordinate.
 
     Notes
     -----
     This function just uses scipy's interp1d function under the hood.
     See scipy.interpolate.interp1d for information.
 
-    Values for interpolation must be evenly-spaced.
+    Be aware than non-evenly sampled extrapolation values may make it
+    so some patch processing methods no longer work.
+
+    See also [snap](`dascore.core.Patch.snap`).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # up-sample time coordinate
+    >>> time = patch.coords['time']
+    >>> new_time = np.linspace(time.min(), time.max(), num=10*len(time))
+    >>> uptime = patch.interpolate(time=new_time)
+    >>> # interpolate unevenly sampled dim to evenly sampled
+    >>> patch = dc.get_example_patch("wacky_dim_coords_patch")
+    >>> patch_time_even = patch.interpolate(time=None)
     """
     dim, axis, samples = get_dim_value_from_kwargs(patch, kwargs)
-    # ensure samples are evenly sampled
-    check_evenly_sampled(samples)
+    # if samples is None, get evenly sampled coords along dimension.
+    if samples is None:
+        coord = patch.coords.coord_map[dim]
+        samples = coord.snap().values
     # we need to make sure only real numbers are used, interp1d doesn't support
     # datetime64 yet.
     coord_num = to_number(patch.coords[dim])
     samples_num = to_number(samples)
-    func = compat.interp1d(coord_num, patch.data, axis=axis, kind=kind)
+    func = compat.interp1d(
+        coord_num, patch.data, axis=axis, kind=kind, fill_value="extrapolate"
+    )
     out = func(samples_num)
-    # update attributes
-    new_attrs = dict(patch.attrs)
-    new_attrs[f"d_{dim}"] = np.median(np.diff(samples))
-    new_attrs[f"min_{dim}"] = np.min(samples)
-    new_attrs[f"max_{dim}"] = np.max(samples)
-    # update coordinates
-    new_coords = {x: patch.coords[x] for x in patch.dims}
+    new_coords = dict(patch.coords.coord_map)
     new_coords[dim] = samples
-    kwargs = dict(data=out, attrs=new_attrs, dims=patch.dims, coords=new_coords)
-    return patch.__class__(**kwargs)
+    return patch.new(data=out, coords=new_coords)
 
 
 @patch_function()
@@ -157,7 +171,8 @@ def resample(
         The interpolation type if output of fourier resampling doesn't produce
         exactly the right sampling rate.
     **kwargs
-        keyword arguments to specify
+        keyword arguments to specify dimension and new sampling value. Units
+        can also be used to specify sampling_period or frequency.
 
     Notes
     -----
@@ -168,10 +183,16 @@ def resample(
 
     Examples
     --------
-    # resample a patch along time dimension to 10 ms
-    import dascore as dc
-    patch = dc.get_example_patch()
-    new = patch.resample(time=np.timedelta64(10, 'ms'))
+    >>> # resample a patch along time dimension to 10 ms
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> new = patch.resample(time=np.timedelta64(10, 'ms'))
+    # Resample time dimension to 50 Hz
+    >>> from dascore.units import Hz
+    >>> new = patch.rename(time=(50 * Hz))
+    # Resample distance dimension to a sampling period of 15m
+    >>> from dascore.units import m
+    >>> new = patch.resample(time=15 * m)
 
     See Also
     --------
@@ -181,6 +202,8 @@ def resample(
     """
     dim, axis, new_d_dim = get_dim_value_from_kwargs(patch, kwargs)
     d_dim = patch.attrs[f"d_{dim}"]  # current sampling rate
+    coord_units = 1 / dc.get_quantity(patch.coords.coord_map[dim].units)
+    new_d_dim, _ = get_filter_units(new_d_dim, new_d_dim, to_unit=coord_units)
     # nasty hack so that ints/floats get converted to seconds.
     if isinstance(d_dim, np.timedelta64):
         new_d_dim = to_timedelta64(new_d_dim)
@@ -222,6 +245,7 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
+    >>> # Resample time axis such that there are 50 samples total
     >>> new = patch.iresample(time=50)
 
     See Also

@@ -716,6 +716,7 @@ def get_coord_manager(
     >>> attrs = dc.get_example_patch().attrs
     >>> cm = get_coord_manager(attrs=attrs)
     """
+
     def _coord_from_attrs(coord_map, dim_map, attrs, names):
         """Try to get coordinates from attributes."""
         for name in names:

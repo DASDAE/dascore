@@ -10,10 +10,9 @@ from types import ModuleType
 from typing import Iterable, Optional, Union
 
 import numpy as np
-import numpy.typing as nt
 import pandas as pd
 
-from dascore.exceptions import MissingOptionalDependency, ParameterError
+from dascore.exceptions import MissingOptionalDependency
 
 
 def register_func(list_or_dict: Union[list, dict], key: Optional[str] = None):
@@ -188,22 +187,6 @@ def all_close(ar1, ar2):
         return np.all(ar1 == ar2)
     else:
         return np.allclose(ar1, ar2)
-
-
-def check_evenly_sampled(array: nt.ArrayLike):
-    """
-    Check if an array is evenly sampled.
-
-    If not raise a ParameterError.
-    """
-    diff = np.diff(array)
-    if not all_close(diff, np.mean(diff)):
-        unique_diffs = np.unique(diff)
-        msg = (
-            "The passed array is not evenly sampled. The values you passed"
-            f"have the following unique differences: {unique_diffs}"
-        )
-        raise ParameterError(msg)
 
 
 def iter_files(

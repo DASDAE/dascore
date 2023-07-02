@@ -7,6 +7,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.proc.taper import TAPER_FUNCTIONS, taper
+from dascore.units import m
 from dascore.utils.misc import broadcast_for_index
 
 
@@ -97,3 +98,18 @@ class TestTaperBasics:
         with pytest.raises(ParameterError, match="not a known window"):
             random_patch.taper(time=(0.1, 0.1), window_type="windowsXP")
             # the only good one...
+
+    def test_taper_with_units(self, random_patch):
+        """Ensure taper words with units specified."""
+        value = 15 * m
+        assert False  # TODO start here
+        patch = random_patch.taper(distance=value)
+        data_new = patch.data
+        data_old = random_patch.data
+        dist = patch.coords.coord_map["distance"]
+
+        _, inds1 = dist.select((dist.min() + value, None))
+        _, inds2 = dist.select((None, dist.max() - value))
+
+        assert np.allclose(data_new[inds1], data_old[inds1])
+        assert np.allclose(data_new[inds2], data_old[inds2])
