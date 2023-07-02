@@ -4,7 +4,6 @@ Processing for applying a taper.
 from typing import Sequence
 
 import numpy as np
-import pandas as pd
 from scipy.signal import windows  # the best operating system?
 
 from dascore.constants import PatchType
@@ -31,18 +30,19 @@ TAPER_FUNCTIONS = dict(
 def _get_taper_slices(patch, kwargs):
     """Get slice for start/end of patch."""
     dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
-    d_len = patch.shape[axis]
+    coord = patch.coords.coord_map[dim]
     if isinstance(value, (Sequence, np.ndarray)):
         assert len(value) == 2, "Length 2 sequence required."
         start, stop = value[0], value[1]
     else:
         start, stop = value, value
+    dur = coord.max() - coord.min()
     # either let units pass through or multiply by d_len
-    start = start if isinstance(start, Quantity) else start * d_len
-    stop = stop if isinstance(stop, Quantity) else stop * d_len
-    coord = patch.coords.coord_map[dim]
-    _, inds_1 = coord.select(None, start, relative=True)
-    _, inds_2 = coord.select(-stop, None, relative=True)
+    start = start if isinstance(start, Quantity) or start is None else start * dur
+    stop = stop if isinstance(stop, Quantity) or stop is None else stop * dur
+    stop = -stop if stop is not None else stop
+    _, inds_1 = coord.select((None, start), relative=True)
+    _, inds_2 = coord.select((stop, None), relative=True)
     return axis, (start, stop), inds_1, inds_2
 
 
@@ -59,14 +59,23 @@ def _get_window_function(window_type):
     return func
 
 
-def _validate_windows(samps, shape, axis):
+def _validate_windows(samps, start_slice, end_slice, shape, axis):
     """Validate the the windows don't overlap or exceed dim len."""
-    samps = np.array([x for x in samps if not pd.isnull(x)])
-    if len(samps) > 1 and samps[0] > samps[1]:
-        msg = "Taper windows cannot overlap"
-        raise ParameterError(msg)
-    elif np.any(samps < 0) or np.any(samps > shape[axis]):
+    max_len = shape[axis]
+    start_ind = start_slice.stop
+    end_ind = end_slice.start
+
+    bad_start = samps[0] is not None and (start_ind is None or start_ind < 0)
+    bad_end = samps[1] is not None and (end_ind is None or end_ind > max_len)
+
+    if bad_start or bad_end:
         msg = "Total taper lengths exceed total dim length"
+        raise ParameterError(msg)
+
+    if start_ind is None or end_ind is None:
+        return
+    if start_ind > end_ind:
+        msg = "Taper windows cannot overlap"
         raise ParameterError(msg)
 
 
@@ -115,16 +124,17 @@ def taper(
     shape = out.shape
     n_dims = len(out.shape)
     axis, samps, start_slice, end_slice = _get_taper_slices(patch, kwargs)
-    _validate_windows(samps, shape, axis)
+    _validate_windows(samps, start_slice, end_slice, shape, axis)
     if samps[0] is not None:
-        window = func(2 * int(samps[0]))[: samps[0]]
+        val = start_slice.stop
+        window = func(2 * val)[:val]
         # get indices window (which will broadcast) and data
         data_inds = broadcast_for_index(n_dims, axis, start_slice)
         window_inds = broadcast_for_index(n_dims, axis, slice(None), fill_none=True)
         out[data_inds] = out[data_inds] * window[window_inds]
     if samps[1] is not None:
-        diff = shape[axis] - samps[1]
-        window = func(2 * diff)[diff:]
+        val = shape[axis] - end_slice.start
+        window = func(2 * val)[val:]
         data_inds = broadcast_for_index(n_dims, axis, end_slice)
         window_inds = broadcast_for_index(n_dims, axis, slice(None), fill_none=True)
         out[data_inds] = out[data_inds] * window[window_inds]

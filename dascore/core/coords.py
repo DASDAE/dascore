@@ -262,7 +262,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Return the internal data. Same as values attribute."""
         return self.values
 
-    def _get_compatible_value(self, value):
+    def _get_compatible_value(self, value, relative=False):
         """
         Return values that are compatible with dtype/units of coord.
 
@@ -277,6 +277,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # if null or ... just return None
         if pd.isnull(value) or value is Ellipsis:
             return None
+        # special case for datetime and relative
+        if relative:
+            if np.issubdtype(self.dtype, np.datetime64):
+                value = dc.to_timedelta64(value)
+            value = self._get_relative_values(value)
         # apply validators. These can, eg, coerce to correct dtype.
         validators = _get_coord_filter_validators(self.dtype)
         out = value
@@ -341,11 +346,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # apply simple checks; ensure we have a len 2 tuple.
         for func in [_validate_slice, _validate_none_or_ellipsis, _validate_len]:
             select = func(select)
-        p1, p2 = (self._get_compatible_value(x) for x in select)
-        # apply relative adjustment
-        if relative:
-            p1 = self._get_relative_values(p1)
-            p2 = self._get_relative_values(p2)
+        p1, p2 = (self._get_compatible_value(x, relative=relative) for x in select)
         # reverse order if needed to ensure p1 < p2
         if p1 is not None and p2 is not None and p2 < p1:
             p1, p2 = p2, p1
@@ -354,9 +355,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def _get_relative_values(self, value):
         """Get relative values based on start (pos) or stop (neg)"""
-        if value is None:
-            return None
-        pos = np.isclose(np.sign(value), 1.0)
+        pos = value >= 0
         return self.min() + value if pos else self.max() + value
 
     def empty(self, axes=None) -> Self:

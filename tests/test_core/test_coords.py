@@ -461,9 +461,13 @@ class TestSelect:
         dist = (coord.max() - coord.min()) / 4
         abs1 = coord.min() + dist
         abs2 = coord.max() - dist
-        out1 = coord.select((abs1, abs2))
-        out2 = coord.select((dist, -dist), relative=True)
-        assert out1 == out2
+        out1, ind_1 = coord.select((abs1, abs2))
+        out2, ind_2 = coord.select((dist, -dist), relative=True)
+        assert np.all(out1 == out2)
+        if isinstance(ind_1, np.ndarray):
+            assert np.all(ind_1 == ind_2)
+        else:
+            assert ind_1 == ind_2
 
 
 class TestEqual:

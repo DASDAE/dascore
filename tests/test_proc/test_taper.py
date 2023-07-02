@@ -99,17 +99,17 @@ class TestTaperBasics:
             random_patch.taper(time=(0.1, 0.1), window_type="windowsXP")
             # the only good one...
 
-    def test_taper_with_units(self, random_patch):
+    def test_taper_with_units(self, patch_ones):
         """Ensure taper words with units specified."""
         value = 15 * m
-        assert False  # TODO start here
-        patch = random_patch.taper(distance=value)
+        patch = patch_ones.taper(distance=value)
         data_new = patch.data
-        data_old = random_patch.data
-        dist = patch.coords.coord_map["distance"]
+        data_old = patch_ones.data
+        dim_len = patch.dims.index("distance")
+        mid_dim = dim_len // 2
 
-        _, inds1 = dist.select((dist.min() + value, None))
-        _, inds2 = dist.select((None, dist.max() - value))
+        assert not np.allclose(data_new, data_old)
 
-        assert np.allclose(data_new[inds1], data_old[inds1])
-        assert np.allclose(data_new[inds2], data_old[inds2])
+        assert np.allclose(
+            data_new[mid_dim - 10 : mid_dim + 10], data_old[mid_dim - 10 : mid_dim + 10]
+        )

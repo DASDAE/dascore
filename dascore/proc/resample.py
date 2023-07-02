@@ -202,7 +202,10 @@ def resample(
     """
     dim, axis, new_d_dim = get_dim_value_from_kwargs(patch, kwargs)
     d_dim = patch.attrs[f"d_{dim}"]  # current sampling rate
-    coord_units = 1 / dc.get_quantity(patch.coords.coord_map[dim].units)
+    coord_units = dc.get_quantity(patch.coords.coord_map[dim].units)
+    # inverse coord unit to trick filter units into giving correct units.
+    if coord_units is not None:
+        coord_units = 1 / coord_units
     new_d_dim, _ = get_filter_units(new_d_dim, new_d_dim, to_unit=coord_units)
     # nasty hack so that ints/floats get converted to seconds.
     if isinstance(d_dim, np.timedelta64):
