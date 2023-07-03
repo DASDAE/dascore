@@ -120,8 +120,8 @@ def interpolate(
     >>> patch = dc.get_example_patch()
     >>> # up-sample time coordinate
     >>> time = patch.coords['time']
-    >>> new_time = np.linspace(time.min(), time.max(), num=10*len(time))
-    >>> uptime = patch.interpolate(time=new_time)
+    >>> new_time = np.arange(time.min(), time.max(), 0.5*patch.attrs.d_time)
+    >>> patch_uptime = patch.interpolate(time=new_time)
     >>> # interpolate unevenly sampled dim to evenly sampled
     >>> patch = dc.get_example_patch("wacky_dim_coords_patch")
     >>> patch_time_even = patch.interpolate(time=None)
@@ -187,12 +187,12 @@ def resample(
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> new = patch.resample(time=np.timedelta64(10, 'ms'))
-    # Resample time dimension to 50 Hz
+    >>> # Resample time dimension to 50 Hz
     >>> from dascore.units import Hz
-    >>> new = patch.rename(time=(50 * Hz))
-    # Resample distance dimension to a sampling period of 15m
+    >>> new = patch.resample(time=(50 * Hz))
+    >>> # Resample distance dimension to a sampling period of 15m
     >>> from dascore.units import m
-    >>> new = patch.resample(time=15 * m)
+    >>> new = patch.resample(distance=15 * m)
 
     See Also
     --------

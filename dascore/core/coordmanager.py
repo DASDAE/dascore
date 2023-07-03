@@ -303,7 +303,9 @@ class CoordManager(DascoreBaseModel):
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
         return new, self._get_new_data(index, array)
 
-    def select(self, array: MaybeArray = None, **kwargs) -> Tuple[Self, MaybeArray]:
+    def select(
+        self, array: MaybeArray = None, relative=False, **kwargs
+    ) -> Tuple[Self, MaybeArray]:
         """
         Perform selection on coordinates.
 
@@ -311,6 +313,8 @@ class CoordManager(DascoreBaseModel):
         ----------
         array
             An array to which the selection will be applied.
+        relative
+            If True, coordinate updates are relative.
         **kwargs
             Used to specify select arguments. Can be of the form
             {coord_name: (lower_limit, upper_limit)}.
@@ -349,7 +353,7 @@ class CoordManager(DascoreBaseModel):
                 dim_name = dimap[coord_name][0]
                 # this handles the case of out-of-bound selections.
                 # These should be converted to degenerate coords.
-                new_coord, reductions = coord.select(limits)
+                new_coord, reductions = coord.select(limits, relative=relative)
                 dim_reductions[dim_name] = reductions
                 new_coords[coord_name] = (dimap[coord_name], new_coord)
                 # update other coords affected by change.

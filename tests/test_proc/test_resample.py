@@ -240,6 +240,18 @@ class TestResample:
         new3 = random_patch.resample(distance=5)
         assert new1 == new2 == new3
 
+    def test_resample_docs(self, random_patch):
+        """Ensure docstring examples runs."""
+        patch = random_patch
+        time = patch.coords["time"]
+        new_time = np.arange(time.min(), time.max(), 0.5 * patch.attrs.d_time)
+        uptime = patch.interpolate(time=new_time)
+        assert isinstance(uptime, dc.Patch)
+        # interpolate unevenly sampled dim to evenly sampled
+        patch = dc.get_example_patch("wacky_dim_coords_patch")
+        patch_time_even = patch.interpolate(time=None)
+        assert isinstance(patch_time_even, dc.Patch)
+
 
 class TestIResample:
     """Tests for resampling based on numbers of sample per dimension."""

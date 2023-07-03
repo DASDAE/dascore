@@ -6,7 +6,7 @@ from dascore.utils.patch import patch_function
 
 
 @patch_function(history=None)
-def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
+def select(patch: PatchType, *, copy=False, relative=False, **kwargs) -> PatchType:
     """
     Return a subset of the patch based on query parameters.
 
@@ -20,9 +20,14 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
 
     Parameters
     ----------
+    patch
+        The patch object.
     copy
         If True, copy the resulting data. This is needed so the old
         array can get gc'ed and memory freed.
+    relative
+        If True, select ranges are relative to the start of coordinate, if
+        possitive, or the end of the coordinate, if negative.
     **kwargs
         Used to specify the dimension and slices to select on.
 
@@ -37,9 +42,17 @@ def select(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
     >>> # select time (1 second from start to -1 second from end)
     >>> t1 = patch.attrs.time_min + dc.to_timedelta64(1)
     >>> t2 = patch.attrs.time_max - dc.to_timedelta64(1)
-    >>> new_time = patch.select(time=(t1, t2))
+    >>> new_time1 = patch.select(time=(t1, t2))
+    >>> # this can be accomplished more simply using the relative keyword
+    >>> new_time2 = patch.select(time=(1, -1))
+    >>> # filter 1 second from start time to 3 seconds from start time
+    >>> new_time3 = patch.select(time=(1, 3))
+    >>> # filter 6 second from end time to 1 second from end time
+    >>> new_time4 = patch.select(time=(-6, -1))
     """
-    new_coords, data = patch.coords.select(**kwargs, array=patch.data)
+    new_coords, data = patch.coords.select(
+        **kwargs, array=patch.data, relative=relative
+    )
     # no slicing was performed, just return original.
     if data.shape == patch.data.shape:
         return patch

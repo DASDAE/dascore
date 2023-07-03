@@ -67,6 +67,44 @@ class TestSelect:
         assert out.shape[deleted_axis] == 0
         assert np.size(out.data) == 0
 
+    def test_select_relative_start_end(self, random_patch):
+        """Ensure relative select works on start to end"""
+        patch1 = random_patch.select(time=(1, -1), relative=True)
+        t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
+        t2 = random_patch.attrs.time_max - dc.to_timedelta64(1)
+        patch2 = random_patch.select(time=(t1, t2))
+        assert patch1 == patch2
+
+    def test_select_relative_end_end(self, random_patch):
+        """Ensure relative works for end to end"""
+        patch1 = random_patch.select(time=(-3, -1), relative=True)
+        t1 = random_patch.attrs.time_max - dc.to_timedelta64(1)
+        t2 = random_patch.attrs.time_max - dc.to_timedelta64(3)
+        patch2 = random_patch.select(time=(t1, t2))
+        assert patch1 == patch2
+
+    def test_select_relative_start_start(self, random_patch):
+        """Ensure relative start ot start"""
+        patch1 = random_patch.select(time=(1, 3), relative=True)
+        t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
+        t2 = random_patch.attrs.time_min + dc.to_timedelta64(3)
+        patch2 = random_patch.select(time=(t1, t2))
+        assert patch1 == patch2
+
+    def test_select_relative_start_open(self, random_patch):
+        """Ensure relative start to open end"""
+        patch1 = random_patch.select(time=(1, None), relative=True)
+        t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
+        patch2 = random_patch.select(time=(t1, None))
+        assert patch1 == patch2
+
+    def test_select_relative_end_open(self, random_patch):
+        """Ensure relative start to open end"""
+        patch1 = random_patch.select(time=(-1, None), relative=True)
+        t1 = random_patch.attrs.time_max - dc.to_timedelta64(1)
+        patch2 = random_patch.select(time=(t1, None))
+        assert patch1 == patch2
+
 
 class TestSelectHistory:
     """Test behavior of history added by select."""
