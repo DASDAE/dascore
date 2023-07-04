@@ -93,7 +93,7 @@ dist_filtered = pa.pass_filter(distance=(10*m, 100*m))
 
 Units and quantities (units multiplied by constants) can also be created with [`get_unit`](`dascore.units.get_unit`) and [get_quantity](`dascore.units.get_quantity`).
 
-```python
+```{python}
 from dascore.units import get_unit, get_quantity
 
 # Units (without scalar multiples) can be created like so:

@@ -184,6 +184,7 @@ def resample(
     Examples
     --------
     >>> # resample a patch along time dimension to 10 ms
+    >>> import numpy as np
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> new = patch.resample(time=np.timedelta64(10, 'ms'))

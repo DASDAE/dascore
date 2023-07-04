@@ -78,6 +78,7 @@ docs/api/*
 _autosummary
 .quarto/
 docs/site_libs
+docs/_quarto.yml  # this is generated automatically
 
 # profile stuff from asv
 .asv
