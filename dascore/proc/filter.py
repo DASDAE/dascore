@@ -134,7 +134,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     >>>  # Apply lowpass filter along distance axis for wavelengths less than 100m
     >>> lowpassed = pa.pass_filter(distance=(None, 1/100))
     >>> # Note that None and ... both indicate open intervals
-    >>> pa.pass_filter(time=(None, 90)) == pa.pass_filter(time=(..., 90))
+    >>> assert pa.pass_filter(time=(None, 90)) == pa.pass_filter(time=(..., 90))
 
     >>> # Optionally, units can be specified for a more expressive API.
     >>> from dascore.units import m, ft, s, Hz
