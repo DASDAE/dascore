@@ -25,6 +25,7 @@ website:
   title: {{ dascore_version_str }}
   repo-url: https://github.com/dasdae/dascore
   site-path: /docs
+  site-url: https://www.dascore.org
 
   image: "_static/logo.png"
   favicon: "_static/logo.png"

@@ -79,6 +79,7 @@ _autosummary
 .quarto/
 docs/site_libs
 docs/_quarto.yml  # this is generated automatically
+docs/**.ipynb
 
 # profile stuff from asv
 .asv

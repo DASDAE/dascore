@@ -140,6 +140,13 @@ class TestPassFilter:
         with pytest.raises(UnitError, match=match):
             random_patch.pass_filter(time=(1 * s, 10 * s))
 
+    def test_ellipses(self, random_patch):
+        """Ellipses should work for filtering."""
+        p = random_patch
+        p.pass_filter(time=(..., 20))
+        assert p.pass_filter(time=(None, 20)) == p.pass_filter(time=(..., 20))
+        assert p.pass_filter(time=(10, None)) == p.pass_filter(time=(10, ...))
+
 
 class TestSobelFilter:
     """Simple tests to make sure Sobel filter runs."""

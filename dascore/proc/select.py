@@ -12,7 +12,7 @@ def select(patch: PatchType, *, copy=False, relative=False, **kwargs) -> PatchTy
 
     Any dimension of the data can be passed as key, and the values
     should either be a Slice or a tuple of (min, max) for that
-    dimension.
+    dimension. None and ... both indicate open intervals.
 
     The time dimension is handled specially in that either floats,
     datetime64 or datetime objects can be used to specify relative
@@ -39,6 +39,8 @@ def select(patch: PatchType, *, copy=False, relative=False, **kwargs) -> PatchTy
     >>> patch = get_example_patch()
     >>> # select meters 50 to 300
     >>> new_distance = patch.select(distance=(50, 300))
+    >>> # select channels less than 300
+    >>> lt_dist = patch.select(distance=(..., 300))
     >>> # select time (1 second from start to -1 second from end)
     >>> t1 = patch.attrs.time_min + dc.to_timedelta64(1)
     >>> t2 = patch.attrs.time_max - dc.to_timedelta64(1)

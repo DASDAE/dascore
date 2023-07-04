@@ -133,15 +133,17 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
 
     >>>  # Apply lowpass filter along distance axis for wavelengths less than 100m
     >>> lowpassed = pa.pass_filter(distance=(None, 1/100))
+    >>> # Note that None and ... both indicate open intervals
+    >>> pa.pass_filter(time=(None, 90)) == pa.pass_filter(time=(..., 90))
 
-    >>>  # Optionally, units can be specified for a more expressive API.
+    >>> # Optionally, units can be specified for a more expressive API.
     >>> from dascore.units import m, ft, s, Hz
     >>> # Filter from 1 Hz to 10 Hz in time dimension
     >>> lp_units = pa.pass_filter(time=(1 * Hz, 10 * Hz))
     >>> # Filter wavelengths 50m to 100m
     >>> bp_m = pa.pass_filter(distance=(50 * m, 100 * m))
     >>> # filter wavelengths less than 200 ft
-    >>> lp_ft = pa.pass_filter(distance=(200 * ft, None))
+    >>> lp_ft = pa.pass_filter(distance=(200 * ft, ...))
     """
     dim, (arg1, arg2) = _check_filter_kwargs(kwargs)
     axis = patch.dims.index(dim)

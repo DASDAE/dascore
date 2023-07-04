@@ -4,14 +4,11 @@ execute:
   warning: false
 ---
 
-Spools are containers/managers of [patches](patch.qmd). Spools come in a few varieties which
-can manage a group of patches loaded into memory, archives of local files,
-and (in the future) a variety of clients for accessing remote resources.
+Spools are containers/managers of [patches](patch.qmd). Spools come in a few varieties which can manage a group of patches loaded into memory, archives of local files, and (in the future) a variety of clients for accessing remote resources.
 
 # Data Sources
 
-The simplest way to get the appropriate spool for a specified input is to use
-the `spool` function, which should work in the vast majority of cases.
+The simplest way to get the appropriate spool for a specified input is to use the [`spool`](`dascore.spool`) function, which knows about many different input types and returns an appropriate `Patch`.
 
 ## Patches (in-memory)
 
@@ -49,8 +46,7 @@ directory_path = path_to_das_file.parent
 spool3 = dc.spool(directory_path).update()
 ```
 
-If you want the index file to exist somewhere else, for example if you can't
-write to the data directory, you can specify an index path.
+If you want the index file to exist somewhere else, for example if you can't write to the data directory, you can specify an index path.
 
 ```{python}
 #| warning: false
@@ -102,8 +98,7 @@ new_spool = spool[1:]
 
 # get_contents
 
-Returns a dataframe listing contents. This method may not be supported on all
-spools, especially those interfacing with vast remote resources.
+Returns a dataframe listing contents. This method may not be supported on all spools, especially those interfacing with remote resources.
 
 ```{python}
 #| output: false
@@ -153,9 +148,7 @@ subspool = spool.select(tag='some*')
 
 # chunk
 
-Chunk controls how data are grouped together in patches. It can be used to
-merge contiguous patches together, specify the size of patches for processing,
-specify overlap with previous segments, etc.
+Chunk controls how data are grouped together in patches. It can be used to merge contiguous patches together, specify the size of patches for processing, specify overlap with previous segments, etc.
 
 ```{python}
 import dascore as dc

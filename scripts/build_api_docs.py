@@ -4,14 +4,14 @@ Script to build the API docs for dascore.
 from pathlib import Path
 
 from _index_api import get_alias_mapping, parse_project
-
-from _render_api import render_project, get_template
+from _render_api import get_template, render_project
 
 import dascore as dc
 
 
 def create_quarto_qmd():
     """Create the _quarto.yml file."""
+
     def _get_nice_version_string():
         """Just get a simplified version string."""
         version_str = str(dc.__version__)
@@ -19,7 +19,7 @@ def create_quarto_qmd():
             vstr = version_str
         else:
             vstr = version_str.split("+")[0]
-        return f"DASCore {vstr}"
+        return f"DASCore ({vstr})"
 
     temp = get_template("_quarto.yml")
     version_str = _get_nice_version_string()

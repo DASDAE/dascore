@@ -33,8 +33,8 @@ def get_unit(value) -> Unit:
 @cache
 def get_quantity(value: str_or_none) -> Optional[Quantity]:
     """Convert a value to a pint quantity."""
-    if value is None:
-        return value
+    if value is None or value is ...:
+        return None
     if isinstance(value, Unit):
         value = str(value)  # ensure unit is converted to quantity
     ureg = get_registry()
@@ -152,6 +152,8 @@ def get_filter_units(
 
     # fast-path for non-unit, non-quantity inputs.
     unitable = (Quantity, Unit)
+    arg1 = None if arg1 is ... else arg1
+    arg2 = None if arg2 is ... else arg2
     if not (isinstance(arg1, unitable) or isinstance(arg2, unitable)):
         return arg1, arg2
     to_units = get_quantity(to_unit).units

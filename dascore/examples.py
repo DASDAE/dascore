@@ -9,6 +9,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.exceptions import UnknownExample
+from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 from dascore.utils.patch import get_default_patch_name
@@ -16,46 +17,6 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 
 EXAMPLE_PATCHES = {}
 EXAMPLE_SPOOLS = {}
-
-
-def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
-    """
-    Load an example Patch.
-
-    Parameters
-    ----------
-    example_name
-        The name of the example to load.
-    **kwargs
-        Passed to the corresponding functions to generate data.
-
-    Raises
-    ------
-        UnknownExample if unregistered patch is requested.
-
-    """
-    if example_name not in EXAMPLE_PATCHES:
-        msg = (
-            f"No example patch registered with name {example_name} "
-            f"Registered example patches are {list(EXAMPLE_PATCHES)}"
-        )
-        raise UnknownExample(msg)
-    return EXAMPLE_PATCHES[example_name](**kwargs)
-
-
-def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
-    """
-    Load an example spool.
-
-    kwargs are passed to the corresponding functions to generate data.
-    """
-    if example_name not in EXAMPLE_SPOOLS:
-        msg = (
-            f"No example spool registered with name {example_name} "
-            f"Registered example spools are {list(EXAMPLE_SPOOLS)}"
-        )
-        raise UnknownExample(msg)
-    return EXAMPLE_SPOOLS[example_name](**kwargs)
 
 
 @register_func(EXAMPLE_PATCHES, key="random_das")
@@ -201,7 +162,6 @@ def _example_event_1():
     return dc.spool(path)[0]
 
 
-@register_func(EXAMPLE_PATCHES, key="random_das_non_")
 @register_func(EXAMPLE_SPOOLS, key="random_das")
 def _random_spool(
     time_gap=0, length=3, starttime=np.datetime64("2020-01-03"), **kwargs
@@ -288,3 +248,59 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5")
         out_path = path / (f"{get_default_patch_name(patch)}.{extention}")
         patch.io.write(out_path, file_format=file_format)
     return path
+
+
+@compose_docstring(examples=", ".join(list(EXAMPLE_PATCHES)))
+def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
+    """
+    Load an example Patch.
+
+    Options are:
+    {examples}
+
+    Parameters
+    ----------
+    example_name
+        The name of the example to load. Options are:
+    **kwargs
+        Passed to the corresponding functions to generate data.
+
+    Raises
+    ------
+        UnknownExample if unregistered patch is requested.
+    """
+    if example_name not in EXAMPLE_PATCHES:
+        msg = (
+            f"No example patch registered with name {example_name} "
+            f"Registered example patches are {list(EXAMPLE_PATCHES)}"
+        )
+        raise UnknownExample(msg)
+    return EXAMPLE_PATCHES[example_name](**kwargs)
+
+
+@compose_docstring(examples=", ".join(list(EXAMPLE_SPOOLS)))
+def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
+    """
+    Load an example Spool.
+
+    Options are:
+    {examples}
+
+    Parameters
+    ----------
+    example_name
+        The name of the example to load. Options are:
+    **kwargs
+        Passed to the corresponding functions to generate data.
+
+    Raises
+    ------
+        UnknownExample if unregistered patch is requested.
+    """
+    if example_name not in EXAMPLE_SPOOLS:
+        msg = (
+            f"No example spool registered with name {example_name} "
+            f"Registered example spools are {list(EXAMPLE_SPOOLS)}"
+        )
+        raise UnknownExample(msg)
+    return EXAMPLE_SPOOLS[example_name](**kwargs)
