@@ -5,7 +5,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import PatchAttributeError, PatchDimError
-from dascore.utils.patch import _merge_patches
+from dascore.utils.patch import _merge_patches, get_dim_value_from_kwargs
 
 
 @dc.patch_function(required_dims=("time", "distance"))
@@ -121,3 +121,13 @@ class TestMergePatches:
 
         with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
             merge_patches(random_patch)
+
+
+class TestGetDimValueFromKwargs:
+    """Tests for getting dimensional values."""
+
+    def test_raises_no_overlap(self, random_patch):
+        """Test that an exception is raised when key doesn't exist."""
+        kwargs = {}
+        with pytest.raises(PatchDimError):
+            get_dim_value_from_kwargs(random_patch, kwargs)
