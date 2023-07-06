@@ -36,7 +36,7 @@ class TestReadTerra15V5:
     def test_coord_attr_time_equal(self, terra15_v5_patch):
         """The time reported in the attrs and coords should match"""
         attr_time = terra15_v5_patch.attrs["time_max"]
-        coord_time = terra15_v5_patch.coords["time"].max()
+        coord_time = terra15_v5_patch.coords.coord_map["time"].max()
         assert attr_time == coord_time
 
     def test_read_with_limits(self, terra15_v5_patch, terra15_v5_path):
@@ -65,8 +65,10 @@ class TestReadTerra15V5:
         assert attrs["time_max"] == coords["time"].max()
         # since we use floats sometimes this are a little off.
         assert (attrs["time_max"] - t2) < (attrs["d_time"] / 4)
-        assert attrs["distance_min"] == coords["distance"].min() == d1
-        assert attrs["distance_max"] == coords["distance"].max() == d2
+        assert np.isclose(attrs["distance_min"], d1)
+        assert np.isclose(coords["distance"].min(), d1)
+        assert np.isclose(attrs["distance_max"], d2)
+        assert np.isclose(coords["distance"].max(), d2)
 
     def test_no_arrays_in_attrs(self, terra15_das_patch):
         """

@@ -88,15 +88,6 @@ def terra15_das_example_path():
     return out
 
 
-@pytest.fixture(scope="session")
-@register_func(SPOOL_FIXTURES)
-def terra15_das_unfinished_path() -> Path:
-    """Return the spool of Terra15 Das Array"""
-    out = fetch("terra15_das_unfinished.hdf5")
-    assert out.exists()
-    return out
-
-
 @pytest.fixture(scope="class")
 def terra15_v5_path():
     """Get the path to terra15 V5 file, download if not cached."""
@@ -133,13 +124,6 @@ def idas_h5_example_path():
     return out
 
 
-@pytest.fixture()
-@register_func(SPOOL_FIXTURES)
-def terra15_das_spool(terra15_das_example_path) -> SpoolType:
-    """Return the spool of Terra15 Das Array"""
-    return read(terra15_das_example_path, file_format="terra15")
-
-
 # --- Patch fixtures
 
 
@@ -149,7 +133,7 @@ def terra15_das_patch(terra15_das_example_path) -> Patch:
     """Read the terra15 data, return contained DataArray"""
     out = read(terra15_das_example_path, "terra15")[0]
     attr_time = out.attrs["time_max"]
-    coord_time = out.coords["time"].max()
+    coord_time = out.coords.coord_map["time"].max()
     assert attr_time == coord_time
     return out
 
@@ -183,7 +167,8 @@ def random_patch() -> Patch:
 @register_func(PATCH_FIXTURES)
 def random_patch_with_lat_lon(random_patch):
     """Get a random patch with added lat/lon coordinates."""
-    return dc.get_example_patch("random_patch_with_lat_lon")
+    out = dc.get_example_patch("random_patch_with_lat_lon")
+    return out
 
 
 @pytest.fixture(scope="class")
@@ -204,13 +189,17 @@ def event_patch_1():
     return dc.get_example_patch("example_event_1")
 
 
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def wacky_dim_patch():
+    """Fetch event patch 1."""
+    return dc.get_example_patch("wacky_dim_coords_patch")
+
+
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)
 def patch(request):
     """A meta-fixtures for collecting all patches used in testing."""
     return request.getfixturevalue(request.param)
-
-
-# --- Spool setup fixtures
 
 
 @pytest.fixture(scope="class")
@@ -253,6 +242,22 @@ def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
 
 
 # --- Spool fixtures
+
+
+@pytest.fixture()
+@register_func(SPOOL_FIXTURES)
+def terra15_das_spool(terra15_das_example_path) -> SpoolType:
+    """Return the spool of Terra15 Das Array"""
+    return read(terra15_das_example_path, file_format="terra15")
+
+
+@pytest.fixture(scope="session")
+@register_func(SPOOL_FIXTURES)
+def terra15_das_unfinished_path() -> Path:
+    """Return the spool of Terra15 Das Array"""
+    out = fetch("terra15_das_unfinished.hdf5")
+    assert out.exists()
+    return out
 
 
 @pytest.fixture(scope="session")
@@ -312,7 +317,7 @@ def diverse_directory_spool(diverse_spool_directory):
 @register_func(SPOOL_FIXTURES)
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
-    out = DirectorySpool(two_patch_directory)
+    out = DirectorySpool(two_patch_directory).update()
     return out.update()
 
 
@@ -337,6 +342,36 @@ def memory_spool_dim_1_patches():
         length=10,
         starttime="2023-06-13T15:38:00.49953408",
     )
+    return spool
+
+
+@pytest.fixture(scope="class")
+@register_func(SPOOL_FIXTURES)
+def all_examples_spool(terra15_das_example_path):
+    """
+    Create a spool from all the examples.
+    """
+    parent = terra15_das_example_path.parent
+    spool = dc.spool(parent)
+    try:
+        spool = spool.update()
+    except Exception:  # noqa
+        spool.indexer.index_path.unlink()  # delete index if problems found
+        spool = spool.update()  # then re-index
+    return spool
+
+
+@pytest.fixture(scope="class")
+@register_func(SPOOL_FIXTURES)
+def memory_spool_small_dt_differences(random_spool):
+    """Create a memory spool with slightly different d_times"""
+    out = []
+    for num, patch in enumerate(random_spool):
+        dt = patch.attrs.d_time + num * np.timedelta64(1, "ns")
+        new = patch.update_attrs(d_time=dt)
+        out.append(new)
+    spool = dc.spool(out)
+    assert len(out) == len(spool)
     return spool
 
 

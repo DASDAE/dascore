@@ -73,7 +73,7 @@ def _array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
         if not array.shape:  # dealing with degenerate (0-D( array
             out = np.datetime64(array)
         else:
-            out = array
+            out = array.astype("datetime64[ns]")
     # dealing with numerical data
     elif not np.issubdtype(array.dtype, np.datetime64) and np.isreal(array[0]):
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -181,8 +181,8 @@ def _series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
 
 @to_timedelta64.register(np.timedelta64)
 def _pass_time_delta(time_delta):
-    """simply return the time delta."""
-    return to_timedelta64(time_delta / np.timedelta64(1, "s"))
+    """simply return the time delta as ns precision."""
+    return time_delta.astype("<m8[ns]")
 
 
 @to_timedelta64.register(pd.Timedelta)
@@ -327,7 +327,7 @@ def is_timedelta64(obj) -> bool:
     """
     Return True if object is a timedelta64 (or equivalent) or an array of such.
     """
-    if isinstance(obj, np.datetime64):
+    if isinstance(obj, np.timedelta64):
         return True
     if isinstance(obj, (np.ndarray, list, tuple, pd.Series)):
         if np.issubdtype(np.array(obj).dtype, np.timedelta64):

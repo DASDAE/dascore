@@ -29,8 +29,20 @@ class PatchError(DASCoreError):
     """Parent class for more specific Patch Errors."""
 
 
-class PatchCoordError(ValueError, PatchError):
-    """Raised when something is wrong with a Patch's coordinates."""
+class CoordError(ValueError, PatchError):
+    """Raised when something is wrong with a Coordinate."""
+
+
+class CoordMergeError(CoordError):
+    """Raised when something is wrong with requested merge operation."""
+
+
+class CoordSortError(CoordError):
+    """Raised when coordinates cannot be sorted."""
+
+
+class CoordDataError(CoordError):
+    """Raised when the data shape doesn't match the coordinates."""
 
 
 class PatchDimError(ValueError, PatchError):
@@ -71,3 +83,11 @@ class MissingOptionalDependency(ImportError, DASCoreError):
 
 class InvalidSpoolError(ValueError, DASCoreError):
     """Raised when something is wrong with a spool."""
+
+
+class UnitError(ValueError, DASCoreError):
+    """Raised when an issue is encountered with unit handling."""
+
+
+class AttributeMergeError(ValueError, DASCoreError):
+    """Raised when something is wrong with combining attributes."""

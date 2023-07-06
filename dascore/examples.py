@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Sequence, Union
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.exceptions import UnknownExample
+from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 from dascore.utils.patch import get_default_patch_name
@@ -17,65 +19,32 @@ EXAMPLE_PATCHES = {}
 EXAMPLE_SPOOLS = {}
 
 
-def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
-    """
-    Load an example Patch.
-
-    Parameters
-    ----------
-    example_name
-        The name of the example to load.
-    **kwargs
-        Passed to the corresponding functions to generate data.
-
-    Raises
-    ------
-        UnknownExample if unregistered patch is requested.
-
-    """
-    if example_name not in EXAMPLE_PATCHES:
-        msg = (
-            f"No example patch registered with name {example_name} "
-            f"Registered example patches are {list(EXAMPLE_PATCHES)}"
-        )
-        raise UnknownExample(msg)
-    return EXAMPLE_PATCHES[example_name](**kwargs)
-
-
-def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
-    """
-    Load an example spool.
-
-    kwargs are passed to the corresponding functions to generate data.
-    """
-    if example_name not in EXAMPLE_SPOOLS:
-        msg = (
-            f"No example spool registered with name {example_name} "
-            f"Registered example spools are {list(EXAMPLE_SPOOLS)}"
-        )
-        raise UnknownExample(msg)
-    return EXAMPLE_SPOOLS[example_name](**kwargs)
-
-
 @register_func(EXAMPLE_PATCHES, key="random_das")
 def _random_patch(
+    *,
     starttime="2017-09-18",
+    start_distance=0,
     network="",
     station="",
     tag="random",
     shape=(300, 2_000),
     d_time=to_timedelta64(1 / 250),
     d_distance=1,
+    time_array=None,
+    dist_array=None,
 ):
     """
     Generate a random DAS Patch.
     """
+    # get input data
     rand = np.random.RandomState(13)
     array = rand.random(shape)
-    t1 = np.datetime64(starttime)
+    # create attrs
+    t1 = np.atleast_1d(np.datetime64(starttime))
+    d1 = np.atleast_1d(start_distance)
     attrs = dict(
         d_distance=d_distance,
-        d_time=d_time,
+        d_time=to_timedelta64(d_time),
         category="DAS",
         time_min=t1,
         network=network,
@@ -84,12 +53,33 @@ def _random_patch(
         time_units="s",
         distance_units="m",
     )
+    # create coords
+    time_array = np.arange(array.shape[1]) if time_array is None else time_array
+    dist_array = np.arange(array.shape[0]) if dist_array is None else dist_array
     coords = dict(
-        distance=np.arange(array.shape[0]) * attrs["d_distance"],
-        time=np.arange(array.shape[1]) * attrs["d_time"],
+        distance=d1 + dist_array * attrs["d_distance"],
+        time=t1 + time_array * attrs["d_time"],
     )
+    # assemble and output.
     out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
-    return dc.Patch(**out)
+    patch = dc.Patch(**out)
+    return patch
+
+
+@register_func(EXAMPLE_PATCHES, key="wacky_dim_coords_patch")
+def _wacky_dim_coord_patch():
+    """Creates a patch with one Monotonic and one Array coord."""
+    shape = (100, 1_000)
+    # distance is neither monotonic nor evenly sampled.
+    dist_ar = np.random.random(100) + np.arange(100) * 0.3
+    # time is monotonic, not evenly sampled.
+    time_ar = np.cumsum(np.random.random(1_000))
+    patch = _random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
+    # check attrs
+    attrs = patch.attrs
+    assert pd.isnull(attrs.d_time)
+    assert pd.isnull(attrs.d_distance)
+    return patch
 
 
 @register_func(EXAMPLE_PATCHES, key="sin_wav")
@@ -258,3 +248,59 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5")
         out_path = path / (f"{get_default_patch_name(patch)}.{extention}")
         patch.io.write(out_path, file_format=file_format)
     return path
+
+
+@compose_docstring(examples=", ".join(list(EXAMPLE_PATCHES)))
+def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
+    """
+    Load an example Patch.
+
+    Options are:
+    {examples}
+
+    Parameters
+    ----------
+    example_name
+        The name of the example to load. Options are:
+    **kwargs
+        Passed to the corresponding functions to generate data.
+
+    Raises
+    ------
+        UnknownExample if unregistered patch is requested.
+    """
+    if example_name not in EXAMPLE_PATCHES:
+        msg = (
+            f"No example patch registered with name {example_name} "
+            f"Registered example patches are {list(EXAMPLE_PATCHES)}"
+        )
+        raise UnknownExample(msg)
+    return EXAMPLE_PATCHES[example_name](**kwargs)
+
+
+@compose_docstring(examples=", ".join(list(EXAMPLE_SPOOLS)))
+def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
+    """
+    Load an example Spool.
+
+    Options are:
+    {examples}
+
+    Parameters
+    ----------
+    example_name
+        The name of the example to load. Options are:
+    **kwargs
+        Passed to the corresponding functions to generate data.
+
+    Raises
+    ------
+        UnknownExample if unregistered patch is requested.
+    """
+    if example_name not in EXAMPLE_SPOOLS:
+        msg = (
+            f"No example spool registered with name {example_name} "
+            f"Registered example spools are {list(EXAMPLE_SPOOLS)}"
+        )
+        raise UnknownExample(msg)
+    return EXAMPLE_SPOOLS[example_name](**kwargs)

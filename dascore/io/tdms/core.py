@@ -4,23 +4,13 @@ IO module for reading Silixa's TDMS DAS data format.
 from pathlib import Path
 from typing import List, Optional, Union
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.schema import PatchFileSummary
 from dascore.io.core import FiberIO
-from dascore.utils.time import to_datetime64
 
-from .utils import (
-    _get_data,
-    _get_data_node,
-    _get_default_attrs,
-    _get_distance_array,
-    _get_time_array,
-    _get_version_str,
-)
+from .utils import _get_data, _get_data_node, _get_default_attrs, _get_version_str
 
 
 class TDMSFormatterV4713(FiberIO):
@@ -73,39 +63,23 @@ class TDMSFormatterV4713(FiberIO):
     ) -> dc.BaseSpool:
         """
         Read a silixa tdms file, return a DataArray.
-
         """
-
         with open(path, "rb") as tdms_file:
-            # get time array. If an input isn't provided for time we return everything
-            if time is None:
-                time = (None, None)
-            time = tuple(to_datetime64(x) for x in time)
-
             # get all data, total amount of samples and associated attributes
-            data_node, channel_length, attrs = _get_data_node(
+            data_node, channel_length, attrs_full = _get_data_node(
                 tdms_file, LEAD_IN_LENGTH=28
             )
-            # time_max scanned in attributes is updated after reading data
-            attrs["time_max"] = attrs["time_min"] + np.timedelta64(
-                int(1000 * channel_length * attrs["d_time"]), "ms"
-            )
-            # get time and distance array.
-            time_ar = _get_time_array(tdms_file=None, attrs=attrs)
-            dist_ar = _get_distance_array(tdms_file=None, attrs=attrs)
-
-            # Get data in distance and time requested and assoociated time
+            attrs = _get_default_attrs(tdms_file, attrs_full)
+            # get time and distance coordinates.
+            time_coord = attrs_full["_time_coord"]
+            dist_coord = attrs_full["_distance_coord"]
+            # Get data in distance and time requested and associated time
             # and distance arrays
-            data, tar, dar = _get_data(time, distance, time_ar, dist_ar, data_node)
+            data, tar, dar = _get_data(
+                time, distance, time_coord, dist_coord, data_node
+            )
             dims = ("time", "distance")
             _coords = {"time": tar, "distance": dar}
-            attrs = _get_default_attrs(tdms_file, attrs)
-
             # Update time and distance attributes to match requested parameters
-            attrs["time_min"] = tar.min()
-            attrs["time_max"] = tar.max()
-            attrs["distance_min"] = dar.min()
-            attrs["distance_max"] = dar.max()
-            # get slices of data and read
             patch = Patch(data=data, coords=_coords, attrs=attrs, dims=dims)
             return dc.spool(patch)

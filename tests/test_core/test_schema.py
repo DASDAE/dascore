@@ -2,7 +2,8 @@
 import pydantic
 import pytest
 
-from dascore.core.schema import PatchAttrs, SimpleValidator
+from dascore.core.schema import PatchAttrs
+from dascore.utils.models import SimpleValidator
 
 
 @pytest.fixture(scope="class")
@@ -59,6 +60,15 @@ class TestSummarySchema:
         docstr = PatchAttrs.__doc__
         # data_type is one of the parameters inserted into docstring.
         assert "data_type" in docstr
+
+    def test_from_dict(self, random_attrs):
+        """Test new method for more intuitive init."""
+        out = PatchAttrs.from_dict(random_attrs)
+        assert out == random_attrs
+        new_dict = dict(random_attrs)
+        new_dict["data_units"] = "m/s"
+        out = PatchAttrs.from_dict(new_dict)
+        assert isinstance(out, PatchAttrs)
 
 
 class TestSchemaIsDictLike:

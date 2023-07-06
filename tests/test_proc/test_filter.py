@@ -5,11 +5,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import dascore
-from dascore.exceptions import FilterValueError
+import dascore as dc
+from dascore.exceptions import CoordDataError, FilterValueError, UnitError
 
 
-class TestFilterChecks:
+class TestPassFilterChecks:
     """Test that bad filter checks raise appropriate errors."""
 
     def test_no_kwargs_raises(self, random_patch):
@@ -35,47 +35,117 @@ class TestFilterChecks:
             _ = random_patch.pass_filter(time=[10, 1])
 
     def test_bad_low_param(self, random_patch):
-        """Ensure a low parameter above niquest raises."""
+        """Ensure a low parameter above nyquist raises."""
         with pytest.raises(FilterValueError, match="possible filter bounds"):
             _ = random_patch.pass_filter(time=[1000, None])
 
     def test_bad_high_param(self, random_patch):
-        """Ensure a high parameter above niquest raises."""
+        """Ensure a high parameter above nyquist raises."""
         with pytest.raises(FilterValueError, match="possible filter bounds"):
             _ = random_patch.pass_filter(distance=[None, 10])
 
     def test_filt_param_less_than_0(self, random_patch):
-        """Ensure a high parameter above niquest raises."""
+        """Ensure a high parameter above nyquist raises."""
         with pytest.raises(FilterValueError, match="possible filter bounds"):
             _ = random_patch.pass_filter(distance=[None, -10])
 
+    def test_bad_units_error(self, random_patch):
+        """Ensure incompatible units raise an Error."""
+        m = dc.units.get_quantity("m")
+        with pytest.raises(UnitError):
+            random_patch.pass_filter(time=(1 * m, 10 * m))
 
-class TestFilterBasics:
+    def test_units_dont_match(self, random_patch):
+        """Tests for Units matching."""
+        sec = dc.get_quantity("s")
+        m = dc.get_quantity("m")
+        filt = (1 * m, 10 * sec)
+        match = "Units must match"
+        with pytest.raises(UnitError, match=match):
+            random_patch.pass_filter(time=filt)
+
+    def test_high_time_raises(self, random_patch):
+        """Ensure too high freq band in time axis raises."""
+        nyquest = 0.5 / (random_patch.attrs.d_time / dc.to_timedelta64(1))
+        Hz = dc.get_quantity("Hz")
+        filt = (1 * Hz, nyquest * 1.1 * Hz)
+        match = "possible filter bounds are"
+        with pytest.raises(FilterValueError, match=match):
+            random_patch.pass_filter(time=filt)
+
+
+class TestPassFilter:
     """Simple tests to make sure filter logic runs."""
 
     def test_time_bandpass_runs(self, random_patch):
         """Ensure filtering along time_axis works"""
         out = random_patch.pass_filter(time=(10, 100))
-        assert isinstance(out, dascore.Patch)
+        assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
     def test_time_lowpass_runs(self, random_patch):
         """Ensure stopfilter on time works."""
         out = random_patch.pass_filter(time=(None, 100.22))
-        assert isinstance(out, dascore.Patch)
+        assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
     def test_time_highpass_runs(self, random_patch):
         """Ensure a highpass on time runs"""
         out = random_patch.pass_filter(time=(10.2, None))
-        assert isinstance(out, dascore.Patch)
+        assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
     def test_apply_distance_filter(self, random_patch):
         """Apply bandpass along distance dimension."""
         out = random_patch.pass_filter(distance=(0.1, 0.2))
-        assert isinstance(out, dascore.Patch)
+        assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
+
+    def test_uneven_sampling_raises(self, wacky_dim_patch):
+        """A nice error message should be raised if the samples arent even."""
+        match = "is not evenly sampled"
+        with pytest.raises(CoordDataError, match=match):
+            wacky_dim_patch.pass_filter(time=(10, 100))
+
+    def test_specify_units_simple(self, random_patch):
+        """Ensure units can be specified in patch arguments."""
+        Hz = dc.units.get_quantity("Hz")
+        out1 = random_patch.pass_filter(time=(1 * Hz, 10 * Hz))
+        out2 = random_patch.pass_filter(time=(1, 10))
+        assert out1.equals(out2)
+
+    def test_specify_units_inverse(self, random_patch):
+        """Passing 1/Hz (eg seconds) should also work."""
+        s = dc.units.get_quantity("s")
+        out1 = random_patch.pass_filter(time=(1 * s, 10 * s))
+        out2 = random_patch.pass_filter(time=(0.1, 1))
+        assert out1.equals(out2)
+
+    def test_misc_units(self, random_patch):
+        """Catchall for other unit tests."""
+        patch = random_patch
+        m, ft = dc.units.get_unit("m"), dc.units.get_unit("ft")
+        Hz = dc.units.get_unit("Hz")
+        # Filter from 1 Hz to 10 Hz in time dimension
+        patch.pass_filter(time=(1 * Hz, 10 * Hz))
+        # Filter wavelengths 50m to 100m
+        patch.pass_filter(distance=(50 * m, 100 * m))
+        # filter wavelengths less than 200 ft
+        patch.pass_filter(distance=(200 * ft, None))
+
+    def test_one_unit_raises(self, random_patch):
+        """When only one unit is specified it should raise."""
+        match = "Both inputs must be "
+        s = dc.units.get_quantity("1")
+        with pytest.raises(UnitError, match=match):
+            random_patch.pass_filter(time=(1 * s, 10 * s))
+
+    def test_ellipses(self, random_patch):
+        """Ellipses should work for filtering."""
+        p = random_patch
+        p.pass_filter(time=(..., 20))
+        assert p.pass_filter(time=(None, 20)) == p.pass_filter(time=(..., 20))
+        assert p.pass_filter(time=(10, None)) == p.pass_filter(time=(10, ...))
 
 
 class TestSobelFilter:
@@ -109,7 +179,7 @@ class TestSobelFilter:
     def test_sobel_runs(self, random_patch):
         """Ensure Sobel filter works with default params."""
         out = random_patch.sobel_filter(dim="time")
-        assert isinstance(out, dascore.Patch)
+        assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
 
@@ -119,17 +189,17 @@ class TestMedianFilter:
     def test_median_filter_default(self, random_patch):
         """apply default values"""
         out = random_patch.median_filter()
-        assert isinstance(out, dascore.Patch)
+        assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
     def test_median_filter_user_single_value(self, random_patch):
         """apply default values"""
         out = random_patch.median_filter(kernel_size=5)
-        assert isinstance(out, dascore.Patch)
+        assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
     def test_median_filter_user_multi_value(self, random_patch):
         """apply default values"""
         out = random_patch.median_filter(kernel_size=(5, 3))
-        assert isinstance(out, dascore.Patch)
+        assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))

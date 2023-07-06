@@ -3,10 +3,10 @@ A few mappings that might be useful.
 
 We can't simply use types.MappingProxyType because it can't be pickled.
 """
-import collections.abc
+from collections.abc import Mapping as ABCMap
 
 
-class FrozenDict(collections.abc.Mapping):
+class FrozenDict(ABCMap):
     """
     An immutable wrapper around dictionaries that implements the complete
     :py:class:`collections.Mapping` interface. It can be used as a drop-in

@@ -6,17 +6,19 @@ import weakref
 import numpy as np
 import pandas as pd
 import pytest
+from rich.text import Text
 
-import dascore
+import dascore as dc
 from dascore.core import Patch
-from dascore.utils.time import to_timedelta64
+from dascore.core.coords import CoordRange
 
 
 def get_simple_patch() -> Patch:
     """
     Return a small simple array for memory testing.
 
-    Note: This cant be a fixture as pytest holds a reference.
+    Note: This cant be a fixture as pytest seems to hold a reference,
+    even for function scoped outputs.
     """
     attrs = {"d_time": 1}
     pa = Patch(
@@ -39,7 +41,7 @@ class TestInit:
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 200))
         attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
-        time_deltas = to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
+        time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
         coords = dict(
             distance=np.arange(array.shape[0]) * attrs["dx"],
             time=self.time1 + time_deltas,
@@ -53,10 +55,11 @@ class TestInit:
         """Create a patch with 'complex' (non-dimensional) coords."""
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 100))
-        attrs = dict(dx=1, d_time=1 / 250.0, category="DAS", id="test_data1")
-        time_deltas = to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
+        dt = 1 / 250.0
+        attrs = dict(d_distance=1, d_time=dt, category="DAS", id="test_data1")
+        time_deltas = dc.to_timedelta64(np.arange(array.shape[1]) * attrs["d_time"])
         coords = dict(
-            distance=np.arange(array.shape[0]) * attrs["dx"],
+            distance=np.arange(array.shape[0]) * attrs["d_distance"],
             time=self.time1 + time_deltas,
             latitude=("distance", array[:, 0]),
             quality=(("distance", "time"), array),
@@ -64,6 +67,30 @@ class TestInit:
         dims = ("distance", "time")
         out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
         return Patch(**out)
+
+    @pytest.fixture(scope="class")
+    def patch_conflicting_attrs_coords(self):
+        """Patch for testing conflicting coordinates/attributes"""
+        array = np.random.random((10, 10))
+        # create attrs, these should all get overwritten by coords.
+        attrs = dict(
+            d_distance=10,
+            d_time=dc.to_timedelta64(1),
+            distance_min=1000,
+            distance_max=2002,
+            time_min=dc.to_datetime64("2017-01-01"),
+            time_max=dc.to_datetime64("2019-01-01"),
+        )
+        # create coords
+        coords = dict(
+            time=dc.to_datetime64(np.cumsum(np.random.random(10))),
+            distance=np.random.random(10),
+        )
+        # assemble and output.
+        dims = ("distance", "time")
+        out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
+        patch = dc.Patch(**out)
+        return patch
 
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
         """
@@ -77,7 +104,7 @@ class TestInit:
         Ensure the time_min and time_max attrs can be inferred from coord time.
         """
         patch = random_dt_coord
-        time = patch.coords["time"].max()
+        time = patch.coords.coord_map["time"].max()
         assert patch.attrs["time_max"] == time
 
     def test_init_from_array(self, random_patch):
@@ -93,26 +120,12 @@ class TestInit:
         """The min/max values of the distance attrs should have been populated."""
         attrs = random_patch.attrs
         expected_filled_in = [
-            x for x in list(attrs.__fields__) if x.startswith("distance")
+            x
+            for x in list(attrs.__fields__)
+            if x.startswith("distance") and "units" not in x
         ]
         for attr in expected_filled_in:
             assert not pd.isnull(attrs[attr])
-
-    def test_dt_is_datetime64(self, random_patch):
-        """Ensure dt gets changed into timedelta64."""
-        d_time = random_patch.attrs["d_time"]
-        assert isinstance(d_time, np.timedelta64)
-        # test d_time from update_attrs
-        new = random_patch.update_attrs(d_time=10)
-        assert new.attrs["d_time"] == to_timedelta64(10)
-        # test d_time in new Patch
-        attrs = dict(random_patch.attrs)
-        attrs["d_time"] = to_timedelta64(10)
-        coords = random_patch.coords
-        new = dascore.Patch(
-            data=random_patch.data, attrs=attrs, coords=coords, dims=list(coords)
-        )
-        assert new.attrs["d_time"] == to_timedelta64(10)
 
     def test_had_default_attrs(self, patch):
         """Test that all patches used in the test suite have default attrs."""
@@ -151,6 +164,49 @@ class TestInit:
         with pytest.raises(ValueError, match="data, coords, and dims"):
             Patch(data=data)
 
+    def test_coords_from_1_element_array(self):
+        """Ensure CoordRange is still returned despite 1D array in time."""
+        patch = dc.get_example_patch("random_das", shape=(100, 1))
+        time_coord = patch.coords.coord_map["time"]
+        assert isinstance(time_coord, CoordRange)
+
+    def test_sin_wave_patch(self):
+        """Ensure the sin wave patch is consistent with its coord dims."""
+        # For some reason this combination can make coords with wrong shape.
+        patch = dc.examples.sin_wave_patch(
+            sample_rate=1000,
+            frequency=[200, 10],
+            channel_count=2,
+        )
+        assert patch.shape == patch.coords.shape == patch.data.shape
+        time_shape = patch.shape[patch.dims.index("time")]
+        assert time_shape == len(patch.coords["time"])
+        assert time_shape == len(patch.coords["time"])
+
+    def test_init_conflicting_coord_dims(self, patch_conflicting_attrs_coords):
+        """Test initing a patch which has conflicting info in coords/dims."""
+        patch = patch_conflicting_attrs_coords
+        coords = patch.coords.coord_map
+        attrs = patch.attrs
+        for name, coord in coords.items():
+            assert getattr(attrs, f"{name}_min") == coord.min()
+            assert getattr(attrs, f"{name}_max") == coord.max()
+            if pd.isnull(coord.step):
+                assert pd.isnull(getattr(attrs, f"d_{name}"))
+            else:
+                assert getattr(attrs, f"d_{name}") == coord.step
+
+    def test_init_no_coords(self, random_patch):
+        """Ensure a new patch can be inited from only attrs."""
+        attrs = random_patch.attrs
+        new = random_patch.__class__(attrs=attrs, data=random_patch.data)
+        assert isinstance(new, dc.Patch)
+
+    def test_init_with_patch(self, random_patch):
+        """Ensure a patch inited on a patch just returns a patch."""
+        new = dc.Patch(random_patch)
+        assert new == random_patch
+
 
 class TestNew:
     """Tests for `Patch.new` method."""
@@ -179,15 +235,42 @@ class TestNew:
         out_2 = patch.new(data=data, coords=coords_2)
         assert out_1 == out_2
 
+    def test_attrs_preserved_when_not_specified(self, random_patch):
+        """If attrs is not passed to new, old attrs should remain."""
+        pa = random_patch.update_attrs(network="bob", tag="2", station="10")
+        new_1 = pa.new(data=pa.data * 10)
+        assert new_1.attrs == pa.attrs
 
-class TestEmptyPatch:
-    """Tests for empty patch objects."""
+    def test_new_dims_renames_dims(self, random_patch):
+        """Ensure new can rename dimensions."""
+        dims = ("tom", "jerry")
+        out = random_patch.new(dims=dims)
+        assert out.dims == dims
+
+
+class TestDisplay:
+    """Tests for displaying patches."""
+
+    def test_str(self, patch):
+        """All patches should have str rep."""
+        out = str(patch)
+        assert isinstance(out, str)
+        assert len(out)
+
+    def test_rich(self, patch):
+        """Patches should also have rich representation."""
+        out = patch.__rich__()
+        assert isinstance(out, Text)
 
     def test_empty_patch_str(self):
         """An empty patch should have both a str and repr of nonzero length."""
         patch = Patch()
         assert len(str(patch))
         assert len(repr(patch))
+
+
+class TestEmptyPatch:
+    """Tests for empty patch objects."""
 
     def test_has_attrs(self):
         """An empty test patch should have attrs with null(ish) values."""
@@ -217,9 +300,9 @@ class TestEquals:
         assert not new.equals(random_patch)
 
     def test_coords_named_differently(self, random_patch):
-        """Ensure if the coords are not equal neither are the arrays."""
+        """Ensure if the coords are named differently patches are not equal."""
         dims = random_patch.dims
-        new_coords = {x: random_patch.coords[x] for x in random_patch.coords}
+        new_coords = dict(random_patch.coords)
         new_coords["bob"] = new_coords.pop(dims[-1])
         new_dims = tuple(list(dims)[:-1] + ["bob"])
         patch_2 = random_patch.new(coords=new_coords, dims=new_dims)
@@ -227,7 +310,7 @@ class TestEquals:
 
     def test_coords_not_equal(self, random_patch):
         """Ensure if the coords are not equal neither are the arrays."""
-        new_coords = {x: random_patch.coords[x] for x in random_patch.coords}
+        new_coords = dict(random_patch.coords)
         new_coords["distance"] = new_coords["distance"] + 10
         patch_2 = random_patch.new(coords=new_coords)
         assert not patch_2.equals(random_patch)
@@ -236,6 +319,7 @@ class TestEquals:
         """Ensure if the attributes are not equal the arrays are not equal"""
         attrs = dict(random_patch.attrs)
         attrs["d_time"] = attrs["d_time"] - np.timedelta64(10, "s")
+        attrs.pop("time_max")  # need to remove time for this to be valid.
         patch2 = random_patch.new(attrs=attrs)
         assert not patch2.equals(random_patch)
 
@@ -272,10 +356,22 @@ class TestEquals:
         patch2 = random_patch.new(attrs=attrs2)
         assert patch1.equals(patch2)
 
-    def test_transposed_patches_equal(self, random_patch):
-        """Transposed patches are still equal."""
+    def test_transposed_patches_not_equal(self, random_patch):
+        """Transposed patches are not considered equal."""
         transposed = random_patch.transpose()
-        assert random_patch.equals(transposed)
+        assert transposed.dims != random_patch.dims
+        assert not random_patch.equals(transposed)
+
+    def test_one_coord_not_equal(self, wacky_dim_patch):
+        """Ensure coords being close but not equals fails equality."""
+        patch = wacky_dim_patch
+        coords = patch.coords
+        coord_array = np.array(coords.coord_map["distance"].values)
+        coord_array[20:30] *= 0.9
+        assert not np.allclose(coord_array, coords["distance"])
+        new_coords = coords.update_coords(distance=coord_array)
+        new = patch.new(coords=new_coords)
+        assert new != patch
 
 
 class TestTranspose:
@@ -311,20 +407,38 @@ class TestUpdateAttrs:
         assert "bob" not in dict(random_patch.attrs)
         assert random_patch.attrs == old_attrs
 
-    def test_update_starttime(self, random_patch):
+    def test_update_starttime1(self, random_patch):
         """Ensure coords are updated with attrs."""
         t1 = np.datetime64("2000-01-01")
         pa = random_patch.update_attrs(time_min=t1)
         assert pa.attrs["time_min"] == t1
         assert pa.coords["time"].min() == t1
 
-    def test_update_startttime(self, random_patch):
+    def test_update_startttime2(self, random_patch):
         """Updating start time should update end time as well."""
         duration = random_patch.attrs["time_max"] - random_patch.attrs["time_min"]
         new_start = np.datetime64("2000-01-01")
         pa1 = random_patch.update_attrs(time_min=str(new_start))
         assert pa1.attrs["time_min"] == new_start
         assert pa1.attrs["time_max"] == new_start + duration
+
+    def test_dt_is_datetime64(self, random_patch):
+        """Ensure dt gets changed into timedelta64."""
+        d_time = random_patch.attrs["d_time"]
+        assert isinstance(d_time, np.timedelta64)
+        new1 = random_patch.update_attrs(d_time=10)
+        assert new1.attrs["d_time"] == dc.to_timedelta64(10)
+
+    def test_update_non_sorted_coord(self, wacky_dim_patch):
+        """Ensure update attrs updates non-sorted coordinates."""
+        # test updating dist max
+        pa = wacky_dim_patch.update_attrs(distance_max=10)
+        assert pa.attrs.distance_max == 10
+        assert not np.any(pd.isnull(pa.coords["distance"]))
+        # test update dist min
+        pa = wacky_dim_patch.update_attrs(distance_min=10)
+        assert pa.attrs.distance_min == 10
+        assert not np.any(pd.isnull(pa.coords["distance"]))
 
 
 class TestSqueeze:
@@ -344,10 +458,10 @@ class TestReleaseMemory:
         """
         Ensure a single patch is gc'ed when it leaves scope.
         """
-        simple_array = get_simple_patch()
-        wr = weakref.ref(simple_array.data)
+        simple_patch = get_simple_patch()
+        wr = weakref.ref(simple_patch.data)
         # delete pa and ensure the array was collected.
-        del simple_array
+        del simple_patch
         assert wr() is None
 
     def test_decimated_patch(self):
@@ -409,8 +523,8 @@ class TestPipe:
         assert out.attrs["keyword_arg"] == "bob"
 
 
-class TestAddCoords:
-    """Tests for adding non-standard coords to patches."""
+class TestCoords:
+    """Test various things about patch coordinates."""
 
     @pytest.fixture(scope="class")
     def random_patch_with_lat(self, random_patch):
@@ -428,7 +542,7 @@ class TestAddCoords:
     def test_add_single_dim_two_coord2(self, random_patch_with_lat_lon):
         """Ensure multiple coords can be added to patch."""
         out2 = random_patch_with_lat_lon
-        assert {"latitude", "longitude"}.issubset(set(out2.coords))
+        assert {"latitude", "longitude"}.issubset(set(out2.coords.coord_map))
         assert out2.coords["longitude"].shape
         assert out2.coords["latitude"].shape
 
@@ -438,3 +552,12 @@ class TestAddCoords:
         assert "quality" in out1.coords
         assert out1.coords["quality"].shape
         assert np.all(out1.coords["quality"] == 1)
+
+    def test_coord_time_narrow_select(self, multi_dim_coords_patch):
+        """Ensure the coord type doesn't change in narrow slice."""
+        patch = multi_dim_coords_patch
+        time = patch.coords.coord_map["time"]
+        new = patch.select(time=(time.min(), time.min()))
+        assert 1 in new.shape
+        new_coords = new.coords.coord_map
+        assert isinstance(new_coords["time"], CoordRange)

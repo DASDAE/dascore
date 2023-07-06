@@ -4,6 +4,7 @@ Tests for reading silixa TDMS file format.
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import dascore
@@ -82,8 +83,10 @@ class TestReadTDMS:
         attrs, coords = patch.attrs, patch.coords
         assert attrs["time_min"] == coords["time"].min() == t1
         assert attrs["time_max"] == coords["time"].max() == t2
-        assert attrs["distance_min"] == coords["distance"].min() == d1
-        assert attrs["distance_max"] == coords["distance"].max() == d2
+        assert np.isclose(attrs["distance_min"], d1)
+        assert np.isclose(coords["distance"].min(), d1)
+        assert np.isclose(attrs["distance_max"], d2)
+        assert np.isclose(coords["distance"].max(), d2)
 
 
 class TestGetFormatTDMS:

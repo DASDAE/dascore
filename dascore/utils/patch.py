@@ -1,13 +1,10 @@
 """
 Utilities for working with the Patch class.
 """
-import collections
-import copy
 import functools
 import inspect
-import re
+import sys
 import warnings
-from fnmatch import translate
 from typing import (
     Any,
     Callable,
@@ -22,34 +19,22 @@ from typing import (
 
 import numpy as np
 import pandas as pd
-import xarray as xr
 
 import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
+from dascore.core.coordmanager import merge_coord_managers
 from dascore.core.schema import PatchAttrs, PatchFileSummary
-from dascore.exceptions import PatchAttributeError, PatchDimError
-from dascore.utils.coords import Coords
+from dascore.exceptions import (
+    CoordDataError,
+    PatchAttributeError,
+    PatchDimError,
+)
 from dascore.utils.docs import compose_docstring, format_dtypes
-from dascore.utils.misc import append_func
-from dascore.utils.time import to_datetime64, to_timedelta64
+from dascore.utils.misc import all_diffs_close_enough, get_middle_value
+from dascore.utils.models import merge_models
+from dascore.utils.time import to_timedelta64
 
 attr_type = Union[Dict[str, Any], str, Sequence[str], None]
-
-
-def _shallow_copy(patch: PatchType) -> PatchType:
-    """
-    Shallow copy patch so data array, attrs, and history can be changed.
-
-    Note
-    ----
-    This is an internal function because Patch should be immutable with
-    the public APIs.
-    """
-    dar = patch._data_array.copy(deep=False)  # dont copy data and such
-    attrs = dict(dar.attrs)
-    attrs["history"] = list(attrs.get("history", []))
-    dar.attrs = attrs
-    return patch.__class__(dar)
 
 
 def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
@@ -201,8 +186,9 @@ def patch_function(
             out: PatchType = func(patch, *args, **kwargs)
             # attach history string. Consider something a bit less hacky.
             if hist_str and hasattr(out, "attrs"):
-                out = _shallow_copy(out)
-                out._data_array.attrs["history"].append(hist_str)
+                hist = list(out.attrs.history)
+                hist.append(hist_str)
+                out = out.update_attrs(history=hist)
             return out
 
         _func.func = func  # attach original function
@@ -222,216 +208,6 @@ def copy_attrs(attrs) -> dict:
     if "history" in out:
         out["history"] = list(out["history"])
     return out
-
-
-class _AttrsCoordsMixer:
-    """Class for handling complex interactions between attrs and coords."""
-
-    # a dict of {key: List[func]} for special handling of set attrs.
-    set_attr_funcs = collections.defaultdict(list)
-    # a dict of {key: func} for special handling of missing attributes.
-    missing_attr_funcs = {}
-    _missing_attr_keys = frozenset()
-    # a dict of {attr: (expected_type, func)}
-    _expected_types = dict(
-        d_time=(np.timedelta64, to_timedelta64),
-        time_min=(np.datetime64, to_datetime64),
-        time_max=(np.datetime64, to_datetime64),
-    )
-
-    def __init__(self, attrs, coords, dims):
-        """Init with attrs and coords"""
-        if not dims and coords:
-            dims = list(coords)
-        self.attrs = attrs if attrs is not None else {}
-        self.coords = Coords(coords)
-        self.dims = dims if dims is not None else ()
-        self._original_attrs = attrs
-        self._original_coords = coords
-        # fill missing values with default or implicit values
-        self._set_default_attrs()
-        self._set_attr_types()
-        self._condition_coords()
-        # infer any attr values from coordinates
-        self._update_attrs_from_coords(self._missing_attr_keys)
-
-    def update_attrs(self, **kwargs):
-        """
-        Update a coordinate.
-
-        Parameters
-        ----------
-        **kwargs
-            The coordinates to update.
-        """
-        for key, value in kwargs.items():
-            attr = self.copied_attrs
-            # convert types to those expected, mainly for converting times
-            # from strings or ints to np.datetime64 or np.timedelta64.
-            if key in self._expected_types:
-                expected_type, func = self._expected_types[key]
-                if not isinstance(value, expected_type):
-                    value = func(value)
-            attr[key] = value
-            # apply special processing for this key
-            for match_key in self._get_matching_patterns(self.set_attr_funcs, key):
-                match_dims = [x for x in self.dims if x in key]
-                for func in self.set_attr_funcs[match_key]:
-                    func(self, match_dims=match_dims)
-
-    def _get_matching_patterns(self, match_list, key):
-        """
-        Return any patterns that match key. Match list contains unix-style match
-        strings.
-        """
-        for match_str in list(match_list):
-            if re.match(translate(match_str), key):
-                yield match_str
-
-    @append_func(set_attr_funcs["*_min"])
-    def _update_max_from_min(self, match_dims=()):
-        """Update end coord based on new start coord."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            td = self._original_attrs[f"{dim}_max"] - self._original_attrs[f"{dim}_min"]
-            if not pd.isnull(td):
-                attrs = self.copied_attrs
-                attrs[f"{dim}_max"] = self.attrs[f"{dim}_min"] + td
-
-    @append_func(set_attr_funcs["*_min"])
-    def _update_coords_min(self, match_dims=()):
-        """Update coordinate for new min"""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            coord = self.coords.get(dim)
-            coord_min = self.attrs[f"{dim}_min"]
-            if coord is not None and np.min(coord) != coord_min:
-                td = coord - coord[0]
-                self.coords = self.coords.update(**{dim: coord_min + td})
-
-    @append_func(set_attr_funcs["*_max"])
-    def _update_min_from_max(self, match_dims=()):
-        """Update start based on new end."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            td = self._original_attrs[f"{dim}_max"] - self._original_attrs[f"{dim}_min"]
-            if not pd.isnull(td):
-                attrs = self.copied_attrs
-                attrs["time_min"] = self.attrs["time_max"] - td
-
-    @append_func(set_attr_funcs["*_max"])
-    def _update_coords_from_max(self, match_dims=()):
-        """Update coordinate for new start of dimension."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            coord = self.coords.get(dim, None)
-            time_max = self.attrs[f"{dim}_max"]
-            if coord is not None and np.max(coord) != time_max:
-                td = coord - coord[-1]
-                self.coords = self.coords.update(**{dim: time_max + td})
-
-    @append_func(set_attr_funcs["d_*"])
-    def _update_max_from_d(self, match_dims=()):
-        """Update the ending attribute from updating dimension sampling."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            coord = self.coords[dim]
-            attrs = self.copied_attrs
-            start = attrs.get(f"{dim}_min", None)
-            if start:
-                new_end = start + (len(coord) - 1) * attrs[f"d_{dim}"]
-                self.copied_attrs[f"{dim}_max"] = new_end
-
-    @append_func(set_attr_funcs["d_*"])
-    def _update_coords_from_d(self, match_dims=()):
-        """Update coordinates for new d_dim."""
-        if len(match_dims):
-            assert len(match_dims) == 1
-            dim = match_dims[0]
-            coord = self.coords.get(dim, None)
-            d_dim = self.copied_attrs[f"d_{dim}"]
-            start = self.copied_attrs.get(f"{dim}_min", None)
-            if coord is not None and start is not None:
-                new_coord = start + np.arange(len(coord)) * d_dim
-                self.coords = self.coords.update(**{dim: new_coord})
-
-    @functools.cached_property
-    def copied_attrs(self):
-        """Make a copy of the attrs before mutating."""
-        self.attrs = copy_attrs(self.attrs)
-        return self.attrs
-
-    @functools.cached_property
-    def copied_coords(self):
-        """Make a copy of the coords before mutating."""
-        # TODO I don't like having this deep copy but shallow still caused
-        return copy.deepcopy(self.coords)
-
-    def __call__(self, *args, **kwargs):
-        return PatchAttrs(**self.attrs), self.coords
-
-    def _set_default_attrs(self):
-        """Get the attribute dict, add required keys if not yet defined."""
-        # add default values if they are not in out or attrs yet
-        defaults = PatchAttrs.get_defaults()
-        defaults.update(self.attrs)
-        self.attrs = defaults
-
-    # --- Coordinate bits
-
-    def _update_attrs_from_coords(self, fill_keys=None):
-        """Fill in missing attributes that can be inferred."""
-        fill_keys = fill_keys if fill_keys else set(self.attrs)
-        # iterate each dimension, fill in missing values with data from coords
-        for dim in self.dims:
-            array = self.coords[dim]
-            # make sure its not an xarray thing
-            array = getattr(array, "values", array)
-            if f"{dim}_min" in fill_keys:
-                minval = np.min(array) if len(array) else np.NaN
-                self.copied_attrs[f"{dim}_min"] = minval
-            if f"{dim}_max" in fill_keys:
-                maxval = np.max(array) if len(array) else np.NaN
-                self.copied_attrs[f"{dim}_max"] = maxval
-        # add dims column
-        if not len(self.attrs["dims"]):
-            self.copied_attrs["dims"] = ",".join(self.dims)
-
-    def update_coords(self, **kwargs):
-        """Update the coordinates based on kwarg inputs."""
-        self.coords = self.coords.update(**kwargs)
-        self._condition_coords()
-        self._update_attrs_from_coords()
-
-    def _condition_coords(self):
-        """
-        Condition the coordinates before using them.
-
-        This is mainly to enforce common time conventions
-        """
-        coords = self.coords
-        if coords is None or (time := coords.get("time")) is None:
-            return
-        start_time = self.attrs["time_min"]
-        if pd.isnull(start_time):
-            start_time = to_datetime64(0)
-        # Convert non-datetime into time deltas
-        if not np.issubdtype(time.dtype, np.datetime64):
-            td = to_timedelta64(time)
-            time = start_time + td
-        self.coords = self.coords.update(time=time)
-
-    def _set_attr_types(self):
-        """Make sure time attrs are expected types"""
-        for key, (expected_type, func) in self._expected_types.items():
-            val = self.attrs[key]
-            if not isinstance(val, expected_type):
-                self.copied_attrs[key] = func(val)
 
 
 @compose_docstring(fields=PatchAttrs.__annotations__)
@@ -496,14 +272,14 @@ def merge_patches(
         example, prevent merging filtered and unfiltered data together.
     tolerance
         The upper limit of a gap to tolerate in terms of the sampling
-        along the desired dimension. E.G., the default value means any patches
+        along the desired dimension. e.g., the default value means any patches
         with gaps <= 1.5 * dt will be merged.
     """
     msg = (
-        "merge_patches is deprecated. Use spool.chunk instead."
-        "For example, to merge a list of patches you can use:"
+        "merge_patches is deprecated. Use spool.chunk instead. "
+        "For example, to merge a list of patches you can use: "
         "dascore.spool(patch_list).chunk(time=None) to merge on the time "
-        "dimension"
+        "dimension."
     )
     warnings.warn(msg, DeprecationWarning)
     return _merge_patches(patches, dim, check_history, tolerance)
@@ -542,25 +318,36 @@ def _merge_patches(
             patches = patches.assign(history=lambda x: x["history"].apply(str))
         return patches.sort_values(sort_names), sort_names, group_names
 
-    def _merge_compatible_patches(patch_df):
+    def _merge_trimmed_patches(trimmed_patches):
+        """Merge trimmed patches together."""
+        axis = trimmed_patches[0].dims.index(dim)
+        datas = [x.data for x in trimmed_patches]
+        coords = [x.coords for x in trimmed_patches]
+        attrs = [x.attrs for x in trimmed_patches]
+        new_array = np.concatenate(datas, axis=axis)
+        new_coord = merge_coord_managers(coords, dim=dim, snap_tolerance=tolerance)
+        new_attrs = merge_models(attrs, dim)
+        return dc.Patch(data=new_array, coords=new_coord, attrs=new_attrs)
+
+    def _merge_compatible_patches(patch_df, dim):
         """perform merging after patch compatibility has been confirmed."""
         has_overlap = patch_df["_dist_to_previous"] <= to_timedelta64(0)
-        overlap_start = patch_df[min_name] - patch_df["_dist_to_previous"]
-        # get data arrays
-        dars = [x._data_array for x in patch_df["patch"]]
-        dars = [
+        dist = patch_df["_dist_to_previous"] - df[f"d_{dim}"]
+        overlap_start = patch_df[min_name] - dist
+        patches = list(patch_df["patch"])
+        # this handles removing overlap in patches.
+        trimmed_patches = [
             _trim_or_fill(x, start) if needs_action else x
-            for x, start, needs_action in zip(dars, overlap_start, has_overlap)
+            for x, start, needs_action in zip(patches, overlap_start, has_overlap)
         ]
-        dar = xr.concat(dars, dim=dim)
-        dar.attrs[min_name] = np.NaN
-        dar.attrs[max_name] = np.NaN
-        dims = tuple(dar.dims)
-        return dc.Patch(dar.data, coords=dar.coords, attrs=dar.attrs, dims=dims)
+        # some patches can be degenerate; just remove those
+        valid_patches = [x for x in trimmed_patches if x.size > 0]
+        return _merge_trimmed_patches(valid_patches)
 
-    def _trim_or_fill(dar, new_start):
+    def _trim_or_fill(patch, new_start):
         """Trim or fill data array."""
-        return dar.loc[{dim: dar.coords[dim] > new_start}]
+        out = patch.select(**{dim: (new_start, ...)})
+        return out
 
     # get a dataframe
     if not isinstance(patches, pd.DataFrame):
@@ -583,8 +370,72 @@ def _merge_patches(
         sub_df["_dist_to_previous"] = dist_to_previous
         # determine if each patch should be merged with the previous one
         for _, merge_patch_df in sub_df.groupby(no_merge.astype(np.int64).cumsum()):
-            out.append(_merge_compatible_patches(merge_patch_df))
+            out.append(_merge_compatible_patches(merge_patch_df, dim))
     return out
+
+
+def _force_patch_merge(patch_dict_list):
+    """
+    Force a merge of the patches along a dimension.
+
+    This function is used in conjunction with `spool.chunk`, which
+    does all the compatibility checks beforehand.
+    """
+
+    def _get_merge_col(df):
+        dims = df["dims"].unique()
+        assert len(dims) == 1
+        dims = dims[0].split(",")
+        dims_vary = pd.Series({x: False for x in dims})
+        for dim in dims:
+            cols = [f"{dim}_min", f"{dim}_max", f"d_{dim}"]
+            vals = df[cols].values
+            vals_eq = vals == vals[[0], :]
+            vals_null = pd.isnull(vals)
+            columns_equal = (vals_eq | vals_null).all(axis=1)
+            dims_vary[dim] = not np.all(columns_equal)
+        assert dims_vary.sum() <= 1, "Only one dimension can vary for forced merge"
+        if not dims_vary.any():  # the case of complete overlap.
+            return None
+        return dims_vary[dims_vary].index[0]
+
+    def _maybe_step(df, dim):
+        """Get the expected step if all steps are close, else None."""
+        col = df[f"d_{dim}"].values
+        if all_diffs_close_enough(col):
+            return get_middle_value(col)
+        return None
+
+    def _get_new_coord(df, merge_dim, coords):
+        """Get new coordinates, also validate anticipated sampling."""
+        new_coord = merge_coord_managers(coords, dim=merge_dim)
+        expected_step = _maybe_step(df, merge_dim)
+        if not pd.isnull(expected_step):
+            new_coord = new_coord.snap(merge_dim)[0]
+            # TODO slightly different dt can be produced, let pass for now
+            # need to think more about how the merging should work.
+            # coord = new_coord.coord_map[merge_dim]
+            # assert coord.step == expected_step, "incorrect sampling produced"
+        return new_coord
+
+    df = pd.DataFrame(patch_dict_list)
+    merge_dim = _get_merge_col(df)
+    if merge_dim is None:  # nothing to merge, complete overlap
+        return [patch_dict_list[0]]
+    dims = df["dims"].iloc[0].split(",")
+    # get patches, ensure they are oriented the same.
+    patches = [x.transpose(*dims) for x in df["patch"]]
+    axis = patches[0].dims.index(merge_dim)
+    # get data, coords, attrs for merging patch together.
+    datas = [x.data for x in patches]
+    coords = [x.coords for x in patches]
+    attrs = [x.attrs for x in patches]
+    new_data = np.concatenate(datas, axis=axis)
+    new_coord = _get_new_coord(df, merge_dim, coords)
+    new_attrs = merge_models(attrs, merge_dim)
+    patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
+    new_dict = {"patch": patch}
+    return [new_dict]
 
 
 @compose_docstring(fields=format_dtypes(PatchFileSummary.__annotations__))
@@ -657,3 +508,34 @@ def get_dim_value_from_kwargs(patch, kwargs):
     dim = list(overlap)[0]
     axis = dims.index(dim)
     return dim, axis, kwargs[dim]
+
+
+def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
+    """
+    Get sampling rate, as a float from sampling period along a dimension.
+
+    Parameters
+    ----------
+    patch
+        The imput patch.
+    dim
+        Dimension to extract.
+
+    Raises
+    ------
+    [CoordDataError](`dascore.exceptions.CoordDataError`) if patch is not
+    evenly sampled along desired dimension.
+    """
+    d_dim = patch.coords.coord_map[dim].step
+    if isinstance(d_dim, np.timedelta64):
+        d_dim = d_dim / np.timedelta64(1, "s")
+    if pd.isnull(d_dim):
+        # get the name of the calling function
+        calling_function = inspect.getframeinfo(sys._getframe(1))[2]
+        msg = (
+            f"Patch coordinate {dim} is not evenly sampled as required by "
+            f"{calling_function}. This can be fixed with Patch.snap or "
+            f"Patch.extrapolate. "
+        )
+        raise CoordDataError(msg)
+    return 1.0 / d_dim

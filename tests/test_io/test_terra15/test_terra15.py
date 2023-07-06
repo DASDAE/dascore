@@ -28,3 +28,29 @@ class TestTerra15:
         patch = dc.read(missing_gps_terra15_hdf5)[0]
         assert isinstance(patch, dc.Patch)
         assert not np.any(pd.isnull(patch.coords["time"]))
+
+    def test_time_slice(self, terra15_v6_path):
+        """Ensure time slice within the file works."""
+        info = dc.scan_to_df(terra15_v6_path).iloc[0]
+        file_t1, file_t2 = info["time_min"], info["time_max"]
+        dur = file_t2 - file_t1
+        new_dur = dur / 4
+        t1, t2 = file_t1 + new_dur, file_t1 + 2 * new_dur
+        out = dc.read(terra15_v6_path, time=(t1, t2))[0]
+        assert isinstance(out, dc.Patch)
+        attrs = out.attrs
+        assert attrs.time_min >= t1
+        assert attrs.time_max <= t2
+
+    def test_time_slice_no_snap(self, terra15_v6_path):
+        """Ensure no snapping returns raw time."""
+        info = dc.scan_to_df(terra15_v6_path).iloc[0]
+        file_t1, file_t2 = info["time_min"], info["time_max"]
+        dur = file_t2 - file_t1
+        new_dur = dur / 4
+        t1, t2 = file_t1 + new_dur, file_t1 + 2 * new_dur
+        out = dc.read(terra15_v6_path, time=(t1, t2), snap_dims=False)[0]
+        assert isinstance(out, dc.Patch)
+        attrs = out.attrs
+        assert attrs.time_min >= t1
+        assert attrs.time_max <= t2

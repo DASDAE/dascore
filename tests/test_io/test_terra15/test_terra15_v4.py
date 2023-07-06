@@ -30,7 +30,7 @@ class TestReadTerra15:
     def test_coord_attr_time_equal(self, terra15_das_patch):
         """The time reported in the attrs and coords should match."""
         attr_time = terra15_das_patch.attrs["time_max"]
-        coord_time = terra15_das_patch.coords["time"].max()
+        coord_time = terra15_das_patch.coords.coord_map["time"].max()
         assert attr_time == coord_time
 
     def test_time_dist_slice(self, terra15_das_patch, terra15_das_example_path):

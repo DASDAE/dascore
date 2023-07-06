@@ -60,3 +60,7 @@ class QuantXV2(FiberIO):
         with open_hdf5_file(path) as fi:
             patch = _read_quantx(fi.get_node("/Acquisition"), time, distance)
         return dc.spool(patch)
+
+
+if __name__ == "__main__":
+    spool = dc.spool("myfile.hdf5")

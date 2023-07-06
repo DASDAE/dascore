@@ -170,14 +170,17 @@ def _convert_times(df, some_dict):
     return some_dict
 
 
-def get_interval_columns(df, name):
+def get_interval_columns(df, name, arrays=False):
     """Return a series of start, stop, step for columns."""
     names = f"{name}_min", f"{name}_max", f"d_{name}"
     missing_cols = set(names) - set(df.columns)
     if missing_cols:
         msg = f"Dataframe is missing {missing_cols} to chunk on {name}"
         raise KeyError(msg)
-    return df[names[0]], df[names[1]], df[names[2]]
+    if not arrays:
+        return df[names[0]], df[names[1]], df[names[2]]
+    else:
+        return df[names[0]].values, df[names[1]].values, df[names[2]].values
 
 
 def yield_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
@@ -379,3 +382,35 @@ def _model_list_to_df(mod_list: Sequence[BaseModel]) -> pd.DataFrame:
     if "dims" in df.columns:
         df["dims"] = list_ser_to_str(df["dims"])
     return df
+
+
+def _remove_overlaps(df, name):
+    """.
+    Remove overlaps in col, where col_min and col_max should exist in df.
+
+    Assumes df is sorted.
+    """
+
+    def _get_step_values(df, step_name):
+        array = np.roll(df[step_name].values, 1)
+        isna = pd.isnull(array)
+        zeros = np.zeros_like(array, dtype=array.dtype)
+        return np.where(~isna, array, zeros)
+
+    def _get_correct_starts(start, stop, df, step_name):
+        step = _get_step_values(df, step_name)
+        stop_roll = np.roll(stop, 1)
+        start_lt_stop = start <= stop_roll
+        start_lt_stop[0] = False  # remove roll artifact; [0] should be start[0]
+        adjusted = stop_roll + step
+        return np.where(start_lt_stop, adjusted, start)
+
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"d_{name}"
+    assert df[min_name].is_monotonic_increasing, "df must be sorted"
+    start = df[min_name].values
+    stop = df[max_name].values
+    # Add step to stop roll so we don't get 1 sample of overlap
+    corrected_starts = _get_correct_starts(start, stop, df, step_name)
+    # wrap around in roll gives wrong start value, correct it.
+    corrected_starts[0] = start[0]
+    return df.assign(**{min_name: corrected_starts})

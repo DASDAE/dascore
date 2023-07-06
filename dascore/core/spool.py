@@ -7,16 +7,18 @@ from pathlib import Path
 from typing import Mapping, Optional, Sequence, Union
 
 import pandas as pd
+from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PatchType, numeric_types, timeable_types
 from dascore.exceptions import InvalidSpoolError
 from dascore.utils.chunk import ChunkManager
+from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor
-from dascore.utils.patch import _merge_patches, patches_to_df
+from dascore.utils.patch import _force_patch_merge, patches_to_df
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     adjust_segments,
@@ -30,6 +32,8 @@ class BaseSpool(abc.ABC):
     """
     Spool Abstract Base Class (ABC) for defining Spool interface.
     """
+
+    _rich_style = "bold"
 
     @abc.abstractmethod
     def __getitem__(self, item: int) -> PatchType:
@@ -88,8 +92,46 @@ class BaseSpool(abc.ABC):
         Get a dataframe of the patches that will be returned by the spool.
         """
 
-    def __len__(self):
-        pass
+    @abc.abstractmethod
+    def __len__(self) -> int:
+        """return len of spool."""
+
+    def __eq__(self, other) -> bool:
+        """Simple equality checks on spools."""
+
+        def _vals_equal(dict1, dict2):
+            if set(dict1) != set(dict2):
+                return False
+            for key in set(dict1):
+                val1, val2 = dict1[key], dict2[key]
+                if isinstance(val1, dict):
+                    if not _vals_equal(val1, val2):
+                        return False
+                elif hasattr(val1, "equals"):
+                    if not val1.equals(val2):
+                        return False
+                elif val1 != val2:
+                    return False
+            return True
+
+        my_dict = self.__dict__
+        other_dict = getattr(other, "__dict__", {})
+        return _vals_equal(my_dict, other_dict)
+
+    def __rich__(self):
+        """Rich rep. of spool."""
+        text = get_dascore_text() + Text(" ")
+        text += Text(self.__class__.__name__, style=self._rich_style)
+        text += Text(" 🧵 ")
+        patch_len = len(self)
+        text += Text(f"({patch_len:d}")
+        text += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
+        return text
+
+    def __str__(self):
+        return str(self.__rich__())
+
+    __repr__ = __str__
 
 
 class DataFrameSpool(BaseSpool):
@@ -164,22 +206,22 @@ class DataFrameSpool(BaseSpool):
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
         df_dict_list = self._df_to_dict_list(joined)
-        out_list = []
         expected_len = len(joined["current_index"].unique())
         for patch_kwargs in df_dict_list:
             # convert kwargs to format understood by parser/patch.select
             kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
             patch = self._load_patch(kwargs)
+            # apply any trimming needed on patch
             select_kwargs = {
-                i: v for i, v in kwargs.items() if i in patch.dims or i in patch.coords
+                i: v
+                for i, v in kwargs.items()
+                if i in patch.dims or i in patch.coords.coord_map
             }
-            out_list.append(patch.select(**select_kwargs))
-        if len(out_list) > expected_len:
-            patch_df = patches_to_df(out_list)
-            # Tolerance should be high since the dataframe chunker has
-            # already determined these rows should be merged together.
-            out_list = _merge_patches(patch_df, tolerance=1_000_000)
-        return out_list
+            patch_kwargs["patch"] = patch.select(**select_kwargs)
+            # out_list.append(patch.select(**select_kwargs))
+        if len(df_dict_list) > expected_len:
+            df_dict_list = _force_patch_merge(df_dict_list)
+        return [x["patch"] for x in df_dict_list]
 
     @staticmethod
     def _get_dummy_dataframes(input_df):
@@ -280,17 +322,15 @@ class MemorySpool(DataFrameSpool):
             dfs = self._get_dummy_dataframes(patches_to_df(data))
             self._df, self._source_df, self._instruction_df = dfs
 
-    def __str__(self):
-        """Returns a (hopefully) useful string rep of spool."""
+    def __rich__(self):
+        base = super().__rich__()
         df = self._df
-        tmin, tmax = df["time_min"].min(), df["time_max"].max()
-        out = (
-            f"MemorySpool object managing {len(self)} patches spanning:"
-            f" {tmin} to {tmax}"
-        )
-        return out
-
-    __repr__ = __str__
+        t1, t2 = df["time_min"].min(), df["time_max"].max()
+        tmin = get_nice_text(t1)
+        tmax = get_nice_text(t2)
+        duration = get_nice_text(t2 - t1)
+        base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
+        return base
 
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory"""

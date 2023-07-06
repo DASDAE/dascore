@@ -140,6 +140,12 @@ class TestToDateTime64:
             expected = to_datetime64(0) - to_timedelta64(val)
             assert out == expected or (pd.isnull(out) and pd.isnull(expected))
 
+    def test_datetime_non_ns_array(self):
+        """Non-ns datetime arrays should be converted to ns precision."""
+        ar = np.atleast_1d(np.datetime64("2012-01-01"))
+        out = to_datetime64(ar)
+        assert out.dtype == np.dtype("<M8[ns]")
+
 
 class TestToTimeDelta64:
     """Tests for creating timedeltas"""

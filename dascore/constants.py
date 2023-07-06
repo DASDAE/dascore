@@ -45,6 +45,9 @@ ONE_BILLION = 1_000_000_000
 # One second with a precision of nano seconds
 ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
 
+# Float printing precision
+FLOAT_PRECISION = 5
+
 # Valid strings for "datatype" attribute
 VALID_DATA_TYPES = (
     "",  # unspecified
@@ -59,19 +62,19 @@ VALID_DATA_TYPES = (
 # Valid categories (of instruments)
 VALID_DATA_CATEGORIES = ("", "DAS", "DTS", "DSS")
 
-
 max_lens = {
     "path": 120,
     "file_format": 15,
     "tag": 100,
-    "network": 8,
-    "station": 8,
+    "network": 12,
+    "station": 12,
     "dims": 40,
     "file_version": 9,
     "cable_id": 50,
     "instrument_id": 50,
+    "data_type": 20,
+    "data_category": 4,
 }
-
 
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
@@ -95,7 +98,6 @@ LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 # Required shared attributes to merge patches together
 PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "data_category")
 
-
 # A map from the unit name to the code used in numpy.timedelta64
 NUMPY_TIME_UNIT_MAPPING = {
     "hour": "h",
@@ -112,6 +114,10 @@ NUMPY_TIME_UNIT_MAPPING = {
     "week": "W",
     "day": "D",
 }
+
+
+class _DegenerateDimension:
+    """Used to mark which dimensions of an array have gone to 0."""
 
 
 # A description of basic patch metadata.
@@ -152,10 +158,6 @@ cable_id
     A Unique identifier of the cable, or composition of cables.
 distance_units
     The units of distance, defaults to m.
-data_units
-    units
-category
-    The category
 network
     The network code an ascii-compatible string up to 2 characters.
 station
@@ -173,3 +175,22 @@ network
 history
     A list of strings indicating what processing has occurred on the patch.
 """
+
+# Rich styles for various object displays.
+dascore_styles = dict(
+    dc_blue="#002868",
+    dc_red="#cf0029",
+    dc_yellow="#ffc934",
+    default_coord="bold white",
+    coord_range="bold green",
+    coord_array="bold #cd0000",
+    coord_monotonic="bold #d64806",
+    coord_degenerate="bold #d40000",
+    units="#cca3e1",
+    dtypes="#a2bf48",
+    keys="#a2bf48",
+    # these are for formatting datetimes
+    ymd="#e96baa",
+    hms="#e96baa",
+    dec="#e96baa",
+)

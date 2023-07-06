@@ -27,6 +27,12 @@ class TestFrozenDict:
         assert isinstance(out, FrozenDict)
         assert "bob" in out
 
+    def test_init_on_frozen_dict(self):
+        """Ensure a frozen dict is valid input."""
+        out = FrozenDict({"bob": 1})
+        out2 = FrozenDict(out)
+        assert out == out2
+
     def test_len(self, frozen_dict):
         """Ensure len works."""
         assert len(frozen_dict) == 2

@@ -10,10 +10,9 @@ from types import ModuleType
 from typing import Iterable, Optional, Union
 
 import numpy as np
-import numpy.typing as nt
 import pandas as pd
 
-from dascore.exceptions import MissingOptionalDependency, ParameterError
+from dascore.exceptions import MissingOptionalDependency
 
 
 def register_func(list_or_dict: Union[list, dict], key: Optional[str] = None):
@@ -101,7 +100,7 @@ def _pass_through_method(func):
     return _func
 
 
-def get_slice(array, cond=Optional[tuple]) -> slice:
+def get_slice_from_monotonic(array, cond=Optional[tuple]) -> slice:
     """
     Return a slice object which meets conditions in cond on array.
 
@@ -120,10 +119,11 @@ def get_slice(array, cond=Optional[tuple]) -> slice:
     Examples
     --------
     >>> import numpy as np
-    >>> from dascore.utils.misc import get_slice
+    >>> from dascore.utils.misc import get_slice_from_monotonic
     >>> ar = np.arange(100)
-    >>> array_slice = get_slice(ar, cond=(1, 10))
+    >>> array_slice = get_slice_from_monotonic(ar, cond=(1, 10))
     """
+    # TODO do we still need this or can we just use coordinates?
     if cond is None:
         return slice(None, None)
     assert len(cond) == 2, "you must pass a length 2 tuple to get_slice."
@@ -137,7 +137,7 @@ def get_slice(array, cond=Optional[tuple]) -> slice:
     # check for and handle zeroed end values
     if array[-1] <= array[0]:
         increasing_segment_end = np.argmin(np.diff(array))
-        out = get_slice(array[:increasing_segment_end], cond)
+        out = get_slice_from_monotonic(array[:increasing_segment_end], cond)
         stop = np.min([out.stop or len(array), increasing_segment_end])
     return slice(start, stop)
 
@@ -187,22 +187,6 @@ def all_close(ar1, ar2):
         return np.all(ar1 == ar2)
     else:
         return np.allclose(ar1, ar2)
-
-
-def check_evenly_sampled(array: nt.ArrayLike):
-    """
-    Check if an array is evenly sampled.
-
-    If not raise a ParameterError.
-    """
-    diff = np.diff(array)
-    if not all_close(diff, np.mean(diff)):
-        unique_diffs = np.unique(diff)
-        msg = (
-            "The passed array is not evenly sampled. The values you passed"
-            f"have the following unique differences: {unique_diffs}"
-        )
-        raise ParameterError(msg)
 
 
 def iter_files(
@@ -327,63 +311,27 @@ def optional_import(package_name: str) -> ModuleType:
     return mod
 
 
-def _query_trims_range(query_tuple, lim1, lim2, spacing):
-    """
-    Return True if a query tuple should trim the range of limits.
-
-    Parameters
-    ----------
-    query_tuple
-        A tuple of (min, max) where both min and max are defined or
-        one is None.
-    lim1
-        The lower limit.
-    lim2
-        The upper limit.
-    spacing
-        The spacing along dimension.
-    """
-    assert len(query_tuple) == 2, "only length two sequence allowed to specify range"
-    q1, q2 = query_tuple
-    if q1 is not None and q1 >= (lim1 + spacing):
-        return True
-    if q2 is not None and q2 <= (lim2 - spacing):
-        return True
-    return False
+def get_middle_value(array):
+    """Get the middle value in the differences array without changing dtype."""
+    array = np.sort(np.array(array))
+    last_ind = len(array) - 1
+    ind = int(np.floor(last_ind / 2))
+    return np.sort(array)[ind]
 
 
-def trim_attrs_get_inds(attrs, dim_length, **kwargs):
-    """
-    Trim a dimension in attrs and get a slice for trimming data.
+def all_diffs_close_enough(diffs):
+    """Check if all the diffs are 'close' handling timedeltas."""
+    diffs = np.array(diffs)
+    is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
+    is_td = np.issubdtype(diffs.dtype, np.datetime64)
+    if is_td or is_dt:
+        diffs = diffs.astype(np.int64).astype(np.float64)
+    med = np.median(diffs)
+    return np.allclose(diffs, med)
 
-    Parameters
-    ----------
-    attrs
-        A dict-able object which contains {dim}_min, {dim}_max, d_{dim}.
-    dim_length
-        The length of the data along the specified dimension.
-    **kwargs
-        Used to specify which dimension to trim (dim=(start, stop)).
-    """
-    if not kwargs:
-        return attrs, dim_length
-    assert len(kwargs) == 1, "exactly one dimension allowed."
-    dim = list(kwargs)[0]
-    value = kwargs[dim]
-    old_start, old_stop = attrs[f"{dim}_min"], attrs[f"{dim}_max"]
-    spacing = attrs[f"d_{dim}"]
-    if not _query_trims_range(value, old_start, old_stop, spacing):
-        return slice(None), attrs
-    out = dict(attrs)
-    # get new start/stop values
-    start_ind, stop_ind = 0, dim_length
-    if value[0] is not None and value[0] > old_start:
-        diff = value[0] - old_start
-        start_ind = np.ceil(diff / spacing)
-        out[f"{dim}_min"] = start_ind * spacing + old_start
-    if value[1] is not None and value[1] < old_stop:
-        diff = old_stop - value[1]
-        diff_samples = -np.floor(diff / spacing)
-        stop_ind = dim_length + diff_samples
-        out[f"{dim}_max"] = old_stop + diff_samples * spacing
-    return slice(int(start_ind), int(stop_ind)), attrs.__class__(**out)
+
+def unbyte(byte_or_str: Union[bytes, str]) -> str:
+    """Ensure a string is given by str or possibly bytes."""
+    if isinstance(byte_or_str, (bytes, np.bytes_)):
+        byte_or_str = byte_or_str.decode("utf8")
+    return byte_or_str

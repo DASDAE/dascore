@@ -6,7 +6,7 @@ import copy
 import numpy as np
 import pytest
 
-import dascore
+import dascore as dc
 from dascore.exceptions import (
     InvalidFiberFile,
     InvalidFileFormatter,
@@ -137,14 +137,19 @@ class TestGetFormat:
 
     def test_terra_15(self, terra15_das_example_path):
         """Ensure terra15 v2 can be read"""
-        out = dascore.get_format(terra15_das_example_path)
+        out = dc.get_format(terra15_das_example_path)
         vtuple = (out[0].upper(), out[1])
         assert vtuple == ("TERRA15", "4")
 
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
         with pytest.raises(UnknownFiberFormat):
-            dascore.get_format(dummy_text_file)
+            dc.get_format(dummy_text_file)
+
+    def test_missing_file(self):
+        """Ensure a missing file raises"""
+        with pytest.raises(FileNotFoundError):
+            dc.get_format("bad/file")
 
 
 class TestRead:
@@ -152,8 +157,8 @@ class TestRead:
 
     def test_read_terra15(self, terra15_das_example_path, terra15_das_patch):
         """Ensure terra15 can be read."""
-        out = dascore.read(terra15_das_example_path)
-        assert isinstance(out, dascore.BaseSpool)
+        out = dc.read(terra15_das_example_path)
+        assert isinstance(out, dc.BaseSpool)
         assert len(out) == 1
         assert out[0].equals(terra15_das_patch)
 
@@ -163,7 +168,7 @@ class TestScan:
 
     def test_scan_terra15(self, terra15_das_example_path):
         """Ensure terra15 format can be automatically determined."""
-        out = dascore.scan(terra15_das_example_path)
+        out = dc.scan(terra15_das_example_path)
         assert isinstance(out, list)
         assert len(out)
 
@@ -173,25 +178,25 @@ class TestScan:
         dummy_file = tmp_path / "data.txt"
         dummy_file.touch()
         with pytest.raises(UnknownFiberFormat):
-            _ = dascore.scan(dummy_file)
-        out = dascore.scan(dummy_file, ignore=True)
+            _ = dc.scan(dummy_file)
+        out = dc.scan(dummy_file, ignore=True)
         assert not len(out)
         assert out == []
 
     def test_scan_directory(self, tmp_path):
         """Trying to scan an empty directory should return empty list."""
-        out = dascore.scan(tmp_path)
+        out = dc.scan(tmp_path)
         assert len(out) == 0
 
     def test_scan_bad_files(self, tmp_path):
         """Trying to scan a directory should raise a nice error"""
         new = tmp_path / "myfile.txt"
         with pytest.raises(InvalidFiberFile):
-            _ = dascore.scan(new)
+            _ = dc.scan(new)
 
     def test_scan_patch(self, random_patch):
         """Scan should also work on a patch"""
-        out = dascore.scan_to_df(random_patch)
+        out = dc.scan_to_df(random_patch)
         attrs = random_patch.attrs
         assert len(out) == 1
         ser = out.iloc[0]
@@ -211,3 +216,31 @@ class TestScan:
         assert not FiberFormatTestV1().implements_get_format
         dasdae = FiberIO.manager.get_fiberio("DASDAE")
         assert dasdae.implements_get_format
+
+    def test_scan_attrs_match_patch_attrs(self, data_file_path):
+        """We need to make sure scan and patch attrs are identical."""
+        # Since dasdae format stores attrs and coords, we need to
+        # skip events created before coords/attrs were more closely
+        # aligned.
+        if data_file_path.name == "example_dasdae_event_1.h5":
+            return
+        comp_attrs = (
+            "data_type",
+            "data_units",
+            "d_time",
+            "time_min",
+            "time_max",
+            "distance_min",
+            "distance_max",
+            "d_distance",
+            "tag",
+            "network",
+        )
+        scan_attrs_list = dc.scan(data_file_path)
+        patch_attrs_list = [x.attrs for x in dc.read(data_file_path)]
+        assert len(scan_attrs_list) == len(patch_attrs_list)
+        for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
+            for attr_name in comp_attrs:
+                patch_attr = getattr(pat_attrs1, attr_name)
+                scan_attr = getattr(scan_attrs2, attr_name)
+                assert scan_attr == patch_attr

@@ -21,6 +21,24 @@ DIRECTORY_SPOOLS = []
 
 @pytest.fixture(scope="class")
 @register_func(DIRECTORY_SPOOLS)
+def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
+    """Create an index that isn't order chronologically."""
+    path = tmp_path_factory.mktemp("out_of_order_index")
+    spool = dc.spool(path)
+    # sort patches by starttime
+    patch_list = sorted(random_spool, key=lambda x: x.attrs.time_min)
+    # write patches to disk out of order.
+    patch_list[-1].io.write(path / "patch_3.h5", "dasdae")
+    spool.update()
+    patch_list[0].io.write(path / "patch_1.h5", "dasdae")
+    spool.update()
+    patch_list[1].io.write(path / "patch_2.h5", "dasdae")
+    spool.update()
+    return spool
+
+
+@pytest.fixture(scope="class")
+@register_func(DIRECTORY_SPOOLS)
 def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     spool = DirectorySpool(one_file_dir)
@@ -33,12 +51,18 @@ def directory_spool(request):
     return request.getfixturevalue(request.param)
 
 
-class TestFileSpool:
-    """Test that the file spool works."""
+class TestDirectorySpoolBasics:
+    """Basic tests for the directory spool."""
 
     def test_isinstance(self, directory_spool):
         """Simply ensure expected type was returned."""
         assert isinstance(directory_spool, DirectorySpool)
+
+    def test_selected_str(self, directory_spool):
+        """Ensure select kwargs show up in str."""
+        new = directory_spool.select(tag="random")
+        out = str(new)
+        assert "Select kwargs" in str(out)
 
 
 class TestDirectoryIndex:
@@ -56,9 +80,12 @@ class TestDirectoryIndex:
 
     def test_index_len(self, basic_index_df, two_patch_directory):
         """An index should be returned."""
+        spool = dc.spool(two_patch_directory)
+        spool.indexer.index_path.unlink()
+        df = spool.update().get_contents()
         bank_paths = list(Path(two_patch_directory).rglob("*hdf5"))
-        assert isinstance(basic_index_df, pd.DataFrame)
-        assert len(bank_paths) == len(basic_index_df)
+        assert isinstance(df, pd.DataFrame)
+        assert len(bank_paths) == len(df)
 
     def test_index_columns(self, basic_index_df):
         """Ensure expected columns show up in the index."""
@@ -286,6 +313,19 @@ class TestBasicChunk:
         assert patch.attrs.time_max == content["time_max"].max()
         assert patch.attrs.d_time == spool[0].attrs.d_time
 
+    def test_chunk_out_of_order_index(self, dir_spool_index_out_of_order):
+        """Ensure when the index isn't ordered chunk can still work."""
+        spool = dir_spool_index_out_of_order
+        time = 4.25
+        chunk = spool.chunk(time=time)
+        for patch in chunk:
+            assert isinstance(patch, dc.Patch)
+            dur = (patch.attrs.time_max - patch.attrs.time_min) / ONE_SECOND
+            diff = np.abs(dur - time)
+            # because we try to avoid overlaps, the segments can be up to 2
+            # samples shorter than what was asked for. Maybe revisit this?
+            assert diff <= 2 * (patch.attrs.d_time / ONE_SECOND)
+
 
 class TestGetContents:
     """Tests for getting the contents of the spool."""
@@ -319,3 +359,8 @@ class TestFileSpoolIntegrations:
             patch_duration = (attrs["time_max"] - attrs["time_min"]) / ONE_SECOND
             diff = patch_duration - duration
             assert abs(diff) <= 1.5 * attrs["d_time"] / ONE_SECOND
+
+    def test_doc_example(self, all_examples_spool):
+        """Tests for quickstart"""
+        spool = all_examples_spool.update()
+        assert isinstance(spool, dc.BaseSpool)

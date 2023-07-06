@@ -61,7 +61,7 @@ directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
 spool = (
     dc.spool(directory_path)
     .update()
-    .select(time_min=('2020-01-01', None))
+    .select(time_min=('2020-01-01', ...))
     .chunk(time=60, overlap=10)
 )
 ```
@@ -91,7 +91,7 @@ patch = dc.get_example_patch('random_das')
 out = (
     patch.decimate(time=8)  # decimate along time axis (keep every 8th sample)
     .detrend(dim='distance')  # detrend in distance axis
-    .pass_filter(time=(None, 10))  # apply low-pass filter
+    .pass_filter(time=(..., 10))  # apply low-pass filter
 )
 ```
 
@@ -103,7 +103,7 @@ import dascore as dc
 patch = (
     dc.get_example_patch('example_event_1')
     .taper(time=0.05)
-    .pass_filter(time=(None, 300))
+    .pass_filter(time=(..., 300))
 )
 
 patch.viz.waterfall(show=True, scale=0.2);
@@ -121,8 +121,7 @@ pip install dascore
 conda install dascore -c conda-forge
 ```
 
-See the [contributing docs](contributing/contributing.qmd) for development
-installations.
+See the [contributing docs](contributing/contributing.qmd) for development installations.
 
 # Feedback and Support
 

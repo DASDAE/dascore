@@ -5,6 +5,19 @@ execute:
 ---
 This page highlights a few core DASCore concepts.
 
+# Data structures
+
+For most uses of DASCore, only two data structures are directly involved.
+These are the [Patch](patch.qmd) and the [Spool](spool.qmd).
+
+The `Patch` contains a contiguous block of N dimensional data and metadata.
+The `Spool` manages a group of `Patch`s. These can be in memory, on
+disk, or a remote resource.
+
+![Patch (blue) and Spool (red)](../_static/patch_n_spool.png){#fig-patch_n_spool}
+
+You will read more about Patches and Spools later on in the tutorial.
+
 # Time
 
 Any expression of time should use [numpy](https://numpy.org/doc/stable/reference/arrays.datetime.html) time
@@ -42,7 +55,7 @@ time_1 = dc.to_datetime64('2022-01-01T12:12:12.1212')
 time_2 = dc.to_datetime64(610243200)
 ```
 
-In general you should try to be as explicit as possible and use numpy's time constructs directly, but the
+In general, you should try to be as explicit as possible and use numpy's time constructs directly, but the
 dascore time functions provide a helpful way to sanitize a variety of time inputs.
 
 # Dimension Selection
@@ -60,13 +73,43 @@ filtered_distance = patch.pass_filter(distance=(0.1, 0.2))
 ```
 However, the meaning of the values (ie frequency vs period) depends on the function, so be sure to read the docs!
 
-# Data structures
+# Units
 
-DASCore has two key data structures; the [Patch](patch.qmd) and the [Spool](spool.qmd).
-Both of these have their own tutorial pages.
+DASCore provides first class support for units through the `units` module. Here are a few examples how you can use units in DASCore:
 
-The `Patch` contains a contiguous block of N dimensional data and metadata.
-The `Spool` manages a group of `Patch`s. These can be in memory, on
-disk, or a remote resource.
+```{python}
+# units can be imported and used directly
+import dascore as dc
+from dascore.units import m, ft
 
-![Patch (blue) and Spool (red)](../_static/patch_n_spool.png){#fig-patch_n_spool}
+pa = dc.get_example_patch()
+
+# sub-select a patch to only include distance from 10ft to 10m.
+sub_selected = pa.select(distance=(10*ft, 10*m))
+
+# filter patch for spatial wavelengths from 10m to 100m
+dist_filtered = pa.pass_filter(distance=(10*m, 100*m))
+```
+
+Units and quantities (units multiplied by constants) can also be created with [`get_unit`](`dascore.units.get_unit`) and [get_quantity](`dascore.units.get_quantity`).
+
+```{python}
+from dascore.units import get_unit, get_quantity
+
+# Units (without scalar multiples) can be created like so:
+meters = get_unit("meters")
+
+# Quantities are created by multiply units
+ten_m = meters * 10
+print(ten_m)
+
+# Or by direct string parsing, which can handle a surprising bit of complexity
+quantity = get_quantity("10 * (PI / 10^3) (millifurlongs)/(tesla)")
+print(quantity)
+```
+
+Many of DASCore's processing functions support units/quantities as shown above.
+
+:::{.callout-note}
+DASCore uses the superb unit library [pint](https://github.com/hgrecco/pint) under the hood for unit parsing/conversions. You can checkout its documentation for more on how units and quantities work, although DASCore should handle most of this for you.
+:::

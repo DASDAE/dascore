@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from dascore.transform.fft import rfft
+from dascore.units import get_quantity
 
 
 class TestRfft:
@@ -25,7 +26,8 @@ class TestRfft:
 
     def test_time_units(self, rfft_patch):
         """Time units should be 1/s now."""
-        assert rfft_patch.attrs["time_units"] == "1/(s)"
+        rquant = get_quantity(rfft_patch.attrs["time_units"])
+        assert rquant == get_quantity("1/s")
 
     def test_abs_rrft(self, rfft_patch):
         """Ensure abs works with rfft to get amplitude spectra."""

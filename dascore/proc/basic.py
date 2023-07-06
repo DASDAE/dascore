@@ -41,12 +41,17 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     >>> # transpose the time and data array dimensions in the example patch
     >>> out = dascore.proc.transpose(pa,"time", "distance")
     """
-
-    return self.__class__(self._data_array.transpose(*dims))
+    dims = tuple(dims)
+    old_dims = self.coords.dims
+    new_coord = self.coords.transpose(*dims)
+    new_dims = new_coord.dims
+    axes = tuple(old_dims.index(x) for x in new_dims)
+    new_data = np.transpose(self.data, axes)
+    return self.new(data=new_data, coords=new_coord)
 
 
 @patch_function()
-def squeeze(self: PatchType, dim=None, drop=False):
+def squeeze(self: PatchType, dim=None) -> PatchType:
     """
     Return a new object with len one dimensions flattened.
 
@@ -56,17 +61,11 @@ def squeeze(self: PatchType, dim=None, drop=False):
         Selects a subset of the length one dimensions. If a dimension
         is selected with length greater than one, an error is raised.
         If None, all length one dimensions are squeezed.
-    drop
-        If True, drop squeezed coordinates instead of making them scalar.
-
-
-    Notes
-    -----
-    Simply calls `xr.squeeze`.
     """
-    dar = self._data_array
-    out = dar.squeeze(dim=dim, drop=drop)
-    return self.__class__(out)
+    coords = self.coords.squeeze(dim)
+    axis = None if dim is None else self.coords.dims.index(dim)
+    data = np.squeeze(self.data, axis=axis)
+    return self.new(data=data, coords=coords)
 
 
 @patch_function()
@@ -87,8 +86,8 @@ def rename(self: PatchType, **names) -> PatchType:
     >>> pa2 = pa.rename(distance='fragrance')
     >>> assert 'fragrance' in pa2.dims
     """
-    new_data_array = self._data_array.rename(**names)
-    return self.__class__(new_data_array)
+    new_coord = self.coords.rename_coord(**names)
+    return self.new(coords=new_coord, dims=new_coord.dims)
 
 
 @patch_function()

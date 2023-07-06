@@ -7,7 +7,6 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 
 from typing import Sequence
 
-import numpy as np
 import pandas as pd
 from scipy import ndimage
 from scipy.signal import iirfilter, medfilt2d, sosfilt, sosfiltfilt, zpk2sos
@@ -15,7 +14,8 @@ from scipy.signal import iirfilter, medfilt2d, sosfilt, sosfiltfilt, zpk2sos
 import dascore
 from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
-from dascore.utils.patch import patch_function
+from dascore.units import get_filter_units
+from dascore.utils.patch import get_dim_sampling_rate, patch_function
 
 
 def _check_filter_kwargs(kwargs):
@@ -25,18 +25,19 @@ def _check_filter_kwargs(kwargs):
         raise FilterValueError(msg)
     dim = list(kwargs.keys())[0]
     filt_range = kwargs[dim]
+    # strip out units if used.
+    mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
     if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
         msg = f"filter range must be a length two sequence not {filt_range}"
         raise FilterValueError(msg)
-    filt1, filt2 = filt_range
-    if all([pd.isnull(x) for x in filt_range]):
+    if all([pd.isnull(x) for x in mags]):
         msg = (
             f"pass filter requires at least one filter limit, "
             f"you passed {filt_range}"
         )
         raise FilterValueError(msg)
 
-    return dim, filt1, filt2
+    return dim, filt_range
 
 
 def _check_sobel_args(dim, mode, cval):
@@ -67,22 +68,14 @@ def _check_sobel_args(dim, mode, cval):
     return dim, mode, cval
 
 
-def _get_sampling_rate(patch, dim):
-    """Get sampling rate, as a float from sampling period along a dimension."""
-    d_dim = patch.attrs[f"d_{dim}"]
-    if dim == "time":  # get time in to seconds
-        d_dim = d_dim / np.timedelta64(1, "s")
-    return 1.0 / d_dim
-
-
-def _check_filter_range(niquest, low, high, filt_min, filt_max):
+def _check_filter_range(nyquist, low, high, filt_min, filt_max):
     """Simple check on filter parameters."""
-    # ensure filter bounds are within niquest
+    # ensure filter bounds are within nyquist
     if low is not None and ((0 > low) or (low > 1)):
-        msg = f"possible filter bounds are [0, {niquest}] you passed {filt_min}"
+        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_min}"
         raise FilterValueError(msg)
     if high is not None and ((0 > high) or (high > 1)):
-        msg = f"possible filter bounds are [0, {niquest}] you passed {filt_max}"
+        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_max}"
         raise FilterValueError(msg)
     if high is not None and low is not None and high <= low:
         msg = (
@@ -94,10 +87,10 @@ def _check_filter_range(niquest, low, high, filt_min, filt_max):
 
 def _get_sos(sr, filt_min, filt_max, corners):
     """Get second order sections from sampling rate and filter bounds."""
-    niquest = 0.5 * sr
-    low = None if pd.isnull(filt_min) else filt_min / niquest
-    high = None if pd.isnull(filt_max) else filt_max / niquest
-    _check_filter_range(niquest, low, high, filt_min, filt_min)
+    nyquist = 0.5 * sr
+    low = None if pd.isnull(filt_min) else filt_min / nyquist
+    high = None if pd.isnull(filt_max) else filt_max / nyquist
+    _check_filter_range(nyquist, low, high, filt_min, filt_max)
 
     if (low is not None) and (high is not None):  # apply bandpass
         z, p, k = iirfilter(
@@ -135,16 +128,29 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     >>> import dascore
     >>> pa = dascore.get_example_patch()
 
-    >>>  # 1. Apply bandpass filter along time axis from 1 to 100 Hz
+    >>>  # Apply bandpass filter along time axis from 1 to 100 Hz
     >>> bandpassed = pa.pass_filter(time=(1, 100))
 
-    >>>  # 2. Apply lowpass filter along distance axis for wavelengths less than 100m
+    >>>  # Apply lowpass filter along distance axis for wavelengths less than 100m
     >>> lowpassed = pa.pass_filter(distance=(None, 1/100))
+    >>> # Note that None and ... both indicate open intervals
+    >>> assert pa.pass_filter(time=(None, 90)) == pa.pass_filter(time=(..., 90))
+
+    >>> # Optionally, units can be specified for a more expressive API.
+    >>> from dascore.units import m, ft, s, Hz
+    >>> # Filter from 1 Hz to 10 Hz in time dimension
+    >>> lp_units = pa.pass_filter(time=(1 * Hz, 10 * Hz))
+    >>> # Filter wavelengths 50m to 100m
+    >>> bp_m = pa.pass_filter(distance=(50 * m, 100 * m))
+    >>> # filter wavelengths less than 200 ft
+    >>> lp_ft = pa.pass_filter(distance=(200 * ft, ...))
     """
-    dim, filt_min, filt_max = _check_filter_kwargs(kwargs)
+    dim, (arg1, arg2) = _check_filter_kwargs(kwargs)
     axis = patch.dims.index(dim)
-    sr = _get_sampling_rate(patch, dim)
-    # get niquest and low/high in terms of niquest
+    coord_units = patch.coords.coord_map[dim].units
+    filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units)
+    sr = get_dim_sampling_rate(patch, dim)
+    # get nyquist and low/high in terms of nyquist
     sos = _get_sos(sr, filt_min, filt_max, corners)
     if zerophase:
         out = sosfiltfilt(sos, patch.data, axis=axis)
@@ -208,7 +214,7 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 #     dim, filt_min, filt_max = _check_filter_kwargs(kwargs)
 #     axis = patch.dims.index(dim)
 #     sr = _get_sampling_rate(patch, dim)
-#     # get niquest and low/high in terms of niquest
+#     # get nyquist and low/high in terms of nyquist
 #     sos = _get_sos(sr, filt_min, filt_max, corners)
 #     out = sosfilt(sos, patch.data, axis=axis)
 #     if zerophase:
@@ -240,7 +246,7 @@ def median_filter(patch: PatchType, kernel_size=3) -> PatchType:
     Written by Ge Jin (gjin@mines.edu)
 
     """
-    # get niquest and low/high in terms of niquest
+    # get nyquist and low/high in terms of nyquist
     out = medfilt2d(patch.data, kernel_size=kernel_size)
     return dascore.Patch(
         data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims

@@ -6,6 +6,7 @@ import pytest
 
 import dascore as dc
 from dascore.constants import REQUIRED_DAS_ATTRS
+from dascore.core.coords import CoordRange
 from dascore.core.schema import PatchFileSummary
 from dascore.io.terra15.core import Terra15FormatterV6
 
@@ -37,7 +38,7 @@ class TestReadTerra15V6:
     def test_coord_attr_time_equal(self, terra15_v6_patch):
         """The time reported in the attrs and coords should match"""
         attr_time = terra15_v6_patch.attrs["time_max"]
-        coord_time = terra15_v6_patch.coords["time"].max()
+        coord_time = terra15_v6_patch.coords.coord_map["time"].max()
         assert attr_time == coord_time
 
     def test_read_with_limits(self, terra15_v6_patch, terra15_v6_path):
@@ -69,13 +70,21 @@ class TestReadTerra15V6:
         assert attrs["distance_min"] == coords["distance"].min() == d1
         assert attrs["distance_max"] == coords["distance"].max() == d2
 
-    def test_no_arrays_in_attrs(self, terra15_das_patch):
+    def test_no_arrays_in_attrs(self, terra15_v6_patch):
         """
         Ensure that the attributes are not arrays.
         Originally, attrs like time_min can be arrays with empty shapes.
         """
-        for key, val in terra15_das_patch.attrs.items():
+        for key, val in terra15_v6_patch.attrs.items():
             assert not isinstance(val, np.ndarray)
+
+    def test_coordinate_datatype(self, terra15_v6_patch):
+        """Ensure the coords have reasonable datatypes."""
+        coords = terra15_v6_patch.coords
+        time = coords.coord_map["time"]
+        distance = coords.coord_map["distance"]
+        assert isinstance(time, CoordRange)
+        assert isinstance(distance, CoordRange)
 
 
 class TestIsTerra15V6:

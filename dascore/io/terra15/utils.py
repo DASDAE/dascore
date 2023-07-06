@@ -2,14 +2,13 @@
 
 from typing import Optional
 
-import numpy as np
 from tables.exceptions import NoSuchNodeError
 
 from dascore.constants import timeable_types
 from dascore.core import Patch
+from dascore.core.coords import get_coord
 from dascore.core.schema import PatchFileSummary
-from dascore.utils.misc import get_slice
-from dascore.utils.time import datetime_to_float, to_datetime64
+from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- Getting format/version
 
@@ -36,12 +35,22 @@ def _get_terra15_version_str(hdf_fi) -> str:
 # --- Getting File summaries
 
 
-def _get_scanned_time_min_max(data_node):
-    """Get the min/max time from time array."""
+def _get_time_node(data_node):
+    """
+    Get the time node from data.
+
+    This will prefer GPS time but gets posix time if it is missing.
+    """
     try:
         time = data_node["gps_time"]
     except (NoSuchNodeError, IndexError):
         time = data_node["posix_time"]
+    return time
+
+
+def _get_scanned_time_info(data_node):
+    """Get the min, max, len, and dt from time array."""
+    time = _get_time_node(data_node)
     t_len = len(time)
     # first try fast path by tacking first/last of time
     tmin, tmax = time[0], time[-1]
@@ -52,15 +61,22 @@ def _get_scanned_time_min_max(data_node):
         time_filtered = time[time > 0]
         t_len = len(time_filtered)
         tmin, tmax = time_filtered[0], time_filtered[-1]
-    return tmin, tmax, t_len
+    # surprisingly, using gps time column, dt is much different than dt
+    # reported in data attrs so we calculate it this way.
+    dt = (tmax - tmin) / (t_len - 1)
+    starttime = to_datetime64(tmin)
+    d_time = to_timedelta64(dt)
+    endtime = starttime + d_time * (t_len - 1)
+    return starttime, endtime, t_len, d_time
 
 
 def _get_extra_scan_attrs(self, file_version, path, data_node):
     """Get the extra attributes that go into summary information."""
-    tmin, tmax, _ = _get_scanned_time_min_max(data_node)
+    tmin, tmax, _, dt = _get_scanned_time_info(data_node)
     out = {
         "time_min": to_datetime64(tmin),
         "time_max": to_datetime64(tmax),
+        "d_time": to_timedelta64(dt),
         "path": path,
         "file_format": self.name,
         "file_version": str(file_version),
@@ -86,32 +102,17 @@ def _scan_terra15(self, fi, path):
     root = fi.root
     root_attrs = fi.root._v_attrs
     version, data_node = _get_version_data_node(root)
-    out = _get_default_attrs(data_node.data.attrs, root_attrs)
+    out = _get_default_attrs(root_attrs)
     out.update(_get_extra_scan_attrs(self, version, path, data_node))
     return [PatchFileSummary.parse_obj(out)]
 
 
-#
 # --- Reading patch
-
-
-def _get_start_stop(time_len, time_lims, file_tmin, dt):
-    """Get the start/stop index along time axis."""
-    # sst start index
-    tmin = time_lims[0] or file_tmin
-    tmax = time_lims[1] or dt * (time_len - 1) + file_tmin
-    start_ind = int(np.round((tmin - file_tmin) / dt))
-    stop_ind = int(np.round((tmax - file_tmin) / dt)) + 1
-    # enforce upper limit on time end index.
-    if stop_ind > time_len:
-        stop_ind = time_len
-    assert 0 <= start_ind < stop_ind
-    return start_ind, stop_ind
 
 
 def _get_dar_attrs(data_node, root, tar, dar):
     """Get the attributes for the terra15 data array (loaded)"""
-    attrs = _get_default_attrs(data_node.data.attrs, root._v_attrs)
+    attrs = _get_default_attrs(root._v_attrs)
     attrs["time_min"] = tar.min()
     attrs["time_max"] = tar.max()
     attrs["distance_min"] = dar.min()
@@ -119,10 +120,17 @@ def _get_dar_attrs(data_node, root, tar, dar):
     return attrs
 
 
+def _get_raw_time_coord(data_node):
+    """Read the time from the data node and return it."""
+    time = _get_time_node(data_node)[:]
+    return get_coord(values=to_datetime64(time))
+
+
 def _read_terra15(
     root,
     time: Optional[tuple[timeable_types, timeable_types]] = None,
     distance: Optional[tuple[float, float]] = None,
+    snap_dims: bool = True,
 ) -> Patch:
     """
     Read a terra15 file.
@@ -134,74 +142,70 @@ def _read_terra15(
     However, sometimes this results in subsequent samples having a time before
     the previous sample (time did not increase monotonically).
 
-    So now, we use the first GPS sample, then the reported dt to calculate
-    time array. The Terra15 folks suggested this is probably the best way to
-    do it.
+    So now, we use the first GPS sample, the last sample, and length
+    to determine the dt (new in dascore>0.0.11).
     """
-    # get time array
-    time_lims = tuple(
-        datetime_to_float(x) if x is not None else None
-        for x in (time if time is not None else (None, None))
-    )
     _, data_node = _get_version_data_node(root)
-    file_t_min, file_t_max, time_len = _get_scanned_time_min_max(data_node)
-    # surprisingly, using gps time column, dt is much different than dt
-    # reported in data attrs!, use GPS time here.
-    dt = (file_t_max - file_t_min) / (time_len - 1)
-    # get the start and stop along the time axis
-    start_ind, stop_ind = _get_start_stop(time_len, time_lims, file_t_min, dt)
-    req_t_min = file_t_min if start_ind == 0 else file_t_min + dt * start_ind
-    # account for files that might not be full, adjust requested max time
-    stop_ind = min(stop_ind, time_len)
-    assert stop_ind > start_ind
-    req_t_max = (
-        time_lims[-1] if stop_ind < time_len else file_t_min + (stop_ind - 1) * dt
-    )
-    assert req_t_max > req_t_min
-    # calculate time array, convert to datetime64
-    t_float = file_t_min + np.arange(start_ind, stop_ind) * dt
-    time_ar = to_datetime64(t_float)
-    time_inds = (start_ind, stop_ind)
+    t_min, t_max, time_len, d_time = _get_scanned_time_info(data_node)
+    if snap_dims:
+        kwargs = dict(start=t_min, stop=t_max + d_time, step=d_time, units="s")
+        time_coord = get_coord(**kwargs)
+    else:
+        time_coord = _get_raw_time_coord(data_node)
+    time_coord, time_slice = time_coord.select(time)
     # get data and sliced distance coord
-    dist_ar = _get_distance_array(root)
-    dslice = get_slice(dist_ar, distance)
-    dist_ar_trimmed = dist_ar[dslice]
-    data = data_node.data[slice(*time_inds), dslice]
-    coords = {"time": time_ar, "distance": dist_ar_trimmed}
+    dist_coord = _get_distance_coord(root)
+    dist_coord, dslice = dist_coord.select(distance)
+    _data = data_node.data
+    # checks for incomplete data blocks
+    if _data.shape[0] > time_len:
+        new_stop = time_slice.stop or time_len
+        time_slice = slice(time_slice.start, new_stop)
+    data = data_node.data[time_slice, dslice]
+    coords = {"time": time_coord, "distance": dist_coord}
     dims = ("time", "distance")
-    attrs = _get_dar_attrs(data_node, root, time_ar, dist_ar_trimmed)
+    attrs = _get_dar_attrs(data_node, root, time_coord, dist_coord)
     return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
 
 
-def _get_default_attrs(data_node_attrs, root_node_attrs):
+def _get_default_attrs(root_node_attrs):
     """
     Return the required/default attributes which can be fetched from attributes.
 
     Note: missing time, distance absolute ranges. Downstream functions should handle
     this.
     """
-    out = dict(dims="time, distance")
+    dmin, dmax, dstep, _ = _get_distance_start_stop_step(root_node_attrs)
+    out = dict(
+        dims="time,distance",
+        distance_min=dmin,
+        distance_max=dmax,
+        d_distance=dstep,
+    )
     _root_attrs = {
         "data_product": "data_type",
-        "dx": "d_distance",
         "serial_number": "instrument_id",
-        "sensing_range_start": "distance_min",
-        "sensing_range_end": "distance_max",
         "data_product_units": "data_units",
     }
+
     for treble_name, out_name in _root_attrs.items():
         out[out_name] = getattr(root_node_attrs, treble_name)
-
-    out["d_time"] = data_node_attrs.dT
 
     return out
 
 
-def _get_distance_array(root):
-    """Get the distance (along fiber) array."""
+def _get_distance_start_stop_step(root):
+    """Get distance values for start, stop, step."""
     # TODO: At least for the v4 test file, sensing_range_start, sensing_range_stop,
     # nx, and dx are not consistent, meaning d_min + dx * nx != d_max
     # so I just used this method. We need to look more into this.
-    attrs = root._v_attrs
-    dist = (np.arange(attrs.nx) * attrs.dx) + attrs.sensing_range_start
-    return dist
+    attrs = getattr(root, "_v_attrs", root)
+    start, step, samps = attrs.sensing_range_start, attrs.dx, attrs.nx
+    stop = attrs.sensing_range_start + (attrs.nx - 1) * attrs.dx
+    return start, stop, step, samps
+
+
+def _get_distance_coord(root):
+    """Get the distance coordinate."""
+    start, stop, step, samps = _get_distance_start_stop_step(root)
+    return get_coord(start=start, stop=stop + step, step=step)

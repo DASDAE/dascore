@@ -56,6 +56,6 @@ class TestBasic:
         duration = attrs.time_max - attrs.time_min
         dt = duration / 3
         spool = terra15_file_spool.chunk(time=dt, keep_partial=True)
+        assert len(spool) == 3
         for patch in spool:
             assert isinstance(patch, dc.Patch)
-        assert len(spool) == 3

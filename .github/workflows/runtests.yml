@@ -11,6 +11,10 @@ on:
       - '**.py'
       - '.github/workflows/runtests.yml'
 
+env:
+  # used to manually trigger cache reset. Just increment if needed.
+  CACHE_NUMBER: 1
+
 # Cancel previous runs when this one starts.
 concurrency:
   group: TestCode-${{ github.event.pull_request.number || github.run_id }}
@@ -20,7 +24,7 @@ jobs:
   # Runs the tests on combinations of the supported python/os matrix.
   test_code:
 
-    timeout-minutes: 20
+    timeout-minutes: 25
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -31,8 +35,6 @@ jobs:
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     env:
-      # used to manually trigger cache reset. Just increment if needed.
-      CACHE_NUMBER: 1
       # set path of test environment for caching
       prefix: ${{ startsWith(matrix.os, 'ubuntu') && '/usr/share/miniconda3/envs/dascore'
                || startsWith(matrix.os, 'macos') && '/Users/runner/miniconda3/envs/dascore'
@@ -112,6 +114,63 @@ jobs:
           flags: unittests
           name: PR_tests
           fail_ci_if_error: false
+
+  min_deps:
+    timeout-minutes: 25
+    runs-on: ubuntu-latest
+    # only run if CI isn't turned off
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: install dascore
+        shell: bash -l {0}
+        run: |
+          python -m pip install -e .[test]
+
+      - name: set data cache path
+        shell: bash -l {0}
+        run: |
+          echo "DATA_CACHE_PATH=$(python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
+
+      - name: cache test data
+        uses: actions/cache@v3
+        with:
+          enableCrossOsArchive: true
+          path: ${{ env.DATA_CACHE_PATH }}
+          key: DATA_${{ env.CACHE_NUMBER }}
+
+      - name: print package info
+        shell: bash -l {0}
+        run: |
+          conda info -a
+          conda list
+
+      - name: run test suite
+        shell: bash -l {0}
+        run: |
+          pytest -s --cov dascore --cov-append --cov-report=xml
+
+      # Runs examples in docstrings
+      - name: test docstrings
+        shell: bash -l {0}
+        run: |
+          pytest dascore --doctest-modules
+
+      # upload coverage
+      - name: upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: PR_tests
+          fail_ci_if_error: false
+
 
 # This is a very useful step for debugging, it allows you to ssh into the CI
 # machine (https://github.com/marketplace/actions/debugging-with-tmate).

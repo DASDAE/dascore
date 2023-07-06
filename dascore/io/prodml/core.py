@@ -62,13 +62,8 @@ class ProdMLV2_0(FiberIO):
         """
         Read a ProdML file.
         """
-        kwargs = {}
-        if time is not None:
-            kwargs["time"] = time
-        if distance is not None:
-            kwargs["distance"] = distance
         with open_hdf5_file(path) as fi:
-            patches = _read_prodml(fi, **kwargs)
+            patches = _read_prodml(fi, time=time, distance=distance)
         return dc.spool(patches)
 
 

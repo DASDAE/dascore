@@ -3,22 +3,23 @@ A 2D trace object.
 """
 from __future__ import annotations
 
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
-from numpy.typing import ArrayLike
-from xarray import DataArray
+from rich.text import Text
 
 import dascore.proc
+from dascore.compat import DataArray, array
 from dascore.constants import PatchType
+from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coords import assign_coords
 from dascore.core.schema import PatchAttrs
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
-from dascore.utils.coords import Coords, assign_coords
-
-# from dascore.utils.mapping import FrozenDict
-from dascore.utils.patch import _AttrsCoordsMixer
+from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
+from dascore.utils.misc import optional_import
+from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
 
 
@@ -29,55 +30,59 @@ class Patch:
     Parameters
     ----------
     data
-        An array-like containing data, an xarray DataArray object, or a Patch.
+        The data representing fiber optic measurements.
     coords
         The coordinates, or dimensional labels for the data. These can be
         passed in three forms:
-        {coord_name: data}
-        {coord_name: ((dimensions,), data)}
-        {coord_name: (dimensions, data)}
+        {coord_name: coord}
+        {coord_name: ((dimensions,), coord)}
+        {coord_name: (dimensions, coord)}
     dims
-        A sequence of dimension strings. The first entry cooresponds to the
+        A sequence of dimension strings. The first entry corresponds to the
         first axis of data, the second to the second dimension, and so on.
     attrs
-        Optional attributes (non-coordinate metadata) passed as a dict.
+        Optional attributes (non-coordinate metadata) passed as a dict or
+        [PatchAttrs](`dascore.core.schema.PatchAttrs')
 
     Notes
     -----
-    Unless data is a DataArray or Patch, data, coords, and dims are required.
+    - If coordinates and dims are not provided, they will be extracted from
+    attrs, if possible.
+
+    - If coords and attrs are provided, attrs will have priority. This means
+    if there is a conflict between information contained in both, the coords
+    will be recalculated. However, any missing data in attrs will be filled in
+    if available in coords.
     """
 
     data: ArrayLike
-    coords: Mapping[str, ArrayLike]
+    coords: CoordManager
     dims: tuple[str, ...]
-    attrs: PatchAttrs
+    attrs: Union[PatchAttrs, Mapping]
 
     def __init__(
         self,
         data: ArrayLike | DataArray | None = None,
-        coords: Mapping[str, ArrayLike] | None = None,
+        coords: Mapping[str, ArrayLike] | None | CoordManager = None,
         dims: Sequence[str] | None = None,
-        attrs: Optional[Mapping] = None,
+        attrs: Optional[Union[Mapping, PatchAttrs]] = None,
     ):
         if isinstance(data, (DataArray, self.__class__)):
-            dar = data if isinstance(data, DataArray) else data._data_array
-            self._data_array = dar
-            return
+            data, attrs, coords = data.data, data.attrs, data.coords
+        if dims is None and isinstance(coords, CoordManager):
+            dims = coords.dims
         # Try to generate coords from ranges in attrs
         if coords is None and attrs is not None:
-            coords = PatchAttrs(**dict(attrs)).coords_from_dims()
+            coords = PatchAttrs.coords_from_dims(attrs)
+            dims = dims if dims is not None else attrs.dim_tuple
+        # Ensure required info is here
         non_attrs = [x is None for x in [data, coords, dims]]
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
-
-        mixer = _AttrsCoordsMixer(attrs, coords, dims)
-        attrs, coords = mixer()
-        # get xarray coords from custom coords object
-        xr_coords = coords.to_nested_dict()
-        self._data_array = DataArray(
-            data=data, dims=dims, coords=xr_coords, attrs=attrs
-        )
+        self._coords = get_coord_manager(coords, dims, attrs)
+        self._attrs = PatchAttrs.from_dict(attrs, self.coords)
+        self._data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):
         """
@@ -93,16 +98,28 @@ class Patch:
         """
         return self.equals(other)
 
+    def __rich__(self):
+        dascore_text = get_dascore_text()
+        patch_text = Text("Patch ⚡", style="bold")
+        header = Text.assemble(dascore_text, " ", patch_text)
+        line = Text("-" * len(header))
+        coords = self.coords.__rich__()
+        data = array_to_text(self.data)
+        attrs = attrs_to_text(self.attrs)
+        out = Text("\n").join([header, line, coords, data, attrs])
+        return out
+
+        pass
+
     def __str__(self):
-        xarray_str = str(self._data_array)
-        class_name = self.__class__.__name__
-        return xarray_str.replace("xarray.DataArray", f"dascore.{class_name}")
+        out = self.__rich__()
+        return str(out)
 
     __repr__ = __str__
 
     def equals(self, other: PatchType, only_required_attrs=True) -> bool:
         """
-        Determine if the current trace equals the other trace.
+        Determine if the current patch equals the other patch.
 
         Parameters
         ----------
@@ -132,17 +149,8 @@ class Patch:
             if not_equal:
                 return False
         # check coords, names and values
-        coord1 = {x: self.coords[x] for x in self.coords}
-        coord2 = {x: other.coords[x] for x in other.coords}
-        if not set(coord2) == set(coord1):
+        if not self.coords == other.coords:
             return False
-        for name in coord1:
-            if not np.all(coord1[name] == coord2[name]):
-                return False
-        # handle transposed case; patches that are identical but transposed
-        # should still be equal.
-        if self.dims != other.dims and set(self.dims) == set(other.dims):
-            other = other.transpose(*self.dims)
         return np.equal(self.data, other.data).all()
 
     def new(
@@ -166,17 +174,31 @@ class Patch:
             {coord_name: ((dimensions,), data)}
             {coord_name: (dimensions, data)}
         dims
-            A sequence of dimension strings. The first entry cooresponds to the
+            A sequence of dimension strings. The first entry corresponds to the
             first axis of data, the second to the second dimension, and so on.
         attrs
             Optional attributes (non-coordinate metadata) passed as a dict.
         """
         data = data if data is not None else self.data
-        attrs = attrs if attrs is not None else self.attrs
-        dims = dims or self.dims
-        if coords is None:
-            coords = getattr(self.coords, "_coords", self.coords)
-        return self.__class__(data=data, coords=coords, attrs=attrs, dims=dims)
+        coords = coords if coords is not None else self.coords
+        if dims is None:
+            dims = coords.dims if isinstance(coords, CoordManager) else self.dims
+        coords = get_coord_manager(coords, dims)
+        if attrs:
+            # need to figure out what changed and just pass that to update coords
+            new, old = dict(attrs), dict(self.attrs)
+            diffs = {i: v for i, v in new.items() if new[i] != old.get(i, type)}
+            coords = coords.update_from_attrs(diffs)
+        attrs = attrs or self.attrs
+        return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
+
+    def _fast_attr_update(self, attrs):
+        """A fast method for just squashing the attrs and returning new patch."""
+        new = self.__new__(self.__class__)
+        new._data = self.data
+        new._attrs = attrs
+        new._coords = self.coords
+        return new
 
     def update_attrs(self: PatchType, **attrs) -> PatchType:
         """
@@ -187,53 +209,63 @@ class Patch:
         **attrs
             attrs to add/update.
         """
-        dar = self._data_array
-        mixer = _AttrsCoordsMixer(dar.attrs, dar.coords, dar.dims)
-        mixer.update_attrs(**attrs)
-        attrs, coords = mixer()
-        return self.__class__(self.data, coords=coords, attrs=attrs, dims=self.dims)
-
-    @property
-    def data(self):
-        """Return the data array."""
-        return self._data_array.data
-
-    @property
-    def coords(self):
-        """Return a dict of coordinate data {coord_name: data}"""
-        return Coords(self._data_array.coords, dims=self.dims).array_dict
-
-    @property
-    def coord_dims(self):
-        """Return a dict of coordinate dimensions {coord_name: (**dims)}"""
-        return Coords(self._data_array.coords, dims=self.dims).dims_dict
+        # since we update history so often, we make a fast track for it.
+        new_attrs = dict(self.attrs)
+        new_attrs.update(attrs)
+        if len(attrs) == 1 and "history" in attrs:
+            return self._fast_attr_update(PatchAttrs(**new_attrs))
+        new_coords = self.coords.update_from_attrs(attrs)
+        out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
+        return self.__class__(self.data, **out)
 
     @property
     def dims(self) -> tuple[str, ...]:
         """Return the dimensions contained in patch."""
-        return self._data_array.dims
+        return self.coords.dims
 
     @property
     def attrs(self) -> PatchAttrs:
-        """Return the attributes of the trace."""
-        return PatchAttrs(**self._data_array.attrs)
+        """Return the dimensions contained in patch."""
+        return self._attrs
+
+    @property
+    def coords(self) -> CoordManager:
+        """Return the dimensions contained in patch."""
+        return self._coords
+
+    @property
+    def data(self) -> ArrayLike:
+        """Return the dimensions contained in patch."""
+        return self._data
 
     @property
     def shape(self) -> tuple[int, ...]:
         """Return the shape of the data array."""
-        return self._data_array.shape
+        return self.coords.shape
+
+    @property
+    def size(self) -> tuple[int, ...]:
+        """Return the shape of the data array."""
+        return self.coords.size
 
     def to_xarray(self):
         """
         Return a data array with patch contents.
         """
-        # Note this is here in case we decide to remove xarray there will
-        # still be a way to get a DataArray object with an optional import
-        return self._data_array
+        xr = optional_import("xarray")
+        attrs = dict(self.attrs)
+        dims = self.dims
+        coords = self.coords._get_dim_array_dict()
+        return xr.DataArray(self.data, attrs=attrs, dims=dims, coords=coords)
 
     squeeze = dascore.proc.squeeze
     rename = dascore.proc.rename
     transpose = dascore.proc.transpose
+    snap_coords = dascore.proc.snap_coords
+    sort_coords = dascore.proc.sort_cords
+    set_units = dascore.proc.set_units
+    convert_units = dascore.proc.convert_units
+    simplify_units = dascore.proc.simplify_units
 
     # --- processing funcs
 

@@ -4,32 +4,31 @@ execute:
   warning: false
 ---
 
-A [`Patch`](`dascore.core.patch.Patch`) is a section of contiguous, uniformly sampled data and metadata.
+A [`Patch`](`dascore.core.patch.Patch`) manages data and its associated coordinates and metadata.
 
 :::{.callout-note}
-The `Patch` design was heavily inspired by
-[Xarray's `DataArray` object](https://docs.xarray.dev/en/stable/generated/xarray.DataArray.html)
+The `Patch` design was inspired by [Xarray's `DataArray` object](https://docs.xarray.dev/en/stable/generated/xarray.DataArray.html)
 :::
 
 # Creating Patches
 
-Patches can be generated in a few ways.
+Patches can be created in a few ways.
 
 ## Load an Example Patch
 
-This example patch contains some artificially generated data. They are mostly used
-for simple demonstrations or testing.
+DASCore includes several example datasets. They are mostly used for simple demonstrations and testing.
 
 ```{python}
 import dascore as dc
+from dascore import print
 
-pa = dc.get_example_patch()
+pa1 = dc.get_example_patch("random_das")
+pa2 = dc.get_example_patch("example_event_1")
 ```
 
 ## Load a File
 
-We first download a small example fiber file from a URL in the DASCore library (you need an internet connection).
-Next, we simply read it into a [spool](spool.qmd) object then get the first (and only) patch.
+We first download a small example fiber file from a URL in the DASCore library (you need an internet connection). Next, we read it into a [spool](`dascore.core.spool.BaseSpool`) object then get the first (and only) patch. Spools are covered in more detail in the [next section](spool.qmd).
 
 ```{python}
 import dascore as dc
@@ -37,27 +36,16 @@ from dascore.utils.downloader import fetch
 
 path = fetch("terra15_das_1_trimmed.hdf5")  # path to a datafile
 
-pa = dc.read(path)[0]
-# or
 pa = dc.spool(path)[0]
 ```
 
-:::{.callout-note)
-Both `dc.read` and `dc.spool` can be used to load data from a file.
-`dc.read` will load the file contents into memory, whereas `dc.spool` will,
-depending on the file support for scanning, often load data lazily.
+## Create a Patch from Scratch
 
-Usually `dc.spool` is the function you want.
-:::
+Patches can be created from using:
 
-## Create from Scratch
-
-Patches can also be created from NumPy arrays and dictionaries. This requires:
-
-- The data array
-- The coordinates for labeling each axis
-- The attributes (optional)
-
+- A data array
+- Coordinates for labeling each axis
+- Attributes (optional)
 
 ```{python}
 import numpy as np
@@ -76,43 +64,105 @@ attrs = dict(
     category="DAS",
     id="test_data1",
     time_min=t1,
+    data_units="um/(m * s)"
 )
 
 # Create coordinates, labels for each axis in the array.
 coords = dict(
     distance=np.arange(array.shape[0]) * attrs["d_distance"],
-    time=np.arange(array.shape[1]) * attrs["d_time"],
+    time=t1 + np.arange(array.shape[1]) * attrs["d_time"],
 )
 
 # define dimensions (first label corresponds to data axis 0)
 dims = ('distance', 'time')
 
 pa = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
-print(pa)
 ```
 
-# Attrs
+# Patch Anatomy
 
-The metadata stored in `Patch.attrs` is a
-[pydnatic model](https://docs.pydantic.dev/usage/models/) which enforces some
-basic schema validation. You can print the schema info like this:
+## Data
+
+The data is simply an n-dimensional array which is accessed with the `data` attribute.
 
 ```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+print(f"Data shape is {patch.data.shape}")
+
+print(f"Data contents are\n{patch.data}")
+```
+
+:::{.callout-note}
+The data arrays are should be read-only. This means you can't modify them, but should first make a copy.
+
+```python
+import numpy as np
+
+patch.data[:10] = 12  # wont work
+
+array = np.array(patch.data)  # this makes a copy
+array[:10] = 12  # then this works
+```
+:::
+
+
+## Coords
+
+DASCore implements a special class, called a [CoordinateManager](`dascore.core.coordmanager.CoordManager`), which managers dimension names, coordinate labels, etc. This class behaves like a dict, so coordinate arrays are easily accessed via their names.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+coords = patch.coords
+
+# get time array
+time = coords['time']
+
+# get distance array
+distance = coords['distance']
+```
+
+Coords also have a useful string representation:
+
+```{python}
+print(coords)
+```
+
+You can read more about the coordinate manager in [its doc page](`dascore.core.coordmanager`).
+
+## Attrs
+
+The metadata stored in `Patch.attrs` is a [pydnatic model](https://docs.pydantic.dev/usage/models/) which enforces some basic schema validation. You can print the schema info like this:
+
+```python
 import dascore as dc
 
 print(dc.PatchAttrs.__doc__)
 ```
 
+There may also be other attributes added by specific fiber formats.
+
+## String Rep.
+
+DASCore Patches have as useful string representation:
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+print(patch)
+```
 
 # Processing
 
-For various reasons, Patches should be treated as *immutable*, meaning they should
-not be modified in place, but rather new patches created when something needs to be
-modified.
+For various reasons, Patches should be treated as *immutable*, meaning they should not be modified in place, but rather new patches created when something needs to be modified.
 
-The patch has several methods which are intended to be chained together via a
-[fluent interface](https://en.wikipedia.org/wiki/Fluent_interface), meaning each
-method returns a new `Patch` instance.
+The patch has several methods which are intended to be chained together via a [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface), meaning each method returns a new `Patch` instance.
 
 ```{python}
 import dascore as dc
@@ -121,25 +171,25 @@ pa = dc.get_example_patch()
 out = (
     pa.decimate(time=8)  # decimate to reduce data volume by 8 along time dimension
     .detrend(dim='distance')  # detrend along distance dimension
-    .pass_filter(time=(None, 10))  # apply a low-pass 10 Hz butterworth filter
+    .pass_filter(time=(..., 10))  # apply a low-pass 10 Hz butterworth filter
 )
 ```
-The processing methods are located in the [dascore.proc](`dascore.proc`) package.
+The processing methods are located in the [dascore.proc](`dascore.proc`) module.
 
 # Visualization
 
-DASCore provides various visualization functions found in the [dascore.viz](`dascore.viz`)
-package or using the `Patch.viz` namespace. DASCore generally only implements simple, matplotlib
-based visualizations but other DASDAE packages will do more interesting visualizations.
+DASCore provides various visualization functions found in the [dascore.viz](`dascore.viz`) package or using the `Patch.viz` namespace. DASCore generally only implements simple, matplotlib based visualizations but other DASDAE packages will do more interesting visualizations.
 
 ```{python}
 import dascore as dc
+
 patch = (
     dc.get_example_patch('example_event_1')
+    .taper(time=0.05)
     .pass_filter(time=(None, 300))
 )
 
-patch.viz.waterfall(show=True, scale=0.04);
+patch.viz.waterfall(show=True, scale=0.2);
 ```
 
 # Modifying Patches
@@ -150,8 +200,7 @@ patches with modifications, however, that are functionally the same.
 
 ## New
 
-Often you may wish to modify one aspect of the patch. [`Patch.new`](`dascore.core.patch.Patch.new`)
-is designed for this purpose:
+Often you may wish to modify one aspect of the patch. [`Patch.new`](`dascore.core.patch.Patch.new`) is designed for this purpose:
 
 ```{python}
 import dascore as dc
@@ -219,7 +268,7 @@ def func(patch, arg1=1):
 
 pa = (
     dc.get_example_patch()
-    .pass_filter(time=(None, 10))
+    .pass_filter(time=(..., 10))
     .detrend('time', 'linear')
     .pipe(func, arg1=3)
 )
@@ -264,9 +313,7 @@ out_3 = pa.assign_coords(
 
 ## Coords in Patch Initialization
 
-Any number of coordinates can also be assigned when the patch is initiated. For
-coordinates other than those of the patch dimensions, the associated dimensions
-must be specified. For example:
+Any number of coordinates can also be assigned when the patch is initiated. For coordinates other than those of the patch dimensions, the associated dimensions must be specified. For example:
 
 ```{python}
 import dascore as dc

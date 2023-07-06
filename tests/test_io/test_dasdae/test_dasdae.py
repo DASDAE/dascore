@@ -190,3 +190,18 @@ class TestRoundTrips:
         assert len(spool) == 1
         new_patch = spool[0]
         assert patch.equals(new_patch)
+
+    def test_roundtrip_1_dim_patch(self, tmp_path_factory):
+        """A spool with a dimension of length 1 should roundtrip."""
+        path = tmp_path_factory.mktemp("round_trip_dim_1") / "out.h5"
+        patch = dc.get_example_patch(
+            "random_das",
+            d_time=0.999767552,
+            shape=(100, 1),
+            starttime="2023-06-13T15:38:00.49953408",
+        )
+        patch.io.write(path, "dasdae")
+        formatter = DASDAEV1()
+        spool = formatter.read(path)
+        new_patch = spool[0]
+        assert patch.equals(new_patch)

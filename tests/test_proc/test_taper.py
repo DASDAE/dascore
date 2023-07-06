@@ -7,6 +7,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.proc.taper import TAPER_FUNCTIONS, taper
+from dascore.units import m
 from dascore.utils.misc import broadcast_for_index
 
 
@@ -42,6 +43,12 @@ class TestTaperBasics:
         """Ensure each taper type runs."""
         assert isinstance(time_tapered_patch, dc.Patch)
         assert time_tapered_patch.shape == random_patch.shape
+
+    def test_time_dt_unchanged(self, time_tapered_patch, random_patch):
+        """Ensure each taper type runs."""
+        attrs1, attrs2 = random_patch.attrs, time_tapered_patch.attrs
+        assert attrs1.time_units == attrs2.time_units
+        assert attrs1.d_time == attrs2.d_time
 
     def test_ends_near_zero(self, time_tapered_patch):
         """Ensure the ends of the patch are near zero."""
@@ -91,3 +98,18 @@ class TestTaperBasics:
         with pytest.raises(ParameterError, match="not a known window"):
             random_patch.taper(time=(0.1, 0.1), window_type="windowsXP")
             # the only good one...
+
+    def test_taper_with_units(self, patch_ones):
+        """Ensure taper words with units specified."""
+        value = 15 * m
+        patch = patch_ones.taper(distance=value)
+        data_new = patch.data
+        data_old = patch_ones.data
+        dim_len = patch.dims.index("distance")
+        mid_dim = dim_len // 2
+
+        assert not np.allclose(data_new, data_old)
+
+        assert np.allclose(
+            data_new[mid_dim - 10 : mid_dim + 10], data_old[mid_dim - 10 : mid_dim + 10]
+        )
