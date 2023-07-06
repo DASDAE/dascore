@@ -96,6 +96,28 @@ class BaseSpool(abc.ABC):
     def __len__(self) -> int:
         """return len of spool."""
 
+    def __eq__(self, other) -> bool:
+        """Simple equality checks on spools."""
+
+        def _vals_equal(dict1, dict2):
+            if set(dict1) != set(dict2):
+                return False
+            for key in set(dict1):
+                val1, val2 = dict1[key], dict2[key]
+                if isinstance(val1, dict):
+                    if not _vals_equal(val1, val2):
+                        return False
+                elif hasattr(val1, "equals"):
+                    if not val1.equals(val2):
+                        return False
+                elif val1 != val2:
+                    return False
+            return True
+
+        my_dict = self.__dict__
+        other_dict = getattr(other, "__dict__", {})
+        return _vals_equal(my_dict, other_dict)
+
     def __rich__(self):
         """Rich rep. of spool."""
         text = get_dascore_text() + Text(" ")

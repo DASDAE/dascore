@@ -429,6 +429,17 @@ class TestUpdateAttrs:
         new1 = random_patch.update_attrs(d_time=10)
         assert new1.attrs["d_time"] == dc.to_timedelta64(10)
 
+    def test_update_non_sorted_coord(self, wacky_dim_patch):
+        """Ensure update attrs updates non-sorted coordinates."""
+        # test updating dist max
+        pa = wacky_dim_patch.update_attrs(distance_max=10)
+        assert pa.attrs.distance_max == 10
+        assert not np.any(pd.isnull(pa.coords["distance"]))
+        # test update dist min
+        pa = wacky_dim_patch.update_attrs(distance_min=10)
+        assert pa.attrs.distance_min == 10
+        assert not np.any(pd.isnull(pa.coords["distance"]))
+
 
 class TestSqueeze:
     """Tests for squeeze."""

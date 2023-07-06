@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.constants import numeric_types, timeable_types
-from dascore.exceptions import ParameterError
+from dascore.exceptions import CoordMergeError, ParameterError
 from dascore.utils.misc import get_middle_value
 from dascore.utils.pd import (
     _remove_overlaps,
@@ -150,6 +150,7 @@ class ChunkManager:
             )
             raise ParameterError(msg)
         ((key, value),) = kwargs.items()
+        value = None if value is ... else value
         return key, value
 
     def _validate_chunker(self):
@@ -221,6 +222,13 @@ class ChunkManager:
         merger = df.drop(columns=out.columns)
         for col in merger:
             vals = merger[col].unique()
+            if len(vals) > 1:
+                msg = (
+                    f"Cannot merge on dim {self._name} because all values for "
+                    f"{col} are not equal."
+                )
+                raise CoordMergeError(msg)
+
             assert len(vals) == 1, "Haven't yet implemented non-homogenous merging"
             out[col] = vals[0]
         # add the group number for getting instruction df later

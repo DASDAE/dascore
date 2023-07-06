@@ -24,7 +24,11 @@ import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
 from dascore.core.coordmanager import merge_coord_managers
 from dascore.core.schema import PatchAttrs, PatchFileSummary
-from dascore.exceptions import CoordDataError, PatchAttributeError, PatchDimError
+from dascore.exceptions import (
+    CoordDataError,
+    PatchAttributeError,
+    PatchDimError,
+)
 from dascore.utils.docs import compose_docstring, format_dtypes
 from dascore.utils.misc import all_diffs_close_enough, get_middle_value
 from dascore.utils.models import merge_models
@@ -386,7 +390,9 @@ def _force_patch_merge(patch_dict_list):
         for dim in dims:
             cols = [f"{dim}_min", f"{dim}_max", f"d_{dim}"]
             vals = df[cols].values
-            columns_equal = (vals == vals[[0], :]).all(axis=1)
+            vals_eq = vals == vals[[0], :]
+            vals_null = pd.isnull(vals)
+            columns_equal = (vals_eq | vals_null).all(axis=1)
             dims_vary[dim] = not np.all(columns_equal)
         assert dims_vary.sum() <= 1, "Only one dimension can vary for forced merge"
         if not dims_vary.any():  # the case of complete overlap.
@@ -404,7 +410,7 @@ def _force_patch_merge(patch_dict_list):
         """Get new coordinates, also validate anticipated sampling."""
         new_coord = merge_coord_managers(coords, dim=merge_dim)
         expected_step = _maybe_step(df, merge_dim)
-        if expected_step is not None:
+        if not pd.isnull(expected_step):
             new_coord = new_coord.snap(merge_dim)[0]
             # TODO slightly different dt can be produced, let pass for now
             # need to think more about how the merging should work.
