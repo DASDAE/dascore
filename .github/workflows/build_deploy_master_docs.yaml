@@ -34,6 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Get tags
+        run: git fetch --tags origin
+
       - name: Setup conda
         uses: conda-incubator/setup-miniconda@v2
         with:

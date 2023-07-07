@@ -24,11 +24,7 @@ import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
 from dascore.core.coordmanager import merge_coord_managers
 from dascore.core.schema import PatchAttrs, PatchFileSummary
-from dascore.exceptions import (
-    CoordDataError,
-    PatchAttributeError,
-    PatchDimError,
-)
+from dascore.exceptions import CoordDataError, PatchAttributeError, PatchDimError
 from dascore.utils.docs import compose_docstring, format_dtypes
 from dascore.utils.misc import all_diffs_close_enough, get_middle_value
 from dascore.utils.models import merge_models
