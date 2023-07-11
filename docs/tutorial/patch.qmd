@@ -158,9 +158,51 @@ patch = dc.get_example_patch()
 print(patch)
 ```
 
-# Processing
+:::{callout-note}
+For various reasons, Patches should be treated as *immutable*, meaning they should not be modified in place, but rather new patches are created when something needs to be modified.
+:::
 
-For various reasons, Patches should be treated as *immutable*, meaning they should not be modified in place, but rather new patches created when something needs to be modified.
+# Selecting (trimming)
+
+Patches are trimmed using the [`select`](`dascore.Patch.select`) method.  `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `None` or `...` indicating an open interval.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+
+patch = dc.get_example_patch()
+attrs = patch.attrs
+
+# select 1 sec after current start time to 1 sec before end time.
+one_sec = dc.to_timedelta64(1)
+select_tuple = (attrs.time_min + one_sec, attrs.time_max - one_sec)
+new = patch.select(time=select_tuple)
+
+# select only the first half of the distance channels.
+distance_max = np.mean(patch.coords['distance'])
+new = patch.select(distance=(..., distance_max))
+```
+
+The "relative" keyword is used to trim coordinates based on start (positive) to end (negative)
+
+```{python}
+import dascore as dc
+from dascore.units import ft
+
+patch = dc.get_example_patch()
+
+# We can make the example above simpler with relative selection
+new = patch.select(time=(1, -1), relative=True)
+
+# select 2 seconds from end to 1 second from end
+new = patch.select(time=(-2, -1), relative=True)
+
+# select last 100 ft of distance channels
+new = patch.select(distance=(..., -100 * ft), relative=True)
+```
+
+# Processing
 
 The patch has several methods which are intended to be chained together via a [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface), meaning each method returns a new `Patch` instance.
 
