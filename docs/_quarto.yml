@@ -22,7 +22,7 @@ format:
 
 
 website:
-  title: DASCore (0.0.12.dev8)
+  title: DASCore (0.0.11.dev9)
   repo-url: https://github.com/dasdae/dascore
   site-path: /docs
   site-url: https://www.dascore.org

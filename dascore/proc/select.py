@@ -46,11 +46,11 @@ def select(patch: PatchType, *, copy=False, relative=False, **kwargs) -> PatchTy
     >>> t2 = patch.attrs.time_max - dc.to_timedelta64(1)
     >>> new_time1 = patch.select(time=(t1, t2))
     >>> # this can be accomplished more simply using the relative keyword
-    >>> new_time2 = patch.select(time=(1, -1))
+    >>> new_time2 = patch.select(time=(1, -1), relative=True)
     >>> # filter 1 second from start time to 3 seconds from start time
-    >>> new_time3 = patch.select(time=(1, 3))
+    >>> new_time3 = patch.select(time=(1, 3), relative=True)
     >>> # filter 6 second from end time to 1 second from end time
-    >>> new_time4 = patch.select(time=(-6, -1))
+    >>> new_time4 = patch.select(time=(-6, -1), relative=True)
     """
     new_coords, data = patch.coords.select(
         **kwargs, array=patch.data, relative=relative

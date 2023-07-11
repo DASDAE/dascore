@@ -22,9 +22,14 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
-from dascore.core.coordmanager import merge_coord_managers
+from dascore.core.coordmanager import CoordManager, merge_coord_managers
 from dascore.core.schema import PatchAttrs, PatchFileSummary
-from dascore.exceptions import CoordDataError, PatchAttributeError, PatchDimError
+from dascore.exceptions import (
+    CoordDataError,
+    IncompatiblePatchError,
+    PatchAttributeError,
+    PatchDimError,
+)
 from dascore.utils.docs import compose_docstring, format_dtypes
 from dascore.utils.misc import all_diffs_close_enough, get_middle_value
 from dascore.utils.models import merge_models
@@ -536,3 +541,97 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
         )
         raise CoordDataError(msg)
     return 1.0 / d_dim
+
+
+def merge_compatible_coords_attrs(
+    patch1: PatchType, patch2: PatchType, attrs_to_ignore=("history",)
+) -> Tuple[CoordManager, PatchAttrs]:
+    """
+    Merge the coordinates and attributes of patches or raise if incompatible.
+
+    The rules for compatibility are:
+        - All attrs must be equal other than history.
+        - Patches must share the same dimensions, in the same order
+        - All dimensional coordinates must be strictly equal
+        - If patches share a non-dimensional coordinate they must be equal.
+    Any coordinates or attributes contained by a single patch will be included
+    in the output.
+
+    Parameters
+    ----------
+    patch1
+        The first patch
+    patch2
+        The second patch
+    attr_ignore
+        A sequence of attributes to not consider in equality. Only these
+        attributes from the first patch are kept in outputs.
+    """
+
+    def _check_dims(dims1, dims2):
+        if dims1 == dims2:
+            return
+        msg = (
+            "Patches are not compatible because their dimensions are not equal."
+            f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
+        )
+        raise IncompatiblePatchError(msg)
+
+    def _check_coords(cm1, cm2):
+        cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)
+        shared = cset1 & cset2
+        not_equal_coords = []
+        for coord in shared:
+            coord1 = cm1.coord_map[coord]
+            coord2 = cm2.coord_map[coord]
+            if coord1 == coord2:
+                continue
+            not_equal_coords.append(coord)
+        if not_equal_coords:
+            msg = (
+                f"Patches are not compatible. The following shared coordinates "
+                f"are not equal {coord}"
+            )
+            raise IncompatiblePatchError(msg)
+
+    def _merge_coords(coords1, coords2):
+        out = {}
+        coord_names = set(coords1.coord_map) & set(coords2.coord_map)
+        # fast patch to update identical coordinates
+        if len(coord_names) == len(coords1.coord_map):
+            return coords1
+        # otherwise just squish coords from both managers together.
+        for name in coord_names:
+            coord = coords1 if name in coords1.coord_map else coords2
+            dims = coord.dim_map[name]
+            out[name] = (dims, coord.coord_map[name])
+        return dc.core.coordmanager.get_coord_manager(out, dims=coords1.dims)
+
+    def _merge_models(attrs1, attrs2):
+        """Ensure models are equal in the right ways."""
+        no_comp_keys = set(attrs_to_ignore)
+        if attrs1 == attrs2:
+            return attrs1
+        dict1, dict2 = dict(attrs1), dict(attrs2)
+        common_keys = set(dict1) & set(dict2)
+        ne_attrs = []
+        for key in common_keys:
+            if key in no_comp_keys:
+                continue
+            if dict2[key] != dict1[key]:
+                ne_attrs.append(key)
+        if ne_attrs:
+            msg = (
+                "Patches are not compatible because the following attributes "
+                f"are not equal. {ne_attrs}"
+            )
+            raise IncompatiblePatchError(msg)
+        return merge_models([attrs1, attrs2], conflicts="keep_first")
+
+    _check_dims(patch1.dims, patch2.dims)
+    coord1, coord2 = patch1.coords, patch2.coords
+    attrs1, attrs2 = patch1.attrs, patch2.attrs
+    _check_coords(coord1, coord2)
+    coord_out = _merge_coords(coord1, coord2)
+    attrs = _merge_models(attrs1, attrs2)
+    return coord_out, attrs

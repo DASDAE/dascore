@@ -49,10 +49,18 @@ class BaseTransformatter(abc.ABC):
         func = self._forward_unit_label if forward else self._inverse_unit_label
         index_list = [index] if index is not None else range(len(dims))
         out = dict(attrs)  # this ensures we have a dict and a copy
+        new_units = []
         for ind in index_list:
             dim_unit_attr_name = f"{dims[ind]}_units"
             if dim_unit_attr_name in out:
-                out[dim_unit_attr_name] = func(out[dim_unit_attr_name])
+                quant = func(out[dim_unit_attr_name])
+                out[dim_unit_attr_name] = quant
+                new_units.append(get_quantity(quant))
+        if "data_units" in out and (dunits := out["data_units"]) is not None:
+            data_units = get_quantity(dunits)
+            for new_unit in new_units:
+                data_units /= new_unit
+            out["data_units"] = str(data_units)
         return out
 
     def transform_dims_and_attrs(self, dims, attrs, index=None, forward=True):

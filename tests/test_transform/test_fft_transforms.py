@@ -33,3 +33,25 @@ class TestRfft:
         """Ensure abs works with rfft to get amplitude spectra."""
         out = rfft_patch.abs()
         assert np.allclose(out.data, np.abs(rfft_patch.data))
+
+    def test_time_coord_units(self, random_patch, rfft_patch):
+        """Ensure time label units have been correctly set."""
+        units1 = random_patch.coords.coord_map["time"].units
+        units2 = rfft_patch.coords.coord_map["ft_time"].units
+        assert get_quantity(units1) == 1 / get_quantity(units2)
+
+    def test_data_units(self, random_patch):
+        """Ensure data units have been updated."""
+        patch = random_patch.update_attrs(data_units="m/s")
+        fft_patch = patch.tran.rfft("time")
+        dunits1 = get_quantity(patch.attrs.data_units)
+        dunits2 = get_quantity(fft_patch.attrs.data_units)
+        assert dunits2 == dunits1 * get_quantity("second")
+
+    def test_parsevals_theorem(self, random_patch, rfft_patch):
+        """Ensure parsevals theorem holds for transform."""
+        # TODO work on this after integrate and diff are implemented.
+        pytest.skip("not yet implemented.")
+        # pa1 = (random_patch**2).integrate("time")
+        # pa2 = (rfft_patch**2).integrate("frequency")
+        # breakpoint()

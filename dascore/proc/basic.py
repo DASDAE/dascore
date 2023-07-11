@@ -5,8 +5,11 @@ from typing import Literal
 
 import numpy as np
 
+import dascore as dc
 from dascore.constants import PatchType
-from dascore.utils.patch import patch_function
+from dascore.exceptions import UnitError
+from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.utils.patch import merge_compatible_coords_attrs, patch_function
 
 
 @patch_function()
@@ -69,13 +72,13 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
 
 
 @patch_function()
-def rename(self: PatchType, **names) -> PatchType:
+def rename_coords(self: PatchType, **kwargs) -> PatchType:
     """
-    Rename coordinate or dimensions of Patch.
+    Rename coordinate of Patch.
 
     Parameters
     ----------
-    **names
+    **kwargs
         The mapping from old names to new names
 
     Examples
@@ -83,11 +86,37 @@ def rename(self: PatchType, **names) -> PatchType:
     >>> from dascore.examples import get_example_patch
     >>> pa = get_example_patch()
     >>> # rename dim "distance" to "fragrance"
-    >>> pa2 = pa.rename(distance='fragrance')
+    >>> pa2 = pa.rename_coords(distance='fragrance')
     >>> assert 'fragrance' in pa2.dims
     """
-    new_coord = self.coords.rename_coord(**names)
-    return self.new(coords=new_coord, dims=new_coord.dims)
+    new_coord = self.coords.rename_coord(**kwargs)
+    attrs = self.attrs.rename_dimension(**kwargs)
+    return self.new(coords=new_coord, dims=new_coord.dims, attrs=attrs)
+
+
+@patch_function()
+def update_coords(self: PatchType, **kwargs) -> PatchType:
+    """
+    Update the coordiantes of a patch.
+
+    Will either add new coordinates, or update existing ones.
+
+    Parameters
+    ----------
+    **kwargs
+        The mapping from old names to new names
+
+    Examples
+    --------
+    >>> from dascore.examples import get_example_patch
+    >>> pa = get_example_patch()
+    >>> # rename dim "distance" to "fragrance"
+    >>> pa2 = pa.rename_coords(distance='fragrance')
+    >>> assert 'fragrance' in pa2.dims
+    """
+    new_coord = self.coords.update_coords(**kwargs)
+    attrs = self.attrs.rename_dimension(**kwargs)
+    return self.new(coords=new_coord, dims=new_coord.dims, attrs=attrs)
 
 
 @patch_function()
@@ -166,3 +195,80 @@ def standardize(
     std = np.std(data, axis=axis, keepdims=True)
     new_data = (data - mean) / std
     return self.new(data=new_data)
+
+
+@patch_function()
+def integrate(patch: PatchType, dim: str) -> PatchType:
+    """
+    Integrate along a specified dimension.
+
+    Parameters
+    ----------
+    patch
+        Patch object for integration.
+    dim
+        The dimension along which to integrate.
+    """
+
+
+@patch_function()
+def apply_operator(patch: PatchType, other, operator) -> PatchType:
+    """
+    Apply a ufunc-type operator to a patch.
+
+    This is used to implement a patch's operator overload.
+
+    Parameters
+    ----------
+    patch
+        The patch instance.
+    other
+        The other object to apply the operator element-wise. Must be either a
+        non-patch which is broadcastable to the shape of the patch's data, or
+        a patch which has compatible coordinates. If units are provided they
+        must be compatible.
+    operator
+        The operator. Must be numpy ufunc-like.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> from dascore.proc.basic import apply_operator
+    >>> patch = dc.get_example_patch()
+    >>> # multiply the patch by 10
+    >>> new = apply_operator(patch, 10, np.multiply)
+    >>> assert np.allclose(patch.data * 10, new.data)
+    >>> # add a random value to each element of patch data
+    >>> noise = np.random.random(patch.shape)
+    >>> new = apply_operator(patch, noise, np.add)
+    >>> assert np.allclose(new.data, patch.data + noise)
+    >>> # subtract one patch from another. Coords and attrs must be compatible
+    >>> new = patch - patch
+    >>> assert np.allclose(new.data, 0)
+    """
+    if isinstance(other, dc.Patch):
+        coords, attrs = merge_compatible_coords_attrs(patch, other)
+        other = other.data
+        if other_units := get_quantity(attrs.data_units):
+            other = other * other_units
+    else:
+        coords, attrs = patch.coords, patch.attrs
+    # handle units of output
+    if isinstance(other, (Quantity, Unit)):
+        data_units = get_quantity(attrs.data_units)
+        data = patch.data if data_units is None else patch.data * data_units
+        # other is not numpy array wrapped w/ quantity, convert to quant
+        if not hasattr(other, "shape"):
+            other = get_quantity(other)
+        try:
+            new_data_w_units = operator(data, other)
+        except DimensionalityError:
+            msg = f"{operator} failed with units {data_units} and {other.units}"
+            raise UnitError(msg)
+        attrs = attrs.update(data_units=str(new_data_w_units.units))
+        new_data = new_data_w_units.magnitude
+    else:  # simpler case; no units.
+        new_data = operator(patch.data, other)
+    new = patch.new(data=new_data, coords=coords, attrs=attrs)
+    return new

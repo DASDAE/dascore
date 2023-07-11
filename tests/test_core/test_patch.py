@@ -1,6 +1,7 @@
 """
 Tests for Trace2D object.
 """
+import operator
 import weakref
 
 import numpy as np
@@ -11,6 +12,7 @@ from rich.text import Text
 import dascore as dc
 from dascore.core import Patch
 from dascore.core.coords import CoordRange
+from dascore.proc.basic import apply_operator
 
 
 def get_simple_patch() -> Patch:
@@ -440,6 +442,15 @@ class TestUpdateAttrs:
         assert pa.attrs.distance_min == 10
         assert not np.any(pd.isnull(pa.coords["distance"]))
 
+    def test_update_units(self, random_patch):
+        """Ensure units can be updated in attrs."""
+        new_dist = "ft"
+        patch = random_patch.update_attrs(distance_units=new_dist)
+        coord = patch.coords.coord_map["distance"]
+        assert coord.units == new_dist
+        patch2 = random_patch.convert_units(distance=new_dist)
+        assert patch == patch2
+
 
 class TestSqueeze:
     """Tests for squeeze."""
@@ -561,3 +572,37 @@ class TestCoords:
         assert 1 in new.shape
         new_coords = new.coords.coord_map
         assert isinstance(new_coords["time"], CoordRange)
+
+
+class TestApplyOperator:
+    """Tests for applying various ufunc-type operators."""
+
+    ops = (
+        operator.add,
+        operator.sub,
+        operator.mul,
+        operator.truediv,
+        operator.floordiv,
+        operator.pow,
+    )
+    bool_ops = (
+        operator.and_,
+        operator.or_,
+    )
+
+    @pytest.fixture(params=ops)
+    def operation(self, request):
+        """Parameterization to get operator."""
+        return request.param
+
+    def test_scalar1(self, random_patch, operation):
+        """Tests for scalar operators."""
+        new = operation(random_patch, 2)
+        expected = operation(random_patch.data, 2)
+        assert np.allclose(new.data, expected)
+
+    def test_array_like(self, random_patch):
+        """Ensure array-like operations work."""
+        ones = np.ones(random_patch.shape)
+        new = apply_operator(random_patch, ones, np.add)
+        assert np.allclose(new.data, ones + random_patch.data)

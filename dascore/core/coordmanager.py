@@ -509,6 +509,10 @@ class CoordManager(DascoreBaseModel):
         for name, coord in self.coord_map.items():
             start, stop = attrs.get(f"{name}_min"), attrs.get(f"{name}_max")
             step = attrs.get(f"d_{name}")
+            # update units, use type so None can be set.
+            if (data_units := attrs.get(f"{name}_units", type)) is not type:
+                coord = coord.convert_units(data_units)
+                out[name] = coord
             # quick path for not updating.
             all_none = all([x is None for x in (start, stop, step)])
             limits_equal = coord.max() == stop and coord.min() == start
@@ -648,6 +652,12 @@ class CoordManager(DascoreBaseModel):
             for d in new.dims
         )
         return new, slices
+
+    @property
+    @cache
+    def coord_shapes(self) -> Dict[str, Tuple[int, ...]]:
+        """Get a dict of {coord_name: shape}"""
+        return {i: v.shape for i, v in self.coord_map.items()}
 
     @property
     @cache

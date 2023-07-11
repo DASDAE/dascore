@@ -149,6 +149,25 @@ class PatchAttrs(BaseModel):
         """Return a tuple of dimensions. The dims attr is a string."""
         return tuple(self.dims.split(","))
 
+    def rename_dimension(self, **kwargs):
+        """
+        Rename one or more dimensions if in kwargs. Return new PatchAttrs.
+        """
+        if not (dims := set(kwargs) & set(self.dim_tuple)):
+            return self
+        new = dict(self)
+        new_dims = list(self.dim_tuple)
+        for old_name, new_name in {x: kwargs[x] for x in dims}.items():
+            new_dims[new_dims.index(old_name)] = new_name
+        new["dims"] = tuple(new_dims)
+        return self.__class__(**new)
+
+    def update(self, **kwargs) -> Self:
+        """Update an attribute in the model, return new model."""
+        out = dict(self)
+        out.update(kwargs)
+        return self.__class__(**out)
+
 
 class PatchFileSummary(PatchAttrs):
     """
