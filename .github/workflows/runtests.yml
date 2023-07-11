@@ -47,9 +47,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Get tags
-        run: git fetch --tags origin
-
       - name: Get year week
         id: date
         run: echo "date=$(date +'%Y:%U')" >> $GITHUB_STATE
@@ -126,9 +123,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-
-      - name: Get tags
-        run: git fetch --tags origin
 
       - uses: actions/setup-python@v4
         with:
