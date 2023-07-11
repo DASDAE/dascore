@@ -353,8 +353,9 @@ In the case of scalars and numpy arrays, the operations are broadcast over the p
 ## Patch operations with scalars
 
 ```{python}
-import dascore as dc
 import numpy as np
+
+import dascore as dc
 
 patch = dc.get_example_patch()
 
