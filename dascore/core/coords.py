@@ -18,7 +18,7 @@ from dascore.constants import dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit
 from dascore.utils.display import get_nice_text
-from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
+from dascore.utils.misc import all_diffs_close_enough, iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, UnitQuantity
 from dascore.utils.time import is_datetime64, is_timedelta64
 
@@ -861,14 +861,16 @@ def get_coord(
         is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)
         # the array cannot be evenly sampled if it isn't monotonic
         if is_monotonic:
-            unique_diff = np.unique(view2 - view1)
+            diffs = view2 - view1
+            unique_diff = np.unique(diffs)
             # here we are dealing with a length 0 or 1 array.
-            if not len(unique_diff):
+            if len(view2) < 2:
                 return None, None, None, False
             if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
                 _min = data[0]
                 _max = data[-1]
-                _step = get_middle_value(unique_diff)
+                # this is a poor man's median that preserves dtype
+                _step = np.sort(diffs)[len(diffs) // 2]
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 

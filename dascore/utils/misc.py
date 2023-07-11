@@ -329,7 +329,9 @@ def all_diffs_close_enough(diffs):
     if is_td or is_dt:
         diffs = diffs.astype(np.int64).astype(np.float64)
     med = np.median(diffs)
-    return np.allclose(diffs, med)
+    # Note: The rtol parameter here is a bit arbitrary; it was set
+    # based on experience but there is probably a better way to do this.
+    return np.allclose(diffs, med, rtol=0.001)
 
 
 def unbyte(byte_or_str: Union[bytes, str]) -> str:

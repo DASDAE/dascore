@@ -16,6 +16,18 @@ from dascore.utils.misc import get_middle_value
 from dascore.utils.time import to_timedelta64
 
 
+@pytest.fixture(scope="class")
+def spool_dt_perturbed(random_patch) -> dc.BaseSpool:
+    """Create a spool with patches that have slightly different dts."""
+    dts = np.array((0.999722, 0.99985, 0.99973, 0.99986))
+    current_max = random_patch.attrs.time_max
+    patches = []
+    for dt in dts:
+        patch = random_patch.update_attrs(time_min=current_max, d_time=dt)
+        patches.append(patch)
+    return dc.spool(patches)
+
+
 class TestChunk:
     """
     Tests for merging/chunking patches.
@@ -352,3 +364,10 @@ class TestChunkMerge:
         new_at, old_at = patch_new.attrs, patch_old.attrs
         assert new_at["time_max"] == contents["time_max"].max()
         assert new_at["d_time"] == old_at["d_time"] == contents["d_time"].iloc[0]
+
+    def test_perturbed_dt(self, spool_dt_perturbed):
+        """Ensure patches still merge if dt is slightly off."""
+        out = spool_dt_perturbed.chunk(time=...)
+        assert len(out) == 1
+        for patch in out:
+            assert isinstance(patch, dc.Patch)
