@@ -12,9 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Get tags
-        run: git fetch --tags origin
-
       - name: install linting packages
         run: pip install pre-commit
 
