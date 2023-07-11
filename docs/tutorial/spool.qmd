@@ -155,7 +155,7 @@ import dascore as dc
 spool = dc.get_example_spool()
 
 # chunk spool for 3 second increments with 1 second overlaps
-# and keep any segements that don't have full 3600 seconds
+# and keep any segements at the end that don't have the full 3 seconds
 subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
 
 # merge all contiguous segments along time dimension
