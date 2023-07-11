@@ -428,7 +428,8 @@ def _force_patch_merge(patch_dict_list):
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(datas, axis=axis)
     new_coord = _get_new_coord(df, merge_dim, coords)
-    new_attrs = merge_models(attrs, merge_dim)
+    coord = new_coord.coord_map[merge_dim] if merge_dim in dims else None
+    new_attrs = merge_models(attrs, merge_dim, coord=coord)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
