@@ -156,7 +156,7 @@ class Patch:
     def new(
         self: PatchType,
         data: None | ArrayLike = None,
-        coords: None | dict[str | Sequence[str], ArrayLike] = None,
+        coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,
         dims: None | Sequence[str] = None,
         attrs: None | Mapping = None,
     ) -> PatchType:
@@ -259,13 +259,17 @@ class Patch:
         return xr.DataArray(self.data, attrs=attrs, dims=dims, coords=coords)
 
     squeeze = dascore.proc.squeeze
-    rename = dascore.proc.rename
     transpose = dascore.proc.transpose
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_cords
+    rename_coords = dascore.proc.rename_coords
+
     set_units = dascore.proc.set_units
     convert_units = dascore.proc.convert_units
     simplify_units = dascore.proc.simplify_units
+
+    def __pow__(self, power, modulo=None):
+        return dascore.proc.pow(self, power)
 
     # --- processing funcs
 

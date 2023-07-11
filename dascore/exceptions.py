@@ -29,6 +29,10 @@ class PatchError(DASCoreError):
     """Parent class for more specific Patch Errors."""
 
 
+class IncompatiblePatchError(PatchError):
+    """Raised when an operator cannot be performed on a patch."""
+
+
 class CoordError(ValueError, PatchError):
     """Raised when something is wrong with a Coordinate."""
 

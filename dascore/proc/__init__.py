@@ -2,7 +2,7 @@
 Module to Patch Processing.
 """
 from .aggregate import aggregate
-from .basic import abs, normalize, rename, squeeze, standardize, transpose
+from .basic import abs, normalize, pow, rename_coords, squeeze, standardize, transpose
 from .coords import snap_coords, sort_cords
 from .detrend import detrend
 from .filter import median_filter, pass_filter, sobel_filter

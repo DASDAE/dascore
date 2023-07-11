@@ -12,6 +12,7 @@ from dascore.exceptions import MissingOptionalDependency
 from dascore.utils.misc import (
     MethodNameSpace,
     get_slice_from_monotonic,
+    get_stencil_coefs,
     iter_files,
     iterate,
     optional_import,
@@ -248,3 +249,25 @@ class TestOptionalImport:
         """Ensure a module which is missing raises the appropriate Error."""
         with pytest.raises(MissingOptionalDependency, match="boblib4"):
             optional_import("boblib4")
+
+
+class TestGetStencilCoefficients:
+    """Tests for stencil coefficients."""
+
+    def test_3_point_1st_derivative(self):
+        """3 point 1st derivative"""
+        out = get_stencil_coefs(1, 1)
+        expected = np.array([-1 / 2, 0, 1 / 2])
+        assert np.allclose(out, expected)
+
+    def test_5_point_1st_derivative(self):
+        """5 point 1st derivative"""
+        out = get_stencil_coefs(2, 1)
+        expected = np.array([1, -8, 0, 8, -1]) / 12.0
+        assert np.allclose(out, expected)
+
+    def test_3_point_2nd_derivative(self):
+        """3 point 2nd derivative"""
+        out = get_stencil_coefs(1, 2)
+        expected = np.array([1, -2, 1])
+        assert np.allclose(out, expected)

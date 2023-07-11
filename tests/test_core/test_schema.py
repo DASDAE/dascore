@@ -95,3 +95,17 @@ class TestSchemaIsDictLike:
             random_attrs.bob = 1
         with pytest.raises(TypeError, match="is immutable"):
             random_attrs["bob"] = 1
+
+
+class TestRenameDimension:
+    """Ensure rename dimension works."""
+
+    def test_simple_rename(self, random_attrs):
+        """Ensure renaming a dimension works."""
+        attrs = random_attrs
+        new_name = "money"
+        time_ind = attrs.dim_tuple.index("time")
+        out = attrs.rename_dimension(time=new_name)
+        assert new_name in out.dims
+        assert out.dim_tuple[time_ind] == new_name
+        assert len(out.dim_tuple) == len(attrs.dim_tuple)

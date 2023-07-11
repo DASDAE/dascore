@@ -39,18 +39,3 @@ def velocity_to_strain_rate(
     attrs["data_type"] = "strain_rate"
     attrs["gauge_length"] = d_distance * gauge_multiple
     return patch.new(data=new, attrs=attrs)
-
-
-#
-# def convert_velocity_to_strain_rate(
-#         patch: PatchType, gauge_length, dx_dec, start_index2=None, end_index2=None
-# ) -> PatchType:
-#     """The nasty func copied from terra15 note."""
-#     sliced_inp = get_slices_by_range(inp, start_index2, end_index2)
-#     n_t, n_d = sliced_inp[0, :, :].shape  # Convert gauge length to spatial
-#     samplesg = np.int32(round(gauge_length / dx_dec))
-#     inv_gauge_length = np.float32(1.0 / gauge_length)
-#     strain_rates = (
-#         sliced_inp[:, :, g:n_d] - sliced_inp[:, :, 0 : n_d - g]
-#     ) * inv_gauge_length
-#     return strain_rates

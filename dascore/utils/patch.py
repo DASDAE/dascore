@@ -22,9 +22,14 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
-from dascore.core.coordmanager import merge_coord_managers
+from dascore.core.coordmanager import CoordManager, merge_coord_managers
 from dascore.core.schema import PatchAttrs, PatchFileSummary
-from dascore.exceptions import CoordDataError, PatchAttributeError, PatchDimError
+from dascore.exceptions import (
+    CoordDataError,
+    IncompatiblePatchError,
+    PatchAttributeError,
+    PatchDimError,
+)
 from dascore.utils.docs import compose_docstring, format_dtypes
 from dascore.utils.misc import all_diffs_close_enough, get_middle_value
 from dascore.utils.models import merge_models
@@ -535,3 +540,65 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
         )
         raise CoordDataError(msg)
     return 1.0 / d_dim
+
+
+def merge_compatible_coords_attrs(
+    patch1: PatchType, patch2: PatchType
+) -> Tuple[CoordManager, PatchAttrs]:
+    """
+    Merge the coordinates and attributes of patches or raise if incompatible.
+
+    The rules for compatibility are:
+        - All attrs must be equal other than history.
+        - Patches must share the same dimensions, in the same order
+        - All dimensional coordinates must be strictly equal
+        - If patches share a non-dimensional coordinate they must be equal.
+    Any coordinates or attributes contained by a single patch will be included
+    in the output.
+    """
+
+    def _check_dims(dims1, dims2):
+        if dims1 == dims2:
+            return
+        msg = (
+            "Patches are not compatible because their dimensions are not equal."
+            f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
+        )
+        raise IncompatiblePatchError(msg)
+
+    def _check_coords(cm1, cm2):
+        cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)
+        shared = cset1 & cset2
+        not_equal_coords = []
+        for coord in shared:
+            coord1 = cm1.coord_map[coord]
+            coord2 = cm2.coord_map[coord]
+            if coord1 == coord2:
+                continue
+            not_equal_coords.append(coord)
+        if not_equal_coords:
+            msg = (
+                f"Patches are not compatible. The following shared coordinates "
+                f"are not equal {coord}"
+            )
+            raise IncompatiblePatchError(msg)
+
+    def _check_attrs(attrs1, attrs2):
+        pass
+
+    def _merge_coords(coords1, coords2):
+
+        return coords1
+
+    def _merge_attrs(attrs1, attrs2):
+        return attrs1
+
+    _check_dims(patch1.dims, patch2.dims)
+
+    coord1, coord2 = patch1.coords, patch2.coords
+    attrs1, attrs2 = patch1.attrs, patch2.attrs
+
+    _check_coords(coord1, coord2)
+    _check_attrs(attrs1, attrs2)
+
+    return _merge_coords(coord1, coord2), _merge_attrs(attrs1, attrs2)

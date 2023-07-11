@@ -60,6 +60,7 @@ class TestFTUnitRename:
     attrs = {
         "distance_units": str(get_quantity("1.0 m")),
         "time_units": str(get_quantity("1.0 s")),
+        "data_units": str(get_quantity("1.0 V")),
     }
 
     def test_forward_unit_transform(self, ft_reformatter):
@@ -79,3 +80,32 @@ class TestFTUnitRename:
         assert 1 / get_quantity(value) == get_quantity(out[key])
         out_2 = ft_reformatter.rename_attrs(self.dims, out, index=0, forward=False)
         assert out_2 == self.attrs
+
+    def test_data_units_single_index(self, ft_reformatter):
+        """Ensure data units are renamed when a single index is specified."""
+        for index, dim in enumerate(self.dims):
+            out = ft_reformatter.rename_attrs(
+                self.dims, self.attrs, index=index, forward=False
+            )
+            new_units = get_quantity(out["data_units"])
+            old_units = get_quantity(self.attrs["data_units"])
+            old_coord_units = get_quantity(self.attrs[f"{dim}_units"])
+            assert new_units == old_units * old_coord_units
+            # now check round tripping
+            rt = ft_reformatter.rename_attrs(
+                self.dims,
+                out,
+                index=index,
+                forward=True,
+            )
+            assert get_quantity(rt["data_units"]) == old_units
+
+    def test_data_units_no_index(self, ft_reformatter):
+        """Ensure data units are renamed when all units are specified."""
+        out = ft_reformatter.rename_attrs(self.dims, self.attrs)
+        dunit = get_quantity(self.attrs["data_units"])
+        time_unit = get_quantity(self.attrs["time_units"])
+        dist_units = get_quantity(self.attrs["distance_units"])
+        assert get_quantity(out["data_units"]) == dunit * time_unit * dist_units
+        reverse = ft_reformatter.rename_attrs(self.dims, out)
+        assert get_quantity(reverse["data_units"]) == dunit

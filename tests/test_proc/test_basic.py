@@ -4,6 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from dascore.exceptions import IncompatiblePatchError
+from dascore.proc.basic import apply_operator
+
 
 class TestAbs:
     """Test absolute values."""
@@ -122,3 +125,26 @@ class TestStandarize:
         assert np.allclose(
             np.round(np.mean(out.data, axis=axis, keepdims=True), decimals=1), 0.0
         )
+
+
+class TestApplyOperator:
+    """Tests for applying various ufunc-type operators."""
+
+    def test_scalar(self, random_patch):
+        """Test for a single scalar."""
+        new = apply_operator(random_patch, 10, np.multiply)
+        assert np.allclose(new.data, random_patch.data * 10)
+
+    def test_array_like(self, random_patch):
+        """Ensure array-like operations work."""
+        ones = np.ones_like(random_patch.shape)
+        new = apply_operator(random_patch, ones, np.add)
+        assert np.allclose(new.data, ones + random_patch.data)
+
+    def test_incompatible_coords(self, random_patch):
+        """Ensure incompatible dimensions raises."""
+        assert False
+        # new = random_patch.update_attrs(time_min=random_patch.attrs.time_max)
+        # breakpoint()
+        # with pytest.raises(IncompatiblePatchError):
+        #     apply_operator(new, random_patch)
