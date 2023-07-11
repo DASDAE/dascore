@@ -162,6 +162,12 @@ class PatchAttrs(BaseModel):
         new["dims"] = tuple(new_dims)
         return self.__class__(**new)
 
+    def update(self, **kwargs) -> Self:
+        """Update an attribute in the model, return new model."""
+        out = dict(self)
+        out.update(kwargs)
+        return self.__class__(**out)
+
 
 class PatchFileSummary(PatchAttrs):
     """

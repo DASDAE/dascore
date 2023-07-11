@@ -78,3 +78,12 @@ class TestMergeModels:
         assert isinstance(out, PatchAttrs)
         assert out.tag == defaults.tag
         assert out.station == defaults.station
+
+    def test_keep_disjoint_values(self, random_patch):
+        """Ensure when disjoint values should be kept they are."""
+        random_attrs = random_patch.attrs
+        new = dict(random_attrs)
+        new["jazz_hands"] = 1984
+        attrs1 = PatchAttrs(**new)
+        out = merge_models([attrs1, random_attrs], conflicts="keep_first")
+        assert out.jazz_hands == 1984

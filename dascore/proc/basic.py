@@ -1,12 +1,15 @@
 """
 Basic operations for patches.
 """
-from typing import Literal, Union
+from typing import Literal
 
 import numpy as np
 
+import dascore as dc
 from dascore.constants import PatchType
-from dascore.utils.patch import patch_function
+from dascore.exceptions import UnitError
+from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.utils.patch import merge_compatible_coords_attrs, patch_function
 
 
 @patch_function()
@@ -111,7 +114,7 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa2 = pa.rename_coords(distance='fragrance')
     >>> assert 'fragrance' in pa2.dims
     """
-    new_coord = self.coords.rename_coord(**kwargs)
+    new_coord = self.coords.update_coords(**kwargs)
     attrs = self.attrs.rename_dimension(**kwargs)
     return self.new(coords=new_coord, dims=new_coord.dims, attrs=attrs)
 
@@ -237,38 +240,35 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
     >>> new = apply_operator(patch, 10, np.multiply)
     >>> assert np.allclose(patch.data * 10, new.data)
     >>> # add a random value to each element of patch data
-    >>> noise = np.random.random(patch.size)
+    >>> noise = np.random.random(patch.shape)
     >>> new = apply_operator(patch, noise, np.add)
     >>> assert np.allclose(new.data, patch.data + noise)
     >>> # subtract one patch from another. Coords and attrs must be compatible
     >>> new = patch - patch
     >>> assert np.allclose(new.data, 0)
     """
-    new_data = operator(patch.data, other)
-    new = patch.new(data=new_data)
+    if isinstance(other, dc.Patch):
+        coords, attrs = merge_compatible_coords_attrs(patch, other)
+        other = other.data
+        if other_units := get_quantity(attrs.data_units):
+            other = other * other_units
+    else:
+        coords, attrs = patch.coords, patch.attrs
+    # handle units of output
+    if isinstance(other, (Quantity, Unit)):
+        data_units = get_quantity(attrs.data_units)
+        data = patch.data if data_units is None else patch.data * data_units
+        # other is not numpy array wrapped w/ quantity, convert to quant
+        if not hasattr(other, "shape"):
+            other = get_quantity(other)
+        try:
+            new_data_w_units = operator(data, other)
+        except DimensionalityError:
+            msg = f"{operator} failed with units {data_units} and {other.units}"
+            raise UnitError(msg)
+        attrs = attrs.update(data_units=str(new_data_w_units.units))
+        new_data = new_data_w_units.magnitude
+    else:  # simpler case; no units.
+        new_data = operator(patch.data, other)
+    new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
-
-
-@patch_function()
-def pow(patch: PatchType, pow: Union[int, float]) -> PatchType:
-    """
-    Raise a patch to a power.
-
-    Only accepts ints, floats.
-
-    Parameters
-    ----------
-    patch
-        A patch instance.
-    pow
-        The power to which the patch data will be raised.
-
-    Examples
-    --------
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> pow = patch ** 2
-    >>> assert np.allclose(patch.data**2, pow.data)
-    """
-    new_data = patch.data**pow
-    return patch.new(data=new_data)

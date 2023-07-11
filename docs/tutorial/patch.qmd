@@ -276,14 +276,11 @@ pa = (
 
 # Adding Coordinates
 
-It is common to have additional coordinates, such as latitude/longitude,
-attached to a particular dimension (e.g., distance). There are two ways
-to add coordinates to a patch:
+It is common to have additional coordinates, such as latitude/longitude,  attached to a particular dimension (e.g., distance). There are two ways to add coordinates to a patch:
 
-## Assign Coordinates
+## Update Coordinates
 
-The [assign_coordinates](`dascore.utils.coords.assign_coords`) method will
-add the requested coordinates and return a new patch instance.
+The [update_coords](`dascore.Patch.update_coords`) method will return a new patch with the coordinate added, if it didn't exist in the original, or replaced, if it did.
 
 ```{python}
 import numpy as np
@@ -295,18 +292,18 @@ time = coords['time']
 
 # Add a single coordinate associated with distance dimension
 lat = np.arange(0, len(dist)) * .001 -109.857952
-out_1 = pa.assign_coords(latitude=('distance', lat))
+out_1 = pa.update_coords(latitude=('distance', lat))
 
 # Add multiple coordinates associated with distance dimension
 lon = np.arange(0, len(dist)) *.001 + 41.544654
-out_2 = pa.assign_coords(
+out_2 = pa.update_coords(
     latitude=('distance', lat),
     longitude=('distance', lon),
 )
 
 # Add multi-dimensional coordinates
 quality = np.ones_like(pa.data)
-out_3 = pa.assign_coords(
+out_3 = pa.update_coords(
     quality=(pa.dims, quality)
 )
 ```
@@ -346,3 +343,91 @@ coords = dict(
 dims = ("distance", "time")
 out = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
 ```
+
+# Patch Operations
+
+Patches implement common operators which means that many [ufunc](https://numpy.org/doc/stable/reference/ufuncs.html) type operations can be applied directly on a patch with built-in python operators.
+
+In the case of scalars and numpy arrays, the operations are broadcast over the patch data. In the case of two patches, compatibility between patches are first checked, the intersection of the coords and attrs are calculated, then the operator is applied to both patchs' data. Here are a few examples:
+
+## Patch operations with scalars
+
+```{python}
+import dascore as dc
+import numpy as np
+
+patch = dc.get_example_patch()
+
+out1 = patch / 10
+assert np.allclose(patch.data / 10, out1.data)
+
+out2 = patch ** 2.3
+assert np.allclose(patch.data ** 2.3, out2.data)
+
+out3 = patch - 3
+assert np.allclose(patch.data - 3, out3.data)
+```
+
+Units are also fully supported.
+
+```{python}
+import dascore as dc
+from dascore.units import m, s
+
+patch = dc.get_example_patch().set_units("m/s")
+
+# multiplying patches by a quantity with units updates the data_units attribute.
+new = patch * 10 * m/s
+
+print(f"units before operation {patch.attrs.data_units}")
+print(f"units after operation {new.attrs.data_units}")
+```
+
+## Patch operations with numpy arrays
+
+```{python}
+import numpy as np
+
+import dascore as dc
+
+patch = dc.get_example_patch()
+ones = np.ones(patch.shape)
+
+out1 = patch + ones
+assert np.allclose(patch.data + ones, out1.data)
+```
+
+Units also work with numpy arrays.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+from dascore.units import furlongs
+
+patch = dc.get_example_patch()
+ones = np.ones(patch.shape) * furlongs
+
+out1 = patch * ones
+print(f"units before operation {patch.attrs.data_units}")
+print(f"units after operation {out1.attrs.data_units}")
+```
+
+## Patch operations with other patches
+
+```{python}
+import numpy as np
+
+import dascore as dc
+from dascore.units import furlongs
+
+patch = dc.get_example_patch()
+
+# adding two patches together simply adds their data and checks/merges their
+# coords and attrs.
+out = patch + patch
+
+assert np.allclose(patch.data * 2, out.data)
+```
+
+See [`merge_compatible_coords_attrs`](`dascore.utils.patch.merge_compatible_coords_attrs`) for more details on how attributes and coordinates are handled when performing operations on two patches.

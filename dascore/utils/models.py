@@ -1,6 +1,7 @@
 """
 Utilities for models.
 """
+from collections import ChainMap
 from functools import _lru_cache_wrapper, cached_property, reduce
 from typing import Optional, Sequence
 
@@ -104,7 +105,7 @@ class UnitQuantity(str, SimpleValidator):
 def merge_models(
     model_list: Sequence[BaseModel],
     dim: Optional[str] = None,
-    conflicts: Literal["drop", "raise"] = "raise",
+    conflicts: Literal["drop", "raise", "keep_first"] = "raise",
     drop_attrs: Optional[Sequence[str]] = None,
 ):
     """
@@ -122,7 +123,8 @@ def merge_models(
         indicated by dim. If "drop" simply drop conflicting attributes,
         or attributes not shared by all models. If "raise" raise an
         [AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when
-        issues are encountered.
+        issues are encountered. If "keep_first", just keep the first value
+        for each attribute.
     drop_attrs
         If provided, attributes which should be dropped.
     """
@@ -186,6 +188,8 @@ def merge_models(
 
     def _handle_other_attrs(mod_dict_list):
         """Check the other attributes and handle based on conflicts param."""
+        if conflicts == "keep_first":
+            return [dict(ChainMap(*mod_dict_list))]
         no_null_ = _replace_null_with_None(mod_dict_list)
         all_eq = all(no_null_[0] == x for x in no_null_)
         if all_eq:

@@ -3,7 +3,7 @@ A 2D trace object.
 """
 from __future__ import annotations
 
-from typing import Callable, Mapping, Optional, Sequence, Union
+from typing import Callable, Dict, Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -13,7 +13,6 @@ import dascore.proc
 from dascore.compat import DataArray, array
 from dascore.constants import PatchType
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import assign_coords
 from dascore.core.schema import PatchAttrs
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
@@ -86,17 +85,27 @@ class Patch:
 
     def __eq__(self, other):
         """
-        Compare one Trace2D to another.
-
-        Parameters
-        ----------
-        other
-
-        Returns
-        -------
-
+        Compare one Patch.
         """
         return self.equals(other)
+
+    def __add__(self, other):
+        return dascore.proc.apply_operator(self, other, np.add)
+
+    def __sub__(self, other):
+        return dascore.proc.apply_operator(self, other, np.subtract)
+
+    def __floordiv__(self, other):
+        return dascore.proc.apply_operator(self, other, np.floor_divide)
+
+    def __truediv__(self, other):
+        return dascore.proc.apply_operator(self, other, np.divide)
+
+    def __mul__(self, other):
+        return dascore.proc.apply_operator(self, other, np.multiply)
+
+    def __pow__(self, other):
+        return dascore.proc.apply_operator(self, other, np.power)
 
     def __rich__(self):
         dascore_text = get_dascore_text()
@@ -158,7 +167,7 @@ class Patch:
         data: None | ArrayLike = None,
         coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,
         dims: None | Sequence[str] = None,
-        attrs: None | Mapping = None,
+        attrs: None | Mapping | PatchAttrs = None,
     ) -> PatchType:
         """
         Return a copy of the Patch with updated data, coords, dims, or attrs.
@@ -224,6 +233,11 @@ class Patch:
         return self.coords.dims
 
     @property
+    def coord_shapes(self) -> Dict[str, tuple[int, ...]]:
+        """Return a dict of coordinate: (shape, ...)"""
+        return self.coords.coord_shapes
+
+    @property
     def attrs(self) -> PatchAttrs:
         """Return the dimensions contained in patch."""
         return self._attrs
@@ -263,13 +277,12 @@ class Patch:
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_cords
     rename_coords = dascore.proc.rename_coords
+    update_coords = dascore.proc.update_coords
+    assign_coords = dascore.proc.update_coords
 
     set_units = dascore.proc.set_units
     convert_units = dascore.proc.convert_units
     simplify_units = dascore.proc.simplify_units
-
-    def __pow__(self, power, modulo=None):
-        return dascore.proc.pow(self, power)
 
     # --- processing funcs
 
@@ -326,6 +339,3 @@ class Patch:
             Keyword arguments passed to func.
         """
         return func(self, *args, **kwargs)
-
-    # Bind assign_coords as method
-    assign_coords = assign_coords

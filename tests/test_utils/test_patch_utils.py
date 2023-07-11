@@ -1,6 +1,7 @@
 """
 Test patch utilities.
 """
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -165,10 +166,24 @@ class TestMergeCompatibleCoordsAttrs:
         with pytest.raises(IncompatiblePatchError, match=match):
             merge_compatible_coords_attrs(new, random_patch)
 
+    def test_incompatible_attrs(self, random_patch):
+        """Ensure if attrs are off an Error is raised."""
+        new = random_patch.update_attrs(network="TA")
+        match = "attributes are not equal"
+        with pytest.raises(IncompatiblePatchError, match=match):
+            merge_compatible_coords_attrs(new, random_patch)
+
     def test_extra_coord(self, random_patch, random_patch_with_lat_lon):
         """Extra coords on both patch should end up in the merged."""
-        pa1, pa2 = random_patch, random_patch_with_lat_lon
-        # add new coordinate to patch 1
+        new_coord = np.ones(random_patch.coord_shapes["time"])
+        pa1 = random_patch.update_coords(new_time=("time", new_coord))
+        pa2 = random_patch_with_lat_lon
         expected = set(pa1.coords.coord_map) & set(pa2.coords.coord_map)
         coords, attrs = merge_compatible_coords_attrs(pa1, pa2)
         assert set(coords.coord_map) == expected
+
+    def test_extra_attrs(self, random_patch):
+        """Ensure extra attributes are added to patch."""
+        patch = random_patch.update_attrs(new_attr=10)
+        coords, attrs = merge_compatible_coords_attrs(patch, random_patch)
+        assert attrs.get("new_attr") == 10

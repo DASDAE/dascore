@@ -655,6 +655,12 @@ class CoordManager(DascoreBaseModel):
 
     @property
     @cache
+    def coord_shapes(self) -> Dict[str, Tuple[int, ...]]:
+        """Get a dict of {coord_name: shape}"""
+        return {i: v.shape for i, v in self.coord_map.items()}
+
+    @property
+    @cache
     def dim_to_coord_map(self) -> FrozenDict[str, Tuple[str, ...]]:
         """Get a dimension to coordinate map."""
         out = defaultdict(list)

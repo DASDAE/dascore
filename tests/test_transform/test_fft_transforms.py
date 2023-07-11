@@ -50,7 +50,8 @@ class TestRfft:
 
     def test_parsevals_theorem(self, random_patch, rfft_patch):
         """Ensure parsevals theorem holds for transform."""
-        assert False
+        # TODO work on this after integrate and diff are implemented.
+        pytest.skip("not yet implemented.")
         # pa1 = (random_patch**2).integrate("time")
         # pa2 = (rfft_patch**2).integrate("frequency")
         # breakpoint()

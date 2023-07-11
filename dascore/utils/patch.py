@@ -543,7 +543,7 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
 
 
 def merge_compatible_coords_attrs(
-    patch1: PatchType, patch2: PatchType
+    patch1: PatchType, patch2: PatchType, attrs_to_ignore=("history",)
 ) -> Tuple[CoordManager, PatchAttrs]:
     """
     Merge the coordinates and attributes of patches or raise if incompatible.
@@ -555,6 +555,16 @@ def merge_compatible_coords_attrs(
         - If patches share a non-dimensional coordinate they must be equal.
     Any coordinates or attributes contained by a single patch will be included
     in the output.
+
+    Parameters
+    ----------
+    patch1
+        The first patch
+    patch2
+        The second patch
+    attr_ignore
+        A sequence of attributes to not consider in equality. Only these
+        attributes from the first patch are kept in outputs.
     """
 
     def _check_dims(dims1, dims2):
@@ -583,22 +593,44 @@ def merge_compatible_coords_attrs(
             )
             raise IncompatiblePatchError(msg)
 
-    def _check_attrs(attrs1, attrs2):
-        pass
-
     def _merge_coords(coords1, coords2):
+        out = {}
+        coord_names = set(coords1.coord_map) & set(coords2.coord_map)
+        # fast patch to update identical coordinates
+        if len(coord_names) == len(coords1.coord_map):
+            return coords1
+        # otherwise just squish coords from both managers together.
+        for name in coord_names:
+            coord = coords1 if name in coords1.coord_map else coords2
+            dims = coord.dim_map[name]
+            out[name] = (dims, coord.coord_map[name])
+        return dc.core.coordmanager.get_coord_manager(out, dims=coords1.dims)
 
-        return coords1
-
-    def _merge_attrs(attrs1, attrs2):
-        return attrs1
+    def _merge_models(attrs1, attrs2):
+        """Ensure models are equal in the right ways."""
+        no_comp_keys = set(attrs_to_ignore)
+        if attrs1 == attrs2:
+            return attrs1
+        dict1, dict2 = dict(attrs1), dict(attrs2)
+        common_keys = set(dict1) & set(dict2)
+        ne_attrs = []
+        for key in common_keys:
+            if key in no_comp_keys:
+                continue
+            if dict2[key] != dict1[key]:
+                ne_attrs.append(key)
+        if ne_attrs:
+            msg = (
+                "Patches are not compatible because the following attributes "
+                f"are not equal. {ne_attrs}"
+            )
+            raise IncompatiblePatchError(msg)
+        return merge_models([attrs1, attrs2], conflicts="keep_first")
 
     _check_dims(patch1.dims, patch2.dims)
-
     coord1, coord2 = patch1.coords, patch2.coords
     attrs1, attrs2 = patch1.attrs, patch2.attrs
-
     _check_coords(coord1, coord2)
-    _check_attrs(attrs1, attrs2)
-
-    return _merge_coords(coord1, coord2), _merge_attrs(attrs1, attrs2)
+    coord_out = _merge_coords(coord1, coord2)
+    attrs = _merge_models(attrs1, attrs2)
+    return coord_out, attrs
