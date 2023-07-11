@@ -818,8 +818,8 @@ def _get_coord_dim_map(coords, dims, attrs=None):
         # pull out any relevant info from attrs.
         maybe_attrs = attrs or {}
         units = maybe_attrs.get(f"{name}_units", None)
-        d_time = maybe_attrs.get(f"d_{name}", None)
-        coord_out = get_coord(values=coord[1], units=units, step=d_time)
+        step = maybe_attrs.get(f"d_{name}", None)
+        coord_out = get_coord(values=coord[1], units=units, step=step)
         assert coord_out.shape == np.shape(coord[1])
         return coord_out, dim_names
 

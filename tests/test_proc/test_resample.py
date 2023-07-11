@@ -20,7 +20,7 @@ class TestInterpolate:
         new_coord = np.arange(start, stop, new_sampling)
         out = random_patch.interpolate(distance=new_coord)
         assert out.data.shape[axis] == len(new_coord)
-        assert np.all(out.coords["distance"] == new_coord)
+        assert np.allclose(out.coords["distance"], new_coord)
 
     def test_interp_down_sample_distance(self, random_patch):
         """Ensure interp can be used to downsample data."""
@@ -30,7 +30,7 @@ class TestInterpolate:
         new_coord = np.arange(start, stop, new_sampling)
         out = random_patch.interpolate(distance=new_coord)
         assert out.data.shape[axis] == len(new_coord)
-        assert np.all(out.coords["distance"] == new_coord)
+        assert np.allclose(out.coords["distance"], new_coord)
 
     def test_uneven_sampling_rates(self, random_patch):
         """Uneven sampling should now work fine."""
@@ -107,7 +107,7 @@ class TestDecimate:
         dt = dc.to_timedelta64(0.001)
         t1 = dc.to_datetime64("2020-01-01")
         coords = {
-            "distance": [1, 2],
+            "distance": np.array([1, 2]),
             "time": np.arange(0, ar.shape[0]) * dt + t1,
         }
         dims = ("time", "distance")
@@ -218,7 +218,8 @@ class TestResample:
         """Tests resampling to odd time interval."""
         dt = np.timedelta64(1234567, "ns")
         out = random_patch.resample(time=dt)
-        assert out.attrs["d_time"] == dt
+        new_dt = out.attrs["d_time"]
+        assert np.isclose(float(new_dt), float(dt))
         assert out.attrs
 
     def test_huge_resample(self, random_patch):

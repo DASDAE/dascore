@@ -108,9 +108,6 @@ def interpolate(
     This function just uses scipy's interp1d function under the hood.
     See scipy.interpolate.interp1d for information.
 
-    Be aware than non-evenly sampled extrapolation values may make it
-    so some patch processing methods no longer work.
-
     See also [snap](`dascore.core.Patch.snap`).
 
     Examples
