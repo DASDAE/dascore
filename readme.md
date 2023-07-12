@@ -11,8 +11,9 @@ A python library for distributed fiber optic sensing.
 
 [Code](https://github.com/DASDAE/dascore)
 
-[Documentation](https://dascore.org)
+[Documentation (stable)](https://dascore.org)
 
-[Documentation (Dev version)](https://dascore.quarto.pub/dascore/)
+[Documentation (development)](https://dascore.quarto.pub/dascore/)
+
 
 **WARNING**: dascore is still very new. There will be bugs and API changes.
