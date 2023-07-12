@@ -198,9 +198,9 @@ def standardize(
 
 
 @patch_function()
-def integrate(patch: PatchType, dim: str) -> PatchType:
+def integrate(patch: PatchType, dim: str, keep_dims=False) -> PatchType:
     """
-    Integrate along a specified dimension.
+    Integrate along a specified dimension using simpson's composite rule.
 
     Parameters
     ----------
@@ -208,6 +208,34 @@ def integrate(patch: PatchType, dim: str) -> PatchType:
         Patch object for integration.
     dim
         The dimension along which to integrate.
+    keep_dims
+        If True, collapse (remove) the integration dimension.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> integrated = patch.integrate(dim='time')
+    """
+
+
+@patch_function()
+def diff(patch: PatchType, dim: str) -> PatchType:
+    """
+    Differentiate along specified dimension.
+
+    Parameters
+    ----------
+    patch
+        The patch to differentiate
+    dim
+        The dimension along which to differentiate.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> integrated = patch.diff(dim='time')
     """
 
 
