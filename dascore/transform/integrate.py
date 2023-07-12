@@ -1,8 +1,8 @@
 """
 Module for performing integration on patches.
 """
-from dascore import patch_function
 from dascore.constants import PatchType
+from dascore.utils.patch import patch_function
 
 
 @patch_function()

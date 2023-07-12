@@ -41,7 +41,7 @@ def snap_coords(patch: PatchType, *coords, reverse=False):
 
 
 @patch_function()
-def sort_cords(patch: PatchType, *coords, reverse=False):
+def sort_coords(patch: PatchType, *coords, reverse=False):
     """
     Sort one or more coordinates.
 

@@ -7,7 +7,7 @@ import dascore as dc
 from dascore.core.schema import PatchFileSummary
 from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.patch import get_default_patch_name
-from dascore.utils.time import to_number, to_timedelta64
+from dascore.utils.time import to_int, to_timedelta64
 
 # --- Functions for writing DASDAE format.
 
@@ -35,7 +35,7 @@ def _save_array(data, name, group, h5):
     is_dt = np.issubdtype(data.dtype, np.datetime64)
     is_td = np.issubdtype(data.dtype, np.timedelta64)
     if is_dt or is_td:
-        data = to_number(data)
+        data = to_int(data)
     out = h5.create_array(
         group,
         name,

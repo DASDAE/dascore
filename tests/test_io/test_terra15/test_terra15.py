@@ -54,3 +54,12 @@ class TestTerra15:
         attrs = out.attrs
         assert attrs.time_min >= t1
         assert attrs.time_max <= t2
+
+    def test_units(self, terra15_das_patch):
+        """All units should be defined on terra15 patch."""
+        patch = terra15_das_patch
+        assert patch.attrs.data_units is not None
+        assert patch.attrs.distance_units is not None
+        assert patch.attrs.time_units is not None
+        assert patch.get_coord("time").units == patch.attrs.time_units
+        assert patch.get_coord("distance").units == patch.attrs.distance_units

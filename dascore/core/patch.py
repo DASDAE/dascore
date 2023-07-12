@@ -12,12 +12,13 @@ from rich.text import Text
 import dascore.proc
 from dascore.compat import DataArray, array
 from dascore.constants import PatchType
-from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coordmanager import BaseCoord, CoordManager, get_coord_manager
 from dascore.core.schema import PatchAttrs
+from dascore.exceptions import CoordError
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import get_parent_code_name, optional_import
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
 
@@ -227,6 +228,35 @@ class Patch:
         out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
         return self.__class__(self.data, **out)
 
+    def get_coord(
+        self,
+        name: str,
+        require_sorted: bool = False,
+        require_evenly_sampled: bool = False,
+    ) -> BaseCoord:
+        """
+        Get a managed coordinate, raising if it doesn't meet requirements.
+
+        Parameters
+        ----------
+        name
+            Name of the coordinate to fetch.
+        require_sorted
+            If True, require the coordinate to be sorted or raise Error.
+        require_evenly_sampled
+            If True, require the coordinate to be evenly sampled or raise Error.
+        """
+        coord = self.coords.coord_map[name]
+        if require_evenly_sampled and coord.step is None:
+            extra = f"as required by {get_parent_code_name()}"  # adds caller name
+            msg = f"Coordinate {name} is not evenly sampled {extra}"
+            raise CoordError(msg)
+        if require_sorted and not coord.sorted or coord.reverse_sorted:
+            extra = f"as required by {get_parent_code_name()}"  # adds caller name
+            msg = f"Coordinate {name} is not sorted {extra}"
+            raise CoordError(msg)
+        return coord
+
     @property
     def dims(self) -> tuple[str, ...]:
         """Return the dimensions contained in patch."""
@@ -275,7 +305,7 @@ class Patch:
     squeeze = dascore.proc.squeeze
     transpose = dascore.proc.transpose
     snap_coords = dascore.proc.snap_coords
-    sort_coords = dascore.proc.sort_cords
+    sort_coords = dascore.proc.sort_coords
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
     assign_coords = dascore.proc.update_coords

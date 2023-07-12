@@ -16,7 +16,7 @@ from dascore.utils.patch import (
     get_start_stop_step,
     patch_function,
 )
-from dascore.utils.time import to_number, to_timedelta64
+from dascore.utils.time import to_int, to_timedelta64
 
 
 @patch_function()
@@ -130,8 +130,8 @@ def interpolate(
         samples = coord.snap().values
     # we need to make sure only real numbers are used, interp1d doesn't support
     # datetime64 yet.
-    coord_num = to_number(patch.coords[dim])
-    samples_num = to_number(samples)
+    coord_num = to_int(patch.coords[dim])
+    samples_num = to_int(samples)
     func = compat.interp1d(
         coord_num, patch.data, axis=axis, kind=kind, fill_value="extrapolate"
     )

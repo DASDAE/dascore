@@ -4,6 +4,7 @@ Misc Utilities.
 import contextlib
 import functools
 import importlib
+import inspect
 import os
 import warnings
 from types import ModuleType
@@ -371,3 +372,11 @@ def get_stencil_coefs(order, derivative=2):
     """
     dx = np.arange(-order, order + 1)
     return _get_stencil_weights(dx, 0, derivative)
+
+
+def get_parent_code_name(levels: int = 2) -> str:
+    """Get the name of the calling function/class levels up in stack."""
+    stack = inspect.currentframe()
+    for _ in range(levels):
+        stack = stack.f_back
+    return stack.f_code.co_name

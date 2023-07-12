@@ -1,31 +1,27 @@
 """
 Transformations to strain rates.
 """
-from typing import Union
-
-import findiff
 
 from dascore.constants import PatchType
-from dascore.exceptions import CoordError
+from dascore.transform.differentiate import differentiate
 from dascore.utils.patch import patch_function
 
 
 @patch_function(
-    required_dims=(
-        "time",
-        "distance",
-    ),
+    required_dims=("distance",),
     required_attrs={"data_type": "velocity"},
 )
 def velocity_to_strain_rate(
     patch: PatchType,
-    gauge_multiple: Union[int] = 1,
-    order=1,
+    gauge_multiple: int = 1,
+    order: int = 2,
 ) -> PatchType:
     """
     Convert velocity das data to strain rate.
 
-    This is primarily used with Terra15 data.
+    This is primarily used with Terra15 data and simply uses
+    [patch.differentiate](`dascore.transform.differentiate.differentiate`)
+    under the hood.
 
     Parameters
     ----------
@@ -35,18 +31,13 @@ def velocity_to_strain_rate(
     gauge_multiple
         The multiples of spatial sampling to make the simulated gauge length.
     order
-        The order for the derivative operator. Second order is default.
+        The order for the finite difference 1st derivative stencil (accuracy).
     """
     assert gauge_multiple == 1, "only supporting 1 for now."
-    axis = patch.dims.index("distance")
-    d_distance = patch.attrs["d_distance"]
-    coord = patch.coords.coord_map["distance"]
-    if not coord.evenly_sampled:
-        msg = "Cannot convert patch which is not evenly sampled along distance."
-        raise CoordError(msg)
-    differ = findiff.FinDiff(axis, d_distance, order)
-    new = differ(patch.data)
-    attrs = dict(patch.attrs)
-    attrs["data_type"] = "strain_rate"
-    attrs["gauge_length"] = d_distance * gauge_multiple
-    return patch.new(data=new, attrs=attrs)
+    coord = patch.get_coord("distance", require_evenly_sampled=True)
+    step = coord.step
+    patch = differentiate.func(patch, dim="distance", order=order)
+    new_attrs = patch.attrs.update(
+        data_type="strain_rate", gauge_length=step * gauge_multiple
+    )
+    return patch.new(attrs=new_attrs)

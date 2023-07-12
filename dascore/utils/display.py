@@ -117,7 +117,7 @@ def array_to_text(data) -> Text:
     """Convert a coordinate to string."""
     header = Text("➤ ") + Text("Data", style=dascore_styles["dc_red"])
     header += Text(f" ({data.dtype})")
-    np_str = np.array_str(data, precision=FLOAT_PRECISION, suppress_small=True)
+    np_str = np.array_str(data, precision=FLOAT_PRECISION)  # suppress_small=True)
     numpy_format = textwrap.indent(np_str, "   ")
     return header + Text("\n") + Text(numpy_format)
 

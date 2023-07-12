@@ -6,7 +6,9 @@ Transforms are defined as
 
 from dascore.utils.misc import MethodNameSpace
 
+from .differentiate import differentiate
 from .fft import rfft
+from .integrate import integrate
 from .spectro import spectrogram
 from .strain import velocity_to_strain_rate
 
@@ -18,3 +20,5 @@ class TransformPatchNameSpace(MethodNameSpace):
     spectrogram = spectrogram
     rfft = rfft
     # irfft = irfft
+    differentiate = differentiate
+    integrate = integrate
