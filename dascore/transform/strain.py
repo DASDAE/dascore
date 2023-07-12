@@ -6,10 +6,17 @@ from typing import Union
 import findiff
 
 from dascore.constants import PatchType
+from dascore.exceptions import CoordError
 from dascore.utils.patch import patch_function
 
 
-@patch_function(required_dims=("time",), required_attrs={"data_type": "velocity"})
+@patch_function(
+    required_dims=(
+        "time",
+        "distance",
+    ),
+    required_attrs={"data_type": "velocity"},
+)
 def velocity_to_strain_rate(
     patch: PatchType,
     gauge_multiple: Union[int] = 1,
@@ -33,6 +40,10 @@ def velocity_to_strain_rate(
     assert gauge_multiple == 1, "only supporting 1 for now."
     axis = patch.dims.index("distance")
     d_distance = patch.attrs["d_distance"]
+    coord = patch.coords.coord_map["distance"]
+    if not coord.evenly_sampled:
+        msg = "Cannot convert patch which is not evenly sampled along distance."
+        raise CoordError(msg)
     differ = findiff.FinDiff(axis, d_distance, order)
     new = differ(patch.data)
     attrs = dict(patch.attrs)
