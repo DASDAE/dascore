@@ -165,7 +165,7 @@ class Patch:
 
     def new(
         self: PatchType,
-        data: None | ArrayLike = None,
+        data: None | ArrayLike | np.ndarray = None,
         coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,
         dims: None | Sequence[str] = None,
         attrs: None | Mapping | PatchAttrs = None,

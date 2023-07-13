@@ -31,7 +31,7 @@ def _findiff_diff(data, axis, order, dx):
     if len(axis) > 1:
         orders = [1] * len(axis)  # always first order (first derivative).
         tuples = [tuple(x) for x in zip(axis, dx, orders)]
-        func = findiff.FinDiff(tuples, acc=order)
+        func = findiff.FinDiff(*tuples, acc=order)
     else:
         func = findiff.FinDiff(axis[0], dx[0], 1, acc=order)
     out = func(data)
@@ -46,6 +46,10 @@ def differentiate(
 ) -> PatchType:
     """
     Calculate first derivative along dimension(s) using centeral diferences.
+
+    The shape of the output patch is the same as the input patch. Derivative
+    along edges are calculated with the same order (accuarcy) as centeral
+    points using non-centered stencils.
 
     Parameters
     ----------
@@ -69,8 +73,10 @@ def differentiate(
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> # 2nd order differentiation along time axis
-    >>> integrated = patch.tran.differentiate(dim='time')
+    >>> # 2nd order stencil for 1st derivative along time dimension
+    >>> patch_diff_1 = patch.tran.differentiate(dim='time', order=2)
+    >>> # 1st derivative along all dimensions using 6th order stencil
+    >>> patch_diff_2 = patch.tran.differentiate(dim=None, order=6)
     """
     dims = iterate(dim if dim is not None else patch.dims)
     dx_or_spacing, axes = _get_dx_or_spacing_and_axes(patch, dims)

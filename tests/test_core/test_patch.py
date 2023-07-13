@@ -210,6 +210,14 @@ class TestInit:
         new = dc.Patch(random_patch)
         assert new == random_patch
 
+    def test_non_time_distance_dims(self):
+        """Ensure dimensions other than time/distance work."""
+        x = np.arange(10) * 2
+        y = np.arange(10) * 3
+        data = np.add.outer(y, x).astype(np.float64)
+        patch = dc.Patch(data=data, coords={"x": x, "y": y}, dims=("x", "y"))
+        assert isinstance(patch, dc.Patch)
+
 
 class TestNew:
     """Tests for `Patch.new` method."""

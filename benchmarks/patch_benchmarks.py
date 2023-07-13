@@ -58,6 +58,26 @@ class ProcessingSuite:
         self.patch.select(time=(t1, t2))
 
 
+class TransformSuite:
+    """Timing for various transformations."""
+
+    def setup(self):
+        """just load the default patch."""
+        self.patch = dc.get_example_patch()
+
+    def time_indefinite_integrate(self):
+        """integrate along time axis."""
+        self.patch.tran.integrate(dim="time", defininte=False)
+
+    def time_definite_integrate(self):
+        """integrate along time axis."""
+        self.patch.tran.integrate(dim="time", defininte=True)
+
+    def time_differentiate(self):
+        """differentiate along time axis"""
+        self.patch.tran.differentiate(dim="time")
+
+
 class VizSuite:
     """Timing for visualizations."""
 

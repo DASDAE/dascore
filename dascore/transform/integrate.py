@@ -10,6 +10,7 @@ import numpy as np
 
 from dascore.constants import PatchType
 from dascore.utils.misc import broadcast_for_index, iterate
+from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
@@ -27,29 +28,57 @@ def _quasi_mean(array):
     return np.array([out], dtype=array.dtype)
 
 
-def _get_new_coords_and_array(patch, array, dims, axes, keep_dims):
-    """Get new coordinates with smashed (or not) coordinates."""
+def _get_definite_integral(patch, dxs_or_vals, dims, axes):
+    """Get a definite integral along axes."""
 
-    if keep_dims:
+    def _get_new_coords_and_array(patch, array, dims):
+        """Get new coordinates with smashed (or not) coordinates."""
         new_coords = {x: _quasi_mean(patch.get_coord(x).data) for x in dims}
         # also add related coords indicating start/stop
         for name in dims:
             coord = patch.get_coord(name).data
             new_coords[f"{name}_min"] = (name, np.array([coord.min()]))
             new_coords[f"{name}_max"] = (name, np.array([coord.max()]))
-    else:
-        # Need to collapse empty dimensions
-        ndim = len(patch.dims)
-        indexer = broadcast_for_index(ndim, axes, 0)
-        array = array[indexer]
-        new_coords = {x: None for x in dims}
-    cm = patch.coords.update_coords(**new_coords)
-    return array, cm
+        cm = patch.coords.update_coords(**new_coords)
+        return array, cm
+
+    array = patch.data
+    ndims = len(patch.shape)
+    for dxs_or_val, ax in zip(dxs_or_vals, axes):
+        indexer = broadcast_for_index(ndims, ax, None, fill=slice(None))
+        if isinstance(dxs_or_val, np.ndarray):
+            array = np.trapz(array, x=dxs_or_val, axis=ax)[indexer]
+        else:
+            array = np.trapz(array, dx=dxs_or_val, axis=ax)[indexer]
+    array, coords = _get_new_coords_and_array(patch, array, dims)
+    return array, coords
+
+
+def _get_indefinite_integral(patch, dxs_or_vals, axes):
+    """
+    Get indefinite integral along dimensions.
+
+    We need to calculate the distance weighted average for the areas between
+    samples for the integration dimension.
+    """
+    array = np.array(patch.data)
+    for dx_or_val, ax in zip(dxs_or_vals, axes):
+        # if coordinate values are provided need to get diffs.
+        if isinstance(dx_or_val, (np.ndarray, ArrayLike)):
+            dx_or_val = dx_or_val[1:] - dx_or_val[:-1]
+        ndim = len(array.shape)
+        # get diffs along dimension
+        stop_indexer = broadcast_for_index(ndim, ax, slice(1, None), fill=slice(None))
+        start_indexer = broadcast_for_index(ndim, ax, slice(None, -1), fill=slice(None))
+        # get average values of trapezoid between points
+        avs = (array[stop_indexer] + array[start_indexer]) / (2 * dx_or_val)
+        array[stop_indexer] = np.cumsum(avs, axis=ax)
+    return array, patch.coords  # coords shouldn't change
 
 
 @patch_function()
 def integrate(
-    patch: PatchType, dim: Sequence[str] | str | None, keep_dims=True
+    patch: PatchType, dim: Sequence[str] | str | None, definite: bool = False
 ) -> PatchType:
     """
     Integrate along a specified dimension using composite trapezoidal rule.
@@ -59,32 +88,37 @@ def integrate(
     patch
         Patch object for integration.
     dim
-        The dimension(s) along which to integrate.
-    keep_dims
-        If False collapse (remove) the integration dimension(s).
+        The dimension(s) along which to integrate. If None, integrate along
+        all dimensions.
+    definite
+        If True, consider the integration to be defined from the minimum to
+        the maximum value along specified dimension(s). In essense, this
+        collapses the integrated dimensions to a lenght of 1.
+        If define is False, the shape of the patch is preserved.
+
+    Notes
+    -----
+    The number of dimensions will always remain the same regardless of `definite`
+    value. To remove dimensions with length 1, see
+    [squeeze](`dacsore.proc.basic.squeeze`)
 
     Examples
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> # integrate along time axis, preserve time coordinate
-    >>> time_integrated = patch.tran.integrate(dim="time", keep_dims=True)
-    >>> assert "time" in time_integrated.dims
-    >>> # integrate along distance axis, drop distance coordinate
-    >>> dist_integrated = patch.tran.integrate(dim="distance", keep_dims=False)
-    >>> assert "distance" not in dist_integrated.dims
+    >>> # integrate along time axis, preserve patch shape with indefinite integral
+    >>> time_integrated = patch.tran.integrate(dim="time", definite=False)
+    >>> # integrate along distance axis, collapse distance coordinate
+    >>> dist_integrated = patch.tran.integrate(dim="distance", definite=True)
+    >>> # integrate along all dimensions.
+    >>> all_integrated = patch.tran.integrate(dim=None, definite=False)
     """
     dims = iterate(dim if dim is not None else patch.dims)
     dxs_or_vals, axes = _get_dx_or_spacing_and_axes(patch, dims)
-    ndims = len(patch.dims)
-    indexers = [broadcast_for_index(ndims, x, None) for x in axes]
-    array = patch.data
-    for dxs_or_val, ax, inds in zip(dxs_or_vals, axes, indexers):
-        if isinstance(dxs_or_val, np.ndarray):
-            array = np.trapz(array, x=dxs_or_val, axis=ax)[inds]
-        else:
-            array = np.trapz(array, dx=dxs_or_val, axis=ax)[inds]
-    array, coords = _get_new_coords_and_array(patch, array, dims, axes, keep_dims)
+    if definite:
+        array, coords = _get_definite_integral(patch, dxs_or_vals, dims, axes)
+    else:
+        array, coords = _get_indefinite_integral(patch, dxs_or_vals, axes)
     new_units = _get_data_units_from_dims(patch, dims, mul)
     attrs = patch.attrs.update(data_units=new_units)
     return patch.new(data=array, attrs=attrs, coords=coords)

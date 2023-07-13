@@ -149,7 +149,7 @@ def broadcast_for_index(
     n_dims: int,
     axis: Union[int, Sequence[int]],
     value: Union[slice, int, None],
-    fill_none=False,
+    fill=slice(None),
 ):
     """
     For a given shape of array, return empty slices except for slice axis.
@@ -162,10 +162,9 @@ def broadcast_for_index(
         The axis number.
     value
         A slice object.
-    fill_none
-        If True, fill non axis dims with None, else slice(None)
+    fill
+        The default values for non-axis entries.
     """
-    fill = None if fill_none else slice(None)
     axes = set(iterate(axis))
     return tuple(fill if x not in axes else value for x in range(n_dims))
 

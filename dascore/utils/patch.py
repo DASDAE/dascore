@@ -661,13 +661,15 @@ def _get_dx_or_spacing_and_axes(
     """
     For each selected coordinates, get dx if evenly sampled or values.
 
+    Dimension must be sorted or an Error is raised.
+
     Also get axes.
     """
     dims = iterate(dim if dim is not None else patch.dims)
     out = []
     axes = []
     for dim_ in dims:
-        coord = patch.get_coord(dim_)
+        coord = patch.get_coord(dim_, require_sorted=True)
         if coord.evenly_sampled:
             val = coord.step
         else:
