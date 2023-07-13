@@ -45,14 +45,15 @@ def differentiate(
     order=2,
 ) -> PatchType:
     """
-    Differentiate along specified dimension using centeral diferences.
+    Calculate first derivative along dimension(s) using centeral diferences.
 
     Parameters
     ----------
     patch
         The patch to differentiate.
     dim
-        The dimension along which to differentiate. If None.
+        The dimension(s) along which to differentiate. If None differentiates
+        over all dimensions.
     order
         The order of the differentiation operator. Must be a possitive, even
         integar.
@@ -61,14 +62,15 @@ def differentiate(
     -----
     For order=2 (the default) numpy's gradient function is used. When
     order != the optional package findiff must be installed in which case
-    order is interpreted as accuracy (as order means order of differention
+    order is interpreted as accuracy ("order" means order of differention
     in that package).
 
     Examples
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> integrated = patch.diff(dim='time')
+    >>> # 2nd order differentiation along time axis
+    >>> integrated = patch.tran.differentiate(dim='time')
     """
     dims = iterate(dim if dim is not None else patch.dims)
     dx_or_spacing, axes = _get_dx_or_spacing_and_axes(patch, dims)

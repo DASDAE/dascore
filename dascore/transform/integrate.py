@@ -4,6 +4,7 @@ Module for performing integration on patches.
 from __future__ import annotations
 
 from operator import mul
+from typing import Sequence
 
 import numpy as np
 
@@ -47,7 +48,9 @@ def _get_new_coords_and_array(patch, array, dims, axes, keep_dims):
 
 
 @patch_function()
-def integrate(patch: PatchType, dim: str | None, keep_dims=True) -> PatchType:
+def integrate(
+    patch: PatchType, dim: Sequence[str] | str | None, keep_dims=True
+) -> PatchType:
     """
     Integrate along a specified dimension using composite trapezoidal rule.
 
@@ -56,15 +59,20 @@ def integrate(patch: PatchType, dim: str | None, keep_dims=True) -> PatchType:
     patch
         Patch object for integration.
     dim
-        The dimension along which to integrate.
+        The dimension(s) along which to integrate.
     keep_dims
-        If True, collapse (remove) the integration dimension.
+        If False collapse (remove) the integration dimension(s).
 
     Examples
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> integrated = patch.integrate(dim='time')
+    >>> # integrate along time axis, preserve time coordinate
+    >>> time_integrated = patch.tran.integrate(dim="time", keep_dims=True)
+    >>> assert "time" in time_integrated.dims
+    >>> # integrate along distance axis, drop distance coordinate
+    >>> dist_integrated = patch.tran.integrate(dim="distance", keep_dims=False)
+    >>> assert "distance" not in dist_integrated.dims
     """
     dims = iterate(dim if dim is not None else patch.dims)
     dxs_or_vals, axes = _get_dx_or_spacing_and_axes(patch, dims)
