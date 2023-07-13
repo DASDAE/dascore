@@ -46,7 +46,7 @@ ONE_BILLION = 1_000_000_000
 ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
 
 # Float printing precision
-FLOAT_PRECISION = 5
+FLOAT_PRECISION = 3
 
 # Valid strings for "datatype" attribute
 VALID_DATA_TYPES = (

@@ -1,6 +1,8 @@
 """
 Utilities for working with the Patch class.
 """
+from __future__ import annotations
+
 import functools
 import inspect
 import sys
@@ -30,10 +32,11 @@ from dascore.exceptions import (
     PatchAttributeError,
     PatchDimError,
 )
+from dascore.units import get_quantity
 from dascore.utils.docs import compose_docstring, format_dtypes
-from dascore.utils.misc import all_diffs_close_enough, get_middle_value
+from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
 from dascore.utils.models import merge_models
-from dascore.utils.time import to_timedelta64
+from dascore.utils.time import to_float, to_timedelta64
 
 attr_type = Union[Dict[str, Any], str, Sequence[str], None]
 
@@ -635,3 +638,43 @@ def merge_compatible_coords_attrs(
     coord_out = _merge_coords(coord1, coord2)
     attrs = _merge_models(attrs1, attrs2)
     return coord_out, attrs
+
+
+def _get_data_units_from_dims(patch, dims, operator):
+    """Get new data units from dimensions."""
+    if (data_units := get_quantity(patch.attrs.data_units)) is None:
+        return
+    dim_units = None
+    for dim in dims:
+        dim_unit = get_quantity(patch.get_coord(dim).units)
+        if dim_unit is None:
+            continue
+        dim_units = dim_unit if dim_units is None else dim_unit * dim_units
+    if dim_units is not None:
+        data_units = operator(data_units, dim_units)
+    return data_units
+
+
+def _get_dx_or_spacing_and_axes(
+    patch, dim
+) -> tuple[tuple[int | np.ndarray, ...], tuple[int, ...]]:
+    """
+    For each selected coordinates, get dx if evenly sampled or values.
+
+    Dimension must be sorted or an Error is raised.
+
+    Also get axes.
+    """
+    dims = iterate(dim if dim is not None else patch.dims)
+    out = []
+    axes = []
+    for dim_ in dims:
+        coord = patch.get_coord(dim_, require_sorted=True)
+        if coord.evenly_sampled:
+            val = coord.step
+        else:
+            val = coord.data
+        # need to convert val to float so datetimes work
+        out.append(to_float(val))
+        axes.append(patch.dims.index(dim_))
+    return tuple(out), tuple(axes)

@@ -4,10 +4,11 @@ Misc Utilities.
 import contextlib
 import functools
 import importlib
+import inspect
 import os
 import warnings
 from types import ModuleType
-from typing import Iterable, Optional, Union
+from typing import Iterable, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -145,7 +146,10 @@ def get_slice_from_monotonic(array, cond=Optional[tuple]) -> slice:
 
 
 def broadcast_for_index(
-    n_dims: int, axis: int, value: Union[slice, int], fill_none=False
+    n_dims: int,
+    axis: Union[int, Sequence[int]],
+    value: Union[slice, int, None],
+    fill=slice(None),
 ):
     """
     For a given shape of array, return empty slices except for slice axis.
@@ -158,11 +162,11 @@ def broadcast_for_index(
         The axis number.
     value
         A slice object.
-    fill_none
-        If True, fill non axis dims with None, else slice(None)
+    fill
+        The default values for non-axis entries.
     """
-    fill = None if fill_none else slice(None)
-    return tuple(fill if x != axis else value for x in range(n_dims))
+    axes = set(iterate(axis))
+    return tuple(fill if x not in axes else value for x in range(n_dims))
 
 
 def _get_sampling_rate(sampling_period):
@@ -371,3 +375,11 @@ def get_stencil_coefs(order, derivative=2):
     """
     dx = np.arange(-order, order + 1)
     return _get_stencil_weights(dx, 0, derivative)
+
+
+def get_parent_code_name(levels: int = 2) -> str:
+    """Get the name of the calling function/class levels up in stack."""
+    stack = inspect.currentframe()
+    for _ in range(levels):
+        stack = stack.f_back
+    return stack.f_code.co_name

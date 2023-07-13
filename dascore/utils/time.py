@@ -2,7 +2,7 @@
 Utility for working with time.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import singledispatch
 from typing import Optional, Union
 
@@ -246,27 +246,26 @@ def datetime_to_float(dt):
 
 
 @singledispatch
-def to_number(obj: Union[timeable_types, np.array]) -> np.array:
+def to_int(obj: Union[timeable_types, np.array]) -> np.array:
     """
     Ensure a scalar or array is a number.
 
     If the input values represents a time or a time-delta, convert it to a
     an int representing ns.
     """
-    msg = f"type {type(obj)} is not yet supported"
-    raise NotImplementedError(msg)
+    return obj
 
 
-@to_number.register(float)
-@to_number.register(int)
+@to_int.register(float)
+@to_int.register(int)
 def _float_to_num(num: Union[float, int]) -> Union[float, int]:
     """Convert a float to a single datetime."""
     return num
 
 
-@to_number.register(np.ndarray)
-@to_number.register(list)
-@to_number.register(tuple)
+@to_int.register(np.ndarray)
+@to_int.register(list)
+@to_int.register(tuple)
 def _array_to_number(array: np.array) -> np.array:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
@@ -283,30 +282,82 @@ def _array_to_number(array: np.array) -> np.array:
     return array
 
 
-@to_number.register(np.datetime64)
-@to_number.register(datetime)
-@to_number.register(pd.Timestamp)
+@to_int.register(np.datetime64)
+@to_int.register(datetime)
+@to_int.register(pd.Timestamp)
 def _time_to_num(datetime):
     """Simply return the datetime."""
-    return to_number([to_datetime64(datetime)])[0]
+    return to_int([to_datetime64(datetime)])[0]
 
 
-@to_number.register(type(None))
-@to_number.register(type(pd.NaT))
-@to_number.register(type(pd.NA))
+@to_int.register(type(None))
+@to_int.register(type(pd.NaT))
+@to_int.register(type(pd.NA))
 def _return_number_null(null):
     """Convert non to NaT."""
     return np.NaN
 
 
-@to_number.register(np.timedelta64)
+@to_int.register(np.timedelta64)
 def _time_delta_to_number(time_delta: np.timedelta64):
-    return to_number([to_timedelta64(time_delta)])[0]
+    return to_int([to_timedelta64(time_delta)])[0]
 
 
-@to_number.register(pd.Series)
+@to_int.register(pd.Series)
 def _pandas_timestamp_to_num(ser: pd.Series):
     return ser.view(np.int64)
+
+
+@singledispatch
+def to_float(obj: Union[timeable_types, np.array]) -> np.array:
+    """
+    Convert various datetime/timedelta things to a float.
+
+    Time offsets represent seconds, and datetimes are seconds from 1970.
+    """
+    return float(obj)
+
+
+@to_float.register(np.ndarray)
+@to_float.register(list)
+@to_float.register(tuple)
+def _array_to_float(array: np.array) -> np.array:
+    """
+    Convert an array of floating point timestamps to an array of np.datatime64.
+    """
+    array = np.array(array)
+    if not len(array):
+        return array.astype(np.float64)
+    if np.issubdtype(array.dtype, np.datetime64):
+        # convert to offset from 1970
+        array = array - to_datetime64(0)
+    if np.issubdtype(array.dtype, np.timedelta64):
+        array = array / ONE_SECOND
+    return array.astype(np.float64)
+
+
+@to_float.register(np.datetime64)
+@to_float.register(datetime)
+@to_float.register(pd.Timestamp)
+def _time_to_float(datetime):
+    """Simply return the datetime."""
+    td = to_datetime64(datetime) - to_datetime64(0)
+    return to_float(td)
+
+
+@to_float.register(type(None))
+@to_float.register(type(pd.NaT))
+@to_float.register(type(pd.NA))
+def _return_null(null):
+    """Convert non to NaT."""
+    return np.NaN
+
+
+@to_float.register(np.timedelta64)
+@to_float.register(timedelta)
+@to_float.register(pd.Timedelta)
+def _time_delta_to_float(time_delta: np.timedelta64):
+    return to_timedelta64(time_delta) / ONE_SECOND
 
 
 def is_datetime64(obj) -> bool:

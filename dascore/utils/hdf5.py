@@ -27,7 +27,7 @@ from dascore.utils.pd import (
     fill_defaults_from_pydantic,
     list_ser_to_str,
 )
-from dascore.utils.time import get_max_min_times, to_number
+from dascore.utils.time import get_max_min_times, to_int
 
 HDF5ExtError = tables.HDF5ExtError
 NoSuchNodeError = tables.NoSuchNodeError
@@ -120,9 +120,9 @@ class HDFPatchIndexManager:
     _query_columns = ("time_min", "time_max", "distance_min", "distance_max")
     # functions applied to encode dataframe before saving to hdf5
     _column_encoders = {
-        "time_min": to_number,
-        "time_max": to_number,
-        "d_time": to_number,
+        "time_min": to_int,
+        "time_max": to_int,
+        "d_time": to_int,
         "dims": list_ser_to_str,
     }
     # functions to apply to decode dataframe after loading from hdf file

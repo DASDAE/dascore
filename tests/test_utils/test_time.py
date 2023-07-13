@@ -11,7 +11,8 @@ from dascore.utils.time import (
     get_select_time,
     is_datetime64,
     to_datetime64,
-    to_number,
+    to_float,
+    to_int,
     to_timedelta64,
 )
 
@@ -282,42 +283,42 @@ class TestToNumber:
 
     def test_timedelta64(self):
         """Ensure a timedelta64 returns the ns"""
-        out = to_number(np.timedelta64(1, "s"))
+        out = to_int(np.timedelta64(1, "s"))
         assert out == 1_000_000_000
 
     def test_datetime64(self):
         """Ensure int ns is returned for datetime64."""
-        out = to_number(to_datetime64("1970-01-01") + np.timedelta64(1, "ns"))
+        out = to_int(to_datetime64("1970-01-01") + np.timedelta64(1, "ns"))
         assert out == 1
 
     def test_timedelta64_array(self):
         """Ensure int ns is returned for datetime64."""
         array = to_datetime64(["2017-01-01", "1970-01-01", "1999-01-01"])
-        out = to_number(array)
+        out = to_int(array)
         assert np.issubdtype(out.dtype, np.int64)
 
     def test_timedelta_array(self):
         """Ensure a timedelta array works."""
         array = to_timedelta64([1, 1_000_000, 20])
-        out = to_number(array)
+        out = to_int(array)
         assert np.issubdtype(out.dtype, np.int64)
 
     def test_nullish_returns_nan(self):
         """Ensure a timedelta array works."""
-        assert to_number(None) is np.NaN
-        assert to_number(pd.NaT) is np.NaN
+        assert to_int(None) is np.NaN
+        assert to_int(pd.NaT) is np.NaN
 
     def test_number_unchanged(self):
         """Ensure a number is passed through unchanged."""
-        assert to_number(10) == 10
-        assert to_number(10.1) == 10.1
+        assert to_int(10) == 10
+        assert to_int(10.1) == 10.1
 
     def test_numeric_array_unchanged(self):
         """Ensure numeric arrays are not changed."""
         array = np.array([10, 12, 20])
-        assert np.all(to_number(array) == array)
+        assert np.all(to_int(array) == array)
         array = np.array([12.3, 13.2, 12.2])
-        assert np.all(to_number(array) == array)
+        assert np.all(to_int(array) == array)
 
     def test_non_ns_datetime64(self):
         """Tests that a non-nano second datatime gets converted to one."""
@@ -328,7 +329,7 @@ class TestToNumber:
         ]
         expected = np.datetime64("2011-01-01", "ns").astype(np.int64)
         for dt in datetimes:
-            out = to_number(dt)
+            out = to_int(dt)
             assert out == expected
 
 
@@ -356,3 +357,52 @@ class TestIsDateTime:
         array = to_datetime64(["1990-01-01", "2010-01-01T12:23:22"])
         ser = pd.Series(array)
         assert is_datetime64(ser)
+
+
+class TestToFloat:
+    """Tests for converting datetime(ish) things to floats."""
+
+    def test_float(self):
+        """Ensure a single float gets converted to float."""
+        assert to_float(1.0) == 1.0
+        assert to_float(5) == 5.0
+
+    def test_numerical_array(self):
+        """Tests for numerical arrays."""
+        ar = np.random.random(10)
+        assert np.allclose(to_float(ar), ar)
+        assert np.issubdtype(ar.dtype, np.float_)
+        ar = np.ones(10)
+        assert np.allclose(ar, 1.0)
+        assert np.issubdtype(ar.dtype, np.float_)
+
+    def test_timedelta(self):
+        """Ensure time delta is floated."""
+        td = to_timedelta64(100.00)
+        assert np.isclose(to_float(td), 100.00)
+
+    def test_timedelta_array(self):
+        """tests for arrays of time deltas"""
+        td = to_timedelta64(np.ones(10))
+        out = to_float(td)
+        assert np.issubdtype(out.dtype, np.float_)
+        assert np.allclose(out, 1.0)
+
+    def test_datetime(self):
+        """Ensure datetimes work"""
+        dt = to_datetime64("2012-01-01")
+        out = to_float(dt)
+        expected = (dt - to_datetime64("1970-01-01")) / to_timedelta64(1)
+        assert np.isclose(out, expected)
+
+    def test_datetime_array(self):
+        """Tests for arrays of date times."""
+        dt = to_datetime64((np.ones(10)))
+        out = to_float(dt)
+        assert np.issubdtype(out.dtype, np.float_)
+        assert np.allclose(out, 1.0)
+
+    def test_none(self):
+        """Ensure None returns NaN"""
+        out = to_float(None)
+        assert out is np.NaN

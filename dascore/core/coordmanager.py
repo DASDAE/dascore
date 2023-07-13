@@ -129,17 +129,18 @@ class CoordManager(DascoreBaseModel):
             return out
 
         # get coords to drop from selecting None
-        coords_to_drop = [i for i, v in kwargs.items() if i is None]
+        coords_to_drop = [i for i, v in kwargs.items() if v is None]
         # convert input to coord_map/dim_map
-        _coords_to_add = {i: v for i, v in kwargs.items() if i is not None}
+        _coords_to_add = {i: v for i, v in kwargs.items() if v is not None}
         coord_map, dim_map = _get_coord_dim_map(_coords_to_add, self.dims)
         # find coords to drop because their dimension changed.
         coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
         coords, _ = self.drop_coord(coords_to_drop + coord_drops)
         out = coords._get_dim_array_dict()
-        out.update(kwargs)
-        return get_coord_manager(out, dims=self.dims)
+        out.update({i: v for i, v in kwargs.items() if i not in coords_to_drop})
+        dims = tuple(x for x in self.dims if x not in coords_to_drop)
+        return get_coord_manager(out, dims=dims)
 
     def sort(
         self, *coords, array: MaybeArray = None, reverse: bool = False

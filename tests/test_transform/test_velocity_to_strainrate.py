@@ -5,12 +5,13 @@ import numpy as np
 import pytest
 
 from dascore.exceptions import PatchAttributeError
+from dascore.units import get_quantity
 
 
 class TestStrainRateConversion:
     """Tests for converting velocity to strain-rate."""
 
-    @pytest.fixture()
+    @pytest.fixture(scope="class")
     def patch_strain_rate_default(self, terra15_das_patch):
         """Return the default terra15 converted to strain rate."""
         return terra15_das_patch.tran.velocity_to_strain_rate()
@@ -30,3 +31,10 @@ class TestStrainRateConversion:
         """It does not make sense to apply this twice."""
         with pytest.raises(PatchAttributeError, match="velocity"):
             _ = patch_strain_rate_default.tran.velocity_to_strain_rate()
+
+    def test_update_units(self, patch_strain_rate_default, terra15_das_patch):
+        """Ensure units are updated. See issue #144."""
+        new_units = get_quantity(patch_strain_rate_default.attrs.data_units)
+        old_units = get_quantity(terra15_das_patch.attrs.data_units)
+        assert new_units != old_units
+        assert new_units == old_units / get_quantity("m")

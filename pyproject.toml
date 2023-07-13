@@ -42,7 +42,6 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
-     "findiff",
      "matplotlib",
      "numpy",
      "packaging",
@@ -60,6 +59,7 @@ dependencies = [
 
 extras = [
     "xarray",
+    "findiff",
 ]
 
 docs = [

@@ -130,12 +130,12 @@ def taper(
         window = func(2 * val)[:val]
         # get indices window (which will broadcast) and data
         data_inds = broadcast_for_index(n_dims, axis, start_slice)
-        window_inds = broadcast_for_index(n_dims, axis, slice(None), fill_none=True)
+        window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
         out[data_inds] = out[data_inds] * window[window_inds]
     if samps[1] is not None:
         val = shape[axis] - end_slice.start
         window = func(2 * val)[val:]
         data_inds = broadcast_for_index(n_dims, axis, end_slice)
-        window_inds = broadcast_for_index(n_dims, axis, slice(None), fill_none=True)
+        window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
         out[data_inds] = out[data_inds] * window[window_inds]
     return patch.new(data=out)

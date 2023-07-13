@@ -208,4 +208,4 @@ def _get_distance_start_stop_step(root):
 def _get_distance_coord(root):
     """Get the distance coordinate."""
     start, stop, step, samps = _get_distance_start_stop_step(root)
-    return get_coord(start=start, stop=stop + step, step=step)
+    return get_coord(start=start, stop=stop + step, step=step, units="m")

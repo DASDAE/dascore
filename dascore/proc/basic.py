@@ -198,20 +198,6 @@ def standardize(
 
 
 @patch_function()
-def integrate(patch: PatchType, dim: str) -> PatchType:
-    """
-    Integrate along a specified dimension.
-
-    Parameters
-    ----------
-    patch
-        Patch object for integration.
-    dim
-        The dimension along which to integrate.
-    """
-
-
-@patch_function()
 def apply_operator(patch: PatchType, other, operator) -> PatchType:
     """
     Apply a ufunc-type operator to a patch.

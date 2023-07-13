@@ -660,7 +660,7 @@ class CoordArray(BaseCoord):
             msg = "At most one parameter can be specified in update_limits."
             raise ValueError(msg)
         out = self
-        if step is not None:
+        if not pd.isnull(step):
             out = self.snap().update_limits(step=step)
         elif start is not None:
             diff = start - self.min()

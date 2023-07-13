@@ -10,7 +10,7 @@ import numpy as np
 from dascore.constants import ONE_BILLION, PatchType
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import _format_time_axis, _get_ax
-from dascore.utils.time import to_number
+from dascore.utils.time import to_int
 
 
 @patch_function(required_dims=("time", "distance"))
@@ -55,12 +55,12 @@ def wiggle(
         max_of_traces = abs(data).max(axis=1)
         data = data / max_of_traces[:, np.newaxis]
         axis_across_wiggles = coords["distance"]
-        axis_along_wiggles = to_number(coords["time"]) / ONE_BILLION
+        axis_along_wiggles = to_int(coords["time"]) / ONE_BILLION
         intervals = coords["distance"][1:] - coords["distance"][:-1]
     else:
         max_of_traces = abs(data).max(axis=0)
         data = data / max_of_traces[np.newaxis, :]
-        axis_across_wiggles = to_number(coords["time"]) / ONE_BILLION
+        axis_across_wiggles = to_int(coords["time"]) / ONE_BILLION
         axis_along_wiggles = coords["distance"]
         intervals = (coords["time"][1:] - coords["time"][:-1]) / np.timedelta64(1, "s")
 

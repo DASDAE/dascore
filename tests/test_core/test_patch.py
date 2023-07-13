@@ -11,7 +11,8 @@ from rich.text import Text
 
 import dascore as dc
 from dascore.core import Patch
-from dascore.core.coords import CoordRange
+from dascore.core.coords import BaseCoord, CoordRange
+from dascore.exceptions import CoordError
 from dascore.proc.basic import apply_operator
 
 
@@ -208,6 +209,14 @@ class TestInit:
         """Ensure a patch inited on a patch just returns a patch."""
         new = dc.Patch(random_patch)
         assert new == random_patch
+
+    def test_non_time_distance_dims(self):
+        """Ensure dimensions other than time/distance work."""
+        x = np.arange(10) * 2
+        y = np.arange(10) * 3
+        data = np.add.outer(y, x).astype(np.float64)
+        patch = dc.Patch(data=data, coords={"x": x, "y": y}, dims=("x", "y"))
+        assert isinstance(patch, dc.Patch)
 
 
 class TestNew:
@@ -606,3 +615,28 @@ class TestApplyOperator:
         ones = np.ones(random_patch.shape)
         new = apply_operator(random_patch, ones, np.add)
         assert np.allclose(new.data, ones + random_patch.data)
+
+
+class TestGetCoord:
+    """Tests for retrieving coords and imposing requirements."""
+
+    def test_simple(self, random_patch):
+        """Ensure a simple coordinate is returned."""
+        coord = random_patch.get_coord("time")
+        assert coord == random_patch.coords.coord_map["time"]
+
+    def test_raises_not_evenly_sampled(self, wacky_dim_patch):
+        """Ensure an error is raised when coord is not evenly sampled, if specified."""
+        patch = wacky_dim_patch
+        assert isinstance(patch.get_coord("time"), BaseCoord)
+        match = "Coordinate time is not evenly sampled"
+        with pytest.raises(CoordError, match=match):
+            patch.get_coord("time", require_evenly_sampled=True)
+
+    def test_raises_not_sorted(self, wacky_dim_patch):
+        """Ensure an error is raised when coord is not sorted, if specified."""
+        patch = wacky_dim_patch
+        assert isinstance(patch.get_coord("distance"), BaseCoord)
+        match = "Coordinate distance is not sorted"
+        with pytest.raises(CoordError, match=match):
+            patch.get_coord("distance", require_sorted=True)

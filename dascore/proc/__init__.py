@@ -12,7 +12,7 @@ from .basic import (
     transpose,
     update_coords,
 )
-from .coords import snap_coords, sort_cords
+from .coords import snap_coords, sort_coords
 from .detrend import detrend
 from .filter import median_filter, pass_filter, sobel_filter
 from .resample import decimate, interpolate, iresample, resample
