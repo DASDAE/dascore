@@ -65,6 +65,7 @@ class TestDifferentiateWFindiff:
 
     def test_default_case(self, random_patch):
         """Diff with order != 2 on each dimension."""
+        pytest.importorskip("findiff")
         patch = random_patch
         for dim in patch.dims:  # test all dimensions.
             for order in [4, 6, 8, 10]:
@@ -72,6 +73,19 @@ class TestDifferentiateWFindiff:
 
     def test_different_orders(self, linear_patch):
         """Different order stencils should be approx equal with simple data."""
+        pytest.importorskip("findiff")
+        patch = linear_patch
+        p1 = patch.tran.differentiate("distance", order=2)
+        p2 = patch.tran.differentiate("distance", order=4)
+        p3 = patch.tran.differentiate("distance", order=6)
+        p4 = patch.tran.differentiate("distance", order=8)
+        assert np.allclose(p1.data, p2.data)
+        assert np.allclose(p2.data, p3.data)
+        assert np.allclose(p3.data, p4.data)
+
+    def test_diff_all_dims(self, linear_patch):
+        """Ensure findiff can diff all dims."""
+        pytest.importorskip("findiff")
         patch = linear_patch
         p1 = patch.tran.differentiate("distance", order=2)
         p2 = patch.tran.differentiate("distance", order=4)
