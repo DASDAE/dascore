@@ -8,7 +8,7 @@ import inspect
 import os
 import warnings
 from types import ModuleType
-from typing import Iterable, Optional, Union
+from typing import Iterable, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -146,7 +146,10 @@ def get_slice_from_monotonic(array, cond=Optional[tuple]) -> slice:
 
 
 def broadcast_for_index(
-    n_dims: int, axis: int, value: Union[slice, int], fill_none=False
+    n_dims: int,
+    axis: Union[int, Sequence[int]],
+    value: Union[slice, int, None],
+    fill_none=False,
 ):
     """
     For a given shape of array, return empty slices except for slice axis.
@@ -163,7 +166,8 @@ def broadcast_for_index(
         If True, fill non axis dims with None, else slice(None)
     """
     fill = None if fill_none else slice(None)
-    return tuple(fill if x != axis else value for x in range(n_dims))
+    axes = set(iterate(axis))
+    return tuple(fill if x not in axes else value for x in range(n_dims))
 
 
 def _get_sampling_rate(sampling_period):

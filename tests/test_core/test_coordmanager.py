@@ -62,7 +62,8 @@ def coord_manager_with_units(basic_coord_manager):
 def basic_degenerate_coord_manager(basic_coord_manager):
     """A degenerate coord manager on time axis."""
     time_coord = basic_coord_manager.coord_map["time"]
-    return basic_coord_manager.update_coords(time=time_coord.empty())
+    degenerate = time_coord.empty()
+    return basic_coord_manager.update_coords(time=degenerate)
 
 
 @pytest.fixture(scope="class")
@@ -618,6 +619,12 @@ class TestUpdateCoords:
         # any coords with time as a dim (but not time itself) should be gone.
         has_time = [i for i, v in cm.dim_map.items() if ("time" in v and i != "time")]
         assert set(has_time).isdisjoint(set(new.coord_map))
+
+    def test_update_none_drops(self, basic_coord_manager):
+        """Ensure when passing coord=None the coord is dropped."""
+        cm1 = basic_coord_manager.update_coords(time=None)
+        cm2, _ = basic_coord_manager.drop_coord("time")
+        assert cm1 == cm2
 
 
 class TestSqueeze:
