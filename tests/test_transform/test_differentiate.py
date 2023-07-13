@@ -101,12 +101,12 @@ class TestCompareOrders:
             pytest.importorskip("findiff")
         return request.param
 
-    def test_default_case(self, random_patch):
+    def test_default_case(self, random_patch, order):
         """Diff with order != 2 on each dimension."""
         patch = random_patch
         for dim in patch.dims:  # test all dimensions.
-            for order in [4, 6, 8, 10]:
-                differentiate(random_patch, dim=dim, order=order)
+            out = differentiate(random_patch, dim=dim, order=order)
+            assert out.shape == patch.shape
 
     def test_different_orders(self, linear_patch, order):
         """Different order stencils should be approx equal with simple data."""
