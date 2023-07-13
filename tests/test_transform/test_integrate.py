@@ -95,3 +95,8 @@ class TestDefiniteIntegration:
         """Ensure all dims can be integrated."""
         out = random_patch.tran.integrate(dim=None, definite=True)
         assert out.shape == tuple([1] * len(random_patch.shape))
+
+    def test_integrate_non_evenly_sampled_dim(self, wacky_dim_patch):
+        """Simple test to integrate along non-evenly sampled dimension"""
+        out = wacky_dim_patch.tran.integrate(dim="time", definite=True)
+        assert isinstance(out, dc.Patch)
