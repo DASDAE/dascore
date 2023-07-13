@@ -1,20 +1,26 @@
 """
 Tests for time variables.
 """
-import functools
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from dascore.utils.time import (
-    get_select_time,
+    get_max_min_times,
     is_datetime64,
+    is_timedelta64,
     to_datetime64,
     to_float,
     to_int,
     to_timedelta64,
 )
+
+
+class Dummy:
+    """A dummy class for testing dispatching."""
+
+    pass
 
 
 class TestToDateTime64:
@@ -147,6 +153,11 @@ class TestToDateTime64:
         out = to_datetime64(ar)
         assert out.dtype == np.dtype("<M8[ns]")
 
+    def test_unsupported_type(self):
+        """Ensure unsupported types raise."""
+        with pytest.raises(NotImplementedError):
+            to_datetime64(Dummy())
+
 
 class TestToTimeDelta64:
     """Tests for creating timedeltas"""
@@ -236,49 +247,13 @@ class TestToTimeDelta64:
             expected = -to_timedelta64(abs(val))
             assert out == expected or (pd.isnull(out) and pd.isnull(expected))
 
-
-class TestGetSelectTime:
-    """Tests for getting select time(s)."""
-
-    t1 = np.datetime64("2020-01-03")
-    t2 = np.datetime64("2020-01-04")
-    func = functools.partial(get_select_time, time_min=t1, time_max=t2)
-
-    def test_datetime64(self):
-        """Test for returning a datetime 64."""
-        assert get_select_time(self.t1) == self.t1
-        assert get_select_time(self.t2) == self.t2
-        time = self.t1 + np.timedelta64(100, "s")
-        assert get_select_time(time) == time
-
-    def test_string(self):
-        """Tests for passing time as a string"""
-        tstr = "2020-01-03T01"
-        out = self.func(tstr)
-        assert out == np.datetime64(tstr)
-
-    def test_positive_float_int(self):
-        """Test float/ints are interpreted as relative"""
-        out = self.func(1)
-        expected = self.t1 + to_timedelta64(1)
-        assert out == expected
-
-        out = self.func(1.0)
-        expected = self.t1 + to_timedelta64(1)
-        assert out == expected
-
-    def test_negative_float_int(self):
-        """Test float/ints are interpreted as relative"""
-        out = self.func(-1)
-        expected = self.t2 - to_timedelta64(1)
-        assert out == expected
-
-        out = self.func(-1.0)
-        expected = self.t2 - to_timedelta64(1)
-        assert out == expected
+    def test_unsupported_type(self):
+        """Ensure unsupported types raise."""
+        with pytest.raises(NotImplementedError):
+            to_timedelta64(Dummy())
 
 
-class TestToNumber:
+class TestToInt:
     """Tests for converting time-like types to ints, or passing through reals"""
 
     def test_timedelta64(self):
@@ -308,10 +283,10 @@ class TestToNumber:
         assert to_int(None) is np.NaN
         assert to_int(pd.NaT) is np.NaN
 
-    def test_number_unchanged(self):
-        """Ensure a number is passed through unchanged."""
+    def test_converted_to_int(self):
+        """Ensure a number is converted to int"""
         assert to_int(10) == 10
-        assert to_int(10.1) == 10.1
+        assert to_int(10.1) == 10
 
     def test_numeric_array_unchanged(self):
         """Ensure numeric arrays are not changed."""
@@ -331,6 +306,17 @@ class TestToNumber:
         for dt in datetimes:
             out = to_int(dt)
             assert out == expected
+
+    def test_empty_array(self):
+        """ensure an empty array comes out the other end."""
+        ar = np.array([])
+        out = to_int(ar)
+        assert len(out) == 0
+
+    def test_unsupported_type(self):
+        """Ensure unsupported types raise."""
+        with pytest.raises(NotImplementedError):
+            to_int(Dummy())
 
 
 class TestIsDateTime:
@@ -406,3 +392,40 @@ class TestToFloat:
         """Ensure None returns NaN"""
         out = to_float(None)
         assert out is np.NaN
+
+    def test_empty_array(self):
+        """Empty arrays should work too."""
+        ar = np.array([])
+        out = to_float(ar)
+        assert len(out) == 0
+        assert np.issubdtype(out.dtype, np.float_)
+
+
+class TestIsTimeDelta:
+    """Test suite for determining time deltas."""
+
+    def test_simple_td(self):
+        """A single time delta should be true."""
+        td = to_timedelta64(10)
+        assert is_timedelta64(td)
+
+    def test_timedelta_array(self):
+        """Time-delta arrays should also be true."""
+        td = to_timedelta64(np.array([1, 2, 3]))
+        assert is_timedelta64(td)
+
+    def datetimes_false(self):
+        """Datetimes are not timedeltas :)"""
+        dt = to_datetime64("2020-01-02")
+        assert not is_timedelta64(dt)
+
+
+class TestGetmaxMinTimes:
+    """Tests for max_min fetching"""
+
+    def test_raises_bad_value(self):
+        """Simple test to make sure error is raised if unordered tuple."""
+        t1 = to_datetime64("2020-01-01")
+        t2 = to_datetime64("1994-01-01")
+        with pytest.raises(ValueError):
+            get_max_min_times((t1, t2))

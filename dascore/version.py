@@ -1,10 +1,11 @@
 """Module for reporting the version of dascore."""
+from contextlib import suppress
 from importlib.metadata import PackageNotFoundError, version
 
-try:
-    __version__ = version("dascore")
-except PackageNotFoundError:
-    # package is not installed
-    __version__ = "0.0.0"
+__version__ = "0.0.0"
+
+# try to get version from installed metadata
+with suppress(PackageNotFoundError):
+    __version__ = version("dascore")  # noqa
 
 __last_version__ = ".".join(__version__.split(".")[:3])

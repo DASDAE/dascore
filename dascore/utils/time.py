@@ -4,7 +4,7 @@ Utility for working with time.
 
 from datetime import datetime, timedelta
 from functools import singledispatch
-from typing import Optional, Union
+from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -16,7 +16,6 @@ from dascore.constants import (
     SMALLDT64,
     timeable_types,
 )
-from dascore.exceptions import TimeError
 
 
 @singledispatch
@@ -35,7 +34,9 @@ def to_datetime64(obj: Union[timeable_types, np.array]):
     >>> # Convert a timestamp (float)
     >>> dt = dc.to_datetime64(631152000.0)
     """
-    msg = f"type {type(obj)} is not yet supported"
+    if pd.isnull(obj):
+        return np.datetime64("NaT")
+    msg = f"type {type(obj)} is not supported"
     raise NotImplementedError(msg)
 
 
@@ -96,13 +97,6 @@ def _pass_datetime(datetime):
     return np.datetime64(datetime, "ns")
 
 
-@to_datetime64.register(type(None))
-@to_datetime64.register(type(pd.NaT))
-def _return_NaT(datetime):
-    """Convert non to NaT."""
-    return np.datetime64("NaT")
-
-
 @to_datetime64.register(pd.Timestamp)
 def _pandas_timestamp(datetime: pd.Timestamp):
     return datetime.to_datetime64()
@@ -125,8 +119,8 @@ def to_timedelta64(obj: Union[float, np.array, str]):
     >>> d_time_2 = dc.to_datetime64(-10.5)
     """
     if pd.isnull(obj):
-        return np.datetime64("NaT")
-    msg = f"type {type(obj)} is not yet supported"
+        return np.timedelta64("NaT")
+    msg = f"type {type(obj)} is not supported"
     raise NotImplementedError(msg)
 
 
@@ -203,48 +197,6 @@ def _time_delta_from_str(time_delta_str: str):
     return np.timedelta64(int(val), new_unit)
 
 
-def get_select_time(
-    time: Union[float, int, np.datetime64, np.timedelta64, str, datetime],
-    time_min: Optional[np.datetime64] = None,
-    time_max: Optional[np.datetime64] = None,
-) -> np.datetime64:
-    """
-    Applies logic for select time.
-
-    Parameters
-    ----------
-    time
-        The input time argument. Can either be:
-            * An absolute time expressed as a datetime64 or datettime object.
-            * A relative time expressed as a float, int, or time delta.
-              Positive relative times reference time_min, negative reference
-              time_max.
-
-    time_min
-        The reference start time (used for relative times).
-    time_max
-        The reference end time (used for relative times).
-
-    """
-    if pd.isnull(time):
-        return np.datetime64("NaT")
-    if isinstance(time, (str, datetime, np.datetime64)):
-        return to_datetime64(time)
-    else:
-        d_time = to_timedelta64(time)
-        relative_to = time_min if d_time > 0 else time_max
-        if pd.isnull(relative_to):
-            msg = "Cannot use relative times when reference times are null"
-            raise TimeError(msg)
-        return relative_to + d_time
-
-
-def datetime_to_float(dt):
-    """Convert a datetime-like object to a float (timestamp)."""
-    datetime64 = (to_datetime64(dt) - to_datetime64(0)) / ONE_SECOND
-    return datetime64
-
-
 @singledispatch
 def to_int(obj: Union[timeable_types, np.array]) -> np.array:
     """
@@ -253,20 +205,21 @@ def to_int(obj: Union[timeable_types, np.array]) -> np.array:
     If the input values represents a time or a time-delta, convert it to a
     an int representing ns.
     """
-    return obj
+    msg = f"type {type(obj)} is not supported"
+    raise NotImplementedError(msg)
 
 
 @to_int.register(float)
 @to_int.register(int)
 def _float_to_num(num: Union[float, int]) -> Union[float, int]:
-    """Convert a float to a single datetime."""
-    return num
+    """convert number to int"""
+    return int(num)
 
 
 @to_int.register(np.ndarray)
 @to_int.register(list)
 @to_int.register(tuple)
-def _array_to_number(array: np.array) -> np.array:
+def _array_to_int(array: np.array) -> np.array:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
@@ -285,8 +238,8 @@ def _array_to_number(array: np.array) -> np.array:
 @to_int.register(np.datetime64)
 @to_int.register(datetime)
 @to_int.register(pd.Timestamp)
-def _time_to_num(datetime):
-    """Simply return the datetime."""
+def _time_to_int(datetime):
+    """Simply return the datetime converted to ns."""
     return to_int([to_datetime64(datetime)])[0]
 
 
