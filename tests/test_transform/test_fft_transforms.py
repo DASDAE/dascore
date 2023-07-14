@@ -9,8 +9,8 @@ from dascore.transform.fft import rfft
 from dascore.units import get_quantity
 
 
-class TestRfft:
-    """Tests for the real fourier transform."""
+class TestRealFourierTransformSingleDim:
+    """Real Fourier transform test suite for a single dimension."""
 
     @pytest.fixture(scope="class")
     def rfft_patch(self, random_patch):
@@ -19,7 +19,7 @@ class TestRfft:
         return out
 
     def test_dims(self, rfft_patch):
-        """Ensure ft of original axis shows up in dimensions."""
+        """Ensure ft of original axis shows up in coordinate name."""
         dims = rfft_patch.dims
         start_freq = [x.startswith("ft_") for x in dims]
         assert any(start_freq)

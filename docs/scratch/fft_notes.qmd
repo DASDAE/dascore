@@ -1,0 +1,90 @@
+# Notes on Fourier Transforms in DASCore
+
+# Theory
+
+### Continuous Fourier Transform
+
+The Continuous Fourier Transform (CFT) [can be defined](https://en.wikipedia.org/wiki/Fourier_transform#Definitions) as:
+
+$$
+\hat{f}(\xi) = \int_{-\infty}^{\infty} f(x) e^{-i 2 \pi \xi x} dx
+$${#eq-1}
+
+Where $f$ is a function of some variable $x$, $\hat{f}$ is $f$ as a function of frequency ($\xi$), and $i$ is the imaginary unit.
+
+The properties @eq-1 are covered by many texts. One interesting property is [Parseval's identity](https://en.wikipedia.org/wiki/Parseval%27s_identity) which, in 1D, can be stated as:
+
+$$
+\int_{-\infty}^{\infty} |\hat{f}(\xi)|^2dx = \int_{-\infty}^{\infty} |f(x)|^2 dx
+$${#eq-2}
+
+
+### The Discrete Fourier Transform
+
+
+Numpy's discrete fourier transform is implemented as:
+
+$$
+A_k = \sum_{m=0}^{n-1} a_m e^{-2 \pi i \frac{m k}{n}}
+$${#eq-3}
+
+where $a$ is the untransformed series of length $n$ $A$ is the transformed discrete series with elements corresponding to frequency bins ($k$,  $(k=0, ..., n-1)$)
+
+Right away you might notice some differences from @eq-1. First, the output amplitude depends on the number of samples in the original signal ($n$).
+
+To see this consider a sine waves with amplitude of $\pm$ 1 and dominant frequency of 5 Hz.
+
+$$
+f(x) = sin(2 \pi 5 x)
+$$
+
+
+
+
+ one with 100 samples and the other with 300 samples. When we perform the dft and plot the result we get the following:
+
+```{python}
+
+#| code-fold: true
+#| label: fig-unscalled-plot
+#| fig-cap: "Unscalled Amplitude Plot"
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+duration = 5  # seconds
+freq = 5  # Hz
+n1, n2 = 100, 300  # number of samples
+
+# get time vectors
+t1 = np.linspace(0, duration, num=n1)
+t2 = np.linspace(0, duration, num=n2)
+
+# get sin waves
+sin1 = np.sin(2 * np.pi * freq * t1)
+sin2 = np.sin(2 * np.pi * freq * t2)
+
+# calculate dft for both signals
+fft1 = np.fft.rfft(sin1)
+freqs1 = np.fft.rfftfreq(n1, duration/n1)
+fft2 = np.fft.rfft(sin2)
+freqs2 = np.fft.rfftfreq(n2, duration/n2)
+
+# plot without normalization
+plt.plot(freqs1, np.abs(fft1), label=f"n={n1}")
+plt.plot(freqs2, np.abs(fft2), label=f"n={n2}")
+plt.legend()
+plt.show()
+```
+
+As expected, both have a spike at the frequency of the sine wave (5Hz), but the amplitude of the 300 sample wave is 3X larger than the 100 sample wave!
+
+
+# Useful Resources
+
+[Sclaing of DFT](https://appliedacousticschalmers.github.io/scaling-of-the-dft/AES2020_eBrief/): Concise overview of the DFT and its properties compared to the CFT.
+
+[xrft](https://xrft.readthedocs.io/en/latest/index.html): A very useful resource for DASCore's implementation.
+
+[numpy's fft module](https://numpy.org/doc/stable/reference/routines.fft.html): Details Numpy's fft implementations.

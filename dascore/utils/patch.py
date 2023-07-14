@@ -656,7 +656,7 @@ def _get_data_units_from_dims(patch, dims, operator):
 
 
 def _get_dx_or_spacing_and_axes(
-    patch, dim
+    patch, dim, require_sorted=True, require_evenly_spaced=False
 ) -> tuple[tuple[int | np.ndarray, ...], tuple[int, ...]]:
     """
     For each selected coordinates, get dx if evenly sampled or values.
@@ -669,7 +669,11 @@ def _get_dx_or_spacing_and_axes(
     out = []
     axes = []
     for dim_ in dims:
-        coord = patch.get_coord(dim_, require_sorted=True)
+        coord = patch.get_coord(
+            dim_,
+            require_sorted=require_sorted,
+            require_evenly_sampled=require_evenly_spaced,
+        )
         if coord.evenly_sampled:
             val = coord.step
         else:
