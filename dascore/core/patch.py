@@ -114,7 +114,8 @@ class Patch:
         header = Text.assemble(dascore_text, " ", patch_text)
         line = Text("-" * len(header))
         coords = self.coords.__rich__()
-        data = array_to_text(self.data)
+        attrs = self.attrs
+        data = array_to_text(self.data, units=attrs.get("data_units"))
         attrs = attrs_to_text(self.attrs)
         out = Text("\n").join([header, line, coords, data, attrs])
         return out

@@ -50,6 +50,9 @@ website:
       - text: Recipes
         file: recipes/overview.qmd
 
+      - text: Notes
+        file: notes/notes.qmd
+
       - text: Contributing
         file: contributing/contributing.qmd
 
@@ -148,6 +151,13 @@ website:
 
         - text: "Code of Conduct"
           href: contributing/code_of_conduct.qmd
+
+    - title: 'Notes'
+      contents:
+        - notes/notes.qmd
+
+        - text: FFT notes
+          href: notes/fft_notes.qmd
 
     - title: 'API'
       contents:

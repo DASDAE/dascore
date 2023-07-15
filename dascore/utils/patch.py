@@ -641,11 +641,11 @@ def merge_compatible_coords_attrs(
 
 
 def _get_data_units_from_dims(patch, dims, operator):
-    """Get new data units from dimensions."""
+    """Get new data units from some operation on dimensions."""
     if (data_units := get_quantity(patch.attrs.data_units)) is None:
         return
     dim_units = None
-    for dim in dims:
+    for dim in iterate(dims):
         dim_unit = get_quantity(patch.get_coord(dim).units)
         if dim_unit is None:
             continue
@@ -656,14 +656,24 @@ def _get_data_units_from_dims(patch, dims, operator):
 
 
 def _get_dx_or_spacing_and_axes(
-    patch, dim, require_sorted=True, require_evenly_spaced=False
+    patch,
+    dim,
+    require_sorted=True,
+    require_evenly_spaced=False,
 ) -> tuple[tuple[int | np.ndarray, ...], tuple[int, ...]]:
     """
-    For each selected coordinates, get dx if evenly sampled or values.
+    Return dx (spacing) or values for a list of dims and corresponding axes.
 
-    Dimension must be sorted or an Error is raised.
-
-    Also get axes.
+    Parameters
+    ----------
+    patch
+        The input patch
+    dim
+        The dimension name or sequence of such
+    require_sorted
+        If True, raise an error if all requested dimensions are not sorted.
+    require_evenly_spaced
+        If True, raise an error if all requested dimensions are not evenly sampled.
     """
     dims = iterate(dim if dim is not None else patch.dims)
     out = []
@@ -681,4 +691,5 @@ def _get_dx_or_spacing_and_axes(
         # need to convert val to float so datetimes work
         out.append(to_float(val))
         axes.append(patch.dims.index(dim_))
+
     return tuple(out), tuple(axes)
