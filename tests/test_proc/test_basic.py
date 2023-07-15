@@ -9,6 +9,16 @@ from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
 
 
+@pytest.fixture(scope="session")
+def random_complex_patch(random_patch):
+    """Swap out data for complex data."""
+    shape = random_patch.shape
+    rand = np.random.random
+    new_data = rand(shape) + rand(shape) * 1j
+    pa = random_patch.new(data=new_data)
+    return pa
+
+
 class TestAbs:
     """Test absolute values."""
 
@@ -20,6 +30,54 @@ class TestAbs:
         new = random_patch.new(data=data)
         out = new.abs()
         assert np.all(out.data >= 0)
+
+    def test_all_real(self, random_complex_patch):
+        """Ensure all values are real after abs on complex data."""
+        out = random_complex_patch.abs()
+        assert np.issubdtype(out.data.dtype, np.float_)
+        assert np.allclose(np.imag(out.data), 0)
+
+
+class TestReal:
+    """Test for getting real data values."""
+
+    def test_real_from_complex(self, random_complex_patch):
+        """Simply ensure data are real-valued."""
+        out1 = random_complex_patch.real()
+        assert np.all(out1.data == np.real(out1.data))
+
+    def test_real_does_nothing_on_float(self, random_patch):
+        """Read shouldn't do anything for float patches."""
+        pa1 = random_patch.real()
+        assert np.allclose(pa1.data, random_patch.data)
+
+
+class TestImag:
+    """Test for getting imaginary part of data values."""
+
+    def test_imag_from_real(self, random_patch):
+        """Real data should have close to 0 imaginary part."""
+        out1 = random_patch.imag()
+        assert np.allclose(out1.data, 0)
+
+    def test_imag_from_complex(self, random_complex_patch):
+        """Real data should have close to 0 imaginary part."""
+        out1 = random_complex_patch.imag()
+        assert np.allclose(out1.data, np.imag(random_complex_patch.data))
+
+
+class TestsAngle:
+    """Test for getting phase angle."""
+
+    def test_angle_from_real(self, random_patch):
+        """Ensure phase angles from real value are close to 0/360"""
+        out = random_patch.angle()
+        assert np.allclose(out.data, 0)
+
+    def test_angle_from_complex(self, random_complex_patch):
+        """Simple phase angle test."""
+        out = random_complex_patch.angle()
+        assert np.allclose(out.data, np.angle(random_complex_patch.data))
 
 
 class TestTranspose:

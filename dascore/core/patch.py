@@ -326,6 +326,9 @@ class Patch:
     median_filter = dascore.proc.median_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
+    real = dascore.proc.real
+    imag = dascore.proc.imag
+    angle = dascore.proc.angle
     resample = dascore.proc.resample
     iresample = dascore.proc.iresample
     interpolate = dascore.proc.interpolate

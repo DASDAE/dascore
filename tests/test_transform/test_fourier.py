@@ -6,9 +6,8 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.transform.fft import dft, idft, rfft
+from dascore.transform.fourier import dft, idft
 from dascore.units import get_quantity
-from dascore.utils.misc import suppress_warnings
 
 F_0 = 2
 
@@ -17,7 +16,7 @@ F_0 = 2
 def sin_patch():
     """Get the sine wave patch, set units for testing."""
     patch = dc.get_example_patch("sin_wav", sample_rate=100, duration=3, frequency=F_0)
-    out = patch.set_units("V", time="s", distance="m")
+    out = patch.set_units(get_quantity("1.0 V"), time="s", distance="m")
     return out
 
 
@@ -75,7 +74,8 @@ class TestDiscreteFourierTransform:
         """
         patch = random_patch_many_coords
         # every coord associated with time should be dropped in output.
-        coord_to_drop = set(patch.coords.dim_to_coord_map["time"])
+        # but time itself should be kept as non-dimensional coord.
+        coord_to_drop = set(patch.coords.dim_to_coord_map["time"]) - {"time"}
         coords_to_keep = set(patch.coords.coord_map) - coord_to_drop
         # do dft
         out = dft(patch, "time")
@@ -83,6 +83,8 @@ class TestDiscreteFourierTransform:
         new_coords = set(out.coords.coord_map)
         assert coord_to_drop.isdisjoint(new_coords)
         assert coords_to_keep.issubset(new_coords)
+        # make sure time has no dimsensions
+        assert out.coords.dim_map["time"] == ()
 
     def test_real_fft(self, sin_patch):
         """Ensure real fft works."""
@@ -108,53 +110,35 @@ class TestDiscreteFourierTransform:
         real_coord = out.get_coord("ft_distance")
         assert real_coord.min() == 0
 
+    def test_parseval(self, sin_patch, fft_sin_patch_time):
+        """
+        Ensure parseval's theorem holds. This means we have scaled the
+        transforms correctly.
+        """
+        pa1, pa2 = sin_patch, fft_sin_patch_time
+        vals1 = (pa1**2).tran.integrate("time", definite=True)
+        vals2 = (pa2.abs() ** 2).tran.integrate("ft_time", definite=True)
+        assert np.allclose(vals1.data, vals2.data)
+
 
 class TestInverseDiscreteFourierTransform:
     """Inverse DFT suite."""
 
-    def test_invertible(self, sin_patch, ifft_sin_patch_time):
+    def _patches_about_equal(self, patch1, patch2):
+        """Ensure patches are about equal in coord manager and data."""
+        assert np.allclose(patch1.data, patch2.data)
+        cm1 = patch1.coords.drop_disassociated_coords()
+        cm2 = patch2.coords.drop_disassociated_coords()
+        assert cm1 == cm2
+
+    def test_invertible_1d(self, sin_patch, ifft_sin_patch_time):
         """Ensure pre dft and idft(dft(patch)) are equal."""
         patch1 = sin_patch
-        patch2 = ifft_sin_patch_time
-        assert patch1.equals(patch2)
+        patch2 = ifft_sin_patch_time.real()
+        self._patches_about_equal(patch1, patch2)
 
-
-class TestRfft:
-    """
-    Tests for the real fourier transform.
-
-    TODO: Remove this in a few versions
-    """
-
-    @pytest.fixture(scope="class")
-    def rfft_patch(self, random_patch):
-        """return the random patched transformed along time w/ rrft."""
-        with suppress_warnings(DeprecationWarning):
-            out = rfft(random_patch, dim="time")
-        return out
-
-    def test_dims(self, rfft_patch):
-        """Ensure ft of original axis shows up in dimensions."""
-        dims = rfft_patch.dims
-        start_freq = [x.startswith("ft_") for x in dims]
-        assert any(start_freq)
-
-    def test_abs_rrft(self, rfft_patch):
-        """Ensure abs works with rfft to get amplitude spectra."""
-        out = rfft_patch.abs()
-        assert np.allclose(out.data, np.abs(rfft_patch.data))
-
-    def test_time_coord_units(self, random_patch, rfft_patch):
-        """Ensure time label units have been correctly set."""
-        units1 = random_patch.coords.coord_map["time"].units
-        units2 = rfft_patch.coords.coord_map["ft_time"].units
-        assert get_quantity(units1) == 1 / get_quantity(units2)
-
-    def test_data_units(self, random_patch):
-        """Ensure data units have been updated."""
-        patch = random_patch.update_attrs(data_units="m/s")
-        with suppress_warnings(DeprecationWarning):
-            fft_patch = patch.tran.rfft("time")
-        dunits1 = get_quantity(patch.attrs.data_units)
-        dunits2 = get_quantity(fft_patch.attrs.data_units)
-        assert dunits2 == dunits1 * get_quantity("second")
+    def test_invertible_2d(self, sin_patch, ifft_sin_patch_all):
+        """Ensure 2d patches are invertible."""
+        patch1 = sin_patch
+        patch2 = ifft_sin_patch_all.real()
+        self._patches_about_equal(patch1, patch2)

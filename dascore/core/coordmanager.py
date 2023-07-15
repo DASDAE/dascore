@@ -304,6 +304,30 @@ class CoordManager(DascoreBaseModel):
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
         return new, self._get_new_data(index, array)
 
+    def disassociate_coord(self, coord: Union[str, Sequence[str]]) -> Self:
+        """
+        Disassociate some coordinates from dimensions.
+
+        These coordinates will no longer be associated with a dimension in
+        the coord manager but can still be retrieved.
+
+        Parameters
+        ----------
+        coord
+            The coordinate name(s) to disassociated from their dimensions.
+        """
+        new = {x: (None, self.coord_map[x]) for x in iterate(coord)}
+        return self.drop_coord(coord)[0].update_coords(**new)
+
+    def drop_disassociated_coords(self) -> Self:
+        """
+        Drop all coordinates not associated with a dimension.
+        """
+        cmap = self.coord_map
+        dim_map = self.dim_map
+        no_dim_coords = [x for x in cmap if dim_map[x] == ()]
+        return self.drop_coord(no_dim_coords)
+
     def select(
         self, array: MaybeArray = None, relative=False, **kwargs
     ) -> Tuple[Self, MaybeArray]:
@@ -395,7 +419,7 @@ class CoordManager(DascoreBaseModel):
             coord = self.coord_map[name]
             coord_dims = self.dim_map[name]
             if name in self.dims:
-                base = Text.assemble("\n    ", Text(name, style="bold"), ": ")
+                base = Text.assemble("\n    * ", Text(name, style="bold"), ": ")
             else:
                 base = Text(f"\n    {name} {coord_dims}: ")
             text = Text.assemble(base, coord.__rich__())
@@ -414,7 +438,7 @@ class CoordManager(DascoreBaseModel):
         for name, coord_dims in dim_map.items():
             expected_shape = tuple(dim_shapes[x][0] for x in coord_dims)
             shape = coord_map[name].shape
-            if tuple(expected_shape) == shape:
+            if tuple(expected_shape) == shape or not expected_shape:
                 continue
             msg = (
                 f"coordinate: {name} has a shape of {shape} which does not "

@@ -168,6 +168,12 @@ class PatchAttrs(BaseModel):
         out.update(kwargs)
         return self.__class__(**out)
 
+    def drop_private(self) -> Self:
+        """Drop all private attributes."""
+        contents = dict(self)
+        out = {i: v for i, v in contents.items() if not i.startswith("_")}
+        return self.__class__(**out)
+
 
 class PatchFileSummary(PatchAttrs):
     """

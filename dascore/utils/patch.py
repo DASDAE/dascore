@@ -660,7 +660,7 @@ def _get_dx_or_spacing_and_axes(
     dim,
     require_sorted=True,
     require_evenly_spaced=False,
-) -> tuple[tuple[int | np.ndarray, ...], tuple[int, ...]]:
+) -> tuple[tuple[float | np.ndarray, ...], tuple[int, ...]]:
     """
     Return dx (spacing) or values for a list of dims and corresponding axes.
 
