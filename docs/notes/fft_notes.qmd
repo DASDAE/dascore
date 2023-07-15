@@ -4,14 +4,16 @@ These notes provide the reasoning for DASCore's [fft](`dacore.tran.fft`) module 
 
 ## Summary {#sec-summary}
 
- - DACore multiplies the fft output by the coordinate spacing in order to:
+- DACore multiplies numpy's fft output by the coordinate spacing in order to:
+
    - Produce the same units as the continuous fourier transform.
    - Preserve energy between the initial and transformed signals.
    - Ensure the zero frequency approximates the average of the signal.
 
- - DASCore also performs a frequency shift so the output axis labels are sorted.
+- If the scaled fft is divided by the signal duration, the amplitude spectrum magnitudes correspond to the magnitude of the composite harmonics.
 
-### Continuous Fourier Transform
+
+## Continuous Fourier Transform
 
 The Continuous Fourier Transform (CFT) [can be defined](https://en.wikipedia.org/wiki/Fourier_transform#Definitions) as:
 
@@ -31,7 +33,7 @@ Let us consider how $F$ affects the units of $f(x)$ by first examining the units
 
 The units of $\hat{f}$ are also straight-forward to ascertain from @eq-1. Because $e^{-i 2 \pi \xi x}$ has no units, the resulting units of $\hat{f}$ are just the units of $f(x)$ multiplied by the units of $dx$. So, if the original units of $f$ are in volts ($V$) and the units of $x$ are seconds, the units of $\hat{f}$ are $Vs$, which is often written as $\frac{V}{Hz}$.
 
-@eq-1 has many other properties covered by many texts. One property that is relavent to DASCore's implementation is [Parseval's identity](https://en.wikipedia.org/wiki/Parseval%27s_identity) which, in 1D, can be stated as:
+One property of @eq-1 relevant to DASCore's implementation is [Parseval's identity](https://en.wikipedia.org/wiki/Parseval%27s_identity) which, in 1D, can be stated as:
 
 $$
 \int_{-\infty}^{\infty} |\hat{f}(\xi)|^2dx = \int_{-\infty}^{\infty} |f(x)|^2 dx
@@ -46,7 +48,7 @@ $$
 $$
 
 
-### The Discrete Fourier Transform
+## The Discrete Fourier Transform
 
 Before defining the Discrete Fourier Transform (DFT), let's first consider how we expect DASCore's DFT to behave based on @eq-1 and the discussion in the previous section.
 
@@ -62,11 +64,11 @@ $$
 A_k = \sum_{m=0}^{n-1} a_m e^{-2 \pi i \frac{m k}{n}}
 $${#eq-4}
 
-where $a$ is the untransformed series of length $n$ $A$ is the transformed discrete series with elements corresponding to frequency bins ($k$,  $(k=0, ..., n-1)$)
+where $a$ is the untransformed series of length $n$ $A$ is the transformed discrete series with elements corresponding to frequency bins ($k$, $k=0, ..., n-1$)
 
 Right away you might notice some reasons @eq-4 can't meet our expectations. First, nowhere are the units of $a$'s axis multiplied by the summation. Since the exponential term must be unit-less, $a$ must have the same units as $A$. Next, the energy can't be preserved since the number of elements in the summation increases as $n$ increases. Lastly, $A(0) = \sum_{m=0}^{n-1} a_m$ which is not the integral, but the sum, of the $a$ (it doesn't consider sample spacing).
 
-### Two Sine Waves
+## Two Sine Waves
 
 To illustrate some of these issues, consider a sine waves with amplitude of $\pm$ $b_0$ and dominant frequency of $f_0$ Hz.
 
@@ -87,7 +89,7 @@ To discretize @eq-5, let $f_0 = 2$, the total signal duration ($T$) = 5 seconds,
 ```{python}
 #| code-fold: true
 #| label: fig-unscalled-plot
-#| fig-cap: "Unscalled Amplitude Plot"
+#| fig-cap: "Sine amplitude spectrum"
 import matplotlib.pyplot as plt
 
 import numpy as np
@@ -138,19 +140,21 @@ plt.show()
 
 As expected, both have spikes at $\pm f_0$ (5Hz), but the amplitude of the 1000 sample function 2X larger than the 500 sample function. This isn't entirely surprising; from @eq-6 we expect the amplitude to tend toward infinity as the signal moves from discrete to continuous ($n \rightarrow \infty$). However, this scaling is typically not useful. Certainly, it won't help us meet our expectations.
 
-### Sine Scaling
+## Scaling
 
 One approach to fix the differences in scaling is to divide each fft by the number of samples. After which, they have nearly identical spectral amplitudes.
 
 ```{python}
 #| code-fold: true
 #| label: fig-n-scalled-plot
-#| fig-cap: "n Scalled Amplitude Plot"
+#| fig-cap: "Sine amplitude spectrum scaled by n"
 n_scaled_fft1 = fft1 / len(freqs1)
 n_scaled_fft2 = fft2 / len(freqs2)
 ax = plot_amplitude_spectras(freqs1, n_scaled_fft1, freqs2, n_scaled_fft2)
 plt.show()
 ```
+
+A nice result of this approach is that the magnitude of the amplitude spectrum values at $\pm$ the dominant frequency ($f_0$) are half of the amplitude of the original sine wave ($b_0$). If we fold the amplitude spectrum over 0, meaning we add the values of the negative frequencies to their corresponding positive frequencies, the value corresponding to $f_0$ is exactly $b_0$.
 
 However, does the equivalent of @eq-3 hold if we perform numerical integration?
 
@@ -177,17 +181,19 @@ print(f"sine wave (n={len(t2)}) energy {time2_energy:.02f}")
 print(f"fft n-scaled (n={len(t2)}) energy {fft2_energy:.02f}")
 ```
 
-It doesn't. And what about the units? As we saw above, $A$ in @eq-4 would have the same units as $a$. So what if, drawing inspiration from @eq-1, we simply scale the output units by the function sample spacing? After all, the spacing and the number of samples is directly related by
+It doesn't. And what about the units? As we saw above, $A$ in @eq-4 would have the same units as $a$.
+
+What if, drawing inspiration from @eq-1, we simply scale the output units by the function's sample spacing? After all, the spacing and the number of samples is directly related by
 
 $$
-\frac{T}{dt} = n
-$$
+\frac{T}{n} = dt
+$${#eq-7}
 
 
 ```{python}
 #| code-fold: true
 #| label: fig-dt-scalled-plot
-#| fig-cap: "dt Scalled Amplitude Plot"
+#| fig-cap: "Sine amplitude spectrum scalled by dx"
 dt1, dt2 = t1[1] - t1[0], t2[1] - t2[0]
 dt_scaled_fft1 = fft1 * dt1
 dt_scaled_fft2 = fft2 * dt2
@@ -195,7 +201,7 @@ ax = plot_amplitude_spectras(freqs1, dt_scaled_fft1, freqs2, dt_scaled_fft2)
 plt.show()
 ```
 
-They still have the same amplitude, and checking their energy conservation:
+The transforms with different numbers of points still have the same magnitude at $\pm f_0$. Checking their energy conservation:
 
 ```{python}
 #| code-fold: true
@@ -213,17 +219,17 @@ print(f"sine wave (n={len(t2)}) energy {time2_energy:.02f}")
 print(f"fft dt_scaled (n={len(t2)}) energy {fft2_energy:.02f}")
 ```
 
-The energy is conserved, and the expected units are produced.
+The energy is conserved, and the expected units are produced. However, we would need to divide by the total signal duration $T$ in order for the spectrum magnitudes to correspond to the time-domain amplitude of harmonics in the new basis (@eq-7).
 
 
 ## Zero Frequency
 
-What about the zero frequency representing the integral over the signal domain? It is hard to say with a zero-mean signal like a sine wave. We could use a triangle though, such that $f(x) = x$. Using the 5 second signal from before, which forms a triangle with area of 12.5, we get the following transforms:
+What about the zero frequency representing the integral over the signal domain? It is hard to say with a zero-mean signal like the sine wave used in the previous section. We could use a ramp function, such that $f(x) = x$. Using the 5 second signal from before, which forms a triangle with area of 12.5, we get the following transforms:
 
 ```{python}
 #| code-fold: true
 #| label: triangle_fft_plot
-#| fig-cap: "Triangle scaled fft"
+#| fig-cap: "Ramp amplitude spectrum scaled by dx"
 
 # get scaled fft
 
@@ -238,19 +244,26 @@ tri_fft2_scaled = tri_fft2 * dt2
 
 
 ax = plot_amplitude_spectras(tri_freq1, tri_fft1_scaled, tri_freq2, tri_fft2_scaled)
-print(np.abs(tri_fft1_scaled).max())
+
+value = np.abs(tri_fft2_scaled).max()
+
+print(f"Zero frequency amplitude {value}")
+
 plt.show()
 ```
 
-Both outputs have a zero frequency very near the expected value of 12.5.
+Both outputs have a zero frequency amplitude spectrum value very near  12.5.
 
 ## Conclusions
 
-All our requirements/expectations of the dft if we simply multiply numpy's fft output by the sample spacing. We would also need to be careful to undo the frequency shift and divide by the sample spacing before performing the inverse transform.
+All our requirements/expectations of the dft if we simply multiply numpy's fft output by the sample spacing ($dx$). If we want the amplitude spectrum magnitudes to correspond to the amplitude of the composite harmonics, we just need to divide by the signal duration.
 
+:::{.callout-note}
+Although not mentioned in the text, we also need to be careful to undo the frequency shift and divide by the sample spacing before performing the inverse transform.
+:::
 Patch methods [dft](`dascore.tran.fft.dft`) and [idft](`dascore.tran.fft.idft`) handle this for you.
 
-### Useful Resources
+## Useful Resources
 
 [Sclaing of DFT](https://appliedacousticschalmers.github.io/scaling-of-the-dft/AES2020_eBrief/): Concise overview of the DFT and its properties compared to the CFT.
 

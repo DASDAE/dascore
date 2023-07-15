@@ -175,11 +175,22 @@ def random_patch_with_lat_lon(random_patch):
 @register_func(PATCH_FIXTURES)
 def multi_dim_coords_patch(random_patch):
     """A patch with a multiple dimensional coord."""
-    dist = random_patch.coords["distance"]
-    time = random_patch.coords["time"]
-    quality = np.ones((len(dist), len(time)))
-    out = random_patch.assign_coords(quality=(("distance", "time"), quality))
+    quality = np.ones(random_patch.shape)
+    out = random_patch.assign_coords(quality=(random_patch.dims, quality))
     return out
+
+
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def random_patch_many_coords(random_patch):
+    """Get a random patch with many different coordinates."""
+    shapes = random_patch.coord_shapes
+    patch = random_patch.update_coords(
+        lat=("distance", np.random.random(shapes["distance"])),
+        time2=("time", np.random.random(shapes["time"])),
+        quality=(random_patch.dims, np.random.random(random_patch.shape)),
+    )
+    return patch
 
 
 @pytest.fixture(scope="session")

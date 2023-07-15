@@ -25,7 +25,7 @@ class TestWiggle:
         """test the example from the docs"""
         import dascore as dc
 
-        patch = dc.examples.sin_wave_patch(
+        patch = dc.examples._sin_wave_patch(
             sample_rate=1000,
             frequency=[200, 10],
             channel_count=2,

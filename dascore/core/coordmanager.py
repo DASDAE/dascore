@@ -670,6 +670,17 @@ class CoordManager(DascoreBaseModel):
                 out[dim].append(coord)
         return FrozenDict({i: tuple(v) for i, v in out.items()})
 
+    def get_coord_tuple_map(self) -> dict[str, Tuple[Tuple[str, ...], "BaseCoord"]]:
+        """
+        Return a mapping of {coord_name: (dims, coord)}.
+
+        This is helpful because it can be passed directly to
+        get_coordinate_manager.
+        """
+        dims = self.dim_map
+        coords = self.coord_map
+        return {x: (dims[x], c) for x, c in coords.items()}
+
     def _get_coord_dims_tuple(self):
         """Return a tuple of ((coord, dims...,), ...)"""
         dim_map = self.dim_map

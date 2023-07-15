@@ -36,7 +36,7 @@ def fft_sin_patch_all(sin_patch):
 @pytest.fixture(scope="session")
 def ifft_sin_patch_time(fft_sin_patch_time):
     """Get the sine wave patch, set units for testing."""
-    return idft(fft_sin_patch_time, dim="time")
+    return idft(fft_sin_patch_time, dim="ft_time")
 
 
 @pytest.fixture(scope="session")
@@ -50,6 +50,7 @@ class TestDiscreteFourierTransform:
 
     def test_max_frequency(self, fft_sin_patch_time):
         """Ensure when sin wave is input max freq is correct."""
+        assert "ft_time" in fft_sin_patch_time.dims
         patch = fft_sin_patch_time
         freq_dim = patch.dims.index("ft_time")
         ar = np.argmax(np.abs(patch.data), freq_dim)
@@ -57,6 +58,65 @@ class TestDiscreteFourierTransform:
         freqs = patch.get_coord("ft_time").data
         max_freq = np.abs(freqs[ar[0]])
         assert np.isclose(max_freq, F_0, rtol=0.01)
+
+    def test_units(self, fft_sin_patch_time, sin_patch):
+        """Ensure units were transformed as expected."""
+        time_units = get_quantity(sin_patch.get_coord("time").units)
+        ft_time_units = get_quantity(fft_sin_patch_time.get_coord("ft_time").units)
+        assert 1 / time_units == ft_time_units
+        old_data_units = get_quantity(sin_patch.attrs.data_units)
+        new_data_units = get_quantity(fft_sin_patch_time.attrs.data_units)
+        assert old_data_units * time_units == new_data_units
+
+    def test_drop_non_dimensional_coordinates(self, random_patch_many_coords):
+        """
+        Non-dimensional coordinates associated with transformed axis should
+        be dropped, but those associated with non-transformed axis should remain.
+        """
+        patch = random_patch_many_coords
+        # every coord associated with time should be dropped in output.
+        coord_to_drop = set(patch.coords.dim_to_coord_map["time"])
+        coords_to_keep = set(patch.coords.coord_map) - coord_to_drop
+        # do dft
+        out = dft(patch, "time")
+        # ensure kept coords are kept and dropped are dropped.
+        new_coords = set(out.coords.coord_map)
+        assert coord_to_drop.isdisjoint(new_coords)
+        assert coords_to_keep.issubset(new_coords)
+
+    def test_real_fft(self, sin_patch):
+        """Ensure real fft works."""
+        out = sin_patch.tran.dft("time", real=True)
+        coord = out.get_coord("ft_time")
+        freq_ax = out.dims.index("ft_time")
+        assert coord.min() == 0
+        ar = np.argmax(np.abs(out.data), axis=freq_ax)
+        assert np.allclose(ar, ar[0])
+        max_freq = np.abs(coord.data[ar[0]])
+        assert np.isclose(max_freq, F_0, rtol=0.01)
+
+    def test_all_dims(self, fft_sin_patch_all):
+        """Ensure fft can be done on all axis."""
+        patch = fft_sin_patch_all
+        assert all((x.startswith("ft_") for x in patch.dims))
+
+    def test_real_multiple_dims(self, sin_patch):
+        """Ensure the real axis can be specified."""
+        patch = sin_patch
+        out = patch.tran.dft(dim=("distance", "time"), real="distance")
+        assert all((x.startswith("ft_") for x in out.dims))
+        real_coord = out.get_coord("ft_distance")
+        assert real_coord.min() == 0
+
+
+class TestInverseDiscreteFourierTransform:
+    """Inverse DFT suite."""
+
+    def test_invertible(self, sin_patch, ifft_sin_patch_time):
+        """Ensure pre dft and idft(dft(patch)) are equal."""
+        patch1 = sin_patch
+        patch2 = ifft_sin_patch_time
+        assert patch1.equals(patch2)
 
 
 class TestRfft:

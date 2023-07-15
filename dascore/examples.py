@@ -83,7 +83,7 @@ def _wacky_dim_coord_patch():
 
 
 @register_func(EXAMPLE_PATCHES, key="sin_wav")
-def sin_wave_patch(
+def _sin_wave_patch(
     sample_rate=44100,
     frequency: Union[Sequence[float], float] = 100.0,
     time_min="2020-01-01",

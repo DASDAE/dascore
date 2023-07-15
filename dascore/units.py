@@ -4,6 +4,7 @@ Module for handling units.
 from functools import cache
 from typing import Optional, Tuple, TypeVar, Union
 
+import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit  # noqa
 
@@ -31,14 +32,21 @@ def get_unit(value) -> Unit:
 
 
 @cache
+def _str_to_quant(qunat_str):
+    """Get quantity from a string; cache output."""
+    if isinstance(qunat_str, Unit):
+        qunat_str = str(qunat_str)  # ensure unit is converted to quantity
+    ureg = get_registry()
+    return ureg.Quantity(qunat_str)
+
+
 def get_quantity(value: str_or_none) -> Optional[Quantity]:
     """Convert a value to a pint quantity."""
     if value is None or value is ...:
         return None
-    if isinstance(value, Unit):
-        value = str(value)  # ensure unit is converted to quantity
-    ureg = get_registry()
-    return ureg.Quantity(value)
+    if isinstance(value, Quantity):
+        return value
+    return _str_to_quant(value)
 
 
 def get_factor_and_unit(
@@ -69,10 +77,12 @@ def get_conversion_factor(from_quant, to_quant) -> float:
     return mag_ratio * unit_ratio
 
 
-def invert_unit(unit: Union[pint.Unit, str]) -> pint.Unit:
+def invert_quantity(unit: Union[pint.Unit, str]) -> pint.Unit:
     """Invert a unit"""
-    out = 1 / pint.Unit(unit)
-    return out.units
+    if pd.isnull(unit):
+        return None
+    quant = get_quantity(unit)
+    return 1 / quant
 
 
 def validate_quantity(quant_str) -> Optional[str]:

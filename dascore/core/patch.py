@@ -3,7 +3,7 @@ A 2D trace object.
 """
 from __future__ import annotations
 
-from typing import Callable, Dict, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -128,19 +128,20 @@ class Patch:
 
     __repr__ = __str__
 
-    def equals(self, other: PatchType, only_required_attrs=True) -> bool:
+    def equals(self, other: Any, only_required_attrs=True) -> bool:
         """
-        Determine if the current patch equals the other patch.
+        Determine if the current patch equals a
 
         Parameters
         ----------
         other
-            A Trace2D object
+            A Patch (could be equal) or some other type (not equal)
         only_required_attrs
             If True, only compare required attributes. This helps avoid issues
             with comparing histories or custom attrs of patches, for example.
         """
-
+        if not isinstance(other, type(self)):
+            return False
         if only_required_attrs:
             attrs_to_compare = set(PatchAttrs.get_defaults()) - {"history"}
             attrs1 = {x: self.attrs.get(x, None) for x in attrs_to_compare}
