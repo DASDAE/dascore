@@ -98,7 +98,7 @@ class TestDiscreteFourierTransform:
         assert np.isclose(max_freq, F_0, rtol=0.01)
         # data shape should be less than before (since real fft)
         ft_shape = out.coord_shapes["ft_time"][0]
-        time_shape = sin_patch.coord_shapes['time'][0]
+        time_shape = sin_patch.coord_shapes["time"][0]
         assert ft_shape == time_shape // 2 or ft_shape == (time_shape // 2 + 1)
 
     def test_all_dims(self, fft_sin_patch_all):

@@ -74,7 +74,7 @@ def _get_dft_attrs(patch, dims, new_coords, scale_factor):
     new = dict(patch.attrs)
     new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
-    new['_dft_scale_factor'] = scale_factor
+    new["_dft_scale_factor"] = scale_factor
     return PatchAttrs(**new)
 
 
@@ -172,7 +172,6 @@ def _get_idft_dims_steps_axis(patch, dim):
         dims.append(dims.pop(real_ind))
     steps, axis = _get_dx_or_spacing_and_axes(patch, dims)
     return dims, steps, axis, has_real
-
 
 
 def _get_idft_coords_and_sizes(patch, dims, steps, new_dims, axes, real):

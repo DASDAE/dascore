@@ -284,8 +284,8 @@ class TestCoordManagerInputs:
     def test_dim_coord_wrong_dim(self):
         """It shouldn't be possible to init a dimension coord with the wrong dim."""
         coords = {
-            "time": ((), np.array([1,2,3])),
-            "distance": ("distance", np.array([1,2,3])),
+            "time": ((), np.array([1, 2, 3])),
+            "distance": ("distance", np.array([1, 2, 3])),
         }
         dims = "time", "distance"
         with pytest.raises(ValidationError):

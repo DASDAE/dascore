@@ -106,7 +106,7 @@ Conversely, you can also preview the documentation so changes are rendered in re
 quarto preview docs
 ```
 
-If you need to change the structure of the site, like adding a new section/subsection, the file to edit is scripts/_templates/_quarto.yml. 
+If you need to change the structure of the site, like adding a new section/subsection, the file to edit is scripts/_templates/_quarto.yml.
 
 # Cross references
 

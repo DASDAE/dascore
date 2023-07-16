@@ -218,7 +218,7 @@ print(f"sine wave (n={len(t2)}) energy {time2_energy:.02f}")
 print(f"fft dt_scaled (n={len(t2)}) energy {fft2_energy:.02f}")
 ```
 
-The energy is conserved, and the expected units are produced. However, we would need to divide by the total signal duration $T$ in order for the spectrum magnitudes to correspond to the time-domain amplitude of harmonics in the new basis (@eq-7), if that property is desirable. 
+The energy is conserved, and the expected units are produced. However, we would need to divide by the total signal duration $T$ in order for the spectrum magnitudes to correspond to the time-domain amplitude of harmonics in the new basis (@eq-7), if that property is desirable.
 
 
 ## Zero Frequency

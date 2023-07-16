@@ -54,9 +54,9 @@ class TestSpoolEquals:
     def test_unequal_attr(self, random_spool):
         """Simulate some attribute which isnt equal."""
         new1 = copy.deepcopy(random_spool)
-        new1.__dict__['bad_attr'] = 1
+        new1.__dict__["bad_attr"] = 1
         new2 = copy.deepcopy(random_spool)
-        new2.__dict__['bad_attr'] = 2
+        new2.__dict__["bad_attr"] = 2
         assert new1 != new2
 
 
