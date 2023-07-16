@@ -64,6 +64,7 @@ class TransformSuite:
     def setup(self):
         """just load the default patch."""
         self.patch = dc.get_example_patch()
+        self.dft_patch = self.patch.tran.dft("time")
 
     def time_indefinite_integrate(self):
         """integrate along time axis."""
@@ -76,6 +77,14 @@ class TransformSuite:
     def time_differentiate(self):
         """differentiate along time axis"""
         self.patch.tran.differentiate(dim="time")
+
+    def time_dft(self):
+        """The discrete fourier transform"""
+        self.patch.tran.dft(dim='time')
+
+    def time_idft(self):
+        """The inverse of the fourier transform"""
+        self.dft_patch.tran.idft()
 
 
 class VizSuite:
