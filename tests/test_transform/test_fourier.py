@@ -96,6 +96,10 @@ class TestDiscreteFourierTransform:
         assert np.allclose(ar, ar[0])
         max_freq = np.abs(coord.data[ar[0]])
         assert np.isclose(max_freq, F_0, rtol=0.01)
+        # data shape should be less than before (since real fft)
+        ft_shape = out.coord_shapes["ft_time"][0]
+        time_shape = sin_patch.coord_shapes['time'][0]
+        assert ft_shape == time_shape // 2 or ft_shape == (time_shape // 2 + 1)
 
     def test_all_dims(self, fft_sin_patch_all):
         """Ensure fft can be done on all axis."""
@@ -126,6 +130,7 @@ class TestInverseDiscreteFourierTransform:
 
     def _patches_about_equal(self, patch1, patch2):
         """Ensure patches are about equal in coord manager and data."""
+        assert patch1.data.shape == patch2.data.shape
         assert np.allclose(patch1.data, patch2.data)
         cm1 = patch1.coords.drop_disassociated_coords()
         cm2 = patch2.coords.drop_disassociated_coords()
@@ -142,3 +147,14 @@ class TestInverseDiscreteFourierTransform:
         patch1 = sin_patch
         patch2 = ifft_sin_patch_all.real()
         self._patches_about_equal(patch1, patch2)
+
+    def test_undo_real_dft(self, sin_patch):
+        """Ensure real dft is properly handled."""
+        pa1 = sin_patch.tran.dft(dim="time", real=True)
+        pa2 = pa1.tran.idft().real()
+        self._patches_about_equal(sin_patch, pa2)
+
+    def test_raises_on_untransformed_patch(self, sin_patch):
+        """Only patches which have been first transformed can be idft'ed"""
+        with pytest.raises(NotImplementedError):
+            sin_patch.tran.idft("time")

@@ -21,7 +21,7 @@ def abs(patch: PatchType) -> PatchType:
     --------
     >>> import dascore # import dascore library
     >>> pa = dascore.get_example_patch() # generate example patch
-    >>> out = pa.abs(pa) # take absolute value of generated example patch data
+    >>> out = pa.abs() # take absolute value of generated example patch data
     """
     return patch.new(data=np.abs(patch.data))
 
@@ -35,7 +35,7 @@ def real(patch: PatchType) -> PatchType:
     --------
     >>> import dascore
     >>> pa = dascore.get_example_patch()
-    >>> out = pa.real(pa)
+    >>> out = pa.real()
     """
     return patch.new(data=np.real(patch.data))
 
@@ -49,7 +49,7 @@ def imag(patch: PatchType) -> PatchType:
     --------
     >>> import dascore
     >>> pa = dascore.get_example_patch()
-    >>> out = pa.imag(pa)
+    >>> out = pa.imag()
     """
     return patch.new(data=np.imag(patch.data))
 
@@ -63,7 +63,7 @@ def angle(patch: PatchType) -> PatchType:
     --------
     >>> import dascore
     >>> pa = dascore.get_example_patch()
-    >>> out = pa.angle(pa)
+    >>> out = pa.angle()
     """
     return patch.new(data=np.angle(patch.data))
 

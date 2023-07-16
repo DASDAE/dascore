@@ -281,6 +281,16 @@ class TestCoordManagerInputs:
         with pytest.raises(ValidationError, match="does not match the dimension"):
             get_coord_manager(coords, DIMS)
 
+    def test_dim_coord_wrong_dim(self):
+        """It shouldn't be possible to init a dimension coord with the wrong dim."""
+        coords = {
+            "time": ((), np.array([1,2,3])),
+            "distance": ("distance", np.array([1,2,3])),
+        }
+        dims = "time", "distance"
+        with pytest.raises(ValidationError):
+            get_coord_manager(coords, dims=dims)
+
     def test_mappings_immutable(self, coord_manager):
         """Ensure the mappings are immutable."""
         with pytest.raises(Exception):

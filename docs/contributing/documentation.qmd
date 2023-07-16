@@ -84,7 +84,7 @@ can be used directly. The latter gives more control over outputs and display opt
 
 DASCore's documentation is built with [quarto](https://quarto.org/). In order to build the documentation, you
 must first [install DASCore in development mode](dev_install.qmd) then
-[install quarto](https://quarto.org/docs/get-started/) and [install panflute](http://scorreia.com/software/panflute/).
+[install quarto](https://quarto.org/docs/get-started/).
 
 Next, the automatic API documents are created with scripts/build_api_docs.py
 
@@ -105,6 +105,8 @@ Conversely, you can also preview the documentation so changes are rendered in re
 ```bash
 quarto preview docs
 ```
+
+If you need to change the structure of the site, like adding a new section/subsection, the file to edit is scripts/_templates/_quarto.yml. 
 
 # Cross references
 

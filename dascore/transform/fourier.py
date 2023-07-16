@@ -23,6 +23,7 @@ from dascore.utils.patch import (
     _get_dx_or_spacing_and_axes,
     patch_function,
 )
+from dascore.utils.time import to_float
 from dascore.utils.transformatter import FourierTransformatter
 
 
@@ -79,7 +80,7 @@ def _get_dft_attrs(patch, dims, new_coords, scale_factor):
 
 @patch_function()
 def dft(
-    patch: PatchType, dim: str | None | Sequence[str], real: str | bool | None = None
+    patch: PatchType, dim: str | None | Sequence[str], *, real: str | bool | None = None
 ) -> PatchType:
     """
     Perform the discrete Fourier transform (dft) on specified dimension(s).
@@ -118,7 +119,7 @@ def dft(
 
     See Also
     --------
-    -[idft](`dascore.tran.fft.idft`)
+    -[idft](`dascore.transform.fourier.idft`)
 
     Examples
     --------
@@ -161,7 +162,7 @@ def _get_idft_dims_steps_axis(patch, dim):
         dim = [x for x in patch.dims if x.startswith("ft_")]
     dims = list(iterate(dim))
     coords = [patch.get_coord(x, require_evenly_sampled=True) for x in dims]
-    is_real = [1 if x.min() == 0 else 0 for x in coords]
+    is_real = [1 if to_float(x.min()) == 0 else 0 for x in coords]
     real_sum = sum(is_real)
     assert real_sum <= 1, "only one real axis allowed."
     has_real = bool(real_sum)
@@ -181,21 +182,24 @@ def _get_idft_coords_and_sizes(patch, dims, steps, new_dims, axes, real):
     shapes = patch.shape
     coord_map = patch.coords.disassociate_coord(dims).get_coord_tuple_map()
     sizes = []
-    for old_dim, step, new_dim, ax in zip(dims, steps, new_dims, axes):
+    for old_dim, new_dim, ax in zip(dims, new_dims, axes):
         # if old dim is stored
         ax_len = shapes[ax]
-        potential_coord = coord_map.get(new_dim)[1]
+        potential_coord = coord_map.get(new_dim, (None, None))[1]
         if potential_coord is None:
-            raise NotImplementedError("not yet there")
-        if (coord_len := len(potential_coord)) == ax_len:
+            msg = (
+                "Currently, IDFT can only be performed on patches which have"
+                " been transformed to Fourier domain with dft method."
+            )
+            raise NotImplementedError(msg)
+        if (len(potential_coord) == ax_len) or (real and old_dim == dims[-1]):
             coord_map[new_dim] = (new_dim, potential_coord)
-            sizes.append(coord_len)
-        else:
-            raise NotImplementedError("still working on it")
+            sizes.append(len(potential_coord))
     ft = FourierTransformatter()
     new_dims = ft.rename_dims(patch.dims, index=axes, forward=False)
     cm = get_coord_manager(coord_map, dims=new_dims).drop_coord(dims)[0]
-    return cm, np.array(sizes)
+    out_size = np.array(sizes) if len(sizes) else None
+    return cm, out_size
 
 
 def _get_idft_attrs(patch, dims, new_coords):
@@ -238,7 +242,7 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
 
     See Also
     --------
-    -[dft](`dascore.tran.fft.dft`)
+    -[dft](`dascore.transform.fourier.dft`)
 
     Examples
     --------
@@ -246,10 +250,8 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     >>> patch = dc.get_example_patch()
     >>> # perform dft (fft) on time axis
     >>> dft_time = patch.tran.dft(dim="time")
-    >>> # make it a real fft (no negative frequencies)
-    >>> dft_time_real = patch.tran.dft(dim="time", real=True)
-    >>> # dft on specified dimensions, specify real dimension
-    >>> dft_some_real = patch.tran.dft(dim=("time", "distance"), real="time")
+    >>> # get inverse dft, transformed axis are ascertained automatically
+    >>> idft = dft_time.tran.idft()
     """
     dims, steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
     new_dims = FourierTransformatter().rename_dims(dims, forward=False)
@@ -262,4 +264,3 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     data = func(_preped, s=sizes, axes=axes)
     attrs = _get_idft_attrs(patch, dims, coords)
     return patch.new(data=data, attrs=attrs, coords=coords)
-

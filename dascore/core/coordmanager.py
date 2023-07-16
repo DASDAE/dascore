@@ -435,6 +435,8 @@ class CoordManager(DascoreBaseModel):
         coord_map, dim_map = values["coord_map"], values["dim_map"]
         dims = values["dims"]
         dim_shapes = {dim: coord_map[dim].shape for dim in dims}
+        # ensure non-dimensional coordinates have the same length as
+        # corresponding coordinates.
         for name, coord_dims in dim_map.items():
             expected_shape = tuple(dim_shapes[x][0] for x in coord_dims)
             shape = coord_map[name].shape
@@ -446,6 +448,10 @@ class CoordManager(DascoreBaseModel):
                 f"of {expected_shape}"
             )
             raise CoordError(msg)
+        # Ensure dimensional coordinates are associated as such
+        for dim in dims:
+            assert dim_map[dim] == (dim,), f"Incorrect dim association on {dim}"
+
         return values
 
     def equals(self, other) -> bool:
