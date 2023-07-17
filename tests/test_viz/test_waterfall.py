@@ -56,8 +56,8 @@ class TestWaterfall:
         ax = out.viz.waterfall()
 
         # check labels
-        assert random_patch.dims[0].capitalize() in ax.get_ylabel()
-        assert random_patch.dims[1].capitalize() in ax.get_xlabel()
+        assert random_patch.dims[0] in ax.get_ylabel().lower()
+        assert random_patch.dims[1] in ax.get_xlabel().lower()
         assert isinstance(ax, plt.Axes)
 
     def test_colorbar_scale(self, random_patch):
