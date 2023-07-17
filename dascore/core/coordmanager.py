@@ -373,6 +373,9 @@ class CoordManager(DascoreBaseModel):
             dimap = self.dim_map
             new_coords = dict(self._get_dim_array_dict(keep_coord=True))
             for coord_name, limits in kwargs.items():
+                # this is not a selectable coord, just skip.
+                if coord_name not in self.coord_map:
+                    continue
                 coord = self.coord_map[coord_name]
                 _validate_coords(coord, coord_name)
                 dim_name = dimap[coord_name][0]

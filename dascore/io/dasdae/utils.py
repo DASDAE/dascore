@@ -4,6 +4,7 @@ DASDAE format utilities
 import numpy as np
 
 import dascore as dc
+from dascore.core.coordmanager import get_coord_manager
 from dascore.core.schema import PatchFileSummary
 from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.patch import get_default_patch_name
@@ -97,7 +98,7 @@ def _read_array(table_array):
     return data
 
 
-def _get_coords(patch_group):
+def _get_coords(patch_group, dims):
     """Get the coordinates from a patch group."""
     out = {}
     for coord in [x for x in patch_group if x.name.startswith("_coord_")]:
@@ -109,9 +110,10 @@ def _get_coords(patch_group):
         name = coord_name.replace("_cdims_", "")
         value = patch_group._v_attrs[coord_name]
         assert name in out, "Should already have loaded coordinate array"
-        # add dimensions to coordinates that have them.
         out[name] = (tuple(value.split(".")), out[name])
-    return out
+        # add dimensions to coordinates that have them.
+    cm = get_coord_manager(out, dims=dims)
+    return cm
 
 
 def _get_dims(patch_group):
@@ -128,9 +130,12 @@ def _read_patch(patch_group, **kwargs):
     """Read a patch group, return Patch."""
     attrs = _get_attrs(patch_group)
     dims = _get_dims(patch_group)
-    coords = _get_coords(patch_group)
+    coords = _get_coords(patch_group, dims)
     try:
-        data = patch_group["data"][:]
+        if kwargs:
+            coords, data = coords.select(array=patch_group["data"], **kwargs)
+        else:
+            data = patch_group["data"][:]
     except (IndexError, KeyError):
         data = np.array(None)
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)

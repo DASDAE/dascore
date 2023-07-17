@@ -7,6 +7,10 @@ tests should go in their respective test modules. Tests for *how* specific
 IO functions (i.e., not that they work on various files) should go in
 test_io_core.py
 """
+from functools import cache
+from operator import eq, ge, le
+
+import pandas as pd
 import pytest
 
 import dascore as dc
@@ -20,7 +24,7 @@ from dascore.io.terra15 import (
     Terra15FormatterV6,
 )
 from dascore.utils.downloader import fetch, get_registry_df
-from dascore.utils.misc import iterate
+from dascore.utils.misc import all_close, iterate
 
 # --- Fixtures
 
@@ -49,6 +53,17 @@ COMMON_IO_READ_TESTS = {
 }
 
 
+@cache
+def _cached_read(path, io=None):
+    """
+    A function to read data without any params and cache.
+    This ensures each files is read at most twice.
+    """
+    if io is None:
+        return dc.read(path)
+    return io.read(path)
+
+
 def _get_flat_io_test():
     """Flatten list to [(fiberio, path)] so it can be parametrized."""
     flat_io = []
@@ -68,20 +83,21 @@ def io_path_tuple(request):
     return io, fetch(fetch_name)
 
 
-@pytest.fixture(scope="session")
-def read_spool(io_path_tuple):
-    """Read path without any parameters."""
-    io, path = io_path_tuple
-    return io.read(path)
-
-
-@pytest.fixture(scope="class", params=get_registry_df()["name"])
+@pytest.fixture(scope="session", params=get_registry_df()["name"])
 def data_file_path(request):
     """A fixture of all data files. Will download if needed."""
     return fetch(request.param)
 
 
+@pytest.fixture(scope="session")
+def read_spool(data_file_path):
+    """Read each file into a spool."""
+    return dc.read(data_file_path)
+
+
 # --- Tests
+
+DIM_RELATED_ATTRS = ("{dim}_min", "{dim}_max", "d_{dim}")
 
 
 class TestGetFormat:
@@ -104,15 +120,102 @@ class TestGetFormat:
         assert isinstance(version_str, str)
 
 
+def _assert_coords_attrs_match(patch):
+    """Ensure both the coordinates and attributes match on patch."""
+    attrs = patch.attrs
+    coords = patch.coords
+    assert attrs.dim_tuple == coords.dims
+    for dim in attrs.dim_tuple:
+        coord = patch.get_coord(dim)
+        assert coord.min() == getattr(attrs, f"{dim}_min")
+        assert coord.max() == getattr(attrs, f"{dim}_max")
+        assert coord.step == getattr(attrs, f"{dim}_step")
+
+
+def _assert_op_or_close(val1, val2, op):
+    """assert op(val1, val2) or isclose(val1, val2)."""
+    meets_eq = op(val1, val2)
+    both_null = pd.isnull(val1) and pd.isnull(val2)
+    all_close_vals = all_close(val1, val2)
+    if meets_eq or both_null or all_close_vals:
+        return
+    msg = f"{val1} and {val2} do not pass {op} or all close."
+    assert False, msg
+
+
 class TestRead:
     """Test suite for reading formats."""
 
-    def test_scan_read_same_attrs(self, io_path_tuple):
-        """Ensure"""
+    def test_read_returns_spools(self, io_path_tuple):
+        """Each read function must return a spool."""
+        io, path = io_path_tuple
+        out = _cached_read(path, io=io)
+        assert isinstance(out, dc.BaseSpool)
+        assert all([isinstance(x, dc.Patch) for x in out])
+
+    def test_coord_attrs_match(self, read_spool):
+        """The attributes and coordinate should match in min/max/step."""
+        for patch in read_spool:
+            _assert_coords_attrs_match(patch)
+
+    def test_slice_single_dim_both_ends(self, io_path_tuple):
+        """
+        Ensure each dimension can be passed as an argument to `read` and
+        a patch containing the requested data is returned.
+        """
+        io, path = io_path_tuple
+        attrs = dc.scan(path)
+        # skip files that have more than one patch for now
+        # TODO just write better test logic to handle this case.
+        if len(attrs) > 1:
+            pytest.skip("Havent implemented test for multipatch files.")
+        attrs_init = attrs[0]
+        for dim in attrs_init.dim_tuple:
+            start = getattr(attrs_init, f"{dim}_min")
+            stop = getattr(attrs_init, f"{dim}_max")
+            duration = stop - start
+            # first test double ended query
+            trim_tuple = (start + duration / 10, start + 2 * duration // 10)
+            spool = io.read(path, **{dim: trim_tuple})
+            assert len(spool) == 1
+            patch = spool[0]
+            _assert_coords_attrs_match(patch)
+            coord = patch.get_coord(dim)
+            _assert_op_or_close(coord.min(), trim_tuple[0], ge)
+            _assert_op_or_close(coord.max(), trim_tuple[1], le)
+            # then single-ended query on start side
+            trim_tuple = (start + duration / 10, ...)
+            spool = io.read(path, **{dim: trim_tuple})
+            assert len(spool) == 1
+            patch = spool[0]
+            attrs = patch.attrs
+            _assert_coords_attrs_match(patch)
+            coord = patch.get_coord(dim)
+            _assert_op_or_close(coord.min(), trim_tuple[0], ge)
+            _assert_op_or_close(coord.max(), getattr(attrs, f"{dim}_max"), eq)
+            # then single-ended query on end side
+            trim_tuple = (None, start + duration / 10)
+            spool = io.read(path, **{dim: trim_tuple})
+            assert len(spool) == 1
+            patch = spool[0]
+            attrs = patch.attrs
+            _assert_coords_attrs_match(patch)
+            coord = patch.get_coord(dim)
+            _assert_op_or_close(coord.min(), getattr(attrs, f"{dim}_min"), eq)
+            _assert_op_or_close(coord.max(), trim_tuple[1], le)
 
 
 class TestScan:
     """Tests for generic scanning"""
+
+    def test_scan(self, data_file_path):
+        """Ensure each file can be scanned."""
+        attrs_list = dc.scan(data_file_path)
+        assert len(attrs_list)
+
+        for attrs in attrs_list:
+            assert isinstance(attrs, dc.PatchAttrs)
+            assert str(attrs.path) == str(data_file_path)
 
 
 class TestIntegration:
@@ -128,19 +231,25 @@ class TestIntegration:
         comp_attrs = (
             "data_type",
             "data_units",
-            "d_time",
-            "time_min",
-            "time_max",
-            "distance_min",
-            "distance_max",
-            "d_distance",
             "tag",
             "network",
         )
         scan_attrs_list = dc.scan(data_file_path)
-        patch_attrs_list = [x.attrs for x in dc.read(data_file_path)]
+        patch_attrs_list = [x.attrs for x in _cached_read(data_file_path)]
         assert len(scan_attrs_list) == len(patch_attrs_list)
         for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
+            assert pat_attrs1.dims == scan_attrs2.dims
+            # first compare dimensions are related attributes
+            for dim in pat_attrs1.dim_tuple:
+                assert getattr(pat_attrs1, f"{dim}_min") == getattr(
+                    pat_attrs1, f"{dim}_min"
+                )
+                for dim_attr in DIM_RELATED_ATTRS:
+                    attr_name = dim_attr.format(dim=dim)
+                    attr1 = getattr(pat_attrs1, attr_name)
+                    attr2 = getattr(pat_attrs1, attr_name)
+                    assert attr1 == attr2
+            # then other expected attributes.
             for attr_name in comp_attrs:
                 patch_attr = getattr(pat_attrs1, attr_name)
                 scan_attr = getattr(scan_attrs2, attr_name)
