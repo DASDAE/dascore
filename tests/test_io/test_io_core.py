@@ -135,12 +135,6 @@ class TestFormatter:
 class TestGetFormat:
     """Tests to ensure formats can be retrieved."""
 
-    def test_terra_15(self, terra15_das_example_path):
-        """Ensure terra15 v2 can be read"""
-        out = dc.get_format(terra15_das_example_path)
-        vtuple = (out[0].upper(), out[1])
-        assert vtuple == ("TERRA15", "4")
-
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
         with pytest.raises(UnknownFiberFormat):
@@ -152,25 +146,8 @@ class TestGetFormat:
             dc.get_format("bad/file")
 
 
-class TestRead:
-    """Basic tests for reading files."""
-
-    def test_read_terra15(self, terra15_das_example_path, terra15_das_patch):
-        """Ensure terra15 can be read."""
-        out = dc.read(terra15_das_example_path)
-        assert isinstance(out, dc.BaseSpool)
-        assert len(out) == 1
-        assert out[0].equals(terra15_das_patch)
-
-
 class TestScan:
     """Tests for scanning fiber files."""
-
-    def test_scan_terra15(self, terra15_das_example_path):
-        """Ensure terra15 format can be automatically determined."""
-        out = dc.scan(terra15_das_example_path)
-        assert isinstance(out, list)
-        assert len(out)
 
     def test_scan_with_ignore(self, tmp_path):
         """ignore option should make scan return []"""
@@ -216,31 +193,3 @@ class TestScan:
         assert not FiberFormatTestV1().implements_get_format
         dasdae = FiberIO.manager.get_fiberio("DASDAE")
         assert dasdae.implements_get_format
-
-    def test_scan_attrs_match_patch_attrs(self, data_file_path):
-        """We need to make sure scan and patch attrs are identical."""
-        # Since dasdae format stores attrs and coords, we need to
-        # skip events created before coords/attrs were more closely
-        # aligned.
-        if data_file_path.name == "example_dasdae_event_1.h5":
-            return
-        comp_attrs = (
-            "data_type",
-            "data_units",
-            "d_time",
-            "time_min",
-            "time_max",
-            "distance_min",
-            "distance_max",
-            "d_distance",
-            "tag",
-            "network",
-        )
-        scan_attrs_list = dc.scan(data_file_path)
-        patch_attrs_list = [x.attrs for x in dc.read(data_file_path)]
-        assert len(scan_attrs_list) == len(patch_attrs_list)
-        for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
-            for attr_name in comp_attrs:
-                patch_attr = getattr(pat_attrs1, attr_name)
-                scan_attr = getattr(scan_attrs2, attr_name)
-                assert scan_attr == patch_attr

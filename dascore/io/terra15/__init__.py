@@ -28,3 +28,4 @@ gps_time[-1], cast to datetime64 objects.
 It is very important that the scan method returns exactly the same time_min
 and time_max as contained in the patch when loaded into memory.
 """
+from .core import Terra15FormatterV4, Terra15FormatterV5, Terra15FormatterV6
