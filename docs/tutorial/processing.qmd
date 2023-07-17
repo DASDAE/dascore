@@ -20,7 +20,8 @@ decimation frequency and one below.
 ```{python}
 import dascore as dc
 
-patch = dc.examples.sin_wave_patch(
+patch = dc.examples.get_example_patch(
+    "sin_wav",
     sample_rate=1000,
     frequency=[200, 10],
     channel_count=2,

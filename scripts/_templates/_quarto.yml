@@ -156,7 +156,7 @@ website:
       contents:
         - notes/notes.qmd
 
-        - text: Fourier transform notes
+        - text: Fourier transforms
           href: notes/dft_notes.qmd
 
     - title: 'API'
