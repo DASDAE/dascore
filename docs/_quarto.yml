@@ -22,7 +22,7 @@ format:
 
 
 website:
-  title: DASCore (0.0.11.dev12)
+  title: DASCore (0.0.13.dev8)
   repo-url: https://github.com/dasdae/dascore
   site-path: /docs
   site-url: https://www.dascore.org
@@ -156,8 +156,8 @@ website:
       contents:
         - notes/notes.qmd
 
-        - text: FFT notes
-          href: notes/fft_notes.qmd
+        - text: Fourier transform notes
+          href: notes/dft_notes.qmd
 
     - title: 'API'
       contents:

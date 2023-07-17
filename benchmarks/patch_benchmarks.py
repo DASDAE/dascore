@@ -80,7 +80,7 @@ class TransformSuite:
 
     def time_dft(self):
         """The discrete fourier transform"""
-        self.patch.tran.dft(dim='time')
+        self.patch.tran.dft(dim="time")
 
     def time_idft(self):
         """The inverse of the fourier transform"""

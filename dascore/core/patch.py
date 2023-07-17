@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 from rich.text import Text
+from typing_extensions import Self
 
 import dascore.proc
 from dascore.compat import DataArray, array
@@ -18,7 +19,7 @@ from dascore.exceptions import CoordError
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
-from dascore.utils.misc import get_parent_code_name, optional_import
+from dascore.utils.misc import get_parent_code_name, iterate, optional_import
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
 
@@ -258,6 +259,15 @@ class Patch:
             msg = f"Coordinate {name} is not sorted {extra}"
             raise CoordError(msg)
         return coord
+
+    def assert_has_coords(self, coord_names: Sequence[str] | str) -> Self:
+        """Raise an error if patch doesn't have required coordinates."""
+        required_coords = set(iterate(coord_names))
+        current_coords = set(self.coords.coord_map)
+        if missing := required_coords - current_coords:
+            msg = f"Patch does not have required coordinate(s): {missing}"
+            raise CoordError(msg)
+        return self
 
     @property
     def dims(self) -> tuple[str, ...]:

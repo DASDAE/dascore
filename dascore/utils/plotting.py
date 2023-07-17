@@ -14,7 +14,7 @@ def _get_dim_label(patch, dim):
     attrs = patch.attrs
     maybe_units = attrs.get(f"{dim}_units")
     unit_str = f"({maybe_units})" if maybe_units else ""
-    return str(dim).capitalize() + unit_str
+    return str(dim) + unit_str
 
 
 def _get_cmap(cmap):

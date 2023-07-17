@@ -67,14 +67,13 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real):
     return cm
 
 
-def _get_dft_attrs(patch, dims, new_coords, scale_factor):
+def _get_dft_attrs(patch, dims, new_coords):
     """
     Get new attributes for transformed patch.
     """
     new = dict(patch.attrs)
     new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
-    new["_dft_scale_factor"] = scale_factor
     return PatchAttrs(**new)
 
 
@@ -133,6 +132,7 @@ def dft(
     >>> dft_some_real = patch.tran.dft(dim=("time", "distance"), real="time")
     """
     dims = list(iterate(dim if dim is not None else patch.dims))
+    patch.assert_has_coords(dims)
     # re-arrange list so real dim is last (if provided)
     if isinstance(real, str):
         assert real in dims, "real must be in provided dimensions."
@@ -149,7 +149,7 @@ def dft(
     # get new coordinates
     new_coords = _get_dft_new_coords(patch, dxs, dims, axes, real)
     # get attributes
-    attrs = _get_dft_attrs(patch, dims, new_coords, scale_factor)
+    attrs = _get_dft_attrs(patch, dims, new_coords)
     return patch.new(data=data, coords=new_coords, attrs=attrs)
 
 
@@ -158,9 +158,14 @@ def _get_idft_dims_steps_axis(patch, dim):
     Get the dimensions, step sizes as a float, axis numbers and if an
     rff should be performed.
     """
+    ft = FourierTransformatter()
     if dim is None:
         dim = [x for x in patch.dims if x.startswith("ft_")]
-    dims = list(iterate(dim))
+    # try to get pre-transformed names if used. EG "time" might refer to
+    # ft_time for brevity.
+    current_dims = set(patch.dims)
+    dims = [x if x in current_dims else ft.rename_dims(x)[0] for x in iterate(dim)]
+    patch.assert_has_coords(dims)
     coords = [patch.get_coord(x, require_evenly_sampled=True) for x in dims]
     is_real = [1 if to_float(x.min()) == 0 else 0 for x in coords]
     real_sum = sum(is_real)
@@ -215,6 +220,12 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     """
     Perform the inverse discrete Fourier transform (idft) on specified dimension(s).
 
+    Currently, only patches that have been transformed with
+    [dft](`dascore.transform.fourier.dft`) can be used with this function.
+    After transformation with dft, the transformed coordinates cannot change
+    (e.g., with [select]('dascore.proc.basic.select`) otherwise idft won't
+    work.
+
     Parameters
     ----------
     patch
@@ -227,17 +238,11 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
 
     Notes
     -----
-    - See the [FFT note](dascore.org/notes/fft_notes.html) in Notes section
-      of DASCore's documentation.
-
-    - First divides output by spacing of transformation axis.
-
     - Real transforms are determined by transformed coordinates which have
       no negative values.
 
-    - The transformed coordinates don't carry information about the offset
-      (e.g. we can't tell from frequencies the actual start time) so attibutes
-      are searched to restore offset.
+    - See the [FFT note](dascore.org/notes/fft_notes.html) in Notes section
+      of DASCore's documentation.
 
     See Also
     --------
@@ -258,7 +263,7 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     coords, sizes = _get_idft_coords_and_sizes(patch, dims, steps, new_dims, axes, real)
     # now unshift data and undo scaling
     ax_slice = slice(None, -1) if real else slice(None)
-    scale_factor = patch.attrs.get("_dft_scale_factor", 1)
+    scale_factor = np.prod([to_float(coords.coord_map[x].step) for x in new_dims])
     _preped = nft.ifftshift(patch.data / scale_factor, axes=axes[ax_slice])
     data = func(_preped, s=sizes, axes=axes)
     attrs = _get_idft_attrs(patch, dims, coords)
