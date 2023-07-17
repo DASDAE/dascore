@@ -113,11 +113,17 @@ def get_dascore_text():
     return Text.assemble(das, c, ore)
 
 
-def array_to_text(data) -> Text:
+def array_to_text(data, units=None) -> Text:
     """Convert a coordinate to string."""
     header = Text("➤ ") + Text("Data", style=dascore_styles["dc_red"])
-    header += Text(f" ({data.dtype})")
-    np_str = np.array_str(data, precision=FLOAT_PRECISION)  # suppress_small=True)
+    unitstr = Text("") if units is None else Text(f", units: {units}")
+    header += Text(f" ({data.dtype}") + unitstr + Text(")")
+    threshold = dascore_styles["np_array_threshold"]
+    np_str = np.array2string(
+        data,
+        precision=FLOAT_PRECISION,
+        threshold=threshold,
+    )
     numpy_format = textwrap.indent(np_str, "   ")
     return header + Text("\n") + Text(numpy_format)
 

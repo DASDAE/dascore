@@ -1,0 +1,5 @@
+---
+title: Notes
+---
+
+This section of the documentation provides understanding-oriented explanation for DASCore implementation and design decisions.

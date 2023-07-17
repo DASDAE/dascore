@@ -108,6 +108,17 @@ def coord_dt_small_diff(memory_spool_small_dt_differences):
     return out
 
 
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def coord_non_associated_coord(basic_coord_manager):
+    """A cm with coordinates that are not associated with a dimension."""
+    new = basic_coord_manager.update_coords(
+        bob=(None, np.arange(10)),
+        bill=((), np.arange(100)),
+    )
+    return new
+
+
 @pytest.fixture(scope="class", params=COORD_MANAGERS)
 def coord_manager(request) -> CoordManager:
     """Meta fixture for aggregating coordinates."""
@@ -270,10 +281,20 @@ class TestCoordManagerInputs:
         with pytest.raises(ValidationError, match="does not match the dimension"):
             get_coord_manager(coords, DIMS)
 
+    def test_dim_coord_wrong_dim(self):
+        """It shouldn't be possible to init a dimension coord with the wrong dim."""
+        coords = {
+            "time": ((), np.array([1, 2, 3])),
+            "distance": ("distance", np.array([1, 2, 3])),
+        }
+        dims = "time", "distance"
+        with pytest.raises(ValidationError):
+            get_coord_manager(coords, dims=dims)
+
     def test_mappings_immutable(self, coord_manager):
         """Ensure the mappings are immutable."""
         with pytest.raises(Exception):
-            coord_manager.coord_map["bob"]
+            coord_manager.coord_map["bob"] = 2
 
 
 class TestCoordManagerWithAttrs:
@@ -972,3 +993,27 @@ class TestConvertUnits:
         time2 = new.coord_map["time"]
         assert time1.dtype == time2.dtype
         assert np.all(np.equal(time1.values, time2.values))
+
+
+class TestDisassociate:
+    """Ensure coordinates can be disassociated from coordinate manager."""
+
+    def test_basic_disassociate(self, coord_manager_multidim):
+        """Ensure coordinates can be dissociated."""
+        cm = coord_manager_multidim.disassociate_coord("time")
+        # now time should still exist but have no dim, quality should drop
+        assert "time" in cm.coord_map
+        assert "quality" not in cm.coord_map
+        time_dim = cm.dim_map["time"]
+        assert time_dim == ()
+        assert "time" not in cm.dims
+        # but if both time and quality are dissociated nothing should be dropped.
+        cm = coord_manager_multidim.disassociate_coord(("time", "quality"))
+        assert {"time", "quality"}.issubset(set(cm.coord_map))
+        assert "time" not in cm.dims
+
+    def test_disassociate_non_dim_coord(self, coord_manager_multidim):
+        """Ensure non-dim coords can be dissociated with no change to dims"""
+        cm = coord_manager_multidim.disassociate_coord("quality")
+        assert cm.dim_map["quality"] == ()
+        assert cm.dims == coord_manager_multidim.dims

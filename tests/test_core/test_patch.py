@@ -176,7 +176,7 @@ class TestInit:
     def test_sin_wave_patch(self):
         """Ensure the sin wave patch is consistent with its coord dims."""
         # For some reason this combination can make coords with wrong shape.
-        patch = dc.examples.sin_wave_patch(
+        patch = dc.examples._sin_wave_patch(
             sample_rate=1000,
             frequency=[200, 10],
             channel_count=2,
@@ -383,6 +383,12 @@ class TestEquals:
         new_coords = coords.update_coords(distance=coord_array)
         new = patch.new(coords=new_coords)
         assert new != patch
+
+    def test_other_types(self, random_patch):
+        """Ensure a non-patch is not equal."""
+        assert not random_patch.equals(None)
+        assert not random_patch.equals(1)
+        assert not random_patch.equals(random_patch.data)
 
 
 class TestTranspose:
@@ -640,3 +646,25 @@ class TestGetCoord:
         match = "Coordinate distance is not sorted"
         with pytest.raises(CoordError, match=match):
             patch.get_coord("distance", require_sorted=True)
+
+
+class TestAssertHasCoords:
+    """Test suite for has coords."""
+
+    def test_raises_single(self, random_patch):
+        """Ensure an error is raised if as single required coord isnt found."""
+        match = "does not have required coordinate"
+        with pytest.raises(CoordError, match=match):
+            random_patch.assert_has_coords("foo")
+
+    def test_raises_multiple(self, random_patch):
+        """Ensure an error is raised if required coords aren't found"""
+        match = "does not have required coordinate"
+        with pytest.raises(CoordError, match=match):
+            random_patch.assert_has_coords(("bar", "depth"))
+
+    def test_has_coords_ok(self, random_patch):
+        """No Error should be raised if the patch has the coordinates."""
+        dims = random_patch.dims
+        random_patch.assert_has_coords(dims[0])
+        random_patch.assert_has_coords(dims)

@@ -1,6 +1,7 @@
 """
 Test for spool functions.
 """
+import copy
 
 import pandas as pd
 import pytest
@@ -49,6 +50,14 @@ class TestSpoolEquals:
     def test_eq_self(self, random_spool):
         """A spool should always eq itself."""
         assert random_spool == random_spool
+
+    def test_unequal_attr(self, random_spool):
+        """Simulate some attribute which isnt equal."""
+        new1 = copy.deepcopy(random_spool)
+        new1.__dict__["bad_attr"] = 1
+        new2 = copy.deepcopy(random_spool)
+        new2.__dict__["bad_attr"] = 2
+        assert new1 != new2
 
 
 class TestIndexing:

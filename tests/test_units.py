@@ -10,8 +10,9 @@ from dascore.units import (
     get_conversion_factor,
     get_factor_and_unit,
     get_filter_units,
+    get_quantity,
     get_unit,
-    invert_unit,
+    invert_quantity,
     validate_quantity,
 )
 
@@ -33,9 +34,10 @@ class TestUnitInit:
     def test_invert(self):
         """Ensure a unit can be inverted."""
         unit = dc.get_unit("s")
-        inverted = invert_unit(unit)
-        reverted = invert_unit(inverted)
+        inverted = invert_quantity(unit)
+        reverted = invert_quantity(inverted)
         assert unit == reverted
+        assert invert_quantity(None) is None
 
     def test_conversion_factor_none(self):
         """If either unit is None it should return 1."""
@@ -89,6 +91,19 @@ class TestUnitAndFactor:
         assert unit is None
 
 
+class TestGetQuantity:
+    """Tests for getting a quantity."""
+
+    def test_quantity_identity(self):
+        """Get quantity should always return the same quantity."""
+        quant1 = get_quantity("1/s")
+        quant2 = get_quantity("1 Hz")
+        assert quant1 == get_quantity(quant1)
+        assert quant1 is get_quantity(quant1)
+        assert quant2 == get_quantity(quant2)
+        assert quant2 is get_quantity(quant2)
+
+
 class TestConvenientImport:
     """Tests for conveniently importing units for dascore.units"""
 
@@ -121,16 +136,16 @@ class TestGetFilterUnits:
         """Tests for when filter units are already those selected."""
         Hz = get_unit("Hz")
         s = get_unit("s")
-        assert get_filter_units(1 * Hz, 10 * Hz, s) == (1.0, 10.0)
-        assert get_filter_units(None, 10 * Hz, s) == (None, 10.0)
-        assert get_filter_units(1 * Hz, 10 * Hz, s) == (1.0, 10.0)
+        assert get_filter_units(1.0 * Hz, 10.0 * Hz, s) == (1.0, 10.0)
+        assert get_filter_units(None, 10.0 * Hz, s) == (None, 10.0)
+        assert get_filter_units(1.0 * Hz, 10.0 * Hz, s) == (1.0, 10.0)
 
     def test_same_units(self):
         """Tests for when filter units are already those selected."""
         s = get_unit("s")
-        assert get_filter_units(1 * s, 10 * s, s) == (0.1, 1.0)
-        assert get_filter_units(None, 10 * s, s) == (None, 0.1)
-        assert get_filter_units(10 * s, None, s) == (0.1, None)
+        assert get_filter_units(1.0 * s, 10.0 * s, s) == (0.1, 1.0)
+        assert get_filter_units(None, 10.0 * s, s) == (None, 0.1)
+        assert get_filter_units(10.0 * s, None, s) == (0.1, None)
 
     def test_different_units_raises(self):
         """The units must be the same or it should raise."""

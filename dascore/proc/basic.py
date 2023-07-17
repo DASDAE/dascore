@@ -21,10 +21,51 @@ def abs(patch: PatchType) -> PatchType:
     --------
     >>> import dascore # import dascore library
     >>> pa = dascore.get_example_patch() # generate example patch
-    >>> out = dascore.proc.abs(pa) # take absolute value of generated example patch data
+    >>> out = pa.abs() # take absolute value of generated example patch data
     """
-    new_data = np.abs(patch.data)
-    return patch.new(data=new_data)
+    return patch.new(data=np.abs(patch.data))
+
+
+@patch_function()
+def real(patch: PatchType) -> PatchType:
+    """
+    Return a new patch with the real part of the data array.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+    >>> out = pa.real()
+    """
+    return patch.new(data=np.real(patch.data))
+
+
+@patch_function()
+def imag(patch: PatchType) -> PatchType:
+    """
+    Return a new patch with the imaginary part of the data array.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+    >>> out = pa.imag()
+    """
+    return patch.new(data=np.imag(patch.data))
+
+
+@patch_function()
+def angle(patch: PatchType) -> PatchType:
+    """
+    Return a new patch with the phase angles from the data array.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+    >>> out = pa.angle()
+    """
+    return patch.new(data=np.angle(patch.data))
 
 
 @patch_function()

@@ -109,3 +109,14 @@ class TestRenameDimension:
         assert new_name in out.dims
         assert out.dim_tuple[time_ind] == new_name
         assert len(out.dim_tuple) == len(attrs.dim_tuple)
+
+
+class TestDropPrivate:
+    """Tests for dropping private attrs."""
+
+    def test_simple_drop(self):
+        """Ensure private attrs are removed after operation."""
+        attrs = PatchAttrs(_private1=1, extra_attr=2).drop_private()
+        attr_dict = dict(attrs)
+        assert "_private1" not in attr_dict
+        assert "extra_attr" in attr_dict

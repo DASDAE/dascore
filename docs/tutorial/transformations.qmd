@@ -4,16 +4,79 @@ execute:
   warning: false
 ---
 
-In DASCore, transformations are operations which change the units of a patch. For example, applying a [real Fourier Transform](`dascore.transform.fft.rfft`) to the time dimension of a Patch. Transforms can be found in the [transform module](`dascore.transform`) or access via the `Patch.tran` attribute.
+In DASCore, transformations are operations which change the units of a patch. Transforms can be found in the [transform module](`dascore.transform`) or access via the `Patch.tran` attribute.
 
-```python
+# Discrete Fourier Transforms
+
+ The [Discrete Fourier Transform](https://en.wikipedia.org/wiki/Discrete_Fourier_transform) (dft) is commonly used in many signal processing workflows. DASCore implements this as the [dft](`dascore.transform.fourier.dft`) patch method.
+
+```{python}
+import numpy as np
 import dascore as dc
 
-patch = dc.get_example_patch()
+# get example, set unit to velocity (just for demonstration)
+patch = dc.get_example_patch().set_units("m/s")
 
-transformed = patch.tran.rfft(dim="time")
+transformed = patch.tran.dft(dim="time")
+
 # note how the dimension name has changed
-print(transformed.dims)
+print(f"old_dims: {patch.dims} new dims: {transformed.dims}")
+
 # as have the units
-print(transformed.attrs.data_units)
+old_units = patch.attrs.data_units
+new_units = transformed.attrs.data_units
+print(f"old units: {old_units}, new units: {new_units}")
+```
+
+:::{.callout-note}
+The transformed dimension names change; "time" becomes "ft_time" indicating the domain of the dimension has changed. The units are also updated. See the [note on Fourier transforms in DASCore](../notes/dft_notes.qmd) for more details.
+:::
+
+In many cases, it is advantages to only calculate the fourier transform corresponding to the positive frequencies (since the Fourier transform of a real signal is symmetric).
+
+```{python}
+# Transform distance axis to Fourier domain using real fourier transform
+real_transform = patch.tran.dft(dim='distance', real=True)
+print(real_transform.get_coord("ft_distance"))
+```
+
+Of course, this operation can be undone using the [idft](`dascore.tran.idft`)
+
+```{python}
+# transform back to time domain, take only real component.
+patch_2 = transformed.tran.idft().real()
+assert np.allclose(patch_2.data, patch.data)
+```
+
+## F-k Transforms
+
+[F-k transforms](https://wiki.seg.org/wiki/F-k_filtering) are common in geophysics for various types of filtering.
+
+Going back to our example event:
+
+```{python}
+import dascore as dc
+
+patch = (
+    dc.get_example_patch('example_event_1')
+    .set_units("mm/(m*s)", distance='m', time='s')
+    .taper(time=0.05)
+    .pass_filter(time=(None, 300))
+)
+
+patch.viz.waterfall(show=True, scale=0.2);
+```
+
+We can transform and visualize it in the F-k domain using the dft.
+
+```{python}
+# Apply transform on all dimensions
+fk_patch = patch.tran.dft(patch.dims)
+
+# We can't plot complex arrays so only plot amplitude
+ax = fk_patch.abs().viz.waterfall()
+
+# zoom in around interesting frequencies
+ax.set_xlim(-500, 500);
+ax.set_ylim(-.2, .2);
 ```

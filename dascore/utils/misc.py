@@ -15,6 +15,7 @@ import pandas as pd
 from scipy.linalg import solve
 from scipy.special import factorial
 
+from dascore.constants import ONE_SECOND
 from dascore.exceptions import MissingOptionalDependency
 
 
@@ -174,7 +175,7 @@ def _get_sampling_rate(sampling_period):
     Get a sampling rate as a float.
     """
     if np.issubdtype(sampling_period.dtype, np.timedelta64):
-        num = np.timedelta64(1, "s")
+        num = ONE_SECOND
     else:
         num = 1
     return num / sampling_period

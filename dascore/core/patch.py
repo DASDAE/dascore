@@ -3,11 +3,12 @@ A 2D trace object.
 """
 from __future__ import annotations
 
-from typing import Callable, Dict, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
 from rich.text import Text
+from typing_extensions import Self
 
 import dascore.proc
 from dascore.compat import DataArray, array
@@ -18,7 +19,7 @@ from dascore.exceptions import CoordError
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
-from dascore.utils.misc import get_parent_code_name, optional_import
+from dascore.utils.misc import get_parent_code_name, iterate, optional_import
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
 
@@ -114,7 +115,8 @@ class Patch:
         header = Text.assemble(dascore_text, " ", patch_text)
         line = Text("-" * len(header))
         coords = self.coords.__rich__()
-        data = array_to_text(self.data)
+        attrs = self.attrs
+        data = array_to_text(self.data, units=attrs.get("data_units"))
         attrs = attrs_to_text(self.attrs)
         out = Text("\n").join([header, line, coords, data, attrs])
         return out
@@ -127,19 +129,20 @@ class Patch:
 
     __repr__ = __str__
 
-    def equals(self, other: PatchType, only_required_attrs=True) -> bool:
+    def equals(self, other: Any, only_required_attrs=True) -> bool:
         """
-        Determine if the current patch equals the other patch.
+        Determine if the current patch equals a
 
         Parameters
         ----------
         other
-            A Trace2D object
+            A Patch (could be equal) or some other type (not equal)
         only_required_attrs
             If True, only compare required attributes. This helps avoid issues
             with comparing histories or custom attrs of patches, for example.
         """
-
+        if not isinstance(other, type(self)):
+            return False
         if only_required_attrs:
             attrs_to_compare = set(PatchAttrs.get_defaults()) - {"history"}
             attrs1 = {x: self.attrs.get(x, None) for x in attrs_to_compare}
@@ -257,6 +260,15 @@ class Patch:
             raise CoordError(msg)
         return coord
 
+    def assert_has_coords(self, coord_names: Sequence[str] | str) -> Self:
+        """Raise an error if patch doesn't have required coordinates."""
+        required_coords = set(iterate(coord_names))
+        current_coords = set(self.coords.coord_map)
+        if missing := required_coords - current_coords:
+            msg = f"Patch does not have required coordinate(s): {missing}"
+            raise CoordError(msg)
+        return self
+
     @property
     def dims(self) -> tuple[str, ...]:
         """Return the dimensions contained in patch."""
@@ -324,6 +336,9 @@ class Patch:
     median_filter = dascore.proc.median_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
+    real = dascore.proc.real
+    imag = dascore.proc.imag
+    angle = dascore.proc.angle
     resample = dascore.proc.resample
     iresample = dascore.proc.iresample
     interpolate = dascore.proc.interpolate
