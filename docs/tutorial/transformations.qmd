@@ -14,19 +14,22 @@ In DASCore, transformations are operations which change the units of a patch. Tr
 import numpy as np
 import dascore as dc
 
-patch = dc.get_example_patch()
+# get example, set unit to velocity (just for demonstration)
+patch = dc.get_example_patch().set_units("m/s")
 
 transformed = patch.tran.dft(dim="time")
 
 # note how the dimension name has changed
-print(transformed.dims)
+print(f"old_dims: {patch.dims} new dims: {transformed.dims}")
 
 # as have the units
-print(transformed.attrs.data_units)
+old_units = patch.attrs.data_units
+new_units = transformed.attrs.data_units
+print(f"old units: {old_units}, new units: {new_units}")
 ```
 
 :::{.callout-note}
-The transformed dimension names change; "time" becomes "ft_time" indicating the domain of the dimension has changed. The units are also updated. See the
+The transformed dimension names change; "time" becomes "ft_time" indicating the domain of the dimension has changed. The units are also updated. See the [note on Fourier transforms in DASCore](../notes/dft_notes.qmd) for more details.
 :::
 
 In many cases, it is advantages to only calculate the fourier transform corresponding to the positive frequencies (since the Fourier transform of a real signal is symmetric).
@@ -39,7 +42,7 @@ print(real_transform.get_coord("ft_distance"))
 
 Of course, this operation can be undone using the [idft](`dascore.tran.idft`)
 
-```{patch}
+```{python}
 # transform back to time domain, take only real component.
 patch_2 = transformed.tran.idft().real()
 assert np.allclose(patch_2.data, patch.data)
