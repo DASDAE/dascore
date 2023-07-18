@@ -5,7 +5,8 @@ import numpy as np
 
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.schema import PatchFileSummary
+from dascore.core.coords import get_coord
+from dascore.core.schema import PatchFileSummary, PatchAttrs
 from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int, to_timedelta64
@@ -85,7 +86,7 @@ def _get_attrs(patch_group):
         if isinstance(val, np.ndarray) and not val.shape:
             val = np.array([val])[0]
         out[key] = val
-    return out
+    return PatchAttrs(**out)
 
 
 def _read_array(table_array):
@@ -98,21 +99,28 @@ def _read_array(table_array):
     return data
 
 
-def _get_coords(patch_group, dims):
+def _get_coords(patch_group, dims, attrs2):
     """Get the coordinates from a patch group."""
-    out = {}
+    coord_dict = {}  # just store coordinates here
+    coord_dim_dict = {}  # stores {coord_name: ((dims, ...), coord)}
     for coord in [x for x in patch_group if x.name.startswith("_coord_")]:
         name = coord.name.replace("_coord_", "")
-        out[name] = _read_array(coord)
-
-    attrs = [x for x in patch_group._v_attrs._f_list() if x.startswith("_cdims")]
-    for coord_name in attrs:
+        array = _read_array(coord)
+        coord = get_coord(
+            values=array,
+            units=getattr(attrs2, f"{name}_units", None),
+            step=getattr(attrs2, f"{name}_step", None),
+        )
+        coord_dict[name] = coord
+    # associates coordinates with dimensions
+    c_dims = [x for x in patch_group._v_attrs._f_list() if x.startswith("_cdims")]
+    for coord_name in c_dims:
         name = coord_name.replace("_cdims_", "")
         value = patch_group._v_attrs[coord_name]
-        assert name in out, "Should already have loaded coordinate array"
-        out[name] = (tuple(value.split(".")), out[name])
+        assert name in coord_dict, "Should already have loaded coordinate array"
+        coord_dim_dict[name] = (tuple(value.split(".")), coord_dict[name])
         # add dimensions to coordinates that have them.
-    cm = get_coord_manager(out, dims=dims)
+    cm = get_coord_manager(coord_dim_dict, dims=dims)
     return cm
 
 
@@ -130,7 +138,7 @@ def _read_patch(patch_group, **kwargs):
     """Read a patch group, return Patch."""
     attrs = _get_attrs(patch_group)
     dims = _get_dims(patch_group)
-    coords = _get_coords(patch_group, dims)
+    coords = _get_coords(patch_group, dims, attrs)
     try:
         if kwargs:
             coords, data = coords.select(array=patch_group["data"], **kwargs)

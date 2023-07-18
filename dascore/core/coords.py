@@ -769,9 +769,13 @@ class CoordMonotonicArray(CoordArray):
         """Return True is any data increment meets the comp. requirement."""
         vals = self.values
         # we must iterate because first two elements might be equal.
+        # but this wont iterate the whole array; just until sort order is found
         for ind in range(1, len(self)):
             if op(vals[ind], vals[ind - 1]):
                 return True
+        # we consider single valued arrays sorted, but not reverse sorted.
+        if len(vals) == 1 and op is gt:
+            return True
         return False
 
     @property
@@ -881,10 +885,13 @@ def get_coord(
             return values
         if np.size(values) == 0:
             return CoordDegenerate(values=values, units=units, step=step)
-        # special case of len 1 array that specify step
-        elif len(values) == 1 and not pd.isnull(step):
-            val = values[0]
-            return CoordRange(start=val, stop=val + step, step=step, units=units)
+        # special case of len 1 array either get range, if step specified
+        # or sorted monotonic array if not.
+        elif len(values) == 1:
+            if not pd.isnull(step):
+                val = values[0]
+                return CoordRange(start=val, stop=val + step, step=step, units=units)
+            return CoordMonotonicArray(values=values, units=units)
         start, stop, step, monotonic = _maybe_get_start_stop_step(values)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)
