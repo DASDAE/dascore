@@ -176,7 +176,7 @@ def random_patch_with_lat_lon(random_patch):
 def multi_dim_coords_patch(random_patch):
     """A patch with a multiple dimensional coord."""
     quality = np.ones(random_patch.shape)
-    out = random_patch.assign_coords(quality=(random_patch.dims, quality))
+    out = random_patch.update_coords(quality=(random_patch.dims, quality))
     return out
 
 
