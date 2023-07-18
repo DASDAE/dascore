@@ -5,6 +5,7 @@ import contextlib
 from typing import Union
 
 import pandas as pd
+from tables import HDF5ExtError
 
 import dascore as dc
 from dascore.constants import SpoolType, path_types
@@ -96,13 +97,17 @@ class DASDAEV1(FiberIO):
 
     def get_format(self, path) -> Union[tuple[str, str], bool]:
         """Return the format from a dasdae file."""
-        with open_hdf5_file(path, mode="r") as fi:
-            is_dasdae, version = False, ""  # NOQA
-            with contextlib.suppress(KeyError):
-                is_dasdae = fi.root._v_attrs["__format__"] == "DASDAE"
-                dasdae_file_version = fi.root._v_attrs["__DASDAE_version__"]
-            if is_dasdae:
-                return (self.name, dasdae_file_version)
+        try:
+            with open_hdf5_file(path, mode="r") as fi:
+                is_dasdae, version = False, ""  # NOQA
+                with contextlib.suppress(KeyError):
+                    is_dasdae = fi.root._v_attrs["__format__"] == "DASDAE"
+                    dasdae_file_version = fi.root._v_attrs["__DASDAE_version__"]
+                if is_dasdae:
+                    return (self.name, dasdae_file_version)
+                return False
+        # an existing, non-hdf file was passed
+        except HDF5ExtError:
             return False
 
     def read(self, path, **kwargs) -> SpoolType:
@@ -113,7 +118,7 @@ class DASDAEV1(FiberIO):
         with open_hdf5_file(path, mode="r") as fi:
             try:
                 waveform_group = fi.root["/waveforms"]
-            except KeyError:
+            except (KeyError, IndexError):
                 return dc.spool([])
             for patch_group in waveform_group:
                 patches.append(_read_patch(patch_group, **kwargs))

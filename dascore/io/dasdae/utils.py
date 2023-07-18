@@ -6,10 +6,10 @@ import numpy as np
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.schema import PatchFileSummary, PatchAttrs
+from dascore.core.schema import PatchAttrs, PatchFileSummary
 from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.patch import get_default_patch_name
-from dascore.utils.time import to_int, to_timedelta64
+from dascore.utils.time import to_int
 
 # --- Functions for writing DASDAE format.
 
@@ -93,9 +93,9 @@ def _read_array(table_array):
     """Read an array into numpy."""
     data = table_array[:]
     if table_array._v_attrs["is_datetime64"]:
-        data = data.astype("datetime64[ns]")
+        data = data.view("datetime64[ns]")
     if table_array._v_attrs["is_timedelta64"]:
-        data = to_timedelta64(data)
+        data = data.view("timedelta64[ns]")
     return data
 
 
@@ -139,13 +139,13 @@ def _read_patch(patch_group, **kwargs):
     attrs = _get_attrs(patch_group)
     dims = _get_dims(patch_group)
     coords = _get_coords(patch_group, dims, attrs)
-    try:
-        if kwargs:
-            coords, data = coords.select(array=patch_group["data"], **kwargs)
-        else:
-            data = patch_group["data"][:]
-    except (IndexError, KeyError):
-        data = np.array(None)
+    # Note, previously this was wrapped with try, except (Index, KeyError)
+    # and the data = np.array(None) in except block. Not sure, why, removed
+    # try except.
+    if kwargs:
+        coords, data = coords.select(array=patch_group["data"], **kwargs)
+    else:
+        data = patch_group["data"][:]
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
 

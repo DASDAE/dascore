@@ -94,20 +94,6 @@ class TestWriteDASDAE:
         assert (df["time_min"] == to_datetime64("1990-01-01")).any()
 
 
-class TestGetVersionDASDAE:
-    """Test for version gathering from files."""
-
-    def test_version_tuple_returned(self, dasdae_v1_file_path):
-        """Ensure the expected version str is returned."""
-        # format_version_tuple = dc.get_format(written_dascore)
-        formatter = DASDAEV1()
-        ex_format, ex_version = formatter.name, formatter.version
-        dasie_format_ver = DASDAEV1().get_format(dasdae_v1_file_path)
-        format_ver = dc.get_format(dasdae_v1_file_path)
-        assert dasie_format_ver == format_ver
-        assert format_ver == (ex_format, ex_version)
-
-
 class TestReadDASDAE:
     """
     Test for reading a dasdae format.
@@ -143,6 +129,12 @@ class TestReadDASDAE:
         for name in ("time_min", "time_max"):
             assert isinstance(patch_2.attrs[name], np.datetime64)
 
+    def test_read_file_no_wavegroup(self, generic_hdf5):
+        """Ensure an h5 with no wavegroup returns empty patch."""
+        parser = DASDAEV1()
+        spool = parser.read(generic_hdf5)
+        assert not len(spool)
+
 
 class TestScanDASDAE:
     """Tests for scanning the dasdae format."""
@@ -154,13 +146,6 @@ class TestScanDASDAE:
         common_keys = set(info1) & set(info2) - {"history"}
         for key in common_keys:
             assert info1[key] == info2[key]
-
-    def test_scan_format_version(self, written_dascore_v1_random):
-        """Ensure scanning returns expected values."""
-        formatter = DASDAEV1()
-        df = dc.scan_to_df(written_dascore_v1_random)
-        assert all(df["file_version"] == formatter.version)
-        assert all(df["file_format"] == formatter.name)
 
     def test_indexed_vs_unindexed(
         self,
@@ -184,7 +169,14 @@ class TestRoundTrips:
         coords.
         """
         new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
-        patch = random_patch_with_lat_lon
+        shape = random_patch_with_lat_lon.shape
+        dims = random_patch_with_lat_lon.dims
+        # add time deltas to ensure they are also serialized/deserialized.
+        dist_shape = shape[dims.index("distance")]
+        time_deltas = dc.to_timedelta64(np.random.random(dist_shape))
+        patch = random_patch_with_lat_lon.assign_coords(
+            delta_times=("distance", time_deltas),
+        )
         dc.write(patch, new_path, "DASDAE")
         spool = dc.read(new_path, file_format="DASDAE")
         assert len(spool) == 1

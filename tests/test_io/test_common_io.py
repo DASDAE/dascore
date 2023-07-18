@@ -73,6 +73,12 @@ def _get_flat_io_test():
     return flat_io
 
 
+@pytest.fixture(scope="session", params=list(COMMON_IO_READ_TESTS))
+def io_instance(request):
+    """Fixture for returning fiber io instances."""
+    return request.param
+
+
 @pytest.fixture(scope="session", params=_get_flat_io_test())
 def io_path_tuple(request):
     """
@@ -93,6 +99,32 @@ def data_file_path(request):
 def read_spool(data_file_path):
     """Read each file into a spool."""
     return dc.read(data_file_path)
+
+
+# --- Helper functions
+
+
+def _assert_coords_attrs_match(patch):
+    """Ensure both the coordinates and attributes match on patch."""
+    attrs = patch.attrs
+    coords = patch.coords
+    assert attrs.dim_tuple == coords.dims
+    for dim in attrs.dim_tuple:
+        coord = patch.get_coord(dim)
+        assert coord.min() == getattr(attrs, f"{dim}_min")
+        assert coord.max() == getattr(attrs, f"{dim}_max")
+        assert coord.step == getattr(attrs, f"{dim}_step")
+
+
+def _assert_op_or_close(val1, val2, op):
+    """assert op(val1, val2) or isclose(val1, val2)."""
+    meets_eq = op(val1, val2)
+    both_null = pd.isnull(val1) and pd.isnull(val2)
+    all_close_vals = all_close(val1, val2)
+    if meets_eq or both_null or all_close_vals:
+        return
+    msg = f"{val1} and {val2} do not pass {op} or all close."
+    assert False, msg
 
 
 # --- Tests
@@ -119,28 +151,13 @@ class TestGetFormat:
         assert isinstance(format_str, str)
         assert isinstance(version_str, str)
 
+    def test_random_textfile_isnt_format(self, io_instance, dummy_text_file):
+        """Ensure a dummy text file the format (it isn't any fiber format)."""
+        assert not io_instance.get_format(dummy_text_file)
 
-def _assert_coords_attrs_match(patch):
-    """Ensure both the coordinates and attributes match on patch."""
-    attrs = patch.attrs
-    coords = patch.coords
-    assert attrs.dim_tuple == coords.dims
-    for dim in attrs.dim_tuple:
-        coord = patch.get_coord(dim)
-        assert coord.min() == getattr(attrs, f"{dim}_min")
-        assert coord.max() == getattr(attrs, f"{dim}_max")
-        assert coord.step == getattr(attrs, f"{dim}_step")
-
-
-def _assert_op_or_close(val1, val2, op):
-    """assert op(val1, val2) or isclose(val1, val2)."""
-    meets_eq = op(val1, val2)
-    both_null = pd.isnull(val1) and pd.isnull(val2)
-    all_close_vals = all_close(val1, val2)
-    if meets_eq or both_null or all_close_vals:
-        return
-    msg = f"{val1} and {val2} do not pass {op} or all close."
-    assert False, msg
+    def test_random_h5_isnt_format(self, io_instance, generic_hdf5):
+        """Ensure a dummy h5 file the format (it isn't any fiber format)."""
+        assert not io_instance.get_format(generic_hdf5)
 
 
 class TestRead:
@@ -208,7 +225,7 @@ class TestRead:
 class TestScan:
     """Tests for generic scanning"""
 
-    def test_scan(self, data_file_path):
+    def test_scan_basics(self, data_file_path):
         """Ensure each file can be scanned."""
         attrs_list = dc.scan(data_file_path)
         assert len(attrs_list)
@@ -216,6 +233,14 @@ class TestScan:
         for attrs in attrs_list:
             assert isinstance(attrs, dc.PatchAttrs)
             assert str(attrs.path) == str(data_file_path)
+
+    def test_scan_has_version_and_format(self, io_path_tuple):
+        """Scan output should contain version and format."""
+        io, path = io_path_tuple
+        attr_list = io.scan(path)
+        for attrs in attr_list:
+            assert attrs.file_format == io.name
+            assert attrs.file_version == io.version
 
 
 class TestIntegration:
