@@ -11,7 +11,7 @@ from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int
 
-# --- Functions for writing DASDAE format.
+# --- Functions for writing DASDAE format
 
 
 def _write_meta(hfile, file_version):

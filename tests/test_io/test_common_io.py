@@ -8,12 +8,15 @@ IO functions (i.e., not that they work on various files) should go in
 test_io_core.py
 """
 from functools import cache
+from io import BytesIO
 from operator import eq, ge, le
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.quantx import QuantXV2
@@ -102,7 +105,8 @@ def data_file_path(request):
 @pytest.fixture(scope="session")
 def read_spool(data_file_path):
     """Read each file into a spool."""
-    return dc.read(data_file_path)
+    out = dc.read(data_file_path)
+    return out
 
 
 # --- Helper functions
@@ -179,6 +183,22 @@ class TestRead:
         for patch in read_spool:
             _assert_coords_attrs_match(patch)
 
+    def test_read_stream(self, io_path_tuple):
+        """If the format supports reading from a stream, test it out."""
+        io, path = io_path_tuple
+        req_type = getattr(io.read, "_required_type", None)
+        if not isinstance(req_type, BinaryReader):
+            msg = f"{io} doesn't require a read type."
+            pytest.skip(msg)
+        spool1 = _cached_read(path)
+        # write file contents to bytes io and ensure it can be read.
+        bio = BytesIO()
+        bio.write(Path(io_path_tuple).read_bytes())
+        bio.seek(0)
+        spool2 = io.read(bio)
+        for patch1, patch2 in zip(spool1, spool2):
+            assert patch1.equals(patch2)
+
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """
         Ensure each dimension can be passed as an argument to `read` and
@@ -186,6 +206,7 @@ class TestRead:
         """
         io, path = io_path_tuple
         attrs = dc.scan(path)
+        assert len(attrs)
         # skip files that have more than one patch for now
         # TODO just write better test logic to handle this case.
         if len(attrs) > 1:

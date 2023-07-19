@@ -1,14 +1,12 @@
 """
 IO module for reading prodML data.
 """
-from pathlib import Path
 from typing import List, Optional, Union
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.core.schema import PatchFileSummary
-from dascore.io.core import FiberIO
-from dascore.utils.hdf5 import HDF5ExtError, NoSuchNodeError, open_hdf5_file
+from dascore.io import FiberIO, HDF5Reader
 
 from .utils import _get_prodml_attrs, _get_prodml_version_str, _read_prodml
 
@@ -22,39 +20,34 @@ class ProdMLV2_0(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "2.0"
 
-    def get_format(self, path: Union[str, Path]) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: HDF5Reader) -> Union[tuple[str, str], bool]:
         """
         Return True if file contains terra15 version 2 data else False.
 
         Parameters
         ----------
-        path
+        resource
             A path to the file which may contain terra15 data.
         """
-        try:
-            with open_hdf5_file(path, "r") as fi:
-                version_str = _get_prodml_version_str(fi)
-                if version_str:
-                    return (self.name, version_str)
-        except (HDF5ExtError, OSError, IndexError, KeyError, NoSuchNodeError):
-            return False
+        version_str = _get_prodml_version_str(resource)
+        if version_str:
+            return (self.name, version_str)
 
-    def scan(self, path: Union[str, Path]) -> List[PatchFileSummary]:
+    def scan(self, resource: HDF5Reader) -> List[PatchFileSummary]:
         """
         Scan a prodml file, return summary information about the file's contents.
         """
-        with open_hdf5_file(path) as fi:
-            file_version = _get_prodml_version_str(fi)
-            extras = {
-                "path": path,
-                "file_format": self.name,
-                "file_version": str(file_version),
-            }
-            return _get_prodml_attrs(fi, extras=extras, cls=PatchFileSummary)
+        file_version = _get_prodml_version_str(resource)
+        extras = {
+            "path": resource.filename,
+            "file_format": self.name,
+            "file_version": str(file_version),
+        }
+        return _get_prodml_attrs(resource, extras=extras, cls=PatchFileSummary)
 
     def read(
         self,
-        path: Union[str, Path],
+        resource: HDF5Reader,
         time: Optional[tuple[opt_timeable_types, opt_timeable_types]] = None,
         distance: Optional[tuple[Optional[float], Optional[float]]] = None,
         **kwargs
@@ -62,8 +55,7 @@ class ProdMLV2_0(FiberIO):
         """
         Read a ProdML file.
         """
-        with open_hdf5_file(path) as fi:
-            patches = _read_prodml(fi, time=time, distance=distance)
+        patches = _read_prodml(resource, time=time, distance=distance)
         return dc.spool(patches)
 
 

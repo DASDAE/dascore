@@ -5,9 +5,8 @@ Das Data.
 import inspect
 import os.path
 from collections import defaultdict
-from functools import cache, cached_property, reduce, wraps
+from functools import cache, cached_property, wraps
 from importlib.metadata import entry_points
-from operator import add
 from pathlib import Path
 from typing import List, Optional, Union, get_type_hints
 
@@ -17,17 +16,10 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.constants import PatchType, SpoolType, timeable_types
 from dascore.core.schema import PatchFileSummary
-from dascore.exceptions import (
-    DASCoreError,
-    InvalidFiberFile,
-    InvalidFiberIO,
-    UnknownFiberFormat,
-)
+from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
-from dascore.utils.hdf5 import HDF5ExtError
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
-from dascore.utils.misc import suppress_warnings
-from dascore.utils.patch import scan_patches
+from dascore.utils.misc import iterate, suppress_warnings
 from dascore.utils.pd import _model_list_to_df
 
 
@@ -106,6 +98,7 @@ class _FiberIOManager:
             self._extension_list[ext].append(fiberio)
         self._format_version[forma][ver] = fiberio
 
+    @cache
     def get_fiberio(
         self,
         format: Optional[str] = None,
@@ -223,22 +216,35 @@ def _type_caster(func, sig, required_type, arg_name):
     """
     A decorator for casting types for arguments of cast ind.
     """
+    fun_name = func.__name__
 
     @wraps(func)
     def _wraper(*args, _pre_cast=False, **kwargs):
         """Wraps args but performs coercion to get proper stream"""
         # TODO look at replacing this with pydantic's type_guard thing.
+
+        # this allows us to fast-track calls from generic functions
         if required_type is None or _pre_cast:
             return func(*args, **kwargs)
         bound = sig.bind(*args, **kwargs)
-        new_kwargs = bound.arguments
-        resource = new_kwargs.pop(arg_name)
-        new_kwargs[arg_name] = get_handle_from_resource(resource, required_type)
-        # kwargs is included in bound arguments, need to re-attach
-        new_kwargs.update(new_kwargs.pop("kwargs", {}))
-        out = func(**new_kwargs)
-        # if resource has a seek go back to 0.
-        getattr(resource, "seek", lambda x: None)(0)
+        new_kw = bound.arguments
+        resource = new_kw.pop(arg_name)
+        try:
+            new_resource = get_handle_from_resource(resource, required_type)
+            new_kw[arg_name] = new_resource
+            # kwargs is included in bound arguments, need to re-attach
+            new_kw.update(new_kw.pop("kwargs", {}))
+            out = func(**new_kw)
+        except Exception as e:  # noqa get_format can't raise; must return false.
+            if fun_name == "get_format":
+                out = False
+            else:
+                raise e
+        else:
+            # if a new file handle was created we need to close it now. But it
+            # shouldn't close any passed in, that should happen up the stack.
+            if new_resource is not resource and hasattr(new_resource, "close"):
+                new_resource.close()
         return out
 
     # attach the function and required type for later use
@@ -280,7 +286,7 @@ class FiberIO:
         "get_format": 1,
     }
 
-    def read(self, path, **kwargs) -> SpoolType:
+    def read(self, resource, **kwargs) -> SpoolType:
         """
         Load data from a path.
 
@@ -291,7 +297,7 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, path) -> List[PatchFileSummary]:
+    def scan(self, resource) -> List[PatchFileSummary]:
         """
         Returns a list of summary info for patches contained in file.
         """
@@ -299,7 +305,7 @@ class FiberIO:
         # however, this can be very slow, so each parser should implement scan
         # when possible.
         try:
-            spool = self.read(path)
+            spool = self.read(resource)
         except NotImplementedError:
             msg = f"FiberIO: {self.name} has no scan or read method"
             raise NotImplementedError(msg)
@@ -307,18 +313,18 @@ class FiberIO:
         for pa in spool:
             info = dict(pa.attrs)
             info["file_format"] = self.name
-            info["path"] = str(path)
+            info["path"] = str(resource)
             out.append(PatchFileSummary.parse_obj(info))
         return out
 
-    def write(self, spool: SpoolType, path: Union[str, Path]):
+    def write(self, spool: SpoolType, resource):
         """
-        Write the spool to disk
+        Write the spool to a resource (eg path, stream, etc.).
         """
         msg = f"FiberIO: {self.name} has no write method"
         raise NotImplementedError(msg)
 
-    def get_format(self, path) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource) -> Union[tuple[str, str], bool]:
         """
         Return a tuple of (format_name, version_numbers).
 
@@ -416,7 +422,7 @@ def read(
         formatter = FiberIO.manager.get_fiberio(file_format, file_version)
         required_type = getattr(formatter.read, "_required_type")
         path = man.get_resource(required_type)
-        return formatter.read(
+        out = formatter.read(
             path,
             file_version=file_version,
             time=time,
@@ -424,6 +430,9 @@ def read(
             _pre_cast=True,
             **kwargs,
         )
+        # if resource has a seek go back to 0 so this stream can be re-used.
+        getattr(path, "seek", lambda x: None)(0)
+        return out
 
 
 @compose_docstring(fields=list(PatchFileSummary.__fields__))
@@ -431,7 +440,6 @@ def scan_to_df(
     path: Union[Path, str, PatchType, SpoolType, IOResourceManager],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
-    ignore: bool = False,
 ) -> pd.DataFrame:
     """
     Scan a path, return a dataframe of contents.
@@ -442,9 +450,6 @@ def scan_to_df(
         The path the to file to scan
     file_format
         Format of the file. If not provided DASCore will try to determine it.
-    ignore
-        If True, ignore non-DAS files by returning an empty list, else raise
-        UnknownFiberFormat if unreadable file encountered.
 
     Returns
     -------
@@ -452,96 +457,77 @@ def scan_to_df(
         {fields}
     """
     info = scan(
-        path_or_spool=path,
+        path=path,
         file_format=file_format,
         file_version=file_version,
-        ignore=ignore,
     )
     df = _model_list_to_df(info)
     return df[list(PatchFileSummary.get_index_columns())]
 
 
+def _iterate_scan_inputs(patch_source):
+    """Yield scan candidates."""
+    for el in iterate(patch_source):
+        if isinstance(el, (str, Path)) and (path := Path(el)).exists():
+            if path.is_dir():  # directory, yield contents
+                for sub_path in path.rglob("*"):
+                    if sub_path.is_dir():
+                        continue
+                    yield sub_path
+            else:
+                yield path
+        else:
+            yield el
+
+
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))
 def scan(
-    path_or_spool: Union[Path, str, PatchType, SpoolType, IOResourceManager],
+    path: Union[Path, str, PatchType, SpoolType, IOResourceManager],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
-    ignore: bool = False,
 ) -> list[PatchFileSummary]:
     """
-    Scan a file, return the summary dictionary.
+    Scan a potential patch source, return a list of PatchAttrs.
 
     Parameters
     ----------
-    path_or_spool
-        The path the to file to scan
+    path
+        A resource containing Fiber data.
     file_format
         Format of the file. If not provided DASCore will try to determine it.
         Only applicable for path-like inputs.
     file_version
         Version of the file. If not provided DASCore will try to determine it.
         Only applicable for path-like inputs.
-    ignore
-        If True, ignore non-DAS files by returning an empty list, else raise
-        UnknownFiberFormat if unreadable file encountered.
 
-    Notes
-    -----
-    The summary dictionaries contain the following fields:
+    Returns
+    -------
+    A list of [PatchFileSummary](`dascore.core.schema.PatchFileSummary`) which
+    have the following fields:
         {fields}
     """
-    if isinstance(path_or_spool, (str, Path, IOResourceManager)):
-        with IOResourceManager(path_or_spool) as man:
-            out = _scan_from_path(
-                man,
-                file_format=file_format,
-                file_version=file_version,
-                ignore=ignore,
-            )
-    else:
-        out = scan_patches(path_or_spool)
-    return out
-
-
-def _scan_from_path(
-    path_or_manager: Union[IOResourceManager, str, Path],
-    file_format: Optional[str] = None,
-    file_version: Optional[str] = None,
-    ignore: bool = False,
-) -> list[PatchFileSummary]:
-    """Scan from a single path."""
-    if isinstance(path_or_manager, IOResourceManager):
-        path_or_manager = path_or_manager.get_resource(Path)
-    path = Path(path_or_manager)
-    if not os.path.exists(path):
-        msg = f"{path} does not exist"
-        raise InvalidFiberFile(msg)
-    # recursively handle directory files
-    if os.path.isdir(path):
-        out = [
-            _scan_from_path(x, file_format, file_version, ignore=True)
-            for x in Path(path).glob("*")
-        ]
-        if len(out):
-            return reduce(add, out)
-        else:
-            return []
-    # dispatch to file format handlers
-    if not file_format or not file_version:
-        try:
-            file_format, file_version = get_format(
-                path,
-                file_format=file_format,
-                file_version=file_version,
-            )
-        except UnknownFiberFormat as e:
-            if ignore:
-                return []
-            else:
-                raise e
-
-    formatter = FiberIO.manager.get_fiberio(file_format, file_version)
-    out = formatter.scan(path)
+    out = []
+    for patch_source in _iterate_scan_inputs(path):
+        # just pull attrs from patch
+        if isinstance(patch_source, dc.Patch):
+            out.append(PatchFileSummary(**dict(patch_source.attrs)))
+            continue
+        with IOResourceManager(path) as man:
+            # get fiberio
+            if not file_format or not file_version:
+                try:
+                    file_format, file_version = get_format(
+                        man,
+                        file_format=file_format,
+                        file_version=file_version,
+                    )
+                except UnknownFiberFormat:  # skip bad entities
+                    continue
+            formatter = FiberIO.manager.get_fiberio(file_format, file_version)
+            req_type = getattr(formatter.scan, "_required_type", None)
+            patch_thing = man.get_resource(req_type)
+            for attr in formatter.scan(patch_thing, _pre_cast=True):
+                out.append(attr)
     return out
 
 
@@ -583,19 +569,19 @@ def get_format(
             # we need to wrap this in try except to make it robust to what
             # may happen in each formatters get_format method, many of which
             # may be third party code
+            func = formatter.get_format
+            required_type = getattr(func, "_required_type")
+            func_input = None
             try:
-                func = formatter.get_format
-                required_type = getattr(func, "_required_type")
+                # get resource has to be in the try block because it can also
+                # raise, in which case the format doesn't belong.
                 func_input = man.get_resource(required_type)
                 format_version = func(func_input, _pre_cast=True)  # noqa
-            except (
-                ValueError,
-                TypeError,
-                HDF5ExtError,
-                NotImplementedError,
-                DASCoreError,
-            ):
+            except Exception:  # noqa we need to catch everythign here
                 continue
+            finally:
+                # If file handle-like seek back to 0 so it can be reused.
+                getattr(func_input, "seek", lambda x: None)(0)
             if format_version:
                 return format_version
         else:
@@ -631,8 +617,8 @@ def write(
     if not isinstance(patch_or_spool, dc.BaseSpool):
         patch_or_spool = dc.spool([patch_or_spool])
     with IOResourceManager(path) as man:
-        required_type = getattr(formatter.write, "_required_type")
-        path = man.get_resource(required_type)
         func = formatter.write
-        func(patch_or_spool, path, _pre_cast=True, **kwargs)  # noqa
+        required_type = getattr(func, "_required_type")
+        resource = man.get_resource(required_type)
+        func(patch_or_spool, resource, _pre_cast=True, **kwargs)  # noqa
     return path

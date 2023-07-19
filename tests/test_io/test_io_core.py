@@ -10,7 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.exceptions import InvalidFiberFile, InvalidFiberIO, UnknownFiberFormat
+from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.io.core import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.io import BinaryReader, BinaryWriter
@@ -37,17 +37,17 @@ class _FiberCaster(FiberIO):
     name = "_TestFormatter"
     version = "2"
 
-    def read(self, path: BinaryReader, **kwargs) -> SpoolType:
+    def read(self, resource: BinaryReader, **kwargs) -> SpoolType:
         """Just ensure read was cast to correct type"""
-        assert isinstance(path, BinaryReader)
+        assert isinstance(resource, BinaryReader)
 
-    def write(self, spool: SpoolType, path: BinaryWriter):
+    def write(self, spool: SpoolType, resource: BinaryWriter):
         """ditto for write"""
-        assert isinstance(path, BinaryWriter)
+        assert isinstance(resource, BinaryWriter)
 
-    def get_format(self, path: Path) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: Path) -> Union[tuple[str, str], bool]:
         """and get format"""
-        assert isinstance(path, Path)
+        assert isinstance(resource, Path)
         return False
 
     def scan(self, not_path: BinaryReader):
@@ -173,14 +173,11 @@ class TestGetFormat:
 class TestScan:
     """Tests for scanning fiber files."""
 
-    def test_scan_with_ignore(self, tmp_path):
-        """ignore option should make scan return []"""
-        # no ignore should still raise
+    def test_scan_no_good_files(self, tmp_path):
+        """Scan with no fiber files should return []"""
         dummy_file = tmp_path / "data.txt"
         dummy_file.touch()
-        with pytest.raises(UnknownFiberFormat):
-            _ = dc.scan(dummy_file)
-        out = dc.scan(dummy_file, ignore=True)
+        out = dc.scan(dummy_file)
         assert not len(out)
         assert out == []
 
@@ -192,7 +189,7 @@ class TestScan:
     def test_scan_bad_files(self, tmp_path):
         """Trying to scan a directory should raise a nice error"""
         new = tmp_path / "myfile.txt"
-        with pytest.raises(InvalidFiberFile):
+        with pytest.raises(FileNotFoundError):
             _ = dc.scan(new)
 
     def test_scan_patch(self, random_patch):

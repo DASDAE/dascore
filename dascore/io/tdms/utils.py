@@ -259,7 +259,7 @@ def _get_fileinfo(tdms_file, LEAD_IN_LENGTH=28):
 def _get_data_node(tdms_file, LEAD_IN_LENGTH=28):
     """Get all the data saved in the current file"""
 
-    def get_segmentdata(fileinfo, nch, dmap, nso, rdo):
+    def get_segment_data(fileinfo, nch, dmap, nso, rdo):
 
         # seg1_length: length of recording indicated as raw_data in metadata for
         # each channel in bytes
@@ -323,7 +323,7 @@ def _get_data_node(tdms_file, LEAD_IN_LENGTH=28):
 
     flag = 0
     while flag == 0:
-        cdata_node, cchannel_length = get_segmentdata(fileinfo, nch, dmap, nso, rdo)
+        cdata_node, cchannel_length = get_segment_data(fileinfo, nch, dmap, nso, rdo)
         if fileinfo["file_size"] == nso:
             flag = 1
         else:

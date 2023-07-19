@@ -3,6 +3,7 @@
 from typing import Optional
 
 import numpy as np
+from tables import NoSuchNodeError
 
 from dascore.constants import timeable_types
 from dascore.core import Patch
@@ -25,8 +26,10 @@ def _get_qunatx_version_str(hdf_fi) -> str:
         "MeasurementStartTime",
         "schemaVersion",
     ]
-
-    acquisition_group = hdf_fi.get_node("/Acquisition")
+    try:
+        acquisition_group = hdf_fi.get_node("/Acquisition")
+    except NoSuchNodeError:
+        return ""
     acquisition_attrs = acquisition_group._v_attrs
 
     is_quantx = all([hasattr(acquisition_attrs, x) for x in expected_attrs])
@@ -67,12 +70,6 @@ def _get_dist_coord(root_node_attrs):
     return coord
 
 
-def _get_extra_scan_attrs(self, file_version, path):
-    """Get the extra attributes that go into summary information."""
-    out = dict(path=path, file_format=self.name, file_version=file_version)
-    return out
-
-
 def _get_version_data_node(root):
     """Get the version, time, and data node from Quantx file."""
     version = str(root._v_attrs.schemaVersion.decode())
@@ -84,13 +81,14 @@ def _get_version_data_node(root):
     return version, data_node
 
 
-def _scan_quantx(self, fi, path):
+def _scan_quantx(self, fi):
     """Scan an Quantx file, return metadata."""
     root = fi.get_node("/Acquisition")
     root_attrs = root._v_attrs
     version, data_node = _get_version_data_node(root)
     out = _get_attrs(data_node, root_attrs)
-    out.update(_get_extra_scan_attrs(self, version, path))
+    extras = dict(path=fi.filename, file_format=self.name, file_version=version)
+    out.update(extras)
     return [PatchFileSummary.parse_obj(out)]
 
 

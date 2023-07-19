@@ -65,6 +65,7 @@ class HDF5Writer(Protocol):
     title: str
     filters: Any
     isopen: bool
+    filename: str
 
 
 @typing.runtime_checkable
@@ -76,6 +77,7 @@ class HDF5Reader(Protocol):
     title: str
     filters: Any
     isopen: bool
+    filename: str
 
 
 @cache

@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import tables
 from packaging.version import parse as get_version
+from pandas.io.common import stringify_path
 from tables import ClosedNodeError
 
 import dascore as dc
@@ -35,6 +36,34 @@ NodeError = tables.NodeError
 
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
 ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
+
+
+class HDF5Store(pd.HDFStore):
+    """This is a work-around for pandas HDF5 store not accepting file handles."""
+
+    def __init__(
+        self,
+        path,
+        mode: str = "a",
+        complevel: int | None = None,
+        complib=None,
+        fletcher32: bool = False,
+        **kwargs,
+    ) -> None:
+        if isinstance(path, (str, Path)):
+            self._path = stringify_path(path)
+        elif isinstance(path, tables.File):
+            self._path = stringify_path(path.filename)
+        self._mode = "a" if mode is None else mode
+        self._handle = None
+        self._complevel = complevel if complevel else 0
+        self._complib = complib
+        self._fletcher32 = fletcher32
+        self._filters = None
+        if isinstance(path, tables.File):
+            self._handle = path
+        else:
+            self.open(mode)
 
 
 @contextmanager
@@ -229,7 +258,7 @@ class HDFPatchIndexManager:
         # read in dataframe and prepare for input into hdf5 index
         update_time = update_time or time.time()
         df = self.encode_table(update_df, path=base_path)
-        with pd.HDFStore(str(self.path)) as store:
+        with HDF5Store(self.path) as store:
             try:
                 nrows = store.get_storer(self._index_node).nrows
             except (AttributeError, KeyError):
@@ -259,7 +288,7 @@ class HDFPatchIndexManager:
         Read the metadata table.
         """
         try:
-            with pd.HDFStore(self.path, "r") as store:
+            with HDF5Store(self.path, "r") as store:
                 out = store.get(self._meta_node)
             store.close()
             return out
@@ -275,7 +304,7 @@ class HDFPatchIndexManager:
         """
         if not Path(self.path).exists():
             return
-        with pd.HDFStore(str(self.path)) as store:
+        with HDF5Store(self.path) as store:
             # add metadata if not in store
             if self._meta_node not in store:
                 meta = self._make_meta_table()
