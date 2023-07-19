@@ -124,6 +124,7 @@ class HDFPatchIndexManager:
         "time_max": to_int,
         "d_time": to_int,
         "dims": list_ser_to_str,
+        "path": lambda x: x.astype(str),
     }
     # functions to apply to decode dataframe after loading from hdf file
     _column_decorders = {

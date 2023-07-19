@@ -4,6 +4,7 @@ Utilities for basic IO tasks.
 import abc
 import typing
 from functools import cache, singledispatch
+from inspect import isfunction, ismethod
 from pathlib import Path
 from typing import Any, Protocol, get_type_hints
 
@@ -80,9 +81,12 @@ class HDF5Reader(Protocol):
 @cache
 def _get_required_type(required_type, arg_name=None):
     """Get the type hint for the first argument."""
-    if required_type not in HANDLE_FUNCTIONS and callable(required_type):
-        hints = get_type_hints(required_type)
-        if not hints:
+
+    if required_type not in HANDLE_FUNCTIONS:
+        # here we try to get the type from the function type hints
+        # but we need to skip things that aren't functions
+        is_func_y = isfunction(required_type) or ismethod(required_type)
+        if not is_func_y or not (hints := get_type_hints(required_type)):
             return required_type
         arg_name = arg_name if arg_name is not None else list(hints)[0]
         return hints.get(arg_name)
@@ -181,8 +185,22 @@ class IOResourceManager:
         self._source = source
         self._cache = {}
 
+    @property
+    @cache
+    def source(self):
+        """Get the source of the IO manager."""
+        source = self._source
+        # this handles IO managers derived from other IO managers;
+        # effectively, we need to go back to the original, non-io manager source
+        while isinstance(source, self.__class__):
+            source = source.source
+        return source
+
     def get_resource(self, required_type: RequiredType) -> RequiredType:
         """Get the requested resource from"""
+        # no required type, just return source of manager.
+        if required_type is None:
+            return self.source
         # this is so the context managers can be nested and the child
         # context manager only calls to the parent. Then, the resources
         # get closed only after the original exists its context.

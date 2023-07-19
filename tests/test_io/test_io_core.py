@@ -209,6 +209,7 @@ class TestScan:
         assert not _FiberFormatTestV2().implements_scan
         assert not _FiberFormatTestV1().implements_scan
         dasdae = FiberIO.manager.get_fiberio("DASDAE")
+        dasdae.implements_scan
         assert dasdae.implements_scan
 
     def test_implements_get_format(self):

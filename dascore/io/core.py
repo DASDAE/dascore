@@ -25,7 +25,7 @@ from dascore.exceptions import (
 )
 from dascore.utils.docs import compose_docstring
 from dascore.utils.hdf5 import HDF5ExtError
-from dascore.utils.io import get_handle_from_resource, _get_required_type
+from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import scan_patches
 from dascore.utils.pd import _model_list_to_df
@@ -220,10 +220,16 @@ class _FiberIOManager:
 
 
 def _type_caster(func, sig, required_type, arg_name):
-    """A decorator for casting types for arguments of cast ind."""
+    """
+    A decorator for casting types for arguments of cast ind.
+    """
 
     @wraps(func)
-    def _wraper(*args, **kwargs):
+    def _wraper(*args, _pre_cast=False, **kwargs):
+        """Wraps args but performs coercion to get proper stream"""
+        # TODO look at replacing this with pydantic's type_guard thing.
+        if required_type is None or _pre_cast:
+            return func(*args, **kwargs)
         bound = sig.bind(*args, **kwargs)
         new_kwargs = bound.arguments
         resource = new_kwargs.pop(arg_name)
@@ -235,7 +241,22 @@ def _type_caster(func, sig, required_type, arg_name):
         getattr(resource, "seek", lambda x: None)(0)
         return out
 
+    # attach the function and required type for later use
+    _wraper.func = func
+    _wraper._required_type = required_type
+
     return _wraper
+
+
+def _is_wrapped_func(func1, func2):
+    """
+    Small helper function to determine if func1 is func2, unwrapping decorators.
+    """
+    func = func1
+    while hasattr(func, "func") or hasattr(func, "__func__"):
+        func = getattr(func, "func", func)
+        func = getattr(func, "__func__", func)
+    return func is func2
 
 
 class FiberIO:
@@ -312,26 +333,26 @@ class FiberIO:
         """
         Returns True if the subclass implements its own scan method else False.
         """
-        return self.read.__func__ is not FiberIO.read
+        return not _is_wrapped_func(self.read, FiberIO.read)
 
     @property
     def implements_write(self) -> bool:
         """
         Returns True if the subclass implements its own scan method else False.
         """
-        return self.write.__func__ is not FiberIO.write
+        return not _is_wrapped_func(self.write, FiberIO.write)
 
     @property
     def implements_scan(self) -> bool:
         """
         Returns True if the subclass implements its own scan method else False.
         """
-        return self.scan.__func__ is not FiberIO.scan
+        return not _is_wrapped_func(self.scan, FiberIO.scan)
 
     @property
     def implements_get_format(self) -> bool:
         """Return True if the subclass implements its own get_format method."""
-        return self.get_format.__func__ is not FiberIO.get_format
+        return not _is_wrapped_func(self.get_format, FiberIO.get_format)
 
     def __hash__(self):
         """FiberIO instances should be uniquely defined by (format, version)"""
@@ -351,20 +372,15 @@ class FiberIO:
         # decorate methods for type-casting
         for name, param_ind in cls._automatic_type_casters.items():
             method = getattr(cls, name)
-            implements_method = method is not getattr(FiberIO, name)
             sig = inspect.signature(method)
             arg_name = list(sig.parameters)[param_ind]
             required_type = get_type_hints(method).get(arg_name)
-            # if the subclass doesn't implement this method, or there is no
-            # valid type-hint, just return.
-            if not implements_method or required_type is None:
-                continue
             method_wrapped = _type_caster(method, sig, required_type, arg_name)
             setattr(cls, name, method_wrapped)
 
 
 def read(
-    path: Union[str, Path],
+    path: Union[str, Path, IOResourceManager],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
     time: Optional[tuple[Optional[timeable_types], Optional[timeable_types]]] = None,
@@ -390,21 +406,29 @@ def read(
     *kwargs
         All kwargs are passed to the format-specific read functions.
     """
-    if not file_format or not file_version:
-        file_format, file_version = get_format(
+    with IOResourceManager(path) as man:
+        if not file_format or not file_version:
+            file_format, file_version = get_format(
+                man,
+                file_format=file_format,
+                file_version=file_version,
+            )
+        formatter = FiberIO.manager.get_fiberio(file_format, file_version)
+        required_type = getattr(formatter.read, "_required_type")
+        path = man.get_resource(required_type)
+        return formatter.read(
             path,
-            file_format=file_format,
             file_version=file_version,
+            time=time,
+            distance=distance,
+            _pre_cast=True,
+            **kwargs,
         )
-    formatter = FiberIO.manager.get_fiberio(file_format, file_version)
-    return formatter.read(
-        path, file_version=file_version, time=time, distance=distance, **kwargs
-    )
 
 
 @compose_docstring(fields=list(PatchFileSummary.__fields__))
 def scan_to_df(
-    path: Union[Path, str, PatchType, SpoolType],
+    path: Union[Path, str, PatchType, SpoolType, IOResourceManager],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
     ignore: bool = False,
@@ -439,7 +463,7 @@ def scan_to_df(
 
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))
 def scan(
-    path_or_spool: Union[Path, str, PatchType, SpoolType],
+    path_or_spool: Union[Path, str, PatchType, SpoolType, IOResourceManager],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
     ignore: bool = False,
@@ -466,25 +490,29 @@ def scan(
     The summary dictionaries contain the following fields:
         {fields}
     """
-    if isinstance(path_or_spool, (str, Path)):
-        out = _scan_from_path(
-            path_or_spool,
-            file_format=file_format,
-            file_version=file_version,
-            ignore=ignore,
-        )
+    if isinstance(path_or_spool, (str, Path, IOResourceManager)):
+        with IOResourceManager(path_or_spool) as man:
+            out = _scan_from_path(
+                man,
+                file_format=file_format,
+                file_version=file_version,
+                ignore=ignore,
+            )
     else:
         out = scan_patches(path_or_spool)
     return out
 
 
 def _scan_from_path(
-    path: Union[Path, str, PatchType, SpoolType],
+    path_or_manager: Union[IOResourceManager, str, Path],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
     ignore: bool = False,
 ) -> list[PatchFileSummary]:
     """Scan from a single path."""
+    if isinstance(path_or_manager, IOResourceManager):
+        path_or_manager = path_or_manager.get_resource(Path)
+    path = Path(path_or_manager)
     if not os.path.exists(path):
         msg = f"{path} does not exist"
         raise InvalidFiberFile(msg)
@@ -518,7 +546,7 @@ def _scan_from_path(
 
 
 def get_format(
-    path: Union[str, Path],
+    path: Union[str, Path, IOResourceManager],
     file_format: Optional[str] = None,
     file_version: Optional[str] = None,
 ) -> tuple[str, str]:
@@ -543,20 +571,36 @@ def get_format(
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
 
     """
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"{path} does not exist.")
-    ext = Path(path).suffix or None
-    iterator = FiberIO.manager.yield_fiberio(file_format, file_version, extension=ext)
-    for formatter in iterator:
-        try:
-            format_version = formatter.get_format(path)
-        except (ValueError, TypeError, HDF5ExtError, NotImplementedError, DASCoreError):
-            continue
-        if format_version:
-            return format_version
-    else:
-        msg = f"Could not determine file format of {path}"
-        raise UnknownFiberFormat(msg)
+    with IOResourceManager(path) as man:
+        path = man.source
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"{path} does not exist.")
+        ext = Path(path).suffix or None
+        iterator = FiberIO.manager.yield_fiberio(
+            file_format, file_version, extension=ext
+        )
+        for formatter in iterator:
+            # we need to wrap this in try except to make it robust to what
+            # may happen in each formatters get_format method, many of which
+            # may be third party code
+            try:
+                func = formatter.get_format
+                required_type = getattr(func, "_required_type")
+                func_input = man.get_resource(required_type)
+                format_version = func(func_input, _pre_cast=True)  # noqa
+            except (
+                ValueError,
+                TypeError,
+                HDF5ExtError,
+                NotImplementedError,
+                DASCoreError,
+            ):
+                continue
+            if format_version:
+                return format_version
+        else:
+            msg = f"Could not determine file format of {man.source}"
+            raise UnknownFiberFormat(msg)
 
 
 def write(
@@ -586,5 +630,9 @@ def write(
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
     if not isinstance(patch_or_spool, dc.BaseSpool):
         patch_or_spool = dc.spool([patch_or_spool])
-    formatter.write(patch_or_spool, path, **kwargs)
+    with IOResourceManager(path) as man:
+        required_type = getattr(formatter.write, "_required_type")
+        path = man.get_resource(required_type)
+        func = formatter.write
+        func(patch_or_spool, path, _pre_cast=True, **kwargs)  # noqa
     return path
