@@ -89,17 +89,15 @@ def _get_required_type(required_type, arg_name=None):
     return required_type
 
 
-def get_handle_from_resource(uri, required_type=BinaryReader, cast_arg=None):
+def get_handle_from_resource(uri, required_type):
     """
     Get a handle for a file of preferred type.
 
     return uri if required type is not specified.
     """
-    required_type = _get_required_type(required_type, arg_name=cast_arg)
-    func = HANDLE_FUNCTIONS.get(required_type)
-    if func is None:
-        return uri
     if isinstance(uri, required_type):
+        return uri
+    if (func := HANDLE_FUNCTIONS.get(required_type)) is None:
         return uri
     return func(uri)
 

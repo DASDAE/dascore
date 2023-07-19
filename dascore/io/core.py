@@ -9,7 +9,7 @@ from functools import cache, cached_property, reduce, wraps
 from importlib.metadata import entry_points
 from operator import add
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Union, get_type_hints
 
 import pandas as pd
 from typing_extensions import Self
@@ -25,7 +25,7 @@ from dascore.exceptions import (
 )
 from dascore.utils.docs import compose_docstring
 from dascore.utils.hdf5 import HDF5ExtError
-from dascore.utils.io import get_handle_from_resource
+from dascore.utils.io import get_handle_from_resource, _get_required_type
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import scan_patches
 from dascore.utils.pd import _model_list_to_df
@@ -219,17 +219,15 @@ class _FiberIOManager:
 # ------------- Protocol for File Format support
 
 
-def _type_caster(func, arg_name):
+def _type_caster(func, sig, required_type, arg_name):
     """A decorator for casting types for arguments of cast ind."""
 
     @wraps(func)
     def _wraper(*args, **kwargs):
-        bound = inspect.signature(func).bind(*args, **kwargs)
+        bound = sig.bind(*args, **kwargs)
         new_kwargs = bound.arguments
-        if arg_name not in new_kwargs:
-            return func(*args, **kwargs)
         resource = new_kwargs.pop(arg_name)
-        new_kwargs[arg_name] = get_handle_from_resource(resource, func, arg_name)
+        new_kwargs[arg_name] = get_handle_from_resource(resource, required_type)
         # kwargs is included in bound arguments, need to re-attach
         new_kwargs.update(new_kwargs.pop("kwargs", {}))
         out = func(**new_kwargs)
@@ -255,10 +253,10 @@ class FiberIO:
     # A dict of methods which should implement automatic type casting.
     # and the index of the parameter to type cast.
     _automatic_type_casters = {
-        "read": "path",
-        "scan": "path",
-        "write": "path",
-        "get_format": "path",
+        "read": 1,
+        "scan": 1,
+        "write": 2,
+        "get_format": 1,
     }
 
     def read(self, path, **kwargs) -> SpoolType:
@@ -351,12 +349,17 @@ class FiberIO:
         manager: _FiberIOManager = getattr(cls.__mro__[1], "manager")
         manager.register_fiberio(cls())
         # decorate methods for type-casting
-        for name, param in cls._automatic_type_casters.items():
+        for name, param_ind in cls._automatic_type_casters.items():
             method = getattr(cls, name)
-            implements = method is not getattr(FiberIO, name)
-            if not implements:
+            implements_method = method is not getattr(FiberIO, name)
+            sig = inspect.signature(method)
+            arg_name = list(sig.parameters)[param_ind]
+            required_type = get_type_hints(method).get(arg_name)
+            # if the subclass doesn't implement this method, or there is no
+            # valid type-hint, just return.
+            if not implements_method or required_type is None:
                 continue
-            method_wrapped = _type_caster(method, param)
+            method_wrapped = _type_caster(method, sig, required_type, arg_name)
             setattr(cls, name, method_wrapped)
 
 

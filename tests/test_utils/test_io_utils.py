@@ -79,12 +79,6 @@ class TestGetHandleFromResource:
             out = get_handle_from_resource(fi, BinaryWriter)
             assert out is fi
 
-    def test_function_with_annotation(self, tmp_path):
-        """Functions with annotations should also work."""
-        path = tmp_path / "my_path.txt"
-        out = get_handle_from_resource(path, required_type=_dummy_func)
-        assert isinstance(out, str)
-
 
 class TestIOResourceManager:
     """Tests for the IO resource manager."""

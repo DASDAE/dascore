@@ -51,8 +51,8 @@ class _FiberCaster(FiberIO):
         return False
 
     def scan(self, not_path: BinaryReader):
-        """Ensure an off-name still works like it did before."""
-        assert isinstance(not_path, Path)
+        """Ensure an off-name still works for type casting."""
+        assert isinstance(not_path, BinaryWriter)
 
 
 class TestFormatManager:
@@ -235,7 +235,7 @@ class TestCastType:
         # this passes if it doesnt raise.
         io.write(random_spool, path)  # noqa
 
-    def test_non_standard_name(self, tmp_path):
+    def test_non_standard_name(self, dummy_text_file):
         """Ensure non-standard names still work."""
         io = _FiberCaster()
-        io.scan(tmp_path)
+        io.scan(dummy_text_file)
