@@ -19,7 +19,7 @@ from dascore.constants import ONE_SECOND
 from dascore.exceptions import MissingOptionalDependency
 
 
-def register_func(list_or_dict: Union[list, dict], key: Optional[str] = None):
+def register_func(list_or_dict: Union[list, dict], key=None):
     """
     Decorator for registering a function name in a list or dict.
 

@@ -2,10 +2,10 @@
 Base functionality for reading, writing, determining file formats, and scanning
 Das Data.
 """
+import inspect
 import os.path
-from abc import ABC
 from collections import defaultdict
-from functools import cache, cached_property, reduce
+from functools import cache, cached_property, reduce, wraps
 from importlib.metadata import entry_points
 from operator import add
 from pathlib import Path
@@ -20,11 +20,12 @@ from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import (
     DASCoreError,
     InvalidFiberFile,
-    InvalidFileFormatter,
+    InvalidFiberIO,
     UnknownFiberFormat,
 )
 from dascore.utils.docs import compose_docstring
 from dascore.utils.hdf5 import HDF5ExtError
+from dascore.utils.io import get_handle_from_resource
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import scan_patches
 from dascore.utils.pd import _model_list_to_df
@@ -218,7 +219,28 @@ class _FiberIOManager:
 # ------------- Protocol for File Format support
 
 
-class FiberIO(ABC):
+def _type_caster(func, arg_name):
+    """A decorator for casting types for arguments of cast ind."""
+
+    @wraps(func)
+    def _wraper(*args, **kwargs):
+        bound = inspect.signature(func).bind(*args, **kwargs)
+        new_kwargs = bound.arguments
+        if arg_name not in new_kwargs:
+            return func(*args, **kwargs)
+        resource = new_kwargs.pop(arg_name)
+        new_kwargs[arg_name] = get_handle_from_resource(resource, func, arg_name)
+        # kwargs is included in bound arguments, need to re-attach
+        new_kwargs.update(new_kwargs.pop("kwargs", {}))
+        out = func(**new_kwargs)
+        # if resource has a seek go back to 0.
+        getattr(resource, "seek", lambda x: None)(0)
+        return out
+
+    return _wraper
+
+
+class FiberIO:
     """
     An interface which adds support for a given filer format.
 
@@ -230,6 +252,15 @@ class FiberIO(ABC):
     preferred_extensions: tuple[str] = ()
     manager = _FiberIOManager("dascore.fiber_io")
 
+    # A dict of methods which should implement automatic type casting.
+    # and the index of the parameter to type cast.
+    _automatic_type_casters = {
+        "read": "path",
+        "scan": "path",
+        "write": "path",
+        "get_format": "path",
+    }
+
     def read(self, path, **kwargs) -> SpoolType:
         """
         Load data from a path.
@@ -238,7 +269,7 @@ class FiberIO(ABC):
         example, distance=(100, 200) would only read data with distance from
         100 to 200.
         """
-        msg = f"FileFormatter: {self.name} has no read method"
+        msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
     def scan(self, path) -> List[PatchFileSummary]:
@@ -251,7 +282,7 @@ class FiberIO(ABC):
         try:
             spool = self.read(path)
         except NotImplementedError:
-            msg = f"FileFormatter: {self.name} has no scan or read method"
+            msg = f"FiberIO: {self.name} has no scan or read method"
             raise NotImplementedError(msg)
         out = []
         for pa in spool:
@@ -265,7 +296,7 @@ class FiberIO(ABC):
         """
         Write the spool to disk
         """
-        msg = f"FileFormatter: {self.name} has no write method"
+        msg = f"FiberIO: {self.name} has no write method"
         raise NotImplementedError(msg)
 
     def get_format(self, path) -> Union[tuple[str, str], bool]:
@@ -275,8 +306,22 @@ class FiberIO(ABC):
         This should only work if path is the supported file format, otherwise
         raise UnknownFiberError or return False.
         """
-        msg = f"FileFormatter: {self.name} has no get_version method"
+        msg = f"FiberIO: {self.name} has no get_version method"
         raise NotImplementedError(msg)
+
+    @property
+    def implements_read(self) -> bool:
+        """
+        Returns True if the subclass implements its own scan method else False.
+        """
+        return self.read.__func__ is not FiberIO.read
+
+    @property
+    def implements_write(self) -> bool:
+        """
+        Returns True if the subclass implements its own scan method else False.
+        """
+        return self.write.__func__ is not FiberIO.write
 
     @property
     def implements_scan(self) -> bool:
@@ -301,10 +346,18 @@ class FiberIO(ABC):
         # check that the subclass is valid
         if not cls.name:
             msg = "You must specify the file format with the name field."
-            raise InvalidFileFormatter(msg)
+            raise InvalidFiberIO(msg)
         # register formatter
         manager: _FiberIOManager = getattr(cls.__mro__[1], "manager")
         manager.register_fiberio(cls())
+        # decorate methods for type-casting
+        for name, param in cls._automatic_type_casters.items():
+            method = getattr(cls, name)
+            implements = method is not getattr(FiberIO, name)
+            if not implements:
+                continue
+            method_wrapped = _type_caster(method, param)
+            setattr(cls, name, method_wrapped)
 
 
 def read(
@@ -477,7 +530,6 @@ def get_format(
         The known file format.
     file_version
         The known file version.
-
 
     Returns
     -------

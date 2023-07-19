@@ -2,33 +2,57 @@
 Test for basic IO and related functions.
 """
 import copy
+from pathlib import Path
+from typing import Union
 
 import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import (
-    InvalidFiberFile,
-    InvalidFileFormatter,
-    UnknownFiberFormat,
-)
+from dascore.constants import SpoolType
+from dascore.exceptions import InvalidFiberFile, InvalidFiberIO, UnknownFiberFormat
 from dascore.io.core import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
+from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.time import to_datetime64
 
 
-class FiberFormatTestV1(FiberIO):
+class _FiberFormatTestV1(FiberIO):
     """A test format v1"""
 
     name = "_TestFormatter"
     version = "1"
 
 
-class FiberFormatTestV2(FiberIO):
+class _FiberFormatTestV2(FiberIO):
     """A test format v2"""
 
     name = "_TestFormatter"
     version = "2"
+
+
+class _FiberCaster(FiberIO):
+    """A test class for casting inputs to certain types."""
+
+    name = "_TestFormatter"
+    version = "2"
+
+    def read(self, path: BinaryReader, **kwargs) -> SpoolType:
+        """Just ensure read was cast to correct type"""
+        assert isinstance(path, BinaryReader)
+
+    def write(self, spool: SpoolType, path: BinaryWriter):
+        """ditto for write"""
+        assert isinstance(path, BinaryWriter)
+
+    def get_format(self, path: Path) -> Union[tuple[str, str], bool]:
+        """and get format"""
+        assert isinstance(path, Path)
+        return False
+
+    def scan(self, not_path: BinaryReader):
+        """Ensure an off-name still works like it did before."""
+        assert isinstance(not_path, Path)
 
 
 class TestFormatManager:
@@ -65,8 +89,8 @@ class TestFormatManager:
         # ensure all formats are represented.
         assert len(format_array) == len(all_formatters)
         # ensure V2 of the Test formatter appears first
-        v2_arg = np.argmax([isinstance(x, FiberFormatTestV2) for x in ext_formatters])
-        v1_arg = np.argmax([isinstance(x, FiberFormatTestV1) for x in ext_formatters])
+        v2_arg = np.argmax([isinstance(x, _FiberFormatTestV2) for x in ext_formatters])
+        v1_arg = np.argmax([isinstance(x, _FiberFormatTestV1) for x in ext_formatters])
         assert v2_arg < v1_arg
 
     def test_format_raises_unknown_format(self, format_manager):
@@ -93,7 +117,7 @@ class TestFormatManager:
 
     def test_format_multiple_versions(self, format_manager):
         """Ensure multiple versions are returned when only format is specified."""
-        file_format = FiberFormatTestV1.name
+        file_format = _FiberFormatTestV1.name
         out = list(format_manager.yield_fiberio(format=file_format))
         assert len(out) == 2
 
@@ -111,7 +135,7 @@ class TestFormatter:
     def test_empty_formatter_raises(self):
         """An empty formatter can't exist; it at least needs a name."""
 
-        with pytest.raises(InvalidFileFormatter):
+        with pytest.raises(InvalidFiberIO):
 
             class empty_formatter(FiberIO):
                 """formatter with no name"""
@@ -182,14 +206,36 @@ class TestScan:
 
     def test_implements_scan(self):
         """Test for checking is subclass implements_scan"""
-        assert not FiberFormatTestV2().implements_scan
-        assert not FiberFormatTestV1().implements_scan
+        assert not _FiberFormatTestV2().implements_scan
+        assert not _FiberFormatTestV1().implements_scan
         dasdae = FiberIO.manager.get_fiberio("DASDAE")
         assert dasdae.implements_scan
 
     def test_implements_get_format(self):
         """Test for checking is subclass implements_get_format"""
-        assert not FiberFormatTestV2().implements_get_format
-        assert not FiberFormatTestV1().implements_get_format
+        assert not _FiberFormatTestV2().implements_get_format
+        assert not _FiberFormatTestV1().implements_get_format
         dasdae = FiberIO.manager.get_fiberio("DASDAE")
         assert dasdae.implements_get_format
+
+
+class TestCastType:
+    """Test suite to ensure types are intelligently cast to type hints."""
+
+    def test_read(self, dummy_text_file):
+        """ensure write casts type."""
+        io = _FiberCaster()
+        # this passes if it doesnt raise.
+        io.read(dummy_text_file)
+
+    def test_write(self, tmp_path, random_spool):
+        """Ensure write casts type."""
+        path = tmp_path / "write_fiber_cast.txt"
+        io = _FiberCaster()
+        # this passes if it doesnt raise.
+        io.write(random_spool, path)  # noqa
+
+    def test_non_standard_name(self, tmp_path):
+        """Ensure non-standard names still work."""
+        io = _FiberCaster()
+        io.scan(tmp_path)
