@@ -53,6 +53,10 @@ COMMON_IO_READ_TESTS = {
 }
 
 
+# This tuple is for fiber io which support a write method.
+COMMON_IO_WRITE_TESTS = ()
+
+
 @cache
 def _cached_read(path, io=None):
     """

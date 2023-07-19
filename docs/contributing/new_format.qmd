@@ -1,15 +1,24 @@
 ---
 title: Adding a New Format
 ---
-Several steps are required to add support for a new file format. To demonstrate, imagine adding support for a
-format called `jingle` which conventionally uses a file extension of `jgl`.
+
+This page details how to add IO support for a new format to DASCore. The steps are:
+
+1. Create a new module, subclass `FiberIO`, and implement the appropriate methods.
+
+2. Find a small test file to include in DASCore's test suite.
+
+3. Register the new `FiberIO` subclass(es) for generic tests.
+
+4. (Optional) Write format specific tests for the new format.
+
+5. Register the new `FiberIO` subclasses with DASCore's plugins.
+
+To demonstrate this process, imagine adding support for a format called `jingle` which conventionally uses a file extension of `jgl`.
 
 ## Adding a New IO Module
 
-First, we create a new io module called 'jingle' in DASCore's io module (dascore/io/jingle).
-Make sure there is a \__init__.py file in this module whose docstring
-describes basic use of the format and lists any non-obvious implementation details
-that might debug/improve the parser.
+First, we create a new io module called 'jingle' in DASCore's io module (dascore/io/jingle). Make sure there is a \__init__.py file in this module whose docstring describes basic use of the format and lists any non-obvious implementation details that might debug/improve the parser.
 
 contents of `dascore/io/jingle/__init__.py`
 ```{python}
@@ -24,17 +33,15 @@ Examples
 --------
 import dascore as dc
 
-jingle = dc.read('path_to_file.jgl')
+jingle = dc.spool('path_to_file.jgl')
 """
 ```
 
-Next, create a `core.py` file in the new module (dascore/io/jingle/core.py). Start by creating
-a class called `JingleIO`, or better yet, `JingleIOV1`, which subclasses `dascore.io.core.FiberIO.
-Then all you need to do is implement the supported methods.
+Next, create a `core.py` file in the new module (dascore/io/jingle/core.py). Start by creating a class called `JingleIOV1` which subclasses (`dascore.io.core.FiberIO`)[`dascore.io.core.FiberIO`]. Now, on your subclass, you need to implement the supported methods.
 
-Contents of `dascore/io/jingle/core.py`
+Contents of `dascore/io/jingle/core.py`:
 
-```{python}
+```{python filename="dascore/io/jingle/core.py"}
 """
 Core module for jingle file format support.
 """
@@ -49,11 +56,10 @@ class JingleV1(FiberIO):
     # you must specify the format name using the name attribute
     name = 'jingle'
     # you can also define which file extensions are expected like so.
-    # this will speed up determining the formats of files if not specified.
+    # this will speed up DASCore's automatic file format determination.
     preferred_extensions = ('jgl',)
-    # also specifying a version is good practice so when version 2 is
-    # released you can just make another class in the same module named
-    # JingleV2.
+    # also specify a version so when version 2 is released you can
+    # just make another class in the same module named JingleV2.
     version = '1'
 
     def read(self, path, jingle_param=1, **kwargs):
@@ -88,92 +94,127 @@ class JingleV1(FiberIO):
         """
 ```
 
-All 4 methods are optional; some formats will only support reading,
-others only writing. If `is_format` is not implemented the format will not
-be auto-detectable.
+All 4 methods are optional; some formats will only support reading, others only writing. If `is_format` is not implemented the format will not be auto-detectable, meaning you will have to manually pass the format to [`read`](`dascore.read`) and [`spool`](`dascore.spool`).
 
 :::{.callout-warning}
-It is very important that the `scan` method returns *exactly* the same min and max
-values for each dimension as the trace attrs created by `read`. If this is not
-the case, the lazy merge planning done by spool can be inaccurate!
+It is very important that the `scan` method returns *exactly* the same patch information as reading the patch would, otherwise the lazy merge planning done by spool can be wrong!
 :::
 
 
+## Support for Streams/Buffers
+
+Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase), sometimes referred to as buffers, or accept an opened HDF5 file in the form of a `pytables.File` object. There are a few reasons for this:
+
+* More types of inputs can be supported, including steaming file contents from the web or in-memory streams like [`BytesIO`](https://docs.python.org/3/library/io.html#io.BytesIO).
+* It is usually more efficient since open-file handles can be automatically reused by DASCore.
+
+To make this easy, DASCore will automatically manager and serve the right input to `FiberIO` methods based on type hints. Here are the ones currently supported, all of which are imported from [dascore.io](`dascore.io`) :
+
+1. [BinaryReader](`dascore.io.BinaryReader`) - A stream-like object which must have a `read` and `seek` method.
+
+2. [BinaryWriter](`dascore.io.BinaryWriter`) - A stream-like object which must have a `write` method.
+
+3. [HDF5Reader](`dascore.io.HDF5Reader`) - An instance of pytables.File which is open in read mode.
+
+4. [HDF5Writer](`dascore.io.HDF5Writer`) - An instance of pytables.File which is open in write or append (append is default) mode.
+
+Deciding which to use depends on whether the file is an HDF5 or binary format. Assuming Jingle is a binary file format, here is an implementation which supports binary streams (only showing the `read` method for brevity):
+
+
+```{python filename="dascore/io/jingle/core.py"}
+"""
+Core module for jingle file format support.
+"""
+import dascore.exceptions
+from dascore.io import FiberIO, BinaryReader, BinaryWriter
+
+
+class JingleV1(FiberIO):
+    """
+    An IO class supporting version 1 of the jingle format.
+    """
+    name = 'jingle'
+    preferred_extensions = ('jgl',)
+    version = '1'
+
+    def read(self, stream: BinaryReader, jingle_param=1, **kwargs):
+        """
+        get_format now accepts a stream, which DASCore will ensure is provided.
+        """
+        # raise an error if we get the wrong type
+        assert isinstance(stream, BinaryReader)
+        # read first 50 bytes (maybe they have header info)
+        first_50_bytes = stream.read(50)
+        # seek back to byte 20
+        stream.seek(20)
+        # etc.
+
+```
+
+Now, whether we call [`dascore.read`](`dascore.read`) or `JingleV1.read` a readable binary stream will be provided to our implementation. For example:
+
+```{python filename="JingleIO Demonstration"}
+from pathlib import Path
+
+import numpy as np
+
+import dascore as dc
+
+path = Path("test_numpy_binary_file.npy")
+# make a binary file to read
+array = np.random.random(100)
+np.save(path, array)
+
+out = dc.read(path, file_format="jingle", file_version="1")
+jingle_io = JingleV1()
+
+out = jingle_io.read(path)
+
+path.unlink()  # cleanup test file
+```
+
 ## Writing Tests
 
-Next we need to write tests for the format (you weren't thinking of skipping
-this step were you!?). The tests should go in: `test/test_io/test_jingle.py`.
-The hardest part is finding a *small* (typically no more than 1-2 mb) file to
-include in the test suite. The [Adding test data](adding_test_data.qmd) section
-details how to do this.
+Next we need to write tests for the format (you weren't thinking of skipping this step were you!?). The hardest part of testing new file formats is finding a *small* (typically no more than 10 ish mb) file to include in the test suite. Once you have such a file, [Adding test data](adding_test_data.qmd) details how to add it to the registry.
 
-Assuming you added a file called "jingle_test_file.jgl", then the test
-file might look something like this:
+Once the test file is added to the data registry, you can register the new format so a suite of tests run automatically. This is done by adding the format to the appropriate data structures in `tests/test_io/test_common_io.py`. The comments at the top of the file will guide you through this process.
 
-contents of tests/test_io/test_jingle.py
+For some formats, the generic tests will be sufficient. For others, additional test cases may be required. These are placed in test_io folder. In our example, we would create the folder `dascore/tests/test_io/test_jingle`. Assuming you added a file called "jingle_test_file.jgl" to DASCore's data registry, then we could create the test file `dascore/tests/test_io/test_jingle/test_jingle.py` and its contents might look something like this:
 
-```{python}
 
+```{python filename="tests/test_io/test_jingle/test_jingle.py"}
+#| eval: false
 import pytest
 
 import dascore
 from dascore.utils.downloader import fetch
+from dascore.io.jingle import JingleV1
+
+@pytest.fixture(scope='class')
+def jingle_file_path():
+    """Return the path to the test jingle file."""
+    # fetch will ensure the data file is downloaded and cached.
+    path = fetch("jingle_test_file.jgl")
+    return path
 
 
 class TestJingleIO:
-    """Tests for jingle IO format."""
+    """Tests specific to the jingle IO format."""
 
-    @pytest.fixture(scope='class')
-    def jingle_file_path(self):
-        """Return the path to the test jingle file."""
-        path = fetch("jingle_test_file.jgl")
-        return path
-
-    @pytest.fixture(scope='class')
-    def jingle_patch(self, jingle_file_path):
-        """Read the jingle test data"""
-        return dascore.read(jingle_file_path, file_format='jingle')[0]
-
-    def test_read(self, jingle_file_path):
-        """Ensure the test file can be read."""
-        # fetch will download the file (if not already downloaded) and
-        # test read without specifying format
-        out1 = dascore.read(jingle_file_path)
-        # next assert things about the output, maybe len, attributes etc.
-        assert len(out1) == 1
-        # test read specifying format
-        out2 = dascore.read(jingle_file_path, file_format='jingle')
+    def test_issue_xx(self, jingle_file_path):
+        """Test to capture a specific reported issue with this format."""
         ...
 
-    def test_write(self, tmp_path_factory, jingle_patch):
-        """Ensure jingle format can be written."""
-        out_path = tmp_path_factory.mktemp('jingle') / 'jingle_test.jgl'
-        jingle_patch.io.write(jingle_patch, out_path)
-        # make sure the new file exists and has a size
-        assert out_path.exists()
-        assert out_path.stat().size > 0
-
-    def test_scan(self, jingle_file_path):
-        """Tests for scanning a jingle file"""
-        scan = dascore.scan(jingle_file_path)
-        assert len(scan) == 1
-        # should also test the scan time/distance min/max values are
-        # the same as the ones in the patch returned by read
-
-    def test_is_format(self, jingle_file_path):
-        """Tests for automatically determining a jingle format."""
-        file_format, version = dascore.get_format(jingle_file_path)
-        assert file_format.lower() == 'jingle'
-
+    def test_read_option(self, jingle_file_path):
+        """Tests for a jingle-specific read option"""
+        jingle = JingleV1()
+        patch = jingle.read(jingle_file_path, special_option=2)
+        ...
 ```
 
 ## Register Plugin
 
-Now that the Jingle format support is implemented and tested, the final step is to
-register the jingle core module in DASCore's entry points. This is done under the
-[project.entry-points."dascore.fiber_io"] section in dascore's
-pyproject.toml file. For example, after adding jingle the pyproject.toml section
-might look like this:
+Now that the Jingle format support is implemented and tested, the final step is to register the jingle `FiberIO` subclasses in DASCore's entry points. This is done under the [project.entry-points."dascore.fiber_io"] section in DASCore's `pyproject.`toml file. For example, after adding jingle, the `pyproject.toml` section might look like this:
 
 ```default
 [project.entry-points."dascore.fiber_io"]
@@ -184,5 +225,6 @@ DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
 JINGLE__V1 = "dascore.io.jingle.core:JingleV1"
 ```
 
-Note the name of the format is always on the left side of a double underscore
-if the version is included (recommended).
+:::{.callout-note}
+The name and version of the format are separated by a double underscore.
+:::
