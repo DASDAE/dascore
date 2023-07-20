@@ -150,7 +150,7 @@ class JingleV1(FiberIO):
         # raise an error if we get the wrong type
         assert isinstance(resource, BinaryReader)
         # read first 50 bytes (maybe they have header info)
-        first_50_bytes = resourec.read(50)
+        first_50_bytes = resource.read(50)
         # seek back to byte 20
         resource.seek(20)
         # etc.
