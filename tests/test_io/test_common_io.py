@@ -18,6 +18,7 @@ import pytest
 import dascore as dc
 from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
+from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.quantx import QuantXV2
 from dascore.io.tdms import TDMSFormatterV4713
@@ -55,9 +56,10 @@ COMMON_IO_READ_TESTS = {
     QuantXV2(): ("opta_sense_quantx_v2.h5",),
 }
 
-
-# This tuple is for fiber io which support a write method.
-COMMON_IO_WRITE_TESTS = ()
+# This tuple is for fiber io which support a write method and can write
+# generic patches. If the patch has to be in some special form, for example
+# only flat patches can be written to WAV, don't put it here.
+COMMON_IO_WRITE_TESTS = (PickleIO(), DASDAEV1())
 
 
 @cache
@@ -107,6 +109,12 @@ def read_spool(data_file_path):
     """Read each file into a spool."""
     out = dc.read(data_file_path)
     return out
+
+
+@pytest.fixture(scope="session", params=COMMON_IO_WRITE_TESTS)
+def fiber_io_writer(request):
+    """Meta fixture for IO that implement write."""
+    return request.param
 
 
 # --- Helper functions
@@ -266,6 +274,31 @@ class TestScan:
         for attrs in attr_list:
             assert attrs.file_format == io.name
             assert attrs.file_version == io.version
+
+
+class TestWrite:
+    """Tests for writing data to disk."""
+
+    @pytest.fixture(scope="session")
+    def written_fiber_path(self, random_patch, fiber_io_writer, tmp_path_factory):
+        """Write patch to disk, return path."""
+        tmp_path = Path(tmp_path_factory.mktemp("generic_write_test"))
+        pre_ext = list(iterate(fiber_io_writer.preferred_extensions))
+        ext = "" if not len(pre_ext) else pre_ext[0]
+        path = tmp_path / f"{fiber_io_writer.name}.{ext}"
+        fiber_io_writer.write(random_patch, path)
+        return path
+
+    def test_write_random_patch(self, written_fiber_path):
+        """Ensure the random patch can be written."""
+        assert written_fiber_path.exists()
+
+    def test_roundtrip(self, random_patch, written_fiber_path, fiber_io_writer):
+        """If the writer can read, ensure round-tripping patch is equal."""
+        if not fiber_io_writer.implements_read:
+            pytest.skip("FiberIO doesn't implement read")
+        new = fiber_io_writer.read(written_fiber_path)[0]
+        assert new == random_patch
 
 
 class TestIntegration:
