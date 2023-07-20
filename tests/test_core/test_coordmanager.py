@@ -400,6 +400,13 @@ class TestSelect:
             axis = cm.dim_map[name].index(dim)
             assert coord.shape[axis] == expected_len
 
+    def test_select_handles_non_dim_kwargs(self, basic_coord_manager):
+        """The coord manager should handle (supress) non dim keyword args."""
+        ar = np.ones(basic_coord_manager.shape)
+        out, new = basic_coord_manager.select(bob=(10, 20), array=ar)
+        assert new.shape == ar.shape
+        assert out == basic_coord_manager
+
 
 class TestEquals:
     """Tests for coord manager equality"""

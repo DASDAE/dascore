@@ -3,6 +3,7 @@ A 2D trace object.
 """
 from __future__ import annotations
 
+import warnings
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Union
 
 import numpy as np
@@ -320,7 +321,12 @@ class Patch:
     sort_coords = dascore.proc.sort_coords
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
-    assign_coords = dascore.proc.update_coords
+
+    def assign_coords(self, *args, **kwargs):
+        """Deprecated method for update_coords"""
+        msg = "assign_coords is deprecated, use update_coords instead."
+        warnings.warn(msg, DeprecationWarning)
+        return self.update_coords(*args, **kwargs)
 
     set_units = dascore.proc.set_units
     convert_units = dascore.proc.convert_units

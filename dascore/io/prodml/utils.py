@@ -1,8 +1,10 @@
 """Utilities for terra15."""
+from typing import List
 
 import numpy as np
 
 import dascore as dc
+from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.core.schema import PatchAttrs
 
@@ -78,7 +80,7 @@ def _get_data_unit_and_type(node):
     return out
 
 
-def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs):
+def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs) -> List[PatchAttrs]:
     """Scan a prodML file, return metadata."""
     base_info = dict(
         gauge_length=fi.root.Acquisition._v_attrs.GaugeLength,
@@ -106,10 +108,13 @@ def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs):
 
 def _get_data_attr(attrs, node, time, distance):
     """Get a new attributes with adjusted time/distance and data array."""
-    d_coord, d_ind = attrs["_distance_coord"].select(distance)
-    t_coord, t_ind = attrs["_time_coord"].select(time)
-    data = node.RawData[t_ind, d_ind]
-    return data, {"time": t_coord, "distance": d_coord}
+    coords = {
+        "distance": attrs["_distance_coord"],
+        "time": attrs["_time_coord"],
+    }
+    cm = get_coord_manager(coords, dims=("time", "distance"))
+    new_cm, data = cm.select(array=node.RawData, time=time, distance=distance)
+    return data, new_cm
 
 
 def _read_prodml(fi, distance=None, time=None):

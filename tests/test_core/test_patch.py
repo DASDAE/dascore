@@ -558,7 +558,7 @@ class TestCoords:
         dist = random_patch.coords["distance"]
         lat = np.arange(0, len(dist)) * 0.001 - 109.857952
         # add a single coord
-        out = random_patch.assign_coords(latitude=("distance", lat))
+        out = random_patch.update_coords(latitude=("distance", lat))
         return out
 
     def test_add_single_dim_one_coord(self, random_patch_with_lat):
@@ -668,3 +668,14 @@ class TestAssertHasCoords:
         dims = random_patch.dims
         random_patch.assert_has_coords(dims[0])
         random_patch.assert_has_coords(dims)
+
+
+class TestDeprecations:
+    """Ensure deprecations are issued."""
+
+    def test_assign_coords_deprecated(self, random_patch):
+        """assign_coords should issue dep. warning."""
+        new_coord = random_patch.coords["time"]
+
+        with pytest.warns(DeprecationWarning):
+            random_patch.assign_coords(new_time=("time", new_coord))

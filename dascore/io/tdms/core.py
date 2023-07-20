@@ -1,14 +1,13 @@
 """
 IO module for reading Silixa's TDMS DAS data format.
 """
-from pathlib import Path
 from typing import List, Optional, Union
 
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.schema import PatchFileSummary
-from dascore.io.core import FiberIO
+from dascore.io import BinaryReader, FiberIO
 
 from .utils import _get_data, _get_data_node, _get_default_attrs, _get_version_str
 
@@ -23,40 +22,38 @@ class TDMSFormatterV4713(FiberIO):
     preferred_extensions = ("tdms",)
     LEAD_IN_LENGTH = 28
 
-    def get_format(self, path: Union[str, Path]) -> Union[tuple[str, str], bool]:
+    def get_format(self, stream: BinaryReader) -> Union[tuple[str, str], bool]:
         """
         Return a tuple of (TDMS, version) if TDMS else False.
 
         Parameters
         ----------
-        path
+        stream
             A path to the file which may contain silixa data.
         """
 
         try:
-            with open(path, "rb") as tdms_file:
-                version_str = _get_version_str(tdms_file)
-                if version_str:
-                    return "TDMS", version_str
-                else:
-                    return False
+            version_str = _get_version_str(stream)
+            if version_str:
+                return "TDMS", version_str
+            else:
+                return False
         except Exception:  # noqa
             return False
 
-    def scan(self, path: Union[str, Path]) -> List[PatchFileSummary]:
+    def scan(self, resource: BinaryReader) -> List[PatchFileSummary]:
         """
         Scan a silixa tdms file, return summary information about the file's contents.
         """
-        with open(path, "rb") as tdms_file:
-            out = _get_default_attrs(tdms_file)
-            out["path"] = path
-            out["file_format"] = self.name
-            out["file_version"] = self.version
-            return [PatchFileSummary(**out)]
+        out = _get_default_attrs(resource)
+        out["path"] = getattr(resource, "name", "")
+        out["file_format"] = self.name
+        out["file_version"] = self.version
+        return [PatchFileSummary(**out)]
 
     def read(
         self,
-        path: Union[str, Path],
+        resource: BinaryReader,
         time: Optional[tuple[timeable_types, timeable_types]] = None,
         distance: Optional[tuple[float, float]] = None,
         **kwargs
@@ -64,22 +61,19 @@ class TDMSFormatterV4713(FiberIO):
         """
         Read a silixa tdms file, return a DataArray.
         """
-        with open(path, "rb") as tdms_file:
-            # get all data, total amount of samples and associated attributes
-            data_node, channel_length, attrs_full = _get_data_node(
-                tdms_file, LEAD_IN_LENGTH=28
-            )
-            attrs = _get_default_attrs(tdms_file, attrs_full)
-            # get time and distance coordinates.
-            time_coord = attrs_full["_time_coord"]
-            dist_coord = attrs_full["_distance_coord"]
-            # Get data in distance and time requested and associated time
-            # and distance arrays
-            data, tar, dar = _get_data(
-                time, distance, time_coord, dist_coord, data_node
-            )
-            dims = ("time", "distance")
-            _coords = {"time": tar, "distance": dar}
-            # Update time and distance attributes to match requested parameters
-            patch = Patch(data=data, coords=_coords, attrs=attrs, dims=dims)
-            return dc.spool(patch)
+        # get all data, total amount of samples and associated attributes
+        data_node, channel_length, attrs_full = _get_data_node(
+            resource, LEAD_IN_LENGTH=28
+        )
+        attrs = _get_default_attrs(resource, attrs_full)
+        # get time and distance coordinates.
+        time_coord = attrs_full["_time_coord"]
+        dist_coord = attrs_full["_distance_coord"]
+        # Get data in distance and time requested and associated time
+        # and distance arrays
+        data, tar, dar = _get_data(time, distance, time_coord, dist_coord, data_node)
+        dims = ("time", "distance")
+        _coords = {"time": tar, "distance": dar}
+        # Update time and distance attributes to match requested parameters
+        patch = Patch(data=data, coords=_coords, attrs=attrs, dims=dims)
+        return dc.spool(patch)

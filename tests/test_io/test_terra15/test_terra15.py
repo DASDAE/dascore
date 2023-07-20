@@ -9,6 +9,7 @@ import pytest
 import tables
 
 import dascore as dc
+from dascore.io.terra15 import Terra15FormatterV4
 
 
 class TestTerra15:
@@ -63,3 +64,29 @@ class TestTerra15:
         assert patch.attrs.time_units is not None
         assert patch.get_coord("time").units == patch.attrs.time_units
         assert patch.get_coord("distance").units == patch.attrs.distance_units
+
+    def test_hdf5file_not_terra15(self, generic_hdf5):
+        """Assert that the generic hdf5 file is not a terra15."""
+        parser = Terra15FormatterV4()
+        assert not parser.get_format(generic_hdf5)
+
+
+class TestTerra15Unfinished:
+    """Test for reading files with zeroes filled at the end."""
+
+    @pytest.fixture(scope="class")
+    def patch_unfinished(self, terra15_das_unfinished_path):
+        """Return the patch with zeroes at the end."""
+        out = dc.spool(terra15_das_unfinished_path)[0]
+        return out
+
+    def test_zeros_gone(self, patch_unfinished):
+        """No zeros should exist in the data."""
+        data = patch_unfinished.data
+        all_zero_rows = np.all(data == 0, axis=1)
+        assert not np.any(all_zero_rows)
+
+    def test_monotonic_time(self, patch_unfinished):
+        """Ensure the time is increasing."""
+        time = patch_unfinished.coords["time"]
+        assert np.all(np.diff(time) >= np.timedelta64(0, "s"))

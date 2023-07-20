@@ -20,6 +20,7 @@ class PickleIO(FiberIO):
     """
 
     name = "PICKLE"
+    preferred_extensions = ("pkl", "pickle")
 
     def _header_is_dascore(self, byte_stream):
         """Return True if the first few bytes mention dascore classes."""
@@ -27,16 +28,16 @@ class PickleIO(FiberIO):
         spool_or_patch = b"Spool" in byte_stream or b"Patch" in byte_stream
         return has_dascore and spool_or_patch
 
-    def get_format(self, path: Union[str, Path]) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: Union[str, Path]) -> Union[tuple[str, str], bool]:
         """
         Return True if file contains a pickled Patch or Spool.
 
         Parameters
         ----------
-        path
+        resource
             A path to the file which may contain terra15 data.
         """
-        with open(path, "rb") as fp:
+        with open(resource, "rb") as fp:
             try:
                 start = fp.read(100)  # read first 100 bytes, look for class names
                 if self._header_is_dascore(start):
@@ -48,13 +49,13 @@ class PickleIO(FiberIO):
             except (pickle.UnpicklingError, FileNotFoundError, IndexError):
                 return False
 
-    def read(self, path, **kwargs):
+    def read(self, resource, **kwargs):
         """Read a Patch/Spool from disk."""
-        with open(path, "rb") as fi:
+        with open(resource, "rb") as fi:
             out = pickle.load(fi)
         return dascore.spool(out)
 
-    def write(self, patch, path, **kwargs):
+    def write(self, patch, resource, **kwargs):
         """Write a Patch/Spool to disk."""
-        with open(path, "wb") as fi:
+        with open(resource, "wb") as fi:
             pickle.dump(patch, fi)

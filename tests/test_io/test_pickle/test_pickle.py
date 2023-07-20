@@ -15,7 +15,7 @@ def pickle_patch_path(tmp_path_factory, random_patch):
     return path
 
 
-class TestIsPickle:
+class TestGetFormat:
     """Test detecting pickle format."""
 
     def test_detect_file(self, pickle_patch_path):
@@ -25,6 +25,11 @@ class TestIsPickle:
         assert out
         assert out[0] == "PICKLE"
 
+    def test_not_pickle(self, generic_hdf5):
+        """Ensure non-pickle file returns false."""
+        parser = PickleIO()
+        assert not parser.get_format(generic_hdf5)
+
     def test_read_pickle(self, pickle_patch_path, random_patch):
         """Ensure a pickle file can be read."""
         out = dc.read(pickle_patch_path)
@@ -32,6 +37,11 @@ class TestIsPickle:
         assert len(out) == 1
         assert isinstance(out[0], dc.Patch)
         assert random_patch == out[0]
+
+    def test_file_not_there(self):
+        """Get format should return false if the file doesn't exist."""
+        parser = PickleIO()
+        assert not parser.get_format("surely_not_a_file_that_exists")
 
 
 class TestScan:

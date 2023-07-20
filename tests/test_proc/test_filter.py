@@ -147,6 +147,11 @@ class TestPassFilter:
         assert p.pass_filter(time=(None, 20)) == p.pass_filter(time=(..., 20))
         assert p.pass_filter(time=(10, None)) == p.pass_filter(time=(10, ...))
 
+    def test_non_zero_phase(self, random_patch):
+        """Enssure non-zero-phase filter logic runs."""
+        out = random_patch.pass_filter(time=(..., 20), zerophase=False)
+        assert isinstance(out, dc.Patch)
+
 
 class TestSobelFilter:
     """Simple tests to make sure Sobel filter runs."""

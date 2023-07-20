@@ -851,6 +851,12 @@ class TestMonotonicCoord:
         empty = evenly_sampled_time_delta_coord.empty()
         assert pd.isnull(empty.max())
 
+    def test_single_value(self):
+        """A single value coord should be considered sorted."""
+        coord = get_coord(values=np.array([1]))
+        assert coord.sorted
+        assert not coord.reverse_sorted
+
 
 class TestNonOrderedArrayCoords:
     """Tests for non-ordered array coords."""

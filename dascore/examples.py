@@ -145,7 +145,7 @@ def _random_patch_lat_lon():
     lat = np.arange(0, len(dist)) * 0.001 - 109.857952
     lon = np.arange(0, len(dist)) * 0.001 + 41.544654
     # add a single coord
-    out = random_patch.assign_coords(
+    out = random_patch.update_coords(
         latitude=("distance", lat), longitude=("distance", lon)
     )
     return out

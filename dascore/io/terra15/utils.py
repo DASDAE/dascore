@@ -97,13 +97,13 @@ def _get_version_data_node(root):
     return version, data_node
 
 
-def _scan_terra15(self, fi, path):
+def _scan_terra15(self, fi):
     """Scan a terra15 file, return metadata."""
     root = fi.root
     root_attrs = fi.root._v_attrs
     version, data_node = _get_version_data_node(root)
     out = _get_default_attrs(root_attrs)
-    out.update(_get_extra_scan_attrs(self, version, path, data_node))
+    out.update(_get_extra_scan_attrs(self, version, fi.filename, data_node))
     return [PatchFileSummary.parse_obj(out)]
 
 

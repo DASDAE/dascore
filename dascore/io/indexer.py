@@ -195,19 +195,6 @@ class DirectoryIndexer(AbstractIndexer):
         # return file iterator
         return iter_files(paths, ext=self.ext, mtime=mtime)
 
-    def ensure_path_exists(self, create=False):
-        """
-        Ensure the base path exists else raise.
-
-        If create is True, simply create an empty directory.
-        """
-        path = Path(self.path)
-        if create:
-            path.mkdir(parents=True, exist_ok=True)
-        if not path.is_dir():
-            msg = f"{path} is not a directory, cant read spool"
-            raise FileExistsError(msg)
-
     def _enforce_min_version(self):
         """
         Ensure the minimum version is met, else delete index file.
@@ -228,7 +215,7 @@ class DirectoryIndexer(AbstractIndexer):
         update_time = time.time()
         new_files = list(self._get_file_iterator(paths=paths, only_new=True))
         smooth_iterator = track(new_files, f"Indexing {self.path.name}")
-        data_list = [y.dict() for x in smooth_iterator for y in dc.scan(x, ignore=True)]
+        data_list = [y.dict() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
         if not df.empty:
             # ensure the base path is not in the path column

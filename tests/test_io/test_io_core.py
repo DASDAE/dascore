@@ -2,33 +2,76 @@
 Test for basic IO and related functions.
 """
 import copy
+from pathlib import Path
+from typing import Union
 
 import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import (
-    InvalidFiberFile,
-    InvalidFileFormatter,
-    UnknownFiberFormat,
-)
+from dascore.constants import SpoolType
+from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.io.core import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
+from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.time import to_datetime64
 
 
-class FiberFormatTestV1(FiberIO):
+class _FiberFormatTestV1(FiberIO):
     """A test format v1"""
 
     name = "_TestFormatter"
     version = "1"
 
 
-class FiberFormatTestV2(FiberIO):
+class _FiberFormatTestV2(FiberIO):
     """A test format v2"""
 
     name = "_TestFormatter"
     version = "2"
+
+
+class _FiberImplementer(FiberIO):
+    """A fiber io which implements all the methods (poorly)"""
+
+    name = "_Implementer"
+    version = "2"
+
+    def read(self, resource, **kwargs):
+        """dummy read"""
+
+    def write(self, spool: SpoolType, resource):
+        """Dummy write"""
+
+    def scan(self, resource: BinaryReader):
+        """Dummy scan."""
+
+    def get_format(self, resource):
+        """Dummy get_format."""
+
+
+class _FiberCaster(FiberIO):
+    """A test class for casting inputs to certain types."""
+
+    name = "_TestFormatter"
+    version = "2"
+
+    def read(self, resource: BinaryReader, **kwargs) -> SpoolType:
+        """Just ensure read was cast to correct type"""
+        assert isinstance(resource, BinaryReader)
+
+    def write(self, spool: SpoolType, resource: BinaryWriter):
+        """ditto for write"""
+        assert isinstance(resource, BinaryWriter)
+
+    def get_format(self, resource: Path) -> Union[tuple[str, str], bool]:
+        """and get format"""
+        assert isinstance(resource, Path)
+        return False
+
+    def scan(self, not_path: BinaryReader):
+        """Ensure an off-name still works for type casting."""
+        assert isinstance(not_path, BinaryWriter)
 
 
 class TestFormatManager:
@@ -65,8 +108,8 @@ class TestFormatManager:
         # ensure all formats are represented.
         assert len(format_array) == len(all_formatters)
         # ensure V2 of the Test formatter appears first
-        v2_arg = np.argmax([isinstance(x, FiberFormatTestV2) for x in ext_formatters])
-        v1_arg = np.argmax([isinstance(x, FiberFormatTestV1) for x in ext_formatters])
+        v2_arg = np.argmax([isinstance(x, _FiberImplementer) for x in ext_formatters])
+        v1_arg = np.argmax([isinstance(x, _FiberFormatTestV1) for x in ext_formatters])
         assert v2_arg < v1_arg
 
     def test_format_raises_unknown_format(self, format_manager):
@@ -93,7 +136,7 @@ class TestFormatManager:
 
     def test_format_multiple_versions(self, format_manager):
         """Ensure multiple versions are returned when only format is specified."""
-        file_format = FiberFormatTestV1.name
+        file_format = _FiberFormatTestV1.name
         out = list(format_manager.yield_fiberio(format=file_format))
         assert len(out) == 2
 
@@ -111,7 +154,7 @@ class TestFormatter:
     def test_empty_formatter_raises(self):
         """An empty formatter can't exist; it at least needs a name."""
 
-        with pytest.raises(InvalidFileFormatter):
+        with pytest.raises(InvalidFiberIO):
 
             class empty_formatter(FiberIO):
                 """formatter with no name"""
@@ -131,15 +174,27 @@ class TestFormatter:
         with pytest.raises(NotImplementedError):
             instance.scan("bad_path")
 
+    def test_doesnt_implements(self):
+        """Tests for implements_x methods."""
+        # this test fiber io don't implement anything
+        fio = _FiberFormatTestV1()
+        assert not fio.implements_scan
+        assert not fio.implements_get_format
+        assert not fio.implements_read
+        assert not fio.implements_write
+
+    def test_implements(self):
+        """Tests for implements_x methods."""
+        # this test fiber implements all the things
+        fio = _FiberImplementer()
+        assert fio.implements_scan
+        assert fio.implements_get_format
+        assert fio.implements_read
+        assert fio.implements_write
+
 
 class TestGetFormat:
     """Tests to ensure formats can be retrieved."""
-
-    def test_terra_15(self, terra15_das_example_path):
-        """Ensure terra15 v2 can be read"""
-        out = dc.get_format(terra15_das_example_path)
-        vtuple = (out[0].upper(), out[1])
-        assert vtuple == ("TERRA15", "4")
 
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
@@ -152,34 +207,26 @@ class TestGetFormat:
             dc.get_format("bad/file")
 
 
-class TestRead:
-    """Basic tests for reading files."""
-
-    def test_read_terra15(self, terra15_das_example_path, terra15_das_patch):
-        """Ensure terra15 can be read."""
-        out = dc.read(terra15_das_example_path)
-        assert isinstance(out, dc.BaseSpool)
-        assert len(out) == 1
-        assert out[0].equals(terra15_das_patch)
-
-
 class TestScan:
     """Tests for scanning fiber files."""
 
-    def test_scan_terra15(self, terra15_das_example_path):
-        """Ensure terra15 format can be automatically determined."""
-        out = dc.scan(terra15_das_example_path)
-        assert isinstance(out, list)
-        assert len(out)
+    @pytest.fixture(scope="class")
+    def nested_directory_with_patches(self, tmpdir_factory, random_patch):
+        """Return a nested directory with patch files interlaced."""
+        out = Path(tmpdir_factory.mktemp("nested_random_patch"))
+        path_1 = out / "patch_1.h5"
+        path_2 = out / "subdir" / "patch_2.h5"
+        path_3 = out / "subdir" / "suber_dir" / "patch_3.h5"
+        random_patch.io.write(path_1, "dasdae")
+        random_patch.io.write(path_2, "dasdae")
+        random_patch.io.write(path_3, "dasdae")
+        return out
 
-    def test_scan_with_ignore(self, tmp_path):
-        """ignore option should make scan return []"""
-        # no ignore should still raise
+    def test_scan_no_good_files(self, tmp_path):
+        """Scan with no fiber files should return []"""
         dummy_file = tmp_path / "data.txt"
         dummy_file.touch()
-        with pytest.raises(UnknownFiberFormat):
-            _ = dc.scan(dummy_file)
-        out = dc.scan(dummy_file, ignore=True)
+        out = dc.scan(dummy_file)
         assert not len(out)
         assert out == []
 
@@ -191,7 +238,7 @@ class TestScan:
     def test_scan_bad_files(self, tmp_path):
         """Trying to scan a directory should raise a nice error"""
         new = tmp_path / "myfile.txt"
-        with pytest.raises(InvalidFiberFile):
+        with pytest.raises(FileNotFoundError):
             _ = dc.scan(new)
 
     def test_scan_patch(self, random_patch):
@@ -203,44 +250,39 @@ class TestScan:
         assert to_datetime64(ser["time_min"]) == to_datetime64(attrs["time_min"])
         assert to_datetime64(ser["time_max"]) == to_datetime64(attrs["time_max"])
 
-    def test_implements_scan(self):
-        """Test for checking is subclass implements_scan"""
-        assert not FiberFormatTestV2().implements_scan
-        assert not FiberFormatTestV1().implements_scan
-        dasdae = FiberIO.manager.get_fiberio("DASDAE")
-        assert dasdae.implements_scan
+    def test_scan_nested_directory(self, nested_directory_with_patches):
+        """Ensure scan picks up files in nested directories."""
+        out = dc.scan(nested_directory_with_patches)
+        assert len(out) == 3
 
-    def test_implements_get_format(self):
-        """Test for checking is subclass implements_get_format"""
-        assert not FiberFormatTestV2().implements_get_format
-        assert not FiberFormatTestV1().implements_get_format
-        dasdae = FiberIO.manager.get_fiberio("DASDAE")
-        assert dasdae.implements_get_format
+    def test_can_raise(self):
+        """
+        Scan, when called from a FiberIO, should be able to raise if
+        type coercion fails.
+        """
+        fio = _FiberImplementer()
+        bad_input = _FiberFormatTestV1()
+        with pytest.raises(NotImplementedError):
+            fio.scan(bad_input)
 
-    def test_scan_attrs_match_patch_attrs(self, data_file_path):
-        """We need to make sure scan and patch attrs are identical."""
-        # Since dasdae format stores attrs and coords, we need to
-        # skip events created before coords/attrs were more closely
-        # aligned.
-        if data_file_path.name == "example_dasdae_event_1.h5":
-            return
-        comp_attrs = (
-            "data_type",
-            "data_units",
-            "d_time",
-            "time_min",
-            "time_max",
-            "distance_min",
-            "distance_max",
-            "d_distance",
-            "tag",
-            "network",
-        )
-        scan_attrs_list = dc.scan(data_file_path)
-        patch_attrs_list = [x.attrs for x in dc.read(data_file_path)]
-        assert len(scan_attrs_list) == len(patch_attrs_list)
-        for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
-            for attr_name in comp_attrs:
-                patch_attr = getattr(pat_attrs1, attr_name)
-                scan_attr = getattr(scan_attrs2, attr_name)
-                assert scan_attr == patch_attr
+
+class TestCastType:
+    """Test suite to ensure types are intelligently cast to type hints."""
+
+    def test_read(self, dummy_text_file):
+        """ensure write casts type."""
+        io = _FiberCaster()
+        # this passes if it doesnt raise.
+        io.read(dummy_text_file)
+
+    def test_write(self, tmp_path, random_spool):
+        """Ensure write casts type."""
+        path = tmp_path / "write_fiber_cast.txt"
+        io = _FiberCaster()
+        # this passes if it doesnt raise.
+        io.write(random_spool, path)  # noqa
+
+    def test_non_standard_name(self, dummy_text_file):
+        """Ensure non-standard names still work."""
+        io = _FiberCaster()
+        io.scan(dummy_text_file)

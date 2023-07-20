@@ -5,8 +5,8 @@ class DASCoreError(Exception):
     """Base class for dascore errors."""
 
 
-class InvalidFileFormatter(ValueError, DASCoreError):
-    """Raised when an invalid file formatter is defined or used."""
+class InvalidFiberIO(ValueError, DASCoreError):
+    """Raised when an invalid Fiber IO is defined or used."""
 
 
 class InvalidFiberFile(IOError, DASCoreError):

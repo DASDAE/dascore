@@ -1,6 +1,9 @@
 """
 Simple script for downloading external files.
 """
+from __future__ import annotations
+
+from functools import cache
 from importlib.resources import files
 from pathlib import Path
 
@@ -35,17 +38,23 @@ def get_registry_df() -> pd.DataFrame:
     return df
 
 
-def fetch(name: str, **kwargs) -> Path:
+@cache
+def fetch(name: Path | str, **kwargs) -> Path:
     """
-    Fetch a data file.
+    Fetch a data file from the registry.
 
     Parameters
     ----------
     name
+        The name of the file to fetch. Must be in the data registry or a
+        path which exists.
     kwargs
+        Left for compatibility reasons.
 
     Returns
     -------
-
+    A path to the downloaded file.
     """
+    if (existing_path := Path(name)).exists():
+        return existing_path
     return Path(fetcher.fetch(name, **kwargs))

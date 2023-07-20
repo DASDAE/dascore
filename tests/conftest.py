@@ -176,7 +176,7 @@ def random_patch_with_lat_lon(random_patch):
 def multi_dim_coords_patch(random_patch):
     """A patch with a multiple dimensional coord."""
     quality = np.ones(random_patch.shape)
-    out = random_patch.assign_coords(quality=(random_patch.dims, quality))
+    out = random_patch.update_coords(quality=(random_patch.dims, quality))
     return out
 
 
@@ -395,12 +395,13 @@ def spool(request):
 # --- Misc. test fixtures
 
 
-@pytest.fixture
-def generic_hdf5(tmp_path):
+@pytest.fixture(scope="session")
+def generic_hdf5(tmp_path_factory):
     """
     Create a generic hdf5 file (not das). This is useful for ensuring formatters
     recognize differences in HDF5 files.
     """
+    tmp_path = Path(tmp_path_factory.mktemp("generic_h5"))
     parent = tmp_path / "sum"
     parent.mkdir()
     path = parent / "simple.hdf5"
@@ -411,7 +412,7 @@ def generic_hdf5(tmp_path):
     return path
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 def dummy_text_file(tmp_path_factory):
     """Return a text file with silliness in it."""
     parent = tmp_path_factory.mktemp("dummy")

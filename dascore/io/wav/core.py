@@ -19,13 +19,15 @@ class WavIO(FiberIO):
 
     name = "WAV"
 
-    def write(self, spool: SpoolType, path: Union[str, Path], resample_frequency=None):
+    def write(
+        self, spool: SpoolType, resource: Union[str, Path], resample_frequency=None
+    ):
         """
         Write the contents of the patch to one or more wav files.
 
         Parameters
         ----------
-        path
+        resource
             If a path that ends with .wav, write all the distance channels
             to a single file. If not, assume the path is a directory and write
             each distance channel to its own wav file.
@@ -53,19 +55,19 @@ class WavIO(FiberIO):
             rate is 44100, in this case just set resample_frequency=44100 to
             see if this fixes the issue.
         """
-        path = Path(path)
+        resource = Path(resource)
         assert len(spool) == 1, "Only single patch spools can be written to wav"
         patch = spool[0]
         # write a single wav file, maybe multi-channeled.
         data, sr = self._get_wav_data(patch, resample_frequency)
-        if path.name.endswith(".wav"):
-            write(filename=str(path), rate=int(sr), data=data)
+        if resource.name.endswith(".wav"):
+            write(filename=str(resource), rate=int(sr), data=data)
         else:  # write data to directory, one file for each distance
-            path.mkdir(exist_ok=True, parents=True)
+            resource.mkdir(exist_ok=True, parents=True)
             distances = patch.coords["distance"]
             for ind, dist in enumerate(distances):
                 sub_data = np.take(data, ind, axis=1)
-                sub_path = path / f"{dist}.wav"
+                sub_path = resource / f"{dist}.wav"
                 write(filename=str(sub_path), rate=int(sr), data=sub_data)
 
     @staticmethod

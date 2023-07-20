@@ -4,12 +4,14 @@ DASDAE format utilities
 import numpy as np
 
 import dascore as dc
-from dascore.core.schema import PatchFileSummary
+from dascore.core.coordmanager import get_coord_manager
+from dascore.core.coords import get_coord
+from dascore.core.schema import PatchAttrs, PatchFileSummary
 from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.patch import get_default_patch_name
-from dascore.utils.time import to_int, to_timedelta64
+from dascore.utils.time import to_int
 
-# --- Functions for writing DASDAE format.
+# --- Functions for writing DASDAE format
 
 
 def _write_meta(hfile, file_version):
@@ -84,34 +86,42 @@ def _get_attrs(patch_group):
         if isinstance(val, np.ndarray) and not val.shape:
             val = np.array([val])[0]
         out[key] = val
-    return out
+    return PatchAttrs(**out)
 
 
 def _read_array(table_array):
     """Read an array into numpy."""
     data = table_array[:]
     if table_array._v_attrs["is_datetime64"]:
-        data = data.astype("datetime64[ns]")
+        data = data.view("datetime64[ns]")
     if table_array._v_attrs["is_timedelta64"]:
-        data = to_timedelta64(data)
+        data = data.view("timedelta64[ns]")
     return data
 
 
-def _get_coords(patch_group):
+def _get_coords(patch_group, dims, attrs2):
     """Get the coordinates from a patch group."""
-    out = {}
+    coord_dict = {}  # just store coordinates here
+    coord_dim_dict = {}  # stores {coord_name: ((dims, ...), coord)}
     for coord in [x for x in patch_group if x.name.startswith("_coord_")]:
         name = coord.name.replace("_coord_", "")
-        out[name] = _read_array(coord)
-
-    attrs = [x for x in patch_group._v_attrs._f_list() if x.startswith("_cdims")]
-    for coord_name in attrs:
+        array = _read_array(coord)
+        coord = get_coord(
+            values=array,
+            units=getattr(attrs2, f"{name}_units", None),
+            step=getattr(attrs2, f"{name}_step", None),
+        )
+        coord_dict[name] = coord
+    # associates coordinates with dimensions
+    c_dims = [x for x in patch_group._v_attrs._f_list() if x.startswith("_cdims")]
+    for coord_name in c_dims:
         name = coord_name.replace("_cdims_", "")
         value = patch_group._v_attrs[coord_name]
-        assert name in out, "Should already have loaded coordinate array"
+        assert name in coord_dict, "Should already have loaded coordinate array"
+        coord_dim_dict[name] = (tuple(value.split(".")), coord_dict[name])
         # add dimensions to coordinates that have them.
-        out[name] = (tuple(value.split(".")), out[name])
-    return out
+    cm = get_coord_manager(coord_dim_dict, dims=dims)
+    return cm
 
 
 def _get_dims(patch_group):
@@ -128,11 +138,14 @@ def _read_patch(patch_group, **kwargs):
     """Read a patch group, return Patch."""
     attrs = _get_attrs(patch_group)
     dims = _get_dims(patch_group)
-    coords = _get_coords(patch_group)
-    try:
+    coords = _get_coords(patch_group, dims, attrs)
+    # Note, previously this was wrapped with try, except (Index, KeyError)
+    # and the data = np.array(None) in except block. Not sure, why, removed
+    # try except.
+    if kwargs:
+        coords, data = coords.select(array=patch_group["data"], **kwargs)
+    else:
         data = patch_group["data"][:]
-    except (IndexError, KeyError):
-        data = np.array(None)
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
 

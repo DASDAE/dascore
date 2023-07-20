@@ -9,7 +9,6 @@ from scipy.signal import decimate as scipy_decimate
 import dascore as dc
 import dascore.compat as compat
 from dascore.constants import PatchType
-from dascore.exceptions import FilterValueError
 from dascore.units import get_filter_units
 from dascore.utils.patch import (
     get_dim_value_from_kwargs,
@@ -35,7 +34,7 @@ def decimate(
         filter type to use to avoid aliasing. Options are:
             iir - infinite impulse response
             fir - finite impulse response
-            None - No pre-filtering
+            None - No pre-filtering, not recommended, may cause aliasing
     copy
         If True, copy the decimated data array. This is needed if you want
         the old array to get gc'ed to free memory otherwise a view is returned.
@@ -62,12 +61,6 @@ def decimate(
     coords, slices = patch.coords.decimate(**{dim: int(factor)})
     # Apply scipy.signal.decimate and get new coords
     if filter_type:
-        if filter_type == "IRR" and factor > 13:
-            msg = (
-                "IRR filter is unstable for decimation factors above"
-                " 13. Call decimate multiple times."
-            )
-            raise FilterValueError(msg)
         data = scipy_decimate(patch.data, factor, ftype=filter_type, axis=axis)
     else:  # No filter, simply slice along specified dimension.
         data = patch.data[slices]

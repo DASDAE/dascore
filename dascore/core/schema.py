@@ -149,6 +149,16 @@ class PatchAttrs(BaseModel):
         """Return a tuple of dimensions. The dims attr is a string."""
         return tuple(self.dims.split(","))
 
+    @property
+    def time_step(self):
+        """Return d_time. Start transition to time_step."""
+        return self.d_time
+
+    @property
+    def distance_step(self):
+        """Return d_time. Start transition to distance_step."""
+        return self.d_distance
+
     def rename_dimension(self, **kwargs):
         """
         Rename one or more dimensions if in kwargs. Return new PatchAttrs.
