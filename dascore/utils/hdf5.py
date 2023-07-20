@@ -45,7 +45,7 @@ class HDF5Store(pd.HDFStore):
         self,
         path,
         mode: str = "a",
-        complevel: int | None = None,
+        complevel: Optional[int] = None,
         complib=None,
         fletcher32: bool = False,
         **kwargs,
