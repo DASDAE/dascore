@@ -3,7 +3,7 @@ Test for basic IO and related functions.
 """
 import copy
 from pathlib import Path
-from typing import Union
+from typing import TypeVar, Union
 
 import numpy as np
 import pytest
@@ -72,6 +72,19 @@ class _FiberCaster(FiberIO):
     def scan(self, not_path: BinaryReader):
         """Ensure an off-name still works for type casting."""
         assert isinstance(not_path, BinaryWriter)
+
+
+class _FiberUnsupportedTypeHints(FiberIO):
+    """A fiber io which implements typehints which have not casting meaning."""
+
+    name = "_TypeHinterNotRight"
+    version = "2"
+    tvar = TypeVar("tvar", int, float, str, Path)
+
+    def read(self, resource: tvar, **kwargs):
+        """dummy read"""
+        with open(resource) as fi:
+            return fi.read()
 
 
 class TestFormatManager:
@@ -286,3 +299,16 @@ class TestCastType:
         """Ensure non-standard names still work."""
         io = _FiberCaster()
         io.scan(dummy_text_file)
+
+    def test_unsupported_typehints(self, dummy_text_file):
+        """Ensure FiberIO with non-"special" type hints still works."""
+        fiberio = _FiberUnsupportedTypeHints()
+        out = fiberio.read(dummy_text_file)
+        assert out == Path(dummy_text_file).read_text()
+
+    def test_unsupported_type(self, dummy_text_file):
+        """Ensure FiberIO from above works with dascore.read"""
+        name = _FiberUnsupportedTypeHints.name
+        version = _FiberUnsupportedTypeHints.version
+        out = dc.read(dummy_text_file, name, version)
+        assert out == Path(dummy_text_file).read_text()

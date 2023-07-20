@@ -3,6 +3,7 @@ Utilities for basic IO tasks.
 """
 import abc
 import typing
+from contextlib import suppress
 from functools import cache, singledispatch
 from inspect import isfunction, ismethod
 from pathlib import Path
@@ -101,8 +102,9 @@ def get_handle_from_resource(uri, required_type):
 
     return uri if required type is not specified.
     """
-    if isinstance(uri, required_type):
-        return uri
+    with suppress(TypeError):
+        if isinstance(uri, required_type):
+            return uri
     if (func := HANDLE_FUNCTIONS.get(required_type)) is None:
         return uri
     return func(uri)
