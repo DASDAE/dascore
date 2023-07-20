@@ -3,12 +3,11 @@ Utilities for models.
 """
 from collections import ChainMap
 from functools import _lru_cache_wrapper, cached_property, reduce
-from typing import Optional, Sequence
+from typing import Annotated, Optional, Sequence
 
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, WrapValidator
 from typing_extensions import Literal, Self
 
 from dascore.compat import array
@@ -21,14 +20,14 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 class DascoreBaseModel(BaseModel):
     """A base model with sensible configurations."""
 
-    class Config:
-        """Configuration for models."""
-
-        extra = "ignore"
-        validate_assignment = True  # validators run on assignment
-        keep_untouched = (cached_property, _lru_cache_wrapper)
-        frozen = True
-        validate_all = True
+    model_config = ConfigDict(
+        extra="ignore",
+        validate_assignment=True,
+        ignored_types=(cached_property, _lru_cache_wrapper),
+        frozen=True,
+        validate_default=True,
+        arbitrary_types_allowed=True,
+    )
 
     def new(self, **kwargs) -> Self:
         """Create new instance with some attributed updated."""
@@ -37,69 +36,25 @@ class DascoreBaseModel(BaseModel):
             out[item] = value
         return self.__class__(**out)
 
-
-class SimpleValidator:
-    """
-    A custom class for getting simple validation behavior in pydantic.
-
-    Subclass, then define function to be used as validator. func
-    """
-
-    @classmethod
-    def func(cls, value):
-        """A method to overwrite with custom validation."""
-        return value
-
-    @classmethod
-    def __get_validators__(cls):
-        """Hook used by pydantic."""
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, validator):
-        """Simply call func."""
-        return cls.func(validator)
+    def __hash__(self):
+        return hash(id(self))
 
 
-class DateTime64(np.datetime64, SimpleValidator):
-    """DateTime64 validator"""
+def call_validator(callable):
+    """Return validator that simply calls a func on a single value."""
 
-    func = to_datetime64
+    @WrapValidator
+    def _wraper(value, handler):
+        return handler(callable(value))
 
-
-class TimeDelta64(np.timedelta64, SimpleValidator):
-    """TimeDelta64 validator"""
-
-    func = to_timedelta64
+    return _wraper
 
 
-class ArrayLike(np.ndarray, SimpleValidator):
-    """An array like validator."""
-
-    @classmethod
-    def func(cls, object):
-        """Ensure an object is array-like."""
-        assert isinstance(object, np.ndarray)
-        return array(object)
-
-
-class DTypeLike(SimpleValidator):
-    """A data-type like validator."""
-
-    @classmethod
-    def func(cls, object):
-        """Assert an object is datatype-like"""
-        assert isinstance(object, npt.DTypeLike)
-        return object
-
-
-class UnitQuantity(str, SimpleValidator):
-    """A string which can be converted to a Unit (e.g, m)."""
-
-    @classmethod
-    def func(cls, value):
-        """validate that a string can be converted to a unit."""
-        return validate_quantity(value)
+DateTime64 = Annotated[np.datetime64, call_validator(to_datetime64)]
+TimeDelta64 = Annotated[np.timedelta64, call_validator(to_timedelta64)]
+ArrayLike = Annotated[np.ndarray, call_validator(array)]
+DTypeLike = Annotated[str, call_validator(np.dtype)]
+UnitQuantity = Annotated[str | None, call_validator(validate_quantity)]
 
 
 def merge_models(

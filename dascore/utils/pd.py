@@ -358,9 +358,9 @@ def fill_defaults_from_pydantic(df, base_model: Type[BaseModel]):
     base_model
         A pydantic BaseModel
     """
-    fields = base_model.__fields__
+    fields = base_model.model_fields
     missing = set(fields) - set(df.columns)
-    required = {x for x in missing if fields[x].required}
+    required = {x for x in missing if fields[x].is_required()}
     if any(required):
         msg = f"Missing required value: {required}"
         raise ValueError(msg)

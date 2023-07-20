@@ -40,12 +40,12 @@ print(new_cm)
 """
 from collections import defaultdict
 from contextlib import suppress
-from functools import cache, reduce
+from functools import reduce
 from operator import and_, or_
-from typing import Dict, Mapping, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Annotated, Dict, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
 import numpy as np
-from pydantic import root_validator, validator
+from pydantic import field_validator, model_validator
 from rich.text import Text
 from typing_extensions import Self
 
@@ -61,10 +61,12 @@ from dascore.exceptions import (
 )
 from dascore.utils.display import get_nice_text
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import all_close, iterate
-from dascore.utils.models import ArrayLike, DascoreBaseModel
+from dascore.utils.misc import all_close, cached_method, iterate
+from dascore.utils.models import ArrayLike, DascoreBaseModel, call_validator
 
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
+
+frozendict_validator = call_validator(FrozenDict)
 
 
 class CoordManager(DascoreBaseModel):
@@ -82,8 +84,8 @@ class CoordManager(DascoreBaseModel):
     """
 
     dims: Tuple[str, ...]
-    coord_map: FrozenDict[str, BaseCoord]
-    dim_map: FrozenDict[str, Tuple[str, ...]]
+    coord_map: Annotated[FrozenDict[str, BaseCoord], frozendict_validator]
+    dim_map: Annotated[FrozenDict[str, Tuple[str, ...]], frozendict_validator]
 
     def __getitem__(self, item) -> np.ndarray:
         # in order to not break backward compatibility, we need to return
@@ -98,7 +100,8 @@ class CoordManager(DascoreBaseModel):
     def __contains__(self, key):
         return key in self.coord_map
 
-    @validator("coord_map", "dim_map")
+    @field_validator("coord_map", "dim_map")
+    @classmethod
     def _convert_to_frozen_dicts(cls, v):
         """Ensure mapping fields are immutable."""
         return FrozenDict(v)
@@ -432,7 +435,8 @@ class CoordManager(DascoreBaseModel):
     def __str__(self):
         return str(self.__rich__())
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def _validate_coords(cls, values):
         """Validate the coordinates and dimensions."""
         coord_map, dim_map = values["coord_map"], values["dim_map"]
@@ -688,13 +692,13 @@ class CoordManager(DascoreBaseModel):
         return new, slices
 
     @property
-    @cache
+    @cached_method
     def coord_shapes(self) -> Dict[str, Tuple[int, ...]]:
         """Get a dict of {coord_name: shape}"""
         return {i: v.shape for i, v in self.coord_map.items()}
 
     @property
-    @cache
+    @cached_method
     def dim_to_coord_map(self) -> FrozenDict[str, Tuple[str, ...]]:
         """Get a dimension to coordinate map."""
         out = defaultdict(list)

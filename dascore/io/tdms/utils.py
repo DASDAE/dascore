@@ -12,7 +12,7 @@ from dascore.core.coords import get_coord
 from dascore.core.schema import PatchAttrs
 from dascore.utils.time import to_datetime64, to_timedelta64
 
-DEFAULT_ATTRS = tuple(PatchAttrs.__fields__)
+DEFAULT_ATTRS = tuple(PatchAttrs.model_fields)
 
 
 def type_not_supported(vargin):

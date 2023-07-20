@@ -46,7 +46,7 @@ dependencies = [
      "packaging",
      "pandas",
      "pooch>=1.2",
-     "pydantic>=1.9.0,<2.0.0",
+     "pydantic>2.0",
      "rich",
      "scipy>=1.10.0",
      "tables",

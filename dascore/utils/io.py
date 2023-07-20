@@ -11,7 +11,7 @@ from typing import Any, Protocol, get_type_hints
 
 import tables
 
-from dascore.utils.misc import register_func
+from dascore.utils.misc import cached_method, register_func
 
 HANDLE_FUNCTIONS = {}
 
@@ -192,7 +192,7 @@ class IOResourceManager:
         self._cache = {}
 
     @property
-    @cache
+    @cached_method
     def source(self):
         """Get the source of the IO manager."""
         source = self._source
