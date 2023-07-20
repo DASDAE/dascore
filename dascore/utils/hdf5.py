@@ -38,8 +38,11 @@ ns_to_datetime = partial(pd.to_datetime, unit="ns")
 ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
 
 
-class HDF5Store(pd.HDFStore):
-    """This is a work-around for pandas HDF5 store not accepting file handles."""
+class _HDF5Store(pd.HDFStore):
+    """
+    This is a work-around for pandas HDF5 store not accepting
+    pytables.File objects.
+    """
 
     def __init__(
         self,
@@ -258,7 +261,7 @@ class HDFPatchIndexManager:
         # read in dataframe and prepare for input into hdf5 index
         update_time = update_time or time.time()
         df = self.encode_table(update_df, path=base_path)
-        with HDF5Store(self.path) as store:
+        with _HDF5Store(self.path) as store:
             try:
                 nrows = store.get_storer(self._index_node).nrows
             except (AttributeError, KeyError):
@@ -288,7 +291,7 @@ class HDFPatchIndexManager:
         Read the metadata table.
         """
         try:
-            with HDF5Store(self.path, "r") as store:
+            with _HDF5Store(self.path, "r") as store:
                 out = store.get(self._meta_node)
             store.close()
             return out
@@ -304,7 +307,7 @@ class HDFPatchIndexManager:
         """
         if not Path(self.path).exists():
             return
-        with HDF5Store(self.path) as store:
+        with _HDF5Store(self.path) as store:
             # add metadata if not in store
             if self._meta_node not in store:
                 meta = self._make_meta_table()
