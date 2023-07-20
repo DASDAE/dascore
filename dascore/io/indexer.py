@@ -195,19 +195,6 @@ class DirectoryIndexer(AbstractIndexer):
         # return file iterator
         return iter_files(paths, ext=self.ext, mtime=mtime)
 
-    def ensure_path_exists(self, create=False):
-        """
-        Ensure the base path exists else raise.
-
-        If create is True, simply create an empty directory.
-        """
-        path = Path(self.path)
-        if create:
-            path.mkdir(parents=True, exist_ok=True)
-        if not path.is_dir():
-            msg = f"{path} is not a directory, cant read spool"
-            raise FileExistsError(msg)
-
     def _enforce_min_version(self):
         """
         Ensure the minimum version is met, else delete index file.

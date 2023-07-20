@@ -176,6 +176,8 @@ def _get_hdf5_writer(uri):
 @_get_hdf5_writer.register(Path)
 def _uri_to_hdf5_writer(path_like):
     """Get a write buffer from as string/path."""
+    # ensure the file structure exists
+    Path(path_like).parent.mkdir(exist_ok=True, parents=True)
     fi = tables.open_file(path_like, "a")
     return fi
 

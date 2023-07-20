@@ -31,6 +31,25 @@ class _FiberFormatTestV2(FiberIO):
     version = "2"
 
 
+class _FiberImplementer(FiberIO):
+    """A fiber io which implements all the methods (poorly)"""
+
+    name = "_Implementer"
+    version = "2"
+
+    def read(self, resource, **kwargs):
+        """dummy read"""
+
+    def write(self, spool: SpoolType, resource):
+        """Dummy write"""
+
+    def scan(self, resource: BinaryReader):
+        """Dummy scan."""
+
+    def get_format(self, resource):
+        """Dummy get_format."""
+
+
 class _FiberCaster(FiberIO):
     """A test class for casting inputs to certain types."""
 
@@ -89,7 +108,7 @@ class TestFormatManager:
         # ensure all formats are represented.
         assert len(format_array) == len(all_formatters)
         # ensure V2 of the Test formatter appears first
-        v2_arg = np.argmax([isinstance(x, _FiberFormatTestV2) for x in ext_formatters])
+        v2_arg = np.argmax([isinstance(x, _FiberImplementer) for x in ext_formatters])
         v1_arg = np.argmax([isinstance(x, _FiberFormatTestV1) for x in ext_formatters])
         assert v2_arg < v1_arg
 
@@ -155,6 +174,24 @@ class TestFormatter:
         with pytest.raises(NotImplementedError):
             instance.scan("bad_path")
 
+    def test_doesnt_implements(self):
+        """Tests for implements_x methods."""
+        # this test fiber io don't implement anything
+        fio = _FiberFormatTestV1()
+        assert not fio.implements_scan
+        assert not fio.implements_get_format
+        assert not fio.implements_read
+        assert not fio.implements_write
+
+    def test_implements(self):
+        """Tests for implements_x methods."""
+        # this test fiber implements all the things
+        fio = _FiberImplementer()
+        assert fio.implements_scan
+        assert fio.implements_get_format
+        assert fio.implements_read
+        assert fio.implements_write
+
 
 class TestGetFormat:
     """Tests to ensure formats can be retrieved."""
@@ -172,6 +209,18 @@ class TestGetFormat:
 
 class TestScan:
     """Tests for scanning fiber files."""
+
+    @pytest.fixture(scope="class")
+    def nested_directory_with_patches(self, tmpdir_factory, random_patch):
+        """Return a nested directory with patch files interlaced."""
+        out = Path(tmpdir_factory.mktemp("nested_random_patch"))
+        path_1 = out / "patch_1.h5"
+        path_2 = out / "subdir" / "patch_2.h5"
+        path_3 = out / "subdir" / "suber_dir" / "patch_3.h5"
+        random_patch.io.write(path_1, "dasdae")
+        random_patch.io.write(path_2, "dasdae")
+        random_patch.io.write(path_3, "dasdae")
+        return out
 
     def test_scan_no_good_files(self, tmp_path):
         """Scan with no fiber files should return []"""
@@ -201,20 +250,20 @@ class TestScan:
         assert to_datetime64(ser["time_min"]) == to_datetime64(attrs["time_min"])
         assert to_datetime64(ser["time_max"]) == to_datetime64(attrs["time_max"])
 
-    def test_implements_scan(self):
-        """Test for checking is subclass implements_scan"""
-        assert not _FiberFormatTestV2().implements_scan
-        assert not _FiberFormatTestV1().implements_scan
-        dasdae = FiberIO.manager.get_fiberio("DASDAE")
-        dasdae.implements_scan
-        assert dasdae.implements_scan
+    def test_scan_nested_directory(self, nested_directory_with_patches):
+        """Ensure scan picks up files in nested directories."""
+        out = dc.scan(nested_directory_with_patches)
+        assert len(out) == 3
 
-    def test_implements_get_format(self):
-        """Test for checking is subclass implements_get_format"""
-        assert not _FiberFormatTestV2().implements_get_format
-        assert not _FiberFormatTestV1().implements_get_format
-        dasdae = FiberIO.manager.get_fiberio("DASDAE")
-        assert dasdae.implements_get_format
+    def test_can_raise(self):
+        """
+        Scan, when called from a FiberIO, should be able to raise if
+        type coercion fails.
+        """
+        fio = _FiberImplementer()
+        bad_input = _FiberFormatTestV1()
+        with pytest.raises(NotImplementedError):
+            fio.scan(bad_input)
 
 
 class TestCastType:

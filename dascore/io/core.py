@@ -512,7 +512,7 @@ def scan(
         if isinstance(patch_source, dc.Patch):
             out.append(PatchFileSummary(**dict(patch_source.attrs)))
             continue
-        with IOResourceManager(path) as man:
+        with IOResourceManager(patch_source) as man:
             # get fiberio
             if not file_format or not file_version:
                 try:

@@ -38,6 +38,11 @@ class TestGetFormat:
         assert isinstance(out[0], dc.Patch)
         assert random_patch == out[0]
 
+    def test_file_not_there(self):
+        """Get format should return false if the file doesn't exist."""
+        parser = PickleIO()
+        assert not parser.get_format("surely_not_a_file_that_exists")
+
 
 class TestScan:
     """Tests for scanning pickle files/"""

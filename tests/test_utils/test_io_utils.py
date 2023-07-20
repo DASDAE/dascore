@@ -4,6 +4,7 @@ Tests for IO utilities.
 from io import BufferedReader, BufferedWriter
 from pathlib import Path
 
+import pytest
 from tables import File
 
 from dascore.utils.io import (
@@ -78,6 +79,18 @@ class TestGetHandleFromResource:
         with open(path, "wb") as fi:
             out = get_handle_from_resource(fi, BinaryWriter)
             assert out is fi
+
+    def test_not_implemented(self):
+        """Tests for raising not implemented errors for types not supported."""
+        bad_instance = _BadType()
+        with pytest.raises(NotImplementedError):
+            get_handle_from_resource(bad_instance, BinaryReader)
+        with pytest.raises(NotImplementedError):
+            get_handle_from_resource(bad_instance, BinaryWriter)
+        with pytest.raises(NotImplementedError):
+            get_handle_from_resource(bad_instance, HDF5Writer)
+        with pytest.raises(NotImplementedError):
+            get_handle_from_resource(bad_instance, HDF5Reader)
 
 
 class TestIOResourceManager:
