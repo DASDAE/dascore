@@ -52,19 +52,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - if: runner.os == 'macOS'
-        name: Fix Python PATH on macOS
-        run: |
-          tee -a ~/.profile <<<'export PATH="$pythonLocation/bin:$PATH"'
-
       - name: install dascore
         shell: bash -l {0}
         run: |
+          export PATH="$pythonLocation:$PATH"
           python -m pip install -e .[test]
 
       - name: set data cache path
         shell: bash -l {0}
         run: |
+          export PATH="$pythonLocation:$PATH"
           echo "DATA_CACHE_PATH=$(python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
 
       - name: cache test data
@@ -74,19 +71,15 @@ jobs:
           path: ${{ env.DATA_CACHE_PATH }}
           key: DATA_${{ env.CACHE_NUMBER }}
 
-      - name: print package info
-        shell: bash -l {0}
-        run: |
-          conda info -a
-          conda list
-
       - name: run test suite
         shell: bash -l {0}
         run: |
-          pytest -s --cov dascore --cov-append --cov-report=xml
+          export PATH="$pythonLocation:$PATH"
+          python -m pytest -s --cov dascore --cov-append --cov-report=xml
 
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
         run: |
-          pytest dascore --doctest-modules
+          export PATH="$pythonLocation:$PATH"
+          python -m pytest dascore --doctest-modules
