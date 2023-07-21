@@ -2,11 +2,10 @@
 Core module for reading and writing pickle format.
 """
 import pickle
-from pathlib import Path
 from typing import Union
 
 import dascore
-from dascore.io.core import FiberIO
+from dascore.io import FiberIO, BinaryWriter, BinaryReader
 
 
 class PickleIO(FiberIO):
@@ -28,7 +27,7 @@ class PickleIO(FiberIO):
         spool_or_patch = b"Spool" in byte_stream or b"Patch" in byte_stream
         return has_dascore and spool_or_patch
 
-    def get_format(self, resource: Union[str, Path]) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: BinaryReader) -> Union[tuple[str, str], bool]:
         """
         Return True if file contains a pickled Patch or Spool.
 
@@ -37,25 +36,22 @@ class PickleIO(FiberIO):
         resource
             A path to the file which may contain terra15 data.
         """
-        with open(resource, "rb") as fp:
-            try:
-                start = fp.read(100)  # read first 100 bytes, look for class names
-                if self._header_is_dascore(start):
-                    fp.seek(0)
-                    pickle.load(fp)
-                    return ("PICKLE", self.version)  # TODO add pickle protocol
-                else:
-                    return False
-            except (pickle.UnpicklingError, FileNotFoundError, IndexError):
+        try:
+            start = resource.read(100)  # read first 100 bytes, look for class names
+            if self._header_is_dascore(start):
+                getattr(resource, "seek", lambda x: None)(0)
+                pickle.load(resource)
+                return ("PICKLE", self.version)  # TODO add pickle protocol
+            else:
                 return False
+        except (pickle.UnpicklingError, FileNotFoundError, IndexError):
+            return False
 
-    def read(self, resource, **kwargs):
+    def read(self, resource: BinaryReader, **kwargs):
         """Read a Patch/Spool from disk."""
-        with open(resource, "rb") as fi:
-            out = pickle.load(fi)
+        out = pickle.load(resource)
         return dascore.spool(out)
 
-    def write(self, patch, resource, **kwargs):
+    def write(self, patch, resource: BinaryWriter, **kwargs):
         """Write a Patch/Spool to disk."""
-        with open(resource, "wb") as fi:
-            pickle.dump(patch, fi)
+        pickle.dump(patch, resource)
