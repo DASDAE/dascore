@@ -100,13 +100,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Total number of elements."""
         return np.prod(self.shape)
 
-    def __hash__(self):
-        """
-        Simply use default hash rather than smart one (object) id
-        so that cache work.
-        """
-        return id(self)
-
     def __rich__(self):
         key_style = dascore_styles["keys"]
         base = Text("", "default")
@@ -679,9 +672,6 @@ class CoordArray(BaseCoord):
         if not np.ndim(out):
             return out
         return self.__class__(values=out, units=self.units)
-
-    def __hash__(self):
-        return hash(id(self))
 
     def _min(self):
         """Return min value"""
