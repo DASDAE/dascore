@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   # Runs the tests on combinations of the supported python/os matrix.
-  test_code:
+  test_code_min_deps:
 
     timeout-minutes: 25
     runs-on: ${{ matrix.os }}
@@ -44,17 +44,6 @@ jobs:
       cache_key: ${{ matrix.os }}-py${{ matrix.python-version }}
       # set conda environment file with dependencies
       env_file: "environment.yml"
-
-  min_deps:
-    timeout-minutes: 25
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
-        python-version: [ '3.11' ]
-
-    # only run if CI isn't turned off
-    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     steps:
       - uses: actions/checkout@v3
