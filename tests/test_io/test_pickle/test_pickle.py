@@ -1,8 +1,9 @@
 """
 Tests for reading/writing pickles.
 """
-import pytest
 from io import BytesIO
+
+import pytest
 
 import dascore as dc
 from dascore.io.pickle.core import PickleIO

@@ -5,7 +5,7 @@ import pickle
 from typing import Union
 
 import dascore
-from dascore.io import FiberIO, BinaryWriter, BinaryReader
+from dascore.io import BinaryReader, BinaryWriter, FiberIO
 
 
 class PickleIO(FiberIO):
