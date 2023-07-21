@@ -1,3 +1,4 @@
+# Run minimum dependency tests without conda
 name: TestCode
 on:
   push:
@@ -44,80 +45,14 @@ jobs:
       # set conda environment file with dependencies
       env_file: "environment.yml"
 
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Get year week
-        id: date
-        run: echo "date=$(date +'%Y:%U')" >> $GITHUB_STATE
-
-      - name: setup conda env
-        uses: conda-incubator/setup-miniconda@v2.2.0
-        with:
-          miniforge-variant: Mambaforge
-          miniforge-version: latest
-          activate-environment: dascore
-          use-mamba: true
-          python-version: ${{ matrix.python-version }}
-
-      - name: Cache conda env
-        uses: actions/cache@v3
-        with:
-          path: ${{ env.prefix }}
-          key: ${{ env.cache_key }}-hash${{ hashFiles(env.env_file) }}-${{ steps.date.outputs.date }}-${{ env.CACHE_NUMBER }}
-        id: cache
-
-      - name: Update environment
-        run: mamba env update -n test -f ${{ env.env_file }}
-        if: steps.cache.outputs.cache-hit != 'true'
-
-      - name: install dascore
-        shell: bash -l {0}
-        run: |
-          python -m pip install -e .[test]
-
-      - name: set data cache path
-        shell: bash -l {0}
-        run: |
-          echo "DATA_CACHE_PATH=$(python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
-
-      - name: cache test data
-        uses: actions/cache@v3
-        with:
-          enableCrossOsArchive: true
-          path: ${{ env.DATA_CACHE_PATH }}
-          key: DATA_${{ env.CACHE_NUMBER }}
-
-      - name: print package info
-        shell: bash -l {0}
-        run: |
-          conda info -a
-          conda list
-
-      # Runs test suite and calculates coverage
-      - name: run test suite
-        shell: bash -l {0}
-        run: |
-          pytest -s --cov dascore --cov-append --cov-report=xml
-
-      # Runs examples in docstrings
-      - name: test docstrings
-        shell: bash -l {0}
-        run: |
-          pytest dascore --doctest-modules
-
-      # upload coverage
-      - name: upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          flags: unittests
-          name: PR_tests
-          fail_ci_if_error: false
-
   min_deps:
     timeout-minutes: 25
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        python-version: [ '3.11' ]
+
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
@@ -126,7 +61,7 @@ jobs:
 
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
       - name: install dascore
         shell: bash -l {0}
@@ -161,19 +96,3 @@ jobs:
         shell: bash -l {0}
         run: |
           pytest dascore --doctest-modules
-
-      # upload coverage
-      - name: upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          flags: unittests
-          name: PR_tests
-          fail_ci_if_error: false
-
-
-# This is a very useful step for debugging, it allows you to ssh into the CI
-# machine (https://github.com/marketplace/actions/debugging-with-tmate).
-#
-#- name: Setup tmate session
-#  uses: mxschmitt/action-tmate@v3
