@@ -124,7 +124,7 @@ class TestInit:
         attrs = random_patch.attrs
         expected_filled_in = [
             x
-            for x in list(attrs.__fields__)
+            for x in list(attrs.model_fields)
             if x.startswith("distance") and "units" not in x
         ]
         for attr in expected_filled_in:
@@ -132,8 +132,8 @@ class TestInit:
 
     def test_had_default_attrs(self, patch):
         """Test that all patches used in the test suite have default attrs."""
-        attr_set = set(patch.attrs.dict())
-        assert attr_set.issubset(set(patch.attrs.dict()))
+        attr_set = set(patch.attrs.model_dump())
+        assert attr_set.issubset(set(patch.attrs.model_dump()))
 
     def test_no_attrs(self):
         """Ensure a patch with no attrs can be created."""
@@ -415,14 +415,14 @@ class TestUpdateAttrs:
     def test_add_attr(self, random_patch):
         """Tests for adding an attribute."""
         new = random_patch.update_attrs(bob=1)
-        assert "bob" in new.attrs.dict() and new.attrs["bob"] == 1
+        assert "bob" in new.attrs.model_dump() and new.attrs["bob"] == 1
 
     def test_original_unchanged(self, random_patch):
         """Updating attributes shouldn't change original patch in any way."""
-        old_attrs = dict(random_patch.attrs)
+        old_attrs = random_patch.attrs.model_dump()
         _ = random_patch.update_attrs(bob=2)
-        assert "bob" not in dict(random_patch.attrs)
-        assert random_patch.attrs == old_attrs
+        assert not hasattr(random_patch.attrs, "bob")
+        assert random_patch.attrs.model_dump() == old_attrs
 
     def test_update_starttime1(self, random_patch):
         """Ensure coords are updated with attrs."""

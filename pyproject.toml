@@ -63,6 +63,7 @@ extras = [
 
 docs = [
     "jinja2",
+    "ipywidgets",
 ]
 
 test = [

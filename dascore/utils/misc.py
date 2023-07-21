@@ -387,6 +387,13 @@ def get_parent_code_name(levels: int = 2) -> str:
     return stack.f_code.co_name
 
 
+def to_str(val):
+    """Convert value to string."""
+    # This is primarily used to avoid lambdas which can cause issues
+    # in pickling.
+    return str(val)
+
+
 def cached_method(func):
     """
     Cache decorated method.
@@ -398,14 +405,13 @@ def cached_method(func):
 
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        # Simple caching without ordering or size limit.
-        if not hasattr(self, "_funky_cache"):
-            self._funky_cache = {}
-        cache = self._funky_cache
+        if not hasattr(self, "_cache"):
+            self._cache = {}
+        cache = self._cache
         if not (args or kwargs):
-            key = func
+            key = id(func)
         else:
-            key = (func,) + args
+            key = (id(func),) + args
             if kwargs:
                 for item in kwargs.items():
                     key += item

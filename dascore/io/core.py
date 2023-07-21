@@ -314,7 +314,7 @@ class FiberIO:
             info = dict(pa.attrs)
             info["file_format"] = self.name
             info["path"] = str(resource)
-            out.append(PatchFileSummary.parse_obj(info))
+            out.append(PatchFileSummary(**info))
         return out
 
     def write(self, spool: SpoolType, resource):

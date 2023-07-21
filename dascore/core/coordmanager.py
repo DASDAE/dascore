@@ -62,11 +62,11 @@ from dascore.exceptions import (
 from dascore.utils.display import get_nice_text
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import all_close, cached_method, iterate
-from dascore.utils.models import ArrayLike, DascoreBaseModel, call_validator
+from dascore.utils.models import ArrayLike, DascoreBaseModel, PlainValidator
 
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
 
-frozendict_validator = call_validator(FrozenDict)
+frozendict_validator = PlainValidator(lambda x: FrozenDict(x))
 
 
 class CoordManager(DascoreBaseModel):
@@ -539,7 +539,7 @@ class CoordManager(DascoreBaseModel):
 
     def update_from_attrs(self, attrs: Mapping) -> Self:
         """Update coordinates based on new attributes."""
-        # a bit wasteful, but we need the coercion from initing a PatchAttrs.
+        # a bit wasteful, but we need the coercion from init'ing a PatchAttrs.
         # this enables, for example, conversion of specified fields to datetime
         validated_attrs = PatchAttrs(**dict(attrs))
         attrs = {i: v for i, v in validated_attrs.items() if i in dict(attrs)}

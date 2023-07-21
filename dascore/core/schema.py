@@ -4,7 +4,7 @@ from typing import Literal, Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 from typing_extensions import Annotated, Self
 
 import dascore as dc
@@ -16,13 +16,20 @@ from dascore.constants import (
 )
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.utils.docs import compose_docstring
-from dascore.utils.models import DateTime64, TimeDelta64, UnitQuantity, call_validator
+from dascore.utils.misc import to_str
+from dascore.utils.models import (
+    DascoreBaseModel,
+    DateTime64,
+    PlainValidator,
+    TimeDelta64,
+    UnitQuantity,
+)
 
-str_validator = call_validator(str)
+str_validator = PlainValidator(to_str)
 
 
 @compose_docstring(basic_params=basic_summary_attrs)
-class PatchAttrs(BaseModel):
+class PatchAttrs(DascoreBaseModel):
     """
     The expected attributes for a Patch.
 
@@ -81,7 +88,7 @@ class PatchAttrs(BaseModel):
         setattr(self, key, value)
 
     def __len__(self):
-        return len(self.dict())
+        return len(self.model_dump())
 
     def get(self, item, default=None):
         """dict-like get method."""
@@ -92,14 +99,14 @@ class PatchAttrs(BaseModel):
 
     def items(self):
         """Yield (attribute, values) just like dict.items()."""
-        for item, value in self.dict().items():
+        for item, value in self.model_dump().items():
             yield item, value
 
     @classmethod
     def get_defaults(cls):
         """return a dict of default values"""
         new = cls()
-        return new.dict()
+        return new.model_dump()
 
     def coords_from_dims(self) -> Mapping[str, BaseCoord]:
         """Return coordinates from dimensions assuming evenly sampled."""
@@ -182,9 +189,6 @@ class PatchAttrs(BaseModel):
         contents = dict(self)
         out = {i: v for i, v in contents.items() if not i.startswith("_")}
         return self.__class__(**out)
-
-
-DATABASE_FIELDS = ()
 
 
 class PatchFileSummary(PatchAttrs):

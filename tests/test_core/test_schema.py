@@ -1,5 +1,6 @@
 """Tests for schema."""
 import pytest
+from pydantic import ValidationError
 
 from dascore.core.schema import PatchAttrs
 
@@ -74,9 +75,9 @@ class TestSchemaIsDictLike:
 
     def test_immutable(self, random_attrs):
         """Ensure random_attrs is faux-immutable."""
-        with pytest.raises(TypeError, match="is immutable"):
+        with pytest.raises(ValidationError, match="Instance is frozen"):
             random_attrs.bob = 1
-        with pytest.raises(TypeError, match="is immutable"):
+        with pytest.raises(ValidationError, match="Instance is frozen"):
             random_attrs["bob"] = 1
 
 

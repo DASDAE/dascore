@@ -615,7 +615,7 @@ class CoordArray(BaseCoord):
     def sort(self, reverse=False) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
         """Sort the coord to be monotonic (maybe range)."""
         argsort: ArrayLike = np.argsort(self.values)[:: -1 if reverse else 1]
-        arg_dict = dict(self)
+        arg_dict = self.model_dump()
         arg_dict["values"] = self.values[argsort]
         new = get_coord(**arg_dict)
         return new, argsort
@@ -709,19 +709,19 @@ class CoordArray(BaseCoord):
         """Return the shape of the coordinate."""
         return np.shape(self.values)
 
-    def __eq__(self, other):
-        try:
-            self_d, other_d = dict(self), dict(other)
-        except (TypeError, ValueError):
-            return False
-        v1, v2 = self_d.pop("values", None), other_d.pop("values", None)
-        shapes_same = v1.shape == v2.shape
-        # Frustratingly, all cose doesn't work with datetime64 so we we need
-        # this short-circuiting equality check.
-        values_same = shapes_same and ((np.all(v1 == v2) or np.allclose(v1, v2)))
-        if values_same and self_d == other_d and values_same:
-            return True
-        return False
+    # def __eq__(self, other):
+    #     try:
+    #         self_d, other_d = dict(self), dict(other)
+    #     except (TypeError, ValueError):
+    #         return False
+    #     v1, v2 = self_d.pop("values", None), other_d.pop("values", None)
+    #     shapes_same = v1.shape == v2.shape
+    #     # Frustratingly, all cose doesn't work with datetime64 so we we need
+    #     # this short-circuiting equality check.
+    #     values_same = shapes_same and ((np.all(v1 == v2) or np.allclose(v1, v2)))
+    #     if values_same and self_d == other_d and values_same:
+    #         return True
+    #     return False
 
 
 class CoordMonotonicArray(CoordArray):

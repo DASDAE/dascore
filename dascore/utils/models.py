@@ -7,18 +7,81 @@ from typing import Annotated, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, WrapValidator
+from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
 from typing_extensions import Literal, Self
 
 from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
 from dascore.units import validate_quantity
-from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
+from dascore.utils.misc import (
+    all_close,
+    all_diffs_close_enough,
+    get_middle_value,
+    iterate,
+    to_str,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
+
+# --- A list of custom types with appropriate serialization/deserialization
+# these can just be use with pydantic type-hints.
+
+# A datetime64
+DateTime64 = Annotated[
+    np.datetime64,
+    PlainValidator(to_datetime64),
+    PlainSerializer(to_str, when_used="json"),  # noqa getting undefined name
+]
+
+TimeDelta64 = Annotated[
+    np.timedelta64,
+    PlainValidator(to_timedelta64),
+    PlainSerializer(to_str, when_used="json"),  # noqa getting undefined name
+]
+
+ArrayLike = Annotated[
+    np.ndarray,
+    PlainValidator(array),
+]
+
+DTypeLike = Annotated[
+    str,
+    PlainValidator(np.dtype),
+]
+
+UnitQuantity = Annotated[
+    str | None,
+    PlainValidator(validate_quantity),
+]
+
+
+def sensible_model_equals(self, other):
+    """
+    Custom equality to not compare private attrs and handle numpy arrays.
+    """
+    try:
+        d1, d2 = self.model_dump(), other.model_dump()
+    except (TypeError, ValueError, AttributeError):
+        return False
+    if not set(d1) == set(d2):  # different keys, not equal
+        return False
+    for name, val1 in d1.items():
+        # skip any private attributes.
+        if name.startswith("_"):
+            continue
+        val2 = d2[name]
+        if isinstance(val1, np.ndarray):
+            if not all_close(val1, val2):
+                return False
+        else:
+            if not val1 == val2:
+                return False
+    return True
 
 
 class DascoreBaseModel(BaseModel):
     """A base model with sensible configurations."""
+
+    _cache = {}
 
     model_config = ConfigDict(
         extra="ignore",
@@ -39,22 +102,7 @@ class DascoreBaseModel(BaseModel):
     def __hash__(self):
         return hash(id(self))
 
-
-def call_validator(callable):
-    """Return validator that simply calls a func on a single value."""
-
-    @WrapValidator
-    def _wraper(value, handler):
-        return handler(callable(value))
-
-    return _wraper
-
-
-DateTime64 = Annotated[np.datetime64, call_validator(to_datetime64)]
-TimeDelta64 = Annotated[np.timedelta64, call_validator(to_timedelta64)]
-ArrayLike = Annotated[np.ndarray, call_validator(array)]
-DTypeLike = Annotated[str, call_validator(np.dtype)]
-UnitQuantity = Annotated[str | None, call_validator(validate_quantity)]
+    __eq__ = sensible_model_equals
 
 
 def merge_models(

@@ -243,7 +243,7 @@ def patches_to_df(
     else:
         df = pd.DataFrame([dict(x) for x in scan_patches(patches)])
         if df.empty:  # create empty df with appropriate columns
-            cols = list(PatchAttrs().dict())
+            cols = list(PatchAttrs().model_dump())
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
         else:  # else populate with patches and concat history
             history = df["history"].apply(lambda x: ",".join(x))
