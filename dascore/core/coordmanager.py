@@ -331,11 +331,28 @@ class CoordManager(DascoreBaseModel):
         no_dim_coords = [x for x in cmap if dim_map[x] == ()]
         return self.drop_coord(no_dim_coords)
 
+    def iselect(
+        self, array: MaybeArray = None, relative=False, **kwargs
+    ) -> Tuple[Self, MaybeArray]:
+        """
+        Perform index-based selection on coordinates.
+
+        Parameters
+        ----------
+        array
+            An array to which the selection will be applied.
+        **kwargs
+            Used to specify select arguments. Can be of the form
+            {coord_name: (lower_index, upper_index) or coord_name: index}.
+            As is standard in python, negative indices refer to the end of
+            sequence.
+        """
+
     def select(
         self, array: MaybeArray = None, relative=False, **kwargs
     ) -> Tuple[Self, MaybeArray]:
         """
-        Perform selection on coordinates.
+        Perform value-based selection on coordinates.
 
         Parameters
         ----------
