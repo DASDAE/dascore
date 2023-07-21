@@ -1,5 +1,5 @@
 # Run minimum dependency tests without conda
-name: TestCode
+name: TestCodeMinDeps
 on:
   push:
     branches:
