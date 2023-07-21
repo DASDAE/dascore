@@ -408,6 +408,13 @@ class TestSelect:
         assert out == basic_coord_manager
 
 
+class TestISelect:
+    """Tests for index-based selections."""
+
+    def test_compare_to_select(self, basic_coord_manager):
+        """Ensure"""
+
+
 class TestEquals:
     """Tests for coord manager equality"""
 
