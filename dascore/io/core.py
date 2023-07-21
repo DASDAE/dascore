@@ -5,7 +5,7 @@ Das Data.
 import inspect
 import os.path
 from collections import defaultdict
-from functools import cache, cached_property, wraps
+from functools import cached_property, wraps
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import List, Optional, Union, get_type_hints
@@ -19,7 +19,7 @@ from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
-from dascore.utils.misc import iterate, suppress_warnings
+from dascore.utils.misc import cached_method, iterate, suppress_warnings
 from dascore.utils.pd import _model_list_to_df
 
 
@@ -75,7 +75,7 @@ class _FiberIOManager:
                 second_class_formatters.extend(formatters[1:])
         return tuple(priority_formatters + second_class_formatters)
 
-    @cache
+    @cached_method
     def load_plugins(self, format: Optional[str] = None):
         """Load plugin for specific format or ensure all formats are loaded"""
         if format is not None and format in self._format_version:
@@ -98,7 +98,7 @@ class _FiberIOManager:
             self._extension_list[ext].append(fiberio)
         self._format_version[forma][ver] = fiberio
 
-    @cache
+    @cached_method
     def get_fiberio(
         self,
         format: Optional[str] = None,
@@ -314,7 +314,7 @@ class FiberIO:
             info = dict(pa.attrs)
             info["file_format"] = self.name
             info["path"] = str(resource)
-            out.append(PatchFileSummary.parse_obj(info))
+            out.append(PatchFileSummary(**info))
         return out
 
     def write(self, spool: SpoolType, resource):
@@ -435,7 +435,7 @@ def read(
         return out
 
 
-@compose_docstring(fields=list(PatchFileSummary.__fields__))
+@compose_docstring(fields=list(PatchFileSummary.model_fields))
 def scan_to_df(
     path: Union[Path, str, PatchType, SpoolType, IOResourceManager],
     file_format: Optional[str] = None,

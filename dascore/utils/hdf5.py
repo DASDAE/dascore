@@ -7,7 +7,7 @@ out the hdf5 backend in the future.
 import time
 import warnings
 from contextlib import contextmanager, suppress
-from functools import cache, partial
+from functools import partial
 from pathlib import Path
 from typing import Literal, Optional, Union
 
@@ -22,7 +22,7 @@ import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, max_lens
 from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import InvalidFileHandler, InvalidIndexVersionError
-from dascore.utils.misc import suppress_warnings
+from dascore.utils.misc import cached_method, suppress_warnings
 from dascore.utils.pd import (
     _remove_base_path,
     fill_defaults_from_pydantic,
@@ -330,7 +330,7 @@ class HDFPatchIndexManager:
             data_columns=list(self._query_columns),
         )
 
-    @cache
+    @cached_method
     def validate_version(self):
         """
         This method handles issues with version mismatches.

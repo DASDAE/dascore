@@ -4,8 +4,8 @@ from typing import Literal, Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, Field, validator
-from typing_extensions import Self
+from pydantic import ConfigDict, Field, field_validator
+from typing_extensions import Annotated, Self
 
 import dascore as dc
 from dascore.constants import (
@@ -16,11 +16,20 @@ from dascore.constants import (
 )
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.utils.docs import compose_docstring
-from dascore.utils.models import DateTime64, TimeDelta64, UnitQuantity
+from dascore.utils.misc import to_str
+from dascore.utils.models import (
+    DascoreBaseModel,
+    DateTime64,
+    PlainValidator,
+    TimeDelta64,
+    UnitQuantity,
+)
+
+str_validator = PlainValidator(to_str)
 
 
 @compose_docstring(basic_params=basic_summary_attrs)
-class PatchAttrs(BaseModel):
+class PatchAttrs(DascoreBaseModel):
     """
     The expected attributes for a Patch.
 
@@ -35,8 +44,8 @@ class PatchAttrs(BaseModel):
     previous indices are invalidated.
     """
 
-    data_type: Literal[VALID_DATA_TYPES] = ""
-    data_category: Literal[VALID_DATA_CATEGORIES] = ""
+    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
+    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
     data_units: Optional[UnitQuantity] = None
     time_min: DateTime64 = np.datetime64("NaT")
     time_max: DateTime64 = np.datetime64("NaT")
@@ -54,18 +63,15 @@ class PatchAttrs(BaseModel):
     network: str = Field("", max_length=max_lens["network"])
     history: Union[str, Sequence[str]] = Field(default_factory=list)
 
-    class Config:
-        """Configuration for Patch Summary"""
+    model_config = ConfigDict(
+        title="Patch Summary",
+        extra="allow",
+        frozen=True,
+        arbitrary_types_allowed=True,
+    )
 
-        title = "Patch Summary"
-        extra = "allow"
-        allow_mutation = False
-        json_encoders = {
-            np.datetime64: lambda x: str(x),
-            np.timedelta64: lambda x: str(x),
-        }
-
-    @validator("dims", pre=True)
+    @field_validator("dims", mode="before")
+    @classmethod
     def _flatten_dims(cls, value):
         """Some dims are passed as a tuple; we just want str"""
         if not isinstance(value, str):
@@ -82,7 +88,7 @@ class PatchAttrs(BaseModel):
         setattr(self, key, value)
 
     def __len__(self):
-        return len(self.dict())
+        return len(self.model_dump())
 
     def get(self, item, default=None):
         """dict-like get method."""
@@ -93,14 +99,14 @@ class PatchAttrs(BaseModel):
 
     def items(self):
         """Yield (attribute, values) just like dict.items()."""
-        for item, value in self.dict().items():
+        for item, value in self.model_dump().items():
             yield item, value
 
     @classmethod
     def get_defaults(cls):
         """return a dict of default values"""
         new = cls()
-        return new.dict()
+        return new.model_dump()
 
     def coords_from_dims(self) -> Mapping[str, BaseCoord]:
         """Return coordinates from dimensions assuming evenly sampled."""
@@ -190,14 +196,6 @@ class PatchFileSummary(PatchAttrs):
     The expected minimum attributes for a Patch/spool file.
     """
 
-    # These attributes are excluded from the HDF index.
-    _excluded_index = (
-        "data_units",
-        "time_units",
-        "distance_units",
-        "history",
-    )
-
     file_version: str = ""
     file_format: str = ""
     path: Union[str, Path] = ""
@@ -205,5 +203,11 @@ class PatchFileSummary(PatchAttrs):
     @classmethod
     def get_index_columns(cls) -> tuple[str, ...]:
         """Return the column names which should be used for indexing."""
-        fields = set(cls.__fields__) - set(cls._excluded_index)
+        excluders = (
+            "data_units",
+            "time_units",
+            "distance_units",
+            "history",
+        )
+        fields = set(cls.model_fields) - set(excluders)
         return tuple(sorted(fields))

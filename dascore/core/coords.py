@@ -8,7 +8,7 @@ from typing import Any, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from pydantic import root_validator
+from pydantic import model_validator
 from rich.text import Text
 from typing_extensions import Self
 
@@ -18,7 +18,7 @@ from dascore.constants import dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit
 from dascore.utils.display import get_nice_text
-from dascore.utils.misc import all_diffs_close_enough, iterate
+from dascore.utils.misc import all_diffs_close_enough, cached_method, iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, UnitQuantity
 from dascore.utils.time import is_datetime64, is_timedelta64
 
@@ -72,8 +72,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     data dimension.
     """
 
-    units: Optional[UnitQuantity] = None
-    step: Any
+    units: UnitQuantity = None
+    step: Any = None
 
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False
@@ -95,17 +95,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __getitem__(self, item) -> Self:
         """Should implement slicing and return new instance."""
 
-    @cache
+    @cached_method
     def __len__(self):
         """Total number of elements."""
         return np.prod(self.shape)
-
-    def __hash__(self):
-        """
-        Simply use default hash rather than smart one (object) id
-        so that cache work.
-        """
-        return id(self)
 
     def __rich__(self):
         key_style = dascore_styles["keys"]
@@ -134,12 +127,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __str__(self):
         return str(self.__rich__())
 
-    @cache
+    @cached_method
     def min(self):
         """return min value"""
         return self._min()
 
-    @cache
+    @cached_method
     def max(self):
         """return max value"""
         return self._max()
@@ -158,7 +151,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Returns (or generates) the array data."""
 
     @property
-    @cache
+    @cached_method
     def limits(self) -> Tuple[Any, Any]:
         """Returns a numpy datatype"""
         return self.min(), self.max()
@@ -387,20 +380,22 @@ class CoordRange(BaseCoord):
     Like range and slice, CoordRange is exclusive of stop value.
     """
 
-    start: Any
-    stop: Any
-    step: Any
+    start: Any = None
+    stop: Any = None
+    step: Any = None
     _evenly_sampled = True
     _rich_style = dascore_styles["coord_range"]
 
-    @root_validator()
+    @model_validator(mode="before")
+    @classmethod
     def ensure_all_attrs_set(cls, values):
         """If any info is neglected the coord is invalid."""
         for name in ["start", "stop", "step"]:
             assert values[name] is not None
         return values
 
-    @root_validator()
+    @model_validator(mode="before")
+    @classmethod
     def _set_stop(cls, values):
         """Set stop to integral value >= current stop."""
         dur = values["stop"] - values["start"]
@@ -419,7 +414,7 @@ class CoordRange(BaseCoord):
         out = self.values[item]
         return get_coord(values=out, units=self.units)
 
-    @cache
+    @cached_method
     def __len__(self):
         if self.start == self.stop:
             return 1
@@ -530,7 +525,7 @@ class CoordRange(BaseCoord):
         return out
 
     @property
-    @cache
+    @cached_method
     def values(self) -> ArrayLike:
         """Return the values of the coordinate as an array."""
         if len(self) == 1:
@@ -567,7 +562,7 @@ class CoordRange(BaseCoord):
         return self.step < 0
 
     @property
-    @cache
+    @cached_method
     def dtype(self):
         """Returns datatype."""
         # some types are weird so we create a small array here to let
@@ -613,7 +608,7 @@ class CoordArray(BaseCoord):
     def sort(self, reverse=False) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
         """Sort the coord to be monotonic (maybe range)."""
         argsort: ArrayLike = np.argsort(self.values)[:: -1 if reverse else 1]
-        arg_dict = dict(self)
+        arg_dict = self.model_dump()
         arg_dict["values"] = self.values[argsort]
         new = get_coord(**arg_dict)
         return new, argsort
@@ -678,9 +673,6 @@ class CoordArray(BaseCoord):
             return out
         return self.__class__(values=out, units=self.units)
 
-    def __hash__(self):
-        return hash(id(self))
-
     def _min(self):
         """Return min value"""
         try:
@@ -696,30 +688,30 @@ class CoordArray(BaseCoord):
             return _get_nullish_for_type(self.dtype)
 
     @property
-    @cache
+    @cached_method
     def dtype(self):
         """Returns datatype."""
         return self.values.dtype
 
     @property
-    @cache
+    @cached_method
     def shape(self):
         """Return the shape of the coordinate."""
         return np.shape(self.values)
 
-    def __eq__(self, other):
-        try:
-            self_d, other_d = dict(self), dict(other)
-        except (TypeError, ValueError):
-            return False
-        v1, v2 = self_d.pop("values", None), other_d.pop("values", None)
-        shapes_same = v1.shape == v2.shape
-        # Frustratingly, all cose doesn't work with datetime64 so we we need
-        # this short-circuiting equality check.
-        values_same = shapes_same and ((np.all(v1 == v2) or np.allclose(v1, v2)))
-        if values_same and self_d == other_d and values_same:
-            return True
-        return False
+    # def __eq__(self, other):
+    #     try:
+    #         self_d, other_d = dict(self), dict(other)
+    #     except (TypeError, ValueError):
+    #         return False
+    #     v1, v2 = self_d.pop("values", None), other_d.pop("values", None)
+    #     shapes_same = v1.shape == v2.shape
+    #     # Frustratingly, all cose doesn't work with datetime64 so we we need
+    #     # this short-circuiting equality check.
+    #     values_same = shapes_same and ((np.all(v1 == v2) or np.allclose(v1, v2)))
+    #     if values_same and self_d == other_d and values_same:
+    #         return True
+    #     return False
 
 
 class CoordMonotonicArray(CoordArray):
@@ -779,13 +771,13 @@ class CoordMonotonicArray(CoordArray):
         return False
 
     @property
-    @cache
+    @cached_method
     def sorted(self):
         """Determine is coord array is sorted in ascending order."""
         return self._step_meets_requirement(gt)
 
     @property
-    @cache
+    @cached_method
     def reverse_sorted(self):
         """Determine is coord array is sorted in descending order."""
         return self._step_meets_requirement(lt)

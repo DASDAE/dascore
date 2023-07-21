@@ -1,6 +1,8 @@
 """
 Tests for reading/writing pickles.
 """
+from io import BytesIO
+
 import pytest
 
 import dascore as dc
@@ -42,6 +44,22 @@ class TestGetFormat:
         """Get format should return false if the file doesn't exist."""
         parser = PickleIO()
         assert not parser.get_format("surely_not_a_file_that_exists")
+
+    def test_get_format_binary_file_too_small(self):
+        """Ensure a file which is too small returns false"""
+        bio = BytesIO()
+        bio.write(b"one")
+        fio = PickleIO()
+        bio.seek(0)
+        assert not fio.get_format(bio)
+
+    def test_has_dascore_not_pickle(self):
+        """Test a buffer which has dascore but isnt a DC pickle."""
+        bio = BytesIO()
+        bio.write(b"dascore.core Spool")
+        fio = PickleIO()
+        bio.seek(0)
+        assert not fio.get_format(bio)
 
 
 class TestScan:

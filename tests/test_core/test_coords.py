@@ -1,6 +1,9 @@
 """
 Tests for coordinate object.
 """
+import pickle
+from io import BytesIO
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -176,7 +179,7 @@ class TestBasics:
 
     def test_cant_add_extra_fields(self, evenly_sampled_coord):
         """Ensure coordinates are immutable."""
-        with pytest.raises(ValueError, match="has no field"):
+        with pytest.raises(ValueError, match="Instance is frozen"):
             evenly_sampled_coord.bob = 1
 
     def test_sort(self, coord):
@@ -206,7 +209,7 @@ class TestBasics:
 
     def test_immutable(self, evenly_sampled_coord):
         """Fields can't change once created."""
-        with pytest.raises(TypeError, match="is immutable"):
+        with pytest.raises((TypeError, ValueError), match="Instance is frozen"):
             evenly_sampled_coord.start = 10
 
     def test_values_immutable(self, coord):
@@ -248,6 +251,15 @@ class TestBasics:
         assert coord.min() == np.min(values)
         assert coord.max() == np.max(values)
         assert coord.max() > coord.min()
+
+    def test_can_pickle(self, coord):
+        """Ensure each coord can be pickled/unpickled, both should be equal."""
+        len(coord)
+        bio = BytesIO()
+        pickle.dump(coord, bio)
+        bio.seek(0)
+        new = pickle.load(bio)
+        assert new == coord
 
     def test_out_of_range_raises(self, evenly_sampled_coord):
         """Accessing a value out of the range of array should raise."""
@@ -389,7 +401,8 @@ class TestSelect:
         assert new.degenerate
         assert np.size(coord.data[indexer]) == 0
         # but this should be fine
-        assert coord.select((v1, None))[0] == coord
+        new = coord.select((v1, None))[0]
+        assert new == coord
 
     def test_select_out_of_bounds_too_late(self, coord):
         """Applying a select out of bounds (too late) should raise an Error."""

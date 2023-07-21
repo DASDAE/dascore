@@ -11,6 +11,7 @@ import pytest
 from dascore.exceptions import MissingOptionalDependency
 from dascore.utils.misc import (
     MethodNameSpace,
+    cached_method,
     get_slice_from_monotonic,
     get_stencil_coefs,
     iter_files,
@@ -271,3 +272,39 @@ class TestGetStencilCoefficients:
         out = get_stencil_coefs(1, 2)
         expected = np.array([1, -2, 1])
         assert np.allclose(out, expected)
+
+
+class TestCachedMethod:
+    """Ensure cached methods caches method calls (duh)"""
+
+    class _JohnnyCached:
+        """Tests class for caching."""
+
+        @cached_method
+        def no_args(self):
+            """no argument method."""
+            return {"output", "defined"}
+
+        @cached_method
+        def multiargs(self, a, b):
+            """multiple arguments for cache testing."""
+            return a + b
+
+    def test_no_args_kwargs(self):
+        """Ensure objects cache without args or kwargs."""
+        john = self._JohnnyCached()
+        first = john.no_args()
+        assert first is john.no_args()
+
+    def test_positional(self):
+        """Ensure positional arguments work."""
+        john = self._JohnnyCached()
+        out = john.multiargs(1, 2)
+        assert john.multiargs(1.0, 2.0) == 3.0
+        assert out == 3
+
+    def test_kwargs(self):
+        """Ensure keywords also work."""
+        john = self._JohnnyCached()
+        assert john.multiargs(1, b=1) == 2
+        assert john.multiargs(a=2, b=3) == 5

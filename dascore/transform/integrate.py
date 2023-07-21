@@ -10,7 +10,6 @@ import numpy as np
 
 from dascore.constants import PatchType
 from dascore.utils.misc import broadcast_for_index, iterate
-from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
@@ -64,7 +63,7 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
     array = np.array(patch.data)
     for dx_or_val, ax in zip(dxs_or_vals, axes):
         # if coordinate values are provided need to get diffs.
-        if isinstance(dx_or_val, (np.ndarray, ArrayLike)):
+        if isinstance(dx_or_val, np.ndarray):
             dx_or_val = dx_or_val[1:] - dx_or_val[:-1]
         ndim = len(array.shape)
         # get diffs along dimension

@@ -141,7 +141,7 @@ class TestScanDASDAE:
 
     def test_scan_returns_info(self, written_dascore_v1_random, random_patch):
         """Ensure scanning returns expected values."""
-        info1 = dc.scan(written_dascore_v1_random)[0].dict()
+        info1 = dc.scan(written_dascore_v1_random)[0].model_dump()
         info2 = dict(random_patch.attrs)
         common_keys = set(info1) & set(info2) - {"history"}
         for key in common_keys:

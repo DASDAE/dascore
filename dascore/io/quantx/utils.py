@@ -89,7 +89,7 @@ def _scan_quantx(self, fi):
     out = _get_attrs(data_node, root_attrs)
     extras = dict(path=fi.filename, file_format=self.name, file_version=version)
     out.update(extras)
-    return [PatchFileSummary.parse_obj(out)]
+    return [PatchFileSummary(**out)]
 
 
 #

@@ -3,32 +3,94 @@ Utilities for models.
 """
 from collections import ChainMap
 from functools import _lru_cache_wrapper, cached_property, reduce
-from typing import Optional, Sequence
+from typing import Annotated, Optional, Sequence
 
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
 from typing_extensions import Literal, Self
 
 from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
 from dascore.units import validate_quantity
-from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
+from dascore.utils.misc import (
+    all_close,
+    all_diffs_close_enough,
+    get_middle_value,
+    iterate,
+    to_str,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
+
+# --- A list of custom types with appropriate serialization/deserialization
+# these can just be use with pydantic type-hints.
+
+# A datetime64
+DateTime64 = Annotated[
+    np.datetime64,
+    PlainValidator(to_datetime64),
+    PlainSerializer(to_str, when_used="json"),  # noqa getting undefined name
+]
+
+TimeDelta64 = Annotated[
+    np.timedelta64,
+    PlainValidator(to_timedelta64),
+    PlainSerializer(to_str, when_used="json"),  # noqa getting undefined name
+]
+
+ArrayLike = Annotated[
+    np.ndarray,
+    PlainValidator(array),
+]
+
+DTypeLike = Annotated[
+    str,
+    PlainValidator(np.dtype),
+]
+
+UnitQuantity = Annotated[
+    str | None,
+    PlainValidator(validate_quantity),
+]
+
+
+def sensible_model_equals(self, other):
+    """
+    Custom equality to not compare private attrs and handle numpy arrays.
+    """
+    try:
+        d1, d2 = self.model_dump(), other.model_dump()
+    except (TypeError, ValueError, AttributeError):
+        return False
+    if not set(d1) == set(d2):  # different keys, not equal
+        return False
+    for name, val1 in d1.items():
+        # skip any private attributes.
+        if name.startswith("_"):
+            continue
+        val2 = d2[name]
+        if isinstance(val1, np.ndarray):
+            if not all_close(val1, val2):
+                return False
+        else:
+            if not val1 == val2:
+                return False
+    return True
 
 
 class DascoreBaseModel(BaseModel):
     """A base model with sensible configurations."""
 
-    class Config:
-        """Configuration for models."""
+    _cache = {}
 
-        extra = "ignore"
-        validate_assignment = True  # validators run on assignment
-        keep_untouched = (cached_property, _lru_cache_wrapper)
-        frozen = True
-        validate_all = True
+    model_config = ConfigDict(
+        extra="ignore",
+        validate_assignment=True,
+        ignored_types=(cached_property, _lru_cache_wrapper),
+        frozen=True,
+        validate_default=True,
+        arbitrary_types_allowed=True,
+    )
 
     def new(self, **kwargs) -> Self:
         """Create new instance with some attributed updated."""
@@ -37,69 +99,10 @@ class DascoreBaseModel(BaseModel):
             out[item] = value
         return self.__class__(**out)
 
+    def __hash__(self):
+        return hash(id(self))
 
-class SimpleValidator:
-    """
-    A custom class for getting simple validation behavior in pydantic.
-
-    Subclass, then define function to be used as validator. func
-    """
-
-    @classmethod
-    def func(cls, value):
-        """A method to overwrite with custom validation."""
-        return value
-
-    @classmethod
-    def __get_validators__(cls):
-        """Hook used by pydantic."""
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, validator):
-        """Simply call func."""
-        return cls.func(validator)
-
-
-class DateTime64(np.datetime64, SimpleValidator):
-    """DateTime64 validator"""
-
-    func = to_datetime64
-
-
-class TimeDelta64(np.timedelta64, SimpleValidator):
-    """TimeDelta64 validator"""
-
-    func = to_timedelta64
-
-
-class ArrayLike(np.ndarray, SimpleValidator):
-    """An array like validator."""
-
-    @classmethod
-    def func(cls, object):
-        """Ensure an object is array-like."""
-        assert isinstance(object, np.ndarray)
-        return array(object)
-
-
-class DTypeLike(SimpleValidator):
-    """A data-type like validator."""
-
-    @classmethod
-    def func(cls, object):
-        """Assert an object is datatype-like"""
-        assert isinstance(object, npt.DTypeLike)
-        return object
-
-
-class UnitQuantity(str, SimpleValidator):
-    """A string which can be converted to a Unit (e.g, m)."""
-
-    @classmethod
-    def func(cls, value):
-        """validate that a string can be converted to a unit."""
-        return validate_quantity(value)
+    __eq__ = sensible_model_equals
 
 
 def merge_models(

@@ -55,6 +55,17 @@ def append_func(some_list):
     return _func
 
 
+def _pass_through_method(func):
+    """Decorator for marking functions as methods on namedspace parent class."""
+
+    @functools.wraps(func)
+    def _func(self, *args, **kwargs):
+        obj = getattr(self, "_obj")
+        return func(obj, *args, **kwargs)
+
+    return _func
+
+
 class _NameSpaceMeta(type):
     """Metaclass for namespace class"""
 
@@ -91,17 +102,6 @@ class MethodNameSpace(metaclass=_NameSpaceMeta):
         for key, val in vars(cls).items():
             if callable(val):  # passes to _NameSpaceMeta settattr
                 setattr(cls, key, val)
-
-
-def _pass_through_method(func):
-    """Decorator for marking functions as methods on namedspace parent class."""
-
-    @functools.wraps(func)
-    def _func(self, *args, **kwargs):
-        obj = getattr(self, "_obj")
-        return func(obj, *args, **kwargs)
-
-    return _func
 
 
 def get_slice_from_monotonic(array, cond=Optional[tuple]) -> slice:
@@ -174,6 +174,7 @@ def _get_sampling_rate(sampling_period):
     """
     Get a sampling rate as a float.
     """
+    # TODO remove, just use to_float from time module.
     if np.issubdtype(sampling_period.dtype, np.timedelta64):
         num = ONE_SECOND
     else:
@@ -384,3 +385,41 @@ def get_parent_code_name(levels: int = 2) -> str:
     for _ in range(levels):
         stack = stack.f_back
     return stack.f_code.co_name
+
+
+def to_str(val):
+    """Convert value to string."""
+    # This is primarily used to avoid lambdas which can cause issues
+    # in pickling.
+    return str(val)
+
+
+def cached_method(func):
+    """
+    Cache decorated method.
+
+    Simply uses the id of self for the key rather than hashing it.
+    We can't use functools.cache due to pydantic #6787.
+    """
+    sentinel = object()  # unique object for cache misses.
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        if not hasattr(self, "_cache"):
+            self._cache = {}
+        cache = self._cache
+        if not (args or kwargs):
+            key = id(func)
+        else:
+            key = (id(func),) + args
+            if kwargs:
+                for item in kwargs.items():
+                    key += item
+        out = cache.get(key, sentinel)
+        if out is not sentinel:
+            return out
+        out = func(self, *args, **kwargs)
+        cache[key] = out
+        return out
+
+    return wrapper

@@ -104,7 +104,7 @@ def _scan_terra15(self, fi):
     version, data_node = _get_version_data_node(root)
     out = _get_default_attrs(root_attrs)
     out.update(_get_extra_scan_attrs(self, version, fi.filename, data_node))
-    return [PatchFileSummary.parse_obj(out)]
+    return [PatchFileSummary(**out)]
 
 
 # --- Reading patch
