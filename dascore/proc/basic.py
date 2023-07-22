@@ -1,15 +1,232 @@
 """
 Basic operations for patches.
 """
-from typing import Literal
+from __future__ import annotations
+
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 import numpy as np
+import pandas as pd
+from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PatchType
-from dascore.exceptions import UnitError
+from dascore.core.coordmanager import BaseCoord, CoordManager, get_coord_manager
+from dascore.core.schema import PatchAttrs
+from dascore.exceptions import CoordError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.utils.misc import get_parent_code_name, iterate, optional_import
+from dascore.utils.models import ArrayLike
 from dascore.utils.patch import merge_compatible_coords_attrs, patch_function
+
+
+def set_dims(self: PatchType, **kwargs: str) -> PatchType:
+    """
+    Set dimension to non-dimensional coordinate.
+
+    Parameters
+    ----------
+    **kwargs
+        A mapping indicating old_dim: new_dim where new_dim refers to
+        the name of a non-dimensional coordinate which will become a
+        dimensional coordinate. The old dimensional coordinate will
+        become a non-dimensional coordinate.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # add new coordinate, random numbers length of time dim
+    >>> my_coord = np.random.random(patch.coord_shapes["time"])
+    >>> out = (
+    ...    patch.update_coords(my_coord=("time", my_coord))  # add my_coord
+    ...    .set_dims(time="my_coord") # set mycoord as dim (rather than time)
+    ... )
+    >>> assert "my_coord" in out.dims
+    """
+    cm = self.coords.set_dims(**kwargs)
+    return self.new(coords=cm)
+
+
+def pipe(
+    self: PatchType, func: Callable[[PatchType, ...], PatchType], *args, **kwargs
+) -> PatchType:
+    """
+    Pipe the patch to a function.
+
+    This is primarily useful for maintaining a chain of patch calls for
+    a function.
+
+    Parameters
+    ----------
+    func
+        The function to pipe the patch. It must take a patch instance as
+        the first argument followed by any number of positional or keyword
+        arguments, then return a patch.
+    *args
+        Positional arguments that get passed to func.
+    **kwargs
+        Keyword arguments passed to func.
+    """
+    return func(self, *args, **kwargs)
+
+
+def to_xarray(self: PatchType):
+    """
+    Return a data array with patch contents.
+    """
+    xr = optional_import("xarray")
+    attrs = dict(self.attrs)
+    dims = self.dims
+    coords = self.coords._get_dim_array_dict()
+    return xr.DataArray(self.data, attrs=attrs, dims=dims, coords=coords)
+
+
+def update_attrs(self: PatchType, **attrs) -> PatchType:
+    """
+    Update attrs and return a new Patch.
+
+    Parameters
+    ----------
+    **attrs
+        attrs to add/update.
+    """
+
+    def _fast_attr_update(self, attrs):
+        """A fast method for just squashing the attrs and returning new patch."""
+        new = self.__new__(self.__class__)
+        new._data = self.data
+        new._attrs = attrs
+        new._coords = self.coords
+        return new
+
+    # since we update history so often, we make a fast track for it.
+    new_attrs = dict(self.attrs)
+    new_attrs.update(attrs)
+    if len(attrs) == 1 and "history" in attrs:
+        return _fast_attr_update(self, PatchAttrs(**new_attrs))
+    new_coords = self.coords.update_from_attrs(attrs)
+    out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
+    return self.__class__(self.data, **out)
+
+
+def get_coord(
+    self: PatchType,
+    name: str,
+    require_sorted: bool = False,
+    require_evenly_sampled: bool = False,
+) -> BaseCoord:
+    """
+    Get a managed coordinate, raising if it doesn't meet requirements.
+
+    Parameters
+    ----------
+    name
+        Name of the coordinate to fetch.
+    require_sorted
+        If True, require the coordinate to be sorted or raise Error.
+    require_evenly_sampled
+        If True, require the coordinate to be evenly sampled or raise Error.
+    """
+    coord = self.coords.coord_map[name]
+    if require_evenly_sampled and coord.step is None:
+        extra = f"as required by {get_parent_code_name()}"  # adds caller name
+        msg = f"Coordinate {name} is not evenly sampled {extra}"
+        raise CoordError(msg)
+    if require_sorted and not coord.sorted or coord.reverse_sorted:
+        extra = f"as required by {get_parent_code_name()}"  # adds caller name
+        msg = f"Coordinate {name} is not sorted {extra}"
+        raise CoordError(msg)
+    return coord
+
+
+def assert_has_coords(self: PatchType, coord_names: Sequence[str] | str) -> Self:
+    """Raise an error if patch doesn't have required coordinates."""
+    required_coords = set(iterate(coord_names))
+    current_coords = set(self.coords.coord_map)
+    if missing := required_coords - current_coords:
+        msg = f"Patch does not have required coordinate(s): {missing}"
+        raise CoordError(msg)
+    return self
+
+
+def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
+    """
+    Determine if the current patch equals a
+
+    Parameters
+    ----------
+    other
+        A Patch (could be equal) or some other type (not equal)
+    only_required_attrs
+        If True, only compare required attributes. This helps avoid issues
+        with comparing histories or custom attrs of patches, for example.
+    """
+    if not isinstance(other, type(self)):
+        return False
+    if only_required_attrs:
+        attrs_to_compare = set(PatchAttrs.get_defaults()) - {"history"}
+        attrs1 = {x: self.attrs.get(x, None) for x in attrs_to_compare}
+        attrs2 = {x: other.attrs.get(x, None) for x in attrs_to_compare}
+    else:
+        attrs1, attrs2 = dict(self.attrs), dict(other.attrs)
+    if set(attrs1) != set(attrs2):  # attrs don't have same keys; not equal
+        return False
+    if attrs1 != attrs2:
+        # see if some values are NaNs, these should be counted equal
+        not_equal = {
+            x
+            for x in attrs1
+            if attrs1[x] != attrs2[x]
+            and not (pd.isnull(attrs1[x]) and pd.isnull(attrs2[x]))
+        }
+        if not_equal:
+            return False
+    # check coords, names and values
+    if not self.coords == other.coords:
+        return False
+    return np.equal(self.data, other.data).all()
+
+
+def new(
+    self: PatchType,
+    data: None | ArrayLike | np.ndarray = None,
+    coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,
+    dims: None | Sequence[str] = None,
+    attrs: None | Mapping | PatchAttrs = None,
+) -> PatchType:
+    """
+    Return a copy of the Patch with updated data, coords, dims, or attrs.
+
+    Parameters
+    ----------
+    data
+        An array-like containing data, an xarray DataArray object, or a Patch.
+    coords
+        The coordinates, or dimensional labels for the data. These can be
+        passed in three forms:
+        {coord_name: data}
+        {coord_name: ((dimensions,), data)}
+        {coord_name: (dimensions, data)}
+    dims
+        A sequence of dimension strings. The first entry corresponds to the
+        first axis of data, the second to the second dimension, and so on.
+    attrs
+        Optional attributes (non-coordinate metadata) passed as a dict.
+    """
+    data = data if data is not None else self.data
+    coords = coords if coords is not None else self.coords
+    if dims is None:
+        dims = coords.dims if isinstance(coords, CoordManager) else self.dims
+    coords = get_coord_manager(coords, dims)
+    if attrs:
+        # need to figure out what changed and just pass that to update coords
+        new, old = dict(attrs), dict(self.attrs)
+        diffs = {i: v for i, v in new.items() if new[i] != old.get(i, type)}
+        coords = coords.update_from_attrs(diffs)
+    attrs = attrs or self.attrs
+    return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 
 
 @patch_function()

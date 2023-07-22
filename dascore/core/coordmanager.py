@@ -411,6 +411,43 @@ class CoordManager(DascoreBaseModel):
         no_dim_coords = [x for x in cmap if dim_map[x] == ()]
         return self.drop_coord(no_dim_coords)
 
+    def set_dims(self, **kwargs: str) -> Self:
+        """
+        Set dimension to non-dimensional coordinate.
+
+        Parameters
+        ----------
+        kwargs
+            A mapping indicating old_dim: new_dim where new_dim refers to
+            the name of a non-dimensional coordinate.
+        """
+        dims = list(self.dims)
+        coord_map = dict(self.coord_map)
+        dim_map = dict(self.dim_map)
+        for old_dim, new_dim in kwargs.items():
+            if new_dim not in coord_map or old_dim not in dims:
+                msg = (
+                    f"{old_dim} is not a dimension or {new_dim} is not a "
+                    f"coordinate."
+                )
+                raise CoordError(msg)
+            # ensure coords have the same shape
+            old_coord, new_coord = coord_map[old_dim], coord_map[new_dim]
+            if not old_coord.shape == new_coord.shape or len(new_coord.shape) != 1:
+                msg = (
+                    f"New coordinate {new_coord} with a shape of {new_coord.shape} "
+                    f"does not match the shape of {old_coord} ({old_coord.shape})"
+                )
+                raise CoordError(msg)
+
+            # swap out old dims
+            dims[dims.index(old_dim)] = new_dim
+        # now loop over dim_maps and swap out old dims with new
+        old_to_new = {i: v for i, v in zip(self.dims, dims)}
+        for coord_name, coord_dims in dim_map.items():
+            dim_map[coord_name] = tuple(old_to_new[x] for x in coord_dims)
+        return self.__class__(dims=dims, coord_map=coord_map, dim_map=dim_map)
+
     def iselect(self, array: MaybeArray = None, **kwargs) -> Tuple[Self, MaybeArray]:
         """
         Perform index-based selection on coordinates.
