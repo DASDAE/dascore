@@ -1099,3 +1099,32 @@ class TestDisassociate:
         cm = coord_manager_multidim.disassociate_coord("quality")
         assert cm.dim_map["quality"] == ()
         assert cm.dims == coord_manager_multidim.dims
+
+
+class TestSetDims:
+    """Tests for setting dims to non-dimensional coordinates."""
+
+    def test_swap_coords(self, coord_manager_multidim):
+        """Simple coord swap"""
+        cm = coord_manager_multidim
+        out1 = cm.set_dims(distance="latitude")
+        assert "latitude" in out1.dims
+        assert "latitude" not in cm.dims, "original dim should be unchanged"
+        # distance should now be associated with latitude.
+        assert out1.dim_map["distance"][0] == "latitude"
+
+    def test_bad_dimension(self, coord_manager_multidim):
+        """Ensure if a bad dimension is provided it raises."""
+        cm = coord_manager_multidim
+        match = "is not a dimension or"
+        with pytest.raises(CoordError, match=match):
+            cm.set_dims(bob="latitude")
+        with pytest.raises(CoordError, match=match):
+            cm.set_dims(distance="bob")
+
+    def test_wrong_shape(self, coord_manager_multidim):
+        """Ensure if a coord with wrong shape is chosen an error is raised."""
+        cm = coord_manager_multidim
+        match = "does not match the shape of"
+        with pytest.raises(CoordError, match=match):
+            cm.set_dims(distance="quality")

@@ -6,6 +6,10 @@ Welcome to DASCore's cookbook! This is a collection of examples (recipes) for pe
 Please look around and consider [contributing](../contributing/contributing.qmd) some examples of your
 own.
 
+# Basic
+
+[Plotting channel number](plotting_channel_number.qmd)
+
 # Contributing
 
 [Contributing to documentation](contributing_to_documentation.qmd)

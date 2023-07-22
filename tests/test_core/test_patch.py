@@ -517,10 +517,9 @@ class TestReleaseMemory:
 class TestXarray:
     """Tests for xarray conversions."""
 
-    pytest.importorskip("xarray")
-
     def test_convert_to_xarray(self, random_patch):
         """Tests for converting to xarray object."""
+        pytest.importorskip("xarray")
         import xarray as xr
 
         da = random_patch.to_xarray()
@@ -679,3 +678,25 @@ class TestDeprecations:
 
         with pytest.warns(DeprecationWarning):
             random_patch.assign_coords(new_time=("time", new_coord))
+
+
+class TestSetDims:
+    """Tests for setting dimensions."""
+
+    # note: patch.set_dims just passes work down too CoordManager.set_dims
+    # which is tested more thoroughly
+    def test_set_dim(self, random_patch_with_lat_lon):
+        """Simple test for set_dims."""
+        patch = random_patch_with_lat_lon
+        out = patch.set_dims(distance="longitude")
+        assert "longitude" in out.dims
+        assert "longitude" in out.coords.dim_map["distance"]
+
+    def test_doctest_example(self, random_patch):
+        """Ensure the doctest example works."""
+        patch = random_patch
+        my_coord = np.random.random(patch.coord_shapes["time"])
+        out = patch.update_coords(my_coord=("time", my_coord)).set_dims(  # add my_coord
+            time="my_coord"
+        )  # set mycoord as dim (rather than time)
+        assert "my_coord" in out.dims
