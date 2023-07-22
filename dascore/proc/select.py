@@ -8,7 +8,7 @@ from dascore.utils.patch import patch_function
 @patch_function(history=None)
 def select(patch: PatchType, *, copy=False, relative=False, **kwargs) -> PatchType:
     """
-    Return a subset of the patch based on query parameters.
+    Return a subset of the patch using value-based query parameters.
 
     Any dimension of the data can be passed as key, and the values
     should either be a Slice or a tuple of (min, max) for that
@@ -30,6 +30,8 @@ def select(patch: PatchType, *, copy=False, relative=False, **kwargs) -> PatchTy
         possitive, or the end of the coordinate, if negative.
     **kwargs
         Used to specify the dimension and slices to select on.
+
+    See also [iselect](`dascore.proc.select.iselect`).
 
     Examples
     --------
@@ -55,6 +57,46 @@ def select(patch: PatchType, *, copy=False, relative=False, **kwargs) -> PatchTy
     new_coords, data = patch.coords.select(
         **kwargs, array=patch.data, relative=relative
     )
+    # no slicing was performed, just return original.
+    if data.shape == patch.data.shape:
+        return patch
+    if copy:
+        data = data.copy()
+    attrs, dims = patch.attrs, patch.dims
+    return patch.__class__(data, attrs=attrs, coords=new_coords, dims=dims)
+
+
+@patch_function(history=None)
+def iselect(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
+    """
+    Return a subset of the patch using index-based query parameters.
+
+    Any dimension of the data can be passed as key, and the values
+    should either be a Slice, a tuple of (min_ind, max_ind) or a single
+    int.
+
+    Parameters
+    ----------
+    patch
+        The patch object.
+    copy
+        If True, copy the resulting data. This is needed so the old
+        array can get gc'ed and memory freed.
+    **kwargs
+        Used to specify the dimension and slices to select on.
+
+    See also [select](`dascore.proc.select.select`).
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # Select first 10 distance indices
+    >>> out1 = patch.iselect(distance=(..., 10))
+    >>> # Select last time row/column
+    >>> out2 = patch.iselect(time=-1)
+    """
+    new_coords, data = patch.coords.iselect(**kwargs, array=patch.data)
     # no slicing was performed, just return original.
     if data.shape == patch.data.shape:
         return patch

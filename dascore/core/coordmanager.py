@@ -42,7 +42,17 @@ from collections import defaultdict
 from contextlib import suppress
 from functools import reduce
 from operator import and_, or_
-from typing import Annotated, Dict, Mapping, Optional, Sequence, Tuple, TypeVar, Union
+from typing import (
+    Annotated,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+    Sized,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 import numpy as np
 from pydantic import field_validator, model_validator
@@ -67,6 +77,76 @@ from dascore.utils.models import ArrayLike, DascoreBaseModel, PlainValidator
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
 
 frozendict_validator = PlainValidator(lambda x: FrozenDict(x))
+
+
+def _validate_select_coords(coord, coord_name):
+    """Ensure multi-dims are not used."""
+    if not len(coord.shape) == 1:
+        msg = (
+            "Only 1 dimensional coordinates can be used for selection "
+            f"{coord_name} has {len(coord.shape)} dimensions."
+        )
+        raise CoordError(msg)
+
+
+def _indirect_coord_updates(cm, dim_name, coord_name, reduction, new_coords):
+    """
+    Applies trim to coordinates when other associated coordinates
+    Are trimmed.
+    """
+    other_coords = set(cm.dim_to_coord_map[dim_name]) - {coord_name}
+    # perform indirect updates.
+    for icoord in other_coords:
+        dims, coord = new_coords[icoord]
+        axis = cm.dim_map[icoord].index(dim_name)
+        new = coord.index(reduction, axis=axis)
+        new_coords[icoord] = (dims, new)
+
+
+def _to_slice(limits):
+    """Convert slice or two len tuple to slice."""
+    if isinstance(limits, slice):
+        return limits
+    # ints should be interpreted as Slice(int, int+1) to not collapse dim.
+    if isinstance(limits, int):
+        if limits == -1:  # -1 case needs open interval to work
+            return slice(-1, None)
+        return slice(limits, limits + 1)
+    if limits is ... or limits is None:
+        return slice(None, None)
+    assert isinstance(limits, Sized) and len(limits) == 2
+    val1, val2 = limits
+    start = None if val1 is ... or val1 is None else val1
+    stop = None if val2 is ... or val2 is None else val2
+    return slice(start, stop)
+
+
+def _get_indexers_and_new_coords_dict(cm, kwargs, index=False, relative=False):
+    """Function to get reductions for each dimension."""
+    dim_reductions = {x: slice(None, None) for x in cm.dims}
+    dimap = cm.dim_map
+    new_coords = dict(cm._get_dim_array_dict(keep_coord=True))
+    for coord_name, limits in kwargs.items():
+        # this is not a selectable coord, just skip.
+        if coord_name not in cm.coord_map:
+            continue
+        coord = cm.coord_map[coord_name]
+        _validate_select_coords(coord, coord_name)
+        dim_name = dimap[coord_name][0]
+        # different logic if we are using indices or values
+        if not index:
+            new_coord, reductions = coord.select(limits, relative=relative)
+        else:
+            reductions = _to_slice(limits)
+            new_coord = coord[reductions]
+        # this handles the case of out-of-bound selections.
+        # These should be converted to degenerate coords.
+        dim_reductions[dim_name] = reductions
+        new_coords[coord_name] = (dimap[coord_name], new_coord)
+        # update other coords affected by change.
+        _indirect_coord_updates(cm, dim_name, coord_name, reductions, new_coords)
+    indexers = tuple(dim_reductions[x] for x in cm.dims)
+    return new_coords, indexers
 
 
 class CoordManager(DascoreBaseModel):
@@ -331,11 +411,34 @@ class CoordManager(DascoreBaseModel):
         no_dim_coords = [x for x in cmap if dim_map[x] == ()]
         return self.drop_coord(no_dim_coords)
 
+    def iselect(self, array: MaybeArray = None, **kwargs) -> Tuple[Self, MaybeArray]:
+        """
+        Perform index-based selection on coordinates.
+
+        Parameters
+        ----------
+        array
+            An array to which the selection will be applied.
+        **kwargs
+            Used to specify select arguments. Can be of the form
+            {coord_name: (lower_index, upper_index) or coord_name: index}.
+            As is standard in python, negative indices refer to the end of
+            sequence.
+        """
+        new_coords, indexers = _get_indexers_and_new_coords_dict(
+            self,
+            kwargs,
+            relative=False,
+            index=True,
+        )
+        new_cm = self.update_coords(**new_coords)
+        return new_cm, self._get_new_data(indexers, array)
+
     def select(
         self, array: MaybeArray = None, relative=False, **kwargs
     ) -> Tuple[Self, MaybeArray]:
         """
-        Perform selection on coordinates.
+        Perform value-based selection on coordinates.
 
         Parameters
         ----------
@@ -347,52 +450,9 @@ class CoordManager(DascoreBaseModel):
             Used to specify select arguments. Can be of the form
             {coord_name: (lower_limit, upper_limit)}.
         """
-
-        def _validate_coords(coord, coord_name):
-            """Ensure multi-dims are not used."""
-            if not len(coord.shape) == 1:
-                msg = (
-                    "Only 1 dimensional coordinates can be used for selection "
-                    f"{coord_name} has {len(coord.shape)} dimensions."
-                )
-                raise CoordError(msg)
-
-        def _indirect_coord_updates(dim_name, coord_name, reduction, new_coords):
-            """
-            Applies trim to coordinates when other associated coordinates
-            Are trimmed.
-            """
-            other_coords = set(self.dim_to_coord_map[dim_name]) - {coord_name}
-            # perform indirect updates.
-            for icoord in other_coords:
-                dims, coord = new_coords[icoord]
-                axis = self.dim_map[icoord].index(dim_name)
-                new = coord.index(reduction, axis=axis)
-                new_coords[icoord] = (dims, new)
-
-        def _get_indexers_and_new_coords_dict():
-            """Function to get reductions for each dimension."""
-            dim_reductions = {x: slice(None, None) for x in self.dims}
-            dimap = self.dim_map
-            new_coords = dict(self._get_dim_array_dict(keep_coord=True))
-            for coord_name, limits in kwargs.items():
-                # this is not a selectable coord, just skip.
-                if coord_name not in self.coord_map:
-                    continue
-                coord = self.coord_map[coord_name]
-                _validate_coords(coord, coord_name)
-                dim_name = dimap[coord_name][0]
-                # this handles the case of out-of-bound selections.
-                # These should be converted to degenerate coords.
-                new_coord, reductions = coord.select(limits, relative=relative)
-                dim_reductions[dim_name] = reductions
-                new_coords[coord_name] = (dimap[coord_name], new_coord)
-                # update other coords affected by change.
-                _indirect_coord_updates(dim_name, coord_name, reductions, new_coords)
-            indexers = tuple(dim_reductions[x] for x in self.dims)
-            return new_coords, indexers
-
-        new_coords, indexers = _get_indexers_and_new_coords_dict()
+        new_coords, indexers = _get_indexers_and_new_coords_dict(
+            self, kwargs, index=False, relative=relative
+        )
         new_cm = self.update_coords(**new_coords)
         return new_cm, self._get_new_data(indexers, array)
 

@@ -32,7 +32,7 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.units import get_conversion_factor
-from dascore.utils.misc import get_middle_value, register_func
+from dascore.utils.misc import all_close, get_middle_value, register_func
 
 COORD_MANAGERS = []
 
@@ -406,6 +406,81 @@ class TestSelect:
         out, new = basic_coord_manager.select(bob=(10, 20), array=ar)
         assert new.shape == ar.shape
         assert out == basic_coord_manager
+
+
+class TestISelect:
+    """Tests for index-based selections."""
+
+    # index ranges to compare with normal select.
+    slice_inds = (
+        (None, 5),
+        (..., 5),
+        (1, 5),
+        (1, None),
+        (1, ...),
+        (..., ...),
+        (None, None),
+        (3, 4),
+        (-4, -1),
+        (1, -1),
+    )
+    # single index values to test
+    inds = (
+        0,
+        1,
+        -1,
+        -2,
+    )
+
+    @pytest.mark.parametrize("slice_range", slice_inds)
+    def test_compare_to_select(self, basic_coord_manager, slice_range):
+        """Ensure select and iselect behave the same with equiv. data."""
+        cm = basic_coord_manager
+        for name, coord in cm.coord_map.items():
+            ind_tuple = slice_range
+            ind_1, ind_2 = slice_range
+            val1 = coord[ind_1] if isinstance(ind_1, int) else ind_1
+            val2 = coord[ind_2 - 1] if isinstance(ind_2, int) else ind_2
+            value_tuple = (val1, val2)
+            # first, just check coords are equal
+            out1 = coord.select(value_tuple)[0]
+            out2 = coord[slice(*ind_tuple)]
+            if not out1 == out2:
+                assert all_close(out1.values, out2.values)
+            # then check that the whole coord_manager are equal
+            cm1 = cm.select(**{name: value_tuple})
+            cm2 = cm.iselect(**{name: ind_tuple})
+            assert cm1 == cm2
+
+    @pytest.mark.parametrize("index", inds)
+    def test_single_values(self, basic_coord_manager, index):
+        """
+        Single values should be treated like slice(val, val+1)
+        as not to collapse the dimensions.
+        """
+        cm = basic_coord_manager
+        data = np.empty(cm.shape)
+        for dim in basic_coord_manager.dims:
+            kwargs = {dim: index}
+            out1, new_data = cm.iselect(array=data, **kwargs)
+            dim_ind = cm.dims.index(dim)
+            # now the array should have a len(1) in the selected dimension.
+            assert out1.shape[dim_ind] == new_data.shape[dim_ind] == 1
+            new_value = out1.coord_map[dim].values[0]
+            expected_value = cm[dim][index]
+            all_close(new_value, expected_value)
+
+    def test_trim_related_coords(self, coord_manager_multidim):
+        """Ensure trim also trims related dimensions."""
+        cm = coord_manager_multidim
+        data = np.empty(cm.shape)
+        out, new_data = cm.iselect(array=data, time=slice(2, 4))
+        for name, coord in out.coord_map.items():
+            dims = cm.dim_map[name]
+            if "time" not in dims:
+                continue
+            time_id = dims.index("time")
+            assert coord.shape[time_id] == 2
 
 
 class TestEquals:

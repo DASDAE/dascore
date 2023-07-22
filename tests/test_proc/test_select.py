@@ -106,6 +106,35 @@ class TestSelect:
         assert patch1 == patch2
 
 
+class TestISelect:
+    """Tests for Index-based selection."""
+
+    # Note: since this uses nearly all the same logic as select, it
+    # is not necessary to test it as extensively.
+    def test_time_slice(self, random_patch):
+        """Ensure a simple time slice works."""
+        pa1 = random_patch.iselect(time=(1, 5))
+        pa2 = random_patch.iselect(time=slice(1, 5))
+        assert pa1 == pa2
+
+    def test_non_slice(self, random_patch):
+        """Ensure a non-slice doesnt change patch."""
+        pa1 = random_patch.iselect(distance=(..., ...))
+        pa2 = random_patch.iselect(distance=(None, ...))
+        pa3 = random_patch.iselect(distance=slice(None, None))
+        pa4 = random_patch.iselect(distance=...)
+        assert pa1 == pa2 == pa3 == pa4
+
+    def test_copy(self, random_patch):
+        """Ensure the copy keyword works."""
+        out1 = random_patch.iselect(time=slice(1, 10), copy=True)
+        # base is None means this isnt a view
+        assert out1.data.base is None
+        out2 = random_patch.iselect(time=slice(1, 10), copy=False)
+        # base is not None means it is a view
+        assert out2.data.base is not None
+
+
 class TestSelectHistory:
     """Test behavior of history added by select."""
 
