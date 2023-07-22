@@ -73,7 +73,7 @@ def iselect(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
 
     Any dimension of the data can be passed as key, and the values
     should either be a Slice, a tuple of (min_ind, max_ind) or a single
-    int. If a single int is used, the patch will be flattened.
+    int.
 
     Parameters
     ----------
@@ -89,7 +89,12 @@ def iselect(patch: PatchType, *, copy=False, **kwargs) -> PatchType:
 
     Examples
     --------
-
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # Select first 10 distance indices
+    >>> out1 = patch.iselect(distance=(..., 10))
+    >>> # Select last time row/column
+    >>> out2 = patch.iselect(time=-1)
     """
     new_coords, data = patch.coords.iselect(**kwargs, array=patch.data)
     # no slicing was performed, just return original.

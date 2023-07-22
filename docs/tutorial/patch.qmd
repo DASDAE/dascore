@@ -202,6 +202,21 @@ new = patch.select(time=(-2, -1), relative=True)
 new = patch.select(distance=(..., -100 * ft), relative=True)
 ```
 
+[`iselect`](`dascore.Patch.iselect`) provides the same functionality, but for index-based trimming.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# Trim patch to only include first 10 time rows (or columns)
+new = patch.iselect(time=(..., 10))
+
+# get the last dimension column/row
+new = patch.iselect(distance=-1)
+```
+
+
 # Processing
 
 The patch has several methods which are intended to be chained together via a [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface), meaning each method returns a new `Patch` instance.

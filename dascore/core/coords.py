@@ -410,7 +410,12 @@ class CoordRange(BaseCoord):
             if item >= len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
             return self.values[item]
-        # Todo we can probably add more intelligent logic for slices.
+        # handle ... as None
+        if isinstance(item, slice):
+            start = None if item.start is ... else item.start
+            end = None if item.stop is ... else item.stop
+            # Todo we can probably add more intelligent logic for slices.
+            item = slice(start, end, item.step)
         out = self.values[item]
         return get_coord(values=out, units=self.units)
 
