@@ -134,7 +134,7 @@ class PatchAttrs(DascoreBaseModel):
         attr_map
             Anything convertible to a dict that contains the attr info.
         coord_manager
-            A coordinate manager to fill in/overite attributes.
+            A coordinate manager to fill in/overwrite attributes.
 
         """
         if isinstance(attr_map, cls) and coord_manager is None:

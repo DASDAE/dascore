@@ -89,7 +89,7 @@ def validate_quantity(quant_str) -> Optional[str]:
     """
     Ensure a unit string is valid and return it.
 
-    If it is not valid raise a [UnitError](`dascore.execptions.UnitError`).
+    If it is not valid raise a [UnitError](`dascore.exceptions.UnitError`).
 
     Parameters
     ----------

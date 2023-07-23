@@ -68,16 +68,13 @@ def replace_links(json_data, raw_string):
     replace_dict = {}
     for link in _yield_links(blocks):
         str_to_scan = json.dumps(link, separators=(",", ":"), ensure_ascii=False)
-        if not str_to_scan in raw_string:
-            from remote_pdb import RemotePdb
-
-            RemotePdb("127.0.0.1", 4444).set_trace()
-
         matches = re.finditer(reg_pattern, str_to_scan)
         for match in matches:
             start, stop = match.span()
             cross_refs = get_cross_ref_dict()
             key = str_to_scan[start:stop].replace("`", "")
+            if key not in cross_refs:
+                raise ValueError(f"Cannot find {key}")
             new_value = cross_refs.get(key, key)
             if new_value != key:
                 new_sub_str = str_to_scan.replace(f'"%60{key}%60"', f'"{new_value}"')

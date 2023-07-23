@@ -459,7 +459,9 @@ def render_project(data_dict, address_dict, api_path=API_DOC_PATH, debug=False):
     """Render the markdown files."""
     # Create and write the qmd files for each function/class/module
     write_api_markdown(data_dict, api_path, address_dict, debug=debug)
-    # dump the json mapping to disk in doc folder
+    # put the parts together; alias; path to docs
     path_mapping = create_json_mapping(data_dict, address_dict, api_path)
-    with open(Path(api_path) / "cross_ref.json", "w") as fi:
+    # dump the json mapping to disk in doc folder
+    cross_ref_path = Path(api_path) / "cross_ref.json"
+    with open(cross_ref_path, "w") as fi:
         json.dump(path_mapping, fi, indent=2)

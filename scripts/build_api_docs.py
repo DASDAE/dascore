@@ -5,6 +5,7 @@ from pathlib import Path
 
 from _index_api import get_alias_mapping, parse_project
 from _render_api import get_template, render_project
+from _validate_links import validate_all_links
 
 import dascore as dc
 
@@ -33,4 +34,7 @@ if __name__ == "__main__":
     data_dict = parse_project(dc)
     obj_dict = get_alias_mapping(dc)
     render_project(data_dict, obj_dict, debug=False)
+    # create the quarto info file (needs templating)
     create_quarto_qmd()
+    # validate links
+    validate_all_links()

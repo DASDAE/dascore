@@ -1,6 +1,6 @@
 # Fourier Transforms in DASCore
 
-These notes provide the reasoning for DASCore's [fourier](`dacore.transform.fourier`) module implementation.
+These notes provide the reasoning for DASCore's [fourier](`dascore.transform.fourier`) module implementation.
 
 ## Summary {#sec-summary}
 
@@ -185,7 +185,7 @@ It doesn't. And what about the units? As we saw above, $A$ in @eq-4 would have t
 What if, drawing inspiration from @eq-1, we simply scale the output units by the function's sample spacing ($dx$)? After all, the spacing and the number of samples is directly related by
 
 $$
-\frac{T}{n} = dt
+\frac{T}{n} = dx
 $${#eq-7}
 
 
