@@ -22,7 +22,7 @@ format:
 
 
 website:
-  title: DASCore (0.0.13.dev13)
+  title: DASCore (0.0.13.dev17)
   repo-url: https://github.com/dasdae/dascore
   site-path: /docs
   site-url: https://www.dascore.org
@@ -70,7 +70,8 @@ website:
         aria-label: DASCore GitHub
 
   sidebar:
-    - title: "About"
+    - id: about
+      title: "About"
       style: "floating"
       collapse-level: 2
       logo: "_static/logo.png"
@@ -88,7 +89,8 @@ website:
         - text: Acknowledgements
           href: acknowledgements.md
 
-    - title: "Tutorial"
+    - id: tutorial
+      title: "Tutorial"
       contents:
         - text: DASCore Concepts
           href: tutorial/concepts.qmd
@@ -111,7 +113,8 @@ website:
         - text: File IO
           href: tutorial/file_io.qmd
 
-    - title: 'Recipes'
+    - id: Recipes
+      title: 'Recipes'
       contents:
         - recipes/overview.qmd
 
@@ -121,7 +124,8 @@ website:
         - text: Contributing to Documentation
           href: recipes/contributing_to_documentation.qmd
 
-    - title: "Contributing"
+    - id: contributing
+      title: "Contributing"
       contents:
         - contributing/contributing.qmd
 
@@ -152,16 +156,37 @@ website:
         - text: "Code of Conduct"
           href: contributing/code_of_conduct.qmd
 
-    - title: 'Notes'
+    - id: Notes
+      title: 'Notes'
+      href: notes/notes.qmd
       contents:
         - notes/notes.qmd
 
         - text: Fourier transforms
           href: notes/dft_notes.qmd
 
-    - title: 'API'
+    - id: API
+      title: "API"
+      href: api/dascore.qmd
       contents:
-        - auto: "api"
+        - api/dascore.qmd
+        - section: clients
+          title: clients
+          href: api/dascore/clients.qmd
+          contents:
+            - section: dirspool
+              href: api/dascore/clients/dirspool.qmd
+              contents:
+                - text: directory spool
+                  href: api/dascore/clients/dirspool/DirectorySpool.qmd
+
+
+#
+#
+##
+#    - title: 'API'
+#      contents:
+#        - auto: "api"
 
 
 bibliography: references.bib
