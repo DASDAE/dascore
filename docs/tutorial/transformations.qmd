@@ -40,7 +40,7 @@ real_transform = patch.tran.dft(dim='distance', real=True)
 print(real_transform.get_coord("ft_distance"))
 ```
 
-Of course, this operation can be undone using the [idft](`dascore.tran.idft`)
+Of course, this operation can be undone using the [idft](`dascore.transform.fourier.idft`)
 
 ```{python}
 # transform back to time domain, take only real component.

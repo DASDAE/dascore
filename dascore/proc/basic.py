@@ -438,7 +438,7 @@ def standardize(
     ```{python}
     import dascore as dc
 
-    patch = dc.load_example_patch()
+    patch = dc.get_example_patch()
 
     # standardize along the time axis
     standardized_time = patch.standardize('time')

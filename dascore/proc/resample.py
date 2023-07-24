@@ -101,7 +101,7 @@ def interpolate(
     This function just uses scipy's interp1d function under the hood.
     See scipy.interpolate.interp1d for information.
 
-    See also [snap](`dascore.core.Patch.snap`).
+    See also [snap](`dascore.core.Patch.snap_coords`).
 
     Examples
     --------
@@ -189,7 +189,7 @@ def resample(
     --------
     [decimate](`dascore.proc.resample.decimate`)
     [interpolate](`dascore.proc.resample.interpolate`)
-    [iresample](`dascore.proc.resmaple.irsample`)
+    [iresample](`dascore.proc.resample.iresample`)
     """
     dim, axis, new_d_dim = get_dim_value_from_kwargs(patch, kwargs)
     d_dim = patch.attrs[f"d_{dim}"]  # current sampling rate
@@ -244,7 +244,7 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
 
     See Also
     --------
-    [iresample](`dascore.proc.resmaple.irsample`)
+    [iresample](`dascore.proc.resample.iresample`)
     [decimate](`dascore.proc.resample.decimate`)
     """
     dim, axis, new_length = get_dim_value_from_kwargs(patch, kwargs)

@@ -19,7 +19,7 @@ Documentation [[stable](https://dascore.org), [development](https://dascore.quar
 
 
 :::{.callout minimal="true"}
-Version-specific documentation can be found on the [release pages](https://github.com/DASDAE/dascore/releases).
+Version-specific documentation builds are attached to the [release pages](https://github.com/DASDAE/dascore/releases).
 :::
 
 # Highlights
@@ -31,8 +31,7 @@ DASCore is a Python library for distributed acoustic sensing (DAS). It provides:
 3. Basic visualizations
 
 :::{.callout-note}
-DASCore is a foundational package of the [DAS Data Analysis Ecosystem (DASDAE)](https://github.com/DASDAE). It
-facilitates rapid development of other DASDAE packages that do more specialized analysis/visualization.
+DASCore is a foundational package of the [DAS Data Analysis Ecosystem (DASDAE)](https://github.com/DASDAE). It facilitates rapid development of other DASDAE packages that do more specialized analysis/visualization.
 :::
 
 # Introductory usage
@@ -52,6 +51,7 @@ spool = dc.spool(file_path)
 ## Index a directory of DAS files
 
 ```{python}
+#| output: false
 import dascore as dc
 from dascore.utils.downloader import fetch
 

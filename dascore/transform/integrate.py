@@ -99,7 +99,7 @@ def integrate(
     -----
     The number of dimensions will always remain the same regardless of `definite`
     value. To remove dimensions with length 1, see
-    [squeeze](`dacsore.proc.basic.squeeze`)
+    [squeeze](`dascore.proc.basic.squeeze`)
 
     Examples
     --------

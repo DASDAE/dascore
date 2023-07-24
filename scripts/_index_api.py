@@ -45,31 +45,47 @@ def _get_base_address(path, base_path):
     return new.replace("/", ".")
 
 
+def _get_address(obj, rel_path):
+    """Get the address for an object."""
+    base_list = (
+        str(rel_path)
+        .replace(f"{os.sep}__init__.py", "")
+        .replace(".py", "")
+        .split(os.sep)
+    )
+    if not isinstance(obj, ModuleType) and hasattr(obj, "__name__"):
+        name_list = [obj.__name__]
+    else:
+        name_list = []
+    return ".".join(base_list + name_list)
+
+
+def _yield_get_submodules(obj, base_path):
+    """Dynamically load submodules that may not have been imported."""
+    path = Path(inspect.getfile(obj))
+    if not isinstance(obj, ModuleType) or path.name != "__init__.py":
+        return
+    submodules = path.parent.glob("*")
+    for submod_path in submodules:
+        is_dir = submod_path.is_dir()
+        is_init = submod_path.name.endswith("__init__.py")
+        # this is a directory, look for corresponding __init__.py
+        if is_dir and (submod_path / "__init__.py").exists():
+            mod_name = str(submod_path.relative_to(base_path)).replace(os.sep, ".")
+            mod = import_module(mod_name)
+            yield mod_name, mod
+        elif submod_path.name.endswith(".py") and not is_init:
+            mod_name = (
+                str(submod_path.relative_to(base_path))
+                .replace(".py", "")
+                .replace(os.sep, ".")
+            )
+            mod = import_module(mod_name)
+            yield mod_name, mod
+
+
 def parse_project(obj, key=None):  # NOQA
     """Parse the project create dict of data and data_type"""
-
-    def yield_get_submodules(obj, base_path):
-        """Dynamically load submodules that may not have been imported."""
-        path = Path(inspect.getfile(obj))
-        if not isinstance(obj, ModuleType) or path.name != "__init__.py":
-            return
-        submodules = path.parent.glob("*")
-        for submod_path in submodules:
-            is_dir = submod_path.is_dir()
-            is_init = submod_path.name.endswith("__init__.py")
-            # this is a directory, look for corresponding __init__.py
-            if is_dir and (submod_path / "__init__.py").exists():
-                mod_name = str(submod_path.relative_to(base_path)).replace(os.sep, ".")
-                mod = import_module(mod_name)
-                yield mod_name, mod
-            elif submod_path.name.endswith(".py") and not is_init:
-                mod_name = (
-                    str(submod_path.relative_to(base_path))
-                    .replace(".py", "")
-                    .replace(os.sep, ".")
-                )
-                mod = import_module(mod_name)
-                yield mod_name, mod
 
     def get_type(
         obj, parent_is_class=False
@@ -113,7 +129,7 @@ def parse_project(obj, key=None):  # NOQA
         # get sub-motdules, methods, functions, etc. (just one level deep)
 
         subs = list(inspect.getmembers(obj)) + list(
-            yield_get_submodules(obj, base_path)
+            _yield_get_submodules(obj, base_path)
         )
         for name, sub_obj in subs:
             if name.startswith("_"):
@@ -141,40 +157,35 @@ def parse_project(obj, key=None):  # NOQA
         data["base_address"] = base_address
         return data
 
-    def get_address(obj, rel_path):
-        """Get the address for an object."""
-        base_list = (
-            str(rel_path)
-            .replace(f"{os.sep}__init__.py", "")
-            .replace(".py", "")
-            .split(os.sep)
-        )
-        if not isinstance(obj, ModuleType) and hasattr(obj, "__name__"):
-            name_list = [obj.__name__]
-        else:
-            name_list = []
-        return ".".join(base_list + name_list)
-
     def traverse(obj, data_dict, base_path, key=None, parent_is_class=False):
         """Traverse tree, populate data_dict"""
         obj = _unwrap_obj(obj)
         obj_id = str(id(obj))
         path = _get_file_path(obj)
-        # this is something outside of dascore
+        # this is something outside of dascore or we have already seen it.
         if str(base_path) not in str(path) or obj_id in data_dict:
             return
         # load all the modules first
         if isinstance(obj, ModuleType):
-            key = get_address(obj, path.relative_to(base_path))
+            key = _get_address(obj, path.relative_to(base_path))
             data_dict[obj_id] = get_data(obj, key, base_path, parent_is_class)
-            for _, mod in yield_get_submodules(obj, base_path):
+            for _, mod in _yield_get_submodules(obj, base_path):
                 traverse(mod, data_dict, base_path)
             for name, obj in inspect.getmembers(obj):
+                # skip private members; we don't document them.
+                if name.startswith("_"):
+                    continue
                 # recurse non-private methods
-                if not name.startswith("_"):
-                    traverse(obj, data_dict, base_path, f"{key}.{name}", False)
+                traverse(obj, data_dict, base_path, f"{key}.{name}", False)
         # then handle non-modules
         else:
+            path = inspect.getfile(obj)
+            base_address = _get_base_address(path, base_path)
+
+            # this is referenced outside of its base address, skip this one.
+            if base_address not in key:
+                return
+
             data_dict[str(id(obj))] = get_data(obj, key, base_path, parent_is_class)
             # recurse attributes and methods of classes
             if inspect.isclass(obj):
@@ -190,10 +201,10 @@ def parse_project(obj, key=None):  # NOQA
                         continue
                     traverse(sub_obj, data_dict, base_path, sub_key, True)
 
-    # key = key or getattr(obj, "__name__", None)
     base_path = Path(_get_file_path(obj)).parent.parent
     data_dict = {}
     traverse(obj, data_dict, base_path)
+
     # traverse(obj, key, data_dict, str(base_path), parent_path=base_path)
     return data_dict
 
@@ -201,24 +212,36 @@ def parse_project(obj, key=None):  # NOQA
 def get_alias_mapping(module, key=None):
     """Return a dict of {object_path: id} to construct cross refs."""
 
-    def traverse_simple(obj, key, data_dict, base_path):
+    def traverse_simple(obj, key, data_dict, base_path, allow_base=False):
         """Traverse the tree and write out markdown."""
         obj = _unwrap_obj(obj)
         obj_id = str(id(obj))
         path = _get_file_path(obj)
+        # dont let base module be re-index
+        if obj is base_mod and not allow_base:
+            return
+        # skip things outside of this module
         if not _get_base_address(path, base_path):
             return
+        # need to ensure all sub-modules are loaded.
+        if isinstance(obj, ModuleType):
+            for _, mod in _yield_get_submodules(obj, base_path):
+                attach_name = f"{mod.__name__.split('.')[-1]}"
+                setattr(obj, attach_name, mod)
+
         data_dict[key] = obj_id
         for (member_name, member) in inspect.getmembers(obj):
             if member_name.startswith("_"):
                 continue
             new_key = ".".join([key, member_name])
-            if new_key.split(".")[-1] in key:
+            if f".{new_key.split('.')[-1]}" in key:
                 continue
             traverse_simple(member, new_key, data_dict, base_path)
 
     data_dict = {}
     key = key or getattr(module, "__name__", None)
     base_path = Path(_get_file_path(module)).parent.parent
-    traverse_simple(module, key, data_dict, base_path)
+    # define base module and base key to not allow recursion through them.
+    base_mod = module
+    traverse_simple(module, key, data_dict, base_path, allow_base=True)
     return data_dict

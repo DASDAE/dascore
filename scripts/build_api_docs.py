@@ -1,36 +1,24 @@
 """
 Script to build the API docs for dascore.
 """
-from pathlib import Path
 
 from _index_api import get_alias_mapping, parse_project
-from _render_api import get_template, render_project
+from _qmd_builder import create_quarto_qmd
+from _render_api import render_project
+from _validate_links import validate_all_links
 
 import dascore as dc
 
-
-def create_quarto_qmd():
-    """Create the _quarto.yml file."""
-
-    def _get_nice_version_string():
-        """Just get a simplified version string."""
-        version_str = str(dc.__version__)
-        if "dev" not in version_str:
-            vstr = version_str
-        else:
-            vstr = version_str.split("+")[0]
-        return f"DASCore ({vstr})"
-
-    temp = get_template("_quarto.yml")
-    version_str = _get_nice_version_string()
-    out = temp.render(dascore_version_str=version_str)
-    path = Path(__file__).parent.parent / "docs" / "_quarto.yml"
-    with path.open("w") as fi:
-        fi.write(out)
-
-
 if __name__ == "__main__":
+    print("Building documentation")
+    print(f"Parsing project {dc.__name__}")
     data_dict = parse_project(dc)
     obj_dict = get_alias_mapping(dc)
+    print("Generating qmd files")
     render_project(data_dict, obj_dict, debug=False)
+    # create the quarto info file (needs templating)
+    print("creating quarto config")
     create_quarto_qmd()
+    # validate links
+    print("Validating links")
+    validate_all_links()

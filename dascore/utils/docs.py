@@ -50,6 +50,8 @@ def compose_docstring(**kwargs: Union[str, Sequence[str]]):
     Examples
     --------
     ```{python}
+    from dascore.utils.docs import compose_docstring
+
     @compose_docstring(some_value='10')
     def example_function():
         '''

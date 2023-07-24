@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 import typing
+from collections import defaultdict
 from functools import cache
 from pathlib import Path
 
@@ -138,6 +139,7 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
 
 def build_signature(data, data_dict, address_dict):
     """Return html of signature block."""
+    sentinel = object()  # to know missing values
 
     def get_annotation_str(param):
         """Get string of annotation."""
@@ -158,7 +160,9 @@ def build_signature(data, data_dict, address_dict):
         """Get the default value for a parameter."""
         default = sig.parameters[param].default
         if default is inspect._empty:
-            return
+            return sentinel
+        if default == "":
+            default = '""'
         return str(default)
 
     def get_params(sig, annotations):
@@ -168,7 +172,7 @@ def build_signature(data, data_dict, address_dict):
             annotation_str = get_annotation_str(annotations.get(param))
             return_str = get_default_value(param, sig)
             param_str = f"{prefix + param}{annotation_str}\n"
-            if return_str is not None:
+            if return_str is not sentinel:
                 param_str += f" = {return_str}"
             out.append(param_str)
         return out
@@ -251,34 +255,9 @@ class NumpyDocStrParser:
         """
         Styles example blocks.
 
-        Example blocks ban be written in standard doc-test or quarto styles.
+        Example blocks can be written in standard doc-test or quarto styles.
         """
-
-        def style_docstest_string(docstr_split):
-            """style the doctest string"""
-            # need to add comment before lines which dont have comment
-            # or dont start with >>> (these are outputs)
-            out = []
-            for line in docstr_split:
-                # the [1:] for > and . lines is to strip off the first space
-                if line.startswith(">"):
-                    out.append(line.strip(">")[1:])
-                elif line.startswith(".."):
-                    out.append(line.strip(".")[1:])
-                elif line.startswith("#") or not line.strip():
-                    out.append(line)
-                else:
-                    out.append(f"# {line}")
-            out_str = "\n".join(out)
-            return "\n```{python}\n" + out_str + "\n```"
-
-        # determine if this is doctest by looking for >>>
-        line_split = example_str.split("\n")
-        if any(x.startswith(">>") for x in example_str.split("\n")):
-            return style_docstest_string(line_split)
-        else:
-            # just need to make python in brackets for quarto
-            return example_str.replace("```python", "```{python}")
+        return to_quarto_code(example_str)
 
     def style_notes(self, notes_str):
         """styles notes section of str."""
@@ -317,6 +296,78 @@ class NumpyDocStrParser:
         "notes": style_notes,
         "note": style_notes,
     }
+
+
+def to_quarto_code(code_lines):
+    """Class for parsing code (eg examples in docstrings) to quarto output."""
+    option_chars = "#|"
+
+    def _get_blocks(code_lines):
+        """
+        Get code blocks. Code blocks are divided by titles "###"
+        """
+        code_blocks = defaultdict(list)
+        current_key = ""
+        for line in code_lines:
+            if line.startswith("###"):
+                current_key = line.replace("###", "").lstrip()
+            else:
+                code_blocks[current_key].append(line)
+        return code_blocks
+
+    def _strip_code(code_str):
+        """Strip off spaces and the doctest stuff (..., >>>, etc)"""
+        out = []
+        code_lines = code_str.splitlines()
+        # first determine how much to strip from each line.
+        start_index = 999
+        for line in code_lines:
+            striped = line.lstrip().lstrip(">").lstrip(".").lstrip()
+            if not len(striped):
+                continue
+            strip_len = len(line) - len(striped)
+            start_index = min([start_index, strip_len])
+        for line in code_lines:
+            out.append(line[start_index:])
+        return out
+
+    def _get_options(code_lines):
+        """Get all quarto options used."""
+        options = []
+        code_segments = []
+        # first get min space to strip.
+        for line in code_lines:
+            if line.startswith(option_chars):
+                options.append(line)
+            else:
+                code_segments.append(line)
+        return code_segments, options
+
+    def _strip_blocks(code_blocks):
+        """strip empty lines from start and end of list of codes."""
+        while len(code_blocks) and not code_blocks[0].strip():
+            code_blocks = code_blocks[1:]
+        while len(code_blocks) and not code_blocks[-1].strip():
+            code_blocks = code_blocks[:-1]
+        return code_blocks
+
+    def _to_quarto(options, blocks):
+        """Convert output to quarto string."""
+        out = []
+        for section_name, code_blocks in blocks.items():
+            title = [] if not section_name else [f"### {section_name}"]
+            stripped_block = _strip_blocks(code_blocks)
+            if not stripped_block:
+                continue
+            new_code = title + ["```{python}"] + options + stripped_block + ["```"]
+            out.append("\n".join(new_code))
+        return "\n".join(out)
+
+    code_lines_stripped = _strip_code(code_lines)
+    code_lines_no_options, options = _get_options(code_lines_stripped)
+    blocks = _get_blocks(code_lines_no_options)
+    out = _to_quarto(options, blocks)
+    return out
 
 
 class Render:
@@ -373,6 +424,27 @@ class Render:
         )
         return source_url
 
+    def _get_class_parent_string(self, data):
+        """Get the class parent string."""
+        obj = data["object"]
+        parents = [x for x in obj.__mro__[1:-1]]
+        # this class only inherits from object (or type if metaclass)
+        if not len(parents):
+            return ""
+        parent_list = []
+        for parent in parents:
+            name = parent.__name__
+            key = str(id(parent))
+            if parent_data := self._data_dict.get(key):
+                parent_str = f"[{name}](`{parent_data['key']}`)"
+            else:
+                parent_str = (
+                    str(parent).replace("<class ", "").replace(">", "").replace("'", "")
+                )
+            parent_list.append(parent_str)
+        out = f"<br>inherits from: {', '.join(parent_list)} \n"
+        return out
+
     def _get_parent_source_block(self, data):
         """Create a parent block with a link."""
         parent = data["key"].removesuffix(f".{data['name']}")
@@ -382,6 +454,11 @@ class Render:
             parent_str = ""
         origin_txt = f"*{self._data['data_type']}* {parent_str}"
         source_url = self._get_github_source(data)
+
+        if inspect.isclass(data["object"]):
+            # add class's ancestor(s)
+            origin_txt += self._get_class_parent_string(data)
+
         template = get_template("parent_source_block.html")
         out = template.render(origin_txt=origin_txt, source_url=source_url)
         return out
@@ -455,11 +532,36 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
         path.unlink()
 
 
+def _clear_empty_directories(parent_path):
+    """recursively delete empty directories."""
+
+    def _dir_empty(path):
+        """Return True if directory is empty."""
+        contents = (
+            x
+            for x in path.rglob("*")
+            if not (x.name.startswith(".") and len(x.name) < 3)
+        )
+        if any(contents):
+            return False
+        return True
+
+    for path in parent_path.rglob("*"):
+        if not path.is_dir():
+            continue
+        if _dir_empty(path):
+            os.rmdir(path)
+
+
 def render_project(data_dict, address_dict, api_path=API_DOC_PATH, debug=False):
     """Render the markdown files."""
     # Create and write the qmd files for each function/class/module
     write_api_markdown(data_dict, api_path, address_dict, debug=debug)
-    # dump the json mapping to disk in doc folder
+    # put the parts together; alias; path to docs
     path_mapping = create_json_mapping(data_dict, address_dict, api_path)
-    with open(Path(api_path) / "cross_ref.json", "w") as fi:
+    # dump the json mapping to disk in doc folder
+    cross_ref_path = Path(api_path) / "cross_ref.json"
+    with open(cross_ref_path, "w") as fi:
         json.dump(path_mapping, fi, indent=2)
+    # Clear out empty directories
+    _clear_empty_directories(api_path)

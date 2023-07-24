@@ -23,10 +23,15 @@ def get_cross_ref_dict() -> Dict[str, str]:
     """
     out = {}
     path = Path(__file__).absolute()
-    while not path.name == "docs":
+    count = 0
+    while path.name != "docs" or str(path).count("docs") != 1:
         path = path.parent
-    for cross_ref in path.rglob("cross_ref.json"):
-        out.update(json.loads(cross_ref.read_text()))
+        count += 1
+        if count > 100:
+            raise ValueError("failed to find cross-ref file")
+    for cross_ref_path in path.rglob("cross_ref.json"):
+        out.update(json.loads(cross_ref_path.read_text()))
+    assert out, "didn't find cross ref dict"
     return out
 
 
@@ -68,11 +73,6 @@ def replace_links(json_data, raw_string):
     replace_dict = {}
     for link in _yield_links(blocks):
         str_to_scan = json.dumps(link, separators=(",", ":"), ensure_ascii=False)
-        if not str_to_scan in raw_string:
-            from remote_pdb import RemotePdb
-
-            RemotePdb("127.0.0.1", 4444).set_trace()
-
         matches = re.finditer(reg_pattern, str_to_scan)
         for match in matches:
             start, stop = match.span()
@@ -108,3 +108,8 @@ def main(raw_data=None):
 if __name__ == "__main__":
     # test()  # uncomment to test.
     main()  # uncomment before running quarto so IO works.
+
+
+# this is helpful for debugging while quarto is running.
+# from remote_pdb import RemotePdb
+# RemotePdb('127.0.0.1', 4444).set_trace()
