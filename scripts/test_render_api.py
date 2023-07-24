@@ -1,6 +1,10 @@
 """Tests for rendering api stuff"""
+import pytest
 
-from _render_api import to_quarto_code
+# These tests only work if doc deps are installed.
+pytest.importorskip("jinja2")  # noqa
+
+from _render_api import to_quarto_code  # noqa
 
 
 class TestToQuartoCode:
