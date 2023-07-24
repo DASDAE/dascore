@@ -76,15 +76,43 @@ def _recombobulate(df, arg1, arg2):
 ## Examples in docstrings
 
 Examples in docstrings can be done using the standard
-[doctest](https://docs.python.org/3/library/doctest.html) syntax as above, or
-[quarto code blocks](https://quarto.org/docs/output-formats/html-code.html)
-can be used directly. The latter gives more control over outputs and display options.
+[doctest](https://docs.python.org/3/library/doctest.html) syntax as above, or [quarto code blocks](https://quarto org/docs/output-formats/html-code.html) can be used directly. The latter gives more control over outputs and display options.
+
+You can also specify [quarto html code block options](https://quarto.org/docs/output-formats/html-code.html) using a "#|" type comment and add headings using "###". For example:
+
+```python
+def my_func():
+    """
+    Example function.
+
+    Examples
+    --------
+    >>> #| code-fold: true
+    >>> # This is a base example
+    >>> print(1 + 2)
+    >>> ### This is a sub-section
+    >>> print("cool beans")
+    """
+```
+
+would produce the following code in the examples section:
+
+````raw
+```{{python}}
+#| code-fold: true
+# This is a base example
+print(1 + 2)
+```
+### This is a sub-section
+```{{python}}
+#| code-fold: true
+print("cool beans")
+```
+````
 
 # Generating Documentation
 
-DASCore's documentation is built with [quarto](https://quarto.org/). In order to build the documentation, you
-must first [install DASCore in development mode](dev_install.qmd) then
-[install quarto](https://quarto.org/docs/get-started/).
+DASCore's documentation is built with [quarto](https://quarto.org/). In order to build the documentation, you must first [install DASCore in development mode](dev_install.qmd) then [install quarto](https://quarto.org/docs/get-started/).
 
 Next, the automatic API documents are created with scripts/build_api_docs.py
 

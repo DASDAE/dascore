@@ -117,6 +117,7 @@ website:
       title: 'Recipes'
       contents:
         - recipes/overview.qmd
+        - plotting_channel_number.qmd
 
         - text: How to Contribute?
           href: recipes/how_to_contribute.qmd
@@ -169,16 +170,9 @@ website:
       title: "API"
       href: api/dascore.qmd
       contents:
-        - api/dascore.qmd
-        - section: clients
-          title: clients
-          href: api/dascore/clients.qmd
-          contents:
-            - section: dirspool
-              href: api/dascore/clients/dirspool.qmd
-              contents:
-                - text: directory spool
-                  href: api/dascore/clients/dirspool/DirectorySpool.qmd
+        {% for item in api_toc_tree -%}
+        {{ item }}
+        {% endfor %}
 
 
 #

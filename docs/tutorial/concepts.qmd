@@ -111,5 +111,5 @@ print(quantity)
 Many of DASCore's processing functions support units/quantities as shown above.
 
 :::{.callout-note}
-DASCore uses the superb unit library [pint](https://github.com/hgrecco/pint) under the hood for unit parsing/conversions. You can checkout its documentation for more on how units and quantities work, although DASCore should handle most of this for you.
+DASCore uses the unit library [Pint](https://github.com/hgrecco/pint) under the hood for unit parsing/conversions. See its documentation for more on how units and quantities work, (although DASCore should handle most of this for you).
 :::
