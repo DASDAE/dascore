@@ -31,7 +31,7 @@ from dascore.exceptions import (
     CoordSortError,
     ParameterError,
 )
-from dascore.units import _get_conversion_multiplier, get_quantity
+from dascore.units import get_quantity
 from dascore.utils.misc import all_close, get_middle_value, register_func
 
 COORD_MANAGERS = []
@@ -1059,7 +1059,7 @@ class TestConvertUnits:
 
     def test_convert_changes_values(self, coord_manager_with_units):
         """Ensure values are scaled accordingly"""
-        conv = _get_conversion_multiplier("m", "ft")
+        conv = get_quantity("m").to("ft").magnitude
         cm = coord_manager_with_units.convert_units(distance="ft")
         dist1 = coord_manager_with_units.coord_map["distance"]
         dist2 = cm.coord_map["distance"]

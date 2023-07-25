@@ -26,6 +26,8 @@ def get_registry():
     # a few custom defs, we may need our own unit registry if this
     # gets too long.
     ureg.define("PI=pi")
+    # allow multiplication with offset units.
+    ureg.autoconvert_offset_to_baseunit = True
     pint.set_application_registry(ureg)
     return ureg
 
@@ -70,35 +72,14 @@ def get_factor_and_unit(
 
 
 @cache
-def _get_conversion_multiplier(from_quant: Quantity, to_quant: Quantity) -> float:
-    """
-    Get a multiplier for converting from one unit to another.
-
-    Doesn't work with offset units.
-
-    Generally, use [convert_units](`dascore.units.convert_units`) instead.
-    """
-    from_quant, to_quant = get_quantity(from_quant), get_quantity(to_quant)
-    if from_quant is None or to_quant is None:
-        return 1
-    mag1, mag2 = from_quant.magnitude, to_quant.magnitude
-    mag_ratio = mag1 / mag2
-    try:
-        unit_ratio = to_quant.units.from_(from_quant.units).magnitude
-    except DimensionalityError as e:
-        raise UnitError(str(e))
-
-    return mag_ratio * unit_ratio
-
-
-@cache
-def _get_conversion_adder(from_quant, to_quant) -> float:
-    """
-    Get a number that represents offset from one unit to another.
-
-    Will be 0 except in cases of units with offsets (eg temperature).
-    """
-    return 0
+def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
+    """Get multiplicative and additive conversion factors."""
+    add_mag = (0 * from_quant).to(0 * to_quant).magnitude
+    # need to convert from and to units to deltas for proper conversion.
+    from_delta = (1 * from_quant.units) - (from_quant.units * 0)
+    to_delta = (1 * to_quant.units) - (to_quant.units * 0)
+    mult_mag1 = from_delta.to(to_delta).magnitude
+    return mult_mag1 * from_quant.magnitude, add_mag, 1 / to_quant.magnitude
 
 
 def convert_units(
@@ -127,9 +108,11 @@ def convert_units(
     to_units, from_units = get_quantity(to_units), get_quantity(from_units)
     if from_units is None:
         return data
-    multiplier = _get_conversion_multiplier(from_units, to_units)
-    adder = _get_conversion_adder(from_units, to_units)
-    return data * multiplier + adder
+    try:
+        mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
+    except DimensionalityError as e:
+        raise UnitError(str(e))
+    return (data * mult1 + add) * mult2
 
 
 def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
@@ -188,7 +171,7 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
 
 
 def get_filter_units(
-    arg1: Quantity | float, arg2: Quantity | float, to_unit: str
+    arg1: Quantity | float, arg2: Quantity | float, to_unit: str | Quantity
 ) -> tuple[float, float]:
     """
     Get a tuple for applying filter based on dimension coordinates.
@@ -199,8 +182,9 @@ def get_filter_units(
         The lower bound of the filter params
     arg2
         The upper bound of the filter params.
-    data_unit
-        The units of the axis which will be filtered.
+    to_unit
+        The units to which the filter should be applied. The returned
+        units will be 1/to_units.
 
     Examples
     --------
@@ -234,11 +218,15 @@ def get_filter_units(
             raise UnitError(msg)
         data_units = get_unit(data_units)
         inverted_units = (1 / data_units).units
-        inversed_units = True
+        units_inversed = True
         if data_units.dimensionality == quant.units.dimensionality:
-            quant, inversed_units = 1 / quant, False
-        mag = _get_conversion_multiplier(quant, inverted_units)
-        return mag, inversed_units
+            quant, units_inversed = 1 / quant, False
+        # try to get invert units, otherwise raise.
+        try:
+            mag = quant.to(inverted_units).magnitude
+        except DimensionalityError as e:
+            raise UnitError(str(e))
+        return mag, units_inversed
 
     # fast-path for non-unit, non-quantity inputs.
     unitable = (Quantity, Unit)
@@ -246,7 +234,11 @@ def get_filter_units(
     arg2 = None if arg2 is ... else arg2
     if not (isinstance(arg1, unitable) or isinstance(arg2, unitable)):
         return arg1, arg2
+    # get inverse of desired output units and ensure units are pure.
+    to_quant = get_quantity(to_unit)
+    assert to_quant.magnitude == 1.0
     to_units = get_quantity(to_unit).units
+    # get
     quant1, quant2 = get_quantity(arg1), get_quantity(arg2)
     _ensure_same_units(quant1, quant2)
     out1, inverted1 = get_inverted_quant(quant1, to_units)

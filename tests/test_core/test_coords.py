@@ -19,7 +19,7 @@ from dascore.core.coords import (
     get_coord_from_attrs,
 )
 from dascore.exceptions import CoordError, ParameterError
-from dascore.units import _get_conversion_multiplier, get_quantity
+from dascore.units import get_quantity
 from dascore.utils.misc import register_func, all_close
 from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like, to_float
 
@@ -615,7 +615,7 @@ class TestCoordRange:
         """Simple test for setting and converting units."""
         if dtype_time_like(coord.dtype):
             pytest.skip("Cant set time-like units")
-        factor = _get_conversion_multiplier("m", "ft")
+        factor = get_quantity("m").to(get_quantity("ft")).magnitude
         c1 = coord.set_units("m")
         c2 = c1.convert_units("ft")
         assert c2.units == get_quantity("ft")

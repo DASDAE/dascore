@@ -467,8 +467,10 @@ class CoordRange(BaseCoord):
         if dtype_time_like(self.dtype):
             return self
         out = dict(units=units)
-        for name in ["start", "stop", "step"]:
-            out[name] = convert_units(getattr(self, name), units, self.units)
+        start = convert_units(self.start, to_units=units, from_units=self.units)
+        stop = convert_units(self.stop, to_units=units, from_units=self.units)
+        step = (stop - start) / len(self)
+        out["start"], out["stop"], out["step"] = start, stop, step
         return self.__class__(**out)
 
     def select(self, args, relative=False) -> tuple[BaseCoord, slice | ArrayLike]:

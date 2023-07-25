@@ -85,15 +85,13 @@ def convert_units(
     [UnitError](`dascore.exceptions.UnitError`) if any of the new units
     are not compatible with the old units.
     """
-
-    def convert_data():
-        if data_units is None:
-            return patch.data
+    # convert data
+    if data_units is not None:
         current_units = patch.attrs.data_units
         data = u_covert_units(patch.data, data_units, current_units)
-        return data
-
-    data = convert_data()
+    else:
+        data = patch.data
+    # then update coords and attrs
     new_attrs = _get_updated_attrs(patch, data_units, kwargs)
     coords = patch.coords.convert_units(**kwargs)
     return patch.new(data=data, attrs=new_attrs, coords=coords)

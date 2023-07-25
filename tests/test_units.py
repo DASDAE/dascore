@@ -7,7 +7,6 @@ import pytest
 import dascore as dc
 from dascore.exceptions import UnitError
 from dascore.units import (
-    _get_conversion_multiplier,
     get_factor_and_unit,
     get_filter_units,
     get_quantity,
@@ -28,12 +27,6 @@ class TestUnitInit:
         sec = dc.get_unit("s")
         assert str(sec.dimensionality) == "[time]"
 
-    def test_conversion_factor(self):
-        """Ensure conversion factors are calculated correctly."""
-        assert _get_conversion_multiplier("s", "ms") == 1000.0
-        assert _get_conversion_multiplier("ms", "s") == 1 / 1000.0
-        assert np.round(_get_conversion_multiplier("ft", "m"), 5) == 0.3048
-
     def test_invert(self):
         """Ensure a unit can be inverted."""
         unit = dc.get_unit("s")
@@ -41,12 +34,6 @@ class TestUnitInit:
         reverted = invert_quantity(inverted)
         assert unit == reverted
         assert invert_quantity(None) is None
-
-    def test_conversion_factor_none(self):
-        """If either unit is None it should return 1."""
-        assert _get_conversion_multiplier(None, None) == 1
-        assert _get_conversion_multiplier(None, "m") == 1
-        assert _get_conversion_multiplier("m", None) == 1
 
 
 class TestGetQuantStr:
@@ -234,8 +221,30 @@ class TestConvertUnits:
         assert np.isclose(out, 0.3048)
 
     def test_convert_offset_units(self):
-        """Ensure units can be converted/set for offset units"""
+        """Test simple offset units."""
         array = np.arange(10)
         f_array = array * (9 / 5) + 32.0
         out = convert_units(array, from_units="degC", to_units="degF")
+        assert np.allclose(f_array, out)
+
+    def test_convert_offset_units_with_mag(self):
+        """
+        Ensure units can be converted/set for offset units when non-1 magnitudes.
+        """
+        # One non-1 quantity
+        array = np.arange(10)
+        f_array = 2 * array * (9 / 5) + 32.0
+        out = convert_units(array, from_units="2*degC", to_units="degF")
+        assert np.allclose(f_array, out)
+
+    def test_convert_offset_units_multiple_mags(self):
+        """Ensure if both units have non-1 offsets conversion still works."""
+        # Multiple non-1 quants
+        array = np.arange(10)
+        f_array = (array * (18 / 5) + 32.0) / 2
+        out = convert_units(array, from_units="2*degC", to_units="2*degF")
+        assert np.allclose(f_array, out)
+        # non equal quants
+        f_array = (array * (9 * 2.5 / 5) + 32.0) / 6
+        out = convert_units(array, from_units="2.5*degC", to_units="6*degF")
         assert np.allclose(f_array, out)
