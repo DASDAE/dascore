@@ -366,7 +366,7 @@ class FiberIO:
         """
         A function for making a table of all the supported formats and the methods.
         """
-        # loads all the plugin so we know about all the FiberIO classes
+        # load all the plugins, so we know about all the FiberIO classes
         FiberIO.manager.load_plugins()
         out = []
         # iterate the dict _format_version_items,

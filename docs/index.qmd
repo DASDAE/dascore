@@ -38,8 +38,9 @@ facilitates rapid development of other DASDAE packages that do more specialized 
 # Supporting input/output formats
 ```{python}
 #| echo: false
+import pandas as pd
 from dascore.io.core import FiberIO
-FiberIO.get_supported_io_table()
+FiberIO.get_supported_io_table().replace(True, value='✅').replace(False, value='❌')
 ```
 
 # Introductory usage
