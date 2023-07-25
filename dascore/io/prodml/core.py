@@ -1,6 +1,7 @@
 """
 IO module for reading prodML data.
 """
+from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
@@ -49,7 +50,7 @@ class ProdMLV2_0(FiberIO):
         resource: HDF5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
-        **kwargs
+        **kwargs,
     ) -> dc.BaseSpool:
         """
         Read a ProdML file.

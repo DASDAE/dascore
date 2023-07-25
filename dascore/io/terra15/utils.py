@@ -1,4 +1,5 @@
 """Utilities for terra15."""
+from __future__ import annotations
 
 from tables.exceptions import NoSuchNodeError
 

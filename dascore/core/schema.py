@@ -1,7 +1,9 @@
 """Pydantic schemas used by DASCore."""
+from __future__ import annotations
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 import numpy as np
 import pandas as pd
@@ -121,7 +123,7 @@ class PatchAttrs(DascoreBaseModel):
     def from_dict(
         cls,
         attr_map,
-        coord_manager: Optional["dc.core.coordmanager.CoordManager"] = None,
+        coord_manager: dc.core.coordmanager.CoordManager | None = None,
     ) -> Self:
         """
         Get a new instance of the PatchAttrs.

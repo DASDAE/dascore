@@ -1,6 +1,8 @@
 """
 Test for basic IO and related functions.
 """
+from __future__ import annotations
+
 import copy
 from pathlib import Path
 from typing import TypeVar
@@ -15,6 +17,9 @@ from dascore.io.core import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.time import to_datetime64
+
+
+tvar = TypeVar("tvar", int, float, str, Path)
 
 
 class _FiberFormatTestV1(FiberIO):
@@ -79,7 +84,6 @@ class _FiberUnsupportedTypeHints(FiberIO):
 
     name = "_TypeHinterNotRight"
     version = "2"
-    tvar = TypeVar("tvar", int, float, str, Path)
 
     def read(self, resource: tvar, **kwargs):
         """dummy read"""

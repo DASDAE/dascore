@@ -1,6 +1,8 @@
 """
 Core module for reading and writing pickle format.
 """
+from __future__ import annotations
+
 import pickle
 
 import dascore

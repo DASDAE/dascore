@@ -1,6 +1,7 @@
 """
 A spectrogram visualization
 """
+from __future__ import annotations
 
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt

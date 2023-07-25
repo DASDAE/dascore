@@ -3,6 +3,8 @@ A spool for working with file systems.
 
 The spool uses a simple hdf5 index for keeping track of files.
 """
+from __future__ import annotations
+
 import copy
 from pathlib import Path
 

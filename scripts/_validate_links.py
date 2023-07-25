@@ -59,7 +59,7 @@ def validate_all_links():
         msg = "Please fix the following (path/link)\n"
         max_len = max(len(x[0]) for x in bad)
         out = []
-        for (path, link) in bad:
+        for path, link in bad:
             path_str = path.ljust(max_len + 3)
             out.append(f"{path_str} {link}")
         new_str = msg + "\n".join(out)

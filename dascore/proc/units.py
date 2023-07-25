@@ -1,6 +1,7 @@
 """
 Processing functions dealing with units and unit conversions.
 """
+from __future__ import annotations
 
 from dascore.constants import PatchType
 from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit

@@ -1,4 +1,5 @@
 """Utilities for Quantx."""
+from __future__ import annotations
 
 import numpy as np
 from tables import NoSuchNodeError

@@ -1,6 +1,8 @@
 """
 Utilities for models.
 """
+from __future__ import annotations
+
 from collections import ChainMap
 from collections.abc import Sequence
 from functools import cached_property, reduce

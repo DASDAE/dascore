@@ -1,6 +1,7 @@
 """
 Utility for working with time.
 """
+from __future__ import annotations
 
 from datetime import datetime, timedelta
 from functools import singledispatch

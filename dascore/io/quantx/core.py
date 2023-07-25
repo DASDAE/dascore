@@ -1,6 +1,7 @@
 """
 IO module for reading Optasense DAS data.
 """
+from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
@@ -43,7 +44,7 @@ class QuantXV2(FiberIO):
         resource: HDF5Reader,
         time: tuple[timeable_types, timeable_types] | None = None,
         distance: tuple[float, float] | None = None,
-        **kwargs
+        **kwargs,
     ) -> dc.BaseSpool:
         """
         Read an Optasense file.

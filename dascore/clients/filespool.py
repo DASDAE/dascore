@@ -1,6 +1,8 @@
 """
 A spool for working with a single file.
 """
+from __future__ import annotations
+
 import copy
 from pathlib import Path
 
@@ -8,9 +10,9 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import SpoolType
 from dascore.core.spool import DataFrameSpool
 from dascore.io.core import FiberIO
+from dascore.constants import SpoolType
 
 
 class FileSpool(DataFrameSpool):

@@ -4,6 +4,8 @@ Utilities for working with HDF5 files.
 Pytables should only be imported in this module in case we need to switch
 out the hdf5 backend in the future.
 """
+from __future__ import annotations
+
 import time
 import warnings
 from contextlib import contextmanager, suppress
@@ -384,7 +386,7 @@ class HDFPatchIndexManager:
         """Return the version string or None if it doesn't yet exist."""
         try:
             version = self._index_version
-        except (FileNotFoundError):
+        except FileNotFoundError:
             return
         return version
 

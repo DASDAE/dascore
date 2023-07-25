@@ -1,6 +1,8 @@
 """
 Pandas utilities.
 """
+from __future__ import annotations
+
 import fnmatch
 import os
 from collections import defaultdict
@@ -240,7 +242,7 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     # apply filtering, this creates a copy so we *should* be ok to update inplace.
     out = df[filter_df(df, ignore_bad_kwargs=ignore_bad_kwargs, **kwargs)]
     # find slice kwargs, get series corresponding to interval columns
-    for (name, qs) in yield_slice_from_kwargs(out, kwargs):
+    for name, qs in yield_slice_from_kwargs(out, kwargs):
         start, stop, step = get_interval_columns(out, name)
         min_val = qs.start if qs.start is not None else start.min()
         max_val = qs.stop if qs.stop is not None else stop.max()

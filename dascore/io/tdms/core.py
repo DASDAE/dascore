@@ -1,6 +1,7 @@
 """
 IO module for reading Silixa's TDMS DAS data format.
 """
+from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
@@ -55,7 +56,7 @@ class TDMSFormatterV4713(FiberIO):
         resource: BinaryReader,
         time: tuple[timeable_types, timeable_types] | None = None,
         distance: tuple[float, float] | None = None,
-        **kwargs
+        **kwargs,
     ) -> dc.BaseSpool:
         """
         Read a silixa tdms file, return a DataArray.

@@ -1,6 +1,7 @@
 """
 IO module for reading Terra15 DAS data.
 """
+from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
@@ -46,7 +47,7 @@ class Terra15FormatterV4(FiberIO):
         time: tuple[timeable_types, timeable_types] | None = None,
         distance: tuple[float, float] | None = None,
         snap_dims: bool = True,
-        **kwargs
+        **kwargs,
     ) -> dc.BaseSpool:
         """
         Read a terra15 file.

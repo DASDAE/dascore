@@ -38,6 +38,8 @@ print(f"New data shape: {new_data.shape}")
 print(new_cm)
 ```
 """
+from __future__ import annotations
+
 from collections import defaultdict
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
@@ -795,7 +797,7 @@ class CoordManager(DascoreBaseModel):
                 out[dim].append(coord)
         return FrozenDict({i: tuple(v) for i, v in out.items()})
 
-    def get_coord_tuple_map(self) -> dict[str, tuple[tuple[str, ...], "BaseCoord"]]:
+    def get_coord_tuple_map(self) -> dict[str, tuple[tuple[str, ...], BaseCoord]]:
         """
         Return a mapping of {coord_name: (dims, coord)}.
 

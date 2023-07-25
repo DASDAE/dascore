@@ -1,6 +1,8 @@
 """
 Module for handling units.
 """
+from __future__ import annotations
+
 from functools import cache
 from typing import TypeVar
 

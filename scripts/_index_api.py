@@ -139,7 +139,7 @@ def parse_project(obj, key=None):  # NOQA
             # for modules, skip entities that aren't children
             if dtype == "module":
                 path, sub_path = _get_file_path(obj), _get_file_path(sub_obj)
-                if not str(path).replace("/__init__.py", "") in str(sub_path):
+                if str(path).replace("/__init__.py", "") not in str(sub_path):
                     continue
             data[sub_dtype].append(str(id(sub_obj)))
 
@@ -193,7 +193,7 @@ def parse_project(obj, key=None):  # NOQA
                     if sub_name.startswith("_") or not callable(sub_obj):
                         continue
                     sub_path = _get_file_path(sub_obj)
-                    if not str(base_path) in str(sub_path):
+                    if str(base_path) not in str(sub_path):
                         continue
                     sub_key = f"{key}.{sub_name}"
                     # make sure this is where the method is defined else skip
@@ -230,7 +230,7 @@ def get_alias_mapping(module, key=None):
                 setattr(obj, attach_name, mod)
 
         data_dict[key] = obj_id
-        for (member_name, member) in inspect.getmembers(obj):
+        for member_name, member in inspect.getmembers(obj):
             if member_name.startswith("_"):
                 continue
             new_key = ".".join([key, member_name])

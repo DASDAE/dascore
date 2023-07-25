@@ -2,6 +2,8 @@
 Base functionality for reading, writing, determining file formats, and scanning
 Das Data.
 """
+from __future__ import annotations
+
 import inspect
 import os.path
 from collections import defaultdict
@@ -90,7 +92,7 @@ class _FiberIOManager:
         # The selected format(s) should now be loaded
         assert set(formats).isdisjoint(self.unloaded_formats)
 
-    def register_fiberio(self, fiberio: "FiberIO"):
+    def register_fiberio(self, fiberio: FiberIO):
         """Register a new fiber IO to manage."""
         forma, ver = fiberio.name.upper(), fiberio.version
         self._loaded_eps.add(fiberio.name)
@@ -104,7 +106,7 @@ class _FiberIOManager:
         format: str | None = None,
         version: str | None = None,
         extension: str | None = None,
-    ) -> "FiberIO":
+    ) -> FiberIO:
         """
         Return the most likely formatter for given inputs.
 

@@ -1,4 +1,6 @@
 """An HDF5-based indexer for local file systems."""
+from __future__ import annotations
+
 import abc
 import os
 import time

@@ -1,6 +1,8 @@
 """
 Machinery for coordinates.
 """
+from __future__ import annotations
+
 import abc
 from functools import cache
 from operator import gt, lt
@@ -46,7 +48,7 @@ def _get_coord_filter_validators(dtype):
     )
 
     out = []
-    for (cls, func) in validators:
+    for cls, func in validators:
         if _is_sub_dtype(dtype, cls):
             out.append(func)
     return tuple(out)
@@ -193,12 +195,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return self.convert_units(unit)
 
     @abc.abstractmethod
-    def sort(self, reverse=False) -> tuple["BaseCoord", slice | ArrayLike]:
+    def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Sort the contents of the coord. Return new coord and slice for sorting.
         """
 
-    def snap(self) -> "CoordRange":
+    def snap(self) -> CoordRange:
         """
         Snap the coordinates to evenly sampled grid points.
 
@@ -462,7 +464,7 @@ class CoordRange(BaseCoord):
         new = self.new(start=new_start, stop=new_end)
         return new, out
 
-    def sort(self, reverse=False) -> tuple["BaseCoord", slice | ArrayLike]:
+    def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Sort the contents of the coord. Return new coord and slice for sorting.
         """

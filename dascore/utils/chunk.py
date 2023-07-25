@@ -1,6 +1,8 @@
 """
 Utilities for chunking dataframes.
 """
+from __future__ import annotations
+
 from collections.abc import Collection
 from functools import reduce
 

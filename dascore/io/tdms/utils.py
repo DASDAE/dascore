@@ -260,7 +260,6 @@ def _get_data_node(tdms_file, LEAD_IN_LENGTH=28):
     """Get all the data saved in the current file"""
 
     def get_segment_data(fileinfo, nch, dmap, nso, rdo):
-
         # seg1_length: length of recording indicated as raw_data in metadata for
         # each channel in bytes
         seg_length = int((nso - rdo) / nch / np.dtype(fileinfo["data_type"]).itemsize)

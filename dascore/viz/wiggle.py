@@ -1,6 +1,8 @@
 """
 Module for wiggle plotting.
 """
+from __future__ import annotations
+
 from datetime import timedelta
 
 import matplotlib.pyplot as plt
