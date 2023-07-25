@@ -357,8 +357,31 @@ class FiberIO:
 
     @property
     def implements_get_format(self) -> bool:
-        """Return True if the subclass implements its own get_format method."""
+        """
+        Return True if the subclass implements its own get_format method.
+        """
         return not _is_wrapped_func(self.get_format, FiberIO.get_format)
+
+    def get_supported_io_table():
+        """
+        A function for making a table of all the supported formats and the methods.
+        """
+        # loads all the plugin so we know about all the FiberIO classes
+        FiberIO.manager.load_plugins()
+        out = []
+        # iterate the dict _format_version_items,
+        # which has the form {format_name: {version_str: FiberIO}}
+        for format_name, version_dict in FiberIO.manager._format_version.items():
+            for version_name, fiberio in version_dict.items():
+                format_info = {}
+                format_info["name"] = format_name
+                format_info["version"] = version_name
+                format_info["scan"] = fiberio.implements_scan
+                format_info["get_format"] = fiberio.implements_get_format
+                format_info["read"] = fiberio.implements_read
+                format_info["write"] = fiberio.implements_write
+                out.append(format_info)
+        return pd.DataFrame(out)
 
     def __hash__(self):
         """FiberIO instances should be uniquely defined by (format, version)"""

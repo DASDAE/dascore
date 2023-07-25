@@ -35,6 +35,13 @@ DASCore is a foundational package of the [DAS Data Analysis Ecosystem (DASDAE)](
 facilitates rapid development of other DASDAE packages that do more specialized analysis/visualization.
 :::
 
+# Supporting input/output formats
+```{python}
+#| echo: false
+from dascore.io.core import FiberIO
+FiberIO.get_supported_io_table()
+```
+
 # Introductory usage
 
 ## Read a file

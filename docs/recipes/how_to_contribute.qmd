@@ -49,7 +49,7 @@ pytest --pdb
 
 Finally, to make a commit and push your branch to GitHub, follow below steps:
 
-1- Run the following command twice(the first time will automatically fix some issues):
+1- Run the following command twice (the first time will automatically fix some issues):
 
 ```bash
 pre-commit run –all
