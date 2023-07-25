@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TypeVar, Union
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
@@ -88,7 +89,7 @@ class _FiberUnsupportedTypeHints(FiberIO):
 
 
 class TestFormatManager:
-    """tests for the format manager."""
+    """Tests for the format manager."""
 
     @pytest.fixture(scope="class")
     def format_manager(self):
@@ -283,7 +284,7 @@ class TestCastType:
     """Test suite to ensure types are intelligently cast to type hints."""
 
     def test_read(self, dummy_text_file):
-        """ensure write casts type."""
+        """Ensure write casts type."""
         io = _FiberCaster()
         # this passes if it doesnt raise.
         io.read(dummy_text_file)
@@ -312,3 +313,18 @@ class TestCastType:
         version = _FiberUnsupportedTypeHints.version
         out = dc.read(dummy_text_file, name, version)
         assert out == Path(dummy_text_file).read_text()
+
+
+class TestGetSupportedIOTable:
+    """A test for creating the supported io table."""
+
+    def test_get_supported_io_table(self):
+        """Test the get_supported_io_table function."""
+        # call the function to get the result
+        result_df = FiberIO.get_supported_io_table()
+
+        # assert that the result is a DataFrame
+        assert isinstance(result_df, pd.DataFrame)
+
+        # assert that the length of the DataFrame is not 0
+        assert len(result_df) > 0

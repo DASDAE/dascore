@@ -40,5 +40,5 @@ quarto preview docs
 This will take a few minutes the first time you run it. After that, the results are cached on only the changed files are re-rendered.
 :::
 
-Now, you can make new documentation or make changes in the /dascore/index.qmd file, /dascore/docs/ directory and so on.
+Now, you can make new documentation or make changes to the "index.qmd" file on the /dascore/docs/ directory and so on.
 However, if you make changes to any of DASCore's docstring, you need to re-run the build_api_docs.py script for the changes to appear.
