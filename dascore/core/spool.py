@@ -1,10 +1,12 @@
 """
 Module for spools, containers of patches.
 """
+from __future__ import annotations
+
 import abc
+from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
-from typing import Mapping, Optional, Sequence, Union
 
 import pandas as pd
 from rich.text import Text
@@ -52,7 +54,7 @@ class BaseSpool(abc.ABC):
     @abc.abstractmethod
     def chunk(
         self,
-        overlap: Optional[Union[numeric_types, timeable_types]] = None,
+        overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float = 1.5,
@@ -146,7 +148,7 @@ class DataFrameSpool(BaseSpool):
     # A dataframe of instructions for going from source_df to df
     _instruction_df: pd.DataFrame = CacheDescriptor("_cache", "_get_instruction_df")
     # kwargs for filtering contents
-    _select_kwargs: Optional[Mapping] = FrozenDict()
+    _select_kwargs: Mapping | None = FrozenDict()
     # attributes which effect merge groups for internal patches
     _group_columns = ("network", "station", "dims", "data_type", "history", "tag")
     _drop_columns = ("patch",)
@@ -258,7 +260,7 @@ class DataFrameSpool(BaseSpool):
     @compose_docstring(doc=BaseSpool.chunk.__doc__)
     def chunk(
         self,
-        overlap: Optional[Union[numeric_types, timeable_types]] = None,
+        overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float = 1.5,
@@ -316,7 +318,7 @@ class MemorySpool(DataFrameSpool):
 
     # tuple of attributes to remove from table
 
-    def __init__(self, data: Optional[Union[PatchType, Sequence[PatchType]]] = None):
+    def __init__(self, data: PatchType | Sequence[PatchType] | None = None):
         super().__init__()
         if data is not None:
             dfs = self._get_dummy_dataframes(patches_to_df(data))
@@ -338,7 +340,7 @@ class MemorySpool(DataFrameSpool):
 
 
 @singledispatch
-def spool(obj: Union[Path, str, BaseSpool, Sequence[PatchType]], **kwargs) -> BaseSpool:
+def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSpool:
     """
     Load a spool from some data source.
 

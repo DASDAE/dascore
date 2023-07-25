@@ -5,7 +5,7 @@ Much of this code was inspired by ObsPy's filtering module created by:
 Tobias Megies, Moritz Beyreuther, Yannik Behr
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 
 import pandas as pd
 from scipy import ndimage

@@ -7,17 +7,8 @@ import functools
 import inspect
 import sys
 import warnings
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Literal, Union
 
 import numpy as np
 import pandas as pd
@@ -38,7 +29,7 @@ from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
 from dascore.utils.models import merge_models
 from dascore.utils.time import to_float, to_timedelta64
 
-attr_type = Union[Dict[str, Any], str, Sequence[str], None]
+attr_type = Union[dict[str, Any], str, Sequence[str], None]
 
 
 def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
@@ -86,7 +77,7 @@ def _get_history_str(patch: PatchType, func, *args, _history="full", **kwargs) -
 
 
 def check_patch_dims(
-    patch: PatchType, required_dims: Optional[Tuple[str, ...]]
+    patch: PatchType, required_dims: tuple[str, ...] | None
 ) -> PatchType:
     """
     Check if a patch object has required dimensions, else raise PatchDimError.
@@ -138,7 +129,7 @@ def check_patch_attrs(patch: PatchType, required_attrs: attr_type) -> PatchType:
 
 
 def patch_function(
-    required_dims: Optional[Union[Tuple[str, ...], Callable]] = None,
+    required_dims: tuple[str, ...] | Callable | None = None,
     required_attrs: attr_type = None,
     history: Literal["full", "method_name", None] = "full",
 ):
@@ -216,7 +207,7 @@ def copy_attrs(attrs) -> dict:
 
 @compose_docstring(fields=PatchAttrs.__annotations__)
 def patches_to_df(
-    patches: Union[Sequence[PatchType], SpoolType, pd.DataFrame]
+    patches: Sequence[PatchType] | SpoolType | pd.DataFrame,
 ) -> pd.DataFrame:
     """
     Return a dataframe
@@ -257,7 +248,7 @@ def patches_to_df(
 
 
 def merge_patches(
-    patches: Union[Sequence[PatchType], pd.DataFrame, SpoolType],
+    patches: Sequence[PatchType] | pd.DataFrame | SpoolType,
     dim: str = "time",
     check_history: bool = True,
     tolerance: float = 1.5,
@@ -290,7 +281,7 @@ def merge_patches(
 
 
 def _merge_patches(
-    patches: Union[Sequence[PatchType], pd.DataFrame, SpoolType],
+    patches: Sequence[PatchType] | pd.DataFrame | SpoolType,
     dim: str = "time",
     check_history: bool = True,
     tolerance: float = 1.5,
@@ -444,9 +435,7 @@ def _force_patch_merge(patch_dict_list):
 
 
 @compose_docstring(fields=format_dtypes(PatchFileSummary.__annotations__))
-def scan_patches(
-    patches: Union[PatchType, Sequence[PatchType]]
-) -> list[PatchFileSummary]:
+def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[PatchFileSummary]:
     """
     Scan a sequence of patches and return a list of summaries.
 
@@ -548,7 +537,7 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
 
 def merge_compatible_coords_attrs(
     patch1: PatchType, patch2: PatchType, attrs_to_ignore=("history",)
-) -> Tuple[CoordManager, PatchAttrs]:
+) -> tuple[CoordManager, PatchAttrs]:
     """
     Merge the coordinates and attributes of patches or raise if incompatible.
 

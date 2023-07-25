@@ -1,6 +1,5 @@
 """Utilities for Quantx."""
-
-from typing import Optional
+from __future__ import annotations
 
 import numpy as np
 from tables import NoSuchNodeError
@@ -98,8 +97,8 @@ def _scan_quantx(self, fi):
 
 def _read_quantx(
     root,
-    time: Optional[tuple[timeable_types, timeable_types]] = None,
-    distance: Optional[tuple[float, float]] = None,
+    time: tuple[timeable_types, timeable_types] | None = None,
+    distance: tuple[float, float] | None = None,
 ) -> Patch:
     """
     Read a Quantx file.

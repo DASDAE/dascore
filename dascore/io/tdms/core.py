@@ -1,7 +1,7 @@
 """
 IO module for reading Silixa's TDMS DAS data format.
 """
-from typing import List, Optional, Union
+from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
@@ -22,7 +22,7 @@ class TDMSFormatterV4713(FiberIO):
     preferred_extensions = ("tdms",)
     LEAD_IN_LENGTH = 28
 
-    def get_format(self, stream: BinaryReader) -> Union[tuple[str, str], bool]:
+    def get_format(self, stream: BinaryReader) -> tuple[str, str] | bool:
         """
         Return a tuple of (TDMS, version) if TDMS else False.
 
@@ -41,7 +41,7 @@ class TDMSFormatterV4713(FiberIO):
         except Exception:  # noqa
             return False
 
-    def scan(self, resource: BinaryReader) -> List[PatchFileSummary]:
+    def scan(self, resource: BinaryReader) -> list[PatchFileSummary]:
         """
         Scan a silixa tdms file, return summary information about the file's contents.
         """
@@ -54,9 +54,9 @@ class TDMSFormatterV4713(FiberIO):
     def read(
         self,
         resource: BinaryReader,
-        time: Optional[tuple[timeable_types, timeable_types]] = None,
-        distance: Optional[tuple[float, float]] = None,
-        **kwargs
+        time: tuple[timeable_types, timeable_types] | None = None,
+        distance: tuple[float, float] | None = None,
+        **kwargs,
     ) -> dc.BaseSpool:
         """
         Read a silixa tdms file, return a DataArray.

@@ -161,7 +161,7 @@ class TestIterFiles:
     def test_basic(self, simple_dir):
         """test basic usage of iterfiles."""
         files = set(self.get_file_paths(self.file_paths, simple_dir))
-        out = set((Path(x) for x in iter_files(simple_dir)))
+        out = {Path(x) for x in iter_files(simple_dir)}
         assert files == out
 
     def test_one_subdir(self, simple_dir):

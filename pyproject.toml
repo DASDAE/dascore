@@ -105,3 +105,41 @@ TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
 TERRA15__V6 = "dascore.io.terra15.core:Terra15FormatterV6"
 QUANTX__V2 = "dascore.io.quantx.core:QuantXV2"
 WAV = "dascore.io.wav.core:WavIO"
+
+
+# --- External tool configuration
+
+[tool.ruff]
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "__init__.py"
+]
+
+# lowest python version supported
+target-version = "py310"
+
+[tool.ruff.mccabe]
+# Unlike Flake8, default to a complexity level of 10.
+max-complexity = 10

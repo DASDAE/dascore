@@ -1,7 +1,7 @@
 """
 IO module for reading Terra15 DAS data.
 """
-from typing import List, Optional, Union
+from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
@@ -21,7 +21,7 @@ class Terra15FormatterV4(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "4"
 
-    def get_format(self, resource: HDF5Reader) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: HDF5Reader) -> tuple[str, str] | bool:
         """
         Return True if file contains terra15 version 2 data else False.
 
@@ -35,7 +35,7 @@ class Terra15FormatterV4(FiberIO):
             if version_str:
                 return (self.name, version_str)
 
-    def scan(self, resource: HDF5Reader) -> List[PatchFileSummary]:
+    def scan(self, resource: HDF5Reader) -> list[PatchFileSummary]:
         """
         Scan a terra15 v2 file, return summary information about the file's contents.
         """
@@ -44,10 +44,10 @@ class Terra15FormatterV4(FiberIO):
     def read(
         self,
         resource: HDF5Reader,
-        time: Optional[tuple[timeable_types, timeable_types]] = None,
-        distance: Optional[tuple[float, float]] = None,
+        time: tuple[timeable_types, timeable_types] | None = None,
+        distance: tuple[float, float] | None = None,
         snap_dims: bool = True,
-        **kwargs
+        **kwargs,
     ) -> dc.BaseSpool:
         """
         Read a terra15 file.

@@ -16,4 +16,4 @@ jobs:
         run: pip install pre-commit
 
       - name: run all precommits
-        run: pre-commit run flake8 --files dascore/**/*
+        run: pre-commit run --files dascore/**/*

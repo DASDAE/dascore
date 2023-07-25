@@ -383,7 +383,7 @@ class TestToFloat:
 
     def test_datetime_array(self):
         """Tests for arrays of date times."""
-        dt = to_datetime64((np.ones(10)))
+        dt = to_datetime64(np.ones(10))
         out = to_float(dt)
         assert np.issubdtype(out.dtype, np.float_)
         assert np.allclose(out, 1.0)

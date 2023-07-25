@@ -18,15 +18,13 @@ def get_qmd_files(
 ):
     """Yield all QMD files."""
     path = _get_docs_path() if path is None else path
-    for qmd_file in path.rglob("*qmd"):
-        yield qmd_file
+    yield from path.rglob("*qmd")
 
 
 def yield_links(text, pattern=r"(?<=\]\(`).*?(?=`\))"):
     """Yield links found in documentation."""
     matches = re.findall(pattern, text)
-    for match in matches:
-        yield match
+    yield from matches
 
 
 @cache
@@ -61,7 +59,7 @@ def validate_all_links():
         msg = "Please fix the following (path/link)\n"
         max_len = max(len(x[0]) for x in bad)
         out = []
-        for (path, link) in bad:
+        for path, link in bad:
             path_str = path.ljust(max_len + 3)
             out.append(f"{path_str} {link}")
         new_str = msg + "\n".join(out)

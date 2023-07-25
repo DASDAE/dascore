@@ -2,13 +2,15 @@
 Base functionality for reading, writing, determining file formats, and scanning
 Das Data.
 """
+from __future__ import annotations
+
 import inspect
 import os.path
 from collections import defaultdict
 from functools import cached_property, wraps
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import List, Optional, Union, get_type_hints
+from typing import get_type_hints
 
 import pandas as pd
 from typing_extensions import Self
@@ -76,7 +78,7 @@ class _FiberIOManager:
         return tuple(priority_formatters + second_class_formatters)
 
     @cached_method
-    def load_plugins(self, format: Optional[str] = None):
+    def load_plugins(self, format: str | None = None):
         """Load plugin for specific format or ensure all formats are loaded"""
         if format is not None and format in self._format_version:
             return  # already loaded
@@ -90,7 +92,7 @@ class _FiberIOManager:
         # The selected format(s) should now be loaded
         assert set(formats).isdisjoint(self.unloaded_formats)
 
-    def register_fiberio(self, fiberio: "FiberIO"):
+    def register_fiberio(self, fiberio: FiberIO):
         """Register a new fiber IO to manage."""
         forma, ver = fiberio.name.upper(), fiberio.version
         self._loaded_eps.add(fiberio.name)
@@ -101,10 +103,10 @@ class _FiberIOManager:
     @cached_method
     def get_fiberio(
         self,
-        format: Optional[str] = None,
-        version: Optional[str] = None,
-        extension: Optional[str] = None,
-    ) -> "FiberIO":
+        format: str | None = None,
+        version: str | None = None,
+        extension: str | None = None,
+    ) -> FiberIO:
         """
         Return the most likely formatter for given inputs.
 
@@ -129,9 +131,9 @@ class _FiberIOManager:
 
     def yield_fiberio(
         self,
-        format: Optional[str] = None,
-        version: Optional[str] = None,
-        extension: Optional[str] = None,
+        format: str | None = None,
+        version: str | None = None,
+        extension: str | None = None,
     ) -> Self:
         """
         Yields fiber IO object based on input priorities.
@@ -297,7 +299,7 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, resource) -> List[PatchFileSummary]:
+    def scan(self, resource) -> list[PatchFileSummary]:
         """
         Returns a list of summary info for patches contained in file.
         """
@@ -324,7 +326,7 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no write method"
         raise NotImplementedError(msg)
 
-    def get_format(self, resource) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource) -> tuple[str, str] | bool:
         """
         Return a tuple of (format_name, version_numbers).
 
@@ -409,11 +411,11 @@ class FiberIO:
 
 
 def read(
-    path: Union[str, Path, IOResourceManager],
-    file_format: Optional[str] = None,
-    file_version: Optional[str] = None,
-    time: Optional[tuple[Optional[timeable_types], Optional[timeable_types]]] = None,
-    distance: Optional[tuple[Optional[float], Optional[float]]] = None,
+    path: str | Path | IOResourceManager,
+    file_format: str | None = None,
+    file_version: str | None = None,
+    time: tuple[timeable_types | None, timeable_types | None] | None = None,
+    distance: tuple[float | None, float | None] | None = None,
     **kwargs,
 ) -> SpoolType:
     """
@@ -460,9 +462,9 @@ def read(
 
 @compose_docstring(fields=list(PatchFileSummary.model_fields))
 def scan_to_df(
-    path: Union[Path, str, PatchType, SpoolType, IOResourceManager],
-    file_format: Optional[str] = None,
-    file_version: Optional[str] = None,
+    path: Path | str | PatchType | SpoolType | IOResourceManager,
+    file_format: str | None = None,
+    file_version: str | None = None,
 ) -> pd.DataFrame:
     """
     Scan a path, return a dataframe of contents.
@@ -505,9 +507,9 @@ def _iterate_scan_inputs(patch_source):
 
 @compose_docstring(fields=list(PatchFileSummary.__annotations__))
 def scan(
-    path: Union[Path, str, PatchType, SpoolType, IOResourceManager],
-    file_format: Optional[str] = None,
-    file_version: Optional[str] = None,
+    path: Path | str | PatchType | SpoolType | IOResourceManager,
+    file_format: str | None = None,
+    file_version: str | None = None,
 ) -> list[PatchFileSummary]:
     """
     Scan a potential patch source, return a list of PatchAttrs.
@@ -555,9 +557,9 @@ def scan(
 
 
 def get_format(
-    path: Union[str, Path, IOResourceManager],
-    file_format: Optional[str] = None,
-    file_version: Optional[str] = None,
+    path: str | Path | IOResourceManager,
+    file_format: str | None = None,
+    file_version: str | None = None,
 ) -> tuple[str, str]:
     """
     Return the name of the format contained in the file and version number.
@@ -614,9 +616,9 @@ def get_format(
 
 def write(
     patch_or_spool,
-    path: Union[str, Path],
+    path: str | Path,
     file_format: str,
-    file_version: Optional[str] = None,
+    file_version: str | None = None,
     **kwargs,
 ) -> Path:
     """

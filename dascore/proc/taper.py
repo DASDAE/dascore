@@ -1,7 +1,7 @@
 """
 Processing for applying a taper.
 """
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 from scipy.signal import windows  # the best operating system?

@@ -4,12 +4,14 @@ Utilities for working with HDF5 files.
 Pytables should only be imported in this module in case we need to switch
 out the hdf5 backend in the future.
 """
+from __future__ import annotations
+
 import time
 import warnings
 from contextlib import contextmanager, suppress
 from functools import partial
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -48,7 +50,7 @@ class _HDF5Store(pd.HDFStore):
         self,
         path,
         mode: str = "a",
-        complevel: Optional[int] = None,
+        complevel: int | None = None,
         complib=None,
         fletcher32: bool = False,
         **kwargs,
@@ -71,7 +73,7 @@ class _HDF5Store(pd.HDFStore):
 
 @contextmanager
 def open_hdf5_file(
-    path_or_handler: Union[Path, str, tables.File],
+    path_or_handler: Path | str | tables.File,
     mode: Literal["r", "w", "a"] = "r",
 ) -> tables.File:
     """
@@ -255,7 +257,7 @@ class HDFPatchIndexManager:
         self,
         update_df,
         update_time=None,
-        base_path: Union[str, Path] = "",
+        base_path: str | Path = "",
     ):
         """convert updates to dataframe, then append to index table"""
         # read in dataframe and prepare for input into hdf5 index
@@ -380,21 +382,21 @@ class HDFPatchIndexManager:
                 return True
 
     @property
-    def _version_or_none(self) -> Optional[str]:
+    def _version_or_none(self) -> str | None:
         """Return the version string or None if it doesn't yet exist."""
         try:
             version = self._index_version
-        except (FileNotFoundError):
+        except FileNotFoundError:
             return
         return version
 
     @property
-    def last_updated_timestamp(self) -> Optional[float]:
+    def last_updated_timestamp(self) -> float | None:
         """
         Return the last modified time stored in the index, else None.
         """
         try:
             out = pd.read_hdf(self.path, self._time_node)[0]
-        except (IOError, IndexError, ValueError, KeyError, AttributeError):
+        except (OSError, IndexError, ValueError, KeyError, AttributeError):
             out = None
         return out

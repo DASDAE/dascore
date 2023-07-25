@@ -1,14 +1,17 @@
 """
 Misc Utilities.
 """
+from __future__ import annotations
+
 import contextlib
 import functools
 import importlib
 import inspect
 import os
 import warnings
+from collections.abc import Iterable, Sequence
 from types import ModuleType
-from typing import Iterable, Optional, Sequence, Union
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -19,7 +22,7 @@ from dascore.constants import ONE_SECOND
 from dascore.exceptions import MissingOptionalDependency
 
 
-def register_func(list_or_dict: Union[list, dict], key=None):
+def register_func(list_or_dict: list | dict, key=None):
     """
     Decorator for registering a function name in a list or dict.
 
@@ -72,7 +75,7 @@ class _NameSpaceMeta(type):
     def __setattr__(self, key, value):
         if callable(value):
             value = _pass_through_method(value)
-        super(_NameSpaceMeta, self).__setattr__(key, value)
+        super().__setattr__(key, value)
 
 
 @contextlib.contextmanager
@@ -148,8 +151,8 @@ def get_slice_from_monotonic(array, cond=Optional[tuple]) -> slice:
 
 def broadcast_for_index(
     n_dims: int,
-    axis: Union[int, Sequence[int]],
-    value: Union[slice, int, None],
+    axis: int | Sequence[int],
+    value: slice | int | None,
     fill=slice(None),
 ):
     """
@@ -198,9 +201,9 @@ def all_close(ar1, ar2):
 
 
 def iter_files(
-    paths: Union[str, Iterable[str]],
-    ext: Optional[str] = None,
-    mtime: Optional[float] = None,
+    paths: str | Iterable[str],
+    ext: str | None = None,
+    mtime: float | None = None,
     skip_hidden: bool = True,
 ) -> Iterable[str]:
     """
@@ -340,7 +343,7 @@ def all_diffs_close_enough(diffs):
     return np.allclose(diffs, med, rtol=0.001)
 
 
-def unbyte(byte_or_str: Union[bytes, str]) -> str:
+def unbyte(byte_or_str: bytes | str) -> str:
     """Ensure a string is given by str or possibly bytes."""
     if isinstance(byte_or_str, (bytes, np.bytes_)):
         byte_or_str = byte_or_str.decode("utf8")

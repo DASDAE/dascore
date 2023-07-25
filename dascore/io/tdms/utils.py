@@ -152,7 +152,7 @@ def _read_attr(tdms_file):
     # Read length of object path:
     var = struct.unpack("<i", tdms_file.read(4))[0]
     # Read property name and type:
-    name, data_type = struct.unpack("<{0}si".format(var), tdms_file.read(var + 4))
+    name, data_type = struct.unpack(f"<{var}si", tdms_file.read(var + 4))
     # Lookup function to read and parse property value based on type:
     value = TDS_READ_VAL[TDS_DATA_TYPE[data_type]](tdms_file)
     name = name.decode()
@@ -260,7 +260,6 @@ def _get_data_node(tdms_file, LEAD_IN_LENGTH=28):
     """Get all the data saved in the current file"""
 
     def get_segment_data(fileinfo, nch, dmap, nso, rdo):
-
         # seg1_length: length of recording indicated as raw_data in metadata for
         # each channel in bytes
         seg_length = int((nso - rdo) / nch / np.dtype(fileinfo["data_type"]).itemsize)

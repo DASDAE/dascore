@@ -1,8 +1,9 @@
 """
 Core module for reading and writing pickle format.
 """
+from __future__ import annotations
+
 import pickle
-from typing import Union
 
 import dascore
 from dascore.io import BinaryReader, BinaryWriter, FiberIO
@@ -27,7 +28,7 @@ class PickleIO(FiberIO):
         spool_or_patch = b"Spool" in byte_stream or b"Patch" in byte_stream
         return has_dascore and spool_or_patch
 
-    def get_format(self, resource: BinaryReader) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: BinaryReader) -> tuple[str, str] | bool:
         """
         Return True if file contains a pickled Patch or Spool.
 

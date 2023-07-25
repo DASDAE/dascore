@@ -1,17 +1,18 @@
 """
 A spool for working with a single file.
 """
+from __future__ import annotations
+
 import copy
 from pathlib import Path
-from typing import Optional, Union
 
 from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import SpoolType
 from dascore.core.spool import DataFrameSpool
 from dascore.io.core import FiberIO
+from dascore.constants import SpoolType
 
 
 class FileSpool(DataFrameSpool):
@@ -35,9 +36,9 @@ class FileSpool(DataFrameSpool):
 
     def __init__(
         self,
-        path: Union[str, Path],
-        file_format: Optional[str] = None,
-        file_version: Optional[str] = None,
+        path: str | Path,
+        file_format: str | None = None,
+        file_version: str | None = None,
     ):
         super().__init__()
         # Init file spool from another file spool

@@ -1,9 +1,11 @@
 """
 Test for basic IO and related functions.
 """
+from __future__ import annotations
+
 import copy
 from pathlib import Path
-from typing import TypeVar, Union
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
@@ -16,6 +18,9 @@ from dascore.io.core import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.time import to_datetime64
+
+
+tvar = TypeVar("tvar", int, float, str, Path)
 
 
 class _FiberFormatTestV1(FiberIO):
@@ -65,7 +70,7 @@ class _FiberCaster(FiberIO):
         """ditto for write"""
         assert isinstance(resource, BinaryWriter)
 
-    def get_format(self, resource: Path) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: Path) -> tuple[str, str] | bool:
         """and get format"""
         assert isinstance(resource, Path)
         return False
@@ -80,7 +85,6 @@ class _FiberUnsupportedTypeHints(FiberIO):
 
     name = "_TypeHinterNotRight"
     version = "2"
-    tvar = TypeVar("tvar", int, float, str, Path)
 
     def read(self, resource: tvar, **kwargs):
         """dummy read"""

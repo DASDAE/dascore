@@ -1,11 +1,13 @@
 """
 Pandas utilities.
 """
+from __future__ import annotations
+
 import fnmatch
 import os
 from collections import defaultdict
+from collections.abc import Collection, Sequence
 from functools import cache
-from typing import Collection, Sequence, Tuple, Type
 
 import numpy as np
 import pandas as pd
@@ -183,7 +185,7 @@ def get_interval_columns(df, name, arrays=False):
         return df[names[0]].values, df[names[1]].values, df[names[2]].values
 
 
-def yield_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
+def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
     """
     For each slice keyword, yield the name and slice.
 
@@ -240,7 +242,7 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     # apply filtering, this creates a copy so we *should* be ok to update inplace.
     out = df[filter_df(df, ignore_bad_kwargs=ignore_bad_kwargs, **kwargs)]
     # find slice kwargs, get series corresponding to interval columns
-    for (name, qs) in yield_slice_from_kwargs(out, kwargs):
+    for name, qs in yield_slice_from_kwargs(out, kwargs):
         start, stop, step = get_interval_columns(out, name)
         min_val = qs.start if qs.start is not None else start.min()
         max_val = qs.stop if qs.stop is not None else stop.max()
@@ -345,7 +347,7 @@ def get_column_names_from_dim(dims: Sequence[str]) -> list:
     return out
 
 
-def fill_defaults_from_pydantic(df, base_model: Type[BaseModel]):
+def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):
     """
     Fill missing columns in dataframe with defaults from base_model.
 

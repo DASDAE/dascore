@@ -1,8 +1,9 @@
 """
 Core module for wave format.
 """
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Union
 
 import numpy as np
 from scipy.io.wavfile import write
@@ -19,9 +20,7 @@ class WavIO(FiberIO):
 
     name = "WAV"
 
-    def write(
-        self, spool: SpoolType, resource: Union[str, Path], resample_frequency=None
-    ):
+    def write(self, spool: SpoolType, resource: str | Path, resample_frequency=None):
         """
         Write the contents of the patch to one or more wav files.
 

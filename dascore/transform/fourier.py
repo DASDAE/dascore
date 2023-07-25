@@ -6,8 +6,8 @@ implementation.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from operator import mul
-from typing import Sequence
 
 import numpy as np
 import numpy.fft as nft

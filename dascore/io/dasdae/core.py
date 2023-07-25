@@ -1,8 +1,9 @@
 """
 Core module for reading and writing DASDAE format.
 """
+from __future__ import annotations
+
 import contextlib
-from typing import Union
 
 import pandas as pd
 
@@ -92,7 +93,7 @@ class DASDAEV1(FiberIO):
         )
         return df
 
-    def get_format(self, resource: HDF5Reader) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: HDF5Reader) -> tuple[str, str] | bool:
         """Return the format from a dasdae file."""
         is_dasdae, version = False, ""  # NOQA
         with contextlib.suppress(KeyError):

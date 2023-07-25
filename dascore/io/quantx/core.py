@@ -1,7 +1,7 @@
 """
 IO module for reading Optasense DAS data.
 """
-from typing import List, Optional, Union
+from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
@@ -20,7 +20,7 @@ class QuantXV2(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "2.0"
 
-    def get_format(self, resource: HDF5Reader) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: HDF5Reader) -> tuple[str, str] | bool:
         """
         Return True if file contains Optasense version 2 data else False.
 
@@ -33,7 +33,7 @@ class QuantXV2(FiberIO):
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: HDF5Reader) -> List[PatchFileSummary]:
+    def scan(self, resource: HDF5Reader) -> list[PatchFileSummary]:
         """
         Scan an Optasense v2 file, return summary information about the file's contents.
         """
@@ -42,9 +42,9 @@ class QuantXV2(FiberIO):
     def read(
         self,
         resource: HDF5Reader,
-        time: Optional[tuple[timeable_types, timeable_types]] = None,
-        distance: Optional[tuple[float, float]] = None,
-        **kwargs
+        time: tuple[timeable_types, timeable_types] | None = None,
+        distance: tuple[float, float] | None = None,
+        **kwargs,
     ) -> dc.BaseSpool:
         """
         Read an Optasense file.

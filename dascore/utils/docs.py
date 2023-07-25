@@ -1,11 +1,14 @@
 """
 Utilities for documentation.
 """
+from __future__ import annotations
+
 import textwrap
-from typing import Any, Dict, Sequence, Union
+from collections.abc import Sequence
+from typing import Any
 
 
-def format_dtypes(dtype_dict: Dict[str, Any]) -> str:
+def format_dtypes(dtype_dict: dict[str, Any]) -> str:
     """
     Convert dict to string for printing.
 
@@ -33,7 +36,7 @@ def format_dtypes(dtype_dict: Dict[str, Any]) -> str:
     return out
 
 
-def compose_docstring(**kwargs: Union[str, Sequence[str]]):
+def compose_docstring(**kwargs: str | Sequence[str]):
     """
     Decorator for composing docstrings.
 

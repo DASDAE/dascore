@@ -1,7 +1,7 @@
 """
 Benchmark for generic memory spool operations.
 """
-from typing import Optional
+from __future__ import annotations
 
 import dascore as dc
 
@@ -17,7 +17,7 @@ class ChunkSuite:
         )
         self._diverse_spool = dc.get_example_spool("diverse_das")
 
-    def _chunk_n_check(self, spool, length: Optional[int] = 1, time=None):
+    def _chunk_n_check(self, spool, length: int | None = 1, time=None):
         """Helper function to merge and check the spool."""
         new = spool.chunk(time=time)
         if length is not None:

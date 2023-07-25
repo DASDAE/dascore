@@ -1,10 +1,12 @@
 """
 Machinery for coordinates.
 """
+from __future__ import annotations
+
 import abc
 from functools import cache
 from operator import gt, lt
-from typing import Any, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -46,7 +48,7 @@ def _get_coord_filter_validators(dtype):
     )
 
     out = []
-    for (cls, func) in validators:
+    for cls, func in validators:
         if _is_sub_dtype(dtype, cls):
             out.append(func)
     return tuple(out)
@@ -85,7 +87,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Convert from one unit to another. Set units if None are set."""
 
     @abc.abstractmethod
-    def select(self, arg, relative=False) -> Tuple[Self, Union[slice, ArrayLike]]:
+    def select(self, arg, relative=False) -> tuple[Self, slice | ArrayLike]:
         """
         Returns an entity that can be used in a list for numpy indexing
         and selected coord.
@@ -152,7 +154,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     @property
     @cached_method
-    def limits(self) -> Tuple[Any, Any]:
+    def limits(self) -> tuple[Any, Any]:
         """Returns a numpy datatype"""
         return self.min(), self.max()
 
@@ -162,22 +164,22 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Returns a numpy datatype"""
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Return the shape of the coordinate data."""
         return self.data.shape
 
     @property
-    def evenly_sampled(self) -> Tuple[int, ...]:
+    def evenly_sampled(self) -> tuple[int, ...]:
         """Returns True if the coord is evenly sampled."""
         return self._evenly_sampled
 
     @property
-    def sorted(self) -> Tuple[int, ...]:
+    def sorted(self) -> tuple[int, ...]:
         """Returns True if the coord in sorted."""
         return self._sorted
 
     @property
-    def reverse_sorted(self) -> Tuple[int, ...]:
+    def reverse_sorted(self) -> tuple[int, ...]:
         """Returns True if the coord in sorted in reverse order."""
         return self._reverse_sorted
 
@@ -193,12 +195,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return self.convert_units(unit)
 
     @abc.abstractmethod
-    def sort(self, reverse=False) -> Tuple["BaseCoord", Union[slice, ArrayLike]]:
+    def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Sort the contents of the coord. Return new coord and slice for sorting.
         """
 
-    def snap(self) -> "CoordRange":
+    def snap(self) -> CoordRange:
         """
         Snap the coordinates to evenly sampled grid points.
 
@@ -259,9 +261,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def get_slice_tuple(
         self,
-        select: Union[slice, None, type(Ellipsis), Tuple[Any, Any]],
+        select: slice | None | type(Ellipsis) | tuple[Any, Any],
         relative=False,
-    ) -> Tuple[Any, Any]:
+    ) -> tuple[Any, Any]:
         """
         Get a tuple with (start, stop) and perform basic checks.
 
@@ -331,7 +333,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         data = np.empty(tuple(new_shape), dtype=self.dtype)
         return get_coord(values=data)
 
-    def index(self, indexer, axis: Optional[int] = None) -> Self:
+    def index(self, indexer, axis: int | None = None) -> Self:
         """
         Index the coordinate and return new coordinate.
 
@@ -442,7 +444,7 @@ class CoordRange(BaseCoord):
             out[name] = getattr(self, name) * factor
         return self.new(**out)
 
-    def select(self, args, relative=False) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
+    def select(self, args, relative=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Apply select, return selected coords and index to apply to array.
 
@@ -462,7 +464,7 @@ class CoordRange(BaseCoord):
         new = self.new(start=new_start, stop=new_end)
         return new, out
 
-    def sort(self, reverse=False) -> Tuple["BaseCoord", Union[slice, ArrayLike]]:
+    def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Sort the contents of the coord. Return new coord and slice for sorting.
         """
@@ -595,7 +597,7 @@ class CoordArray(BaseCoord):
         factor = get_conversion_factor(self.units, units)
         return self.new(units=units, values=self.values * factor)
 
-    def select(self, args, relative=False) -> Tuple[Self, Union[slice, ArrayLike]]:
+    def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
         args = self.get_slice_tuple(args, relative=relative)
         values = self.values
@@ -610,7 +612,7 @@ class CoordArray(BaseCoord):
             return self.empty(), out
         return self.new(values=values[out]), out
 
-    def sort(self, reverse=False) -> Tuple[BaseCoord, Union[slice, ArrayLike]]:
+    def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the coord to be monotonic (maybe range)."""
         argsort: ArrayLike = np.argsort(self.values)[:: -1 if reverse else 1]
         arg_dict = self.model_dump()
@@ -728,7 +730,7 @@ class CoordMonotonicArray(CoordArray):
     _rich_style = dascore_styles["coord_monotonic"]
     _sorted = True
 
-    def select(self, args, relative=False) -> Tuple[Self, Union[slice, ArrayLike]]:
+    def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
         v1, v2 = self.get_slice_tuple(args, relative=relative)
         # reverse order if reverse monotonic. This is done so when we mult
@@ -797,7 +799,7 @@ class CoordDegenerate(CoordArray):
     step: Any = None
     _rich_style = dascore_styles["coord_degenerate"]
 
-    def select(self, args, relative=False) -> Tuple[Self, Union[slice, ArrayLike]]:
+    def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
         """Select for Degenerate coords does nothing."""
         return self, slice(None, None)
 
@@ -817,11 +819,11 @@ class CoordDegenerate(CoordArray):
 
 def get_coord(
     *,
-    values: Union[ArrayLike, None, np.ndarray] = None,
+    values: ArrayLike | None | np.ndarray = None,
     start=None,
     stop=None,
     step=None,
-    units: Union[None, Unit, Quantity, str] = None,
+    units: None | Unit | Quantity | str = None,
 ) -> BaseCoord:
     """
     Given multiple types of input, return a coordinate.

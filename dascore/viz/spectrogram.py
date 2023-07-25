@@ -1,7 +1,7 @@
 """
 A spectrogram visualization
 """
-from typing import Optional
+from __future__ import annotations
 
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
@@ -34,7 +34,7 @@ def _get_1d_array_dim_name(patch):
 @patch_function()
 def spectrogram(
     patch: PatchType,
-    ax: Optional[plt.Axes] = None,
+    ax: plt.Axes | None = None,
     cmap="bwr",
     log=False,
     show=False,

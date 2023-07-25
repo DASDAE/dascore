@@ -42,7 +42,7 @@ class FrozenDict(ABCMap):
         return len(self._dict)
 
     def __repr__(self):
-        return "<%s %r>" % (self.__class__.__name__, self._dict)
+        return f"<{self.__class__.__name__} {self._dict!r}>"
 
     def _hash_contents(self):
         """Returns a hash of the dictionary"""

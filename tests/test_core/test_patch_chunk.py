@@ -186,7 +186,7 @@ class TestChunkMerge:
         pa1 = wacky_dim_patch
         dt = dc.to_timedelta64(0.2)
         pa2 = pa1.update_attrs(time_min=pa1.attrs.time_max + dt)
-        return dc.spool(([pa1, pa2]))
+        return dc.spool([pa1, pa2])
 
     @pytest.fixture(scope="class")
     def adjacent_spool_monotonic_overlap(self, wacky_dim_patch):
@@ -194,7 +194,7 @@ class TestChunkMerge:
         pa1 = wacky_dim_patch
         dt = dc.to_timedelta64(1)
         pa2 = pa1.update_attrs(time_min=pa1.attrs.time_max - dt)
-        return dc.spool(([pa1, pa2]))
+        return dc.spool([pa1, pa2])
 
     @pytest.fixture(scope="class")
     def distance_adjacent(self, random_patch):
