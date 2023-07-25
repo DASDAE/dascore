@@ -16,6 +16,7 @@ from dascore.utils.misc import unbyte
 from dascore.utils.time import dtype_time_like
 
 str_or_none = TypeVar("str_or_none", None, str)
+numeric = TypeVar("numeric", np.ndarray, int, float)
 
 
 @cache
@@ -68,17 +69,49 @@ def get_factor_and_unit(
     return quant.magnitude, str(quant.units)
 
 
+@cache
+def _get_conversion_multiplier(from_quant: Quantity, to_quant: Quantity) -> float:
+    """
+    Get a multiplier for converting from one unit to another.
+
+    Doesn't work with offset units.
+
+    Generally, use [convert_units](`dascore.units.convert_units`) instead.
+    """
+    from_quant, to_quant = get_quantity(from_quant), get_quantity(to_quant)
+    if from_quant is None or to_quant is None:
+        return 1
+    mag1, mag2 = from_quant.magnitude, to_quant.magnitude
+    mag_ratio = mag1 / mag2
+    try:
+        unit_ratio = to_quant.units.from_(from_quant.units).magnitude
+    except DimensionalityError as e:
+        raise UnitError(str(e))
+
+    return mag_ratio * unit_ratio
+
+
+@cache
+def _get_conversion_adder(from_quant, to_quant) -> float:
+    """
+    Get a number that represents offset from one unit to another.
+
+    Will be 0 except in cases of units with offsets (eg temperature).
+    """
+    return 0
+
+
 def convert_units(
-    array: np.ndarray,
+    data: numeric,
     to_units: None | str | Quantity,
     from_units: None | str | Quantity = None,
-) -> tuple[np.ndarray, Quantity]:
+) -> numeric:
     """
     Convert units in array from one type of units to another.
 
     Parameters
     ----------
-    array
+    data
         The data to convert.
     to_units
         The desired units after the conversion
@@ -92,6 +125,11 @@ def convert_units(
     [time])
     """
     to_units, from_units = get_quantity(to_units), get_quantity(from_units)
+    if from_units is None:
+        return data
+    multiplier = _get_conversion_multiplier(from_units, to_units)
+    adder = _get_conversion_adder(from_units, to_units)
+    return data * multiplier + adder
 
 
 def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
@@ -109,22 +147,6 @@ def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
         )
         raise UnitError(msg)
     return quant
-
-
-@cache
-def get_conversion_factor(from_quant, to_quant) -> float:
-    """Get a conversion factor for converting from one unit to another."""
-    from_quant, to_quant = get_quantity(from_quant), get_quantity(to_quant)
-    if from_quant is None or to_quant is None:
-        return 1
-    mag1, mag2 = from_quant.magnitude, to_quant.magnitude
-    mag_ratio = mag1 / mag2
-    try:
-        unit_ratio = to_quant.units.from_(from_quant.units).magnitude
-    except DimensionalityError as e:
-        raise UnitError(str(e))
-
-    return mag_ratio * unit_ratio
 
 
 def invert_quantity(unit: pint.Unit | str) -> pint.Unit:
@@ -215,7 +237,7 @@ def get_filter_units(
         inversed_units = True
         if data_units.dimensionality == quant.units.dimensionality:
             quant, inversed_units = 1 / quant, False
-        mag = get_conversion_factor(quant, inverted_units)
+        mag = _get_conversion_multiplier(quant, inverted_units)
         return mag, inversed_units
 
     # fast-path for non-unit, non-quantity inputs.

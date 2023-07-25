@@ -19,7 +19,7 @@ from dascore.core.coords import (
     get_coord_from_attrs,
 )
 from dascore.exceptions import CoordError, ParameterError
-from dascore.units import get_conversion_factor, get_quantity
+from dascore.units import _get_conversion_multiplier, get_quantity
 from dascore.utils.misc import register_func, all_close
 from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like, to_float
 
@@ -278,15 +278,13 @@ class TestBasics:
         assert len(out_mm) == len(out_m)
         assert np.allclose(out_mm.values / 1000, out_m.values)
 
-    def test_convert_offset_units(self, coord):
+    def test_convert_offset_units(self):
         """Ensure units can be converted/set for offset units"""
-        # if units are not set convert_units should set them.
-        # out_m = coord.convert_units("m")
-        # assert dc.get_unit(out_m.units) == dc.get_unit("m")
-        # out_mm = out_m.convert_units("mm")
-        # assert dc.get_unit(out_mm.units) == dc.get_unit("mm")
-        # assert len(out_mm) == len(out_m)
-        # assert np.allclose(out_mm.values / 1000, out_m.values)
+        array = np.arange(10)
+        f_array = array * (9 / 5) + 32.0
+        coord = get_coord(values=array, units="degC")
+        out = coord.convert_units("degF")
+        assert np.allclose(f_array, out.values)
 
     def test_out_of_range_raises(self, evenly_sampled_coord):
         """Accessing a value out of the range of array should raise."""
@@ -617,7 +615,7 @@ class TestCoordRange:
         """Simple test for setting and converting units."""
         if dtype_time_like(coord.dtype):
             pytest.skip("Cant set time-like units")
-        factor = get_conversion_factor("m", "ft")
+        factor = _get_conversion_multiplier("m", "ft")
         c1 = coord.set_units("m")
         c2 = c1.convert_units("ft")
         assert c2.units == get_quantity("ft")

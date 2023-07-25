@@ -7,7 +7,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import UnitError
 from dascore.units import (
-    get_conversion_factor,
+    _get_conversion_multiplier,
     get_factor_and_unit,
     get_filter_units,
     get_quantity,
@@ -16,6 +16,7 @@ from dascore.units import (
     get_quantity_str,
     assert_dtype_compatible_with_units,
     Quantity,
+    convert_units,
 )
 
 
@@ -29,9 +30,9 @@ class TestUnitInit:
 
     def test_conversion_factor(self):
         """Ensure conversion factors are calculated correctly."""
-        assert get_conversion_factor("s", "ms") == 1000.0
-        assert get_conversion_factor("ms", "s") == 1 / 1000.0
-        assert np.round(get_conversion_factor("ft", "m"), 5) == 0.3048
+        assert _get_conversion_multiplier("s", "ms") == 1000.0
+        assert _get_conversion_multiplier("ms", "s") == 1 / 1000.0
+        assert np.round(_get_conversion_multiplier("ft", "m"), 5) == 0.3048
 
     def test_invert(self):
         """Ensure a unit can be inverted."""
@@ -43,9 +44,9 @@ class TestUnitInit:
 
     def test_conversion_factor_none(self):
         """If either unit is None it should return 1."""
-        assert get_conversion_factor(None, None) == 1
-        assert get_conversion_factor(None, "m") == 1
-        assert get_conversion_factor("m", None) == 1
+        assert _get_conversion_multiplier(None, None) == 1
+        assert _get_conversion_multiplier(None, "m") == 1
+        assert _get_conversion_multiplier("m", None) == 1
 
 
 class TestGetQuantStr:
@@ -217,3 +218,24 @@ class TestDTypeCompatible:
         """Seconds should work fine."""
         out = assert_dtype_compatible_with_units(np.datetime64, "s")
         assert out == get_quantity("s")
+
+
+class TestConvertUnits:
+    """Test suite for converting units."""
+
+    def test_simple(self):
+        """Simple units to simple units."""
+        out = convert_units(1, "m", "ft")
+        assert np.isclose(out, 0.3048)
+
+    def test_temperature(self):
+        """Ensure temperature can be converted."""
+        out = convert_units(1, "m", "ft")
+        assert np.isclose(out, 0.3048)
+
+    def test_convert_offset_units(self):
+        """Ensure units can be converted/set for offset units"""
+        array = np.arange(10)
+        f_array = array * (9 / 5) + 32.0
+        out = convert_units(array, from_units="degC", to_units="degF")
+        assert np.allclose(f_array, out)

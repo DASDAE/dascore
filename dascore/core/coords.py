@@ -21,10 +21,10 @@ from dascore.exceptions import CoordError, ParameterError
 from dascore.units import (
     Quantity,
     Unit,
-    get_conversion_factor,
     get_factor_and_unit,
     get_quantity_str,
     get_quantity,
+    convert_units,
 )
 from dascore.utils.display import get_nice_text
 from dascore.utils.misc import all_diffs_close_enough, cached_method, iterate
@@ -255,9 +255,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         # strip units and v
         if hasattr(value, "units"):
-            unit = value.units
-            uf = get_conversion_factor(unit, self.units)
-            value = value.magnitude * uf
+            value = convert_units(value.magnitude, self.units, value.units)
         # if null or ... just return None
         if pd.isnull(value) or value is Ellipsis:
             return None
@@ -428,11 +426,14 @@ class CoordRange(BaseCoord):
     @classmethod
     def _set_stop(cls, values):
         """Set stop to integral value >= current stop."""
-        dur = values["stop"] - values["start"]
-        if values["step"] == 0:
+        start, stop = values.get("start"), values.get("stop")
+        step = values.get("step")
+        assert all(x is not None for x in [start, stop, step])
+        dur = stop - start
+        if step == 0:
             return values
-        int_val = int(np.ceil(np.round(dur / values["step"], 1)))
-        values["stop"] = values["start"] + values["step"] * int_val
+        int_val = int(np.ceil(np.round(dur / step, 1)))
+        values["stop"] = start + step * int_val
         return values
 
     def __getitem__(self, item):
@@ -462,15 +463,13 @@ class CoordRange(BaseCoord):
         """
         Convert units, or set units if none exist.
         """
-        is_time = np.issubdtype(self.dtype, np.datetime64)
-        is_time_delta = np.issubdtype(self.dtype, np.timedelta64)
-        if self.units is None or is_time or is_time_delta:
-            return self.set_units(units)
+        # cant convert time units
+        if dtype_time_like(self.dtype):
+            return self
         out = dict(units=units)
-        factor = get_conversion_factor(self.units, units)
         for name in ["start", "stop", "step"]:
-            out[name] = getattr(self, name) * factor
-        return self.new(**out)
+            out[name] = convert_units(getattr(self, name), units, self.units)
+        return self.__class__(**out)
 
     def select(self, args, relative=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """
@@ -622,8 +621,8 @@ class CoordArray(BaseCoord):
         is_time_delta = np.issubdtype(self.dtype, np.timedelta64)
         if self.units is None or is_time or is_time_delta:
             return self.set_units(units)
-        factor = get_conversion_factor(self.units, units)
-        return self.new(units=units, values=self.values * factor)
+        values = convert_units(self.values, units, self.units)
+        return self.new(units=units, values=values)
 
     def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
