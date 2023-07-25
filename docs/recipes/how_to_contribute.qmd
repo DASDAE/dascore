@@ -52,7 +52,7 @@ Finally, to make a commit and push your branch to GitHub, follow below steps:
 1- Run the following command twice (the first time will automatically fix some issues):
 
 ```bash
-pre-commit run –all
+pre-commit run --all
 ```
 
 2- Run all the following commands:
