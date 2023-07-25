@@ -14,6 +14,7 @@ from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.exceptions import CoordError
 from dascore.proc.basic import apply_operator
+from dascore.units import get_quantity
 
 
 def get_simple_patch() -> Patch:
@@ -462,7 +463,7 @@ class TestUpdateAttrs:
         new_dist = "ft"
         patch = random_patch.update_attrs(distance_units=new_dist)
         coord = patch.coords.coord_map["distance"]
-        assert coord.units == new_dist
+        assert coord.units == get_quantity(new_dist)
         patch2 = random_patch.convert_units(distance=new_dist)
         assert patch == patch2
 

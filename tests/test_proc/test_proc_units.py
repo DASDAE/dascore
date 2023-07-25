@@ -7,6 +7,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import UnitError
 from dascore.units import get_quantity
+from dascore.utils.time import dtype_time_like
 
 
 class TestSetUnits:
@@ -17,22 +18,28 @@ class TestSetUnits:
         patch = random_patch_with_lat_lon
         unit_str = "km/µs"
         out = patch.set_units(unit_str)
-        assert str(out.attrs.data_units) == unit_str
+        assert get_quantity(out.attrs.data_units) == get_quantity(unit_str)
 
     def test_convert_dim_units(self, random_patch_with_lat_lon):
         """Ensure we can convert dimensional coordinate units."""
         patch = random_patch_with_lat_lon
         unit_str = "furlong"  # A silly unit that wont be used on patch
         for dim in patch.dims:
+            expected_quant = get_quantity(unit_str)
+            coord = random_patch_with_lat_lon.get_coord(dim)
             new = patch.set_units(**{dim: unit_str})
             attr = new.attrs
             # first check attributes
             attr_name = f"{dim}_units"
             assert hasattr(attr, attr_name)
-            assert getattr(new.attrs, attr_name) == unit_str
+            value = getattr(new.attrs, attr_name)
+            # time shouldn't ever be a anything other than s
+            if dtype_time_like(coord.dtype):
+                expected_quant = get_quantity("s")
+            assert value == expected_quant
             # then check coord
             coord = new.coords.coord_map[dim]
-            assert coord.units == unit_str
+            assert coord.units == expected_quant
 
     def test_update_non_dim_coord_units(self, random_patch_with_lat_lon):
         """Ensure non-dim coords can also have their units updated."""
@@ -47,7 +54,7 @@ class TestSetUnits:
             assert not hasattr(new.attrs, attr_name)
             # the but coord should be set
             coord = new.coords.coord_map[coord_name]
-            assert coord.units == unit_str
+            assert coord.units == get_quantity(unit_str)
 
 
 class TestConvertUnits:
@@ -64,16 +71,16 @@ class TestConvertUnits:
         """Ensure simple conversions work."""
         out_km = unit_patch.convert_units("km/s")
         assert np.allclose(out_km.data * 1_000, unit_patch.data)
-        assert out_km.attrs.data_units == "km/s"
+        assert out_km.attrs.data_units == get_quantity("km/s")
         out_mm = unit_patch.convert_units("mm/s")
         assert np.allclose(out_mm.data / 1_000, unit_patch.data)
-        assert out_mm.attrs.data_units == "mm/s"
+        assert out_mm.attrs.data_units == get_quantity("mm/s")
 
     def test_convert_data_quantity(self, unit_patch):
         """Ensure quantities can be used for units."""
         unit_str = "10 m/s"
         out = unit_patch.convert_units(unit_str)
-        assert out.attrs.data_units == unit_str
+        assert out.attrs.data_units == get_quantity(unit_str)
         assert np.allclose(out.data * 10, unit_patch.data)
 
     def test_bad_data_conversion_raises(self, unit_patch):

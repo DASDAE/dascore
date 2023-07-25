@@ -192,6 +192,7 @@ def all_close(ar1, ar2):
     Just uses numpy.allclose unless ar1 is a datetime, in which case
     strict equality is used.
     """
+    ar1, ar2 = np.array(ar1), np.array(ar2)
     is_date = np.issubdtype(ar1.dtype, np.datetime64)
     is_timedelta = np.issubdtype(ar1.dtype, np.timedelta64)
     if is_date or is_timedelta:

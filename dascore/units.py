@@ -6,12 +6,14 @@ from __future__ import annotations
 from functools import cache
 from typing import TypeVar
 
+import numpy as np
 import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit  # noqa
 
 from dascore.exceptions import UnitError
 from dascore.utils.misc import unbyte
+from dascore.utils.time import dtype_time_like
 
 str_or_none = TypeVar("str_or_none", None, str)
 
@@ -30,6 +32,9 @@ def get_registry():
 @cache
 def get_unit(value) -> Unit:
     """Convert a value to a pint unit."""
+    if isinstance(value, Quantity):
+        assert value.magnitude == 1.0
+        value = value.units
     return get_registry().Unit(value)
 
 
@@ -44,7 +49,7 @@ def _str_to_quant(qunat_str):
 
 def get_quantity(value: str_or_none) -> Quantity | None:
     """Convert a value to a pint quantity."""
-    if value is None or value is ...:
+    if value is None or value is ... or value == "":
         return None
     if isinstance(value, Quantity):
         return value
@@ -61,6 +66,49 @@ def get_factor_and_unit(
     if simplify:
         quant = quant.to_base_units()
     return quant.magnitude, str(quant.units)
+
+
+def convert_units(
+    array: np.ndarray,
+    to_units: None | str | Quantity,
+    from_units: None | str | Quantity = None,
+) -> tuple[np.ndarray, Quantity]:
+    """
+    Convert units in array from one type of units to another.
+
+    Parameters
+    ----------
+    array
+        The data to convert.
+    to_units
+        The desired units after the conversion
+    from_units
+        The current units of the data. If None, simply set the units.
+
+    Raises
+    ------
+    [UnitError](`dascore.exceptions.UnitError`) if conversion is not possible
+    or if the datatype is not compatible (e.g., datetime must always be
+    [time])
+    """
+    to_units, from_units = get_quantity(to_units), get_quantity(from_units)
+
+
+def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
+    """
+    Return quantity if it is compatible with dtype.
+
+    If not raise [UnitError](`dascore.exceptions.UnitError`).
+    """
+    if not dtype_time_like(dtype):
+        return get_quantity(quantity)
+    if (quant := get_quantity(quantity)) != get_quantity("s"):
+        msg = (
+            "For arrays with dtypes of datetime64 and timedelta64 the "
+            "only allowable units are s."
+        )
+        raise UnitError(msg)
+    return quant
 
 
 @cache
@@ -81,32 +129,40 @@ def get_conversion_factor(from_quant, to_quant) -> float:
 
 def invert_quantity(unit: pint.Unit | str) -> pint.Unit:
     """Invert a unit"""
-    if pd.isnull(unit):
+    # just get magnitude for isnull test to avoid warning of casting
+    # quantity to array.
+    unit_test = unit.magnitude if hasattr(unit, "magnitude") else unit
+    if pd.isnull(unit_test):
         return None
     quant = get_quantity(unit)
     return 1 / quant
 
 
-def validate_quantity(quant_str) -> str | None:
+def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     """
-    Ensure a unit string is valid and return it.
+    Ensure a unit/quantity is valid and return its string representation.
 
     If it is not valid raise a [UnitError](`dascore.exceptions.UnitError`).
 
     Parameters
     ----------
-    quant_str
-        A string input specifying a quantity (unit + scaling factors).
+    quant_value
+        A input specifying a quantity.
     """
-    quant_str = unbyte(quant_str)
-    if quant_str is None or quant_str == "":
+    quant_value = unbyte(quant_value)
+    if quant_value is None or quant_value == "":
         return None
     try:
-        get_quantity(quant_str)
+        quant = get_quantity(quant_value)
     except UndefinedUnitError:
-        msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
+        msg = f"DASCore failed to parse the following unit/quantity: {quant_value}"
         raise UnitError(msg)
-    return str(quant_str)
+    if isinstance(quant_value, Quantity):
+        if quant.magnitude == 1.0:
+            quant_value = str(quant.units)
+        else:
+            quant_value = str(quant)
+    return str(quant_value)
 
 
 def get_filter_units(

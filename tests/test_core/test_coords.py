@@ -20,8 +20,8 @@ from dascore.core.coords import (
 )
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_conversion_factor, get_quantity
-from dascore.utils.misc import register_func
-from dascore.utils.time import is_datetime64, is_timedelta64
+from dascore.utils.misc import register_func, all_close
+from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like, to_float
 
 COORDS = []
 
@@ -261,6 +261,33 @@ class TestBasics:
         new = pickle.load(bio)
         assert new == coord
 
+    def test_like_coords_have_s_units(self, coord):
+        """Time like coordinates should have units of s set automatically."""
+        if dtype_time_like(coord.dtype):
+            assert coord.units == get_quantity("s")
+
+    def test_convert_simple_units(self, coord):
+        """Ensure units can be converted/set."""
+        # time always units of s
+        if dtype_time_like(coord.dtype):
+            pytest.skip("Time units cannot be converted.")
+        out_m = coord.convert_units("m")
+        assert dc.get_unit(out_m.units) == dc.get_unit("m")
+        out_mm = out_m.convert_units("mm")
+        assert dc.get_unit(out_mm.units) == dc.get_unit("mm")
+        assert len(out_mm) == len(out_m)
+        assert np.allclose(out_mm.values / 1000, out_m.values)
+
+    def test_convert_offset_units(self, coord):
+        """Ensure units can be converted/set for offset units"""
+        # if units are not set convert_units should set them.
+        # out_m = coord.convert_units("m")
+        # assert dc.get_unit(out_m.units) == dc.get_unit("m")
+        # out_mm = out_m.convert_units("mm")
+        # assert dc.get_unit(out_mm.units) == dc.get_unit("mm")
+        # assert len(out_mm) == len(out_m)
+        # assert np.allclose(out_mm.values / 1000, out_m.values)
+
     def test_out_of_range_raises(self, evenly_sampled_coord):
         """Accessing a value out of the range of array should raise."""
         with pytest.raises(IndexError, match="exceeds coord length"):
@@ -281,10 +308,19 @@ class TestGetSliceTuple:
         # if units aren't none, ensure they work.
         if not (unit := coord.units):
             return
+        # since we can't multiply dt by quant, convert to float
+        if dtype_time_like(coord):
+            start, end = to_float(start), to_float(end)
         start_unit = start * get_quantity(unit)
         end_unit = end * get_quantity(unit)
-        assert coord.get_slice_tuple((start_unit, None)) == (start, None)
-        assert coord.get_slice_tuple((start_unit, end_unit)) == (start, end)
+        # check that first slice is close to original
+        sliced = coord.get_slice_tuple((start_unit, None))
+        lims = (coord.min(), None)
+        assert all_close([to_float(lims[0])], [to_float(sliced[0])])
+        # same for second slice.
+        lims = to_float(np.array((coord.min(), coord.max())))
+        sliced = to_float(np.array(coord.get_slice_tuple((start_unit, end_unit))))
+        assert all_close(lims, sliced)
 
     def test_get_slice_range_bad_values(self, evenly_sampled_coord):
         """Ensure bad values raise helpful error."""
@@ -490,6 +526,8 @@ class TestEqual:
         """When different units are set the coords should not be equal."""
         if coord.units == "furlongs":
             return
+        if dtype_time_like(coord.dtype):
+            pytest.skip("Cant set time-like units")
         new = coord.set_units("furlongs")
         assert new != coord
 
@@ -520,24 +558,14 @@ class TestCoordRange:
     def test_set_units(self, evenly_sampled_coord):
         """Ensure units can be set."""
         out = evenly_sampled_coord.set_units("m")
-        assert out.units == "m"
+        assert out.units == get_quantity("m")
         assert out is not evenly_sampled_coord
 
     def test_set_quantity(self, evenly_sampled_coord):
         """Ensure units can be set."""
         out = evenly_sampled_coord.set_units("10 m")
-        assert out.units == "10 m"
+        assert out.units == get_quantity("10 m")
         assert out is not evenly_sampled_coord
-
-    def test_convert_units(self, evenly_sampled_coord):
-        """Ensure units can be converted/set."""
-        # if units are not set convert_units should set them.
-        out_m = evenly_sampled_coord.convert_units("m")
-        assert dc.get_unit(out_m.units) == dc.get_unit("m")
-        out_mm = out_m.convert_units("mm")
-        assert dc.get_unit(out_mm.units) == dc.get_unit("mm")
-        assert len(out_mm) == len(out_m)
-        assert np.allclose(out_mm.values / 1000, out_m.values)
 
     def test_dtype(self, evenly_sampled_coord, evenly_sampled_date_coord):
         """Ensure datatypes are sensible."""
@@ -587,10 +615,12 @@ class TestCoordRange:
 
     def test_set_convert_units(self, coord):
         """Simple test for setting and converting units."""
+        if dtype_time_like(coord.dtype):
+            pytest.skip("Cant set time-like units")
         factor = get_conversion_factor("m", "ft")
         c1 = coord.set_units("m")
         c2 = c1.convert_units("ft")
-        assert c2.units == "ft"
+        assert c2.units == get_quantity("ft")
         if c2.degenerate:
             return
         values1 = c1.values

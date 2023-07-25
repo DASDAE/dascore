@@ -13,7 +13,9 @@ from dascore.units import (
     get_quantity,
     get_unit,
     invert_quantity,
-    validate_quantity,
+    get_quantity_str,
+    assert_dtype_compatible_with_units,
+    Quantity,
 )
 
 
@@ -46,7 +48,7 @@ class TestUnitInit:
         assert get_conversion_factor("m", None) == 1
 
 
-class TestValidateUnits:
+class TestGetQuantStr:
     """Ensure units can be validated."""
 
     valid = ("m", "s", "Hz", "1/s", "1/m", "feet", "furlongs", "km", "fortnight")
@@ -55,18 +57,29 @@ class TestValidateUnits:
     @pytest.mark.parametrize("in_str", valid)
     def test_validate_units_good_input(self, in_str):
         """Ensure units can be validated from various inputs."""
-        assert validate_quantity(in_str)
+        assert get_quantity_str(in_str)
 
     @pytest.mark.parametrize("in_str", invalid)
     def test_validate_units_bad_input(self, in_str):
         """Ensure units can be validated from various inputs."""
         with pytest.raises(UnitError):
-            validate_quantity(in_str)
+            get_quantity_str(in_str)
 
     def test_none(self):
         """Ensure none and empty str also works."""
-        assert validate_quantity(None) is None
-        assert validate_quantity("") is None
+        assert get_quantity_str(None) is None
+        assert get_quantity_str("") is None
+
+    def test_quantity(self):
+        """Ensure a quantity works."""
+        # with no magnitude the string should be simple units
+        quant = get_quantity("m/s")
+        out = get_quantity_str(quant)
+        assert out == "meter / second"
+        # with magnitude it should be included.
+        quant = get_quantity("10 m /s")
+        out = get_quantity_str(quant)
+        assert "10.0" in out
 
 
 class TestUnitAndFactor:
@@ -102,6 +115,11 @@ class TestGetQuantity:
         assert quant1 is get_quantity(quant1)
         assert quant2 == get_quantity(quant2)
         assert quant2 is get_quantity(quant2)
+
+    def test_get_temp(self):
+        """Get quantity should work with temperatures."""
+        quant1 = get_quantity("degC")
+        assert "Cel" in str(quant1)
 
 
 class TestConvenientImport:
@@ -166,3 +184,36 @@ class TestGetFilterUnits:
 
         with pytest.raises(UnitError, match=match):
             get_filter_units(1.0 * m, 10.0 * m, s)
+
+
+class TestDTypeCompatible:
+    """Ensure dtype compatibility check works."""
+
+    quants = ("degC", "m/s", get_quantity("kg"))
+    non_dt_dtypes = (np.float_, np.int_, np.float32)
+
+    def test_non_datetime(self):
+        """Any non-datetime should be compatible."""
+        for quant in self.quants:
+            for dtype in self.non_dt_dtypes:
+                out = assert_dtype_compatible_with_units(dtype, quant)
+                assert isinstance(out, Quantity)
+
+    def test_bad_dim_raises(self):
+        """Ensure a bad dimension of quantity raises."""
+        for quant in self.quants:
+            with pytest.raises(UnitError):
+                assert_dtype_compatible_with_units(np.datetime64, quant)
+            with pytest.raises(UnitError):
+                assert_dtype_compatible_with_units(np.timedelta64, quant)
+
+    def test_non_s_raises(self):
+        """Only 's' should work, no other increment of time."""
+        match = "only allowable units are s"
+        with pytest.raises(UnitError, match=match):
+            assert_dtype_compatible_with_units(np.datetime64, "ms")
+
+    def test_s_works(self):
+        """Seconds should work fine."""
+        out = assert_dtype_compatible_with_units(np.datetime64, "s")
+        assert out == get_quantity("s")

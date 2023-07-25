@@ -75,41 +75,23 @@ However, the meaning of the values (ie frequency vs period) depends on the funct
 
 # Units
 
-DASCore provides first class support for units through the `units` module. Here are a few examples how you can use units in DASCore:
+DASCore provides first class support for units through the `units` module. Units (or rather quantities) can be created with  [get_quantity](`dascore.units.get_quantity`).
 
 ```{python}
-# units can be imported and used directly
-import dascore as dc
-from dascore.units import m, ft
+from dascore.units import get_quantity
 
-pa = dc.get_example_patch()
+meters = get_quantity("meters")
 
-# sub-select a patch to only include distance from 10ft to 10m.
-sub_selected = pa.select(distance=(10*ft, 10*m))
-
-# filter patch for spatial wavelengths from 10m to 100m
-dist_filtered = pa.pass_filter(distance=(10*m, 100*m))
-```
-
-Units and quantities (units multiplied by constants) can also be created with [`get_unit`](`dascore.units.get_unit`) and [get_quantity](`dascore.units.get_quantity`).
-
-```{python}
-from dascore.units import get_unit, get_quantity
-
-# Units (without scalar multiples) can be created like so:
-meters = get_unit("meters")
-
-# Quantities are created by multiply units
 ten_m = meters * 10
 print(ten_m)
 
-# Or by direct string parsing, which can handle a surprising bit of complexity
+# Or by direct string parsing, which can handle a lot of complexity
 quantity = get_quantity("10 * (PI / 10^3) (millifurlongs)/(tesla)")
 print(quantity)
 ```
 
-Many of DASCore's processing functions support units/quantities as shown above.
+Many of DASCore's processing functions support units/quantities as shown above. See the [units section](patch.qmd#units) in the Patch tutorial for examples.
 
 :::{.callout-note}
-DASCore uses the unit library [Pint](https://github.com/hgrecco/pint) under the hood for unit parsing/conversions. See its documentation for more on how units and quantities work, (although DASCore should handle most of this for you).
+DASCore uses the unit library [Pint](https://github.com/hgrecco/pint) for unit parsing/conversions. See its documentation for more on how units and quantities work.
 :::

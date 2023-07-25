@@ -18,11 +18,18 @@ import dascore as dc
 from dascore.compat import array
 from dascore.constants import dascore_styles
 from dascore.exceptions import CoordError, ParameterError
-from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit
+from dascore.units import (
+    Quantity,
+    Unit,
+    get_conversion_factor,
+    get_factor_and_unit,
+    get_quantity_str,
+    get_quantity,
+)
 from dascore.utils.display import get_nice_text
 from dascore.utils.misc import all_diffs_close_enough, cached_method, iterate
 from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, UnitQuantity
-from dascore.utils.time import is_datetime64, is_timedelta64
+from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like
 
 
 @cache
@@ -82,6 +89,21 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     _sorted = False
     _reverse_sorted = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def check_time_units(cls, data: Any) -> Any:
+        """Ensure time units are s if dattype is time-like."""
+        if isinstance(data, dict):
+            # This handles the coord range case.
+            is_timey = False
+            if start := data.get("start"):
+                is_timey = is_timedelta64(start) or is_datetime64(start)
+            elif (values := data.get("values")) is not None:
+                is_timey = dtype_time_like(values)
+            if is_timey and data.get("units") != (quant := get_quantity("s")):
+                data["units"] = quant
+        return data
+
     @abc.abstractmethod
     def convert_units(self, unit) -> Self:
         """Convert from one unit to another. Set units if None are set."""
@@ -120,9 +142,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         base += get_nice_text(self.shape)
         base += Text(" dtype: ", key_style)
         base += get_nice_text(self.dtype)
-        if not pd.isnull(self.units):
+        if self.units is not None:
             base += Text(" units: ", key_style)
-            base += get_nice_text(self.units, style="units")
+            unit_str = get_quantity_str(self.units)
+            base += get_nice_text(unit_str, style="units")
         base += Text(" )")
         return base
 
@@ -138,6 +161,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def max(self):
         """return max value"""
         return self._max()
+
+    @property
+    def unit_str(self) -> str:
+        """Return a unit string."""
+        return ""
 
     @property
     def degenerate(self):
@@ -632,7 +660,8 @@ class CoordArray(BaseCoord):
         if len(self) == 1:
             # time deltas need to be generated for dt case, hence the subtract
             _zero = self._get_compatible_value(0)
-            step = _zero - _zero
+            step = self._get_compatible_value(1) - _zero
+            # we just use a step of 1 in case of len 1 coord.
         else:
             dur = max_v - min_v
             is_dt = is_timedelta64(dur)
