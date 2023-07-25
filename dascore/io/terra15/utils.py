@@ -1,7 +1,5 @@
 """Utilities for terra15."""
 
-from typing import Optional
-
 from tables.exceptions import NoSuchNodeError
 
 from dascore.constants import timeable_types
@@ -128,8 +126,8 @@ def _get_raw_time_coord(data_node):
 
 def _read_terra15(
     root,
-    time: Optional[tuple[timeable_types, timeable_types]] = None,
-    distance: Optional[tuple[float, float]] = None,
+    time: tuple[timeable_types, timeable_types] | None = None,
+    distance: tuple[float, float] | None = None,
     snap_dims: bool = True,
 ) -> Patch:
     """

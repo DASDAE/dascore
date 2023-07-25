@@ -3,7 +3,6 @@ import abc
 import os
 import time
 from pathlib import Path
-from typing import Optional, Union
 
 import pandas as pd
 from typing_extensions import Self
@@ -67,7 +66,7 @@ class DirectoryIndexer(AbstractIndexer):
     index_name = ".dascore_index.h5"  # name of index file
     executor = None  # an executor for using parallelism
 
-    def __init__(self, path: Union[str, Path], cache_size: int = 5, index_path=None):
+    def __init__(self, path: str | Path, cache_size: int = 5, index_path=None):
         self.max_size = cache_size
         self.path = Path(path).absolute()
         self.index_path = Path(index_path or self.path / self.index_name)
@@ -175,7 +174,7 @@ class DirectoryIndexer(AbstractIndexer):
             self._current_index += 1
         return self.cache.index[self._current_index]
 
-    def _get_file_iterator(self, paths: Optional[path_types] = None, only_new=True):
+    def _get_file_iterator(self, paths: path_types | None = None, only_new=True):
         """Return an iterator of potential un-indexed files."""
         # get mtime, subtract a bit to avoid odd bugs
         mtime = None

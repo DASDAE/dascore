@@ -2,17 +2,18 @@
 Utilities for models.
 """
 from collections import ChainMap
-from functools import _lru_cache_wrapper, cached_property, reduce
-from typing import Annotated, Optional, Sequence
+from collections.abc import Sequence
+from functools import cached_property, reduce
+from typing import Annotated, Literal
 
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
-from typing_extensions import Literal, Self
+from typing_extensions import Self
 
 from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
-from dascore.units import validate_quantity
+from dascore.units import Quantity, validate_quantity
 from dascore.utils.misc import (
     all_close,
     all_diffs_close_enough,
@@ -49,7 +50,7 @@ DTypeLike = Annotated[
 ]
 
 UnitQuantity = Annotated[
-    str | None,
+    Quantity | str | None,
     PlainValidator(validate_quantity),
 ]
 
@@ -86,7 +87,7 @@ class DascoreBaseModel(BaseModel):
     model_config = ConfigDict(
         extra="ignore",
         validate_assignment=True,
-        ignored_types=(cached_property, _lru_cache_wrapper),
+        ignored_types=(cached_property,),
         frozen=True,
         validate_default=True,
         arbitrary_types_allowed=True,
@@ -107,9 +108,9 @@ class DascoreBaseModel(BaseModel):
 
 def merge_models(
     model_list: Sequence[BaseModel],
-    dim: Optional[str] = None,
+    dim: str | None = None,
     conflicts: Literal["drop", "raise", "keep_first"] = "raise",
-    drop_attrs: Optional[Sequence[str]] = None,
+    drop_attrs: Sequence[str] | None = None,
     coord=None,
 ):
     """

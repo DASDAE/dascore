@@ -1,7 +1,8 @@
 """
 Module for waterfall plotting.
 """
-from typing import Literal, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -37,9 +38,9 @@ def _set_scale(im, scale, scale_type, patch):
 @patch_function()
 def waterfall(
     patch: PatchType,
-    ax: Optional[plt.Axes] = None,
+    ax: plt.Axes | None = None,
     cmap="bwr",
-    scale: Optional[Union[float, Sequence[float]]] = None,
+    scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     show=False,
 ) -> plt.Axes:

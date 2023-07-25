@@ -104,13 +104,13 @@ class TestDiscreteFourierTransform:
     def test_all_dims(self, fft_sin_patch_all):
         """Ensure fft can be done on all axis."""
         patch = fft_sin_patch_all
-        assert all((x.startswith("ft_") for x in patch.dims))
+        assert all(x.startswith("ft_") for x in patch.dims)
 
     def test_real_multiple_dims(self, sin_patch):
         """Ensure the real axis can be specified."""
         patch = sin_patch
         out = patch.tran.dft(dim=("distance", "time"), real="distance")
-        assert all((x.startswith("ft_") for x in out.dims))
+        assert all(x.startswith("ft_") for x in out.dims)
         real_coord = out.get_coord("ft_distance")
         assert real_coord.min() == 0
 

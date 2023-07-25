@@ -2,7 +2,7 @@
 Module for handling units.
 """
 from functools import cache
-from typing import Optional, Tuple, TypeVar, Union
+from typing import TypeVar
 
 import pandas as pd
 import pint
@@ -40,7 +40,7 @@ def _str_to_quant(qunat_str):
     return ureg.Quantity(qunat_str)
 
 
-def get_quantity(value: str_or_none) -> Optional[Quantity]:
+def get_quantity(value: str_or_none) -> Quantity | None:
     """Convert a value to a pint quantity."""
     if value is None or value is ...:
         return None
@@ -51,7 +51,7 @@ def get_quantity(value: str_or_none) -> Optional[Quantity]:
 
 def get_factor_and_unit(
     value: str_or_none, simplify: bool = False
-) -> Tuple[float, str_or_none]:
+) -> tuple[float, str_or_none]:
     """Convert a mixed unit/scaling factor to scale_factor and unit str"""
     quant = get_quantity(value)
     if quant is None:
@@ -77,7 +77,7 @@ def get_conversion_factor(from_quant, to_quant) -> float:
     return mag_ratio * unit_ratio
 
 
-def invert_quantity(unit: Union[pint.Unit, str]) -> pint.Unit:
+def invert_quantity(unit: pint.Unit | str) -> pint.Unit:
     """Invert a unit"""
     if pd.isnull(unit):
         return None
@@ -85,7 +85,7 @@ def invert_quantity(unit: Union[pint.Unit, str]) -> pint.Unit:
     return 1 / quant
 
 
-def validate_quantity(quant_str) -> Optional[str]:
+def validate_quantity(quant_str) -> str | None:
     """
     Ensure a unit string is valid and return it.
 
@@ -108,8 +108,8 @@ def validate_quantity(quant_str) -> Optional[str]:
 
 
 def get_filter_units(
-    arg1: Union[Quantity, float], arg2: Union[Quantity, float], to_unit: str
-) -> Tuple[float, float]:
+    arg1: Quantity | float, arg2: Quantity | float, to_unit: str
+) -> tuple[float, float]:
     """
     Get a tuple for applying filter based on dimension coordinates.
 

@@ -1,7 +1,7 @@
 """
 Module for re-sampling patches.
 """
-from typing import Literal, Union
+from typing import Literal
 
 import numpy as np
 from scipy.signal import decimate as scipy_decimate
@@ -74,9 +74,7 @@ def decimate(
 
 
 @patch_function()
-def interpolate(
-    patch: PatchType, kind: Union[str, int] = "linear", **kwargs
-) -> PatchType:
+def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> PatchType:
     """
     Set coordinates of patch along a dimension using interpolation.
 

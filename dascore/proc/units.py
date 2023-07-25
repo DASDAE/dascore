@@ -1,7 +1,6 @@
 """
 Processing functions dealing with units and unit conversions.
 """
-from typing import Optional, Union
 
 from dascore.constants import PatchType
 from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit
@@ -24,7 +23,7 @@ def _get_updated_attrs(patch, data_units, coord_unit_dict):
 
 @patch_function()
 def set_units(
-    patch: PatchType, data_units: Optional[Union[str, Quantity, Unit]] = None, **kwargs
+    patch: PatchType, data_units: str | Quantity | Unit | None = None, **kwargs
 ) -> PatchType:
     """
     Set the units of a patch's data or coordinates.
@@ -59,7 +58,7 @@ def set_units(
 
 @patch_function()
 def convert_units(
-    patch: PatchType, data_units: Optional[Union[str, Quantity, Unit]] = None, **kwargs
+    patch: PatchType, data_units: str | Quantity | Unit | None = None, **kwargs
 ) -> PatchType:
     """
     Convert the patch data or coordinate units.

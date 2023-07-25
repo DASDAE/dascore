@@ -14,7 +14,7 @@ from typing import Dict
 
 
 @cache
-def get_cross_ref_dict() -> Dict[str, str]:
+def get_cross_ref_dict() -> dict[str, str]:
     """
     Load cross-reference dictionaries.
 
@@ -67,7 +67,7 @@ def replace_links(json_data, raw_string):
             else:
                 yield from _yield_links(element.get("c", []))
 
-    reg_pattern = '(?<="\%60)(.*?)(?=\%60")'
+    reg_pattern = r'(?<="\%60)(.*?)(?=\%60")'
     blocks = json_data["blocks"]
 
     replace_dict = {}

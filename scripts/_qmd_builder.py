@@ -63,7 +63,7 @@ def build_amp_toc_tree(api_path=API_PATH):
             out.append(LEVEL_SEP * (level) + val)
         # now go through contents
         contents = sorted(
-            (x for x in dir_path.glob("*.qmd") if x.with_suffix("") not in sub_dir_set)
+            x for x in dir_path.glob("*.qmd") if x.with_suffix("") not in sub_dir_set
         )
         for content in contents:
             content_list = _build_content_string(content, base_path)

@@ -4,8 +4,8 @@ Pandas utilities.
 import fnmatch
 import os
 from collections import defaultdict
+from collections.abc import Collection, Sequence
 from functools import cache
-from typing import Collection, Sequence, Tuple, Type
 
 import numpy as np
 import pandas as pd
@@ -183,7 +183,7 @@ def get_interval_columns(df, name, arrays=False):
         return df[names[0]].values, df[names[1]].values, df[names[2]].values
 
 
-def yield_slice_from_kwargs(df, kwargs) -> Tuple[str, slice]:
+def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
     """
     For each slice keyword, yield the name and slice.
 
@@ -345,7 +345,7 @@ def get_column_names_from_dim(dims: Sequence[str]) -> list:
     return out
 
 
-def fill_defaults_from_pydantic(df, base_model: Type[BaseModel]):
+def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):
     """
     Fill missing columns in dataframe with defaults from base_model.
 

@@ -39,20 +39,11 @@ print(new_cm)
 ```
 """
 from collections import defaultdict
+from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
 from functools import reduce
 from operator import and_, or_
-from typing import (
-    Annotated,
-    Dict,
-    Mapping,
-    Optional,
-    Sequence,
-    Sized,
-    Tuple,
-    TypeVar,
-    Union,
-)
+from typing import Annotated, TypeVar
 
 import numpy as np
 from pydantic import field_validator, model_validator
@@ -163,9 +154,9 @@ class CoordManager(DascoreBaseModel):
         A mapping of {coord_name: (dimensions, ...)}
     """
 
-    dims: Tuple[str, ...]
+    dims: tuple[str, ...]
     coord_map: Annotated[FrozenDict[str, BaseCoord], frozendict_validator]
-    dim_map: Annotated[FrozenDict[str, Tuple[str, ...]], frozendict_validator]
+    dim_map: Annotated[FrozenDict[str, tuple[str, ...]], frozendict_validator]
 
     def __getitem__(self, item) -> np.ndarray:
         # in order to not break backward compatibility, we need to return
@@ -227,7 +218,7 @@ class CoordManager(DascoreBaseModel):
 
     def sort(
         self, *coords, array: MaybeArray = None, reverse: bool = False
-    ) -> Tuple[Self, MaybeArray]:
+    ) -> tuple[Self, MaybeArray]:
         """
         Sort coordinates.
 
@@ -303,7 +294,7 @@ class CoordManager(DascoreBaseModel):
 
     def snap(
         self, *coords, array: MaybeArray = None, reverse: bool = False
-    ) -> Tuple[Self, MaybeArray]:
+    ) -> tuple[Self, MaybeArray]:
         """
         Force the specified coordinates to be monotonic and evenly sampled.
 
@@ -351,9 +342,9 @@ class CoordManager(DascoreBaseModel):
 
     def drop_coord(
         self,
-        coord: Union[str, Sequence[str]],
+        coord: str | Sequence[str],
         array: MaybeArray = None,
-    ) -> Tuple[Self, MaybeArray]:
+    ) -> tuple[Self, MaybeArray]:
         """
         Drop one or more coordinates.
 
@@ -387,7 +378,7 @@ class CoordManager(DascoreBaseModel):
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
         return new, self._get_new_data(index, array)
 
-    def disassociate_coord(self, coord: Union[str, Sequence[str]]) -> Self:
+    def disassociate_coord(self, coord: str | Sequence[str]) -> Self:
         """
         Disassociate some coordinates from dimensions.
 
@@ -448,7 +439,7 @@ class CoordManager(DascoreBaseModel):
             dim_map[coord_name] = tuple(old_to_new[x] for x in coord_dims)
         return self.__class__(dims=dims, coord_map=coord_map, dim_map=dim_map)
 
-    def iselect(self, array: MaybeArray = None, **kwargs) -> Tuple[Self, MaybeArray]:
+    def iselect(self, array: MaybeArray = None, **kwargs) -> tuple[Self, MaybeArray]:
         """
         Perform index-based selection on coordinates.
 
@@ -473,7 +464,7 @@ class CoordManager(DascoreBaseModel):
 
     def select(
         self, array: MaybeArray = None, relative=False, **kwargs
-    ) -> Tuple[Self, MaybeArray]:
+    ) -> tuple[Self, MaybeArray]:
         """
         Perform value-based selection on coordinates.
 
@@ -669,7 +660,7 @@ class CoordManager(DascoreBaseModel):
                 attr_dict[f"d_{dim}"] = coord.step
         return PatchAttrs(**attr_dict)
 
-    def transpose(self, *dims: Union[str, type(Ellipsis)]) -> Self:
+    def transpose(self, *dims: str | type(Ellipsis)) -> Self:
         """Transpose the coordinates."""
 
         def _get_transpose_dims(new, old):
@@ -734,7 +725,7 @@ class CoordManager(DascoreBaseModel):
         out = dict(dims=dims, coord_map=coord_map, dim_map=dim_map)
         return self.__class__(**out)
 
-    def squeeze(self, dim: Optional[Sequence[str]] = None) -> Self:
+    def squeeze(self, dim: Sequence[str] | None = None) -> Self:
         """
         Squeeze length one dimensions.
 
@@ -763,7 +754,7 @@ class CoordManager(DascoreBaseModel):
             to_drop.append(name)
         return self.drop_coord(to_drop)[0]
 
-    def decimate(self, **kwargs) -> Tuple[Self, Tuple[slice, ...]]:
+    def decimate(self, **kwargs) -> tuple[Self, tuple[slice, ...]]:
         """
         Evenly subsample along some dimension.
 
@@ -790,13 +781,13 @@ class CoordManager(DascoreBaseModel):
 
     @property
     @cached_method
-    def coord_shapes(self) -> Dict[str, Tuple[int, ...]]:
+    def coord_shapes(self) -> dict[str, tuple[int, ...]]:
         """Get a dict of {coord_name: shape}"""
         return {i: v.shape for i, v in self.coord_map.items()}
 
     @property
     @cached_method
-    def dim_to_coord_map(self) -> FrozenDict[str, Tuple[str, ...]]:
+    def dim_to_coord_map(self) -> FrozenDict[str, tuple[str, ...]]:
         """Get a dimension to coordinate map."""
         out = defaultdict(list)
         for coord, dims in self.dim_map.items():
@@ -804,7 +795,7 @@ class CoordManager(DascoreBaseModel):
                 out[dim].append(coord)
         return FrozenDict({i: tuple(v) for i, v in out.items()})
 
-    def get_coord_tuple_map(self) -> dict[str, Tuple[Tuple[str, ...], "BaseCoord"]]:
+    def get_coord_tuple_map(self) -> dict[str, tuple[tuple[str, ...], "BaseCoord"]]:
         """
         Return a mapping of {coord_name: (dims, coord)}.
 
@@ -818,9 +809,9 @@ class CoordManager(DascoreBaseModel):
     def _get_coord_dims_tuple(self):
         """Return a tuple of ((coord, dims...,), ...)"""
         dim_map = self.dim_map
-        return tuple(((name, *dim_map[name]) for name in self.coord_map))
+        return tuple((name, *dim_map[name]) for name in self.coord_map)
 
-    def _get_indexer(self, ind: Optional[int] = None, value=None):
+    def _get_indexer(self, ind: int | None = None, value=None):
         """
         Get an indexer for the appropriate data shape.
 
@@ -834,9 +825,9 @@ class CoordManager(DascoreBaseModel):
 
 
 def get_coord_manager(
-    coords: Optional[Mapping[str, Union[BaseCoord, np.ndarray]]] = None,
-    dims: Optional[Tuple[str, ...]] = None,
-    attrs: Optional[PatchAttrs] = None,
+    coords: Mapping[str, BaseCoord | np.ndarray] | None = None,
+    dims: tuple[str, ...] | None = None,
+    attrs: PatchAttrs | None = None,
 ) -> CoordManager:
     """
     Create a coordinate manager.
@@ -964,7 +955,7 @@ def _get_coord_dim_map(coords, dims, attrs=None):
             raise CoordError(msg)
         dim_names = iterate(coord[0])
         # all dims must be in the input dims.
-        if not (d1 := set(dim_names)).issubset((d2 := set(dims))):
+        if not (d1 := set(dim_names)).issubset(d2 := set(dims)):
             bad_dims = d2 - d1
             msg = (
                 f"Coordinate specified invalid dimension(s) {bad_dims}."
@@ -995,7 +986,7 @@ def _get_coord_dim_map(coords, dims, attrs=None):
 def merge_coord_managers(
     coord_managers: Sequence[CoordManager],
     dim: str,
-    snap_tolerance: Optional[float] = None,
+    snap_tolerance: float | None = None,
 ) -> CoordManager:
     """
     Merger coordinate managers along a specified dimension.
@@ -1081,7 +1072,7 @@ def merge_coord_managers(
         for coord_name in coords_to_merge:
             merge_coords = [x.coord_map[dim] for x in managers]
             axis = managers[0].dim_map[coord_name].index(dim)
-            if len((units := set([x.units for x in merge_coords]))) != 1:
+            if len(units := {x.units for x in merge_coords}) != 1:
                 # TODO: we might try to convert all the units to a common
                 # unit in the future.
                 msg = (
@@ -1096,7 +1087,7 @@ def merge_coord_managers(
             out[coord_name] = (dims, new_data)
         return out
 
-    def _get_new_coords(managers) -> Dict[str, Tuple[Tuple[str, ...], ArrayLike]]:
+    def _get_new_coords(managers) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:
         """Merge relevant coordinates together."""
         # build up merged coords.
         coords_to_merge = managers[0].dim_to_coord_map[dim]

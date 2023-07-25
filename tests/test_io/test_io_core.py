@@ -3,7 +3,7 @@ Test for basic IO and related functions.
 """
 import copy
 from pathlib import Path
-from typing import TypeVar, Union
+from typing import TypeVar
 
 import numpy as np
 import pytest
@@ -64,7 +64,7 @@ class _FiberCaster(FiberIO):
         """ditto for write"""
         assert isinstance(resource, BinaryWriter)
 
-    def get_format(self, resource: Path) -> Union[tuple[str, str], bool]:
+    def get_format(self, resource: Path) -> tuple[str, str] | bool:
         """and get format"""
         assert isinstance(resource, Path)
         return False

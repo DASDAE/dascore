@@ -1,5 +1,4 @@
 """Utilities for terra15."""
-from typing import List
 
 import numpy as np
 
@@ -80,7 +79,7 @@ def _get_data_unit_and_type(node):
     return out
 
 
-def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs) -> List[PatchAttrs]:
+def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs) -> list[PatchAttrs]:
     """Scan a prodML file, return metadata."""
     base_info = dict(
         gauge_length=fi.root.Acquisition._v_attrs.GaugeLength,

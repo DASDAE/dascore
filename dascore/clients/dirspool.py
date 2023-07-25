@@ -5,7 +5,6 @@ The spool uses a simple hdf5 index for keeping track of files.
 """
 import copy
 from pathlib import Path
-from typing import Optional, Union
 
 import pandas as pd
 from rich.text import Text
@@ -42,11 +41,11 @@ class DirectorySpool(DataFrameSpool):
 
     def __init__(
         self,
-        base_path: Union[str, Path, Self, AbstractIndexer] = ".",
+        base_path: str | Path | Self | AbstractIndexer = ".",
         *,
-        index_path: Optional[Path] = None,
-        preferred_format: Optional[str] = None,
-        select_kwargs: Optional[dict] = None,
+        index_path: Path | None = None,
+        preferred_format: str | None = None,
+        select_kwargs: dict | None = None,
     ):
         super().__init__()
         # Init file spool from another file spool

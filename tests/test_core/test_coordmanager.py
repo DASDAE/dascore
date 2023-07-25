@@ -1,7 +1,7 @@
 """
 Tests for coordinate manager.
 """
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import pytest
@@ -659,11 +659,11 @@ class TestUpdateToAttrs:
         attrs = basic_coord_manager.update_to_attrs(old_attrs)
         assert isinstance(attrs, PatchAttrs)
         self.assert_dim_coords_consistent(basic_coord_manager, attrs)
-        non_dim_keys = set(
+        non_dim_keys = {
             x
             for x in dict(attrs)
             if not (x.endswith("_max") or x.endswith("_min") or x.startswith("d_"))
-        )
+        }
         for key in non_dim_keys:
             v1, v2 = getattr(old_attrs, key), getattr(attrs, key)
             if isinstance(v1, Sequence):

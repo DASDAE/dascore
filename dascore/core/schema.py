@@ -1,11 +1,12 @@
 """Pydantic schemas used by DASCore."""
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal, Mapping, Optional, Sequence, Union
+from typing import Annotated, Literal, Optional
 
 import numpy as np
 import pandas as pd
 from pydantic import ConfigDict, Field, field_validator
-from typing_extensions import Annotated, Self
+from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import (
@@ -46,22 +47,22 @@ class PatchAttrs(DascoreBaseModel):
 
     data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
     data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
-    data_units: Optional[UnitQuantity] = None
+    data_units: UnitQuantity | None = None
     time_min: DateTime64 = np.datetime64("NaT")
     time_max: DateTime64 = np.datetime64("NaT")
     d_time: TimeDelta64 = np.timedelta64("NaT")
-    time_units: Optional[UnitQuantity] = None
+    time_units: UnitQuantity | None = None
     distance_min: float = np.NaN
     distance_max: float = np.NaN
     d_distance: float = np.NaN
-    distance_units: Optional[UnitQuantity] = None
+    distance_units: UnitQuantity | None = None
     instrument_id: str = Field("", max_length=max_lens["instrument_id"])
     cable_id: str = Field("", max_length=max_lens["cable_id"])
     dims: str = Field("", max_length=max_lens["dims"])
     tag: str = Field("", max_length=max_lens["tag"])
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
-    history: Union[str, Sequence[str]] = Field(default_factory=list)
+    history: str | Sequence[str] = Field(default_factory=list)
 
     model_config = ConfigDict(
         title="Patch Summary",
@@ -99,8 +100,7 @@ class PatchAttrs(DascoreBaseModel):
 
     def items(self):
         """Yield (attribute, values) just like dict.items()."""
-        for item, value in self.model_dump().items():
-            yield item, value
+        yield from self.model_dump().items()
 
     @classmethod
     def get_defaults(cls):
@@ -198,7 +198,7 @@ class PatchFileSummary(PatchAttrs):
 
     file_version: str = ""
     file_format: str = ""
-    path: Union[str, Path] = ""
+    path: str | Path = ""
 
     @classmethod
     def get_index_columns(cls) -> tuple[str, ...]:

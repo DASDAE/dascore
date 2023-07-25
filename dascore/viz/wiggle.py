@@ -2,7 +2,6 @@
 Module for wiggle plotting.
 """
 from datetime import timedelta
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,7 +17,7 @@ def wiggle(
     patch: PatchType,
     dim="time",
     color="black",
-    ax: Optional[plt.Axes] = None,
+    ax: plt.Axes | None = None,
     show=False,
 ) -> plt.Figure:
     """

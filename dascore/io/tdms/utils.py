@@ -152,7 +152,7 @@ def _read_attr(tdms_file):
     # Read length of object path:
     var = struct.unpack("<i", tdms_file.read(4))[0]
     # Read property name and type:
-    name, data_type = struct.unpack("<{0}si".format(var), tdms_file.read(var + 4))
+    name, data_type = struct.unpack(f"<{var}si", tdms_file.read(var + 4))
     # Lookup function to read and parse property value based on type:
     value = TDS_READ_VAL[TDS_DATA_TYPE[data_type]](tdms_file)
     name = name.decode()

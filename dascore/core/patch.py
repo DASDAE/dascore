@@ -4,7 +4,7 @@ A 2D trace object.
 from __future__ import annotations
 
 import warnings
-from typing import Dict, Mapping, Optional, Sequence, Union
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 from rich.text import Text
@@ -55,14 +55,14 @@ class Patch:
     data: ArrayLike
     coords: CoordManager
     dims: tuple[str, ...]
-    attrs: Union[PatchAttrs, Mapping]
+    attrs: PatchAttrs | Mapping
 
     def __init__(
         self,
         data: ArrayLike | DataArray | None = None,
         coords: Mapping[str, ArrayLike] | None | CoordManager = None,
         dims: Sequence[str] | None = None,
-        attrs: Optional[Union[Mapping, PatchAttrs]] = None,
+        attrs: Mapping | PatchAttrs | None = None,
     ):
         if isinstance(data, (DataArray, self.__class__)):
             data, attrs, coords = data.data, data.attrs, data.coords
@@ -131,7 +131,7 @@ class Patch:
         return self.coords.dims
 
     @property
-    def coord_shapes(self) -> Dict[str, tuple[int, ...]]:
+    def coord_shapes(self) -> dict[str, tuple[int, ...]]:
         """Return a dict of coordinate: (shape, ...)"""
         return self.coords.coord_shapes
 

@@ -4,7 +4,6 @@ Utility for working with time.
 
 from datetime import datetime, timedelta
 from functools import singledispatch
-from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -19,7 +18,7 @@ from dascore.constants import (
 
 
 @singledispatch
-def to_datetime64(obj: Union[timeable_types, np.array]):
+def to_datetime64(obj: timeable_types | np.array):
     """
     Convert an object to a datetime64.
 
@@ -48,7 +47,7 @@ def _str_to_datetime64(obj: str) -> np.datetime64:
 
 @to_datetime64.register(float)
 @to_datetime64.register(int)
-def _float_to_datetime(num: Union[float, int]) -> np.datetime64:
+def _float_to_datetime(num: float | int) -> np.datetime64:
     """Convert a float to a single datetime"""
     ar = np.array([num])
     return _array_to_datetime64(ar)[0]
@@ -57,7 +56,7 @@ def _float_to_datetime(num: Union[float, int]) -> np.datetime64:
 @to_datetime64.register(np.ndarray)
 @to_datetime64.register(list)
 @to_datetime64.register(tuple)
-def _array_to_datetime64(array: np.array) -> Union[np.datetime64, np.ndarray]:
+def _array_to_datetime64(array: np.array) -> np.datetime64 | np.ndarray:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
@@ -103,7 +102,7 @@ def _pandas_timestamp(datetime: pd.Timestamp):
 
 
 @singledispatch
-def to_timedelta64(obj: Union[float, np.array, str]):
+def to_timedelta64(obj: float | np.array | str):
     """
     Convert an object to timedelta64.
 
@@ -126,7 +125,7 @@ def to_timedelta64(obj: Union[float, np.array, str]):
 
 @to_timedelta64.register(float)
 @to_timedelta64.register(int)
-def _float_to_timedelta64(num: Union[float, int]) -> np.datetime64:
+def _float_to_timedelta64(num: float | int) -> np.datetime64:
     """Convert a float to a single datetime."""
     ar = np.array([num])
     return _array_to_timedelta64(ar)[0]
@@ -198,7 +197,7 @@ def _time_delta_from_str(time_delta_str: str):
 
 
 @singledispatch
-def to_int(obj: Union[timeable_types, np.array]) -> np.array:
+def to_int(obj: timeable_types | np.array) -> np.array:
     """
     Ensure a scalar or array is a number.
 
@@ -211,7 +210,7 @@ def to_int(obj: Union[timeable_types, np.array]) -> np.array:
 
 @to_int.register(float)
 @to_int.register(int)
-def _float_to_num(num: Union[float, int]) -> Union[float, int]:
+def _float_to_num(num: float | int) -> float | int:
     """convert number to int"""
     return int(num)
 
@@ -262,7 +261,7 @@ def _pandas_timestamp_to_num(ser: pd.Series):
 
 
 @singledispatch
-def to_float(obj: Union[timeable_types, np.array]) -> np.array:
+def to_float(obj: timeable_types | np.array) -> np.array:
     """
     Convert various datetime/timedelta things to a float.
 

@@ -1,8 +1,8 @@
 """A module for loading examples."""
 
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -85,7 +85,7 @@ def _wacky_dim_coord_patch():
 @register_func(EXAMPLE_PATCHES, key="sin_wav")
 def _sin_wave_patch(
     sample_rate=44100,
-    frequency: Union[Sequence[float], float] = 100.0,
+    frequency: Sequence[float] | float = 100.0,
     time_min="2020-01-01",
     channel_count=3,
     duration=1,

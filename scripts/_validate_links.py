@@ -18,15 +18,13 @@ def get_qmd_files(
 ):
     """Yield all QMD files."""
     path = _get_docs_path() if path is None else path
-    for qmd_file in path.rglob("*qmd"):
-        yield qmd_file
+    yield from path.rglob("*qmd")
 
 
 def yield_links(text, pattern=r"(?<=\]\(`).*?(?=`\))"):
     """Yield links found in documentation."""
     matches = re.findall(pattern, text)
-    for match in matches:
-        yield match
+    yield from matches
 
 
 @cache

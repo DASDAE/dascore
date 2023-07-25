@@ -1,8 +1,8 @@
 """
 Utilities for chunking dataframes.
 """
+from collections.abc import Collection
 from functools import reduce
-from typing import Collection, Optional, Union
 
 import numpy
 import numpy as np
@@ -128,8 +128,8 @@ class ChunkManager:
 
     def __init__(
         self,
-        overlap: Optional[Union[timeable_types, numeric_types]] = None,
-        group_columns: Optional[Collection[str]] = None,
+        overlap: timeable_types | numeric_types | None = None,
+        group_columns: Collection[str] | None = None,
         keep_partial=False,
         tolerance=1.5,
         **kwargs,
