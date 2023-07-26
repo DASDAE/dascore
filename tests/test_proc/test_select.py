@@ -1,6 +1,7 @@
 """
 Tests for selecting data from patches.
 """
+from __future__ import annotations
 
 import numpy as np
 

@@ -1,6 +1,7 @@
 """
 Tests for plotting a spectrogram.
 """
+from __future__ import annotations
 import matplotlib.pyplot as plt
 import pytest
 

@@ -1,6 +1,7 @@
 """
 Module for detrending.
 """
+from __future__ import annotations
 from scipy.signal import detrend as scipy_detrend
 
 from dascore.constants import PatchType

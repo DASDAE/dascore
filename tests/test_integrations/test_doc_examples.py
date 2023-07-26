@@ -1,6 +1,7 @@
 """
 Tests for some doc examples which had problems at one point.
 """
+from __future__ import annotations
 import matplotlib.pyplot as plt
 
 import dascore as dc

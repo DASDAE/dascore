@@ -1,6 +1,7 @@
 """
 Utilities for basic IO tasks.
 """
+from __future__ import annotations
 import abc
 import typing
 from contextlib import suppress

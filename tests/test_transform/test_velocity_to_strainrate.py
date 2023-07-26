@@ -1,6 +1,7 @@
 """
 Tests for converting velocity to strain-rate.
 """
+from __future__ import annotations
 import numpy as np
 import pytest
 

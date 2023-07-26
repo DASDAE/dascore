@@ -1,6 +1,7 @@
 """
 Implements logic to apply formatting changes to patches from transformations.
 """
+from __future__ import annotations
 import abc
 
 from dascore.utils.misc import iterate

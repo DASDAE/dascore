@@ -1,4 +1,5 @@
 """DASCore - A library for fiber optic sensing."""
+from __future__ import annotations
 from rich import print  # noqa
 
 from dascore.core.patch import Patch

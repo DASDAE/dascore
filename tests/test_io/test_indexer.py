@@ -1,6 +1,7 @@
 """
 Tests for indexing local file systems.
 """
+from __future__ import annotations
 import shutil
 from contextlib import suppress
 from pathlib import Path

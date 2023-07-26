@@ -1,6 +1,7 @@
 """
 Tests for coordinate object.
 """
+from __future__ import annotations
 import pickle
 from io import BytesIO
 

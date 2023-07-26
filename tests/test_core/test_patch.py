@@ -1,6 +1,7 @@
 """
 Tests for Trace2D object.
 """
+from __future__ import annotations
 import operator
 import weakref
 

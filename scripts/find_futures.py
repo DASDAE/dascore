@@ -1,6 +1,8 @@
 """
-Find all python files which dont have "from __future__ import annotatiosn"
+Find all python files which dont have "from __future__ import annotation"
 """
+from __future__ import annotations
+
 from pathlib import Path
 
 
@@ -20,8 +22,8 @@ def rewrite_file(path, import_str):
     except ValueError:
         try:
             index = out[1:].index("'''")
-        except ValueError as e:
-            raise e
+        except ValueError:
+            index = -1
     out.insert(index + 2, import_str)
     new_str = "\n".join(out)
     with open(path, "w") as fi:
@@ -37,4 +39,3 @@ if __name__ == "__main__":
             rewrite_file(path, search_str)
     for path in missing:
         print(path)
-    breakpoint()

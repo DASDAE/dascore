@@ -1,6 +1,7 @@
 """
 Simple interface for progress markers.
 """
+from __future__ import annotations
 import rich.progress as prog
 
 import dascore as dc
