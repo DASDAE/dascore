@@ -1,6 +1,7 @@
 """
 Processing operations that have much to do with coordinates.
 """
+from __future__ import annotations
 from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
 

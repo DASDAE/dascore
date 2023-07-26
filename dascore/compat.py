@@ -4,6 +4,7 @@ Compatibility module for DASCore.
 All components/functions that may be exchanged for other numpy/scipy
 compatible libraries should go in this model.
 """
+from __future__ import annotations
 
 from contextlib import suppress
 

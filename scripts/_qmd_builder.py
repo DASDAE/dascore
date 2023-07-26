@@ -1,6 +1,7 @@
 """
 A script to build quartos main config file.
 """
+from __future__ import annotations
 import os
 from pathlib import Path
 
@@ -51,9 +52,10 @@ def build_amp_toc_tree(api_path=API_PATH):
         # this is an un-cleaned up quarto dir from rendering
         bad_endings = ["execute-results", "_files"]
         bad_ending = any(dir_path.name.endswith(x) for x in bad_endings)
+        bad_p_ending = any(dir_path.parent.name.endswith(x) for x in bad_endings)
         # the expected path of the qmd file related to this directory.
         section_qmd = dir_path.with_suffix(".qmd")
-        if bad_ending and not section_qmd.exists():
+        if (bad_ending or bad_p_ending) and not section_qmd.exists():
             continue
         assert section_qmd.exists()
         level = _get_level(section_qmd, api_path)

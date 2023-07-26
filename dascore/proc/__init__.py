@@ -1,6 +1,7 @@
 """
 Module containing patch processing routines.
 """
+from __future__ import annotations
 from .aggregate import aggregate
 from .basic import *  # noqa
 from .coords import snap_coords, sort_coords

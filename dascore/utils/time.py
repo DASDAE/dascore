@@ -19,7 +19,7 @@ from dascore.constants import (
 
 
 @singledispatch
-def to_datetime64(obj: timeable_types | np.array):
+def to_datetime64(obj: timeable_types | np.ndarray):
     """
     Convert an object to a datetime64.
 
@@ -57,7 +57,7 @@ def _float_to_datetime(num: float | int) -> np.datetime64:
 @to_datetime64.register(np.ndarray)
 @to_datetime64.register(list)
 @to_datetime64.register(tuple)
-def _array_to_datetime64(array: np.array) -> np.datetime64 | np.ndarray:
+def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
@@ -103,7 +103,7 @@ def _pandas_timestamp(datetime: pd.Timestamp):
 
 
 @singledispatch
-def to_timedelta64(obj: float | np.array | str):
+def to_timedelta64(obj: float | np.ndarray | str):
     """
     Convert an object to timedelta64.
 
@@ -198,7 +198,7 @@ def _time_delta_from_str(time_delta_str: str):
 
 
 @singledispatch
-def to_int(obj: timeable_types | np.array) -> np.array:
+def to_int(obj: timeable_types | np.ndarray) -> np.ndarray:
     """
     Ensure a scalar or array is a number.
 
@@ -219,7 +219,7 @@ def _float_to_num(num: float | int) -> float | int:
 @to_int.register(np.ndarray)
 @to_int.register(list)
 @to_int.register(tuple)
-def _array_to_int(array: np.array) -> np.array:
+def _array_to_int(array: np.ndarray) -> np.ndarray:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """
@@ -262,7 +262,7 @@ def _pandas_timestamp_to_num(ser: pd.Series):
 
 
 @singledispatch
-def to_float(obj: timeable_types | np.array) -> np.array:
+def to_float(obj: timeable_types | np.ndarray) -> np.ndarray:
     """
     Convert various datetime/timedelta things to a float.
 
@@ -274,7 +274,7 @@ def to_float(obj: timeable_types | np.array) -> np.array:
 @to_float.register(np.ndarray)
 @to_float.register(list)
 @to_float.register(tuple)
-def _array_to_float(array: np.array) -> np.array:
+def _array_to_float(array: np.ndarray) -> np.ndarray:
     """
     Convert an array of floating point timestamps to an array of np.datatime64.
     """

@@ -1,6 +1,7 @@
 """
 Tests for QuantXV2 format
 """
+from __future__ import annotations
 import pytest
 
 from dascore.io.core import read

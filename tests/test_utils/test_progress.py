@@ -1,6 +1,7 @@
 """
 Test the progress bar.
 """
+from __future__ import annotations
 import dascore as dc
 from dascore.utils.progress import track
 

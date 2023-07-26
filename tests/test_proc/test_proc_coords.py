@@ -1,6 +1,7 @@
 """
 Tests for coordinate processing methods.
 """
+from __future__ import annotations
 import numpy as np
 
 
