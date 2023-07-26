@@ -163,6 +163,9 @@ website:
       contents:
         - notes/notes.qmd
 
+        - text: Documentation Strategy
+          href: notes/doc_strategy.qmd
+
         - text: Fourier transforms
           href: notes/dft_notes.qmd
 
@@ -173,14 +176,5 @@ website:
         {% for item in api_toc_tree -%}
         {{ item }}
         {% endfor %}
-
-
-#
-#
-##    {{ api_tree }}
-#    - title: 'API'
-#      contents:
-#        - auto: "api"
-
 
 bibliography: references.bib
