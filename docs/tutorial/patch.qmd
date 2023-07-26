@@ -453,7 +453,7 @@ sub_selected = pa.select(distance=(10*ft, 10*m))
 dist_filtered = pa.pass_filter(distance=(10*m, 100*m))
 ```
 
-See the documentation on [`Patch.select`](`dascore.Patch.Select`) and [`Patch.pass_filter`](`dascore.Patch.pass_filter`) for more details.
+See the documentation on [`Patch.select`](`dascore.Patch.select`) and [`Patch.pass_filter`](`dascore.Patch.pass_filter`) for more details.
 
 # Patch Operations
 
