@@ -790,12 +790,12 @@ website:
                   contents:
                     - text: wiggle
                       href: api/dascore/viz/wiggle/wiggle.qmd
-        
+
 
 
 #
 #
-##    
+##
 #    - title: 'API'
 #      contents:
 #        - auto: "api"
