@@ -10,7 +10,7 @@ from scipy.signal import spectrogram as scipy_spectrogram
 from dascore.constants import PatchType
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 from dascore.utils.misc import iterate
 from dascore.utils.patch import _get_dx_or_spacing_and_axes
 from dascore.utils.patch import patch_function, _get_data_units_from_dims

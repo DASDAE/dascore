@@ -22,7 +22,7 @@ from tables import ClosedNodeError
 
 import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, max_lens
-from dascore.core.schema import PatchFileSummary
+from dascore.core.attrs import PatchFileSummary
 from dascore.exceptions import InvalidFileHandler, InvalidIndexVersionError
 from dascore.utils.misc import cached_method, suppress_warnings
 from dascore.utils.pd import (

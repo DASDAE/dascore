@@ -17,7 +17,7 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PatchType, SpoolType, timeable_types
-from dascore.core.schema import PatchFileSummary
+from dascore.core.attrs import PatchFileSummary
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
@@ -527,7 +527,7 @@ def scan(
 
     Returns
     -------
-    A list of [PatchFileSummary](`dascore.core.schema.PatchFileSummary`) which
+    A list of [PatchFileSummary](`dascore.core.attrs.PatchFileSummary`) which
     have the following fields:
         {fields}
     """

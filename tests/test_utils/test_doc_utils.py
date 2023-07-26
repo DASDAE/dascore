@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import textwrap
 
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 from dascore.utils.docs import compose_docstring, format_dtypes
 
 

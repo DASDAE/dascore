@@ -9,7 +9,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.core.schema import PatchFileSummary
+from dascore.core.attrs import PatchFileSummary
 from dascore.io import FiberIO, HDF5Reader, HDF5Writer
 from dascore.utils.hdf5 import HDFPatchIndexManager, NodeError
 from dascore.utils.patch import get_default_patch_name

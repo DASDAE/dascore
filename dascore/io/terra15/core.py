@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
-from dascore.core.schema import PatchFileSummary
+from dascore.core.attrs import PatchFileSummary
 from dascore.io import FiberIO, HDF5Reader
 from dascore.utils.hdf5 import open_hdf5_file
 

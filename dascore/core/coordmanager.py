@@ -54,7 +54,7 @@ from typing_extensions import Self
 
 from dascore.constants import dascore_styles
 from dascore.core.coords import BaseCoord, get_coord, get_coord_from_attrs
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import (
     CoordDataError,
     CoordError,

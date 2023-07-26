@@ -12,7 +12,7 @@ from rich.text import Text
 import dascore.proc
 from dascore.compat import DataArray, array
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
@@ -39,7 +39,7 @@ class Patch:
         first axis of data, the second to the second dimension, and so on.
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict or
-        [PatchAttrs](`dascore.core.schema.PatchAttrs')
+        [PatchAttrs](`dascore.core.attrs.PatchAttrs')
 
     Notes
     -----
@@ -180,7 +180,7 @@ class Patch:
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords"""
         msg = "assign_coords is deprecated, use update_coords instead."
-        warnings.warn(msg, DeprecationWarning)
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.update_coords(*args, **kwargs)
 
     set_units = dascore.proc.set_units

@@ -13,7 +13,7 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coordmanager import BaseCoord, CoordManager, get_coord_manager
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import CoordError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.misc import get_parent_code_name, iterate, optional_import

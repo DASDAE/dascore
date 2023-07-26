@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import AttributeMergeError
 from dascore.utils.models import merge_models
 

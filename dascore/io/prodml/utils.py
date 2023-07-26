@@ -6,7 +6,7 @@ import numpy as np
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 
 # --- Getting format/version
 

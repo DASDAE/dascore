@@ -6,7 +6,7 @@ from __future__ import annotations
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
-from dascore.core.schema import PatchFileSummary
+from dascore.core.attrs import PatchFileSummary
 from dascore.io import BinaryReader, FiberIO
 
 from .utils import _get_data, _get_data_node, _get_default_attrs, _get_version_str

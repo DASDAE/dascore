@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 
 
 @pytest.fixture(scope="class")
@@ -105,3 +105,12 @@ class TestDropPrivate:
         attr_dict = dict(attrs)
         assert "_private1" not in attr_dict
         assert "extra_attr" in attr_dict
+
+
+class TestMisc:
+    """Misc small tests."""
+
+    def test_schema_deprecated(self):
+        """Ensure schema module emits deprecation warning."""
+        with pytest.warns(DeprecationWarning):
+            from dascore.core.schema import PatchAttrs  # noqa

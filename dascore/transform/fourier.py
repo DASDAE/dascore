@@ -15,7 +15,7 @@ import numpy.fft as nft
 from dascore.constants import PatchType
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 from dascore.units import invert_quantity
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (

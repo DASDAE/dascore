@@ -27,7 +27,7 @@ def rfft(patch: PatchType, dim="time") -> PatchType:
     This function is not scaled as detailed in the dascore documentation.
     """
     msg = "The Patch transform rfft is deprecated. Use dft instead."
-    warnings.warn(msg, DeprecationWarning)
+    warnings.warn(msg, DeprecationWarning, stacklevel=2)
     assert dim in patch.dims
     axis = patch.dims.index(dim)
 

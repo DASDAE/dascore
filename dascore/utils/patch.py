@@ -16,7 +16,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
 from dascore.core.coordmanager import CoordManager, merge_coord_managers
-from dascore.core.schema import PatchAttrs, PatchFileSummary
+from dascore.core.attrs import PatchAttrs, PatchFileSummary
 from dascore.exceptions import (
     CoordDataError,
     IncompatiblePatchError,
@@ -276,7 +276,7 @@ def merge_patches(
         "dascore.spool(patch_list).chunk(time=None) to merge on the time "
         "dimension."
     )
-    warnings.warn(msg, DeprecationWarning)
+    warnings.warn(msg, DeprecationWarning, stacklevel=2)
     return _merge_patches(patches, dim, check_history, tolerance)
 
 

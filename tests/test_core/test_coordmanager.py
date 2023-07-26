@@ -24,7 +24,7 @@ from dascore.core.coords import (
     get_coord,
     get_coord_from_attrs,
 )
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
