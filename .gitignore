@@ -86,4 +86,3 @@ docs/**/*.ipynb
 # misc
 scratch/**
 .ruff_cache
-

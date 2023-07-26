@@ -90,6 +90,7 @@ def spectrogram(patch: PatchType, dim: str = "time", **kwargs) -> PatchType:
     >>> time_spec = patch.tran.spectrogram("time")
     >>> # note the new dimensions
     >>> print(time_spec.dims)
+    ('distance', 'ft_time', 'time')
     >>> # perform fourier transforms along distance dimensions
     >>> dist_spec = patch.tran.spectrogram("distance")
     """
