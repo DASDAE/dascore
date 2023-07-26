@@ -1,6 +1,7 @@
 """
 Tests for transformatter.
 """
+from __future__ import annotations
 import pytest
 
 from dascore.utils.transformatter import FourierTransformatter

@@ -1,6 +1,8 @@
 """
 Module to transform a Patch into spectrograms.
 """
+from __future__ import annotations
+
 from operator import mul
 
 from scipy.signal import spectrogram as scipy_spectrogram

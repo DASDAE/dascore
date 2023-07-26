@@ -4,6 +4,7 @@ dascore Filtering module.
 Much of this code was inspired by ObsPy's filtering module created by:
 Tobias Megies, Moritz Beyreuther, Yannik Behr
 """
+from __future__ import annotations
 
 from collections.abc import Sequence
 

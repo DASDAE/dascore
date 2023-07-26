@@ -1,6 +1,7 @@
 """
 Utils for displaying dascore objects.
 """
+from __future__ import annotations
 import textwrap
 from functools import singledispatch
 

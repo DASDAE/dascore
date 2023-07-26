@@ -1,6 +1,7 @@
 """
 Tests for creating/registering accessors.
 """
+from __future__ import annotations
 
 
 # class TestDFSBasics:

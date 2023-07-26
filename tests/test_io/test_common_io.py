@@ -7,6 +7,7 @@ tests should go in their respective test modules. Tests for *how* specific
 IO functions (i.e., not that they work on various files) should go in
 test_io_core.py
 """
+from __future__ import annotations
 from functools import cache
 from io import BytesIO
 from operator import eq, ge, le

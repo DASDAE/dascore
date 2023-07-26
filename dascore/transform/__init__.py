@@ -3,6 +3,7 @@ A module for applying transformation to Patches.
 
 Transforms are defined as
 """
+from __future__ import annotations
 
 from dascore.utils.misc import MethodNameSpace
 

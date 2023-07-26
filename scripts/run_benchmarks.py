@@ -12,6 +12,7 @@ A few notes:
     support projects without setup.py files, so this is a bit of a hack
     until that gets fixed.
 """
+from __future__ import annotations
 from _benchmark_uilts import (
     BASE_PATH,
     REFERENCE_BRANCH,

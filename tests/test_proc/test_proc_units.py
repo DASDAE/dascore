@@ -1,6 +1,7 @@
 """
 Tests for unit dealings on patches.
 """
+from __future__ import annotations
 import numpy as np
 import pytest
 
