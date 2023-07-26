@@ -18,7 +18,7 @@ from dascore.constants import (
     INDEXED_PATCH_ATTRS,
     max_lens,
 )
-from dascore.core.coords import BaseCoord, CoordRange
+from dascore.core.coords import BaseCoord, CoordRange, CoordSummary
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import to_str
 from dascore.utils.mapping import FrozenDict
@@ -37,16 +37,6 @@ from dascore.utils.models import (
 # from dascore.utils.mapping import FrozenDict
 
 str_validator = PlainValidator(to_str)
-
-
-class CoordSummary(DascoreBaseModel):
-    """A summary for coordinates."""
-
-    min: float | np.datetime64 | np.timedelta64 | int | None = None
-    max: float | np.datetime64 | np.timedelta64 | int | None = None
-    step: float | np.datetime64 | np.timedelta64 | int | None = None
-    units: UnitQuantity | None = None
-    dtype: str = ""
 
 
 @compose_docstring(basic_params=basic_summary_attrs)

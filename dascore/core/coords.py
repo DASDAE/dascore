@@ -32,6 +32,21 @@ from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, UnitQua
 from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like
 
 
+class CoordSummary(DascoreBaseModel):
+    """
+    A summary for coordinates.
+
+    Provides enough information for indexing coordinates and creating range
+    coordinates.
+    """
+
+    min: float | np.datetime64 | np.timedelta64 | int | None = None
+    max: float | np.datetime64 | np.timedelta64 | int | None = None
+    step: float | np.datetime64 | np.timedelta64 | int | None = None
+    units: UnitQuantity | None = None
+    dtype: str = ""
+
+
 @cache
 def _get_coord_filter_validators(dtype):
     """Get filter validators for a given input type."""
