@@ -287,6 +287,11 @@ class TestBasics:
         out = coord.convert_units("degF")
         assert np.allclose(f_array, out.values)
 
+    def test_unit_str(self, evenly_sampled_coord):
+        """Ensure the unit string returns a string"""
+        coord = evenly_sampled_coord.set_units("m/s")
+        assert isinstance(coord.unit_str, str)
+
     def test_out_of_range_raises(self, evenly_sampled_coord):
         """Accessing a value out of the range of array should raise."""
         with pytest.raises(IndexError, match="exceeds coord length"):

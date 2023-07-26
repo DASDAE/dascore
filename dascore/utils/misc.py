@@ -18,7 +18,6 @@ import pandas as pd
 from scipy.linalg import solve
 from scipy.special import factorial
 
-from dascore.constants import ONE_SECOND
 from dascore.exceptions import MissingOptionalDependency
 
 
@@ -46,16 +45,6 @@ def register_func(list_or_dict: list | dict, key=None):
         return func
 
     return wrapper
-
-
-def append_func(some_list):
-    """Decorator to append a function to a list."""
-
-    def _func(func):
-        some_list.append(func)
-        return func
-
-    return _func
 
 
 def _pass_through_method(func):
@@ -171,18 +160,6 @@ def broadcast_for_index(
     """
     axes = set(iterate(axis))
     return tuple(fill if x not in axes else value for x in range(n_dims))
-
-
-def _get_sampling_rate(sampling_period):
-    """
-    Get a sampling rate as a float.
-    """
-    # TODO remove, just use to_float from time module.
-    if np.issubdtype(sampling_period.dtype, np.timedelta64):
-        num = ONE_SECOND
-    else:
-        num = 1
-    return num / sampling_period
 
 
 def all_close(ar1, ar2):

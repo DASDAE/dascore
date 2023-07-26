@@ -165,7 +165,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     @property
     def unit_str(self) -> str:
         """Return a unit string."""
-        return ""
+        return get_quantity_str(self.units)
 
     @property
     def degenerate(self):
