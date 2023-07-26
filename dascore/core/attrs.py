@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field
 from typing_extensions import Self
 
 import dascore as dc
@@ -15,20 +15,38 @@ from dascore.constants import (
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
     basic_summary_attrs,
+    INDEXED_PATCH_ATTRS,
     max_lens,
 )
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import to_str
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.models import (
     DascoreBaseModel,
     DateTime64,
     PlainValidator,
     TimeDelta64,
     UnitQuantity,
+    CommaSeparatedStr,
+    frozen_dict_validator,
+    frozen_dict_serializer,
+    # FrozenDictType,
 )
 
+# from dascore.utils.mapping import FrozenDict
+
 str_validator = PlainValidator(to_str)
+
+
+class CoordSummary(DascoreBaseModel):
+    """A summary for coordinates."""
+
+    min: float | np.datetime64 | np.timedelta64 | int | None = None
+    max: float | np.datetime64 | np.timedelta64 | int | None = None
+    step: float | np.datetime64 | np.timedelta64 | int | None = None
+    units: UnitQuantity | None = None
+    dtype: str = ""
 
 
 @compose_docstring(basic_params=basic_summary_attrs)
@@ -47,25 +65,6 @@ class PatchAttrs(DascoreBaseModel):
     previous indices are invalidated.
     """
 
-    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
-    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
-    data_units: UnitQuantity | None = None
-    time_min: DateTime64 = np.datetime64("NaT")
-    time_max: DateTime64 = np.datetime64("NaT")
-    d_time: TimeDelta64 = np.timedelta64("NaT")
-    time_units: UnitQuantity | None = None
-    distance_min: float = np.NaN
-    distance_max: float = np.NaN
-    d_distance: float = np.NaN
-    distance_units: UnitQuantity | None = None
-    instrument_id: str = Field("", max_length=max_lens["instrument_id"])
-    cable_id: str = Field("", max_length=max_lens["cable_id"])
-    dims: str = Field("", max_length=max_lens["dims"])
-    tag: str = Field("", max_length=max_lens["tag"])
-    station: str = Field("", max_length=max_lens["station"])
-    network: str = Field("", max_length=max_lens["network"])
-    history: str | Sequence[str] = Field(default_factory=list)
-
     model_config = ConfigDict(
         title="Patch Summary",
         extra="allow",
@@ -73,16 +72,35 @@ class PatchAttrs(DascoreBaseModel):
         arbitrary_types_allowed=True,
     )
 
-    @field_validator("dims", mode="before")
-    @classmethod
-    def _flatten_dims(cls, value):
-        """Some dims are passed as a tuple; we just want str"""
-        if not isinstance(value, str):
-            value = ",".join(value)
-        return value
+    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
+    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
+    data_units: UnitQuantity | None = None
 
-    # In order to maintain backward compatibility, these dunders make the
-    # class also behave like a dict.
+    instrument_id: str = Field("", max_length=max_lens["instrument_id"])
+    cable_id: str = Field("", max_length=max_lens["cable_id"])
+
+    tag: str = Field("", max_length=max_lens["tag"])
+    station: str = Field("", max_length=max_lens["station"])
+    network: str = Field("", max_length=max_lens["network"])
+    history: str | Sequence[str] = Field(default_factory=list)
+
+    dims: CommaSeparatedStr = Field("", max_length=max_lens["dims"])
+
+    coords: Annotated[
+        FrozenDict[str, CoordSummary],
+        frozen_dict_validator,
+        frozen_dict_serializer,
+    ] = {}
+
+    time_min: DateTime64 = np.datetime64("NaT")
+    time_max: DateTime64 = np.datetime64("NaT")
+    d_time: TimeDelta64 = np.timedelta64("NaT")
+    time_units: UnitQuantity | None = None
+
+    distance_min: float = np.NaN
+    distance_max: float = np.NaN
+    d_distance: float = np.NaN
+    distance_units: UnitQuantity | None = None
 
     def __getitem__(self, item):
         return getattr(self, item)
@@ -198,6 +216,11 @@ class PatchFileSummary(PatchAttrs):
     The expected minimum attributes for a Patch/spool file.
     """
 
+    model_config = ConfigDict(
+        title="Patch File Summary",
+        extra="ignore",
+    )
+    # the attributes to index on
     file_version: str = ""
     file_format: str = ""
     path: str | Path = ""
@@ -205,11 +228,4 @@ class PatchFileSummary(PatchAttrs):
     @classmethod
     def get_index_columns(cls) -> tuple[str, ...]:
         """Return the column names which should be used for indexing."""
-        excluders = (
-            "data_units",
-            "time_units",
-            "distance_units",
-            "history",
-        )
-        fields = set(cls.model_fields) - set(excluders)
-        return tuple(sorted(fields))
+        return INDEXED_PATCH_ATTRS

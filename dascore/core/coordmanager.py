@@ -65,11 +65,14 @@ from dascore.exceptions import (
 from dascore.utils.display import get_nice_text
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import all_close, cached_method, iterate
-from dascore.utils.models import ArrayLike, DascoreBaseModel, PlainValidator
+from dascore.utils.models import (
+    ArrayLike,
+    DascoreBaseModel,
+    frozen_dict_validator,
+    frozen_dict_serializer,
+)
 
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
-
-frozendict_validator = PlainValidator(lambda x: FrozenDict(x))
 
 
 def _validate_select_coords(coord, coord_name):
@@ -157,8 +160,16 @@ class CoordManager(DascoreBaseModel):
     """
 
     dims: tuple[str, ...]
-    coord_map: Annotated[FrozenDict[str, BaseCoord], frozendict_validator]
-    dim_map: Annotated[FrozenDict[str, tuple[str, ...]], frozendict_validator]
+    coord_map: Annotated[
+        FrozenDict[str, BaseCoord],
+        frozen_dict_validator,
+        frozen_dict_serializer,
+    ]
+    dim_map: Annotated[
+        FrozenDict[str, tuple[str, ...]],
+        frozen_dict_validator,
+        frozen_dict_serializer,
+    ]
 
     def __getitem__(self, item) -> np.ndarray:
         # in order to not break backward compatibility, we need to return

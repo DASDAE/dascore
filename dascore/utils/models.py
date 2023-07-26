@@ -16,6 +16,7 @@ from typing_extensions import Self
 from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
 from dascore.units import Quantity, get_quantity_str, get_quantity
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     all_close,
     all_diffs_close_enough,
@@ -27,6 +28,9 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- A list of custom types with appropriate serialization/deserialization
 # these can just be use with pydantic type-hints.
+
+frozen_dict_validator = PlainValidator(lambda x: FrozenDict(x))
+frozen_dict_serializer = PlainSerializer(lambda x: dict(x))
 
 # A datetime64
 DateTime64 = Annotated[
@@ -57,6 +61,16 @@ UnitQuantity = Annotated[
     PlainSerializer(get_quantity_str),
 ]
 
+CommaSeparatedStr = Annotated[
+    str, PlainValidator(lambda x: x if isinstance(x, str) else ",".join(x))
+]
+
+FrozenDictType = Annotated[
+    FrozenDict,
+    frozen_dict_validator,
+    frozen_dict_serializer,
+]
+
 
 def sensible_model_equals(self, other):
     """
@@ -80,6 +94,13 @@ def sensible_model_equals(self, other):
             if not val1 == val2:
                 return False
     return True
+
+
+def _flatten_str(cls, value):
+    """Some dims are passed as a tuple; we just want str"""
+    if not isinstance(value, str):
+        value = ",".join(value)
+    return value
 
 
 class DascoreBaseModel(BaseModel):

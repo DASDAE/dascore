@@ -81,18 +81,6 @@ max_lens = {
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
 
-# A set of attributes which are used in Patch equality checks.
-COMPARE_ATTRS = {
-    "d_time",
-    "d_distance",
-    "data_type",
-    "category" "time_min",
-    "time_max",
-    "distance_min",
-    "distance_max",
-    "instrument_id",
-}
-
 # Large and small np.datetime64[ns] (used when defaults are needed)
 SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
@@ -117,10 +105,26 @@ NUMPY_TIME_UNIT_MAPPING = {
     "day": "D",
 }
 
-
-class _DegenerateDimension:
-    """Used to mark which dimensions of an array have gone to 0."""
-
+# attributes which are indexed by file indexer.
+INDEXED_PATCH_ATTRS = (
+    "data_type",
+    "data_category",
+    "time_min",
+    "time_max",
+    "d_time",
+    "distance_min",
+    "distance_max",
+    "d_distance",
+    "instrument_id",
+    "cable_id",
+    "dims",
+    "tag",
+    "station",
+    "network",
+    "path",
+    "file_version",
+    "file_format",
+)
 
 # A description of basic patch metadata.
 basic_summary_attrs = f"""
@@ -177,6 +181,7 @@ network
 history
     A list of strings indicating what processing has occurred on the patch.
 """
+
 
 # Rich styles for various object displays.
 dascore_styles = dict(
