@@ -32,7 +32,7 @@ from dascore.exceptions import (
     CoordSortError,
     ParameterError,
 )
-from dascore.units import get_conversion_factor
+from dascore.units import get_quantity
 from dascore.utils.misc import all_close, get_middle_value, register_func
 
 COORD_MANAGERS = []
@@ -1053,14 +1053,14 @@ class TestConvertUnits:
 
     def test_convert_changes_labels(self, basic_coord_manager):
         """Basic tests for converting units."""
-        cm = basic_coord_manager.convert_units(time="ms", distance="furlong")
+        cm = basic_coord_manager.convert_units(time="s", distance="furlong")
         time, dist = cm.coord_map["time"], cm.coord_map["distance"]
-        assert time.units == "ms"
-        assert dist.units == "furlong"
+        assert time.units == get_quantity("s")
+        assert dist.units == get_quantity("furlong")
 
     def test_convert_changes_values(self, coord_manager_with_units):
         """Ensure values are scaled accordingly"""
-        conv = get_conversion_factor("m", "ft")
+        conv = get_quantity("m").to("ft").magnitude
         cm = coord_manager_with_units.convert_units(distance="ft")
         dist1 = coord_manager_with_units.coord_map["distance"]
         dist2 = cm.coord_map["distance"]

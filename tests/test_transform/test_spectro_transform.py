@@ -4,7 +4,7 @@ Tests for the spectrogram transformation.
 from __future__ import annotations
 import pytest
 
-import dascore
+import dascore as dc
 from dascore.transform.spectro import spectrogram
 
 
@@ -14,7 +14,23 @@ class TestSpectroTransform:
     @pytest.fixture()
     def spec_patch(self, random_patch):
         """Simple patch trasnformed to spectrogram."""
-        return random_patch.tran.spectrogram("time")
+        patch = random_patch.set_units("m/s")
+        return patch.tran.spectrogram("time")
+
+    def test_units(self, random_patch):
+        """Ensure units were properly converted."""
+        patch = random_patch.set_units("m/s")
+        spec_patch = patch.tran.spectrogram("time")
+        # first check coord units
+        coord1 = patch.get_coord("time")
+        coord2 = spec_patch.get_coord("ft_time")
+        units1 = dc.get_quantity(coord1.units)
+        units2 = dc.get_quantity(coord2.units)
+        assert units1 == 1 / units2
+        # then check data units
+        data_units1 = dc.get_quantity(patch.attrs.data_units)
+        data_units2 = dc.get_quantity(spec_patch.attrs.data_units)
+        assert data_units1 * units1 == data_units2
 
     def test_spec_patch_dimensions(self, spec_patch, random_patch):
         """Ensure expected dimensions now exist."""
@@ -22,13 +38,28 @@ class TestSpectroTransform:
         # dims should have been added
         assert len(dims) > len(random_patch.dims)
         assert set(dims) == (set(random_patch.dims) | {"ft_time"})
-        # because of how spectrogram works, the original dim is replaced with
-        # the frequency equivalent, and the original dim is added to the end.
-        time_index = random_patch.dims.index("time")
-        assert spec_patch.dims[time_index] == "ft_time"
+
+    def test_transformed_coord(self, spec_patch, random_patch):
+        """
+        The start values of transformed dimension should be comparable and the
+        units unchanged.
+        """
+        time_1 = random_patch.get_coord("time")
+        time_2 = spec_patch.get_coord("time")
+        assert time_1.units == time_2.units
 
     def test_time_first(self, random_patch):
         """Ensure the spectrogram still works when time dim is first."""
         transposed = random_patch.transpose(*("time", "distance"))
         out = spectrogram(transposed, dim="time")
-        assert isinstance(out, dascore.Patch)
+        assert isinstance(out, dc.Patch)
+
+    def test_transpose(self, random_patch):
+        """Ensure when patch dim order is different it still works."""
+        out = random_patch.transpose().tran.spectrogram("time")
+        assert set(out.dims) == (set(random_patch.dims) | {"ft_time"})
+
+    def test_distance_dim(self, random_patch):
+        """Ensure distance dimension works."""
+        out = random_patch.transpose().tran.spectrogram("distance")
+        assert set(out.dims) == (set(random_patch.dims) | {"ft_distance"})

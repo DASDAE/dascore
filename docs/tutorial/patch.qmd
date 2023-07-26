@@ -401,6 +401,60 @@ dims = ("distance", "time")
 out = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
 ```
 
+# Units
+
+As mentioned in the [units section of the concept page](concepts.qmd#units), DASCore provides first-class support for units. Here are a few examples:
+
+## Patch units
+
+There are two methods for configuring the units associated with a `Patch`.
+
+[`Patch.set_units`](`dascore.Patch.set_units`) sets the units on a patch or its coordinates. Old units are simply overwritten without performing any conversions. The first argument sets the data units and the keywords set the coordinate units.
+
+[`Patch.convert_units`](`dascore.Patch.convert_units`) converts the existing units of data or coordinates by appropriately transforming the data or coordinates arrays. If no units exist they will be set.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# Set data units and distance units; don't do any conversions
+patch_set_units = patch.set_units("m/s", distance="ft")
+
+# Convert data units and distance units; will modify data/coords
+# to correctly do the conversion.
+patch_conv_units = patch_set_units.convert_units("ft/s", distance='m')
+```
+
+The data or coordinate units attributes are [Pint Quantity](https://pint.readthedocs.io/en/stable/getting/tutorial.html#defining-a-quantity), but they can be converted to strings with [`get_quantity_str`](`dascore.units.get_quantity_str`).
+
+```{python}
+import dascore as dc
+from dascore.units import get_quantity_str
+
+patch = dc.get_example_patch().set_units("m/s")
+
+print(type(patch.attrs.data_units))
+print(get_quantity_str(patch.attrs.data_units))
+```
+
+## Units in processing functions
+
+```{python}
+import dascore as dc
+from dascore.units import m, ft
+
+pa = dc.get_example_patch()
+
+# sub-select a patch to only include distance from 10ft to 10m.
+sub_selected = pa.select(distance=(10*ft, 10*m))
+
+# filter patch for spatial wavelengths from 10m to 100m
+dist_filtered = pa.pass_filter(distance=(10*m, 100*m))
+```
+
+See the documentation on [`Patch.select`](`dascore.Patch.select`) and [`Patch.pass_filter`](`dascore.Patch.pass_filter`) for more details.
+
 # Patch Operations
 
 Patches implement common operators which means that many [ufunc](https://numpy.org/doc/stable/reference/ufuncs.html) type operations can be applied directly on a patch with built-in python operators.

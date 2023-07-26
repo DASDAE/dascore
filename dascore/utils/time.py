@@ -341,6 +341,19 @@ def is_timedelta64(obj) -> bool:
     return False
 
 
+def dtype_time_like(dtype_or_array) -> bool:
+    """Return True if dtype is time related (datetime64, timedelta64)."""
+    try:
+        dtype_or_array = np.dtype(dtype_or_array)
+    except TypeError:
+        dtype_or_array = getattr(dtype_or_array, "dtype", dtype_or_array)
+    is_datetime = np.issubdtype(dtype_or_array, np.datetime64)
+    is_timedelta = np.issubdtype(dtype_or_array, np.timedelta64)
+    if is_timedelta or is_datetime:
+        return True
+    return False
+
+
 def get_max_min_times(kwarg_time=None):
     """
     Function to get min/max times from a tuple of possible time values.

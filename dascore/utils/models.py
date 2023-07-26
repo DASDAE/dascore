@@ -15,7 +15,7 @@ from typing_extensions import Self
 
 from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
-from dascore.units import Quantity, validate_quantity
+from dascore.units import Quantity, get_quantity_str, get_quantity
 from dascore.utils.misc import (
     all_close,
     all_diffs_close_enough,
@@ -53,7 +53,8 @@ DTypeLike = Annotated[
 
 UnitQuantity = Annotated[
     Quantity | str | None,
-    PlainValidator(validate_quantity),
+    PlainValidator(get_quantity),
+    PlainSerializer(get_quantity_str),
 ]
 
 

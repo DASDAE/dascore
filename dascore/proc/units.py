@@ -4,8 +4,9 @@ Processing functions dealing with units and unit conversions.
 from __future__ import annotations
 
 from dascore.constants import PatchType
-from dascore.units import Quantity, Unit, get_conversion_factor, get_factor_and_unit
+from dascore.units import Quantity, Unit, get_factor_and_unit
 from dascore.utils.patch import patch_function
+from dascore.units import convert_units as u_covert_units
 
 
 def _get_updated_attrs(patch, data_units, coord_unit_dict):
@@ -84,15 +85,13 @@ def convert_units(
     [UnitError](`dascore.exceptions.UnitError`) if any of the new units
     are not compatible with the old units.
     """
-
-    def convert_data():
-        if data_units is None:
-            return patch.data
+    # convert data
+    if data_units is not None:
         current_units = patch.attrs.data_units
-        factor = get_conversion_factor(current_units, data_units)
-        return patch.data * factor
-
-    data = convert_data()
+        data = u_covert_units(patch.data, data_units, current_units)
+    else:
+        data = patch.data
+    # then update coords and attrs
     new_attrs = _get_updated_attrs(patch, data_units, kwargs)
     coords = patch.coords.convert_units(**kwargs)
     return patch.new(data=data, attrs=new_attrs, coords=coords)

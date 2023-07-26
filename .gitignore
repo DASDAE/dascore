@@ -77,7 +77,7 @@ docs/api/*
 _autosummary
 .quarto/
 docs/site_libs
-docs/_quarto.yml  # this is generated automatically
+docs/_quarto.yml
 docs/**/*.ipynb
 
 # profile stuff from asv
@@ -85,3 +85,4 @@ docs/**/*.ipynb
 
 # misc
 scratch/**
+.ruff_cache

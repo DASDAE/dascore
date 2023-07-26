@@ -285,7 +285,7 @@ class NumpyDocStrParser:
             if name == "pre" or "note" in name.lower():
                 out.append(content)
             else:
-                out.append(f"\n{self.heading_char} {name}\n {content}")
+                out.append(f"\n{self.heading_char} {name}\n{content}")
         return "\n".join(out)
 
     # stylers is used to decide which style function to apply for various
@@ -317,20 +317,35 @@ def to_quarto_code(code_lines):
                 code_blocks[current_key].append(line)
         return code_blocks
 
+    def _is_doctest_line(line):
+        strip = line.lstrip()
+        doc_str_line = strip.startswith(">>>") or strip.startswith("...")
+        return doc_str_line
+
     def _strip_code(code_str):
         """Strip off spaces and the doctest stuff (..., >>>, etc)"""
         out = []
         code_lines = code_str.splitlines()
+        # first determine if this is a docstring or not
+        is_docstring = False
+        for line in code_lines:
+            strip = line.lstrip()
+            if strip.startswith(">>>"):
+                is_docstring = True
         # first determine how much to strip from each line.
         start_index = 999
         for line in code_lines:
             striped = line.lstrip().lstrip(">").lstrip(".").lstrip()
             if not len(striped):
                 continue
+            if is_docstring and not _is_doctest_line(line):
+                continue
             strip_len = len(line) - len(striped)
             start_index = min([start_index, strip_len])
+        # then do the stripping
         for line in code_lines:
-            out.append(line[start_index:])
+            if (is_docstring and _is_doctest_line(line)) or not is_docstring:
+                out.append(line[start_index:])
         return out
 
     def _get_options(code_lines):
@@ -362,7 +377,7 @@ def to_quarto_code(code_lines):
             if not stripped_block:
                 continue
             new_code = title + ["```{python}"] + options + stripped_block + ["```"]
-            out.append("\n".join(new_code))
+            out.append("\n".join(new_code).lstrip())
         return "\n".join(out)
 
     code_lines_stripped = _strip_code(code_lines)

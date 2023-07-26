@@ -6,14 +6,17 @@ from __future__ import annotations
 from functools import cache
 from typing import TypeVar
 
+import numpy as np
 import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit  # noqa
 
 from dascore.exceptions import UnitError
 from dascore.utils.misc import unbyte
+from dascore.utils.time import dtype_time_like
 
 str_or_none = TypeVar("str_or_none", None, str)
+numeric = TypeVar("numeric", np.ndarray, int, float)
 
 
 @cache
@@ -23,6 +26,8 @@ def get_registry():
     # a few custom defs, we may need our own unit registry if this
     # gets too long.
     ureg.define("PI=pi")
+    # allow multiplication with offset units.
+    ureg.autoconvert_offset_to_baseunit = True
     pint.set_application_registry(ureg)
     return ureg
 
@@ -30,6 +35,9 @@ def get_registry():
 @cache
 def get_unit(value) -> Unit:
     """Convert a value to a pint unit."""
+    if isinstance(value, Quantity):
+        assert value.magnitude == 1.0
+        value = value.units
     return get_registry().Unit(value)
 
 
@@ -44,7 +52,7 @@ def _str_to_quant(qunat_str):
 
 def get_quantity(value: str_or_none) -> Quantity | None:
     """Convert a value to a pint quantity."""
-    if value is None or value is ...:
+    if value is None or value is ... or value == "":
         return None
     if isinstance(value, Quantity):
         return value
@@ -64,53 +72,106 @@ def get_factor_and_unit(
 
 
 @cache
-def get_conversion_factor(from_quant, to_quant) -> float:
-    """Get a conversion factor for converting from one unit to another."""
-    from_quant, to_quant = get_quantity(from_quant), get_quantity(to_quant)
-    if from_quant is None or to_quant is None:
-        return 1
-    mag1, mag2 = from_quant.magnitude, to_quant.magnitude
-    mag_ratio = mag1 / mag2
+def _get_conversion_factors(from_quant, to_quant) -> tuple[float, float, float]:
+    """Get multiplicative and additive conversion factors."""
+    add_mag = (0 * from_quant).to(0 * to_quant).magnitude
+    # need to convert from and to units to deltas for proper conversion.
+    from_delta = (1 * from_quant.units) - (from_quant.units * 0)
+    to_delta = (1 * to_quant.units) - (to_quant.units * 0)
+    mult_mag1 = from_delta.to(to_delta).magnitude
+    return mult_mag1 * from_quant.magnitude, add_mag, 1 / to_quant.magnitude
+
+
+def convert_units(
+    data: numeric,
+    to_units: None | str | Quantity,
+    from_units: None | str | Quantity = None,
+) -> numeric:
+    """
+    Convert units in array from one type of units to another.
+
+    Parameters
+    ----------
+    data
+        The data to convert.
+    to_units
+        The desired units after the conversion
+    from_units
+        The current units of the data. If None, simply set the units.
+
+    Raises
+    ------
+    [UnitError](`dascore.exceptions.UnitError`) if conversion is not possible
+    or if the datatype is not compatible (e.g., datetime must always be
+    [time])
+    """
+    to_units, from_units = get_quantity(to_units), get_quantity(from_units)
+    if from_units is None:
+        return data
     try:
-        unit_ratio = to_quant.units.from_(from_quant.units).magnitude
+        mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
     except DimensionalityError as e:
         raise UnitError(str(e))
+    return (data * mult1 + add) * mult2
 
-    return mag_ratio * unit_ratio
+
+def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
+    """
+    Return quantity if it is compatible with dtype.
+
+    If not raise [UnitError](`dascore.exceptions.UnitError`).
+    """
+    if not dtype_time_like(dtype):
+        return get_quantity(quantity)
+    if (quant := get_quantity(quantity)) != get_quantity("s"):
+        msg = (
+            "For arrays with dtypes of datetime64 and timedelta64 the "
+            "only allowable units are s."
+        )
+        raise UnitError(msg)
+    return quant
 
 
 def invert_quantity(unit: pint.Unit | str) -> pint.Unit:
     """Invert a unit"""
-    if pd.isnull(unit):
+    # just get magnitude for isnull test to avoid warning of casting
+    # quantity to array.
+    unit_test = unit.magnitude if hasattr(unit, "magnitude") else unit
+    if pd.isnull(unit_test):
         return None
     quant = get_quantity(unit)
     return 1 / quant
 
 
-def validate_quantity(quant_str) -> str | None:
+def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     """
-    Ensure a unit string is valid and return it.
+    Ensure a unit/quantity is valid and return its string representation.
 
     If it is not valid raise a [UnitError](`dascore.exceptions.UnitError`).
 
     Parameters
     ----------
-    quant_str
-        A string input specifying a quantity (unit + scaling factors).
+    quant_value
+        A input specifying a quantity.
     """
-    quant_str = unbyte(quant_str)
-    if quant_str is None or quant_str == "":
+    quant_value = unbyte(quant_value)
+    if quant_value is None or quant_value == "":
         return None
     try:
-        get_quantity(quant_str)
+        quant = get_quantity(quant_value)
     except UndefinedUnitError:
-        msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
+        msg = f"DASCore failed to parse the following unit/quantity: {quant_value}"
         raise UnitError(msg)
-    return str(quant_str)
+    if isinstance(quant_value, Quantity):
+        if quant.magnitude == 1.0:
+            quant_value = str(quant.units)
+        else:
+            quant_value = str(quant)
+    return str(quant_value)
 
 
 def get_filter_units(
-    arg1: Quantity | float, arg2: Quantity | float, to_unit: str
+    arg1: Quantity | float, arg2: Quantity | float, to_unit: str | Quantity
 ) -> tuple[float, float]:
     """
     Get a tuple for applying filter based on dimension coordinates.
@@ -121,8 +182,9 @@ def get_filter_units(
         The lower bound of the filter params
     arg2
         The upper bound of the filter params.
-    data_unit
-        The units of the axis which will be filtered.
+    to_unit
+        The units to which the filter should be applied. The returned
+        units will be 1/to_units.
 
     Examples
     --------
@@ -156,11 +218,15 @@ def get_filter_units(
             raise UnitError(msg)
         data_units = get_unit(data_units)
         inverted_units = (1 / data_units).units
-        inversed_units = True
+        units_inversed = True
         if data_units.dimensionality == quant.units.dimensionality:
-            quant, inversed_units = 1 / quant, False
-        mag = get_conversion_factor(quant, inverted_units)
-        return mag, inversed_units
+            quant, units_inversed = 1 / quant, False
+        # try to get invert units, otherwise raise.
+        try:
+            mag = quant.to(inverted_units).magnitude
+        except DimensionalityError as e:
+            raise UnitError(str(e))
+        return mag, units_inversed
 
     # fast-path for non-unit, non-quantity inputs.
     unitable = (Quantity, Unit)
@@ -168,7 +234,11 @@ def get_filter_units(
     arg2 = None if arg2 is ... else arg2
     if not (isinstance(arg1, unitable) or isinstance(arg2, unitable)):
         return arg1, arg2
+    # get inverse of desired output units and ensure units are pure.
+    to_quant = get_quantity(to_unit)
+    assert to_quant.magnitude == 1.0
     to_units = get_quantity(to_unit).units
+    # get
     quant1, quant2 = get_quantity(arg1), get_quantity(arg2)
     _ensure_same_units(quant1, quant2)
     out1, inverted1 = get_inverted_quant(quant1, to_units)

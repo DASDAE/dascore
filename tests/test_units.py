@@ -8,13 +8,15 @@ import pytest
 import dascore as dc
 from dascore.exceptions import UnitError
 from dascore.units import (
-    get_conversion_factor,
     get_factor_and_unit,
     get_filter_units,
     get_quantity,
     get_unit,
     invert_quantity,
-    validate_quantity,
+    get_quantity_str,
+    assert_dtype_compatible_with_units,
+    Quantity,
+    convert_units,
 )
 
 
@@ -26,12 +28,6 @@ class TestUnitInit:
         sec = dc.get_unit("s")
         assert str(sec.dimensionality) == "[time]"
 
-    def test_conversion_factor(self):
-        """Ensure conversion factors are calculated correctly."""
-        assert get_conversion_factor("s", "ms") == 1000.0
-        assert get_conversion_factor("ms", "s") == 1 / 1000.0
-        assert np.round(get_conversion_factor("ft", "m"), 5) == 0.3048
-
     def test_invert(self):
         """Ensure a unit can be inverted."""
         unit = dc.get_unit("s")
@@ -40,14 +36,8 @@ class TestUnitInit:
         assert unit == reverted
         assert invert_quantity(None) is None
 
-    def test_conversion_factor_none(self):
-        """If either unit is None it should return 1."""
-        assert get_conversion_factor(None, None) == 1
-        assert get_conversion_factor(None, "m") == 1
-        assert get_conversion_factor("m", None) == 1
 
-
-class TestValidateUnits:
+class TestGetQuantStr:
     """Ensure units can be validated."""
 
     valid = ("m", "s", "Hz", "1/s", "1/m", "feet", "furlongs", "km", "fortnight")
@@ -56,18 +46,29 @@ class TestValidateUnits:
     @pytest.mark.parametrize("in_str", valid)
     def test_validate_units_good_input(self, in_str):
         """Ensure units can be validated from various inputs."""
-        assert validate_quantity(in_str)
+        assert get_quantity_str(in_str)
 
     @pytest.mark.parametrize("in_str", invalid)
     def test_validate_units_bad_input(self, in_str):
         """Ensure units can be validated from various inputs."""
         with pytest.raises(UnitError):
-            validate_quantity(in_str)
+            get_quantity_str(in_str)
 
     def test_none(self):
         """Ensure none and empty str also works."""
-        assert validate_quantity(None) is None
-        assert validate_quantity("") is None
+        assert get_quantity_str(None) is None
+        assert get_quantity_str("") is None
+
+    def test_quantity(self):
+        """Ensure a quantity works."""
+        # with no magnitude the string should be simple units
+        quant = get_quantity("m/s")
+        out = get_quantity_str(quant)
+        assert out == "meter / second"
+        # with magnitude it should be included.
+        quant = get_quantity("10 m /s")
+        out = get_quantity_str(quant)
+        assert "10.0" in out
 
 
 class TestUnitAndFactor:
@@ -103,6 +104,11 @@ class TestGetQuantity:
         assert quant1 is get_quantity(quant1)
         assert quant2 == get_quantity(quant2)
         assert quant2 is get_quantity(quant2)
+
+    def test_get_temp(self):
+        """Get quantity should work with temperatures."""
+        quant1 = get_quantity("degC")
+        assert "Cel" in str(quant1)
 
 
 class TestConvenientImport:
@@ -167,3 +173,79 @@ class TestGetFilterUnits:
 
         with pytest.raises(UnitError, match=match):
             get_filter_units(1.0 * m, 10.0 * m, s)
+
+
+class TestDTypeCompatible:
+    """Ensure dtype compatibility check works."""
+
+    quants = ("degC", "m/s", get_quantity("kg"))
+    non_dt_dtypes = (np.float_, np.int_, np.float32)
+
+    def test_non_datetime(self):
+        """Any non-datetime should be compatible."""
+        for quant in self.quants:
+            for dtype in self.non_dt_dtypes:
+                out = assert_dtype_compatible_with_units(dtype, quant)
+                assert isinstance(out, Quantity)
+
+    def test_bad_dim_raises(self):
+        """Ensure a bad dimension of quantity raises."""
+        for quant in self.quants:
+            with pytest.raises(UnitError):
+                assert_dtype_compatible_with_units(np.datetime64, quant)
+            with pytest.raises(UnitError):
+                assert_dtype_compatible_with_units(np.timedelta64, quant)
+
+    def test_non_s_raises(self):
+        """Only 's' should work, no other increment of time."""
+        match = "only allowable units are s"
+        with pytest.raises(UnitError, match=match):
+            assert_dtype_compatible_with_units(np.datetime64, "ms")
+
+    def test_s_works(self):
+        """Seconds should work fine."""
+        out = assert_dtype_compatible_with_units(np.datetime64, "s")
+        assert out == get_quantity("s")
+
+
+class TestConvertUnits:
+    """Test suite for converting units."""
+
+    def test_simple(self):
+        """Simple units to simple units."""
+        out = convert_units(1, "m", "ft")
+        assert np.isclose(out, 0.3048)
+
+    def test_temperature(self):
+        """Ensure temperature can be converted."""
+        out = convert_units(1, "m", "ft")
+        assert np.isclose(out, 0.3048)
+
+    def test_convert_offset_units(self):
+        """Test simple offset units."""
+        array = np.arange(10)
+        f_array = array * (9 / 5) + 32.0
+        out = convert_units(array, from_units="degC", to_units="degF")
+        assert np.allclose(f_array, out)
+
+    def test_convert_offset_units_with_mag(self):
+        """
+        Ensure units can be converted/set for offset units when non-1 magnitudes.
+        """
+        # One non-1 quantity
+        array = np.arange(10)
+        f_array = 2 * array * (9 / 5) + 32.0
+        out = convert_units(array, from_units="2*degC", to_units="degF")
+        assert np.allclose(f_array, out)
+
+    def test_convert_offset_units_multiple_mags(self):
+        """Ensure if both units have non-1 offsets conversion still works."""
+        # Multiple non-1 quants
+        array = np.arange(10)
+        f_array = (array * (18 / 5) + 32.0) / 2
+        out = convert_units(array, from_units="2*degC", to_units="2*degF")
+        assert np.allclose(f_array, out)
+        # non equal quants
+        f_array = (array * (9 * 2.5 / 5) + 32.0) / 6
+        out = convert_units(array, from_units="2.5*degC", to_units="6*degF")
+        assert np.allclose(f_array, out)

@@ -17,7 +17,7 @@ class TestToQuartoCode:
         print("hey")
         """
         out = to_quarto_code(code)
-        assert "```{python}" in out
+        assert '```{python}\nprint("hey")\n```' == out
 
     def test_docstring(self):
         """Ensure docstring works."""
@@ -28,6 +28,15 @@ class TestToQuartoCode:
         """
         out = to_quarto_code(code)
         assert "    print(a)" in out.splitlines()
+
+    def test_output_handled(self):
+        """Docstrings can have outputs in them, we need to strip them out"""
+        code = """
+        >>> print("bob")
+        bob
+        """
+        out = to_quarto_code(code)
+        assert '```{python}\nprint("bob")\n```' == out
 
     def test_titles(self):
         """Ensure titles are carried forward."""
