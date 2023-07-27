@@ -10,19 +10,81 @@ from collections import defaultdict
 from functools import cached_property, wraps
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import get_type_hints
+from typing import get_type_hints, Annotated, Literal
 
+import numpy as np
 import pandas as pd
+from pydantic import ConfigDict, Field
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import PatchType, SpoolType, timeable_types
-from dascore.core.attrs import PatchFileSummary
+from dascore.constants import (
+    PatchType,
+    SpoolType,
+    timeable_types,
+    VALID_DATA_TYPES,
+    VALID_DATA_CATEGORIES,
+    max_lens,
+    INDEXED_PATCH_ATTRS,
+)
+from dascore.core.attrs import str_validator
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.utils.docs import compose_docstring
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.misc import cached_method, iterate, suppress_warnings
+from dascore.utils.models import (
+    DascoreBaseModel,
+    CommaSeparatedStr,
+    DateTime64,
+    TimeDelta64,
+)
 from dascore.utils.pd import _model_list_to_df
+
+
+class PatchFileSummary(DascoreBaseModel):
+    """
+    The necessary attributes for indexing a fiber file.
+
+    A subset of [PatchAttributes](`dascore.core.attrs.PatchAttrs`).
+    """
+
+    model_config = ConfigDict(
+        title="Patch File Summary",
+        extra="ignore",
+    )
+
+    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
+    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
+    instrument_id: str = Field("", max_length=max_lens["instrument_id"])
+    cable_id: str = Field("", max_length=max_lens["cable_id"])
+    tag: str = Field("", max_length=max_lens["tag"])
+    station: str = Field("", max_length=max_lens["station"])
+    network: str = Field("", max_length=max_lens["network"])
+    dims: CommaSeparatedStr = Field("", max_length=max_lens["dims"])
+    time_min: DateTime64 = np.datetime64("NaT")
+    time_max: DateTime64 = np.datetime64("NaT")
+    time_step: TimeDelta64 = np.timedelta64("NaT")
+    # the attributes to index on
+    file_version: str = ""
+    file_format: str = ""
+    path: str | Path = ""
+
+    @classmethod
+    def get_index_columns(cls) -> tuple[str, ...]:
+        """Return the column names which should be used for indexing."""
+        return INDEXED_PATCH_ATTRS
+
+    @classmethod
+    def get_summary(cls, patch_attrs: dc.PatchAttrs | Self) -> Self:
+        """Get PatchFileSummary from patch attrs."""
+        if isinstance(patch_attrs, cls):
+            return patch_attrs
+        assert hasattr(patch_attrs, "flat_dump")
+        return cls(**patch_attrs.flat_dump())
+
+    def flat_dump(self):
+        """Alias for dump, for compatibility with PatchAttrs.flat_dump"""
+        return self.model_dump()
 
 
 class _FiberIOManager:
@@ -364,7 +426,8 @@ class FiberIO:
         """
         return not _is_wrapped_func(self.get_format, FiberIO.get_format)
 
-    def get_supported_io_table():
+    @classmethod
+    def get_supported_io_table(cls):
         """
         A function for making a table of all the supported formats and the methods.
         """
@@ -375,13 +438,14 @@ class FiberIO:
         # which has the form {format_name: {version_str: FiberIO}}
         for format_name, version_dict in FiberIO.manager._format_version.items():
             for version_name, fiberio in version_dict.items():
-                format_info = {}
-                format_info["name"] = format_name
-                format_info["version"] = version_name
-                format_info["scan"] = fiberio.implements_scan
-                format_info["get_format"] = fiberio.implements_get_format
-                format_info["read"] = fiberio.implements_read
-                format_info["write"] = fiberio.implements_write
+                format_info = {
+                    "name": format_name,
+                    "version": version_name,
+                    "scan": fiberio.implements_scan,
+                    "get_format": fiberio.implements_get_format,
+                    "read": fiberio.implements_read,
+                    "write": fiberio.implements_write,
+                }
                 out.append(format_info)
         return pd.DataFrame(out)
 
@@ -487,7 +551,7 @@ def scan_to_df(
         file_version=file_version,
     )
     df = _model_list_to_df(info)
-    return df[list(PatchFileSummary.get_index_columns())]
+    return df
 
 
 def _iterate_scan_inputs(patch_source):
@@ -550,9 +614,10 @@ def scan(
                     continue
             formatter = FiberIO.manager.get_fiberio(file_format, file_version)
             req_type = getattr(formatter.scan, "_required_type", None)
+            # this will get an open file handle to past to get_resource
             patch_thing = man.get_resource(req_type)
-            for attr in formatter.scan(patch_thing, _pre_cast=True):
-                out.append(attr)
+            for attr in formatter.scan(patch_thing, _pre_cast=True):  # noqa
+                out.append(PatchFileSummary.get_summary(attr))
     return out
 
 

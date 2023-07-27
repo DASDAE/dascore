@@ -16,7 +16,8 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
 from dascore.core.coordmanager import CoordManager, merge_coord_managers
-from dascore.core.attrs import PatchAttrs, PatchFileSummary
+from dascore.core.attrs import PatchAttrs
+from dascore.io.core import PatchFileSummary
 from dascore.exceptions import (
     CoordDataError,
     IncompatiblePatchError,
@@ -232,7 +233,7 @@ def patches_to_df(
     elif isinstance(patches, pd.DataFrame):
         return patches
     else:
-        df = pd.DataFrame([dict(x) for x in scan_patches(patches)])
+        df = pd.DataFrame([x for x in scan_patches(patches)])
         if df.empty:  # create empty df with appropriate columns
             cols = list(PatchAttrs().model_dump())
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
@@ -435,7 +436,7 @@ def _force_patch_merge(patch_dict_list):
 
 
 @compose_docstring(fields=format_dtypes(PatchFileSummary.__annotations__))
-def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[PatchFileSummary]:
+def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[dict[str, Any]]:
     """
     Scan a sequence of patches and return a list of summaries.
 
@@ -449,7 +450,7 @@ def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[PatchFileSumm
     """
     if isinstance(patches, dc.Patch):
         patches = [patches]  # make sure we have an iterable
-    out = [PatchFileSummary(**dict(pa.attrs)) for pa in patches]
+    out = [pa.attrs.flat_dump() for pa in patches]
     return out
 
 

@@ -2,6 +2,7 @@
 pytest configuration for dascore
 """
 from __future__ import annotations
+
 import os
 import shutil
 from pathlib import Path
@@ -17,6 +18,7 @@ import dascore.examples as ex
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import SpoolType
 from dascore.core import Patch
+from dascore.examples import get_example_patch
 from dascore.io.core import read
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
@@ -159,8 +161,6 @@ def prodml_v2_1_patch(prodml_v2_1_example_path) -> Patch:
 @register_func(PATCH_FIXTURES)
 def random_patch() -> Patch:
     """Init a random array."""
-    from dascore.examples import get_example_patch
-
     return get_example_patch("random_das")
 
 

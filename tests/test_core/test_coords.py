@@ -18,6 +18,7 @@ from dascore.core.coords import (
     CoordRange,
     get_coord,
     get_coord_from_attrs,
+    CoordSummary,
 )
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_quantity
@@ -296,6 +297,11 @@ class TestBasics:
         """Accessing a value out of the range of array should raise."""
         with pytest.raises(IndexError, match="exceeds coord length"):
             _ = evenly_sampled_coord[len(evenly_sampled_coord)]
+
+    def test_to_summary(self, coord):
+        """Ensure all coords can be converted to a summary."""
+        out = coord.to_summary()
+        assert isinstance(out, CoordSummary)
 
 
 class TestGetSliceTuple:

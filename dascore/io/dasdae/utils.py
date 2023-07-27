@@ -7,7 +7,8 @@ import numpy as np
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.attrs import PatchAttrs, PatchFileSummary
+from dascore.core.attrs import PatchAttrs
+from dascore.io.core import PatchFileSummary
 from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int

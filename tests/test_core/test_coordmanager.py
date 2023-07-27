@@ -2,6 +2,7 @@
 Tests for coordinate manager.
 """
 from __future__ import annotations
+
 from collections.abc import Sequence
 
 import numpy as np
@@ -24,7 +25,7 @@ from dascore.core.coords import (
     get_coord,
     get_coord_from_attrs,
 )
-from dascore.core.attrs import PatchAttrs
+
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
@@ -224,6 +225,11 @@ class TestBasicCoordManager:
         data = np.ones((cm.shape[0], cm.shape[1] - 1))
         with pytest.raises(CoordDataError, match=match):
             cm.validate_data(data)
+
+    def test_to_summary_dict(self, coord_manager):
+        """Ensure coord managers can be converted to summary dicts."""
+        sum_dict = coord_manager.to_summary_dict()
+        assert set(sum_dict) == set(coord_manager.coord_map)
 
 
 class TestCoordManagerInputs:
@@ -651,21 +657,21 @@ class TestUpdateToAttrs:
     def test_empty(self, basic_coord_manager):
         """Ensure attributes can be generated coords."""
         attrs = basic_coord_manager.update_to_attrs()
-        assert isinstance(attrs, PatchAttrs)
+        assert isinstance(attrs, dc.PatchAttrs)
         self.assert_dim_coords_consistent(basic_coord_manager, attrs)
 
     def test_unrelated(self, basic_coord_manager, random_patch):
         """Passing an unrelated attrs should wipe relevant fields."""
         old_attrs = random_patch.attrs
         attrs = basic_coord_manager.update_to_attrs(old_attrs)
-        assert isinstance(attrs, PatchAttrs)
-        self.assert_dim_coords_consistent(basic_coord_manager, attrs)
-        non_dim_keys = {
-            x
-            for x in dict(attrs)
-            if not (x.endswith("_max") or x.endswith("_min") or x.startswith("d_"))
-        }
-        for key in non_dim_keys:
+        assert isinstance(attrs, dc.PatchAttrs)
+        # all non-coord related fields should have remained the same.
+        fields = set(old_attrs.model_dump()) - {"coords", "dims"}
+
+        for key in fields:
+            # ensure the field transferred
+            assert hasattr(attrs, key)
+            # then make sure the values are the same
             v1, v2 = getattr(old_attrs, key), getattr(attrs, key)
             if isinstance(v1, Sequence):
                 assert set(v1) == set(v2)

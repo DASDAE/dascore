@@ -12,7 +12,7 @@ import dascore as dc
 import dascore.examples
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
-from dascore.core.attrs import PatchFileSummary
+from dascore.io.core import PatchFileSummary
 from dascore.exceptions import ParameterError
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func

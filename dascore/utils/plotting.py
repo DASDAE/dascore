@@ -8,13 +8,14 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from dascore.utils.misc import suppress_warnings
+from dascore.units import get_quantity_str
 
 
 def _get_dim_label(patch, dim):
     """Create a label for the given dimension, including units if defined."""
     attrs = patch.attrs
     maybe_units = attrs.get(f"{dim}_units")
-    unit_str = f"({maybe_units})" if maybe_units else ""
+    unit_str = f"({get_quantity_str(maybe_units)})" if maybe_units else ""
     return str(dim) + unit_str
 
 

@@ -7,7 +7,7 @@ from tables import NoSuchNodeError
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.coords import get_coord
-from dascore.core.attrs import PatchFileSummary
+from dascore.io.core import PatchFileSummary
 from dascore.utils.time import to_datetime64
 
 # --- Getting format/version

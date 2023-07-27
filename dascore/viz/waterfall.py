@@ -11,6 +11,7 @@ import numpy as np
 
 from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
+from dascore.units import get_quantity_str
 from dascore.utils.plotting import (
     _format_time_axis,
     _get_ax,
@@ -98,7 +99,7 @@ def waterfall(
     # add color bar with title
     if cmap is not None:
         cb = ax.get_figure().colorbar(im)
-        data_units = patch.attrs.data_units or ""
+        data_units = get_quantity_str(patch.attrs.data_units) or ""
         cb.ax.set_title(data_units)
     ax.invert_yaxis()  # invert y axis so origin is at top
     if show:

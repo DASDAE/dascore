@@ -1,13 +1,12 @@
 """Pydantic schemas used by DASCore."""
 from __future__ import annotations
 
+import warnings
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Any
 
-import numpy as np
-import pandas as pd
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 from typing_extensions import Self
 
 import dascore as dc
@@ -15,18 +14,16 @@ from dascore.constants import (
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
     basic_summary_attrs,
-    INDEXED_PATCH_ATTRS,
     max_lens,
 )
 from dascore.core.coords import BaseCoord, CoordRange, CoordSummary
+from dascore.core.coordmanager import CoordManager
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import to_str
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.models import (
     DascoreBaseModel,
-    DateTime64,
     PlainValidator,
-    TimeDelta64,
     UnitQuantity,
     CommaSeparatedStr,
     frozen_dict_validator,
@@ -37,6 +34,71 @@ from dascore.utils.models import (
 # from dascore.utils.mapping import FrozenDict
 
 str_validator = PlainValidator(to_str)
+_coord_summary_suffixes = set(CoordSummary.model_fields)
+
+
+def _get_coords_dict(data_dict, fields):
+    """
+    Add coords dict to data dict, pop out any coordinate attributes.
+
+    For example, if time_min, time_step are in data_dict, these will be
+    grouped into the coords sub dict under "time".
+    """
+
+    def _get_coord_dict(data_dict):
+        """Get a dict for stuffing outputs in."""
+        # first handle coords.
+        coords = data_dict.get("coords", {})
+        if isinstance(coords, CoordManager):
+            data_dict["dims"] = coords.dims
+            coords = coords.to_summary_dict()
+        coords = dict(coords)
+        return coords
+
+    def _ensure_all_coord_summaries(coords):
+        """Enssure each coordinate entry is a CoordSummary."""
+        # then iterate and convert each coordinate
+        for i, v in coords.items():
+            if isinstance(v, BaseCoord):
+                coords[i] = v.to_summary()
+            # converts normal dicts to coord summary
+            elif not isinstance(v, CoordSummary):
+                coords[i] = CoordSummary(**v)
+        return coords
+
+    def _get_coords_from_attrs(data_dict, fields, coords):
+        """Use fields in attrs to get coord dict."""
+        # finally, pull out any attributes on the top level
+        extra_fields = set(data_dict) - set(fields)
+        new_coords = defaultdict(dict)
+        for extra_field in extra_fields:
+            if len(split := extra_field.split("_")) != 2:
+                continue
+            first, second = split
+            # handle d_{coord_name}, it should now be {coord_name}_step
+            if first == "d":
+                first, second = second, "step"
+                msg = f"{extra_field} is deprecated, use {first}_{second}"
+                warnings.warn(msg, DeprecationWarning, stacklevel=2)
+            # if coords were passed we don't want attrs to overwrite them.
+            if second in _coord_summary_suffixes:
+                # we need to pop out the key either way, but only use
+                # it if we haven't already defined the coord summary
+                val = data_dict.pop(extra_field)
+                if first not in coords:
+                    new_coords[first][second] = val
+        # now convert new values to Summaries
+        for i, v in new_coords.items():
+            new_coords[i] = CoordSummary(**v)
+        return new_coords
+
+    coords = _get_coord_dict(data_dict)
+    coords_with_summaries = _ensure_all_coord_summaries(coords)
+    new_coords = _get_coords_from_attrs(data_dict, fields, coords_with_summaries)
+    # update coords and return
+    coords.update(new_coords)
+    data_dict["coords"] = coords
+    return data_dict
 
 
 @compose_docstring(basic_params=basic_summary_attrs)
@@ -82,15 +144,15 @@ class PatchAttrs(DascoreBaseModel):
         frozen_dict_serializer,
     ] = {}
 
-    time_min: DateTime64 = np.datetime64("NaT")
-    time_max: DateTime64 = np.datetime64("NaT")
-    d_time: TimeDelta64 = np.timedelta64("NaT")
-    time_units: UnitQuantity | None = None
-
-    distance_min: float = np.NaN
-    distance_max: float = np.NaN
-    d_distance: float = np.NaN
-    distance_units: UnitQuantity | None = None
+    @model_validator(mode="before")  # noqa
+    @classmethod
+    def parse_coord_attributes(cls, data: Any) -> Any:
+        """
+        Parse the coordinate attributes into coord dict.
+        """
+        if isinstance(data, dict):
+            data = _get_coords_dict(data, cls.model_fields)
+        return data
 
     def __getitem__(self, item):
         return getattr(self, item)
@@ -100,6 +162,24 @@ class PatchAttrs(DascoreBaseModel):
 
     def __len__(self):
         return len(self.model_dump())
+
+    def __getattr__(self, item):
+        """
+        This enables dynamic attributes such as time_min, time_max, etc.
+        """
+        split = item.split("_")
+        # this only works on names like time_max, distance_step, etc.
+        if not len(split) == 2:
+            return super().__getattr__(item)
+        first, second = split
+        if first == "d":
+            first, second = second, "step"
+            msg = f"{item} is depreciated, use {first}_{second} instead."
+            warnings.warn(msg, DeprecationWarning, stacklevel=2)
+        if first not in self.coords:
+            return super().__getattr__(item)
+        coord_sum = self.coords[first]
+        return getattr(coord_sum, second)
 
     def get(self, item, default=None):
         """dict-like get method."""
@@ -152,12 +232,8 @@ class PatchAttrs(DascoreBaseModel):
         out = {} if attr_map is None else dict(attr_map)
         if coord_manager is None:
             return cls(**out)
-        for name in coord_manager.dims:
-            coord = coord_manager.coord_map[name]
-            out[f"{name}_min"], out[f"{name}_max"] = coord.min(), coord.max()
-            out[f"d_{name}"] = np.NaN if pd.isnull(coord.step) else coord.step
-            out[f"{name}_units"] = coord.units
-        out["dims"] = coord_manager.dims
+        out["dims"] = ",".join(coord_manager.dims)
+        out["coords"] = coord_manager.to_summary_dict()
         return cls(**out)
 
     @property
@@ -200,22 +276,12 @@ class PatchAttrs(DascoreBaseModel):
         out = {i: v for i, v in contents.items() if not i.startswith("_")}
         return self.__class__(**out)
 
-
-class PatchFileSummary(PatchAttrs):
-    """
-    The expected minimum attributes for a Patch/spool file.
-    """
-
-    model_config = ConfigDict(
-        title="Patch File Summary",
-        extra="ignore",
-    )
-    # the attributes to index on
-    file_version: str = ""
-    file_format: str = ""
-    path: str | Path = ""
-
-    @classmethod
-    def get_index_columns(cls) -> tuple[str, ...]:
-        """Return the column names which should be used for indexing."""
-        return INDEXED_PATCH_ATTRS
+    def flat_dump(self) -> dict:
+        """
+        Flatten the coordinates and dump to dict
+        """
+        out = self.model_dump()
+        for coord_name, coord in out.pop("coords").items():
+            for name, val in coord.items():
+                out[f"{coord_name}_{name}"] = val
+        return out

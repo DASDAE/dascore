@@ -6,11 +6,11 @@ from __future__ import annotations
 import abc
 from functools import cache
 from operator import gt, lt
-from typing import Any
+from typing import Any, Annotated, TypeVar
 
 import numpy as np
 import pandas as pd
-from pydantic import model_validator
+from pydantic import model_validator, PlainValidator, field_serializer, model_serializer
 from rich.text import Text
 from typing_extensions import Self
 
@@ -28,8 +28,32 @@ from dascore.units import (
 )
 from dascore.utils.display import get_nice_text
 from dascore.utils.misc import all_diffs_close_enough, cached_method, iterate
-from dascore.utils.models import ArrayLike, DascoreBaseModel, DTypeLike, UnitQuantity
+from dascore.utils.models import (
+    ArrayLike,
+    DascoreBaseModel,
+    DTypeLike,
+    UnitQuantity,
+    DateTime64,
+    TimeDelta64,
+)
 from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like
+
+
+# Valid values for min/max
+min_max_type = TypeVar("min_max_type", float, int, DateTime64, TimeDelta64, None)
+
+step_type = TypeVar("step_type", float, int, TimeDelta64, None)
+
+
+def _maybe_validate(self, val, _info):
+    """maybe Validate based on input type."""
+    return _get_compatible_values(val, self.dtype)
+
+
+def _maybe_str(self, val, _info):
+    """Maybe convert value to string if time-like for serialization."""
+    if dtype_time_like(self.dtype):
+        return str(val)
 
 
 class CoordSummary(DascoreBaseModel):
@@ -40,11 +64,25 @@ class CoordSummary(DascoreBaseModel):
     coordinates.
     """
 
-    min: float | np.datetime64 | np.timedelta64 | int | None = None
-    max: float | np.datetime64 | np.timedelta64 | int | None = None
-    step: float | np.datetime64 | np.timedelta64 | int | None = None
+    min: min_max_type = None
+    max: min_max_type = None
+    step: step_type = None
+    shape: tuple[int, ...] | None = None
     units: UnitQuantity | None = None
-    dtype: str = ""
+    dims: tuple[str, ...] = ()
+    dtype: Annotated[str, PlainValidator(lambda x: str(x))] = ""
+
+    field_serializer("min", when_used="json")(_maybe_str)
+    field_serializer("max", when_used="json")(_maybe_str)
+    field_serializer("step", when_used="json")(_maybe_str)
+
+    @model_serializer(when_used="json")
+    def ser_model(self) -> dict[str, str]:
+        out = self.model_dump()
+        return {
+            i: str(v) if is_timedelta64(v) or is_datetime64(v) else v
+            for i, v in out.items()
+        }
 
 
 @cache
@@ -86,6 +124,15 @@ def _get_nullish_for_type(dtype):
     # a bit of a problem for ints, which have no null rep., but upcasting
     # to float will probably cause less damage then using None
     return np.NaN
+
+
+def _get_compatible_values(val, dtype):
+    """Get values compatible with dtype"""
+    validators = _get_coord_filter_validators(dtype)
+    for func in validators:
+        if val is not None:
+            val = func(val)
+    return val
 
 
 class BaseCoord(DascoreBaseModel, abc.ABC):
@@ -280,11 +327,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 value = dc.to_timedelta64(value)
             value = self._get_relative_values(value)
         # apply validators. These can, eg, coerce to correct dtype.
-        validators = _get_coord_filter_validators(self.dtype)
-        out = value
-        for func in validators:
-            if out is not None:
-                out = func(out)
+        out = _get_compatible_values(value, self.dtype)
         return out
 
     def _slice_degenerate(self, sliz):
@@ -403,6 +446,18 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if self.units:
             out[f"{name}_units"] = self.units
         return out
+
+    def to_summary(self, dims=()) -> CoordSummary:
+        """Get the summary info about the coord."""
+        return CoordSummary(
+            min=self.min(),
+            max=self.max(),
+            step=self.step,
+            shape=self.shape,
+            dtype=self.dtype,
+            units=self.units,
+            dims=dims,
+        )
 
 
 class CoordRange(BaseCoord):

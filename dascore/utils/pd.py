@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
+import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -378,9 +379,9 @@ def list_ser_to_str(ser: pd.Series) -> pd.Series:
     return pd.Series(values, index=ser.index, dtype=object)
 
 
-def _model_list_to_df(mod_list: Sequence[BaseModel]) -> pd.DataFrame:
+def _model_list_to_df(mod_list: Sequence[dc.PatchAttrs]) -> pd.DataFrame:
     """Get a dataframe from a sequence of pydantic models."""
-    df = pd.DataFrame([dict(x) for x in mod_list])
+    df = pd.DataFrame([x.flat_dump() for x in mod_list])
     if "dims" in df.columns:
         df["dims"] = list_ser_to_str(df["dims"])
     return df

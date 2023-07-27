@@ -41,11 +41,11 @@ def _random_patch(
     rand = np.random.RandomState(13)
     array = rand.random(shape)
     # create attrs
-    t1 = np.atleast_1d(np.datetime64(starttime))
+    t1 = np.atleast_1d(np.datetime64(starttime))[0]
     d1 = np.atleast_1d(start_distance)
     attrs = dict(
-        d_distance=d_distance,
-        d_time=to_timedelta64(d_time),
+        distance_step=d_distance,
+        time_step=to_timedelta64(d_time),
         category="DAS",
         time_min=t1,
         network=network,
@@ -58,8 +58,8 @@ def _random_patch(
     time_array = np.arange(array.shape[1]) if time_array is None else time_array
     dist_array = np.arange(array.shape[0]) if dist_array is None else dist_array
     coords = dict(
-        distance=d1 + dist_array * attrs["d_distance"],
-        time=t1 + time_array * attrs["d_time"],
+        distance=d1 + dist_array * attrs["distance_step"],
+        time=t1 + time_array * attrs["time_step"],
     )
     # assemble and output.
     out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))

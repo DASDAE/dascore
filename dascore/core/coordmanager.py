@@ -52,9 +52,9 @@ from pydantic import field_validator, model_validator
 from rich.text import Text
 from typing_extensions import Self
 
+import dascore as dc
 from dascore.constants import dascore_styles
-from dascore.core.coords import BaseCoord, get_coord, get_coord_from_attrs
-from dascore.core.attrs import PatchAttrs
+from dascore.core.coords import BaseCoord, get_coord, get_coord_from_attrs, CoordSummary
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
@@ -642,36 +642,28 @@ class CoordManager(DascoreBaseModel):
         """Update coordinates based on new attributes."""
         # a bit wasteful, but we need the coercion from init'ing a PatchAttrs.
         # this enables, for example, conversion of specified fields to datetime
-        validated_attrs = PatchAttrs(**dict(attrs))
-        attrs = {i: v for i, v in validated_attrs.items() if i in dict(attrs)}
+        v_attrs = dc.PatchAttrs(**dict(attrs))
         out = dict(self.coord_map)
-        for name, coord in self.coord_map.items():
-            start, stop = attrs.get(f"{name}_min"), attrs.get(f"{name}_max")
-            step = attrs.get(f"d_{name}")
+        rename = {"min": "start", "max": "stop"}
+        for name in set(v_attrs.coords) & set(self.coord_map):
+            coord = self.coord_map[name]
+            # convert values to dict to determine which should be updated.
+            maybe_update = v_attrs.coords[name].model_dump(exclude_defaults=True)
+            # need to rename min/max to start/step
+            attr_dict = {rename.get(i, i): v for i, v in maybe_update.items()}
             # update units, use type so None can be set.
-            if (data_units := attrs.get(f"{name}_units", type)) is not type:
+            if (data_units := attr_dict.pop("units", type)) is not type:
                 coord = coord.convert_units(data_units)
                 out[name] = coord
-            # quick path for not updating.
-            all_none = all([x is None for x in (start, stop, step)])
-            limits_equal = coord.max() == stop and coord.min() == start
-            if all_none or limits_equal:
-                continue
-            out[name] = coord.update_limits(start, stop, step)
+            out[name] = coord.update_limits(**attr_dict)
         return self.new(coord_map=out)
 
-    def update_to_attrs(self, attrs: PatchAttrs = None) -> PatchAttrs:
+    def update_to_attrs(self, attrs: dc.PatchAttrs = None) -> dc.PatchAttrs:
         """Update attrs from information in coordinates."""
-        attr_dict = {} if attrs is None else dict(attrs)
+        attr_dict = {} if attrs is None else attrs.model_dump()
         attr_dict["dims"] = self.dims
-        for dim in self.dims:
-            coord = self.coord_map[dim]
-            attr_dict[f"{dim}_min"] = coord.min()
-            attr_dict[f"{dim}_max"] = coord.max()
-            # passing None messes up the validation for d_{dim}
-            if coord.step is not None:
-                attr_dict[f"d_{dim}"] = coord.step
-        return PatchAttrs(**attr_dict)
+        attr_dict["coords"] = self.to_summary_dict()
+        return dc.PatchAttrs(**attr_dict)
 
     def transpose(self, *dims: str | type(Ellipsis)) -> Self:
         """Transpose the coordinates."""
@@ -836,11 +828,21 @@ class CoordManager(DascoreBaseModel):
         out[ind] = value
         return tuple(out)
 
+    def to_summary_dict(self) -> dict[str, CoordSummary]:
+        """
+        Convert the contents of the coordinate manager to a summary dict.
+        """
+        dim_map = self.dim_map
+        out = {}
+        for name, coord in self.coord_map.items():
+            out[name] = coord.to_summary(dims=dim_map[name])
+        return out
+
 
 def get_coord_manager(
     coords: Mapping[str, BaseCoord | np.ndarray] | None = None,
     dims: tuple[str, ...] | None = None,
-    attrs: PatchAttrs | None = None,
+    attrs: dc.PatchAttrs | None = None,
 ) -> CoordManager:
     """
     Create a coordinate manager.

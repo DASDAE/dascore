@@ -1,15 +1,21 @@
-"""Tests for schema."""
+"""Tests for Patch attrs modules."""
 from __future__ import annotations
+
+import numpy as np
 import pytest
 from pydantic import ValidationError
 
 from dascore.core.attrs import PatchAttrs
+from dascore.core.coords import get_coord, CoordSummary
+from dascore.utils.misc import register_func
+
+MORE_COORDS_ATTRS = []
 
 
 @pytest.fixture(scope="class")
 def random_summary(random_patch) -> PatchAttrs:
     """Return the summary of the random patch."""
-    return PatchAttrs.model_validate(dict(random_patch.attrs))
+    return PatchAttrs.model_validate(random_patch.attrs.model_dump())
 
 
 @pytest.fixture(scope="class")
@@ -18,7 +24,138 @@ def random_attrs(random_patch) -> PatchAttrs:
     return random_patch.attrs
 
 
-class TestSummarySchema:
+@pytest.fixture(scope="session")
+@register_func(MORE_COORDS_ATTRS)
+def attrs_coords_1() -> PatchAttrs:
+    """Add non-standard coords to attrs."""
+    attrs = {"depth_min": 10.0, "depth_max": 12.0, "another_name": "FooBar"}
+    return PatchAttrs(**attrs)
+
+
+@pytest.fixture(scope="session")
+@register_func(MORE_COORDS_ATTRS)
+def attrs_coords_2() -> PatchAttrs:
+    """Add non-standard coords to attrs."""
+    coords = {"depth": {"min": 10.0, "max": 12.0}}
+    attrs = {"coords": coords, "another_name": "FooBar"}
+    return PatchAttrs(**attrs)
+
+
+@pytest.fixture(scope="session", params=MORE_COORDS_ATTRS)
+def more_coords_attrs(request) -> PatchAttrs:
+    """
+    Meta fixture for attributes with extra coords.
+    These are initiated in different ways but should be identical.
+    """
+    return request.getfixturevalue(request.param)
+
+
+class TestPatchAttrs:
+    """Basic tests on patch attributes."""
+
+    def test_get(self, random_attrs):
+        """Ensure get returns existing values."""
+        out = random_attrs.get("time_min")
+        assert out == random_attrs.time_min
+
+    def test_get_existing_key(self, random_attrs):
+        """Ensure get returns existing values."""
+        out = random_attrs.get("time_min")
+        assert out == random_attrs.time_min
+
+    def test_get_no_key(self, random_attrs):
+        """Ensure missing keys return default value."""
+        out = random_attrs.get("not_a_key", 1)
+        assert out == 1
+
+    def test_immutable(self, random_attrs):
+        """Ensure random_attrs is faux-immutable."""
+        with pytest.raises(ValidationError, match="Instance is frozen"):
+            random_attrs.bob = 1
+        with pytest.raises(ValidationError, match="Instance is frozen"):
+            random_attrs["bob"] = 1
+
+    def test_coords_with_coord_keys(self):
+        """Ensure coords with base keys work."""
+        coords = {"distance": get_coord(values=np.arange(100))}
+        out = PatchAttrs(**{"coords": coords})
+        assert out.coords
+        assert "distance" in out.coords
+        for name, val in out.coords.items():
+            assert isinstance(val, CoordSummary)
+
+    def test_coords_with_coord_manager(self, random_patch):
+        """Ensure coords with a coord manager works."""
+        cm = random_patch.coords
+        out = PatchAttrs(**{"coords": cm})
+        assert out.coords
+        assert set(cm.coord_map) == set(out.coords)
+        assert out.dims == ",".join(cm.dims)
+
+    def test_coords_are_coord_summary(self, more_coords_attrs):
+        """All the coordinates should be Coordinate Summarys not dict."""
+        for _, coord_sum in more_coords_attrs.coords.items():
+            assert isinstance(coord_sum, CoordSummary)
+
+    def test_access_min_max_step_etc(self, more_coords_attrs):
+        """Ensure min, max, step etc can be accessed for new coordinate."""
+        expected_attrs = ["_min", "_max", "_step", "_units", "_dtype"]
+        for eat in expected_attrs:
+            attr_name = "depth" + eat
+            assert hasattr(more_coords_attrs, attr_name)
+            val = getattr(more_coords_attrs, attr_name)
+            if eat == "min":
+                assert val == 10.0
+            if eat == "max":
+                assert val == 12.0
+
+    def test_deprecated_d_set(self):
+        """Ensure setting attributes d_whatever is deprecated."""
+        with pytest.warns(DeprecationWarning):
+            PatchAttrs(d_time=10)
+
+    def test_deprecated_d_get(self, random_attrs):
+        """Access attr.d_{whatever} is deprecated."""
+        with pytest.warns(DeprecationWarning):
+            _ = random_attrs.d_time
+
+    def test_access_coords(self, more_coords_attrs):
+        """Ensure coordinates can be accessed as well."""
+        assert "depth" in more_coords_attrs.coords
+        assert more_coords_attrs.coords["depth"].min == more_coords_attrs.depth_min
+
+    def test_extra_attrs_not_in_dump(self, more_coords_attrs):
+        """When using the extra attrs, they shouldn't show up in the dump."""
+        dump = more_coords_attrs.model_dump()
+        not_expected = {"depth_min", "depth_max", "depth_step"}
+        assert not_expected.isdisjoint(set(dump))
+
+    def test_extra_attrs_not_in_dump_random_attrs(self, random_attrs):
+        """When using the extra attrs, they shouldn't show up in the dump."""
+        dump = random_attrs.model_dump()
+        not_expected = {"time_min", "time_max", "time_step"}
+        assert not_expected.isdisjoint(set(dump))
+
+    def test_supports_extra_attrs(self):
+        """The attr dict should allow extra attributes."""
+        out = PatchAttrs(bob="doesnt", bill_min=12, bob_max="2012-01-12")
+        assert out.bob == "doesnt"
+        assert out.bill_min == 12
+
+    def test_flat_dump(self, more_coords_attrs):
+        """Ensure flat dump flattens out the coords."""
+        out = more_coords_attrs.flat_dump()
+        expected = {
+            "depth_min",
+            "depth_max",
+            "depth_step",
+            "depth_units",
+            "depth_dtype",
+        }
+        assert set(out).issuperset(expected)
+
+
+class TestSummaryAttrs:
     """Tests for summarizing a schema."""
 
     def test_attrs_reconstructed(self, random_patch, random_summary):
@@ -54,32 +191,6 @@ class TestSummarySchema:
         new_dict["data_units"] = "m/s"
         out = PatchAttrs.from_dict(new_dict)
         assert isinstance(out, PatchAttrs)
-
-
-class TestSchemaIsDictLike:
-    """Tests to insure schema behaves like a dict."""
-
-    def test_get(self, random_attrs):
-        """Ensure get returns existing values."""
-        out = random_attrs.get("time_min")
-        assert out == random_attrs.time_min
-
-    def test_get_existing_key(self, random_attrs):
-        """Ensure get returns existing values."""
-        out = random_attrs.get("time_min")
-        assert out == random_attrs.time_min
-
-    def test_get_no_key(self, random_attrs):
-        """Ensure missing keys return default value."""
-        out = random_attrs.get("not_a_key", 1)
-        assert out == 1
-
-    def test_immutable(self, random_attrs):
-        """Ensure random_attrs is faux-immutable."""
-        with pytest.raises(ValidationError, match="Instance is frozen"):
-            random_attrs.bob = 1
-        with pytest.raises(ValidationError, match="Instance is frozen"):
-            random_attrs["bob"] = 1
 
 
 class TestRenameDimension:
