@@ -49,7 +49,7 @@ dependencies = [
      "pydantic>2.0",
      "rich",
      "scipy>=1.10.0",
-     "tables",
+     "tables>=3.7",
      "typing_extensions",
      "pint",
 ]
