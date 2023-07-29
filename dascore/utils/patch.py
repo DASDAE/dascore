@@ -14,20 +14,17 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
-from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import CoordManager, merge_coord_managers
+from dascore.constants import PatchType, SpoolType
+from dascore.core.attrs import combine_patch_attrs
+from dascore.core.coordmanager import merge_coord_managers
 from dascore.exceptions import (
     CoordDataError,
-    IncompatiblePatchError,
     PatchAttributeError,
     PatchDimError,
 )
 from dascore.units import get_quantity
-from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
-from dascore.utils.models import merge_models
-from dascore.utils.time import to_float, to_timedelta64
+from dascore.utils.time import to_float
 
 attr_type = Union[dict[str, Any], str, Sequence[str], None]
 
@@ -205,7 +202,6 @@ def copy_attrs(attrs) -> dict:
     return out
 
 
-@compose_docstring(fields=PatchAttrs.__annotations__)
 def patches_to_df(
     patches: Sequence[PatchType] | SpoolType | pd.DataFrame,
 ) -> pd.DataFrame:
@@ -219,11 +215,9 @@ def patches_to_df(
 
     Returns
     -------
-    A dataframe with the following fields:
-        {fields}
-    plus a field called 'patch' which contains a reference to each patch.
+    A dataframe with the attrs of each patch converted to a columns
+    plus a field called 'patch' which contains a reference to the patches.
     """
-
     if isinstance(patches, dc.BaseSpool):
         df = patches._df
     # Handle spool case
@@ -234,7 +228,7 @@ def patches_to_df(
     else:
         df = pd.DataFrame([x.flat_dump() for x in scan_patches(patches)])
         if df.empty:  # create empty df with appropriate columns
-            cols = list(PatchAttrs().model_dump())
+            cols = list(dc.PatchAttrs().model_dump())
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
         else:  # else populate with patches and concat history
             history = df["history"].apply(lambda x: ",".join(x))
@@ -277,96 +271,7 @@ def merge_patches(
         "dimension."
     )
     warnings.warn(msg, DeprecationWarning, stacklevel=2)
-    return _merge_patches(patches, dim, check_history, tolerance)
-
-
-def _merge_patches(
-    patches: Sequence[PatchType] | pd.DataFrame | SpoolType,
-    dim: str = "time",
-    check_history: bool = True,
-    tolerance: float = 1.5,
-) -> Sequence[PatchType]:
-    """
-    Merge all compatible patches in spool or patch list together.
-
-    Parameters
-    ----------
-    patches
-        A sequence of patches to merge (if compatible)
-    dim
-        The dimension along which to merge
-    check_history
-        If True, only merge patches with common history. This will, for
-        example, prevent merging filtered and unfiltered data together.
-    tolerance
-        The upper limit of a gap to tolerate in terms of the sampling
-        along the desired dimension. E.G., the default value means any patches
-        with gaps <= 1.5 * dt will be merged.
-    """
-
-    def _get_sorted_df_sort_group_names(patches):
-        """Return the sorted dataframe."""
-        group_names = list(PATCH_MERGE_ATTRS) + [d_name]
-        sort_names = group_names + [min_name, max_name]
-        if check_history:
-            sort_names += ["history"]
-            patches = patches.assign(history=lambda x: x["history"].apply(str))
-        return patches.sort_values(sort_names), sort_names, group_names
-
-    def _merge_trimmed_patches(trimmed_patches):
-        """Merge trimmed patches together."""
-        axis = trimmed_patches[0].dims.index(dim)
-        datas = [x.data for x in trimmed_patches]
-        coords = [x.coords for x in trimmed_patches]
-        attrs = [x.attrs for x in trimmed_patches]
-        new_array = np.concatenate(datas, axis=axis)
-        new_coord = merge_coord_managers(coords, dim=dim, snap_tolerance=tolerance)
-        new_attrs = merge_models(attrs, dim)
-        return dc.Patch(data=new_array, coords=new_coord, attrs=new_attrs)
-
-    def _merge_compatible_patches(patch_df, dim):
-        """perform merging after patch compatibility has been confirmed."""
-        has_overlap = patch_df["_dist_to_previous"] <= to_timedelta64(0)
-        dist = patch_df["_dist_to_previous"] - df[f"{dim}_step"]
-        overlap_start = patch_df[min_name] - dist
-        patches = list(patch_df["patch"])
-        # this handles removing overlap in patches.
-        trimmed_patches = [
-            _trim_or_fill(x, start) if needs_action else x
-            for x, start, needs_action in zip(patches, overlap_start, has_overlap)
-        ]
-        # some patches can be degenerate; just remove those
-        valid_patches = [x for x in trimmed_patches if x.size > 0]
-        return _merge_trimmed_patches(valid_patches)
-
-    def _trim_or_fill(patch, new_start):
-        """Trim or fill data array."""
-        out = patch.select(**{dim: (new_start, ...)})
-        return out
-
-    # get a dataframe
-    if not isinstance(patches, pd.DataFrame):
-        patches = patches_to_df(patches)
-    assert dim in {"time", "distance"}, "merge must be on time/distance for now"
-    out = []  # list of merged patches
-    min_name, max_name, d_name = f"{dim}_min", f"{dim}_max", f"{dim}_step"
-    # get sorted dataframe and group/sort column names
-    df, sorted_names, group_names = _get_sorted_df_sort_group_names(patches)
-    # get a boolean if each row is compatible with previous for merging
-    gn = ~(df[group_names] == df.shift()[group_names]).all(axis=1)
-    group_numbers = gn.astype(bool).cumsum()
-    for _, sub_df in df.groupby(group_numbers):
-        # get boolean indicating if patch overlaps with previous
-        start, end = sub_df[min_name], sub_df[max_name]
-        merge_dist = sub_df[d_name] * tolerance
-        # get the dist between each patch
-        dist_to_previous = start - end.shift()
-        no_merge = ~(dist_to_previous <= merge_dist)
-        sub_df["_dist_to_previous"] = dist_to_previous
-        # determine if each patch should be merged with the previous one
-        for _, merge_patch_df in sub_df.groupby(no_merge.astype(np.int64).cumsum()):
-            out.append(_merge_compatible_patches(merge_patch_df, dim))
-    return out
+    return dc.spool(patches).chunk(**{dim: dim}, tolerance=tolerance)
 
 
 def _force_patch_merge(patch_dict_list):
@@ -426,7 +331,7 @@ def _force_patch_merge(patch_dict_list):
     new_data = np.concatenate(datas, axis=axis)
     new_coord = _get_new_coord(df, merge_dim, coords)
     coord = new_coord.coord_map[merge_dim] if merge_dim in dims else None
-    new_attrs = merge_models(attrs, merge_dim, coord=coord)
+    new_attrs = combine_patch_attrs(attrs, merge_dim, coord=coord)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
@@ -530,100 +435,6 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
         )
         raise CoordDataError(msg)
     return 1.0 / d_dim
-
-
-def merge_compatible_coords_attrs(
-    patch1: PatchType, patch2: PatchType, attrs_to_ignore=("history",)
-) -> tuple[CoordManager, PatchAttrs]:
-    """
-    Merge the coordinates and attributes of patches or raise if incompatible.
-
-    The rules for compatibility are:
-        - All attrs must be equal other than history.
-        - Patches must share the same dimensions, in the same order
-        - All dimensional coordinates must be strictly equal
-        - If patches share a non-dimensional coordinate they must be equal.
-    Any coordinates or attributes contained by a single patch will be included
-    in the output.
-
-    Parameters
-    ----------
-    patch1
-        The first patch
-    patch2
-        The second patch
-    attr_ignore
-        A sequence of attributes to not consider in equality. Only these
-        attributes from the first patch are kept in outputs.
-    """
-
-    def _check_dims(dims1, dims2):
-        if dims1 == dims2:
-            return
-        msg = (
-            "Patches are not compatible because their dimensions are not equal."
-            f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
-        )
-        raise IncompatiblePatchError(msg)
-
-    def _check_coords(cm1, cm2):
-        cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)
-        shared = cset1 & cset2
-        not_equal_coords = []
-        for coord in shared:
-            coord1 = cm1.coord_map[coord]
-            coord2 = cm2.coord_map[coord]
-            if coord1 == coord2:
-                continue
-            not_equal_coords.append(coord)
-        if not_equal_coords:
-            msg = (
-                f"Patches are not compatible. The following shared coordinates "
-                f"are not equal {coord}"
-            )
-            raise IncompatiblePatchError(msg)
-
-    def _merge_coords(coords1, coords2):
-        out = {}
-        coord_names = set(coords1.coord_map) & set(coords2.coord_map)
-        # fast patch to update identical coordinates
-        if len(coord_names) == len(coords1.coord_map):
-            return coords1
-        # otherwise just squish coords from both managers together.
-        for name in coord_names:
-            coord = coords1 if name in coords1.coord_map else coords2
-            dims = coord.dim_map[name]
-            out[name] = (dims, coord.coord_map[name])
-        return dc.core.coordmanager.get_coord_manager(out, dims=coords1.dims)
-
-    def _merge_models(attrs1, attrs2):
-        """Ensure models are equal in the right ways."""
-        no_comp_keys = set(attrs_to_ignore)
-        if attrs1 == attrs2:
-            return attrs1
-        dict1, dict2 = dict(attrs1), dict(attrs2)
-        common_keys = set(dict1) & set(dict2)
-        ne_attrs = []
-        for key in common_keys:
-            if key in no_comp_keys:
-                continue
-            if dict2[key] != dict1[key]:
-                ne_attrs.append(key)
-        if ne_attrs:
-            msg = (
-                "Patches are not compatible because the following attributes "
-                f"are not equal. {ne_attrs}"
-            )
-            raise IncompatiblePatchError(msg)
-        return merge_models([attrs1, attrs2], conflicts="keep_first")
-
-    _check_dims(patch1.dims, patch2.dims)
-    coord1, coord2 = patch1.coords, patch2.coords
-    attrs1, attrs2 = patch1.attrs, patch2.attrs
-    _check_coords(coord1, coord2)
-    coord_out = _merge_coords(coord1, coord2)
-    attrs = _merge_models(attrs1, attrs2)
-    return coord_out, attrs
 
 
 def _get_data_units_from_dims(patch, dims, operator):

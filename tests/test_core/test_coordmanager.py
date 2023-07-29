@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from rich.text import Text
 
 import dascore as dc
+import dascore.proc.coords
 from dascore import to_datetime64
 from dascore.core.coordmanager import (
     CoordManager,
@@ -913,14 +914,11 @@ class TestMergeCoordManagers:
 
     def test_unshared_coord_dropped(self, basic_coord_manager):
         """
-        When one coord manager has coords the other doesn't they should
+        When one coord manager has coords and the other doesn't they should
         be dropped.
         """
         cm1 = basic_coord_manager
-        time = cm1.coord_map["time"]
-        cm2 = self._get_offset_coord_manager(cm1, time=-time.step * 1.1).update_coords(
-            time2=("time", cm1["time"])
-        )
+        cm2 = cm1.update_coords(time2=("time", cm1["time"]))
         out_no_range = merge_coord_managers([cm1, cm2], "time")
         assert "time2" not in out_no_range.coord_map
         out_with_range = merge_coord_managers([cm1, cm2], "time")

@@ -8,43 +8,42 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import PatchType
-from dascore.core.coordmanager import BaseCoord, CoordManager, get_coord_manager
-from dascore.core.attrs import PatchAttrs
-from dascore.exceptions import CoordError, UnitError
+from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
+from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
-from dascore.utils.misc import get_parent_code_name, iterate, optional_import
+from dascore.utils.misc import optional_import
 from dascore.utils.models import ArrayLike
-from dascore.utils.patch import merge_compatible_coords_attrs, patch_function
+from dascore.utils.patch import patch_function
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     """
-    Set dimension to non-dimensional coordinate.
+        Set dimension to non-dimensional coordinate.
 
-    Parameters
-    ----------
-    **kwargs
-        A mapping indicating old_dim: new_dim where new_dim refers to
-        the name of a non-dimensional coordinate which will become a
-        dimensional coordinate. The old dimensional coordinate will
-        become a non-dimensional coordinate.
+        Parameters
+        ----------
+        **kwargs
+            A mapping indicating old_dim: new_dim where new_dim refers to
+            the name of a non-dimensional coordinate which will become a
+            dimensional coordinate. The old dimensional coordinate will
+            become a non-dimensional coordinate.
 
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> # add new coordinate, random numbers length of time dim
-    >>> my_coord = np.random.random(patch.coord_shapes["time"])
-    >>> out = (
-    ...    patch.update_coords(my_coord=("time", my_coord))  # add my_coord
-    ...    .set_dims(time="my_coord") # set mycoord as dim (rather than time)
-    ... )
-    >>> assert "my_coord" in out.dims
+        Examples
+        --------
+    import dascore.proc.coords    >>> import numpy as np
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> # add new coordinate, random numbers length of time dim
+        >>> my_coord = np.random.random(patch.coord_shapes["time"])
+        >>> out = (
+        ...    patch.update_coords(my_coord=("time", my_coord))  # add my_coord
+        ...    .set_dims(time="my_coord") # set mycoord as dim (rather than time)
+        ... )
+        >>> assert "my_coord" in out.dims
     """
     cm = self.coords.set_dims(**kwargs)
     return self.new(coords=cm)
@@ -112,46 +111,6 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     return self.__class__(self.data, **out)
 
 
-def get_coord(
-    self: PatchType,
-    name: str,
-    require_sorted: bool = False,
-    require_evenly_sampled: bool = False,
-) -> BaseCoord:
-    """
-    Get a managed coordinate, raising if it doesn't meet requirements.
-
-    Parameters
-    ----------
-    name
-        Name of the coordinate to fetch.
-    require_sorted
-        If True, require the coordinate to be sorted or raise Error.
-    require_evenly_sampled
-        If True, require the coordinate to be evenly sampled or raise Error.
-    """
-    coord = self.coords.coord_map[name]
-    if require_evenly_sampled and coord.step is None:
-        extra = f"as required by {get_parent_code_name()}"  # adds caller name
-        msg = f"Coordinate {name} is not evenly sampled {extra}"
-        raise CoordError(msg)
-    if require_sorted and not coord.sorted or coord.reverse_sorted:
-        extra = f"as required by {get_parent_code_name()}"  # adds caller name
-        msg = f"Coordinate {name} is not sorted {extra}"
-        raise CoordError(msg)
-    return coord
-
-
-def assert_has_coords(self: PatchType, coord_names: Sequence[str] | str) -> Self:
-    """Raise an error if patch doesn't have required coordinates."""
-    required_coords = set(iterate(coord_names))
-    current_coords = set(self.coords.coord_map)
-    if missing := required_coords - current_coords:
-        msg = f"Patch does not have required coordinate(s): {missing}"
-        raise CoordError(msg)
-    return self
-
-
 def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
     """
     Determine if the current patch equals a
@@ -164,14 +123,19 @@ def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
         If True, only compare required attributes. This helps avoid issues
         with comparing histories or custom attrs of patches, for example.
     """
+    # different types are not equal
     if not isinstance(other, type(self)):
         return False
-    if only_required_attrs:
-        attrs_to_compare = set(PatchAttrs.get_defaults()) - {"history"}
-        attrs1 = {x: self.attrs.get(x, None) for x in attrs_to_compare}
-        attrs2 = {x: other.attrs.get(x, None) for x in attrs_to_compare}
-    else:
-        attrs1, attrs2 = dict(self.attrs), dict(other.attrs)
+    # Different coords are not equal; can pop out coords from attrs
+    if not self.coords == other.coords:
+        return False
+    if only_required_attrs:  # only include default fields
+        attrs_to_compare = set(PatchAttrs.model_fields) - {"history", "coords"}
+        attrs1 = self.attrs.model_dump(include=attrs_to_compare)
+        attrs2 = other.attrs.model_dump(include=attrs_to_compare)
+    else:  # include all fields but coords
+        attrs1 = self.attrs.model_dump(exclude=["coords"])
+        attrs2 = other.attrs.model_dump(exclude=["coords"])
     if set(attrs1) != set(attrs2):  # attrs don't have same keys; not equal
         return False
     if attrs1 != attrs2:
@@ -184,9 +148,7 @@ def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
         }
         if not_equal:
             return False
-    # check coords, names and values
-    if not self.coords == other.coords:
-        return False
+
     return np.equal(self.data, other.data).all()
 
 
@@ -328,54 +290,6 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     axis = None if dim is None else self.coords.dims.index(dim)
     data = np.squeeze(self.data, axis=axis)
     return self.new(data=data, coords=coords)
-
-
-@patch_function()
-def rename_coords(self: PatchType, **kwargs) -> PatchType:
-    """
-    Rename coordinate of Patch.
-
-    Parameters
-    ----------
-    **kwargs
-        The mapping from old names to new names
-
-    Examples
-    --------
-    >>> from dascore.examples import get_example_patch
-    >>> pa = get_example_patch()
-    >>> # rename dim "distance" to "fragrance"
-    >>> pa2 = pa.rename_coords(distance='fragrance')
-    >>> assert 'fragrance' in pa2.dims
-    """
-    new_coord = self.coords.rename_coord(**kwargs)
-    attrs = self.attrs.rename_dimension(**kwargs)
-    return self.new(coords=new_coord, dims=new_coord.dims, attrs=attrs)
-
-
-@patch_function()
-def update_coords(self: PatchType, **kwargs) -> PatchType:
-    """
-    Update the coordiantes of a patch.
-
-    Will either add new coordinates, or update existing ones.
-
-    Parameters
-    ----------
-    **kwargs
-        The mapping from old names to new names
-
-    Examples
-    --------
-    >>> from dascore.examples import get_example_patch
-    >>> pa = get_example_patch()
-    >>> # rename dim "distance" to "fragrance"
-    >>> pa2 = pa.rename_coords(distance='fragrance')
-    >>> assert 'fragrance' in pa2.dims
-    """
-    new_coord = self.coords.update_coords(**kwargs)
-    attrs = self.attrs.rename_dimension(**kwargs)
-    return self.new(coords=new_coord, dims=new_coord.dims, attrs=attrs)
 
 
 @patch_function()

@@ -2,7 +2,14 @@
 Processing operations that have much to do with coordinates.
 """
 from __future__ import annotations
+
+from typing import Sequence
+from typing_extensions import Self
+
 from dascore.constants import PatchType
+from dascore.core.coords import BaseCoord
+from dascore.exceptions import CoordError
+from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
 
 
@@ -72,3 +79,92 @@ def sort_coords(patch: PatchType, *coords, reverse=False):
     """
     cman, data = patch.coords.sort(*coords, array=patch.data, reverse=reverse)
     return patch.new(data=data, coords=cman)
+
+
+def get_coord(
+    self: PatchType,
+    name: str,
+    require_sorted: bool = False,
+    require_evenly_sampled: bool = False,
+) -> BaseCoord:
+    """
+    Get a managed coordinate, raising if it doesn't meet requirements.
+
+    Parameters
+    ----------
+    name
+        Name of the coordinate to fetch.
+    require_sorted
+        If True, require the coordinate to be sorted or raise Error.
+    require_evenly_sampled
+        If True, require the coordinate to be evenly sampled or raise Error.
+    """
+    coord = self.coords.coord_map[name]
+    if require_evenly_sampled and coord.step is None:
+        extra = f"as required by {get_parent_code_name()}"  # adds caller name
+        msg = f"Coordinate {name} is not evenly sampled {extra}"
+        raise CoordError(msg)
+    if require_sorted and not coord.sorted or coord.reverse_sorted:
+        extra = f"as required by {get_parent_code_name()}"  # adds caller name
+        msg = f"Coordinate {name} is not sorted {extra}"
+        raise CoordError(msg)
+    return coord
+
+
+def assert_has_coords(self: PatchType, coord_names: Sequence[str] | str) -> Self:
+    """Raise an error if patch doesn't have required coordinates."""
+    required_coords = set(iterate(coord_names))
+    current_coords = set(self.coords.coord_map)
+    if missing := required_coords - current_coords:
+        msg = f"Patch does not have required coordinate(s): {missing}"
+        raise CoordError(msg)
+    return self
+
+
+@patch_function()
+def rename_coords(self: PatchType, **kwargs) -> PatchType:
+    """
+    Rename coordinate of Patch.
+
+    Parameters
+    ----------
+    **kwargs
+        The mapping from old names to new names
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> pa = dc.get_example_patch()
+    >>> # rename dim "distance" to "fragrance"
+    >>> pa2 = pa.rename_coords(distance='fragrance')
+    >>> assert 'fragrance' in pa2.dims
+    """
+    new_coord = self.coords.rename_coord(**kwargs)
+    attrs = self.attrs.rename_dimension(**kwargs)
+    return self.new(coords=new_coord, dims=new_coord.dims, attrs=attrs)
+
+
+@patch_function()
+def update_coords(self: PatchType, **kwargs) -> PatchType:
+    """
+    Update the coordiantes of a patch.
+
+    Will either add new coordinates, or update existing ones.
+
+    Parameters
+    ----------
+    **kwargs
+        The mapping from old names to new names
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> pa = dc.get_example_patch()
+    >>> # Add 1 to all distance coords
+    >>> new_dist = pa.coords['distance'] + 1
+    >>> pa2 = pa.update_coords(distance=new_dist)
+    >>> assert np.all(pa2.coords['distance'] == (pa.coords['distance'] + 1))
+    """
+    new_coord = self.coords.update_coords(**kwargs)
+    return self.new(coords=new_coord, dims=new_coord.dims)

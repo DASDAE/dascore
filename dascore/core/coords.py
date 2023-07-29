@@ -10,7 +10,12 @@ from typing import Any, Annotated, TypeVar
 
 import numpy as np
 import pandas as pd
-from pydantic import model_validator, PlainValidator, model_serializer, field_validator
+from pydantic import (
+    PlainValidator,
+    model_serializer,
+    field_validator,
+    model_validator,
+)
 from rich.text import Text
 from typing_extensions import Self
 
@@ -33,7 +38,6 @@ from dascore.utils.models import (
     DascoreBaseModel,
     DTypeLike,
     UnitQuantity,
-    CommaSeparatedStr,
 )
 from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like
 
@@ -52,11 +56,10 @@ class CoordSummary(DascoreBaseModel):
     """
 
     dtype: None | Annotated[str, PlainValidator(lambda x: str(x))] = ""
-    min: min_max_type | None = None
-    max: min_max_type | None = None
+    min: min_max_type = None
+    max: min_max_type = None
     step: step_type | None = None
     units: UnitQuantity | None = None
-    dims: CommaSeparatedStr = ""
 
     @model_serializer(when_used="json")
     def ser_model(self) -> dict[str, str]:
@@ -72,20 +75,20 @@ class CoordSummary(DascoreBaseModel):
         # for some reason all ints are getting converted to floats. This
         # hack just fixes that. TODO: See if this is needed in a few version
         # after pydantic 2.1.1
-        if pd.isnull(value):
-            return value
-        # convert numpy numerics back to python
-        if np.issubdtype(dtype, np.integer):
-            value = int(value)
-        elif np.issubdtype(dtype, np.floating):
-            value = float(value)
-        elif np.issubdtype(dtype, np.datetime64):
+        if np.issubdtype(dtype, np.datetime64):
             if _info.field_name == "step":
                 value = dc.to_timedelta64(value)
             else:
                 value = dc.to_datetime64(value)
+        elif pd.isnull(value):
+            return value
         elif np.issubdtype(dtype, np.timedelta64):
             value = dc.to_timedelta64(value)
+        # convert numpy numerics back to python
+        elif np.issubdtype(dtype, np.floating):
+            value = float(value) if value is not None else np.NaN
+        elif np.issubdtype(dtype, np.integer):
+            value = int(value)  # no nullable int type, have to use None :(
         return value
 
     def to_coord(self) -> CoordRange:
@@ -479,7 +482,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             step=self.step,
             dtype=self.dtype,
             units=self.units,
-            dims=dims,
         )
 
 

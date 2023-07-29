@@ -2,19 +2,16 @@
 Test patch utilities.
 """
 from __future__ import annotations
-import numpy as np
+
 import pytest
 
 import dascore as dc
 from dascore.exceptions import (
-    IncompatiblePatchError,
     PatchAttributeError,
     PatchDimError,
 )
 from dascore.utils.patch import (
-    _merge_patches,
     get_dim_value_from_kwargs,
-    merge_compatible_coords_attrs,
 )
 
 
@@ -119,12 +116,6 @@ class TestHistory:
 class TestMergePatches:
     """Tests for merging patches together."""
 
-    def test_merge_dir_spool(self, adjacent_spool_directory):
-        """Ensure merge_patches works on a directory spool."""
-        spool = dc.spool(adjacent_spool_directory)
-        out = _merge_patches(spool)
-        assert len(out) == 1
-
     def test_deprecated(self, random_patch):
         """Ensure deprecation warning is raised."""
         from dascore.utils.patch import merge_patches
@@ -141,50 +132,3 @@ class TestGetDimValueFromKwargs:
         kwargs = {}
         with pytest.raises(PatchDimError):
             get_dim_value_from_kwargs(random_patch, kwargs)
-
-
-class TestMergeCompatibleCoordsAttrs:
-    """Tests for merging compatible attrs, coords."""
-
-    def test_simple(self, random_patch):
-        """Simple merge test."""
-        coords, attrs = merge_compatible_coords_attrs(random_patch, random_patch)
-        assert coords == random_patch.coords
-        assert attrs == random_patch.attrs
-
-    def test_incompatible_dims(self, random_patch):
-        """Ensure incompatible dims raises."""
-        new = random_patch.rename_coords(time="money")
-        match = "their dimensions are not equal"
-        with pytest.raises(IncompatiblePatchError, match=match):
-            merge_compatible_coords_attrs(random_patch, new)
-
-    def test_incompatible_coords(self, random_patch):
-        """Ensure an incompatible error is raised for coords that dont match"""
-        new_time = random_patch.attrs.time_max
-        new = random_patch.update_attrs(time_min=new_time)
-        match = "coordinates are not equal"
-        with pytest.raises(IncompatiblePatchError, match=match):
-            merge_compatible_coords_attrs(new, random_patch)
-
-    def test_incompatible_attrs(self, random_patch):
-        """Ensure if attrs are off an Error is raised."""
-        new = random_patch.update_attrs(network="TA")
-        match = "attributes are not equal"
-        with pytest.raises(IncompatiblePatchError, match=match):
-            merge_compatible_coords_attrs(new, random_patch)
-
-    def test_extra_coord(self, random_patch, random_patch_with_lat_lon):
-        """Extra coords on both patch should end up in the merged."""
-        new_coord = np.ones(random_patch.coord_shapes["time"])
-        pa1 = random_patch.update_coords(new_time=("time", new_coord))
-        pa2 = random_patch_with_lat_lon
-        expected = set(pa1.coords.coord_map) & set(pa2.coords.coord_map)
-        coords, attrs = merge_compatible_coords_attrs(pa1, pa2)
-        assert set(coords.coord_map) == expected
-
-    def test_extra_attrs(self, random_patch):
-        """Ensure extra attributes are added to patch."""
-        patch = random_patch.update_attrs(new_attr=10)
-        coords, attrs = merge_compatible_coords_attrs(patch, random_patch)
-        assert attrs.get("new_attr") == 10

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.exceptions import UnitError
 from dascore.units import get_quantity
 from dascore.utils.time import dtype_time_like
@@ -27,7 +28,7 @@ class TestSetUnits:
         unit_str = "furlong"  # A silly unit that wont be used on patch
         for dim in patch.dims:
             expected_quant = get_quantity(unit_str)
-            coord = random_patch_with_lat_lon.get_coord(dim)
+            coord = dascore.proc.coords.get_coord(dim)
             new = patch.set_units(**{dim: unit_str})
             attr = new.attrs
             # first check attributes

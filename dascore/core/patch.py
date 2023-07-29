@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 from rich.text import Text
 
-import dascore.proc
+import dascore.proc.coords
 from dascore.compat import DataArray, array
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.attrs import PatchAttrs

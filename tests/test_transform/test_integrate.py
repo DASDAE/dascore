@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.transform.integrate import integrate
 from dascore.units import get_quantity
 from dascore.utils.misc import broadcast_for_index
@@ -55,8 +56,8 @@ class TestIndefiniteIntegrals:
             data_units2 = get_quantity(out.attrs.data_units)
             assert data_units2 == (data_units1 * get_quantity(eu))
             for dim in patch.dims:
-                coord1 = patch.get_coord(dim)
-                coord2 = patch.get_coord(dim)
+                coord1 = dascore.proc.coords.get_coord(dim)
+                coord2 = dascore.proc.coords.get_coord(dim)
                 assert coord2.units == coord1.units
 
 
@@ -70,14 +71,16 @@ class TestDefiniteIntegration:
             ax = patch.dims.index(dim)
             out = patch.tran.integrate(dim=dim, definite=True)
             assert out.shape[ax] == 1
-            step = to_float(patch.get_coord(dim).step)
+            step = to_float(dascore.proc.coords.get_coord(dim).step)
             expected_data = np.trapz(patch.data, dx=step, axis=ax)
             ndims = len(patch.dims)
             indexer = broadcast_for_index(ndims, ax, None)
             assert np.allclose(out.data, expected_data[indexer])
             # Since the patch is just ones all values should equal the
             # dimensional length when dx == 1
-            if dim == "distance" and np.isclose(patch.get_coord(dim).step, 1):
+            if dim == "distance" and np.isclose(
+                dascore.proc.coords.get_coord(dim).step, 1
+            ):
                 assert np.allclose(out.data, patch.shape[ax] - 1)
 
     def test_units(self, random_patch):
@@ -88,8 +91,8 @@ class TestDefiniteIntegration:
         data_units2 = get_quantity(out.attrs.data_units)
         assert data_units2 == (data_units1 * get_quantity("s"))
         for dim in patch.dims:
-            coord1 = patch.get_coord(dim)
-            coord2 = patch.get_coord(dim)
+            coord1 = dascore.proc.coords.get_coord(dim)
+            coord2 = dascore.proc.coords.get_coord(dim)
             assert coord2.units == coord1.units
 
     def test_integrate_all_dims(self, random_patch):

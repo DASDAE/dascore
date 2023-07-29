@@ -169,7 +169,7 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
             quant_value = str(quant.units)
         else:
             quant_value = str(quant)
-    return str(quant_value)
+    return str(quant_value).replace(" ", "")  # no space in str
 
 
 def get_filter_units(

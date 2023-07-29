@@ -12,6 +12,7 @@ from operator import mul
 import numpy as np
 import numpy.fft as nft
 
+import dascore.proc.coords
 from dascore.constants import PatchType
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
@@ -52,7 +53,7 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real):
     new_coords = old_cm.get_coord_tuple_map()
     ft = FourierTransformatter()
     for i, dim in enumerate(dims):
-        old_coord = patch.get_coord(dim)
+        old_coord = dascore.proc.coords.get_coord(dim)
         units = old_coord.units
         size = old_coord.shape[0]
         dx = dxs[i]
@@ -165,8 +166,10 @@ def _get_idft_dims_steps_axis(patch, dim):
     # ft_time for brevity.
     current_dims = set(patch.dims)
     dims = [x if x in current_dims else ft.rename_dims(x)[0] for x in iterate(dim)]
-    patch.assert_has_coords(dims)
-    coords = [patch.get_coord(x, require_evenly_sampled=True) for x in dims]
+    dascore.proc.coords.assert_has_coords(dims)
+    coords = [
+        dascore.proc.coords.get_coord(x, require_evenly_sampled=True) for x in dims
+    ]
     is_real = [1 if to_float(x.min()) == 0 else 0 for x in coords]
     real_sum = sum(is_real)
     assert real_sum <= 1, "only one real axis allowed."

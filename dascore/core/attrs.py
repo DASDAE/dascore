@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import warnings
+from collections import ChainMap
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
-from typing import Annotated, Literal, Any
+from collections.abc import Mapping
+from collections.abc import Sequence
+from functools import reduce
+from typing import Annotated, Literal
+from typing import Any
 
-from pydantic import ConfigDict, Field, model_validator
+import pandas as pd
+from pydantic import ConfigDict, PlainValidator
+from pydantic import Field, model_validator
 from typing_extensions import Self
 
 import dascore as dc
@@ -15,23 +21,26 @@ from dascore.constants import (
     VALID_DATA_TYPES,
     basic_summary_attrs,
     max_lens,
+    PatchType,
 )
-from dascore.core.coords import BaseCoord, CoordRange, CoordSummary
 from dascore.core.coordmanager import CoordManager
+from dascore.core.coords import BaseCoord, CoordRange, CoordSummary
+from dascore.exceptions import AttributeMergeError, IncompatiblePatchError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import to_str
 from dascore.utils.mapping import FrozenDict
+from dascore.utils.misc import (
+    all_diffs_close_enough,
+    get_middle_value,
+    iterate,
+    to_str,
+)
 from dascore.utils.models import (
     DascoreBaseModel,
-    PlainValidator,
     UnitQuantity,
     CommaSeparatedStr,
     frozen_dict_validator,
     frozen_dict_serializer,
-    # FrozenDictType,
 )
-
-# from dascore.utils.mapping import FrozenDict
 
 str_validator = PlainValidator(to_str)
 _coord_summary_suffixes = set(CoordSummary.model_fields)
@@ -192,12 +201,6 @@ class PatchAttrs(DascoreBaseModel):
         """Yield (attribute, values) just like dict.items()."""
         yield from self.model_dump().items()
 
-    @classmethod
-    def get_defaults(cls):
-        """return a dict of default values"""
-        new = cls()
-        return new.model_dump()
-
     def coords_from_dims(self) -> Mapping[str, BaseCoord]:
         """Return coordinates from dimensions assuming evenly sampled."""
         out = {}
@@ -275,3 +278,248 @@ class PatchAttrs(DascoreBaseModel):
             for name, val in coord.items():
                 out[f"{coord_name}_{name}"] = val
         return out
+
+
+def combine_patch_attrs(
+    model_list: Sequence[PatchAttrs],
+    coord_name: str | None = None,
+    conflicts: Literal["drop", "raise", "keep_first"] = "raise",
+    drop_attrs: Sequence[str] | None = None,
+    coord: None | BaseCoord = None,
+):
+    """
+    Merge Patch Attributes along a dimension.
+
+    Parameters
+    ----------
+    model_list
+        A list of models.
+    coord_name
+        The coordinate, usually a dimension coord, along which to merge.
+    conflicts
+        Indicates how to handle conflicts in attributes other than those
+        indicated by dim. If "drop" simply drop conflicting attributes,
+        or attributes not shared by all models. If "raise" raise an
+        [AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when
+        issues are encountered. If "keep_first", just keep the first value
+        for each attribute.
+    drop_attrs
+        If provided, attributes which should be dropped.
+    coord
+        The coordinate for the new values of dim. This is provided as a
+        shortcut if it has already been computed.
+    """
+    # TODO this is a monstrosity! need to refactor.
+    eq_coord_fields = set(CoordSummary.model_fields) - {"min", "max", "step"}
+
+    def _get_merge_coords(model_dicts):
+        """Get the coordinates to merge together."""
+        # pop out coord to merge on
+        merge_coords = []
+        for mod in model_dicts:
+            coords = mod.get("coords", {})
+            maybe_coord = coords.pop(coord_name, None)
+            if maybe_coord is not None:
+                merge_coords.append(maybe_coord)
+        # dealing with empty coords
+        if not merge_coords:
+            return {}
+        return merge_coords
+
+    def _get_merge_dict_list(merge_coords):
+        """Get a list of {attrs: []}"""
+        out = defaultdict(list)
+        for mdict in merge_coords:
+            for key, val in mdict.items():
+                out[key].append(val)
+        return out
+
+    def _get_new_coord(model_dicts):
+        """Get the merged coord to set on all models."""
+        merge_coords = _get_merge_coords(model_dicts)
+        merge_dict_list = _get_merge_dict_list(merge_coords)
+        out = {}
+        # empy dicts
+        if not merge_dict_list:
+            return dict(merge_dict_list)
+        # make sure at least min/max is defined.
+        if not len(merge_dict_list["min"]) == len(merge_dict_list["max"]):
+            msg = "Cant merge attributes, min and max must be defined for coord."
+            raise AttributeMergeError(msg)
+        # all these should be equal else raise.
+        for key in eq_coord_fields:
+            if not len(vals := merge_dict_list[key]):
+                continue
+            if not all(vals[0] == x for x in vals):
+                msg = f"Cant merge patch attrs, key {key} not equal."
+                raise AttributeMergeError(msg)
+            out[key] = vals[0]
+        out["min"] = min(merge_dict_list["min"])
+        out["max"] = max(merge_dict_list["max"])
+        step = None
+        if all_diffs_close_enough((steps := merge_dict_list["step"])):
+            step = get_middle_value(steps)
+        out["step"] = step
+        return out
+
+    def _get_model_dict_list(mod_list):
+        """Get list of model_dict, merge along dim if specified."""
+        model_dicts = [
+            x.model_dump(exclude_defaults=True) if not isinstance(x, dict) else x
+            for x in mod_list
+        ]
+        # drop attributes specified.
+        if drop := set(iterate(drop_attrs)):
+            model_dicts = [
+                {i: v for i, v in x.items() if i not in drop} for x in model_dicts
+            ]
+        if not coord_name:
+            return model_dicts
+        # coordinate can be determined from existing coords.
+        if coord is None:
+            new_coord = _get_new_coord(model_dicts)
+        else:  # or if one was passed just use its summary.
+            new_coord = coord.to_summary()
+        if new_coord:
+            for mod in model_dicts:
+                mod["coords"][coord_name] = new_coord
+        return model_dicts
+
+    def _replace_null_with_None(mod_dict_list):
+        """Because NaN != NaN we need to replace those values so == works."""
+        out = []
+        for mod in mod_dict_list:
+            out.append(
+                {
+                    i: (v if (isinstance(v, Sequence) or not pd.isnull(v)) else None)
+                    for i, v in mod.items()
+                }
+            )
+        return out
+
+    def _keep_eq(d1, d2):
+        """Keep only the values that are equal between d1/d2."""
+        out = {}
+        for i in set(d1) & set(d2):
+            if not d1[i] == d2[i]:
+                continue
+            out[i] = d1[i]
+        return out
+
+    def _handle_other_attrs(mod_dict_list):
+        """Check the other attributes and handle based on conflicts param."""
+        if conflicts == "keep_first":
+            return [dict(ChainMap(*mod_dict_list))]
+        no_null_ = _replace_null_with_None(mod_dict_list)
+        all_eq = all(no_null_[0] == x for x in no_null_)
+        if all_eq:
+            return mod_dict_list
+        # now the fun part.
+        if conflicts == "raise":
+            msg = "Cannot merge models, not all of their non-dim attrs are equal."
+            raise AttributeMergeError(msg)
+        final_dict = reduce(_keep_eq, mod_dict_list)
+        return [final_dict]
+
+    mod_dict_list = _get_model_dict_list(model_list)
+    mod_dict_list = _handle_other_attrs(mod_dict_list)
+    first_class = model_list[0].__class__
+    cls = first_class if not first_class == dict else PatchAttrs
+    return cls(**mod_dict_list[0])
+
+
+def merge_compatible_coords_attrs(
+    patch1: PatchType, patch2: PatchType, attrs_to_ignore=("history",)
+) -> tuple[CoordManager, PatchAttrs]:
+    """
+    Merge the coordinates and attributes of patches or raise if incompatible.
+
+    The rules for compatibility are:
+        - All attrs must be equal other than history.
+        - Patches must share the same dimensions, in the same order
+        - All dimensional coordinates must be strictly equal
+        - If patches share a non-dimensional coordinate they must be equal.
+    Any coordinates or attributes contained by a single patch will be included
+    in the output.
+
+    Parameters
+    ----------
+    patch1
+        The first patch
+    patch2
+        The second patch
+    attr_ignore
+        A sequence of attributes to not consider in equality. Only these
+        attributes from the first patch are kept in outputs.
+    """
+
+    def _check_dims(dims1, dims2):
+        if dims1 == dims2:
+            return
+        msg = (
+            "Patches are not compatible because their dimensions are not equal."
+            f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
+        )
+        raise IncompatiblePatchError(msg)
+
+    def _check_coords(cm1, cm2):
+        cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)
+        shared = cset1 & cset2
+        not_equal_coords = []
+        for coord in shared:
+            coord1 = cm1.coord_map[coord]
+            coord2 = cm2.coord_map[coord]
+            if coord1 == coord2:
+                continue
+            not_equal_coords.append(coord)
+        if not_equal_coords:
+            msg = (
+                f"Patches are not compatible. The following shared coordinates "
+                f"are not equal {coord}"
+            )
+            raise IncompatiblePatchError(msg)
+
+    def _merge_coords(coords1, coords2):
+        out = {}
+        coord_names = set(coords1.coord_map) & set(coords2.coord_map)
+        # fast patch to update identical coordinates
+        if len(coord_names) == len(coords1.coord_map):
+            return coords1
+        # otherwise just squish coords from both managers together.
+        for name in coord_names:
+            coord = coords1 if name in coords1.coord_map else coords2
+            dims = coord.dim_map[name]
+            out[name] = (dims, coord.coord_map[name])
+        return dc.core.coordmanager.get_coord_manager(out, dims=coords1.dims)
+
+    def _merge_models(attrs1, attrs2, coord):
+        """Ensure models are equal in the right ways."""
+        no_comp_keys = set(attrs_to_ignore)
+        if attrs1 == attrs2:
+            return attrs1
+        dict1, dict2 = dict(attrs1), dict(attrs2)
+        # Coords has already handled merging coordinates
+        new_coords = coord.to_summary_dict()
+        dict1["coords"], dict2["coords"] = new_coords, new_coords
+        common_keys = set(dict1) & set(dict2)
+        ne_attrs = []
+        for key in common_keys:
+            if key in no_comp_keys:
+                continue
+            if dict2[key] != dict1[key]:
+                ne_attrs.append(key)
+        if ne_attrs:
+            msg = (
+                "Patches are not compatible because the following attributes "
+                f"are not equal. {ne_attrs}"
+            )
+            raise IncompatiblePatchError(msg)
+        return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
+
+    _check_dims(patch1.dims, patch2.dims)
+    coord1, coord2 = patch1.coords, patch2.coords
+    attrs1, attrs2 = patch1.attrs, patch2.attrs
+    _check_coords(coord1, coord2)
+    coord_out = _merge_coords(coord1, coord2)
+    attrs = _merge_models(attrs1, attrs2, coord_out)
+    return coord_out, attrs

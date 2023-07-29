@@ -5,8 +5,16 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from dascore.core.attrs import PatchAttrs
+from dascore.core.attrs import (
+    PatchAttrs,
+    combine_patch_attrs,
+    merge_compatible_coords_attrs,
+)
 from dascore.core.coords import get_coord, CoordSummary
+from dascore.exceptions import AttributeMergeError
+from dascore.exceptions import (
+    IncompatiblePatchError,
+)
 from dascore.utils.misc import register_func
 
 MORE_COORDS_ATTRS = []
@@ -225,3 +233,117 @@ class TestMisc:
         """Ensure schema module emits deprecation warning."""
         with pytest.warns(DeprecationWarning):
             from dascore.core.schema import PatchAttrs  # noqa
+
+
+class TestMergeModels:
+    """Tests for merging patch attrs"""
+
+    def test_empty(self):
+        """Empty PatchAttrs should work in all cases"""
+        pa1, pa2 = PatchAttrs(), PatchAttrs()
+        assert isinstance(combine_patch_attrs([pa1, pa2]), PatchAttrs)
+        assert isinstance(combine_patch_attrs([pa1, pa2], "time"), PatchAttrs)
+        assert isinstance(combine_patch_attrs([pa1, pa2], "distance"), PatchAttrs)
+        out = combine_patch_attrs([pa1, pa2], drop_attrs="history")
+        assert isinstance(out, PatchAttrs)
+
+    def test_simple_merge(self):
+        """Happy path, simple merge."""
+        pa1 = PatchAttrs(distance_min=1, distance_max=10)
+        pa2 = PatchAttrs(distance_min=11, distance_max=20)
+        merged = combine_patch_attrs([pa1, pa2], "distance")
+        # the names of attrs should be identical before/after merge
+        assert set(dict(merged)) == set(dict(pa1))
+        assert merged.distance_max == pa2.distance_max
+        assert merged.distance_min == pa1.distance_min
+
+    def test_drop(self):
+        """Ensure drop_attrs does its job."""
+        pa1 = PatchAttrs(history=["a", "b"])
+        pa2 = PatchAttrs()
+        with pytest.raises(AttributeMergeError, match="not all of their non-dim"):
+            combine_patch_attrs([pa1, pa2])
+        out = combine_patch_attrs([pa1, pa2], drop_attrs="history")
+        assert isinstance(out, PatchAttrs)
+
+    def test_conflicts(self):
+        """Ensure when non-dim fields aren't equal merge raises."""
+        pa1 = PatchAttrs(tag="bob")
+        pa2 = PatchAttrs()
+        with pytest.raises(AttributeMergeError, match="not all of their non-dim"):
+            combine_patch_attrs([pa1, pa2])
+
+    def test_not_all_attributes(self):
+        """Ensure when non-dim fields aren't equal merge raises."""
+        pa1 = PatchAttrs(bob_min=10, bob_max=12)
+        pa2 = PatchAttrs(bob_min=13)
+        match = "min and max must be defined"
+        with pytest.raises(AttributeMergeError, match=match):
+            combine_patch_attrs([pa1, pa2], coord_name="bob")
+
+    def test_drop_conflicts(self):
+        """Ensure when non-dim fields aren't equal, but are defined, they drop."""
+        pa1 = PatchAttrs(tag="bill", station="UU")
+        pa2 = PatchAttrs(station="TA", tag="bob")
+        out = combine_patch_attrs([pa1, pa2], coord_name="time", conflicts="drop")
+        defaults = PatchAttrs()
+        assert isinstance(out, PatchAttrs)
+        assert out.tag == defaults.tag
+        assert out.station == defaults.station
+
+    def test_keep_disjoint_values(self, random_patch):
+        """Ensure when disjoint values should be kept they are."""
+        random_attrs = random_patch.attrs
+        new = dict(random_attrs)
+        new["jazz_hands"] = 1984
+        attrs1 = PatchAttrs(**new)
+        out = combine_patch_attrs([attrs1, random_attrs], conflicts="keep_first")
+        assert out.jazz_hands == 1984
+
+
+class TestMergeCompatibleCoordsAttrs:
+    """Tests for merging compatible attrs, coords."""
+
+    def test_simple(self, random_patch):
+        """Simple merge test."""
+        coords, attrs = merge_compatible_coords_attrs(random_patch, random_patch)
+        assert coords == random_patch.coords
+        assert attrs == random_patch.attrs
+
+    def test_incompatible_dims(self, random_patch):
+        """Ensure incompatible dims raises."""
+        new = random_patch.rename_coords(time="money")
+        match = "their dimensions are not equal"
+        with pytest.raises(IncompatiblePatchError, match=match):
+            merge_compatible_coords_attrs(random_patch, new)
+
+    def test_incompatible_coords(self, random_patch):
+        """Ensure an incompatible error is raised for coords that dont match"""
+        new_time = random_patch.attrs.time_max
+        new = random_patch.update_attrs(time_min=new_time)
+        match = "coordinates are not equal"
+        with pytest.raises(IncompatiblePatchError, match=match):
+            merge_compatible_coords_attrs(new, random_patch)
+
+    def test_incompatible_attrs(self, random_patch):
+        """Ensure if attrs are off an Error is raised."""
+        new = random_patch.update_attrs(network="TA")
+        match = "attributes are not equal"
+        with pytest.raises(IncompatiblePatchError, match=match):
+            merge_compatible_coords_attrs(new, random_patch)
+
+    def test_extra_coord(self, random_patch, random_patch_with_lat_lon):
+        """Extra coords on both patch should end up in the merged."""
+        new_coord = np.ones(random_patch.coord_shapes["time"])
+        pa1 = random_patch.update_coords(new_time=("time", new_coord))
+        pa2 = random_patch_with_lat_lon
+        expected = set(pa1.coords.coord_map) & set(pa2.coords.coord_map)
+        coords, attrs = merge_compatible_coords_attrs(pa1, pa2)
+        assert set(coords.coord_map) == expected
+        assert set(attrs.coords) == expected
+
+    def test_extra_attrs(self, random_patch):
+        """Ensure extra attributes are added to patch."""
+        patch = random_patch.update_attrs(new_attr=10)
+        coords, attrs = merge_compatible_coords_attrs(patch, random_patch)
+        assert attrs.get("new_attr") == 10

@@ -377,8 +377,8 @@ class TestEquals:
         coord_array = np.array(coords.coord_map["distance"].values)
         coord_array[20:30] *= 0.9
         assert not np.allclose(coord_array, coords["distance"])
-        new_coords = coords.update_coords(distance=coord_array)
-        new = patch.new(coords=new_coords)
+        new_patch = patch.update_coords(distance=coord_array)
+        new = patch.new(coords=new_patch.coords)
         assert new != patch
 
     def test_other_types(self, random_patch):

@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
@@ -175,7 +176,7 @@ class TestRoundTrips:
         # add time deltas to ensure they are also serialized/deserialized.
         dist_shape = shape[dims.index("distance")]
         time_deltas = dc.to_timedelta64(np.random.random(dist_shape))
-        patch = random_patch_with_lat_lon.update_coords(
+        patch = dascore.proc.coords.update_coords(
             delta_times=("distance", time_deltas),
         )
         dc.write(patch, new_path, "DASDAE")

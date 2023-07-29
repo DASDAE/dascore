@@ -136,7 +136,7 @@ def attrs_to_text(attrs) -> Text:
     """
     attrs = dc.PatchAttrs.from_dict(attrs).model_dump(exclude_defaults=True)
     # pop coords and dims since they show up in other places.
-    attrs.pop("coords"), attrs.pop("dims")
+    attrs.pop("coords", None), attrs.pop("dims", None)
     txt = Text("➤ ") + Text("Attributes", style=dascore_styles["dc_yellow"])
     txt += Text("\n")
     for name, attr in dict(attrs).items():

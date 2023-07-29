@@ -17,6 +17,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.pickle import PickleIO
@@ -127,7 +128,7 @@ def _assert_coords_attrs_match(patch):
     coords = patch.coords
     assert attrs.dim_tuple == coords.dims
     for dim in attrs.dim_tuple:
-        coord = patch.get_coord(dim)
+        coord = dascore.proc.coords.get_coord(dim)
         assert coord.min() == getattr(attrs, f"{dim}_min")
         assert coord.max() == getattr(attrs, f"{dim}_max")
         assert coord.step == getattr(attrs, f"{dim}_step")
@@ -231,7 +232,7 @@ class TestRead:
             assert len(spool) == 1
             patch = spool[0]
             _assert_coords_attrs_match(patch)
-            coord = patch.get_coord(dim)
+            coord = dascore.proc.coords.get_coord(dim)
             _assert_op_or_close(coord.min(), trim_tuple[0], ge)
             _assert_op_or_close(coord.max(), trim_tuple[1], le)
             # then single-ended query on start side
@@ -241,7 +242,7 @@ class TestRead:
             patch = spool[0]
             attrs = patch.attrs
             _assert_coords_attrs_match(patch)
-            coord = patch.get_coord(dim)
+            coord = dascore.proc.coords.get_coord(dim)
             _assert_op_or_close(coord.min(), trim_tuple[0], ge)
             _assert_op_or_close(coord.max(), getattr(attrs, f"{dim}_max"), eq)
             # then single-ended query on end side
@@ -251,7 +252,7 @@ class TestRead:
             patch = spool[0]
             attrs = patch.attrs
             _assert_coords_attrs_match(patch)
-            coord = patch.get_coord(dim)
+            coord = dascore.proc.coords.get_coord(dim)
             _assert_op_or_close(coord.min(), getattr(attrs, f"{dim}_min"), eq)
             _assert_op_or_close(coord.max(), trim_tuple[1], le)
 

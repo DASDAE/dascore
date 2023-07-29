@@ -310,6 +310,8 @@ def get_middle_value(array):
 
 def all_diffs_close_enough(diffs):
     """Check if all the diffs are 'close' handling timedeltas."""
+    if not len(diffs):
+        return False
     diffs = np.array(diffs)
     is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
     is_td = np.issubdtype(diffs.dtype, np.datetime64)

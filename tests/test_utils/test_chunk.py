@@ -159,7 +159,7 @@ class TestBasicChunkDF:
     def test_chunk_on_split(self, terra15_file_spool):
         """Ensure chunking which creates a slice at the end time works."""
         # this spool was selected because I first observed the issue in it.
-        df = terra15_file_spool.get_contents()
+        df = terra15_file_spool.get_contents().drop(columns="history")
         dur = (df["time_max"] - df["time_min"]).iloc[0]
         seg_len = dur / 3
         dt = df["time_step"].iloc[0]
