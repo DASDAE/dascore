@@ -175,7 +175,7 @@ def _convert_times(df, some_dict):
 
 def get_interval_columns(df, name, arrays=False):
     """Return a series of start, stop, step for columns."""
-    names = f"{name}_min", f"{name}_max", f"d_{name}"
+    names = f"{name}_min", f"{name}_max", f"{name}_step"
     missing_cols = set(names) - set(df.columns)
     if missing_cols:
         msg = f"Dataframe is missing {missing_cols} to chunk on {name}"
@@ -328,10 +328,10 @@ def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
     """
     cols = set(df.columns)
     possible_dims = {
-        x.replace("_min", "").replace("_max", "").replace("d_", "") for x in cols
+        x.replace("_min", "").replace("_max", "").replace("_step", "") for x in cols
     }
     out = {
-        x for x in possible_dims if {f"{x}_min", f"{x}_max", f"d_{x}"}.issubset(cols)
+        x for x in possible_dims if {f"{x}_min", f"{x}_max", f"{x}_step"}.issubset(cols)
     }
     return sorted(out)
 
@@ -344,7 +344,7 @@ def get_column_names_from_dim(dims: Sequence[str]) -> list:
     for name in dims:
         out.append(f"{name}_min")
         out.append(f"{name}_max")
-        out.append(f"d_{name}")
+        out.append(f"{name}_step")
     return out
 
 
@@ -408,7 +408,7 @@ def _remove_overlaps(df, name):
         adjusted = stop_roll + step
         return np.where(start_lt_stop, adjusted, start)
 
-    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"d_{name}"
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
     assert df[min_name].is_monotonic_increasing, "df must be sorted"
     start = df[min_name].values
     stop = df[max_name].values

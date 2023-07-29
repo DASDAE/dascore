@@ -6,7 +6,6 @@ from __future__ import annotations
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
-from ..core import PatchFileSummary
 from dascore.io import BinaryReader, FiberIO
 
 from .utils import _get_data, _get_data_node, _get_default_attrs, _get_version_str
@@ -41,7 +40,7 @@ class TDMSFormatterV4713(FiberIO):
         except Exception:  # noqa
             return False
 
-    def scan(self, resource: BinaryReader) -> list[PatchFileSummary]:
+    def scan(self, resource: BinaryReader) -> list[dc.PatchAttrs]:
         """
         Scan a silixa tdms file, return summary information about the file's contents.
         """
@@ -49,7 +48,7 @@ class TDMSFormatterV4713(FiberIO):
         out["path"] = getattr(resource, "name", "")
         out["file_format"] = self.name
         out["file_version"] = self.version
-        return [PatchFileSummary(**out)]
+        return [dc.PatchAttrs(**out)]
 
     def read(
         self,

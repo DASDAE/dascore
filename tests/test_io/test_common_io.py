@@ -214,13 +214,13 @@ class TestRead:
         a patch containing the requested data is returned.
         """
         io, path = io_path_tuple
-        attrs = dc.scan(path)
-        assert len(attrs)
+        attrs_from_file = dc.scan(path)
+        assert len(attrs_from_file)
         # skip files that have more than one patch for now
         # TODO just write better test logic to handle this case.
-        if len(attrs) > 1:
+        if len(attrs_from_file) > 1:
             pytest.skip("Havent implemented test for multipatch files.")
-        attrs_init = attrs[0]
+        attrs_init = attrs_from_file[0]
         for dim in attrs_init.dim_tuple:
             start = getattr(attrs_init, f"{dim}_min")
             stop = getattr(attrs_init, f"{dim}_max")

@@ -109,7 +109,7 @@ class DascoreBaseModel(BaseModel):
     _cache = {}
 
     model_config = ConfigDict(
-        extra="ignore",
+        extra="ignore",  # TODO: change to raise, then let subclass overwrite
         validate_assignment=True,
         ignored_types=(cached_property,),
         frozen=True,
@@ -167,7 +167,7 @@ def merge_models(
             raise AttributeMergeError(msg)
 
     def _get_start_stop_step_from_values(model_dicts, model_sets):
-        dmin, dmax, dstep = f"{dim}_min", f"{dim}_max", f"d_{dim}"
+        dmin, dmax, dstep = f"{dim}_min", f"{dim}_max", f"{dim}_step"
         expected_attrs = {dmin, dmax}
         if not all([x.issuperset(expected_attrs) for x in model_sets]):
             msg = f"All models do not have required attributes: {expected_attrs}"
@@ -202,7 +202,7 @@ def merge_models(
             step = coord.step
         for mod in model_dicts:
             mod[f"{dim}_min"], mod[f"{dim}_max"] = min_start, max_end
-            mod[f"d_{dim}"] = np.NaN if step is None else step
+            mod[f"{dim}_step"] = np.NaN if step is None else step
         return model_dicts
 
     def _replace_null_with_None(mod_dict_list):

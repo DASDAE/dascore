@@ -14,7 +14,7 @@ import pytest
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
-from dascore.io.core import FiberIO
+from dascore.io.core import FiberIO, PatchFileSummary
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.time import to_datetime64
@@ -90,6 +90,15 @@ class _FiberUnsupportedTypeHints(FiberIO):
         """dummy read"""
         with open(resource) as fi:
             return fi.read()
+
+
+class TestPatchFileSummary:
+    """Tests for getting patch file information."""
+
+    def test_d_translates(self):
+        """Ensure d_{whatever} translates to step_{whatever}."""
+        out = PatchFileSummary(d_time=10)
+        assert out.time_step == dc.to_timedelta64(10)
 
 
 class TestFormatManager:

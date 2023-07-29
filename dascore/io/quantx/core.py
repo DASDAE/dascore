@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
-from dascore.io.core import PatchFileSummary
 from dascore.io import FiberIO, HDF5Reader
 
 from .utils import _get_qunatx_version_str, _read_quantx, _scan_quantx
@@ -33,7 +32,7 @@ class QuantXV2(FiberIO):
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: HDF5Reader) -> list[PatchFileSummary]:
+    def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
         """
         Scan an Optasense v2 file, return summary information about the file's contents.
         """

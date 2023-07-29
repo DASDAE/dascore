@@ -15,9 +15,8 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import PATCH_MERGE_ATTRS, PatchType, SpoolType
-from dascore.core.coordmanager import CoordManager, merge_coord_managers
 from dascore.core.attrs import PatchAttrs
-from dascore.io.core import PatchFileSummary
+from dascore.core.coordmanager import CoordManager, merge_coord_managers
 from dascore.exceptions import (
     CoordDataError,
     IncompatiblePatchError,
@@ -25,7 +24,7 @@ from dascore.exceptions import (
     PatchDimError,
 )
 from dascore.units import get_quantity
-from dascore.utils.docs import compose_docstring, format_dtypes
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
 from dascore.utils.models import merge_models
 from dascore.utils.time import to_float, to_timedelta64
@@ -233,7 +232,7 @@ def patches_to_df(
     elif isinstance(patches, pd.DataFrame):
         return patches
     else:
-        df = pd.DataFrame([x for x in scan_patches(patches)])
+        df = pd.DataFrame([x.flat_dump() for x in scan_patches(patches)])
         if df.empty:  # create empty df with appropriate columns
             cols = list(PatchAttrs().model_dump())
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
@@ -328,7 +327,7 @@ def _merge_patches(
     def _merge_compatible_patches(patch_df, dim):
         """perform merging after patch compatibility has been confirmed."""
         has_overlap = patch_df["_dist_to_previous"] <= to_timedelta64(0)
-        dist = patch_df["_dist_to_previous"] - df[f"d_{dim}"]
+        dist = patch_df["_dist_to_previous"] - df[f"{dim}_step"]
         overlap_start = patch_df[min_name] - dist
         patches = list(patch_df["patch"])
         # this handles removing overlap in patches.
@@ -350,7 +349,7 @@ def _merge_patches(
         patches = patches_to_df(patches)
     assert dim in {"time", "distance"}, "merge must be on time/distance for now"
     out = []  # list of merged patches
-    min_name, max_name, d_name = f"{dim}_min", f"{dim}_max", f"d_{dim}"
+    min_name, max_name, d_name = f"{dim}_min", f"{dim}_max", f"{dim}_step"
     # get sorted dataframe and group/sort column names
     df, sorted_names, group_names = _get_sorted_df_sort_group_names(patches)
     # get a boolean if each row is compatible with previous for merging
@@ -384,7 +383,7 @@ def _force_patch_merge(patch_dict_list):
         dims = dims[0].split(",")
         dims_vary = pd.Series({x: False for x in dims})
         for dim in dims:
-            cols = [f"{dim}_min", f"{dim}_max", f"d_{dim}"]
+            cols = [f"{dim}_min", f"{dim}_max", f"{dim}_step"]
             vals = df[cols].values
             vals_eq = vals == vals[[0], :]
             vals_null = pd.isnull(vals)
@@ -397,7 +396,7 @@ def _force_patch_merge(patch_dict_list):
 
     def _maybe_step(df, dim):
         """Get the expected step if all steps are close, else None."""
-        col = df[f"d_{dim}"].values
+        col = df[f"{dim}_step"].values
         if all_diffs_close_enough(col):
             return get_middle_value(col)
         return None
@@ -410,8 +409,6 @@ def _force_patch_merge(patch_dict_list):
             new_coord = new_coord.snap(merge_dim)[0]
             # TODO slightly different dt can be produced, let pass for now
             # need to think more about how the merging should work.
-            # coord = new_coord.coord_map[merge_dim]
-            # assert coord.step == expected_step, "incorrect sampling produced"
         return new_coord
 
     df = pd.DataFrame(patch_dict_list)
@@ -435,8 +432,7 @@ def _force_patch_merge(patch_dict_list):
     return [new_dict]
 
 
-@compose_docstring(fields=format_dtypes(PatchFileSummary.__annotations__))
-def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[dict[str, Any]]:
+def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[dc.PatchAttrs]:
     """
     Scan a sequence of patches and return a list of summaries.
 
@@ -450,7 +446,7 @@ def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[dict[str, Any
     """
     if isinstance(patches, dc.Patch):
         patches = [patches]  # make sure we have an iterable
-    out = [pa.attrs.flat_dump() for pa in patches]
+    out = [pa.attrs for pa in patches]
     return out
 
 
@@ -461,7 +457,7 @@ def get_start_stop_step(patch: PatchType, dim):
     assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"
     start = patch.attrs[f"{dim}_min"]
     end = patch.attrs[f"{dim}_max"]
-    step = patch.attrs[f"d_{dim}"]
+    step = patch.attrs[f"{dim}_step"]
     return start, end, step
 
 

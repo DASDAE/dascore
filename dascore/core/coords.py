@@ -10,7 +10,7 @@ from typing import Any, Annotated, TypeVar
 
 import numpy as np
 import pandas as pd
-from pydantic import model_validator, PlainValidator, field_serializer, model_serializer
+from pydantic import model_validator, PlainValidator, model_serializer, field_validator
 from rich.text import Text
 from typing_extensions import Self
 
@@ -33,27 +33,14 @@ from dascore.utils.models import (
     DascoreBaseModel,
     DTypeLike,
     UnitQuantity,
-    DateTime64,
-    TimeDelta64,
+    CommaSeparatedStr,
 )
 from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like
 
-
 # Valid values for min/max
-min_max_type = TypeVar("min_max_type", float, int, DateTime64, TimeDelta64, None)
+min_max_type = TypeVar("min_max_type")
 
-step_type = TypeVar("step_type", float, int, TimeDelta64, None)
-
-
-def _maybe_validate(self, val, _info):
-    """maybe Validate based on input type."""
-    return _get_compatible_values(val, self.dtype)
-
-
-def _maybe_str(self, val, _info):
-    """Maybe convert value to string if time-like for serialization."""
-    if dtype_time_like(self.dtype):
-        return str(val)
+step_type = TypeVar("step_type")
 
 
 class CoordSummary(DascoreBaseModel):
@@ -64,25 +51,62 @@ class CoordSummary(DascoreBaseModel):
     coordinates.
     """
 
-    min: min_max_type = None
-    max: min_max_type = None
-    step: step_type = None
-    shape: tuple[int, ...] | None = None
+    dtype: None | Annotated[str, PlainValidator(lambda x: str(x))] = ""
+    min: min_max_type | None = None
+    max: min_max_type | None = None
+    step: step_type | None = None
     units: UnitQuantity | None = None
-    dims: tuple[str, ...] = ()
-    dtype: Annotated[str, PlainValidator(lambda x: str(x))] = ""
-
-    field_serializer("min", when_used="json")(_maybe_str)
-    field_serializer("max", when_used="json")(_maybe_str)
-    field_serializer("step", when_used="json")(_maybe_str)
+    dims: CommaSeparatedStr = ""
 
     @model_serializer(when_used="json")
     def ser_model(self) -> dict[str, str]:
-        out = self.model_dump()
-        return {
-            i: str(v) if is_timedelta64(v) or is_datetime64(v) else v
-            for i, v in out.items()
-        }
+        return {i: str(v) for i, v in self.model_dump().items()}
+
+    @field_validator("min", "max", "step")
+    @classmethod
+    def ensure_consistent_dtype(cls, value, _info):
+        """Ensure the values are consistent with dtype."""
+        dtype = _info.data.get("dtype")
+        if not dtype:
+            return value
+        # for some reason all ints are getting converted to floats. This
+        # hack just fixes that. TODO: See if this is needed in a few version
+        # after pydantic 2.1.1
+        if pd.isnull(value):
+            return value
+        # convert numpy numerics back to python
+        if np.issubdtype(dtype, np.integer):
+            value = int(value)
+        elif np.issubdtype(dtype, np.floating):
+            value = float(value)
+        elif np.issubdtype(dtype, np.datetime64):
+            if _info.field_name == "step":
+                value = dc.to_timedelta64(value)
+            else:
+                value = dc.to_datetime64(value)
+        elif np.issubdtype(dtype, np.timedelta64):
+            value = dc.to_timedelta64(value)
+        return value
+
+    def to_coord(self) -> CoordRange:
+        """
+        Convert to coord range, if possible.
+        """
+        if pd.isnull(self.step):
+            msg = "Cannot convert summary which is not evenly sampled to coord."
+            raise CoordError(msg)
+        step = self.step
+        # this is a reverse coord
+        if np.sign(step) == -1:
+            start, stop = self.max, self.min + step
+        else:
+            start, stop = self.min, self.max + step
+        return CoordRange(
+            start=start,
+            stop=stop,
+            step=step,
+            units=self.units,
+        )
 
 
 @cache
@@ -442,7 +466,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Get attrs dict."""
         out = {f"{name}_min": self.min(), f"{name}_max": self.max()}
         if self.step:
-            out[f"d_{name}"] = self.step
+            out[f"{name}_step"] = self.step
         if self.units:
             out[f"{name}_units"] = self.units
         return out
@@ -453,7 +477,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             min=self.min(),
             max=self.max(),
             step=self.step,
-            shape=self.shape,
             dtype=self.dtype,
             units=self.units,
             dims=dims,
@@ -614,16 +637,20 @@ class CoordRange(BaseCoord):
         if start is not None and stop is not None:
             new_step = (stop - start) / len(self)
             return get_coord(start=start, stop=stop, step=new_step, units=self.units)
-        # for other combinations we just apply adjustments sequentially.
+        # For other combinations we just apply adjustments sequentially
+        # after ensuring that the types are compatible.
         out = self
         if step is not None:
+            step = _get_compatible_values(step, type(self.step))
             new_stop = out.start + step * len(out)
             out = out.new(stop=new_stop, step=step)
         if start is not None:
+            start = _get_compatible_values(start, self.dtype)
             diff = start - out.start
             new_stop = out.stop + diff
             out = out.new(start=start, stop=new_stop)
         if stop is not None:
+            stop = _get_compatible_values(stop, self.dtype)
             translation = (stop + out.step) - out.stop
             new_start = self.start + translation
             # we add step so the new range is inclusive of stop.
@@ -1011,7 +1038,7 @@ def get_coord_from_attrs(attrs, name):
     CoordError is raised.
     """
     start, stop = attrs.get(f"{name}_min"), attrs.get(f"{name}_max")
-    step = attrs.get(f"d_{name}")
+    step = attrs.get(f"{name}_step")
     units = attrs.get(f"{name}_units")
     if all([x is not None for x in [start, stop, step]]):
         return get_coord(start=start, stop=stop + step, step=step, units=units)

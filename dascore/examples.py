@@ -29,8 +29,8 @@ def _random_patch(
     station="",
     tag="random",
     shape=(300, 2_000),
-    d_time=to_timedelta64(1 / 250),
-    d_distance=1,
+    time_step=to_timedelta64(1 / 250),
+    distance_step=1,
     time_array=None,
     dist_array=None,
 ):
@@ -44,8 +44,8 @@ def _random_patch(
     t1 = np.atleast_1d(np.datetime64(starttime))[0]
     d1 = np.atleast_1d(start_distance)
     attrs = dict(
-        distance_step=d_distance,
-        time_step=to_timedelta64(d_time),
+        distance_step=distance_step,
+        time_step=to_timedelta64(time_step),
         category="DAS",
         time_min=t1,
         network=network,
@@ -78,8 +78,8 @@ def _wacky_dim_coord_patch():
     patch = _random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
     # check attrs
     attrs = patch.attrs
-    assert pd.isnull(attrs.d_time)
-    assert pd.isnull(attrs.d_distance)
+    assert pd.isnull(attrs.coords["time"].step)
+    assert pd.isnull(attrs.coords["time"].step)
     return patch
 
 
@@ -129,9 +129,9 @@ def _sin_wave_patch(
         dims=("time", "distance"),
         attrs={
             "time_min": to_datetime64(time_min),
-            "d_time": 1 / sample_rate,
+            "time_step": 1 / sample_rate,
             "distance_min": 1,
-            "d_distance": 1,
+            "distance_step": 1,
             "distance_max": 3,
         },
     )
@@ -187,7 +187,7 @@ def _random_spool(
     for _ in range(length):
         patch = _random_patch(starttime=starttime, **kwargs)
         out.append(patch)
-        diff = to_timedelta64(time_gap) + patch.attrs.d_time
+        diff = to_timedelta64(time_gap) + patch.attrs.coords["time"].step
         starttime = patch.attrs["time_max"] + diff
     return dc.spool(out)
 
@@ -205,7 +205,8 @@ def _diverse_spool():
     spool_overlaps = _random_spool(
         time_gap=-np.timedelta64(10, "ms"), station="overlaps"
     )
-    dt = to_timedelta64(spool_big_gaps[0].attrs["d_time"] / np.timedelta64(1, "s"))
+    time_step = spool_big_gaps[0].attrs.coords["time"].step
+    dt = to_timedelta64(time_step / np.timedelta64(1, "s"))
     spool_small_gaps = _random_spool(time_gap=dt, station="smallg")
     spool_way_late = _random_spool(
         length=1, starttime=np.datetime64("2030-01-01"), station="wayout"

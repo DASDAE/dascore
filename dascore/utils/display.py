@@ -134,12 +134,12 @@ def attrs_to_text(attrs) -> Text:
     """
     Convert pydantic model to text.
     """
-    default = dc.PatchAttrs()
+    attrs = dc.PatchAttrs.from_dict(attrs).model_dump(exclude_defaults=True)
+    # pop coords and dims since they show up in other places.
+    attrs.pop("coords"), attrs.pop("dims")
     txt = Text("➤ ") + Text("Attributes", style=dascore_styles["dc_yellow"])
     txt += Text("\n")
     for name, attr in dict(attrs).items():
-        if default.get(name, None) == attr or not (attr):
-            continue
         # determine styles here based on keys
         style = None
         if name.endswith("units"):

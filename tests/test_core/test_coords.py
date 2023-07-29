@@ -17,7 +17,6 @@ from dascore.core.coords import (
     CoordMonotonicArray,
     CoordRange,
     get_coord,
-    get_coord_from_attrs,
     CoordSummary,
 )
 from dascore.exceptions import CoordError, ParameterError
@@ -28,7 +27,7 @@ from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like, t
 COORDS = []
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_coord():
     """Create coordinates which are evenly sampled."""
@@ -36,7 +35,7 @@ def evenly_sampled_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_reversed_coord():
     """Create coordinates which are evenly sampled."""
@@ -44,7 +43,7 @@ def evenly_sampled_reversed_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_float_coord_with_units():
     """Create coordinates which are evenly sampled and have units."""
@@ -52,7 +51,7 @@ def evenly_sampled_float_coord_with_units():
     return get_coord(values=ar, units="m")
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_float_reverse_units_coord():
     """Create coordinates which are evenly sampled and have units."""
@@ -60,7 +59,7 @@ def evenly_sampled_float_reverse_units_coord():
     return get_coord(values=ar, units="m")
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_date_coord():
     """Create coordinates which are evenly sampled."""
@@ -68,7 +67,7 @@ def evenly_sampled_date_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_time_delta_coord():
     """Create coordinates which are evenly sampled."""
@@ -76,7 +75,7 @@ def evenly_sampled_time_delta_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def monotonic_float_coord():
     """Create coordinates which are evenly sampled."""
@@ -84,7 +83,7 @@ def monotonic_float_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def reverse_monotonic_float_coord():
     """Create coordinates which are evenly sampled."""
@@ -92,7 +91,7 @@ def reverse_monotonic_float_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def monotonic_datetime_coord():
     """Create coordinates which are evenly sampled."""
@@ -100,7 +99,7 @@ def monotonic_datetime_coord():
     return get_coord(values=dc.to_datetime64(ar))
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def random_coord():
     """Create coordinates which are evenly sampled."""
@@ -108,7 +107,7 @@ def random_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def random_date_coord():
     """Create coordinates which are evenly sampled."""
@@ -116,13 +115,13 @@ def random_date_coord():
     return get_coord(values=dc.to_datetime64(ar))
 
 
-@pytest.fixture(scope="class", params=COORDS)
+@pytest.fixture(scope="session", params=COORDS)
 def coord(request) -> BaseCoord:
     """Meta-fixture for returning all coords"""
     return request.getfixturevalue(request.param)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 def two_d_coord():
     """ "return a 2D coordinate."""
     ar = np.ones((10, 10))
@@ -298,10 +297,46 @@ class TestBasics:
         with pytest.raises(IndexError, match="exceeds coord length"):
             _ = evenly_sampled_coord[len(evenly_sampled_coord)]
 
+
+class TestCoordSummary:
+    """tests for converting to and from summary coords."""
+
+    @pytest.fixture(scope="session")
+    def summary(self, coord) -> CoordSummary:
+        """Convert each coord to a summary."""
+        return coord.to_summary()
+
+    def test_dtype_consistent(self, summary, coord):
+        """Ensure the datatype is preserved."""
+        dtype = np.dtype(summary.dtype)
+        min_ar = np.array(summary.min)
+        max_ar = np.array(summary.max)
+        assert np.issubdtype(min_ar.dtype, dtype)
+        assert np.issubdtype(max_ar.dtype, dtype)
+
     def test_to_summary(self, coord):
         """Ensure all coords can be converted to a summary."""
         out = coord.to_summary()
         assert isinstance(out, CoordSummary)
+
+    def test_coord_range_round_trip(self, coord):
+        """Coord ranges should round-trip to summaries and back."""
+        if not coord.evenly_sampled:
+            return
+        summary = coord.to_summary()
+        back = summary.to_coord()
+        assert back == coord
+
+        if not back.to_summary() == summary:
+            coord.to_summary()
+
+        assert back.to_summary() == summary
+
+    def test_to_summary_raises(self, random_coord):
+        """Ensure to_summary raises if not evenly sampled."""
+        match = "Cannot convert summary which is not evenly sampled"
+        with pytest.raises(CoordError, match=match):
+            random_coord.to_summary().to_coord()
 
 
 class TestGetSliceTuple:
@@ -1002,34 +1037,6 @@ class TestDegenerateCoords:
         assert not coord.sorted
         assert not coord.reverse_sorted
         assert coord.degenerate
-
-
-class TestCoordFromAttrs:
-    """Tests for creating coordinates from attrs."""
-
-    def test_missing_info_raises(self):
-        """Ensure missing values raise CoordError."""
-        attrs = dict(time_min=0, time_max=10)
-        with pytest.raises(CoordError, match="Could not get coordinate"):
-            get_coord_from_attrs(attrs, name="time")
-
-    def test_int_coords(self):
-        """Happy path for getting coords."""
-        attrs = dict(time_min=0, time_max=10, d_time=1)
-        coord = get_coord_from_attrs(attrs, name="time")
-        assert isinstance(coord, BaseCoord)
-        assert isinstance(coord, CoordRange)
-        assert coord.start == 0
-        assert coord.stop == 11
-        assert coord.step == 1
-        assert coord.values[0] == 0
-        assert coord.values[-1] == 10
-
-    def test_init_attr_with_units(self):
-        """Ensure units are also set."""
-        attrs = dict(time_min=0, time_max=10, d_time=1, time_units="s")
-        coord = get_coord_from_attrs(attrs, name="time")
-        assert dc.get_unit(coord.units) == dc.get_unit("s")
 
 
 class TestCoercion:

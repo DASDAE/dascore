@@ -2,16 +2,16 @@
 DASDAE format utilities
 """
 from __future__ import annotations
+
 import numpy as np
 
 import dascore as dc
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.attrs import PatchAttrs
-from dascore.io.core import PatchFileSummary
-from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int
+
 
 # --- Functions for writing DASDAE format
 
@@ -146,22 +146,22 @@ def _read_patch(patch_group, **kwargs):
     # try except.
     if kwargs:
         coords, data = coords.select(array=patch_group["data"], **kwargs)
+        # attrs = attrs.from_dict(attrs, coord_manager=coords)
     else:
         data = patch_group["data"][:]
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
 
-def _get_contents_from_patch_groups(path, file_version, file_format="DASDAE"):
+def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
     """Get the contents from each patch group."""
     out = []
-    with open_hdf5_file(path) as h5:
-        for group in h5.iter_nodes("/waveforms"):
-            contents = _get_patch_content_from_group(group)
-            # populate file info
-            contents["file_version"] = file_version
-            contents["file_format"] = file_format
-            contents["path"] = h5.filename
-            out.append(PatchFileSummary(**contents))
+    for group in h5.iter_nodes("/waveforms"):
+        contents = _get_patch_content_from_group(group)
+        # populate file info
+        contents["file_version"] = file_version
+        contents["file_format"] = file_format
+        contents["path"] = h5.filename
+        out.append(dc.PatchAttrs(**contents))
     return out
 
 

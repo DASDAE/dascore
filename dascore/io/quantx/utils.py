@@ -4,10 +4,10 @@ from __future__ import annotations
 import numpy as np
 from tables import NoSuchNodeError
 
+import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.coords import get_coord
-from dascore.io.core import PatchFileSummary
 from dascore.utils.time import to_datetime64
 
 # --- Getting format/version
@@ -88,7 +88,7 @@ def _scan_quantx(self, fi):
     out = _get_attrs(data_node, root_attrs)
     extras = dict(path=fi.filename, file_format=self.name, file_version=version)
     out.update(extras)
-    return [PatchFileSummary(**out)]
+    return [dc.PatchAttrs(**out)]
 
 
 #

@@ -23,7 +23,6 @@ from dascore.core.coords import (
     CoordMonotonicArray,
     CoordRange,
     get_coord,
-    get_coord_from_attrs,
 )
 
 from dascore.exceptions import (
@@ -626,7 +625,7 @@ class TestUpdateFromAttrs:
         """Ensure the step can be updated which changes endtime."""
         for dim in basic_coord_manager.dims:
             coord = basic_coord_manager.coord_map[dim]
-            attrs = {f"d_{dim}": coord.step * 10}
+            attrs = {f"{dim}_step": coord.step * 10}
             dist = coord.max() - coord.min()
             new = basic_coord_manager.update_from_attrs(attrs)
             new_coord = new.coord_map[dim]
@@ -645,12 +644,12 @@ class TestUpdateToAttrs:
             coord = coord_manager.coord_map[dim]
             start = getattr(attrs, f"{dim}_min")
             stop = getattr(attrs, f"{dim}_max")
-            step = getattr(attrs, f"d_{dim}")
+            step = getattr(attrs, f"{dim}_step")
             assert start == coord.min()
             assert stop == coord.max()
             assert step == coord.step
             vals_from_coord = coord.values
-            vals_from_attrs = get_coord_from_attrs(attrs, dim).values
+            vals_from_attrs = attrs.coords[dim].to_coord().values
             eqs = np.all(np.equal(vals_from_coord, vals_from_attrs))
             assert eqs or np.allclose(vals_from_attrs, vals_from_coord)
 

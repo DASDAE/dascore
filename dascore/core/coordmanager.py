@@ -54,7 +54,7 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import dascore_styles
-from dascore.core.coords import BaseCoord, get_coord, get_coord_from_attrs, CoordSummary
+from dascore.core.coords import BaseCoord, get_coord, CoordSummary
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
@@ -886,8 +886,8 @@ def get_coord_manager(
     def _coord_from_attrs(coord_map, dim_map, attrs, names):
         """Try to get coordinates from attributes."""
         for name in names:
-            with suppress(CoordError):
-                coord = get_coord_from_attrs(attrs, name)
+            with suppress(CoordError, KeyError):
+                coord = attrs.coords[name].to_coord()
                 coord_map[name] = coord
                 dim_map[name] = (name,)
 
@@ -929,6 +929,7 @@ def get_coord_manager(
     if isinstance(coords, CoordManager) and dims != coords.dims:
         kwargs = {i: v for i, v in zip(coords.dims, dims)}
         coords = coords.rename_coord(**kwargs)
+    attrs = dc.PatchAttrs.from_dict(attrs)  # ensure we have attrs
     coord_map, dim_map = _get_coord_dim_map(coords, dims, attrs)
     _check_and_fill_coords(coord_map, dim_map, dims, attrs)
     out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
@@ -952,7 +953,7 @@ def _get_coord_dim_map(coords, dims, attrs=None):
                 "(dimension, coord) "
             )
             raise CoordError(msg)
-        step = attrs.get(f"d_{name}") if attrs is not None else None
+        step = attrs.get(f"{name}_step") if attrs is not None else None
         out = get_coord(values=coord, step=step)
         # assert out.shape == np.shape(coord)
         return out, (name,)
@@ -980,7 +981,7 @@ def _get_coord_dim_map(coords, dims, attrs=None):
         # pull out any relevant info from attrs.
         maybe_attrs = attrs or {}
         units = maybe_attrs.get(f"{name}_units", None)
-        step = maybe_attrs.get(f"d_{name}", None)
+        step = maybe_attrs.get(f"{name}_step", None)
         coord_out = get_coord(values=coord[1], units=units, step=step)
         assert coord_out.shape == np.shape(coord[1])
         return coord_out, dim_names

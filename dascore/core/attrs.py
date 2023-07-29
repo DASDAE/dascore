@@ -210,7 +210,7 @@ class PatchAttrs(DascoreBaseModel):
     @classmethod
     def from_dict(
         cls,
-        attr_map,
+        attr_map: Mapping | PatchAttrs,
         coord_manager: dc.core.coordmanager.CoordManager | None = None,
     ) -> Self:
         """
@@ -240,16 +240,6 @@ class PatchAttrs(DascoreBaseModel):
     def dim_tuple(self):
         """Return a tuple of dimensions. The dims attr is a string."""
         return tuple(self.dims.split(","))
-
-    @property
-    def time_step(self):
-        """Return d_time. Start transition to time_step."""
-        return self.d_time
-
-    @property
-    def distance_step(self):
-        """Return d_time. Start transition to distance_step."""
-        return self.d_distance
 
     def rename_dimension(self, **kwargs):
         """

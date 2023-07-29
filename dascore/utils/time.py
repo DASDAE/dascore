@@ -48,6 +48,7 @@ def _str_to_datetime64(obj: str) -> np.datetime64:
 
 @to_datetime64.register(float)
 @to_datetime64.register(int)
+@to_datetime64.register(np.number)
 def _float_to_datetime(num: float | int) -> np.datetime64:
     """Convert a float to a single datetime"""
     ar = np.array([num])
@@ -126,6 +127,7 @@ def to_timedelta64(obj: float | np.ndarray | str):
 
 @to_timedelta64.register(float)
 @to_timedelta64.register(int)
+@to_timedelta64.register(np.number)
 def _float_to_timedelta64(num: float | int) -> np.datetime64:
     """Convert a float to a single datetime."""
     ar = np.array([num])
@@ -211,6 +213,7 @@ def to_int(obj: timeable_types | np.ndarray) -> np.ndarray:
 
 @to_int.register(float)
 @to_int.register(int)
+@to_int.register(np.number)
 def _float_to_num(num: float | int) -> float | int:
     """convert number to int"""
     return int(num)

@@ -13,6 +13,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
+import dascore.io
 from dascore.constants import PatchType, numeric_types, timeable_types
 from dascore.exceptions import InvalidSpoolError
 from dascore.utils.chunk import ChunkManager
@@ -366,10 +367,8 @@ def spool_from_str(path, **kwargs):
     # A single file was passed. If the file format supports quick scanning
     # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
-        from dascore.io.core import FiberIO
-
         _format, _version = dc.get_format(path)
-        formatter = FiberIO.manager.get_fiberio(_format, _version)
+        formatter = dascore.io.FiberIO.manager.get_fiberio(_format, _version)
         if formatter.implements_scan:
             from dascore.clients.filespool import FileSpool
 

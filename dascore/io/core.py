@@ -14,7 +14,7 @@ from typing import get_type_hints, Annotated, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 from typing_extensions import Self
 
 import dascore as dc
@@ -29,7 +29,6 @@ from dascore.constants import (
 )
 from dascore.core.attrs import str_validator
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
-from dascore.utils.docs import compose_docstring
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.misc import cached_method, iterate, suppress_warnings
 from dascore.utils.models import (
@@ -64,10 +63,18 @@ class PatchFileSummary(DascoreBaseModel):
     time_min: DateTime64 = np.datetime64("NaT")
     time_max: DateTime64 = np.datetime64("NaT")
     time_step: TimeDelta64 = np.timedelta64("NaT")
+
+    distance_min: DateTime64 = np.datetime64("NaT")
+    distance_max: DateTime64 = np.datetime64("NaT")
+    distance_step: TimeDelta64 = np.timedelta64("NaT")
     # the attributes to index on
     file_version: str = ""
     file_format: str = ""
     path: str | Path = ""
+
+    @property
+    def dim_tuple(self):
+        return tuple(self.dims.split(","))
 
     @classmethod
     def get_index_columns(cls) -> tuple[str, ...]:
@@ -81,6 +88,17 @@ class PatchFileSummary(DascoreBaseModel):
             return patch_attrs
         assert hasattr(patch_attrs, "flat_dump")
         return cls(**patch_attrs.flat_dump())
+
+    @model_validator(mode="before")
+    @classmethod
+    def translate_d_to_step(cls, data):
+        """Translate d_time and d_distance to time_step, distance_step."""
+        if isinstance(data, dict):
+            for name in ["time", "distance"]:
+                step_name, d_name = f"{name}_step", f"d_{name}"
+                if step_name not in data and d_name in data:
+                    data[step_name] = data.pop(d_name)
+        return data
 
     def flat_dump(self):
         """Alias for dump, for compatibility with PatchAttrs.flat_dump"""
@@ -361,7 +379,7 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, resource) -> list[PatchFileSummary]:
+    def scan(self, resource) -> list[dc.PatchAttrs]:
         """
         Returns a list of summary info for patches contained in file.
         """
@@ -375,10 +393,11 @@ class FiberIO:
             raise NotImplementedError(msg)
         out = []
         for pa in spool:
-            info = dict(pa.attrs)
-            info["file_format"] = self.name
-            info["path"] = str(resource)
-            out.append(PatchFileSummary(**info))
+            new = pa.attrs.update(
+                file_format=self.name,
+                path=str(resource),
+            )
+            out.append(new)
         return out
 
     def write(self, spool: SpoolType, resource):
@@ -524,7 +543,6 @@ def read(
         return out
 
 
-@compose_docstring(fields=list(PatchFileSummary.model_fields))
 def scan_to_df(
     path: Path | str | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
@@ -533,17 +551,15 @@ def scan_to_df(
     """
     Scan a path, return a dataframe of contents.
 
+    The columns of the dataframe depend on the attributes and coordinates
+    found in the data files.
+
     Parameters
     ----------
     path
         The path the to file to scan
     file_format
         Format of the file. If not provided DASCore will try to determine it.
-
-    Returns
-    -------
-    Return a dataframe with columns:
-        {fields}
     """
     info = scan(
         path=path,
@@ -569,12 +585,11 @@ def _iterate_scan_inputs(patch_source):
             yield el
 
 
-@compose_docstring(fields=list(PatchFileSummary.__annotations__))
 def scan(
     path: Path | str | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
-) -> list[PatchFileSummary]:
+) -> list[dc.PatchAttrs]:
     """
     Scan a potential patch source, return a list of PatchAttrs.
 
@@ -591,15 +606,14 @@ def scan(
 
     Returns
     -------
-    A list of [PatchFileSummary](`dascore.core.attrs.PatchFileSummary`) which
-    have the following fields:
-        {fields}
+    A list of [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) or subclasses
+    which may have extra fields.
     """
     out = []
     for patch_source in _iterate_scan_inputs(path):
         # just pull attrs from patch
         if isinstance(patch_source, dc.Patch):
-            out.append(PatchFileSummary(**dict(patch_source.attrs)))
+            out.append(patch_source.attrs.flat_dump())
             continue
         with IOResourceManager(patch_source) as man:
             # get fiberio
@@ -617,7 +631,7 @@ def scan(
             # this will get an open file handle to past to get_resource
             patch_thing = man.get_resource(req_type)
             for attr in formatter.scan(patch_thing, _pre_cast=True):  # noqa
-                out.append(PatchFileSummary.get_summary(attr))
+                out.append(dc.PatchAttrs.from_dict(attr))
     return out
 
 

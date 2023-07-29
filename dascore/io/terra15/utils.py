@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from tables.exceptions import NoSuchNodeError
 
+import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.coords import get_coord
-from dascore.io.core import PatchFileSummary
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- Getting format/version
@@ -103,7 +103,7 @@ def _scan_terra15(self, fi):
     version, data_node = _get_version_data_node(root)
     out = _get_default_attrs(root_attrs)
     out.update(_get_extra_scan_attrs(self, version, fi.filename, data_node))
-    return [PatchFileSummary(**out)]
+    return [dc.PatchAttrs(**out)]
 
 
 # --- Reading patch

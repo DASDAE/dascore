@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from ..core import PatchFileSummary
 from dascore.io import FiberIO, HDF5Reader
 
 from .utils import _get_prodml_attrs, _get_prodml_version_str, _read_prodml
@@ -33,7 +32,7 @@ class ProdMLV2_0(FiberIO):
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: HDF5Reader) -> list[PatchFileSummary]:
+    def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
         """
         Scan a prodml file, return summary information about the file's contents.
         """
@@ -43,7 +42,7 @@ class ProdMLV2_0(FiberIO):
             "file_format": self.name,
             "file_version": str(file_version),
         }
-        return _get_prodml_attrs(resource, extras=extras, cls=PatchFileSummary)
+        return _get_prodml_attrs(resource, extras=extras, cls=dc.PatchAttrs)
 
     def read(
         self,

@@ -12,7 +12,6 @@ import dascore as dc
 import dascore.examples
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
-from dascore.io.core import PatchFileSummary
 from dascore.exceptions import ParameterError
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func
@@ -90,7 +89,7 @@ class TestDirectoryIndex:
 
     def test_index_columns(self, basic_index_df):
         """Ensure expected columns show up in the index."""
-        schema_fields = PatchFileSummary.get_index_columns()
+        schema_fields = list(dc.PatchAttrs.flat_dump())
         assert set(basic_index_df).issuperset(schema_fields)
 
     def test_patches_extracted(self, basic_file_spool):

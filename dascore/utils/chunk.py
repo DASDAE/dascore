@@ -116,7 +116,7 @@ class ChunkManager:
     tolerance
         The upper limit of a gap to tolerate in terms of the sampling
         along the desired dimension. E.G., the default value means entities
-        with gaps <= 1.5 * d_{name} will be merged.
+        with gaps <= 1.5 * {name}_step will be merged.
     **kawrgs
         kwargs specify the column along which to chunk. The key specifies the
         column along which to chunk, typically, `time` or `distance`, and the
@@ -190,10 +190,10 @@ class ChunkManager:
         Because sampling can be off a little, this adds some tolerance for
         how sampling affects groups.
 
-        Tolerance affects how close samples have to be to be considered
+        Tolerance affects how close samples have to be in order to count as
         the same. 5% is used here.
         """
-        col = df[f"d_{self._name}"].values
+        col = df[f"{self._name}_step"].values
         sort_args = np.argsort(col)
         sorted_col = col[sort_args]
         roll_forward = np.roll(sorted_col, shift=1)
@@ -220,7 +220,7 @@ class ChunkManager:
         """Reconstruct the dataframe."""
         cols = f"{name}_min", f"{name}_max"
         out = pd.DataFrame(start_stop, columns=list(cols))
-        out[f"d_{name}"] = get_middle_value(df[f"d_{name}"].values)
+        out[f"{name}_step"] = get_middle_value(df[f"{name}_step"].values)
         merger = df.drop(columns=out.columns)
         for col in merger:
             vals = merger[col].unique()
@@ -364,7 +364,7 @@ class ChunkManager:
         """
         Chunk a dataframe into new contiguous segments.
 
-        The dataframe must have column names {key}_max, {key}_min, and d_{key}
+        The dataframe must have column names {key}_max, {key}_min, and {key}_step
         where {key} is the key used in the kwargs.
 
         Parameters
