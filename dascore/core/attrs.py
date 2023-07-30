@@ -10,6 +10,7 @@ from functools import reduce
 from typing import Annotated, Literal
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from pydantic import ConfigDict, PlainValidator
 from pydantic import Field, model_validator
@@ -277,6 +278,15 @@ class PatchAttrs(DascoreBaseModel):
         for coord_name, coord in out.pop("coords").items():
             for name, val in coord.items():
                 out[f"{coord_name}_{name}"] = val
+            # ensure step has right type if nullish
+            step_name, start_name = f"{coord_name}_step", f"{coord_name}_min"
+            step, start = out[step_name], out[start_name]
+            if step is None:
+                is_time = isinstance(start, (np.datetime64, np.timedelta64))
+                if is_time:
+                    out[step_name] = np.timedelta64("NaT")
+                elif isinstance(start, (float, np.floating)):
+                    out[step_name] = np.NaN
         return out
 
 

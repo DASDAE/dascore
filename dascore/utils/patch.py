@@ -218,13 +218,14 @@ def patches_to_df(
     A dataframe with the attrs of each patch converted to a columns
     plus a field called 'patch' which contains a reference to the patches.
     """
-    if isinstance(patches, dc.BaseSpool):
-        df = patches._df
+
+    if hasattr(patches, "_df"):
+        df = patches._df  # noqa
     # Handle spool case
     elif hasattr(patches, "get_contents"):
-        return patches.get_contents()
+        df = patches.get_contents()
     elif isinstance(patches, pd.DataFrame):
-        return patches
+        df = patches
     else:
         df = pd.DataFrame([x.flat_dump() for x in scan_patches(patches)])
         if df.empty:  # create empty df with appropriate columns

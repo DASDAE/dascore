@@ -180,10 +180,11 @@ def get_interval_columns(df, name, arrays=False):
     if missing_cols:
         msg = f"Dataframe is missing {missing_cols} to chunk on {name}"
         raise KeyError(msg)
+    start, stop, step = df[names[0]], df[names[1]], df[names[2]]
     if not arrays:
-        return df[names[0]], df[names[1]], df[names[2]]
+        return start, stop, step
     else:
-        return df[names[0]].values, df[names[1]].values, df[names[2]].values
+        return start.values, stop.values, step.values
 
 
 def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:

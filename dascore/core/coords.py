@@ -75,13 +75,13 @@ class CoordSummary(DascoreBaseModel):
         # for some reason all ints are getting converted to floats. This
         # hack just fixes that. TODO: See if this is needed in a few version
         # after pydantic 2.1.1
-        if np.issubdtype(dtype, np.datetime64):
+        if pd.isnull(value):
+            return value
+        elif np.issubdtype(dtype, np.datetime64):
             if _info.field_name == "step":
                 value = dc.to_timedelta64(value)
             else:
                 value = dc.to_datetime64(value)
-        elif pd.isnull(value):
-            return value
         elif np.issubdtype(dtype, np.timedelta64):
             value = dc.to_timedelta64(value)
         # convert numpy numerics back to python

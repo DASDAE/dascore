@@ -185,7 +185,7 @@ class ChunkManager:
         group_num = has_gap.astype(np.int64).cumsum()
         return group_num[start.index]
 
-    def _get_sampling_group_num(self, df, tolerance=0.05) -> pd.Series:
+    def _get_sampling_group_num(self, step, tolerance=0.05) -> pd.Series:
         """
         Because sampling can be off a little, this adds some tolerance for
         how sampling affects groups.
@@ -193,7 +193,7 @@ class ChunkManager:
         Tolerance affects how close samples have to be in order to count as
         the same. 5% is used here.
         """
-        col = df[f"{self._name}_step"].values
+        col = step.values
         sort_args = np.argsort(col)
         sorted_col = col[sort_args]
         roll_forward = np.roll(sorted_col, shift=1)
@@ -201,7 +201,7 @@ class ChunkManager:
         out_of_threshold = diff > tolerance
         group_number = numpy.cumsum(out_of_threshold)
         # undo sorting
-        out = pd.Series(group_number[np.argsort(sort_args)], index=df.index)
+        out = pd.Series(group_number[np.argsort(sort_args)], index=step.index)
         return out
 
     def _get_duration_overlap(self, duration, start, step, overlap=None):
@@ -351,7 +351,7 @@ class ChunkManager:
         being consistent and group columns matching.
         """
         cont_g = self._get_continuity_group_number(start, stop, step)
-        samp_g = self._get_sampling_group_num(df)
+        samp_g = self._get_sampling_group_num(step)
         col_g = self._get_col_group(df, cont_g)
         group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
         group = reduce(lambda x, y: x + "_" + y, group_series)
