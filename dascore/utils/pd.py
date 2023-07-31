@@ -32,8 +32,9 @@ def _remove_base_path(series: pd.Series, base="") -> pd.Series:
     if series.empty:
         return series
     unix_paths = series.str.replace(os.sep, "/")
-    unix_base_path = str(base).replace(os.sep, "/")
-    return unix_paths.str.replace(unix_base_path, "", regex=False)
+    unix_base_path = (str(base) + "/").replace(os.sep, "/")
+    out = unix_paths.str.replace(unix_base_path, "", regex=False)
+    return out
 
 
 def _get_min_max_query(kwargs, df):
@@ -199,7 +200,9 @@ def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
 
     def _get_slice(value):
         """Ensure the value can rep. a slice."""
-        assert isinstance(value, (slice, Sequence)) and len(value) == 2
+        if not isinstance(value, (slice, Sequence)) or len(value) != 2:
+            msg = "slice must be a length 2 tuple, you passed {kwargs}"
+            raise ParameterError(msg)
         if not isinstance(value, slice):
             value = slice(*value)
         return value
@@ -380,9 +383,13 @@ def list_ser_to_str(ser: pd.Series) -> pd.Series:
     return pd.Series(values, index=ser.index, dtype=object)
 
 
-def _model_list_to_df(mod_list: Sequence[dc.PatchAttrs]) -> pd.DataFrame:
-    """Get a dataframe from a sequence of pydantic models."""
-    df = pd.DataFrame([x.flat_dump() for x in mod_list])
+def _model_list_to_df(mod_list: Sequence[dc.PatchAttrs], exclude=None) -> pd.DataFrame:
+    """
+    Get a dataframe from a sequence of pydantic models.
+
+    Optionally, exclude certain columns
+    """
+    df = pd.DataFrame([x.flat_dump(exclude=exclude) for x in mod_list])
     if "dims" in df.columns:
         df["dims"] = list_ser_to_str(df["dims"])
     return df

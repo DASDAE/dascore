@@ -23,7 +23,7 @@ def example_df_2():
         "bp_max": [110, 145, 121, 99, 165],
         "time_min": time_min,
         "time_max": time_max,
-        "d_time": [np.timedelta64(1, "s") for _ in range(5)],
+        "time_step": [np.timedelta64(1, "s") for _ in range(5)],
     }
     out = pd.DataFrame(raw_data, columns=list(raw_data))
     return out
@@ -169,8 +169,8 @@ class TestAdjustSegments:
         dtime = to_timedelta64(0.01)
         df = (
             pd.DataFrame(index=range(2))
-            .assign(time_min=time_mins, time_max=time_maxs, d_time=dtime)
-            .assign(distance_min=0, distance_max=100, d_distance=1, station="BOB")
+            .assign(time_min=time_mins, time_max=time_maxs, time_step=dtime)
+            .assign(distance_min=0, distance_max=100, distance_step=1, station="BOB")
         )
         return df
 

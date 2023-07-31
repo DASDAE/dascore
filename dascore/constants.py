@@ -105,27 +105,6 @@ NUMPY_TIME_UNIT_MAPPING = {
     "day": "D",
 }
 
-# attributes which are indexed by file indexer.
-INDEXED_PATCH_ATTRS = (
-    "data_type",
-    "data_category",
-    "time_min",
-    "time_max",
-    "d_time",
-    "distance_min",
-    "distance_max",
-    "d_distance",
-    "instrument_id",
-    "cable_id",
-    "dims",
-    "tag",
-    "station",
-    "network",
-    "path",
-    "file_version",
-    "file_format",
-)
-
 # A description of basic patch metadata.
 basic_summary_attrs = f"""
 data_type

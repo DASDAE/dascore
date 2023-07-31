@@ -121,7 +121,12 @@ class DirectoryIndexer(AbstractIndexer):
         con2 = index["time_max"] <= (time_min - buffer)
         pre_filter_df = index[~(con1 | con2)]
         out = pre_filter_df[
-            filter_df(pre_filter_df, time=(time_min, time_max), **kwargs)
+            filter_df(
+                pre_filter_df,
+                time=(time_min, time_max),
+                ignore_bad_kwargs=True,
+                **kwargs,
+            )
         ]
         return out
 
@@ -216,7 +221,7 @@ class DirectoryIndexer(AbstractIndexer):
         update_time = time.time()
         new_files = list(self._get_file_iterator(paths=paths, only_new=True))
         smooth_iterator = track(new_files, f"Indexing {self.path.name}")
-        data_list = [y.model_dump() for x in smooth_iterator for y in dc.scan(x)]
+        data_list = [y.flat_dump() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
         if not df.empty:
             # ensure the base path is not in the path column

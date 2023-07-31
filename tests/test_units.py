@@ -64,7 +64,7 @@ class TestGetQuantStr:
         # with no magnitude the string should be simple units
         quant = get_quantity("m/s")
         out = get_quantity_str(quant)
-        assert out == "meter / second"
+        assert out == "m / s"
         # with magnitude it should be included.
         quant = get_quantity("10 m /s")
         out = get_quantity_str(quant)
@@ -77,7 +77,7 @@ class TestUnitAndFactor:
     def test_quantx_units(self):
         """tests for the quantx unit str."""
         mag, ustr = get_factor_and_unit("rad * 2pi/2^16")
-        assert ustr == "pi * radian"
+        assert ustr == "rad * π"
         assert np.isclose(mag, (2 / (2**16)))
 
     def test_simplify_units(self):
@@ -108,7 +108,7 @@ class TestGetQuantity:
     def test_get_temp(self):
         """Get quantity should work with temperatures."""
         quant1 = get_quantity("degC")
-        assert "Cel" in str(quant1)
+        assert "°C" in str(quant1)
 
 
 class TestConvenientImport:

@@ -10,6 +10,7 @@ import pytest
 
 import dascore as dc
 import dascore.examples
+from dascore.io.core import PatchFileSummary
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
 from dascore.exceptions import ParameterError
@@ -89,7 +90,7 @@ class TestDirectoryIndex:
 
     def test_index_columns(self, basic_index_df):
         """Ensure expected columns show up in the index."""
-        schema_fields = list(dc.PatchAttrs.flat_dump())
+        schema_fields = list(PatchFileSummary.model_fields)
         assert set(basic_index_df).issuperset(schema_fields)
 
     def test_patches_extracted(self, basic_file_spool):
@@ -156,9 +157,9 @@ class TestDirectoryIndex:
         df = dc.spool(base_path).update().get_contents()
         # ensure each sub-directory is represented
         paths = df["path"]
-        assert any(paths.str.startswith("/sub_0"))
-        assert any(paths.str.startswith("/sub_0/sub_1"))
-        assert any(paths.str.startswith("/sub_0/sub_1/sub_2"))
+        assert any(paths.str.startswith("sub_0"))
+        assert any(paths.str.startswith("sub_0/sub_1"))
+        assert any(paths.str.startswith("sub_0/sub_1/sub_2"))
 
 
 class TestSelect:
@@ -247,8 +248,8 @@ class TestSelect:
         assert isinstance(patch, dc.Patch)
 
     def test_nice_error_message_bad_select(self, diverse_directory_spool):
-        """Ensure a nice error message is raised for bad"""
-        with pytest.raises(ParameterError, match="Bad filter parameter"):
+        """Ensure a nice error message is raised for bad filter param."""
+        with pytest.raises(ParameterError, match="must be a length 2 tuple"):
             _ = diverse_directory_spool.select(time=None)[0]
 
     def test_select_correct_history_str(self, diverse_directory_spool):

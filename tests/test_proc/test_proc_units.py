@@ -28,7 +28,7 @@ class TestSetUnits:
         unit_str = "furlong"  # A silly unit that wont be used on patch
         for dim in patch.dims:
             expected_quant = get_quantity(unit_str)
-            coord = dascore.proc.coords.get_coord(dim)
+            coord = patch.get_coord(dim)
             new = patch.set_units(**{dim: unit_str})
             attr = new.attrs
             # first check attributes

@@ -8,7 +8,6 @@ from operator import mul
 
 import numpy as np
 
-import dascore.proc.coords
 from dascore.constants import PatchType
 from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
@@ -33,15 +32,13 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
 
     def _get_new_coords_and_array(patch, array, dims):
         """Get new coordinates with smashed (or not) coordinates."""
-        new_coords = {
-            x: _quasi_mean(dascore.proc.coords.get_coord(x).data) for x in dims
-        }
+        new_coords = {x: _quasi_mean(patch.get_coord(x).data) for x in dims}
         # also add related coords indicating start/stop
         for name in dims:
-            coord = dascore.proc.coords.get_coord(name).data
+            coord = patch.get_coord(name).data
             new_coords[f"{name}_min"] = (name, np.array([coord.min()]))
             new_coords[f"{name}_max"] = (name, np.array([coord.max()]))
-        cm = dascore.proc.coords.update_coords(**new_coords)
+        cm = patch.update_coords(**new_coords)
         return array, cm
 
     array = patch.data

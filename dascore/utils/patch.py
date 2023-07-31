@@ -272,7 +272,7 @@ def merge_patches(
         "dimension."
     )
     warnings.warn(msg, DeprecationWarning, stacklevel=2)
-    return dc.spool(patches).chunk(**{dim: dim}, tolerance=tolerance)
+    return dc.spool(patches).chunk(**{dim: None}, tolerance=tolerance)
 
 
 def _force_patch_merge(patch_dict_list):

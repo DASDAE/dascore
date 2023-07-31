@@ -70,7 +70,7 @@ def get_factor_and_unit(
         return 1.0, None
     if simplify:
         quant = quant.to_base_units()
-    return quant.magnitude, str(quant.units)
+    return quant.magnitude, get_quantity_str(quant.units)
 
 
 @cache
@@ -169,7 +169,7 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
             quant_value = str(quant.units)
         else:
             quant_value = str(quant)
-    return str(quant_value).replace(" ", "")  # no space in str
+    return str(quant_value)
 
 
 def get_filter_units(

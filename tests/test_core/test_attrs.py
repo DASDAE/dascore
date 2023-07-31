@@ -162,6 +162,15 @@ class TestPatchAttrs:
         }
         assert set(out).issuperset(expected)
 
+    def test_flat_dump_coords(self, more_coords_attrs):
+        """Ensure flat dim with dim_tuple works."""
+        attrs = more_coords_attrs
+        out = attrs.flat_dump(dim_tuple=True)
+        assert "depth" in out
+        depth = attrs.coords["depth"]
+        dep_min, dep_max = depth.min, depth.max
+        assert out["depth"] == (dep_min, dep_max)
+
 
 class TestSummaryAttrs:
     """Tests for summarizing a schema."""

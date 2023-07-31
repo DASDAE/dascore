@@ -25,7 +25,6 @@ from dascore.constants import (
     VALID_DATA_TYPES,
     VALID_DATA_CATEGORIES,
     max_lens,
-    INDEXED_PATCH_ATTRS,
 )
 from dascore.core.attrs import str_validator
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
@@ -63,10 +62,6 @@ class PatchFileSummary(DascoreBaseModel):
     time_min: DateTime64 = np.datetime64("NaT")
     time_max: DateTime64 = np.datetime64("NaT")
     time_step: TimeDelta64 = np.timedelta64("NaT")
-
-    distance_min: DateTime64 = np.datetime64("NaT")
-    distance_max: DateTime64 = np.datetime64("NaT")
-    distance_step: TimeDelta64 = np.timedelta64("NaT")
     # the attributes to index on
     file_version: str = ""
     file_format: str = ""
@@ -75,11 +70,6 @@ class PatchFileSummary(DascoreBaseModel):
     @property
     def dim_tuple(self):
         return tuple(self.dims.split(","))
-
-    @classmethod
-    def get_index_columns(cls) -> tuple[str, ...]:
-        """Return the column names which should be used for indexing."""
-        return INDEXED_PATCH_ATTRS
 
     @classmethod
     def get_summary(cls, patch_attrs: dc.PatchAttrs | Self) -> Self:
@@ -547,6 +537,7 @@ def scan_to_df(
     path: Path | str | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
+    exclude=("history",),
 ) -> pd.DataFrame:
     """
     Scan a path, return a dataframe of contents.
@@ -560,13 +551,18 @@ def scan_to_df(
         The path the to file to scan
     file_format
         Format of the file. If not provided DASCore will try to determine it.
+    file_version
+        The version string of the file.
+    exclude
+        A sequence of strings to exclude from the analysis.
+
     """
     info = scan(
         path=path,
         file_format=file_format,
         file_version=file_version,
     )
-    df = _model_list_to_df(info)
+    df = _model_list_to_df(info, exclude=exclude)
     return df
 
 
@@ -613,7 +609,7 @@ def scan(
     for patch_source in _iterate_scan_inputs(path):
         # just pull attrs from patch
         if isinstance(patch_source, dc.Patch):
-            out.append(patch_source.attrs.flat_dump())
+            out.append(patch_source.attrs)
             continue
         with IOResourceManager(patch_source) as man:
             # get fiberio

@@ -80,7 +80,7 @@ def open_hdf5_file(
     A helper function for getting a `tables.file.File` object.
 
     If a file reference (str or Path) is passed this context manager will
-    close the file, if a File
+    close the file when it exists.
 
     Parameters
     ----------
@@ -151,12 +151,12 @@ class HDFPatchIndexManager:
     # string column sizes in hdf5 table
     _min_itemsize = max_lens
     # columns which should be indexed for fast querying
-    _query_columns = ("time_min", "time_max", "distance_min", "distance_max")
+    _query_columns = ("time_min", "time_max")
     # functions applied to encode dataframe before saving to hdf5
     _column_encoders = {
         "time_min": to_int,
         "time_max": to_int,
-        "d_time": to_int,
+        "time_step": to_int,
         "dims": list_ser_to_str,
         "path": lambda x: x.astype(str),
     }
@@ -164,10 +164,10 @@ class HDFPatchIndexManager:
     _column_decorders = {
         "time_min": ns_to_datetime,
         "time_max": ns_to_datetime,
-        "d_time": ns_to_timedelta,
+        "time_step": ns_to_timedelta,
     }
     _base_model = PatchFileSummary
-    index_columns = tuple(_base_model.get_index_columns())
+    index_columns = tuple(_base_model.model_fields)
     # The minimum version of dascore required to read this index. If an older
     # version is used an error will be raised.
     _min_version = "0.0.1"
@@ -198,7 +198,10 @@ class HDFPatchIndexManager:
         """Encode the table for writing to hdf5."""
         # apply column encoders, make paths relative to reference path
         # and drop any non-index columns.
+        cols = set(df.columns)
         for col, func in self._column_encoders.items():
+            if col not in cols:
+                continue
             df[col] = func(df[col])
         out = (
             df.pipe(fill_defaults_from_pydantic, self._base_model)
@@ -259,10 +262,10 @@ class HDFPatchIndexManager:
         update_time=None,
         base_path: str | Path = "",
     ):
-        """convert updates to dataframe, then append to index table"""
+        """Convert updates to dataframe, then append to index table"""
         # read in dataframe and prepare for input into hdf5 index
         update_time = update_time or time.time()
-        df = self.encode_table(update_df, path=base_path)
+        df = self.encode_table(update_df.copy(), path=base_path)
         with _HDF5Store(self.path) as store:
             try:
                 nrows = store.get_storer(self._index_node).nrows

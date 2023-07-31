@@ -208,6 +208,7 @@ class DataFrameSpool(BaseSpool):
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
+        out = []
         df_dict_list = self._df_to_dict_list(joined)
         expected_len = len(joined["current_index"].unique())
         for patch_kwargs in df_dict_list:
@@ -220,11 +221,15 @@ class DataFrameSpool(BaseSpool):
                 for i, v in kwargs.items()
                 if i in patch.dims or i in patch.coords.coord_map
             }
-            patch_kwargs["patch"] = patch.select(**select_kwargs)
-            # out_list.append(patch.select(**select_kwargs))
-        if len(df_dict_list) > expected_len:
-            df_dict_list = _force_patch_merge(df_dict_list)
-        return [x["patch"] for x in df_dict_list]
+            trimmed_patch: dc.Patch = patch.select(**select_kwargs)
+            # its unfortunate, but currently we need to regenerate the patch
+            # dict because the index doesn't carry all the dimensional info
+            info = trimmed_patch.attrs.flat_dump(exclude=["history"])
+            info["patch"] = trimmed_patch
+            out.append(info)
+        if len(out) > expected_len:
+            out = _force_patch_merge(out)
+        return [x["patch"] for x in out]
 
     @staticmethod
     def _get_dummy_dataframes(input_df):

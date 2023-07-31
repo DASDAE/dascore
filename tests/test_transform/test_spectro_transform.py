@@ -23,8 +23,8 @@ class TestSpectroTransform:
         patch = random_patch.set_units("m/s")
         spec_patch = patch.tran.spectrogram("time")
         # first check coord units
-        coord1 = dascore.proc.coords.get_coord("time")
-        coord2 = dascore.proc.coords.get_coord("ft_time")
+        coord1 = patch.get_coord("time")
+        coord2 = patch.get_coord("ft_time")
         units1 = dc.get_quantity(coord1.units)
         units2 = dc.get_quantity(coord2.units)
         assert units1 == 1 / units2
@@ -46,7 +46,7 @@ class TestSpectroTransform:
         units unchanged.
         """
         time_1 = random_patch.get_coord("time")
-        time_2 = dascore.proc.coords.get_coord("time")
+        time_2 = spec_patch.get_coord("time")
         assert time_1.units == time_2.units
 
     def test_time_first(self, random_patch):

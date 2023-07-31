@@ -270,17 +270,31 @@ class PatchAttrs(DascoreBaseModel):
         out = {i: v for i, v in contents.items() if not i.startswith("_")}
         return self.__class__(**out)
 
-    def flat_dump(self) -> dict:
+    def flat_dump(self, dim_tuple=False, exclude=None) -> dict:
         """
-        Flatten the coordinates and dump to dict
+        Flatten the coordinates and dump to dict.
+
+        Parameters
+        ----------
+        dim_tuple
+            If True, return dimensional tuple instead of range. EG, the
+            output will have {time: (min, max)} rather than
+            {time_min: ..., time_max: ...,}. This is useful because it can
+            be passed to read, scan, select, etc.
+        exclude
+            keys to exclude.
         """
-        out = self.model_dump()
+        out = self.model_dump(exclude=exclude)
         for coord_name, coord in out.pop("coords").items():
-            for name, val in coord.items():
-                out[f"{coord_name}_{name}"] = val
+            names = list(coord)
+            if dim_tuple:
+                names = sorted(set(names) - {"min", "max"})
+                out[coord_name] = (coord["min"], coord["max"])
+            for name in names:
+                out[f"{coord_name}_{name}"] = coord[name]
             # ensure step has right type if nullish
-            step_name, start_name = f"{coord_name}_step", f"{coord_name}_min"
-            step, start = out[step_name], out[start_name]
+            step_name = f"{coord_name}_step"
+            step, start = out[step_name], coord["min"]
             if step is None:
                 is_time = isinstance(start, (np.datetime64, np.timedelta64))
                 if is_time:

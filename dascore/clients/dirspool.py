@@ -74,7 +74,9 @@ class DirectorySpool(DataFrameSpool):
 
     def _get_df(self):
         """Get the dataframe of current contents."""
-        out = adjust_segments(self._source_df, **self._select_kwargs)
+        out = adjust_segments(
+            self._source_df, ignore_bad_kwargs=True, **self._select_kwargs
+        )
         return out
 
     def _get_instruction_df(self):
@@ -134,7 +136,8 @@ class DirectorySpool(DataFrameSpool):
         This is significantly faster than iterating rows.
         """
         df = df.copy(deep=False).replace("", None)
-        df["path"] = str(self.spool_path) + df["path"]
+        # note: need to add extra / here since we no longer store it in db.
+        df["path"] = (str(self.spool_path) + "/") + df["path"]
         return super()._df_to_dict_list(df)
 
     def _load_patch(self, kwargs) -> Self:
