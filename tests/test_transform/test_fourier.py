@@ -91,7 +91,7 @@ class TestDiscreteFourierTransform:
     def test_real_fft(self, sin_patch):
         """Ensure real fft works."""
         out = sin_patch.tran.dft("time", real=True)
-        coord = sin_patch.get_coord("ft_time")
+        coord = out.get_coord("ft_time")
         freq_ax = out.dims.index("ft_time")
         assert coord.min() == 0
         ar = np.argmax(np.abs(out.data), axis=freq_ax)
@@ -113,7 +113,7 @@ class TestDiscreteFourierTransform:
         patch = sin_patch
         out = patch.tran.dft(dim=("distance", "time"), real="distance")
         assert all(x.startswith("ft_") for x in out.dims)
-        real_coord = patch.get_coord("ft_distance")
+        real_coord = out.get_coord("ft_distance")
         assert real_coord.min() == 0
 
     def test_parseval(self, sin_patch, fft_sin_patch_time):

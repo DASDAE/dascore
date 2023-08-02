@@ -22,12 +22,12 @@ def check_label_units(patch, ax):
         index = dims.index(coord_name)
         axis = getattr(ax, axis_dict[index])
         label_text = axis.get_label().get_text().lower()
-        assert str(coord.units) in label_text
+        assert str(coord.units.units) in label_text
         assert coord_name in label_text
     # check colorbar labels
     cax = ax.images[-1].colorbar
     title = cax.ax.title.get_text()
-    assert str(patch.attrs.data_units) in title
+    assert str(patch.attrs.data_units.units) in title
 
 
 @pytest.fixture(scope="session")

@@ -69,12 +69,12 @@ class TestScan:
     comp_attrs = (
         "data_type",
         "data_units",
-        "d_time",
+        "time_step",
         "time_min",
         "time_max",
         "distance_min",
         "distance_max",
-        "d_distance",
+        "distance_step",
         "tag",
         "network",
     )

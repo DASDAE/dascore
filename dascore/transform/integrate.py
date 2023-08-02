@@ -38,7 +38,7 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
             coord = patch.get_coord(name).data
             new_coords[f"{name}_min"] = (name, np.array([coord.min()]))
             new_coords[f"{name}_max"] = (name, np.array([coord.max()]))
-        cm = patch.update_coords(**new_coords)
+        cm = patch.coords.update_coords(**new_coords)
         return array, cm
 
     array = patch.data

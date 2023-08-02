@@ -258,7 +258,7 @@ class TestSelect:
         """
         spool = diverse_directory_spool
         t1 = spool[0].attrs.time_min
-        dt = spool[0].attrs.d_time
+        dt = spool[0].attrs.time_step
         selected_spool = spool.select(time=(t1, t1 + 30 * dt))
         patch = selected_spool[0]
         history = patch.attrs.history
@@ -312,7 +312,7 @@ class TestBasicChunk:
         content = spool.get_contents()
         assert patch.attrs.time_min == content["time_min"].min()
         assert patch.attrs.time_max == content["time_max"].max()
-        assert patch.attrs.d_time == spool[0].attrs.d_time
+        assert patch.attrs.time_step == spool[0].attrs.time_step
 
     def test_chunk_out_of_order_index(self, dir_spool_index_out_of_order):
         """Ensure when the index isn't ordered chunk can still work."""
@@ -325,7 +325,7 @@ class TestBasicChunk:
             diff = np.abs(dur - time)
             # because we try to avoid overlaps, the segments can be up to 2
             # samples shorter than what was asked for. Maybe revisit this?
-            assert diff <= 2 * (patch.attrs.d_time / ONE_SECOND)
+            assert diff <= 2 * (patch.attrs.time_step / ONE_SECOND)
 
 
 class TestGetContents:

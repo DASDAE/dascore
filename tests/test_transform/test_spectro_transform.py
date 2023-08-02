@@ -24,7 +24,7 @@ class TestSpectroTransform:
         spec_patch = patch.tran.spectrogram("time")
         # first check coord units
         coord1 = patch.get_coord("time")
-        coord2 = patch.get_coord("ft_time")
+        coord2 = spec_patch.get_coord("ft_time")
         units1 = dc.get_quantity(coord1.units)
         units2 = dc.get_quantity(coord2.units)
         assert units1 == 1 / units2

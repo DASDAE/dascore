@@ -55,7 +55,7 @@ class TestSetUnits:
             attr_name = f"{coord_name}_units"
             assert getattr(new.attrs, attr_name) == get_quantity(unit_str)
             # and the coord should be set
-            coord = new.get_coord("latitude")
+            coord = new.get_coord(coord_name)
             assert coord.units == get_quantity(unit_str)
 
 

@@ -246,7 +246,8 @@ class TestResample:
         """Ensure docstring examples runs."""
         patch = random_patch
         time = patch.coords["time"]
-        new_time = np.arange(time.min(), time.max(), 0.5 * patch.attrs.d_time)
+        ts = patch.attrs.time_step
+        new_time = np.arange(time.min(), time.max(), 0.5 * ts)
         uptime = patch.interpolate(time=new_time)
         assert isinstance(uptime, dc.Patch)
         # interpolate unevenly sampled dim to evenly sampled

@@ -166,8 +166,10 @@ class HDFPatchIndexManager:
         "time_max": ns_to_datetime,
         "time_step": ns_to_timedelta,
     }
+    # base model which determines fields
     _base_model = PatchFileSummary
-    index_columns = tuple(_base_model.model_fields)
+    # any fields to skip
+    _skip_fields = ()
     # The minimum version of dascore required to read this index. If an older
     # version is used an error will be raised.
     _min_version = "0.0.1"
@@ -177,6 +179,12 @@ class HDFPatchIndexManager:
         self.namespace = namespace
         self.path = path
         # self.node = node
+
+    @property
+    def index_columns(self):
+        """Get the columns used for indexing."""
+        out = set(self._base_model.model_fields) - set(self._skip_fields)
+        return tuple(out)
 
     # columns which should be indexed for fast querying
     @property

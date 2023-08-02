@@ -49,7 +49,7 @@ class TestTaperBasics:
         """Ensure each taper type runs."""
         attrs1, attrs2 = random_patch.attrs, time_tapered_patch.attrs
         assert attrs1.time_units == attrs2.time_units
-        assert attrs1.d_time == attrs2.d_time
+        assert attrs1.time_step == attrs2.time_step
 
     def test_ends_near_zero(self, time_tapered_patch):
         """Ensure the ends of the patch are near zero."""

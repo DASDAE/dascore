@@ -1046,7 +1046,7 @@ class TestSnap:
     ):
         """Ensure snapping creates expected dt from merged df."""
         spool = memory_spool_small_dt_differences
-        expected_dt = get_middle_value([x.attrs.d_time for x in spool])
+        expected_dt = get_middle_value([x.attrs.time_step for x in spool])
         snapped = coord_dt_small_diff.snap()[0]
         assert snapped.coord_map["time"].step == expected_dt
 

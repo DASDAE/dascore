@@ -13,14 +13,14 @@ from dascore.units import convert_units as u_covert_units
 def _update_attrs_coord_units(patch: dc.Patch, data_units, coord_unit_dict):
     """Update attributes with new units."""
     attrs = patch.attrs.model_dump()
-    coords = attrs["coords"]
+    # coords = attrs["coords"]
     # set data units
     if data_units is not None:
         attrs["data_units"] = data_units
-    # loop and set coordinate units
-    for name, unit_val in coord_unit_dict.items():
-        if name in coords:
-            coords[name]["units"] = unit_val
+    # # loop and set coordinate units
+    # for name, unit_val in coord_unit_dict.items():
+    #     if name in coords:
+    #         coords[name]["units"] = unit_val
     return patch.attrs.__class__(**attrs)
 
 

@@ -32,6 +32,7 @@ from dascore.units import (
     convert_units,
 )
 from dascore.utils.display import get_nice_text
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import all_diffs_close_enough, cached_method, iterate
 from dascore.utils.models import (
     ArrayLike,
@@ -327,8 +328,31 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return self
 
     @abc.abstractmethod
-    def update_limits(self, start=None, stop=None, step=None) -> Self:
-        """Update the limits or sampling of the coordinates."""
+    def update_limits(self, start=None, stop=None, step=None, **kwargs) -> Self:
+        """
+        Update the limits or sampling of the coordinates.
+
+        If start and stop are defined a new step is determined and returned.
+        Next, the step size is updated changing only the end. Then the start
+        is updated changing the start/end. Then the end is updated changing
+        the start/end.
+
+        Parameters
+        ----------
+        start
+            The new start of the coordiante.
+        stop
+            The new stop of the coordinate.
+        step
+            New step for the coordinate
+        **kwargs
+            Any other attributes which are used to create new coordinate.
+
+        Notes
+        -----
+        For ease of use, stop is considered inclusive, meaning the real stop
+        value in the output will be stop + step.
+        """
 
     @property
     def data(self):
@@ -618,19 +642,10 @@ class CoordRange(BaseCoord):
             return None
         return out
 
-    def update_limits(self, start=None, stop=None, step=None) -> Self:
+    @compose_docstring(doc=BaseCoord.update_limits.__doc__)
+    def update_limits(self, start=None, stop=None, step=None, **kwargs) -> Self:
         """
-        Update the limits or sampling of the coordinates.
-
-        If start and stop are defined a new step is determined and returned.
-        Next, the step size is updated changing only the end. Then the start
-        is updated changing the start/end. Then the end is updated changing
-        the start/end.
-
-        Notes
-        -----
-        For ease of use, stop is considered inclusive, meaning the real stop
-        value in the output will be stop + step.
+        {doc}
         """
         if all(x is not None for x in [start, stop, step]):
             msg = "At most two parameters can be specified in update_limits."
@@ -657,7 +672,7 @@ class CoordRange(BaseCoord):
             new_start = self.start + translation
             # we add step so the new range is inclusive of stop.
             out = out.new(start=new_start, stop=stop + out.step)
-        return out
+        return out.new(**kwargs)
 
     @property
     @cached_method
@@ -779,13 +794,10 @@ class CoordArray(BaseCoord):
             start, stop = min_v, max_v + step
         return CoordRange(start=start, stop=stop, step=step, units=self.units)
 
-    def update_limits(self, start=None, stop=None, step=None) -> Self:
+    @compose_docstring(doc=BaseCoord.update_limits.__doc__)
+    def update_limits(self, start=None, stop=None, step=None, **kwargs) -> Self:
         """
-        Update the limits or sampling of the coordinates.
-
-        This is more limited than with CoordRange since the data are not
-        evenly sampled. In order to change the step, you must first call
-        [snap](`dascore.core.coords
+        {doc}
         """
         if sum(x is not None for x in [start, stop, step]) > 1:
             msg = "At most one parameter can be specified in update_limits."
@@ -801,7 +813,7 @@ class CoordArray(BaseCoord):
             diff = stop - self.max()
             vals = self.values + diff
             out = get_coord(values=vals, units=self.units)
-        return out
+        return out.new(**kwargs)
 
     def __getitem__(self, item) -> Self:
         out = self.values[item]

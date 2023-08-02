@@ -458,7 +458,7 @@ class TestUpdateAttrs:
         """Ensure units can be updated in attrs."""
         new_dist = "ft"
         patch = random_patch.update_attrs(distance_units=new_dist)
-        coord = patch.coords.coord_map["distance"]
+        coord = patch.get_coord("distance")
         assert coord.units == get_quantity(new_dist)
         patch2 = random_patch.convert_units(distance=new_dist)
         assert patch == patch2

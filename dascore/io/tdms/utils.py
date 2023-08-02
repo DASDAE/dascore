@@ -13,7 +13,7 @@ from dascore.core.coords import get_coord
 from dascore.core.attrs import PatchAttrs
 from dascore.utils.time import to_datetime64, to_timedelta64
 
-DEFAULT_ATTRS = tuple(PatchAttrs.model_fields)
+DEFAULT_ATTRS = set(PatchAttrs.model_fields)
 
 
 def type_not_supported(vargin):
@@ -136,10 +136,16 @@ def _get_default_attrs(tdms_file, get_all_attrs=None):
         all_attrs, _ = _get_all_attrs(tdms_file)
     else:
         all_attrs = get_all_attrs
+    # cull attributes to only include defaults (TODO: think about why?)
     out = {
         default_attr: all_attrs[default_attr]
         for default_attr in DEFAULT_ATTRS
         if default_attr in all_attrs
+    }
+    # add coordinates
+    out["coords"] = {
+        "distance": all_attrs["_distance_coord"],
+        "time": all_attrs["_time_coord"],
     }
     return out
 

@@ -147,7 +147,7 @@ def _assert_op_or_close(val1, val2, op):
 
 # --- Tests
 
-DIM_RELATED_ATTRS = ("{dim}_min", "{dim}_max", "d_{dim}")
+DIM_RELATED_ATTRS = ("{dim}_min", "{dim}_max", "{dim}_step")
 
 
 class TestGetFormat:
