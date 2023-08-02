@@ -51,11 +51,11 @@ class TestSetUnits:
         non_dims = set(cmap) - set(patch.dims)
         for coord_name in non_dims:
             new = patch.set_units(**{coord_name: unit_str})
-            # coord string should not show up in the attrs
+            # coord string should show up in the attrs
             attr_name = f"{coord_name}_units"
-            assert not hasattr(new.attrs, attr_name)
-            # the but coord should be set
-            coord = new.coords.coord_map[coord_name]
+            assert getattr(new.attrs, attr_name) == get_quantity(unit_str)
+            # and the coord should be set
+            coord = new.get_coord("latitude")
             assert coord.units == get_quantity(unit_str)
 
 

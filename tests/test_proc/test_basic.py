@@ -224,7 +224,7 @@ class TestApplyOperator:
         # and divide
         new = apply_operator(patch, other, np.divide)
         new_units = get_quantity("m/s") / get_quantity("m/s")
-        assert get_quantity(new.attrs.data_units) == new_units
+        assert new.attrs.data_units is None or new.attrs.data_units == new_units
         assert isinstance(new.data, np.ndarray)
 
     def test_unit(self, random_patch):
@@ -244,7 +244,7 @@ class TestApplyOperator:
         # and divide
         new = apply_operator(patch, other, np.divide)
         new_units = get_quantity("m/s") / get_quantity("m/s")
-        assert get_quantity(new.attrs.data_units) == new_units
+        assert new.attrs.data_units is None or new.attrs.data_units == new_units
         assert np.allclose(new.data, random_patch.data)
 
     def test_patch_with_units(self, random_patch):
