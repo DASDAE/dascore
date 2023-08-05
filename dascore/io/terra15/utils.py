@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from tables.exceptions import NoSuchNodeError
-from tables import EnumAtom
 
 import dascore as dc
 from dascore.constants import timeable_types
@@ -11,9 +10,6 @@ from dascore.core.coords import get_coord
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- Getting format/version
-
-
-H5T_ENUM = EnumAtom(["FALSE", "TRUE"], "FALSE", "int8")
 
 
 def _get_terra15_version_str(hdf_fi) -> str:
