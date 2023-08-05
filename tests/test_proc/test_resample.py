@@ -48,7 +48,7 @@ class TestInterpolate:
         out = random_patch.interpolate(time=new)
         assert out.attrs["time_min"] == np.min(new)
         assert out.attrs["time_max"] == np.max(new)
-        assert out.attrs["d_time"] == np.mean(np.diff(new))
+        assert out.attrs["time_step"] == np.mean(np.diff(new))
         assert out.data.shape[axis] == len(new)
 
     def test_endtime_updated(self, random_patch):
@@ -58,7 +58,7 @@ class TestInterpolate:
         coord = out.coords["distance"]
         assert out.attrs["distance_max"] == coord.max()
         assert out.attrs["distance_min"] == coord.min()
-        assert out.attrs["d_distance"] == np.median(np.diff(coord))
+        assert out.attrs["distance_step"] == np.median(np.diff(coord))
 
     def test_snap_like(self, wacky_dim_patch):
         """Ensure interpolate can be used to snapping coords."""
@@ -94,9 +94,9 @@ class TestDecimate:
         """
         Since decimate changes the spacing of dimension this should be updated.
         """
-        dt1 = random_patch.attrs["d_time"]
+        dt1 = random_patch.attrs.time_step
         out = random_patch.decimate(time=10)
-        assert out.attrs["d_time"] == dt1 * 10
+        assert out.attrs["time_step"] == dt1 * 10
 
     def test_float_32_stability(self, random_patch):
         """
@@ -112,7 +112,7 @@ class TestDecimate:
             "time": np.arange(0, ar.shape[0]) * dt + t1,
         }
         dims = ("time", "distance")
-        attrs = {"d_time": dt, "time_min": t1}
+        attrs = {"time_step": dt, "time_min": t1}
         patch = dc.Patch(data=ar, coords=coords, dims=dims, attrs=attrs)
         # ensure all modes of decimation don't produce NaN values.
         decimated_iir = patch.decimate(time=10, filter_type="iir")
@@ -137,7 +137,7 @@ class TestResample:
         axis = patch.dims.index("time")
         new_dt = 2 * step
         new = patch.resample(time=new_dt)
-        assert new_dt == new.attrs["d_time"]
+        assert new_dt == new.attrs["time_step"]
         assert np.all(np.diff(new.coords["time"]) == new_dt)
         # ensure only the time dimension has changed.
         shape1, shape2 = random_patch.data.shape, new.data.shape
@@ -149,11 +149,11 @@ class TestResample:
 
     def test_upsample_time(self, random_patch):
         """Test increasing the temporal sampling rate"""
-        current_dt = random_patch.attrs["d_time"]
+        current_dt = random_patch.attrs["time_step"]
         axis = random_patch.dims.index("time")
         new_dt = current_dt / 2
         new = random_patch.resample(time=new_dt)
-        assert new_dt == new.attrs["d_time"]
+        assert new_dt == new.attrs["time_step"]
         assert np.all(np.diff(new.coords["time"]) == new_dt)
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
@@ -164,11 +164,11 @@ class TestResample:
 
     def test_upsample_time_float(self, random_patch):
         """Test int as time sampling rate."""
-        current_dt = random_patch.attrs["d_time"]
+        current_dt = random_patch.attrs["time_step"]
         axis = random_patch.dims.index("time")
         new_dt = current_dt / 2
         new = random_patch.resample(time=new_dt / np.timedelta64(1, "s"))
-        assert new_dt == new.attrs["d_time"]
+        assert new_dt == new.attrs["time_step"]
         assert np.all(np.diff(new.coords["time"]) == new_dt)
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
@@ -179,11 +179,11 @@ class TestResample:
 
     def test_resample_distance(self, random_patch):
         """Ensure distance dimension is also resample-able."""
-        current_dx = random_patch.attrs["d_distance"]
+        current_dx = random_patch.attrs["distance_step"]
         new_dx = current_dx / 2
         new = random_patch.resample(distance=new_dx)
         axis = random_patch.dims.index("distance")
-        assert new_dx == new.attrs["d_distance"]
+        assert new_dx == new.attrs["distance_step"]
         assert np.allclose(np.diff(new.coords["distance"]), new_dx)
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
@@ -197,7 +197,7 @@ class TestResample:
         new_step = 1.232132323222
         out = random_patch.resample(distance=new_step)
         assert out.attrs["distance_max"] <= random_patch.attrs["distance_max"]
-        assert np.allclose(out.attrs["d_distance"], new_step)
+        assert np.allclose(out.attrs["distance_step"], new_step)
 
     def test_slightly_above_current_rate(self, random_patch):
         """Tests for resampling slightly above current rate."""
@@ -205,7 +205,7 @@ class TestResample:
         new_step = step + 0.0000001
         out = random_patch.resample(distance=new_step)
         assert out.attrs["distance_max"] <= random_patch.attrs["distance_max"]
-        assert np.allclose(out.attrs["d_distance"], new_step)
+        assert np.allclose(out.attrs["distance_step"], new_step)
 
     def test_slightly_under_current_rate(self, random_patch):
         """Tests for resampling slightly under current rate."""
@@ -213,13 +213,13 @@ class TestResample:
         new_step = step - 0.0000001
         out = random_patch.resample(distance=new_step)
         assert out.attrs["distance_max"] <= random_patch.attrs["distance_max"]
-        assert np.allclose(out.attrs["d_distance"], new_step)
+        assert np.allclose(out.attrs["distance_step"], new_step)
 
     def test_odd_time(self, random_patch):
         """Tests resampling to odd time interval."""
         dt = np.timedelta64(1234567, "ns")
         out = random_patch.resample(time=dt)
-        new_dt = out.attrs["d_time"]
+        new_dt = out.attrs["time_step"]
         assert np.isclose(float(new_dt), float(dt))
         assert out.attrs
 

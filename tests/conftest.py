@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from contextlib import suppress
 
 import matplotlib
 import numpy as np
@@ -368,7 +369,8 @@ def all_examples_spool(terra15_das_example_path):
     try:
         spool = spool.update()
     except Exception:  # noqa
-        spool.indexer.index_path.unlink()  # delete index if problems found
+        with suppress(FileNotFoundError):
+            spool.indexer.index_path.unlink()  # delete index if problems found
         spool = spool.update()  # then re-index
     return spool
 

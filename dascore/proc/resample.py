@@ -110,7 +110,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     >>> patch = dc.get_example_patch()
     >>> # up-sample time coordinate
     >>> time = patch.coords['time']
-    >>> new_time = np.arange(time.min(), time.max(), 0.5*patch.attrs.d_time)
+    >>> new_time = np.arange(time.min(), time.max(), 0.5*patch.attrs.time_step)
     >>> patch_uptime = patch.interpolate(time=new_time)
     >>> # interpolate unevenly sampled dim to evenly sampled
     >>> patch = dc.get_example_patch("wacky_dim_coords_patch")

@@ -23,9 +23,6 @@ opt_timeable_types = Optional[timeable_types]
 # Number types
 numeric_types = Union[int, float]
 
-# expected DAS attributes
-REQUIRED_DAS_ATTRS = ("d_time", "d_distance")
-
 # The smallest value an int64 can rep. (used as NaT by datetime64)
 MININT64 = np.iinfo(np.int64).min
 
@@ -115,7 +112,7 @@ data_category
     are {VALID_DATA_CATEGORIES}.
 data_units
     The units in which the data are recorded (e.g., strain_rate).
-d_time
+time_step
     The temporal sample spacing. If the patch is not evenly sampled
     this should be set to `np.timedelta64('NaT')`
 time_min
@@ -125,7 +122,7 @@ time_max
 time_units
     The units of the time axis (in most cases should be seconds) or
     specified by datetime64 arrays in time coordinate.
-d_distance
+distance_step
     The spatial sampling rate, set to NaN if the patch is not evenly sampled
     in space.
 distance_min

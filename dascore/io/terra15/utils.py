@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from tables.exceptions import NoSuchNodeError
+from tables import EnumAtom
 
 import dascore as dc
 from dascore.constants import timeable_types
@@ -10,6 +11,9 @@ from dascore.core.coords import get_coord
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- Getting format/version
+
+
+H5T_ENUM = EnumAtom(["FALSE", "TRUE"], "FALSE", "int8")
 
 
 def _get_terra15_version_str(hdf_fi) -> str:
@@ -64,9 +68,9 @@ def _get_scanned_time_info(data_node):
     # reported in data attrs so we calculate it this way.
     dt = (tmax - tmin) / (t_len - 1)
     starttime = to_datetime64(tmin)
-    d_time = to_timedelta64(dt)
-    endtime = starttime + d_time * (t_len - 1)
-    return starttime, endtime, t_len, d_time
+    time_step = to_timedelta64(dt)
+    endtime = starttime + time_step * (t_len - 1)
+    return starttime, endtime, t_len, time_step
 
 
 def _get_extra_scan_attrs(self, file_version, path, data_node):

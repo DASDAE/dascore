@@ -11,6 +11,7 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int
+from dascore.utils.misc import suppress_warnings
 
 
 # --- Functions for writing DASDAE format
@@ -88,7 +89,8 @@ def _get_attrs(patch_group):
         if isinstance(val, np.ndarray) and not val.shape:
             val = np.array([val])[0]
         out[key] = val
-    return PatchAttrs(**out)
+    with suppress_warnings(DeprecationWarning):
+        return PatchAttrs(**out)
 
 
 def _read_array(table_array):
@@ -161,7 +163,10 @@ def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
         contents["file_version"] = file_version
         contents["file_format"] = file_format
         contents["path"] = h5.filename
-        out.append(dc.PatchAttrs(**contents))
+        # suppressing warnings because old dasdae files will issue warning
+        # due to d_dim rather than dim_step. TODO fix test files in the future
+        with suppress_warnings(DeprecationWarning):
+            out.append(dc.PatchAttrs(**contents))
     return out
 
 
