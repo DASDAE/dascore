@@ -75,7 +75,7 @@ def _get_extra_scan_attrs(self, file_version, path, data_node):
     out = {
         "time_min": to_datetime64(tmin),
         "time_max": to_datetime64(tmax),
-        "d_time": to_timedelta64(dt),
+        "time_step": to_timedelta64(dt),
         "path": path,
         "file_format": self.name,
         "file_version": str(file_version),
@@ -179,7 +179,7 @@ def _get_default_attrs(root_node_attrs):
         dims="time,distance",
         distance_min=dmin,
         distance_max=dmax,
-        d_distance=dstep,
+        distance_step=dstep,
     )
     _root_attrs = {
         "data_product": "data_type",

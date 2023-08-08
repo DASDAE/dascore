@@ -309,7 +309,7 @@ class TestCoordManagerWithAttrs:
 
     def test_missing_dim(self):
         """Coord manager should be able to pull missing info from attributes."""
-        attrs = dict(distance_min=1, distance_max=100, d_distance=10)
+        attrs = dict(distance_min=1, distance_max=100, distance_step=10)
         coord = {"time": COORDS["time"]}
         new = get_coord_manager(coord, DIMS, attrs=attrs)
         assert "distance" in new.coord_map

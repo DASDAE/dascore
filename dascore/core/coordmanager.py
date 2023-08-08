@@ -649,14 +649,8 @@ class CoordManager(DascoreBaseModel):
             coord = self.coord_map[name]
             # convert values to dict to determine which should be updated.
             maybe_update = v_attrs.coords[name].model_dump(exclude_defaults=True)
-            current_summary = coord.to_summary().model_dump(exclude_defaults=True)
-            changed = {
-                i: v
-                for i, v in maybe_update.items()
-                if maybe_update[i] != current_summary.get(i, type)
-            }
             # need to rename min/max to start/step
-            attr_dict = {rename.get(i, i): v for i, v in changed.items()}
+            attr_dict = {rename.get(i, i): v for i, v in maybe_update.items()}
             # update units, use type so None can be set.
             if (data_units := attr_dict.pop("units", type)) is not type:
                 coord = coord.convert_units(data_units)

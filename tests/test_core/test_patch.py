@@ -79,8 +79,8 @@ class TestInit:
         array = np.random.random((10, 10))
         # create attrs, these should all get overwritten by coords.
         attrs = dict(
-            d_distance=10,
-            d_time=dc.to_timedelta64(1),
+            distance_step=10,
+            time_step=dc.to_timedelta64(1),
             distance_min=1000,
             distance_max=2002,
             time_min=dc.to_datetime64("2017-01-01"),

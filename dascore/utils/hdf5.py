@@ -172,7 +172,7 @@ class HDFPatchIndexManager:
     _skip_fields = ()
     # The minimum version of dascore required to read this index. If an older
     # version is used an error will be raised.
-    _min_version = "0.0.1"
+    _min_version = "0.0.13"
 
     def __init__(self, path, namespace=""):
         super().__init__()

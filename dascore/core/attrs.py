@@ -89,7 +89,7 @@ def _get_coords_dict(data_dict, fields):
             if first == "d":
                 first, second = second, "step"
                 msg = f"{extra_field} is deprecated, use {first}_{second}"
-                warnings.warn(msg, DeprecationWarning, stacklevel=2)
+                warnings.warn(msg, DeprecationWarning, stacklevel=3)
             # if coords were passed we don't want attrs to overwrite them.
             if second in _coord_summary_suffixes:
                 # we need to pop out the key either way, but only use
@@ -207,7 +207,7 @@ class PatchAttrs(DascoreBaseModel):
         out = {}
         for dim in self.dim_tuple:
             start, stop = self[f"{dim}_min"], self[f"{dim}_max"]
-            step = self[f"d_{dim}"]
+            step = self[f"{dim}_step"]
             out[dim] = CoordRange(start=start, stop=stop + step, step=step)
         return out
 

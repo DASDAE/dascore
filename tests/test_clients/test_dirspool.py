@@ -359,7 +359,7 @@ class TestFileSpoolIntegrations:
             assert attrs["time_max"] <= endtime
             patch_duration = (attrs["time_max"] - attrs["time_min"]) / ONE_SECOND
             diff = patch_duration - duration
-            assert abs(diff) <= 1.5 * attrs["d_time"] / ONE_SECOND
+            assert abs(diff) <= 1.5 * attrs["time_step"] / ONE_SECOND
 
     def test_doc_example(self, all_examples_spool):
         """Tests for quickstart"""

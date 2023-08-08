@@ -70,7 +70,7 @@ def decimate(
         data = np.array(data) if copy else data
     # Update delta_dim since spacing along dimension has changed.
     attrs = dict(patch.attrs)
-    attrs[f"d_{dim}"] = patch.attrs[f"d_{dim}"] * factor
+    attrs[f"{dim}_step"] = patch.attrs[f"{dim}_step"] * factor
     out = dc.Patch(data=data, coords=coords, attrs=attrs, dims=patch.dims)
     return out
 
@@ -192,7 +192,7 @@ def resample(
     [iresample](`dascore.proc.resample.iresample`)
     """
     dim, axis, new_d_dim = get_dim_value_from_kwargs(patch, kwargs)
-    d_dim = patch.attrs[f"d_{dim}"]  # current sampling rate
+    d_dim = patch.attrs[f"{dim}_step"]  # current sampling rate
     coord_units = dc.get_quantity(patch.coords.coord_map[dim].units)
     # inverse coord unit to trick filter units into giving correct units.
     if coord_units is not None:
@@ -257,7 +257,7 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
     new_coords[dim] = new_coord
     # update attributes
     new_attrs = dict(patch.attrs)
-    new_attrs[f"d_{dim}"] = new_coord[1] - new_coord[0]
+    new_attrs[f"{dim}_step"] = new_coord[1] - new_coord[0]
     new_attrs[f"{dim}_max"] = np.max(new_coord)
     patch_inputs = dict(data=out, attrs=new_attrs, dims=patch.dims, coords=new_coords)
     return patch.__class__(**patch_inputs)
