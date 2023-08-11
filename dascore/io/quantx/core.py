@@ -1,11 +1,25 @@
 """IO module for reading Optasense DAS data."""
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.io import FiberIO, HDF5Reader
+from dascore.utils.models import UnitQuantity, UTF8Str
 
 from .utils import _get_qunatx_version_str, _read_quantx, _scan_quantx
+
+
+class QuantxPatchAttrs(dc.PatchAttrs):
+    """Patch attrs for quantx."""
+
+    raw_description: str = ""
+    pulse_width: float = np.NAN
+    pulse_width_units: UnitQuantity | None = None
+    gauge_length: float = np.NaN
+    gauge_length_units: UnitQuantity | None = None
+    schema_version: UTF8Str = ""
 
 
 class QuantXV2(FiberIO):
@@ -32,7 +46,8 @@ class QuantXV2(FiberIO):
         """
         Scan an Optasense v2 file, return summary information about the file's contents.
         """
-        return _scan_quantx(self, resource)
+        attr_dict = _scan_quantx(self, resource)
+        return [QuantxPatchAttrs(**attr_dict)]
 
     def read(
         self,
@@ -42,7 +57,8 @@ class QuantXV2(FiberIO):
         **kwargs,
     ) -> dc.BaseSpool:
         """Read an Optasense file."""
-        patch = _read_quantx(resource.get_node("/Acquisition"), time, distance)
+        acq = resource.get_node("/Acquisition")
+        patch = _read_quantx(acq, time, distance, cls=QuantxPatchAttrs)
         return dc.spool(patch)
 
 

@@ -9,6 +9,8 @@ from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.coords import get_coord
 from dascore.utils.time import to_datetime64
+from dascore.utils.misc import maybe_get_attrs
+from dascore.units import get_quantity
 
 # --- Getting format/version
 
@@ -57,7 +59,7 @@ def _get_time_coord(data_node):
 def _get_dist_coord(root_node_attrs):
     """Get the distance coordinate."""
     d_step = root_node_attrs.SpatialSamplingInterval
-    d_unit = root_node_attrs.SpatialSamplingIntervalUnit
+    d_unit = get_quantity(root_node_attrs.SpatialSamplingIntervalUnit)
     d_ind_start = root_node_attrs.StartLocusIndex
     d_ind_num = root_node_attrs.NumberOfLoci
     d_min = d_ind_start * d_step
@@ -85,7 +87,7 @@ def _scan_quantx(self, fi):
     out = _get_attrs(data_node, root_attrs)
     extras = dict(path=fi.filename, file_format=self.name, file_version=version)
     out.update(extras)
-    return [dc.PatchAttrs(**out)]
+    return out
 
 
 #
@@ -96,6 +98,7 @@ def _read_quantx(
     root,
     time: tuple[timeable_types, timeable_types] | None = None,
     distance: tuple[float, float] | None = None,
+    cls=dc.PatchAttrs,
 ) -> Patch:
     """Read a Quantx file."""
     _, data_node = _get_version_data_node(root)
@@ -106,7 +109,7 @@ def _read_quantx(
     data = data_node.RawData[t_ind, d_ind]
     coords = {"time": t_coord, "distance": d_coord}
     dims = ("time", "distance")
-    return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
+    return Patch(data=data, coords=coords, attrs=cls(**attrs), dims=dims)
 
 
 def _get_attrs(data_node, root_node_attrs):
@@ -119,9 +122,13 @@ def _get_attrs(data_node, root_node_attrs):
     out["_t_coord"], out["_d_coord"] = time_coord, dist_coord
     _root_attrs = {
         "uuid": "instrument_id",  # not 100% sure about this one
+        "RawDescription": "raw_description",
+        "PulseWidth": "pulse_width",
+        "PulseWidthUnits": "pulse_width_units",
+        "GaugeLength": "gauge_length_units",
+        "schemaVersion": "schema_version",
     }
-    for treble_name, out_name in _root_attrs.items():
-        out[out_name] = getattr(root_node_attrs, treble_name)
+    out.update(maybe_get_attrs(root_node_attrs, _root_attrs))
     # get calculated attributes
     # get attributes from data node
     out["data_units"] = data_node._v_attrs.RawDataUnit.decode()

@@ -21,6 +21,7 @@ from dascore.utils.misc import (
     get_middle_value,
     iterate,
     to_str,
+    unbyte,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -68,6 +69,8 @@ FrozenDictType = Annotated[
     frozen_dict_validator,
     frozen_dict_serializer,
 ]
+
+UTF8Str = Annotated[str, PlainValidator(unbyte)]
 
 
 def sensible_model_equals(self, other):

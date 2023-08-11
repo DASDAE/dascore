@@ -221,7 +221,7 @@ class TestRead:
         # skip files that have more than one patch for now
         # TODO just write better test logic to handle this case.
         if len(attrs_from_file) > 1:
-            pytest.skip("Havent implemented test for multipatch files.")
+            pytest.skip("Haven't implemented test for multipatch files.")
         attrs_init = attrs_from_file[0]
         for dim in attrs_init.dim_tuple:
             start = getattr(attrs_init, f"{dim}_min")

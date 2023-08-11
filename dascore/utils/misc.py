@@ -8,6 +8,7 @@ import inspect
 import os
 import warnings
 from collections.abc import Iterable, Sequence
+from collections.abc import Mapping
 from types import ModuleType
 
 import numpy as np
@@ -370,6 +371,15 @@ def to_str(val):
     # This is primarily used to avoid lambdas which can cause issues
     # in pickling.
     return str(val)
+
+
+def maybe_get_attrs(obj, attr_map: Mapping):
+    """Maybe get attributes from object (if they exist)."""
+    out = {}
+    for old_name, new_name in attr_map.items():
+        if hasattr(obj, old_name):
+            out[new_name] = getattr(obj, old_name)
+    return out
 
 
 def cached_method(func):

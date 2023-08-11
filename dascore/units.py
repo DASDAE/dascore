@@ -56,6 +56,7 @@ def _str_to_quant(qunat_str):
 
 def get_quantity(value: str_or_none) -> Quantity | None:
     """Convert a value to a pint quantity."""
+    value = unbyte(value)
     if value is None or value is ... or value == "":
         return None
     if isinstance(value, Quantity):
