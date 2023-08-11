@@ -79,6 +79,12 @@ def _get_data_unit_and_type(node):
 
 def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs) -> list[PatchAttrs]:
     """Scan a prodML file, return metadata."""
+    _root_attrs = {
+        "PulseWidth": "pulse_width",
+        "PulseWidthUnits": "pulse_width_units",
+        "GaugeLength": "gauge_length_units",
+        "schemaVersion": "schema_version",
+    }
     base_info = dict(
         gauge_length=fi.root.Acquisition._v_attrs.GaugeLength,
     )
@@ -114,9 +120,9 @@ def _get_data_attr(attrs, node, time, distance):
     return data, new_cm
 
 
-def _read_prodml(fi, distance=None, time=None):
+def _read_prodml(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     """Read the prodml values into a patch."""
-    attr_list = _get_prodml_attrs(fi)
+    attr_list = _get_prodml_attrs(fi, cls=attr_cls)
     nodes = list(_get_raw_node_dict(fi.root.Acquisition).values())
     out = []
     for attrs, node in zip(attr_list, nodes):

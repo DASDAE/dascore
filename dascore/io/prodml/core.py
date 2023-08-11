@@ -1,11 +1,24 @@
 """IO module for reading prodML data."""
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, HDF5Reader
+from dascore.utils.models import UnitQuantity, UTF8Str
 
 from .utils import _get_prodml_attrs, _get_prodml_version_str, _read_prodml
+
+
+class ProdMLPatchAttrs(dc.PatchAttrs):
+    """Patch attrs for ProdML"""
+
+    pulse_width: float = np.NAN
+    pulse_width_units: UnitQuantity | None = None
+    gauge_length: float = np.NaN
+    gauge_length_units: UnitQuantity | None = None
+    schema_version: UTF8Str = ""
 
 
 class ProdMLV2_0(FiberIO):
@@ -36,7 +49,7 @@ class ProdMLV2_0(FiberIO):
             "file_format": self.name,
             "file_version": str(file_version),
         }
-        return _get_prodml_attrs(resource, extras=extras, cls=dc.PatchAttrs)
+        return _get_prodml_attrs(resource, extras=extras, cls=ProdMLPatchAttrs)
 
     def read(
         self,
@@ -46,7 +59,9 @@ class ProdMLV2_0(FiberIO):
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a ProdML file."""
-        patches = _read_prodml(resource, time=time, distance=distance)
+        patches = _read_prodml(
+            resource, time=time, distance=distance, attr_cls=ProdMLPatchAttrs
+        )
         return dc.spool(patches)
 
 

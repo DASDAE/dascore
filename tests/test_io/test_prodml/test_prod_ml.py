@@ -6,9 +6,9 @@ import pytest
 import dascore as dc
 
 
-class TestSilixaFile:
+class TestProdMLFile:
     """
-    Ensure we can read the file provided by Silixa.
+    Ensure we can read the ProdML provided by Silixa.
 
     We do this since the other tests read the prodML files, even though
     the Silixa file is technical just ProdML v2.1.
@@ -23,3 +23,8 @@ class TestSilixaFile:
         """Ensure we can read  Silixa file."""
         assert isinstance(silixa_h5_patch, dc.Patch)
         assert silixa_h5_patch.shape
+
+    def test_has_gauge_length(self, silixa_h5_patch):
+        """Ensure gauge-length is found in patch attrs."""
+        patch = silixa_h5_patch
+        assert hasattr(patch.attrs, "gauge_length")
