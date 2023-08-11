@@ -59,11 +59,11 @@ class TestDirectorySpoolBasics:
         """Simply ensure expected type was returned."""
         assert isinstance(directory_spool, DirectorySpool)
 
-    def test_selected_str(self, directory_spool):
+    def test_selected_str(self, diverse_directory_spool):
         """Ensure select kwargs show up in str."""
-        new = directory_spool.select(tag="random")
-        out = str(new)
-        assert "Select kwargs" in str(out)
+        new = diverse_directory_spool.select(station="big_gaps")
+        contents = new.get_contents()
+        assert (contents["station"] == "big_gaps").all()
 
 
 class TestDirectoryIndex:
@@ -221,6 +221,9 @@ class TestSelect:
             assert attrs["network"] == "das2"
             assert attrs["tag"].startswith("ran")
             assert attrs["time_max"] <= new_max
+        # ensure raises when selecting off the end of the spool
+        with pytest.raises(IndexError):
+            out[len(new_content)]
 
     def test_select_time_tuple_with_string(self, basic_file_spool):
         """Ensure time tuples with strings still work."""
@@ -234,8 +237,7 @@ class TestSelect:
     def test_select_non_zero_index(self, diverse_directory_spool):
         """
         A Bug caused the contents of the source dataframe to have
-        non-zero based indices, thus spools didnt work. This fixes
-        the issue.
+        non-zero based indices, thus spools didn't work.
         """
         contents = diverse_directory_spool.get_contents()
         end_time = contents["time_max"].min()
@@ -360,6 +362,19 @@ class TestFileSpoolIntegrations:
             patch_duration = (attrs["time_max"] - attrs["time_min"]) / ONE_SECOND
             diff = patch_duration - duration
             assert abs(diff) <= 1.5 * attrs["time_step"] / ONE_SECOND
+
+    def test_chunk_select(self, dir_spool_index_out_of_order):
+        """Ensure chunking can be performed first, then selecting."""
+        # get start/endtimes to encompass the last half of the first patch.
+        # and the first half of the second patch.
+        df = dir_spool_index_out_of_order.get_contents().sort_values("time_min")
+        time = (df["time_max"] - df["time_min"]) / 2 + df["time_min"]
+        time_tup = (time.iloc[0], time.iloc[1])
+        # merge, then select, should still work.
+        merged = dir_spool_index_out_of_order.chunk(time=...)
+        assert len(merged) == 1
+        select = merged.select(time=time_tup)
+        assert len(select) == 1
 
     def test_doc_example(self, all_examples_spool):
         """Tests for quickstart"""

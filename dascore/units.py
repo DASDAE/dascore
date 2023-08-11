@@ -26,6 +26,10 @@ def get_registry():
     # a few custom defs, we may need our own unit registry if this
     # gets too long.
     ureg.define("PI=pi")
+    ureg.define("RADIANS=radians")
+    ureg.define("Radians=radians")
+    ureg.define("Radian=radians")
+
     # allow multiplication with offset units.
     ureg.autoconvert_offset_to_baseunit = True
     # set shortest display for units.

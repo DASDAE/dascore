@@ -240,7 +240,7 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     df
         The input dataframe
     ignore_bad_kwargs
-        Ignore kwargs that dont apply to df, else raise.
+        Ignore kwargs that don't apply to df, else raise.
     kwargs
         The keyword arguments for filtering.
     """

@@ -105,17 +105,6 @@ class DirectorySpool(DataFrameSpool):
         """
         return self._df
 
-    def select(self, **kwargs) -> Self:
-        """Sub-select certain dimensions for Spool"""
-        new_kwargs = dict(self._select_kwargs)
-        new_kwargs.update(kwargs)
-        out = self.__class__(
-            base_path=self.indexer,
-            preferred_format=self._preferred_format,
-            select_kwargs=new_kwargs,
-        )
-        return out
-
     def update(self) -> Self:
         """
         Updates the contents of the spool and returns a spool.
