@@ -1,7 +1,6 @@
-"""
-Simple interface for progress markers.
-"""
+"""Simple interface for progress markers."""
 from __future__ import annotations
+
 import rich.progress as prog
 
 import dascore as dc
@@ -12,7 +11,7 @@ def track(sequence, description):
     # This is a dirty hack to allow debugging while running tests.
     # Otherwise, pdb doesn't work in any tracking scope.
     # See: https://github.com/Textualize/rich/issues/1053
-    if getattr(dc, "_debug") or not len(sequence):
+    if dc._debug or not len(sequence):
         yield from sequence
         return
     # Normal progress bar behavior

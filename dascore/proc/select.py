@@ -1,7 +1,6 @@
-"""
-Function for querying Patchs
-"""
+"""Function for querying Patchs."""
 from __future__ import annotations
+
 from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
 

@@ -1,22 +1,21 @@
-"""
-Module for testing units.
-"""
+"""Module for testing units."""
 from __future__ import annotations
+
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.exceptions import UnitError
 from dascore.units import (
+    Quantity,
+    assert_dtype_compatible_with_units,
+    convert_units,
     get_factor_and_unit,
     get_filter_units,
     get_quantity,
+    get_quantity_str,
     get_unit,
     invert_quantity,
-    get_quantity_str,
-    assert_dtype_compatible_with_units,
-    Quantity,
-    convert_units,
 )
 
 
@@ -24,7 +23,7 @@ class TestUnitInit:
     """Ensure units can be initialized."""
 
     def test_time(self):
-        """Tests for time units"""
+        """Tests for time units."""
         sec = dc.get_unit("s")
         assert str(sec.dimensionality) == "[time]"
 
@@ -72,22 +71,22 @@ class TestGetQuantStr:
 
 
 class TestUnitAndFactor:
-    """tests for returning units and scaling factor"""
+    """tests for returning units and scaling factor."""
 
     def test_quantx_units(self):
-        """tests for the quantx unit str."""
+        """Tests for the quantx unit str."""
         mag, ustr = get_factor_and_unit("rad * 2pi/2^16")
         assert ustr == "rad * π"
         assert np.isclose(mag, (2 / (2**16)))
 
     def test_simplify_units(self):
-        """test for reducing units."""
+        """Test for reducing units."""
         mag, ustr = get_factor_and_unit("rad * (km/m)", simplify=True)
         assert get_unit(ustr) == get_unit("radian")
         assert np.isclose(mag, 1000)
 
     def test_none(self):
-        """Ensure none returns a None and string"""
+        """Ensure none returns a None and string."""
         factor, unit = get_factor_and_unit(None)
         assert factor == 1
         assert unit is None
@@ -112,11 +111,11 @@ class TestGetQuantity:
 
 
 class TestConvenientImport:
-    """Tests for conveniently importing units for dascore.units"""
+    """Tests for conveniently importing units for dascore.units."""
 
     def test_import_common(self):
-        """Ensure common units are importable"""
-        from dascore.units import Hz, ft, km, m, miles  # noqa
+        """Ensure common units are importable."""
+        from dascore.units import Hz, ft, km, m, miles
 
         assert m == get_unit("m")
         assert ft == get_unit("ft")
@@ -229,9 +228,7 @@ class TestConvertUnits:
         assert np.allclose(f_array, out)
 
     def test_convert_offset_units_with_mag(self):
-        """
-        Ensure units can be converted/set for offset units when non-1 magnitudes.
-        """
+        """Ensure units can be converted/set for offset units when non-1 magnitudes."""
         # One non-1 quantity
         array = np.arange(10)
         f_array = 2 * array * (9 / 5) + 32.0

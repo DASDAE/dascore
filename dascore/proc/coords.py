@@ -1,9 +1,8 @@
-"""
-Processing operations that have much to do with coordinates.
-"""
+"""Processing operations that have much to do with coordinates."""
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
+
 from typing_extensions import Self
 
 from dascore.constants import PatchType

@@ -1,6 +1,4 @@
-"""
-Module for re-sampling patches.
-"""
+"""Module for re-sampling patches."""
 from __future__ import annotations
 
 from typing import Literal
@@ -201,7 +199,6 @@ def resample(
     # nasty hack so that ints/floats get converted to seconds.
     if isinstance(d_dim, np.timedelta64):
         new_d_dim = to_timedelta64(new_d_dim)
-    # dim_range = int(compat.floor((dim_stop - dim_start) / val))
     current_sig_len = patch.data.shape[axis]
     new_len = current_sig_len * (d_dim / new_d_dim)
     out = iresample.func(patch, window=window, **{dim: int(np.round(new_len))})

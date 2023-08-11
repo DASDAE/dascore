@@ -1,7 +1,6 @@
-"""
-Tests for IO utilities.
-"""
+"""Tests for IO utilities."""
 from __future__ import annotations
+
 from io import BufferedReader, BufferedWriter
 from pathlib import Path
 
@@ -23,7 +22,7 @@ class _BadType:
 
 
 def _dummy_func(arg: str, arg2: _BadType) -> int:
-    """A dummy function"""
+    """A dummy function."""
 
 
 class TestGetHandleFromResource:
@@ -117,7 +116,6 @@ class TestIOResourceManager:
 
     def test_nested_context(self, tmp_path):
         """Ensure nested context works as well."""
-
         write_path = tmp_path / "io_writer"
         with IOResourceManager(write_path) as man:
             fi1 = man.get_resource(BinaryWriter)

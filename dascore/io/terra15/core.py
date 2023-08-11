@@ -1,6 +1,4 @@
-"""
-IO module for reading Terra15 DAS data.
-"""
+"""IO module for reading Terra15 DAS data."""
 from __future__ import annotations
 
 import dascore as dc
@@ -12,9 +10,7 @@ from .utils import _get_terra15_version_str, _read_terra15, _scan_terra15
 
 
 class Terra15FormatterV4(FiberIO):
-    """
-    Support for Terra15 data format, version 4.
-    """
+    """Support for Terra15 data format, version 4."""
 
     name = "TERRA15"
     preferred_extensions = ("hdf5", "h5")
@@ -35,9 +31,7 @@ class Terra15FormatterV4(FiberIO):
                 return (self.name, version_str)
 
     def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
-        """
-        Scan a terra15 v2 file, return summary information about the file's contents.
-        """
+        """Scan a terra15 v2 file, return summary information about the file's contents."""
         return _scan_terra15(self, resource)
 
     def read(
@@ -69,16 +63,12 @@ class Terra15FormatterV4(FiberIO):
 
 
 class Terra15FormatterV5(Terra15FormatterV4):
-    """
-    Support for Terra15 data format, version 5.
-    """
+    """Support for Terra15 data format, version 5."""
 
     version = "5"
 
 
 class Terra15FormatterV6(Terra15FormatterV4):
-    """
-    Support for Terra15 data format, version 5.
-    """
+    """Support for Terra15 data format, version 5."""
 
     version = "6"

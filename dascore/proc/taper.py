@@ -1,7 +1,6 @@
-"""
-Processing for applying a taper.
-"""
+"""Processing for applying a taper."""
 from __future__ import annotations
+
 from collections.abc import Sequence
 
 import numpy as np
@@ -32,7 +31,7 @@ def _get_taper_slices(patch, kwargs):
     """Get slice for start/end of patch."""
     dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
     coord = patch.coords.coord_map[dim]
-    if isinstance(value, (Sequence, np.ndarray)):
+    if isinstance(value, Sequence | np.ndarray):
         assert len(value) == 2, "Length 2 sequence required."
         start, stop = value[0], value[1]
     else:

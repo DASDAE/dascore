@@ -1,7 +1,6 @@
-"""
-Tests for coordinate object.
-"""
+"""Tests for coordinate object."""
 from __future__ import annotations
+
 import pickle
 from io import BytesIO
 
@@ -16,13 +15,13 @@ from dascore.core.coords import (
     CoordDegenerate,
     CoordMonotonicArray,
     CoordRange,
-    get_coord,
     CoordSummary,
+    get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_quantity
-from dascore.utils.misc import register_func, all_close
-from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like, to_float
+from dascore.utils.misc import all_close, register_func
+from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
 COORDS = []
 
@@ -117,7 +116,7 @@ def random_date_coord():
 
 @pytest.fixture(scope="session", params=COORDS)
 def coord(request) -> BaseCoord:
-    """Meta-fixture for returning all coords"""
+    """Meta-fixture for returning all coords."""
     return request.getfixturevalue(request.param)
 
 
@@ -129,7 +128,7 @@ def two_d_coord():
 
 
 def assert_value_in_one_step(coord, index, value, greater=True):
-    """Ensure value at index is within one step of value"""
+    """Ensure value at index is within one step of value."""
     # reverse greater for reverse monotonic
     coord_value = coord.values[index]
     if greater:
@@ -147,11 +146,11 @@ class TestBasics:
     """A suite of basic tests for coordinates."""
 
     def test_coord_init(self, coord):
-        """simply run to insure all coords initialize."""
+        """Simply run to insure all coords initialize."""
         assert isinstance(coord, BaseCoord)
 
     def test_bad_init(self):
-        """Ensure no parameters raises error"""
+        """Ensure no parameters raises error."""
         with pytest.raises(CoordError):
             get_coord()
 
@@ -240,7 +239,7 @@ class TestBasics:
             assert out.sorted
 
     def test_default_units(self):
-        """Default units should be None"""
+        """Default units should be None."""
         out = get_coord(values=np.arange(10))
         assert out.units is None
 
@@ -280,7 +279,7 @@ class TestBasics:
         assert np.allclose(out_mm.values / 1000, out_m.values)
 
     def test_convert_offset_units(self):
-        """Ensure units can be converted/set for offset units"""
+        """Ensure units can be converted/set for offset units."""
         array = np.arange(10)
         f_array = array * (9 / 5) + 32.0
         coord = get_coord(values=array, units="degC")
@@ -288,7 +287,7 @@ class TestBasics:
         assert np.allclose(f_array, out.values)
 
     def test_unit_str(self, evenly_sampled_coord):
-        """Ensure the unit string returns a string"""
+        """Ensure the unit string returns a string."""
         coord = evenly_sampled_coord.set_units("m/s")
         assert isinstance(coord.unit_str, str)
 
@@ -502,7 +501,7 @@ class TestSelect:
         assert coord.select((None, v2))[0] == coord
 
     def test_wide_select_bounds(self, coord):
-        """Wide (lt and gt limits) select bounds should be fine"""
+        """Wide (lt and gt limits) select bounds should be fine."""
 
         def _is_equal(coord1, coord2, indexer):
             """Assert coord and indexer are equal."""
@@ -686,7 +685,7 @@ class TestCoordRange:
         assert new.start - new.step <= datetime
 
     def test_sort(self, evenly_sampled_coord):
-        """Ensure sort returns equal coord"""
+        """Ensure sort returns equal coord."""
         out, _ = evenly_sampled_coord.sort()
         assert out == evenly_sampled_coord
 
@@ -814,7 +813,7 @@ class TestMonotonicCoord:
         assert new.max() <= 40
 
     def test_sort(self, monotonic_float_coord):
-        """Ensure sort returns equal coord"""
+        """Ensure sort returns equal coord."""
         out, _ = monotonic_float_coord.sort()
         assert out == monotonic_float_coord
 
@@ -919,7 +918,7 @@ class TestMonotonicCoord:
         assert wide_coord == coord
 
     def test_properties_mono(self, monotonic_float_coord):
-        """check a few properties for monotonic float coord."""
+        """Check a few properties for monotonic float coord."""
         coord = monotonic_float_coord
         assert coord.sorted
         assert not coord.evenly_sampled
@@ -927,7 +926,7 @@ class TestMonotonicCoord:
         assert not coord.degenerate
 
     def test_properties_reverse_mono(self, reverse_monotonic_float_coord):
-        """check a few properties for reverse monotonic float coord."""
+        """Check a few properties for reverse monotonic float coord."""
         coord = reverse_monotonic_float_coord
         assert not coord.sorted
         assert not coord.evenly_sampled
@@ -950,7 +949,7 @@ class TestNonOrderedArrayCoords:
     """Tests for non-ordered array coords."""
 
     def test_select(self, random_coord):
-        """Ensure selecting returns an ndarray"""
+        """Ensure selecting returns an ndarray."""
         min_v, max_v = np.min(random_coord.values), np.max(random_coord.values)
         dist = max_v - min_v
         val1, val2 = min_v + 0.2 * dist, max_v - 0.2 * dist
@@ -1019,7 +1018,7 @@ class TestDegenerateCoords:
         assert basic_degenerate.empty() == basic_degenerate
 
     def test_min_max(self, basic_degenerate):
-        """Ensure min/max are nullish"""
+        """Ensure min/max are nullish."""
         assert pd.isnull(basic_degenerate.min())
         assert pd.isnull(basic_degenerate.max())
 

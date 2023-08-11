@@ -1,6 +1,4 @@
-"""
-Test patch utilities.
-"""
+"""Test patch utilities."""
 from __future__ import annotations
 
 import pytest
@@ -23,7 +21,7 @@ def time_dist_func(patch):
 
 @dc.patch_function(required_attrs=("bob",))
 def require_bob(patch):
-    """Require bob attribute"""
+    """Require bob attribute."""
     return patch
 
 
@@ -37,16 +35,16 @@ class TestPatchFunction:
     """Tests for patch function decorator."""
 
     def test_no_call(self, random_patch):
-        """Ensure the decorator can be used with or without parens"""
+        """Ensure the decorator can be used with or without parens."""
 
         @dc.patch_function
         def func1(patch):
-            """first test func"""
+            """First test func."""
             return patch
 
         @dc.patch_function()
         def func2(patch):
-            """second test func"""
+            """Second test func."""
             return patch
 
         pa1 = func1(random_patch)
@@ -71,7 +69,7 @@ class TestPatchFunction:
             require_bob(random_patch)
 
     def test_require_attr_exists(self, random_patch):
-        """ "test for requiring an attr exists but not checking value"""
+        """ "test for requiring an attr exists but not checking value."""
         pa1 = random_patch.update_attrs(bob=1)
         pa2 = pa1.update_attrs(bob=2)
         # both these should not raise
@@ -99,14 +97,14 @@ class TestHistory:
     """Tests for tracking patch processing history."""
 
     def test_simple_history(self, random_patch):
-        """just make sure function is logged."""
+        """Just make sure function is logged."""
         out = time_dist_func(random_patch)
         history = out.attrs["history"]
         assert len(history) == 1
         assert "time_dist_func" in history[0]
 
     def test_original_history_unchanged(self, random_patch):
-        """Ensure logging history only occurs on new Patch"""
+        """Ensure logging history only occurs on new Patch."""
         first_history = list(random_patch.attrs["history"])
         _ = time_dist_func(random_patch)
         last_history = list(random_patch.attrs["history"])

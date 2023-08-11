@@ -37,18 +37,14 @@ def get_cross_ref_dict() -> dict[str, str]:
 
 
 def load_stdin(input_stream=None):
-    """
-    Load input from stdin (json string)
-    """
+    """Load input from stdin (json string)."""
     if input_stream is None:
         input_stream = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8")
     return input_stream.read()
 
 
 def dump_stdout(output_str, out_stream=None):
-    """
-    Dump modified json string to std out.
-    """
+    """Dump modified json string to std out."""
     if out_stream is None:
         out_stream = sys.stdout
     out_stream.write(output_str)
@@ -107,10 +103,7 @@ def main(raw_data=None):
 
 
 if __name__ == "__main__":
-    # test()  # uncomment to test.
     main()  # uncomment before running quarto so IO works.
 
 
 # this is helpful for debugging while quarto is running.
-# from remote_pdb import RemotePdb
-# RemotePdb('127.0.0.1', 4444).set_trace()

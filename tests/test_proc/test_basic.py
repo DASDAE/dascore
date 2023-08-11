@@ -71,7 +71,7 @@ class TestsAngle:
     """Test for getting phase angle."""
 
     def test_angle_from_real(self, random_patch):
-        """Ensure phase angles from real value are close to 0/360"""
+        """Ensure phase angles from real value are close to 0/360."""
         out = random_patch.angle()
         assert np.allclose(out.data, 0)
 
@@ -228,7 +228,7 @@ class TestApplyOperator:
         assert isinstance(new.data, np.ndarray)
 
     def test_unit(self, random_patch):
-        """Units should only affect the unit attr"""
+        """Units should only affect the unit attr."""
         patch = random_patch.set_units("m/s")
         other = m / s
         # first try multiply

@@ -1,7 +1,6 @@
-"""
-Tests for FileSpool.
-"""
+"""Tests for FileSpool."""
 from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
@@ -10,10 +9,10 @@ import pytest
 
 import dascore as dc
 import dascore.examples
-from dascore.io.core import PatchFileSummary
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
 from dascore.exceptions import ParameterError
+from dascore.io.core import PatchFileSummary
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func
 
@@ -116,9 +115,7 @@ class TestDirectoryIndex:
         isinstance(spool, dc.BaseSpool)
 
     def test_specify_index_path(self, random_patch, tmp_path_factory):
-        """
-        Ensure an external path can be specified for the index. See #129.
-        """
+        """Ensure an external path can be specified for the index. See #129."""
         bank_path = tmp_path_factory.mktemp("bank")
         index_path = tmp_path_factory.mktemp("index") / "index.h5"
         random_patch.io.write(bank_path / "contents.h5", "dasdae")
@@ -255,9 +252,7 @@ class TestSelect:
             _ = diverse_directory_spool.select(time=None)[0]
 
     def test_select_correct_history_str(self, diverse_directory_spool):
-        """
-        Ensure no history string is added for selecting. See #142/#147.
-        """
+        """Ensure no history string is added for selecting. See #142/#147."""
         spool = diverse_directory_spool
         t1 = spool[0].attrs.time_min
         dt = spool[0].attrs.time_step
@@ -377,6 +372,6 @@ class TestFileSpoolIntegrations:
         assert len(select) == 1
 
     def test_doc_example(self, all_examples_spool):
-        """Tests for quickstart"""
+        """Tests for quickstart."""
         spool = all_examples_spool.update()
         assert isinstance(spool, dc.BaseSpool)

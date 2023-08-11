@@ -1,13 +1,11 @@
-"""
-Find all python files which dont have "from __future__ import annotation"
-"""
+"""Find all python files which dont have "from __future__ import annotation"."""
 from __future__ import annotations
 
 from pathlib import Path
 
 
 def has_search_str(path, search_string):
-    """Return True if search string in path"""
+    """Return True if search string in path."""
     for line in path.read_text().splitlines():
         if search_string in line:
             return True

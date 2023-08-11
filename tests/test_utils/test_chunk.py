@@ -1,7 +1,6 @@
-"""
-Tests for chunking dataframes.
-"""
+"""Tests for chunking dataframes."""
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -29,7 +28,7 @@ def contiguous_df():
 
 @pytest.fixture()
 def contiguous_sr_spaced_df(contiguous_df):
-    """separate df by one sample rate."""
+    """Separate df by one sample rate."""
     sr = contiguous_df.loc[:, "time_step"]
     out = contiguous_df.copy()
     out["time_max"] = out["time_max"] - sr
@@ -65,7 +64,7 @@ class TestGetIntervals:
         assert np.allclose(out, expected)
 
     def test_times_no_overlap(self):
-        """Test using datetime64 and timedelta64"""
+        """Test using datetime64 and timedelta64."""
         start = np.datetime64("2017-01-03")
         step = np.timedelta64(1, "s")
         stop = start + 50 * step
@@ -113,7 +112,7 @@ class TestBasicChunkDF:
         assert new_interval == new_time_interval
 
     def test_rechunk_contiguous_with_sr_separation(self, contiguous_sr_spaced_df):
-        """Ensure it still works on data seperated by one sample"""
+        """Ensure it still works on data seperated by one sample."""
         df = contiguous_sr_spaced_df
         sr = df["time_step"]
         time_interval = (sr + df["time_max"] - df["time_min"]).max()
@@ -234,7 +233,7 @@ class TestChunkToMerge:
 
 
 class TestInstructionDF:
-    """Sanity checks on intermediary df"""
+    """Sanity checks on intermediary df."""
 
     def test_indices(self, contiguous_df):
         """Ensure the input/output index belong to input/output df."""
@@ -258,7 +257,7 @@ class TestInstructionDF:
         in_df, out_df = chunker.chunk(df)
         instruction = chunker.get_instruction_df(in_df, out_df)
         # ensure each output has exactly one station.
-        for current_index, sub in instruction.groupby("current_index"):
+        for _current_index, sub in instruction.groupby("current_index"):
             source = df.loc[sub.index]
             # there should only be on station in the source for this group
             unique_stations = source["station"].unique()

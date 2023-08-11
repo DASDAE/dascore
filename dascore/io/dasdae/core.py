@@ -1,6 +1,4 @@
-"""
-Core module for reading and writing DASDAE format.
-"""
+"""Core module for reading and writing DASDAE format."""
 from __future__ import annotations
 
 import contextlib
@@ -12,6 +10,7 @@ from dascore.constants import SpoolType
 from dascore.io import FiberIO, HDF5Reader, HDF5Writer
 from dascore.utils.hdf5 import HDFPatchIndexManager, NodeError
 from dascore.utils.patch import get_default_patch_name
+
 from .utils import (
     _get_contents_from_patch_groups,
     _read_patch,
@@ -102,9 +101,7 @@ class DASDAEV1(FiberIO):
         return False
 
     def read(self, resource: HDF5Reader, **kwargs) -> SpoolType:
-        """
-        Read a dascore file.
-        """
+        """Read a dascore file."""
         patches = []
         try:
             waveform_group = resource.root["/waveforms"]

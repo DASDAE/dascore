@@ -1,7 +1,6 @@
-"""
-Benchmark for generic memory spool operations.
-"""
+"""Benchmark for generic memory spool operations."""
 from __future__ import annotations
+
 from functools import cache
 
 import dascore as dc
@@ -17,7 +16,7 @@ def test_file_paths():
 
 
 class IoSuite:
-    """Basic io functions"""
+    """Basic io functions."""
 
     def setup(self):
         """Get paths of test files."""

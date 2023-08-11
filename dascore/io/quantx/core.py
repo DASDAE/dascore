@@ -1,6 +1,4 @@
-"""
-IO module for reading Optasense DAS data.
-"""
+"""IO module for reading Optasense DAS data."""
 from __future__ import annotations
 
 import dascore as dc
@@ -11,9 +9,7 @@ from .utils import _get_qunatx_version_str, _read_quantx, _scan_quantx
 
 
 class QuantXV2(FiberIO):
-    """
-    Support for Optasense data format, version 2.
-    """
+    """Support for Optasense data format, version 2."""
 
     name = "QUANTX"
     preferred_extensions = ("hdf5", "h5")
@@ -33,9 +29,7 @@ class QuantXV2(FiberIO):
             return (self.name, version_str)
 
     def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
-        """
-        Scan an Optasense v2 file, return summary information about the file's contents.
-        """
+        """Scan an Optasense v2 file, return summary information about the file's contents."""
         return _scan_quantx(self, resource)
 
     def read(
@@ -45,9 +39,7 @@ class QuantXV2(FiberIO):
         distance: tuple[float, float] | None = None,
         **kwargs,
     ) -> dc.BaseSpool:
-        """
-        Read an Optasense file.
-        """
+        """Read an Optasense file."""
         patch = _read_quantx(resource.get_node("/Acquisition"), time, distance)
         return dc.spool(patch)
 

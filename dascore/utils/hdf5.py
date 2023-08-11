@@ -22,8 +22,8 @@ from tables import ClosedNodeError
 
 import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, max_lens
-from dascore.io.core import PatchFileSummary
 from dascore.exceptions import InvalidFileHandler, InvalidIndexVersionError
+from dascore.io.core import PatchFileSummary
 from dascore.utils.misc import cached_method, suppress_warnings
 from dascore.utils.pd import (
     _remove_base_path,
@@ -55,7 +55,7 @@ class _HDF5Store(pd.HDFStore):
         fletcher32: bool = False,
         **kwargs,
     ) -> None:
-        if isinstance(path, (str, Path)):
+        if isinstance(path, str | Path):
             self._path = stringify_path(path)
         elif isinstance(path, tables.File):
             self._path = stringify_path(path.filename)
@@ -106,7 +106,7 @@ def open_hdf5_file(
             )
             raise InvalidFileHandler(msg)
 
-    if isinstance(path_or_handler, (str, Path)):
+    if isinstance(path_or_handler, str | Path):
         # Note: We suppress DataTypeWarnings because pytables fails to read
         # 8 bit enum indicating true or false written by h5py. See:
         # https://github.com/PyTables/PyTables/issues/647
@@ -178,7 +178,6 @@ class HDFPatchIndexManager:
         super().__init__()
         self.namespace = namespace
         self.path = path
-        # self.node = node
 
     @property
     def index_columns(self):
@@ -270,7 +269,7 @@ class HDFPatchIndexManager:
         update_time=None,
         base_path: str | Path = "",
     ):
-        """Convert updates to dataframe, then append to index table"""
+        """Convert updates to dataframe, then append to index table."""
         # read in dataframe and prepare for input into hdf5 index
         update_time = update_time or time.time()
         df = self.encode_table(update_df.copy(), path=base_path)
@@ -300,9 +299,7 @@ class HDFPatchIndexManager:
             store.put(self._meta_node, meta, format="table")
 
     def _read_metadata(self):
-        """
-        Read the metadata table.
-        """
+        """Read the metadata table."""
         try:
             with _HDF5Store(self.path, "r") as store:
                 out = store.get(self._meta_node)
@@ -315,9 +312,7 @@ class HDFPatchIndexManager:
             return pd.read_hdf(self.path, self._meta_node)
 
     def _ensure_meta_table_exists(self):
-        """
-        If the base path exists ensure it has a meta table, if not create it.
-        """
+        """If the base path exists ensure it has a meta table, if not create it."""
         if not Path(self.path).exists():
             return
         with _HDF5Store(self.path) as store:
@@ -327,7 +322,7 @@ class HDFPatchIndexManager:
                 store.put(self._meta_node, meta, format="table")
 
     def _make_meta_table(self):
-        """get a dataframe of meta info"""
+        """Get a dataframe of meta info."""
         meta = dict(
             dascore_version=dc.__last_version__,
         )
@@ -335,7 +330,7 @@ class HDFPatchIndexManager:
 
     @property
     def hdf_kwargs(self) -> dict:
-        """A dict of hdf_kwargs to pass to PyTables"""
+        """A dict of hdf_kwargs to pass to PyTables."""
         return dict(
             complib=self._complib,
             complevel=self._complevel,
@@ -403,9 +398,7 @@ class HDFPatchIndexManager:
 
     @property
     def last_updated_timestamp(self) -> float | None:
-        """
-        Return the last modified time stored in the index, else None.
-        """
+        """Return the last modified time stored in the index, else None."""
         try:
             out = pd.read_hdf(self.path, self._time_node)[0]
         except (OSError, IndexError, ValueError, KeyError, AttributeError):

@@ -57,7 +57,7 @@ class DirectorySpool(DataFrameSpool):
         # Init file spool from indexer
         elif isinstance(base_path, AbstractIndexer):
             self.indexer = base_path
-        elif isinstance(base_path, (Path, str)):
+        elif isinstance(base_path, Path | str):
             self.indexer = DirectoryIndexer(base_path, index_path=index_path)
         self._preferred_format = preferred_format
         self._select_kwargs = {} if select_kwargs is None else select_kwargs

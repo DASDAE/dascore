@@ -1,5 +1,6 @@
 """Tests for pandas utility functions."""
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import pydantic
@@ -12,7 +13,7 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 
 @pytest.fixture
 def example_df_2():
-    """create a simple df for testing. Example from Chris Albon."""
+    """Create a simple df for testing. Example from Chris Albon."""
     time = to_datetime64("2020-01-03")
     time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
     time_max = time_min + np.timedelta64(10, "m")
@@ -34,7 +35,7 @@ class TestFilterDfBasic:
 
     @pytest.fixture
     def example_df(self):
-        """create a simple df for testing. Example from Chris Albon."""
+        """Create a simple df for testing. Example from Chris Albon."""
         raw_data = {
             "first_name": ["Jason", "Molly", "Tina", "Jake", "Amy"],
             "last_name": ["Miller", "Jacobson", "Ali", "Milner", "Cooze"],
@@ -45,13 +46,13 @@ class TestFilterDfBasic:
         return pd.DataFrame(raw_data, columns=list(raw_data))
 
     def test_string_basic(self, example_df):
-        """test that specifying a string with no matching works."""
+        """Test that specifying a string with no matching works."""
         out = filter_df(example_df, first_name="Jason")
         assert out[0]
         assert not out[1:].any()
 
     def test_string_matching(self, example_df):
-        """unix style matching should also work."""
+        """Unix style matching should also work."""
         # test *
         out = filter_df(example_df, first_name="J*")
         assert {"Jason", "Jake"} == set(example_df[out].first_name)
@@ -66,20 +67,20 @@ class TestFilterDfBasic:
         assert not out[2:].any()
 
     def test_non_str_single_arg(self, example_df):
-        """test that filter index can be used on Non-nslc columns."""
+        """Test that filter index can be used on Non-nslc columns."""
         # test non strings
         out = filter_df(example_df, age=42)
         assert out[0]
         assert not out[1:].any()
 
     def test_non_str_sequence(self, example_df):
-        """ensure sequences still work for isin style comparisons."""
+        """Ensure sequences still work for isin style comparisons."""
         out = filter_df(example_df, age={42, 52})
         assert out[:2].all()
         assert not out[2:].any()
 
     def test_bad_parameter_raises(self, example_df):
-        """ensure passing a parameter that doesn't have a column raises."""
+        """Ensure passing a parameter that doesn't have a column raises."""
         with pytest.raises(ParameterError, match="the column does not"):
             filter_df(example_df, bad_column=2)
 
@@ -112,7 +113,7 @@ class TestFilterDfAdvanced:
     """Tests for advanced filtering of dataframes."""
 
     def test_col(self, example_df_2):
-        """Test column names that end with max"""
+        """Test column names that end with max."""
         vals = [100, 125]
         out = filter_df(example_df_2, bp_min=vals)
         assert np.all(out == example_df_2["bp_min"].isin(vals))
@@ -130,12 +131,12 @@ class TestFilterDfAdvanced:
         assert all(out == in_range)
 
     def test_time_query_all_open(self, example_df_2):
-        """Test for open time interval"""
+        """Test for open time interval."""
         out = filter_df(example_df_2, time=(None, None))
         assert out.all()
 
     def test_time_query_one_open(self, example_df_2):
-        """Test for open time interval"""
+        """Test for open time interval."""
         tmax = to_datetime64(example_df_2["time_max"].max() - np.timedelta64(1, "ns"))
         out = filter_df(example_df_2, time=(tmax, None))
         # just the last row should have been selected
@@ -207,7 +208,7 @@ class TestAdjustSegments:
         """Tests for initing empty columns from pydanitc models."""
 
         class Model(pydantic.BaseModel):
-            """Example basemodel"""
+            """Example basemodel."""
 
             int_with_default: int = 10
             str_with_default: str = "bob"
@@ -231,7 +232,7 @@ class TestAdjustSegments:
             assert out.equals(simple_df)
 
         def test_missing_with_default_fills_default(self, simple_df):
-            """Ensure the default values are filled in when missing"""
+            """Ensure the default values are filled in when missing."""
             df = simple_df.drop(columns="int_with_default")
             out = fill_defaults_from_pydantic(df, self.Model)
             assert "int_with_default" in out.columns

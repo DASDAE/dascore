@@ -1,6 +1,4 @@
-"""
-Module for performing integration on patches.
-"""
+"""Module for performing integration on patches."""
 from __future__ import annotations
 
 from collections.abc import Sequence

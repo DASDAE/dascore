@@ -1,7 +1,6 @@
-"""
-Simple tests for FrozenDict.
-"""
+"""Simple tests for FrozenDict."""
 from __future__ import annotations
+
 from collections.abc import Mapping
 
 import pytest
@@ -16,7 +15,7 @@ def frozen_dict():
 
 
 class TestFrozenDict:
-    """Test chases for frozen dict"""
+    """Test chases for frozen dict."""
 
     def test_is_mapping(self, frozen_dict):
         """Frozen dict should follow mapping ABC."""
@@ -39,7 +38,7 @@ class TestFrozenDict:
         assert len(frozen_dict) == 2
 
     def test_contains(self, frozen_dict):
-        """Ensure contains works"""
+        """Ensure contains works."""
         assert "bob" in frozen_dict
         assert "bill" in frozen_dict
 

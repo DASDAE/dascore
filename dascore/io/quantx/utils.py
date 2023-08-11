@@ -14,10 +14,7 @@ from dascore.utils.time import to_datetime64
 
 
 def _get_qunatx_version_str(hdf_fi) -> str:
-    """
-    Return the version string for Quantx file.
-    """
-
+    """Return the version string for Quantx file."""
     # define a few root attrs that act as a "fingerprint" for Quantx files
     expected_attrs = [
         "GaugeLength",
@@ -100,9 +97,7 @@ def _read_quantx(
     time: tuple[timeable_types, timeable_types] | None = None,
     distance: tuple[float, float] | None = None,
 ) -> Patch:
-    """
-    Read a Quantx file.
-    """
+    """Read a Quantx file."""
     _, data_node = _get_version_data_node(root)
     attrs = _get_attrs(data_node, root._v_attrs)
     t_coord, t_ind = attrs.pop("_t_coord").select(time)
@@ -115,9 +110,7 @@ def _read_quantx(
 
 
 def _get_attrs(data_node, root_node_attrs):
-    """
-    Return the required/default attributes which can be fetched from attributes.
-    """
+    """Return the required/default attributes which can be fetched from attributes."""
     out = dict(dims="time,distance", data_category="DAS")
     time_coord = _get_time_coord(data_node)
     dist_coord = _get_dist_coord(root_node_attrs)

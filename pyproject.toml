@@ -111,6 +111,9 @@ WAV = "dascore.io.wav.core:WavIO"
 
 [tool.ruff]
 
+# enable certain types of linting
+select = ["E", "F", "UP", "D", "I", "N", "T20", "ERA", "RUF"]
+
 # Exclude a variety of commonly ignored directories.
 exclude = [
     ".bzr",
@@ -143,3 +146,13 @@ target-version = "py310"
 [tool.ruff.mccabe]
 # Unlike Flake8, default to a complexity level of 10.
 max-complexity = 10
+
+# config for docstring parsing
+[tool.ruff.pydocstyle]
+convention = "numpy"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Ignore hdf5 warnings from pytables, See pytables #1035
+    'ignore::Warning:tables:'
+]

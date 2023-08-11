@@ -1,7 +1,6 @@
-"""
-Tests for decimation
-"""
+"""Tests for decimation."""
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 
@@ -71,7 +70,7 @@ class TestDecimate:
     """Ensure Patch can be decimated."""
 
     def test_decimate_no_lowpass(self, random_patch):
-        """Simple decimation"""
+        """Simple decimation."""
         p1 = random_patch
         old_time = p1.coords["time"]
         old_dt = old_time[1:] - old_time[:-1]
@@ -91,9 +90,7 @@ class TestDecimate:
         assert out.attrs["time_max"] == out.coords["time"].max()
 
     def test_update_delta_dim(self, random_patch):
-        """
-        Since decimate changes the spacing of dimension this should be updated.
-        """
+        """Since decimate changes the spacing of dimension this should be updated."""
         dt1 = random_patch.attrs.time_step
         out = random_patch.decimate(time=10)
         assert out.attrs["time_step"] == dt1 * 10
@@ -126,9 +123,7 @@ class TestDecimate:
 
 
 class TestResample:
-    """
-    Tests for resampling along a given dimension.
-    """
+    """Tests for resampling along a given dimension."""
 
     def test_downsample_time(self, random_patch):
         """Test decreasing the temporal sampling rate."""
@@ -148,7 +143,7 @@ class TestResample:
                 assert len1 == len2
 
     def test_upsample_time(self, random_patch):
-        """Test increasing the temporal sampling rate"""
+        """Test increasing the temporal sampling rate."""
         current_dt = random_patch.attrs["time_step"]
         axis = random_patch.dims.index("time")
         new_dt = current_dt / 2
@@ -266,7 +261,7 @@ class TestIResample:
         assert len(out.coords["time"]) == time_samples
 
     def test_iresample_distance(self, random_patch):
-        """Test for resampling distance to set len"""
+        """Test for resampling distance to set len."""
         dist = 42
         out = random_patch.iresample(distance=dist)
         assert len(out.coords["distance"]) == dist

@@ -1,7 +1,6 @@
-"""
-Tests for coordinate processing methods.
-"""
+"""Tests for coordinate processing methods."""
 from __future__ import annotations
+
 import numpy as np
 
 
@@ -9,7 +8,7 @@ class TestSortCoords:
     """Test sorting patches' coordinates."""
 
     def test_forward_sort(self, wacky_dim_patch):
-        """Test sort both dims forward"""
+        """Test sort both dims forward."""
         # default sort should just sort both dims.
         out = wacky_dim_patch.sort_coords()
         for name, coord in out.coords.coord_map.items():
@@ -18,7 +17,7 @@ class TestSortCoords:
             assert coord.sorted
 
     def test_reverse_sort(self, wacky_dim_patch):
-        """Test sort both dims backward"""
+        """Test sort both dims backward."""
         out = wacky_dim_patch.sort_coords(reverse=True)
         for name, coord in out.coords.coord_map.items():
             if name not in out.dims:

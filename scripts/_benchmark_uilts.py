@@ -1,4 +1,4 @@
-"""Utils for running benchmarks"""
+"""Utils for running benchmarks."""
 from __future__ import annotations
 
 import os
@@ -10,7 +10,6 @@ from rich.console import Console
 
 console = Console()
 
-# install(show_locals=True)
 
 BASE_PATH = Path(__file__).absolute().parent.parent
 REFERENCE_BRANCH = "master"
@@ -18,7 +17,7 @@ REFERENCE_BRANCH = "master"
 
 @contextmanager
 def cd(path):
-    """Change directory temporarily"""
+    """Change directory temporarily."""
     current = os.getcwd()
     os.chdir(path)
     try:
@@ -31,7 +30,7 @@ def cd(path):
 
 
 def run_asv(name):
-    """Run asv, rename output"""
+    """Run asv, rename output."""
     expected_output_file = BASE_PATH / ".asv" / "results" / "benchmarks.json"
     if expected_output_file.exists():
         expected_output_file.unlink()
@@ -48,7 +47,6 @@ def run_asv(name):
     hash = git_hash()
     run(f"asv dev -e --set-commit-hash {hash}", check=True, shell=True)
     assert expected_output_file.exists()
-    # expected_output_file.rename(expected_output_file.parent / f"{name}.json")
     return
 
 

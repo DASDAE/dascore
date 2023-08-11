@@ -1,12 +1,10 @@
-"""
-pytest configuration for dascore
-"""
+"""pytest configuration for dascore."""
 from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path
 from contextlib import suppress
+from pathlib import Path
 
 import matplotlib
 import numpy as np
@@ -49,7 +47,6 @@ def pytest_addoption(parser):
 
 def pytest_collection_modifyitems(config, items):
     """Configure pytest command line options."""
-
     marks = {}
     if not config.getoption("--integration"):
         msg = "needs --integration option to run"
@@ -134,7 +131,7 @@ def idas_h5_example_path():
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def terra15_das_patch(terra15_das_example_path) -> Patch:
-    """Read the terra15 data, return contained DataArray"""
+    """Read the terra15 data, return contained DataArray."""
     out = read(terra15_das_example_path, "terra15")[0]
     attr_time = out.attrs["time_max"]
     coortime_step = out.coords.coord_map["time"].max()
@@ -145,7 +142,7 @@ def terra15_das_patch(terra15_das_example_path) -> Patch:
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def prodml_v2_0_patch(prodml_v2_0_example_path) -> Patch:
-    """Read the prodML v2.0 patch"""
+    """Read the prodML v2.0 patch."""
     out = read(prodml_v2_0_example_path, "prodml")[0]
     return out
 
@@ -153,7 +150,7 @@ def prodml_v2_0_patch(prodml_v2_0_example_path) -> Patch:
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def prodml_v2_1_patch(prodml_v2_1_example_path) -> Patch:
-    """Read the prodML v2.1 patch"""
+    """Read the prodML v2.1 patch."""
     out = read(prodml_v2_1_example_path, "prodml")[0]
     return out
 
@@ -260,14 +257,14 @@ def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
 @pytest.fixture()
 @register_func(SPOOL_FIXTURES)
 def terra15_das_spool(terra15_das_example_path) -> SpoolType:
-    """Return the spool of Terra15 Das Array"""
+    """Return the spool of Terra15 Das Array."""
     return read(terra15_das_example_path, file_format="terra15")
 
 
 @pytest.fixture(scope="session")
 @register_func(SPOOL_FIXTURES)
 def terra15_das_unfinished_path() -> Path:
-    """Return the spool of Terra15 Das Array"""
+    """Return the spool of Terra15 Das Array."""
     out = fetch("terra15_das_unfinished.hdf5")
     assert out.exists()
     return out
@@ -361,14 +358,12 @@ def memory_spool_dim_1_patches():
 @pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
 def all_examples_spool(terra15_das_example_path):
-    """
-    Create a spool from all the examples.
-    """
+    """Create a spool from all the examples."""
     parent = terra15_das_example_path.parent
     spool = dc.spool(parent)
     try:
         spool = spool.update()
-    except Exception:  # noqa
+    except Exception:
         with suppress(FileNotFoundError):
             spool.indexer.index_path.unlink()  # delete index if problems found
         spool = spool.update()  # then re-index
@@ -378,7 +373,7 @@ def all_examples_spool(terra15_das_example_path):
 @pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
 def memory_spool_small_dt_differences(random_spool):
-    """Create a memory spool with slightly different time_steps"""
+    """Create a memory spool with slightly different time_steps."""
     out = []
     for num, patch in enumerate(random_spool):
         dt = patch.attrs.time_step + num * np.timedelta64(1, "ns")

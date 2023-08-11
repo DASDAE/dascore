@@ -1,7 +1,6 @@
-"""
-Tests for reading/writing pickles.
-"""
+"""Tests for reading/writing pickles."""
 from __future__ import annotations
+
 from io import BytesIO
 
 import pytest
@@ -47,7 +46,7 @@ class TestGetFormat:
         assert not parser.get_format("surely_not_a_file_that_exists")
 
     def test_get_format_binary_file_too_small(self):
-        """Ensure a file which is too small returns false"""
+        """Ensure a file which is too small returns false."""
         bio = BytesIO()
         bio.write(b"one")
         fio = PickleIO()
@@ -64,7 +63,7 @@ class TestGetFormat:
 
 
 class TestScan:
-    """Tests for scanning pickle files/"""
+    """Tests for scanning pickle files/."""
 
     comp_attrs = (
         "data_type",

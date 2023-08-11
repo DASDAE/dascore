@@ -1,7 +1,6 @@
-"""
-Module for testing differentiation of patches.
-"""
+"""Module for testing differentiation of patches."""
 from __future__ import annotations
+
 import numpy as np
 import pytest
 
@@ -42,7 +41,7 @@ def linear_patch(random_patch):
 
 
 class TestDifferentiateOrder2:
-    """Simple tests for differentiation using order=2 (numpy.grad)"""
+    """Simple tests for differentiation using order=2 (numpy.grad)."""
 
     def test_default_case(self, random_patch):
         """Ensure calling differentiate with all dims works."""
@@ -67,7 +66,7 @@ class TestDifferentiateOrder2:
         assert get_quantity(out.attrs.data_units) == expected_units
 
     def test_all_axis(self, random_patch):
-        """Ensure we can diff along all axis"""
+        """Ensure we can diff along all axis."""
         patch = random_patch.set_units("ohm")
         expected_units = get_quantity("ohm / (m * s)")
         out = differentiate(patch, dim=None)
@@ -96,7 +95,7 @@ class TestCompareOrders:
 
     @pytest.fixture(params=orders)
     def order(self, request):
-        """fixture to return order for testing."""
+        """Fixture to return order for testing."""
         order = request.param
         if order != 2:  # order != 2 requires findiff, skip if not installed.
             pytest.importorskip("findiff")
@@ -116,13 +115,13 @@ class TestCompareOrders:
         assert np.allclose(patch.data, 1.0)
 
     def test_diff_all_dims_plus(self, x_plus_y_patch, order):
-        """Ensure diffs over all dimensions on x+y patch"""
+        """Ensure diffs over all dimensions on x+y patch."""
         p1 = x_plus_y_patch.tran.differentiate(dim=None, order=order)
         # since dxdy(3x + 2y) = 0
         assert np.allclose(p1.data, 0.0)
 
     def test_diff_all_dims_mult(self, x_times_y_patch, order):
-        """Ensure diffs over all dimensions on x+y patch"""
+        """Ensure diffs over all dimensions on x+y patch."""
         p1 = x_times_y_patch.tran.differentiate(dim=None, order=order)
         # since dxdy(3x * 2y) = 6
         assert np.allclose(p1.data, 6.0)

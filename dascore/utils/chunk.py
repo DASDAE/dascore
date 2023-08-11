@@ -1,6 +1,4 @@
-"""
-Utilities for chunking dataframes.
-"""
+"""Utilities for chunking dataframes."""
 from __future__ import annotations
 
 from collections.abc import Collection
@@ -144,7 +142,7 @@ class ChunkManager:
         self._validate_chunker()
 
     def _validate_kwargs(self, kwargs):
-        """Ensure kwargs is len one and has a valid"""
+        """Ensure kwargs is len one and has a valid."""
         if not len(kwargs) == 1:
             msg = (
                 f"Chunking only supported along one dimension. You passed "
@@ -205,9 +203,7 @@ class ChunkManager:
         return out
 
     def _get_duration_overlap(self, duration, start, step, overlap=None):
-        """
-        Get duration and overlap from kwargs.
-        """
+        """Get duration and overlap from kwargs."""
         overlap = overlap if overlap is not None else self._overlap
         # cast step to time delta if start is datetime
         if is_datetime64(start):
@@ -268,7 +264,7 @@ class ChunkManager:
         return out
 
     def _get_instructions(self, sub_source, sub_chunk):
-        """get source mapping to chunk."""
+        """Get source mapping to chunk."""
         min_name, max_name = f"{self._name}_min", f"{self._name}_max"
         # sort inputs based on start of range, as long as we don't reset index
         # we should be ok.

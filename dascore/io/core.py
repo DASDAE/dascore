@@ -10,7 +10,7 @@ from collections import defaultdict
 from functools import cached_property, wraps
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import get_type_hints, Annotated, Literal
+from typing import Annotated, Literal, get_type_hints
 
 import numpy as np
 import pandas as pd
@@ -19,20 +19,20 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import (
+    VALID_DATA_CATEGORIES,
+    VALID_DATA_TYPES,
     PatchType,
     SpoolType,
-    timeable_types,
-    VALID_DATA_TYPES,
-    VALID_DATA_CATEGORIES,
     max_lens,
+    timeable_types,
 )
 from dascore.core.attrs import str_validator
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.misc import cached_method, iterate, suppress_warnings
 from dascore.utils.models import (
-    DascoreBaseModel,
     CommaSeparatedStr,
+    DascoreBaseModel,
     DateTime64,
     TimeDelta64,
 )
@@ -91,7 +91,7 @@ class PatchFileSummary(DascoreBaseModel):
         return data
 
     def flat_dump(self):
-        """Alias for dump, for compatibility with PatchAttrs.flat_dump"""
+        """Alias for dump, for compatibility with PatchAttrs.flat_dump."""
         return self.model_dump()
 
 
@@ -112,7 +112,7 @@ class _FiberIOManager:
     def _eps(self):
         """
         Get the unlaoded entry points registered to this domain into a dict of
-        {name: ep}
+        {name: ep}.
         """
         # TODO remove warning suppression and switch to select when 3.9 is dropped
         # see https://docs.python.org/3/library/importlib.metadata.html#entry-points
@@ -149,7 +149,7 @@ class _FiberIOManager:
 
     @cached_method
     def load_plugins(self, format: str | None = None):
-        """Load plugin for specific format or ensure all formats are loaded"""
+        """Load plugin for specific format or ensure all formats are loaded."""
         if format is not None and format in self._format_version:
             return  # already loaded
         if not (unloaded := self.unloaded_formats):
@@ -270,7 +270,7 @@ class _FiberIOManager:
             return
 
     def _yield_extensions(self, extension):
-        """generator to get formatter prioritized by preferred extensions."""
+        """Generator to get formatter prioritized by preferred extensions."""
         has_yielded = set()
         self.load_plugins()
         for formatter in self._extension_list[extension]:
@@ -285,14 +285,12 @@ class _FiberIOManager:
 
 
 def _type_caster(func, sig, required_type, arg_name):
-    """
-    A decorator for casting types for arguments of cast ind.
-    """
+    """A decorator for casting types for arguments of cast ind."""
     fun_name = func.__name__
 
     @wraps(func)
     def _wraper(*args, _pre_cast=False, **kwargs):
-        """Wraps args but performs coercion to get proper stream"""
+        """Wraps args but performs coercion to get proper stream."""
         # TODO look at replacing this with pydantic's type_guard thing.
 
         # this allows us to fast-track calls from generic functions
@@ -307,7 +305,7 @@ def _type_caster(func, sig, required_type, arg_name):
             # kwargs is included in bound arguments, need to re-attach
             new_kw.update(new_kw.pop("kwargs", {}))
             out = func(**new_kw)
-        except Exception as e:  # noqa get_format can't raise; must return false.
+        except Exception as e:  # get_format can't raise; must return false.
             if fun_name == "get_format":
                 out = False
             else:
@@ -327,9 +325,7 @@ def _type_caster(func, sig, required_type, arg_name):
 
 
 def _is_wrapped_func(func1, func2):
-    """
-    Small helper function to determine if func1 is func2, unwrapping decorators.
-    """
+    """Small helper function to determine if func1 is func2, unwrapping decorators."""
     func = func1
     while hasattr(func, "func") or hasattr(func, "__func__"):
         func = getattr(func, "func", func)
@@ -370,9 +366,7 @@ class FiberIO:
         raise NotImplementedError(msg)
 
     def scan(self, resource) -> list[dc.PatchAttrs]:
-        """
-        Returns a list of summary info for patches contained in file.
-        """
+        """Returns a list of summary info for patches contained in file."""
         # default scan method reads in the file and returns required attributes
         # however, this can be very slow, so each parser should implement scan
         # when possible.
@@ -391,9 +385,7 @@ class FiberIO:
         return out
 
     def write(self, spool: SpoolType, resource):
-        """
-        Write the spool to a resource (eg path, stream, etc.).
-        """
+        """Write the spool to a resource (eg path, stream, etc.)."""
         msg = f"FiberIO: {self.name} has no write method"
         raise NotImplementedError(msg)
 
@@ -409,37 +401,27 @@ class FiberIO:
 
     @property
     def implements_read(self) -> bool:
-        """
-        Returns True if the subclass implements its own scan method else False.
-        """
+        """Returns True if the subclass implements its own scan method else False."""
         return not _is_wrapped_func(self.read, FiberIO.read)
 
     @property
     def implements_write(self) -> bool:
-        """
-        Returns True if the subclass implements its own scan method else False.
-        """
+        """Returns True if the subclass implements its own scan method else False."""
         return not _is_wrapped_func(self.write, FiberIO.write)
 
     @property
     def implements_scan(self) -> bool:
-        """
-        Returns True if the subclass implements its own scan method else False.
-        """
+        """Returns True if the subclass implements its own scan method else False."""
         return not _is_wrapped_func(self.scan, FiberIO.scan)
 
     @property
     def implements_get_format(self) -> bool:
-        """
-        Return True if the subclass implements its own get_format method.
-        """
+        """Return True if the subclass implements its own get_format method."""
         return not _is_wrapped_func(self.get_format, FiberIO.get_format)
 
     @classmethod
     def get_supported_io_table(cls):
-        """
-        A function for making a table of all the supported formats and the methods.
-        """
+        """A function for making a table of all the supported formats and the methods."""
         # load all the plugins, so we know about all the FiberIO classes
         FiberIO.manager.load_plugins()
         out = []
@@ -459,19 +441,17 @@ class FiberIO:
         return pd.DataFrame(out)
 
     def __hash__(self):
-        """FiberIO instances should be uniquely defined by (format, version)"""
+        """FiberIO instances should be uniquely defined by (format, version)."""
         return hash((self.name, self.version))
 
     def __init_subclass__(cls, **kwargs):
-        """
-        Hook for registering subclasses.
-        """
+        """Hook for registering subclasses."""
         # check that the subclass is valid
         if not cls.name:
             msg = "You must specify the file format with the name field."
             raise InvalidFiberIO(msg)
         # register formatter
-        manager: _FiberIOManager = getattr(cls.__mro__[1], "manager")
+        manager: _FiberIOManager = cls.__mro__[1].manager
         manager.register_fiberio(cls())
         # decorate methods for type-casting
         for name, param_ind in cls._automatic_type_casters.items():
@@ -518,7 +498,7 @@ def read(
                 file_version=file_version,
             )
         formatter = FiberIO.manager.get_fiberio(file_format, file_version)
-        required_type = getattr(formatter.read, "_required_type")
+        required_type = formatter.read._required_type
         path = man.get_resource(required_type)
         out = formatter.read(
             path,
@@ -569,7 +549,7 @@ def scan_to_df(
 def _iterate_scan_inputs(patch_source):
     """Yield scan candidates."""
     for el in iterate(patch_source):
-        if isinstance(el, (str, Path)) and (path := Path(el)).exists():
+        if isinstance(el, str | Path) and (path := Path(el)).exists():
             if path.is_dir():  # directory, yield contents
                 for sub_path in path.rglob("*"):
                     if sub_path.is_dir():
@@ -626,7 +606,7 @@ def scan(
             req_type = getattr(formatter.scan, "_required_type", None)
             # this will get an open file handle to past to get_resource
             patch_thing = man.get_resource(req_type)
-            for attr in formatter.scan(patch_thing, _pre_cast=True):  # noqa
+            for attr in formatter.scan(patch_thing, _pre_cast=True):
                 out.append(dc.PatchAttrs.from_dict(attr))
     return out
 
@@ -670,14 +650,14 @@ def get_format(
             # may happen in each formatters get_format method, many of which
             # may be third party code
             func = formatter.get_format
-            required_type = getattr(func, "_required_type")
+            required_type = func._required_type
             func_input = None
             try:
                 # get resource has to be in the try block because it can also
                 # raise, in which case the format doesn't belong.
                 func_input = man.get_resource(required_type)
-                format_version = func(func_input, _pre_cast=True)  # noqa
-            except Exception:  # noqa we need to catch everythign here
+                format_version = func(func_input, _pre_cast=True)
+            except Exception:  # we need to catch everythign here
                 continue
             finally:
                 # If file handle-like seek back to 0 so it can be reused.
@@ -718,7 +698,7 @@ def write(
         patch_or_spool = dc.spool([patch_or_spool])
     with IOResourceManager(path) as man:
         func = formatter.write
-        required_type = getattr(func, "_required_type")
+        required_type = func._required_type
         resource = man.get_resource(required_type)
-        func(patch_or_spool, resource, _pre_cast=True, **kwargs)  # noqa
+        func(patch_or_spool, resource, _pre_cast=True, **kwargs)
     return path

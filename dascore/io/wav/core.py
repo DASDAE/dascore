@@ -1,6 +1,4 @@
-"""
-Core module for wave format.
-"""
+"""Core module for wave format."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,9 +12,7 @@ from dascore.utils.patch import check_patch_dims
 
 
 class WavIO(FiberIO):
-    """
-    IO support for wav (audio) format.
-    """
+    """IO support for wav (audio) format."""
 
     name = "WAV"
 

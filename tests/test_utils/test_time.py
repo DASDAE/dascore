@@ -1,6 +1,4 @@
-"""
-Tests for time variables.
-"""
+"""Tests for time variables."""
 from __future__ import annotations
 
 import numpy as np
@@ -30,7 +28,7 @@ class TestToDateTime64:
     date_strs = ["1970-01-01", "2020-01-03T05:22:11.123123345", "2017-09-18T01"]
 
     def test_float_array(self):
-        """Ensure basic tests work"""
+        """Ensure basic tests work."""
         date_strs = ["2015-01-01", "2020-03-01T21:10:10", "1970-01-02"]
         input_datetime64 = np.array(date_strs, dtype="datetime64[ns]")
         # convert to float (ns) then divide by e9 to get float in seconds
@@ -45,7 +43,7 @@ class TestToDateTime64:
         assert out == np.datetime64("1970-01-01T00:00:01.00000", "ns")
 
     def test_string(self):
-        """Test for converting a string to a datetime object"""
+        """Test for converting a string to a datetime object."""
         for time_str in self.date_strs:
             out = to_datetime64(time_str)
             assert isinstance(out, np.datetime64)
@@ -125,9 +123,7 @@ class TestToDateTime64:
         assert out1[1] == out2[0]
 
     def test_zero_dimensional_array(self):
-        """
-        Ensure a zero-dimensional array of a datetime is just unpacked.
-        """
+        """Ensure a zero-dimensional array of a datetime is just unpacked."""
         ar = np.array("2011-08-12", dtype="datetime64[ns]")
         out = to_datetime64(ar)
         assert isinstance(out, np.datetime64)
@@ -161,7 +157,7 @@ class TestToDateTime64:
 
 
 class TestToTimeDelta64:
-    """Tests for creating timedeltas"""
+    """Tests for creating timedeltas."""
 
     @pytest.fixture(
         params=(
@@ -171,16 +167,16 @@ class TestToTimeDelta64:
         )
     )
     def timedelta64(self, request):
-        """Return the parametrized timedeltas"""
+        """Return the parametrized timedeltas."""
         return request.param
 
     def test_single_float(self):
-        """Ensure a single float is converted to timedelta"""
+        """Ensure a single float is converted to timedelta."""
         out = to_timedelta64(1.0)
         assert out == np.timedelta64(1_000_000_000, "ns")
 
     def test_float_array(self):
-        """Ensure an array of flaots can be converted to ns timedelta"""
+        """Ensure an array of flaots can be converted to ns timedelta."""
         ar = [1.0, 0.000000001, 0.001]
         expected = np.array([1 * 10**9, 1, 1 * 10**6], "timedelta64")
         out = to_timedelta64(ar)
@@ -202,7 +198,7 @@ class TestToTimeDelta64:
         assert out == td == out2
 
     def test_pandas_time_delta(self):
-        """Ensure pandas timedelta still works"""
+        """Ensure pandas timedelta still works."""
         expected = np.timedelta64(1, "s")
         ptd = pd.Timedelta(1, "s")
         out = to_timedelta64(ptd)
@@ -255,10 +251,10 @@ class TestToTimeDelta64:
 
 
 class TestToInt:
-    """Tests for converting time-like types to ints, or passing through reals"""
+    """Tests for converting time-like types to ints, or passing through reals."""
 
     def test_timedelta64(self):
-        """Ensure a timedelta64 returns the ns"""
+        """Ensure a timedelta64 returns the ns."""
         out = to_int(np.timedelta64(1, "s"))
         assert out == 1_000_000_000
 
@@ -285,7 +281,7 @@ class TestToInt:
         assert to_int(pd.NaT) is np.NaN
 
     def test_converted_to_int(self):
-        """Ensure a number is converted to int"""
+        """Ensure a number is converted to int."""
         assert to_int(10) == 10
         assert to_int(10.1) == 10
 
@@ -309,7 +305,7 @@ class TestToInt:
             assert out == expected
 
     def test_empty_array(self):
-        """ensure an empty array comes out the other end."""
+        """Ensure an empty array comes out the other end."""
         ar = np.array([])
         out = to_int(ar)
         assert len(out) == 0
@@ -332,7 +328,7 @@ class TestIsDateTime:
         assert not is_datetime64(np.timedelta64(10, "s"))
 
     def test_is_datetime(self):
-        """Things that should return True"""
+        """Things that should return True."""
         assert is_datetime64(np.datetime64("1970-01-01"))
         array = to_datetime64(["1990-01-01", "2010-01-01T12:23:22"])
         assert is_datetime64(array)
@@ -369,14 +365,14 @@ class TestToFloat:
         assert np.isclose(to_float(td), 100.00)
 
     def test_timedelta_array(self):
-        """tests for arrays of time deltas"""
+        """Tests for arrays of time deltas."""
         td = to_timedelta64(np.ones(10))
         out = to_float(td)
         assert np.issubdtype(out.dtype, np.float_)
         assert np.allclose(out, 1.0)
 
     def test_datetime(self):
-        """Ensure datetimes work"""
+        """Ensure datetimes work."""
         dt = to_datetime64("2012-01-01")
         out = to_float(dt)
         expected = (dt - to_datetime64("1970-01-01")) / to_timedelta64(1)
@@ -390,7 +386,7 @@ class TestToFloat:
         assert np.allclose(out, 1.0)
 
     def test_none(self):
-        """Ensure None returns NaN"""
+        """Ensure None returns NaN."""
         out = to_float(None)
         assert out is np.NaN
 
@@ -416,13 +412,13 @@ class TestIsTimeDelta:
         assert is_timedelta64(td)
 
     def datetimes_false(self):
-        """Datetimes are not timedeltas :)"""
+        """Datetimes are not timedeltas :)."""
         dt = to_datetime64("2020-01-02")
         assert not is_timedelta64(dt)
 
 
 class TestGetmaxMinTimes:
-    """Tests for max_min fetching"""
+    """Tests for max_min fetching."""
 
     def test_raises_bad_value(self):
         """Simple test to make sure error is raised if unordered tuple."""

@@ -202,9 +202,7 @@ class DirectoryIndexer(AbstractIndexer):
         return iter_files(paths, ext=self.ext, mtime=mtime)
 
     def _enforce_min_version(self):
-        """
-        Ensure the minimum version is met, else delete index file.
-        """
+        """Ensure the minimum version is met, else delete index file."""
         try:
             self._index_table.validate_version()
         except InvalidIndexVersionError:

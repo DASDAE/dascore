@@ -1,6 +1,4 @@
-"""
-IO module for reading prodML data.
-"""
+"""IO module for reading prodML data."""
 from __future__ import annotations
 
 import dascore as dc
@@ -11,9 +9,7 @@ from .utils import _get_prodml_attrs, _get_prodml_version_str, _read_prodml
 
 
 class ProdMLV2_0(FiberIO):
-    """
-    Support for ProdML V 2.0.
-    """
+    """Support for ProdML V 2.0."""
 
     name = "PRODML"
     preferred_extensions = ("hdf5", "h5")
@@ -33,9 +29,7 @@ class ProdMLV2_0(FiberIO):
             return (self.name, version_str)
 
     def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
-        """
-        Scan a prodml file, return summary information about the file's contents.
-        """
+        """Scan a prodml file, return summary information about the file's contents."""
         file_version = _get_prodml_version_str(resource)
         extras = {
             "path": resource.filename,
@@ -51,16 +45,12 @@ class ProdMLV2_0(FiberIO):
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
     ) -> dc.BaseSpool:
-        """
-        Read a ProdML file.
-        """
+        """Read a ProdML file."""
         patches = _read_prodml(resource, time=time, distance=distance)
         return dc.spool(patches)
 
 
 class ProdMLV2_1(ProdMLV2_0):
-    """
-    Support for ProdML V 2.1.
-    """
+    """Support for ProdML V 2.1."""
 
     version = "2.1"

@@ -1,6 +1,4 @@
-"""
-Simple script for downloading external files.
-"""
+"""Simple script for downloading external files."""
 from __future__ import annotations
 
 from functools import cache
@@ -26,9 +24,7 @@ fetcher.load_registry(REGISTRY_PATH)
 
 
 def get_registry_df() -> pd.DataFrame:
-    """
-    Returns a dataframe of all files in the data registry.
-    """
+    """Returns a dataframe of all files in the data registry."""
     names = (
         "name",
         "hash",

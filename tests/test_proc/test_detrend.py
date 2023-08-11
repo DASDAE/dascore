@@ -1,7 +1,6 @@
-"""
-Tests for detrending functions.
-"""
+"""Tests for detrending functions."""
 from __future__ import annotations
+
 import numpy as np
 
 

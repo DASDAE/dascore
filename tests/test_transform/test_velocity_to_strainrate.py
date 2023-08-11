@@ -1,7 +1,6 @@
-"""
-Tests for converting velocity to strain-rate.
-"""
+"""Tests for converting velocity to strain-rate."""
 from __future__ import annotations
+
 import numpy as np
 import pytest
 
@@ -18,7 +17,7 @@ class TestStrainRateConversion:
         return terra15_das_patch.tran.velocity_to_strain_rate()
 
     def test_attrs(self, patch_strain_rate_default):
-        """Ensure the attributes were updated with strain_rate"""
+        """Ensure the attributes were updated with strain_rate."""
         attrs = patch_strain_rate_default.attrs
         assert attrs["data_type"] == "strain_rate"
 

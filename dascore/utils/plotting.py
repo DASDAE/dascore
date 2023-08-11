@@ -1,14 +1,12 @@
-"""
-Utilities for plotting with matplotlib.
-"""
+"""Utilities for plotting with matplotlib."""
 from __future__ import annotations
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from dascore.utils.misc import suppress_warnings
 from dascore.units import get_quantity_str
+from dascore.utils.misc import suppress_warnings
 
 
 def _get_dim_label(patch, dim):
@@ -27,7 +25,7 @@ def _get_cmap(cmap):
 
 
 def _get_ax(ax):
-    """Get an axis if ax is None"""
+    """Get an axis if ax is None."""
     if ax is None:
         _, ax = plt.subplots(1)
     return ax

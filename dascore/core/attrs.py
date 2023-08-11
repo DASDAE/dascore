@@ -2,27 +2,23 @@
 from __future__ import annotations
 
 import warnings
-from collections import ChainMap
-from collections import defaultdict
-from collections.abc import Mapping
-from collections.abc import Sequence
+from collections import ChainMap, defaultdict
+from collections.abc import Mapping, Sequence
 from functools import reduce
-from typing import Annotated, Literal
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import ConfigDict, PlainValidator
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, PlainValidator, model_validator
 from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import (
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
+    PatchType,
     basic_summary_attrs,
     max_lens,
-    PatchType,
 )
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, CoordRange, CoordSummary
@@ -36,11 +32,11 @@ from dascore.utils.misc import (
     to_str,
 )
 from dascore.utils.models import (
+    CommaSeparatedStr,
     DascoreBaseModel,
     UnitQuantity,
-    CommaSeparatedStr,
-    frozen_dict_validator,
     frozen_dict_serializer,
+    frozen_dict_validator,
 )
 
 str_validator = PlainValidator(to_str)
@@ -154,12 +150,10 @@ class PatchAttrs(DascoreBaseModel):
         frozen_dict_serializer,
     ] = {}
 
-    @model_validator(mode="before")  # noqa
+    @model_validator(mode="before")
     @classmethod
     def parse_coord_attributes(cls, data: Any) -> Any:
-        """
-        Parse the coordinate attributes into coord dict.
-        """
+        """Parse the coordinate attributes into coord dict."""
         if isinstance(data, dict):
             data = _get_coords_dict(data, cls.model_fields)
         return data
@@ -174,9 +168,7 @@ class PatchAttrs(DascoreBaseModel):
         return len(self.model_dump())
 
     def __getattr__(self, item):
-        """
-        This enables dynamic attributes such as time_min, time_max, etc.
-        """
+        """This enables dynamic attributes such as time_min, time_max, etc."""
         split = item.split("_")
         # this only works on names like time_max, distance_step, etc.
         if not len(split) == 2:
@@ -246,9 +238,7 @@ class PatchAttrs(DascoreBaseModel):
         return tuple(self.dims.split(","))
 
     def rename_dimension(self, **kwargs):
-        """
-        Rename one or more dimensions if in kwargs. Return new PatchAttrs.
-        """
+        """Rename one or more dimensions if in kwargs. Return new PatchAttrs."""
         if not (dims := set(kwargs) & set(self.dim_tuple)):
             return self
         new = dict(self)
@@ -296,10 +286,10 @@ class PatchAttrs(DascoreBaseModel):
             step_name = f"{coord_name}_step"
             step, start = out[step_name], coord["min"]
             if step is None:
-                is_time = isinstance(start, (np.datetime64, np.timedelta64))
+                is_time = isinstance(start, np.datetime64 | np.timedelta64)
                 if is_time:
                     out[step_name] = np.timedelta64("NaT")
-                elif isinstance(start, (float, np.floating)):
+                elif isinstance(start, float | np.floating):
                     out[step_name] = np.NaN
         return out
 
@@ -351,7 +341,7 @@ def combine_patch_attrs(
         return merge_coords
 
     def _get_merge_dict_list(merge_coords):
-        """Get a list of {attrs: []}"""
+        """Get a list of {attrs: []}."""
         out = defaultdict(list)
         for mdict in merge_coords:
             for key, val in mdict.items():
@@ -381,7 +371,7 @@ def combine_patch_attrs(
         out["min"] = min(merge_dict_list["min"])
         out["max"] = max(merge_dict_list["max"])
         step = None
-        if all_diffs_close_enough((steps := merge_dict_list["step"])):
+        if all_diffs_close_enough(steps := merge_dict_list["step"]):
             step = get_middle_value(steps)
         out["step"] = step
         return out

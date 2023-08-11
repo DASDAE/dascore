@@ -1,6 +1,4 @@
-"""
-Utilities for working with the Patch class.
-"""
+"""Utilities for working with the Patch class."""
 from __future__ import annotations
 
 import functools
@@ -30,16 +28,14 @@ attr_type = Union[dict[str, Any], str, Sequence[str], None]
 
 
 def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
-    """
-    Get a str rep of the function and input args.
-    """
+    """Get a str rep of the function and input args."""
     callargs = inspect.getcallargs(func, patch, *args, **kwargs)
     callargs.pop("patch", None)
     callargs.pop("self", None)
     kwargs_ = callargs.pop("kwargs", {})
     arguments = []
-    arguments += [f"{k}={repr(v)}" for k, v in callargs.items() if v is not None]
-    arguments += [f"{k}={repr(v)}" for k, v in kwargs_.items() if v is not None]
+    arguments += [f"{k}={v!r}" for k, v in callargs.items() if v is not None]
+    arguments += [f"{k}={v!r}" for k, v in kwargs_.items() if v is not None]
     arguments.sort()
     out = f"{func.__name__}("
     if arguments:
@@ -206,7 +202,7 @@ def patches_to_df(
     patches: Sequence[PatchType] | SpoolType | pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Return a dataframe
+    Return a dataframe.
 
     Parameters
     ----------
@@ -218,7 +214,6 @@ def patches_to_df(
     A dataframe with the attrs of each patch converted to a columns
     plus a field called 'patch' which contains a reference to the patches.
     """
-
     if hasattr(patches, "_df"):
         df = patches._df  # noqa
     # Handle spool case
@@ -357,9 +352,7 @@ def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[dc.PatchAttrs
 
 
 def get_start_stop_step(patch: PatchType, dim):
-    """
-    Convenience method for getting start, stop, step for a given dimension.
-    """
+    """Convenience method for getting start, stop, step for a given dimension."""
     assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"
     start = patch.attrs[f"{dim}_min"]
     end = patch.attrs[f"{dim}_max"]
@@ -402,7 +395,7 @@ def get_dim_value_from_kwargs(patch, kwargs):
             f"dimensions {patch.dims}"
         )
         raise PatchDimError(msg)
-    dim = list(overlap)[0]
+    dim = next(iter(overlap))
     axis = dims.index(dim)
     return dim, axis, kwargs[dim]
 

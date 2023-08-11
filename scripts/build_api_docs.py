@@ -1,6 +1,4 @@
-"""
-Script to build the API docs for dascore.
-"""
+"""Script to build the API docs for dascore."""
 from __future__ import annotations
 
 from _index_api import get_alias_mapping, parse_project

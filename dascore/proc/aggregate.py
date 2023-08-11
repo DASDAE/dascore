@@ -1,7 +1,6 @@
-"""
-Module for applying aggregations along a specified axis.
-"""
+"""Module for applying aggregations along a specified axis."""
 from __future__ import annotations
+
 from functools import partial
 from typing import Literal
 

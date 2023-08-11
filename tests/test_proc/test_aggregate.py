@@ -1,7 +1,6 @@
-"""
-Tests for performing aggregations.
-"""
+"""Tests for performing aggregations."""
 from __future__ import annotations
+
 import numpy as np
 import pytest
 
@@ -9,9 +8,7 @@ from dascore.proc.aggregate import _AGG_FUNCS, aggregate
 
 
 class TestBasicAggregations:
-    """
-    Sanity checks for basic aggregations.
-    """
+    """Sanity checks for basic aggregations."""
 
     @pytest.fixture(params=list(_AGG_FUNCS))
     def distance_aggregated_patch(self, request, random_patch):
@@ -34,14 +31,14 @@ class TestBasicAggregations:
         assert 1 in out.data.shape
 
     def test_first(self, random_patch):
-        """Ensure aggregations can occur"""
+        """Ensure aggregations can occur."""
         out = random_patch.aggregate(dim="distance", method="first")
         axis = random_patch.dims.index("distance")
         assert out.data.shape[axis] == 1
         assert np.allclose(random_patch.data[0, :], out.data[0, :])
 
     def test_last(self, random_patch):
-        """Ensure aggregations can occur"""
+        """Ensure aggregations can occur."""
         out = random_patch.aggregate(dim="distance", method="last")
         axis = random_patch.dims.index("distance")
         assert out.data.shape[axis] == 1

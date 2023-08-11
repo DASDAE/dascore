@@ -34,9 +34,7 @@ def _random_patch(
     time_array=None,
     dist_array=None,
 ):
-    """
-    Generate a random DAS Patch.
-    """
+    """Generate a random DAS Patch."""
     # get input data
     rand = np.random.RandomState(13)
     array = rand.random(shape)
@@ -116,7 +114,7 @@ def _sin_wave_patch(
     # Get time and distance coords
     distance = np.arange(1, channel_count + 1, 1)
     time = to_timedelta64(t_array) + np.datetime64(time_min)
-    freqs = [frequency] if isinstance(frequency, (float, int)) else frequency
+    freqs = [frequency] if isinstance(frequency, float | int) else frequency
     # init empty data and add frequencies.
     data = np.zeros((len(time), len(distance)))
     for freq in freqs:

@@ -1,6 +1,4 @@
-"""
-Module for waterfall plotting.
-"""
+"""Module for waterfall plotting."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -10,8 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dascore.constants import PatchType
-from dascore.utils.patch import patch_function
 from dascore.units import get_quantity_str
+from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _format_time_axis,
     _get_ax,
@@ -25,7 +23,7 @@ def _set_scale(im, scale, scale_type, patch):
     """Set the scale of the color bar based on scale and scale_type."""
     # check scale paramters
     assert scale_type in {"absolute", "relative"}
-    assert isinstance(scale, (float, int)) or len(scale) == 2
+    assert isinstance(scale, float | int) or len(scale) == 2
     # make sure we have a len two array
     data = patch.data
     modifier = 1

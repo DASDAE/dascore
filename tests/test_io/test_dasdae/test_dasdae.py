@@ -1,7 +1,6 @@
-"""
-Tests for DASDAE format.
-"""
+"""Tests for DASDAE format."""
 from __future__ import annotations
+
 import shutil
 from pathlib import Path
 
@@ -21,7 +20,7 @@ WRITTEN_FILES = []
 @pytest.fixture(scope="class")
 @register_func(WRITTEN_FILES)
 def written_dascore_v1_random(random_patch, tmp_path_factory):
-    """write the example patch to disk."""
+    """Write the example patch to disk."""
     path = tmp_path_factory.mktemp("dascore_file") / "test.hdf5"
     dc.write(random_patch, path, "dasdae", file_version="1")
     return path
@@ -30,7 +29,7 @@ def written_dascore_v1_random(random_patch, tmp_path_factory):
 @pytest.fixture(scope="class")
 @register_func(WRITTEN_FILES)
 def written_dascore_v1_random_indexed(written_dascore_v1_random, tmp_path_factory):
-    """copy the previous dasdae file and create an index."""
+    """Copy the previous dasdae file and create an index."""
     new_path = tmp_path_factory.mktemp("dasdae_test_path") / "indexed_dasdae.h5"
     shutil.copy(written_dascore_v1_random, new_path)
     # index new path
@@ -97,12 +96,10 @@ class TestWriteDASDAE:
 
 
 class TestReadDASDAE:
-    """
-    Test for reading a dasdae format.
-    """
+    """Test for reading a dasdae format."""
 
     def test_round_trip_random_patch(self, random_patch, tmp_path_factory):
-        """Ensure the random patch can be round-tripped"""
+        """Ensure the random patch can be round-tripped."""
         path = tmp_path_factory.mktemp("dasedae_round_trip") / "rt.h5"
         dc.write(random_patch, path, "DASDAE")
         out = dc.read(path)
@@ -116,7 +113,7 @@ class TestReadDASDAE:
         spool[0].equals(dc.Patch())
 
     def test_datetimes(self, tmp_path_factory, random_patch):
-        """Ensure the datetimes in the attrs come back as datetimes"""
+        """Ensure the datetimes in the attrs come back as datetimes."""
         # create a patch with a custom dt attribute.
         path = tmp_path_factory.mktemp("dasdae_dt_saes") / "rt.h5"
         dt = np.datetime64("2010-09-12")
@@ -165,7 +162,7 @@ class TestScanDASDAE:
 
 
 class TestRoundTrips:
-    """Tests for round-tripping various patches/spools"""
+    """Tests for round-tripping various patches/spools."""
 
     def test_write_patch_with_lat_lon(
         self, random_patch_with_lat_lon, tmp_path_factory

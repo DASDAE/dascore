@@ -1,7 +1,6 @@
-"""
-Misc. tests for misfit utilities.
-"""
+"""Misc. tests for misfit utilities."""
 from __future__ import annotations
+
 import os
 import time
 from pathlib import Path
@@ -26,7 +25,7 @@ class ParentClass:
 
     @property
     def namespace(self):
-        """Your run-o-the-mill namespace"""
+        """Your run-o-the-mill namespace."""
         return MNS(self)
 
 
@@ -34,7 +33,7 @@ class MNS(MethodNameSpace):
     """method name space subclass."""
 
     def func1(self, expected_type):
-        """First func"""
+        """First func."""
         return isinstance(self, expected_type)
 
 
@@ -63,13 +62,13 @@ class TestGetSlice:
     ar = np.arange(100)
 
     def test_two_intervals(self):
-        """test get slice for two intervals"""
+        """Test get slice for two intervals."""
         array_slice = get_slice_from_monotonic(self.ar, cond=(1, 10))
         expected = slice(1, 11, None)
         assert array_slice == expected
 
     def test_right_side(self):
-        """test for only right interval"""
+        """Test for only right interval."""
         array_slice = get_slice_from_monotonic(self.ar, cond=(None, 10))
         expected = slice(None, 11, None)
         assert array_slice == expected
@@ -93,15 +92,13 @@ class TestGetSlice:
         assert array_slice == expected
 
     def test_cond_is_none(self):
-        """Ensure None is a valid input, returns empty slice"""
+        """Ensure None is a valid input, returns empty slice."""
         array_slice = get_slice_from_monotonic(self.ar, cond=None)
         expected = slice(None, None, None)
         assert array_slice == expected
 
     def test_slice_end_with_zeros(self):
-        """
-        Ensure we get a slice without None at the end if arrays are zeroed at end.
-        """
+        """Ensure we get a slice without None at the end if arrays are zeroed at end."""
         ar = np.arange(100)
         ar[-20:] = 0
         sliced = get_slice_from_monotonic(ar, (None, ar.max()))
@@ -109,9 +106,7 @@ class TestGetSlice:
         assert sliced.stop == ar.max()
 
     def test_slice_middle_with_zeros(self):
-        """
-        Ensure we get a slice without None at the end if arrays are zeroed at end.
-        """
+        """Ensure we get a slice without None at the end if arrays are zeroed at end."""
         ar = np.arange(100)
         ar[-20:] = 0
         sliced = get_slice_from_monotonic(ar, (None, ar.max() - 10))
@@ -160,7 +155,7 @@ class TestIterFiles:
         return path
 
     def test_basic(self, simple_dir):
-        """test basic usage of iterfiles."""
+        """Test basic usage of iterfiles."""
         files = set(self.get_file_paths(self.file_paths, simple_dir))
         out = {Path(x) for x in iter_files(simple_dir)}
         assert files == out
@@ -191,7 +186,7 @@ class TestIterFiles:
             assert val.endswith(".txt")
 
     def test_mtime(self, simple_dir):
-        """Test filtering based on modified time"""
+        """Test filtering based on modified time."""
         files = list(self.get_file_paths(self.file_paths, simple_dir))
         # set the first file mtime in future
         now = time.time()
@@ -223,15 +218,15 @@ class TestIterate:
     """Test case for iterate."""
 
     def test_none(self):
-        """None should return an empty tuple"""
+        """None should return an empty tuple."""
         assert iterate(None) == tuple()
 
     def test_object(self):
-        """A single object should be returned in a tuple"""
+        """A single object should be returned in a tuple."""
         assert iterate(1) == (1,)
 
     def test_str(self):
-        """A single string object should be returned as a tuple"""
+        """A single string object should be returned as a tuple."""
         assert iterate("hey") == ("hey",)
 
 
@@ -257,38 +252,38 @@ class TestGetStencilCoefficients:
     """Tests for stencil coefficients."""
 
     def test_3_point_1st_derivative(self):
-        """3 point 1st derivative"""
+        """3 point 1st derivative."""
         out = get_stencil_coefs(1, 1)
         expected = np.array([-1 / 2, 0, 1 / 2])
         assert np.allclose(out, expected)
 
     def test_5_point_1st_derivative(self):
-        """5 point 1st derivative"""
+        """5 point 1st derivative."""
         out = get_stencil_coefs(2, 1)
         expected = np.array([1, -8, 0, 8, -1]) / 12.0
         assert np.allclose(out, expected)
 
     def test_3_point_2nd_derivative(self):
-        """3 point 2nd derivative"""
+        """3 point 2nd derivative."""
         out = get_stencil_coefs(1, 2)
         expected = np.array([1, -2, 1])
         assert np.allclose(out, expected)
 
 
 class TestCachedMethod:
-    """Ensure cached methods caches method calls (duh)"""
+    """Ensure cached methods caches method calls (duh)."""
 
     class _JohnnyCached:
         """Tests class for caching."""
 
         @cached_method
         def no_args(self):
-            """no argument method."""
+            """No argument method."""
             return {"output", "defined"}
 
         @cached_method
         def multiargs(self, a, b):
-            """multiple arguments for cache testing."""
+            """Multiple arguments for cache testing."""
             return a + b
 
     def test_no_args_kwargs(self):

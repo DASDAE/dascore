@@ -1,9 +1,10 @@
-"""Tests for rendering api stuff"""
+"""Tests for rendering api stuff."""
 from __future__ import annotations
+
 import pytest
 
 # These tests only work if doc deps are installed.
-pytest.importorskip("jinja2")  # noqa
+pytest.importorskip("jinja2")
 
 from _render_api import to_quarto_code  # noqa
 
@@ -30,7 +31,7 @@ class TestToQuartoCode:
         assert "    print(a)" in out.splitlines()
 
     def test_output_handled(self):
-        """Docstrings can have outputs in them, we need to strip them out"""
+        """Docstrings can have outputs in them, we need to strip them out."""
         code = """
         >>> print("bob")
         bob

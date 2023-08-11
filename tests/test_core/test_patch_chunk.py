@@ -5,6 +5,7 @@ This is separated from spool tests because these need to be quite
 extensive.
 """
 from __future__ import annotations
+
 import random
 
 import numpy as np
@@ -30,9 +31,7 @@ def spool_dt_perturbed(random_patch) -> dc.BaseSpool:
 
 
 class TestChunk:
-    """
-    Tests for merging/chunking patches.
-    """
+    """Tests for merging/chunking patches."""
 
     @pytest.fixture(scope="class")
     def random_spool_df(self, random_spool):
@@ -47,9 +46,7 @@ class TestChunk:
         assert sp1 == sp2
 
     def test_merge_chunk_adjacent_no_overlap(self, adjacent_spool_no_overlap):
-        """
-        Ensure chunking works on simple case of contiguous data w/ no overlap.
-        """
+        """Ensure chunking works on simple case of contiguous data w/ no overlap."""
         new = adjacent_spool_no_overlap.chunk(time=None)
         out_list = list(new)
         assert len(new) == len(out_list) == 1
@@ -64,7 +61,7 @@ class TestChunk:
         assert merged_len == 1
 
     def test_chunk_doesnt_modify_original(self, random_spool):
-        """Chunking shouldn't modify original spool"""
+        """Chunking shouldn't modify original spool."""
         first = random_spool.get_contents().copy()
         _ = random_spool.chunk(time=2)
         second = random_spool.get_contents().copy()
@@ -85,7 +82,7 @@ class TestChunk:
         assert chunk_df[cols].equals(new_content[cols])
 
     def test_merge_empty_spool(self, tmp_path_factory):
-        """Ensure merge doesn't raise on empty spools"""
+        """Ensure merge doesn't raise on empty spools."""
         spool = dc.spool([])
         merged = spool.chunk(time=None)
         assert len(merged) == 0
@@ -149,16 +146,12 @@ class TestChunkMerge:
 
     @pytest.fixture()
     def spool_complete_overlap(self, random_patch) -> dc.BaseSpool:
-        """
-        Create a spool which overlaps each other completely.
-        """
+        """Create a spool which overlaps each other completely."""
         return dc.spool([random_patch, random_patch])
 
     @pytest.fixture()
     def spool_slight_gap(self, random_patch) -> dc.BaseSpool:
-        """
-        Create a spool which has a 1.1 * dt gap.
-        """
+        """Create a spool which has a 1.1 * dt gap."""
         pa1 = random_patch
         t2 = random_patch.attrs["time_max"]
         dt = random_patch.attrs["time_step"]
@@ -169,9 +162,7 @@ class TestChunkMerge:
 
     @pytest.fixture(scope="class")
     def adjacent_spool_overlap(self, adjacent_spool_no_overlap):
-        """
-        Create a spool with several patches that have 50% overlap.
-        """
+        """Create a spool with several patches that have 50% overlap."""
         patches = list(adjacent_spool_no_overlap)
         out = [patches[0]]
         for ind in range(1, len(patches)):
@@ -261,7 +252,7 @@ class TestChunkMerge:
         assert pa1 == pa2
 
     def test_merge_transposed_patches(self, spool_complete_overlap):
-        """Ensure if one of the patches is transposed merge still works"""
+        """Ensure if one of the patches is transposed merge still works."""
         # TODO for now this won't work; its probably a silly edge case to complicate
         # the code over, but maybe revisit.
 

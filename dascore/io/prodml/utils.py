@@ -4,18 +4,15 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.attrs import PatchAttrs
 
 # --- Getting format/version
 
 
 def _get_prodml_version_str(hdf_fi) -> str:
-    """
-    Return the version string for prodml file.
-    """
-
+    """Return the version string for prodml file."""
     # define a few root attrs that act as a "fingerprint" for terra15 files
 
     acquisition = getattr(hdf_fi.root, "Acquisition", None)
@@ -36,7 +33,7 @@ def _get_prodml_version_str(hdf_fi) -> str:
 
 
 def _get_raw_node_dict(acquisition_node):
-    """Get a dict of {Raw[x]: node}"""
+    """Get a dict of {Raw[x]: node}."""
     out = {
         x._v_name: x
         for x in acquisition_node._f_iter_nodes()

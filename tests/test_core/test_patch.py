@@ -1,7 +1,6 @@
-"""
-Tests for Trace2D object.
-"""
+"""Tests for Trace2D object."""
 from __future__ import annotations
+
 import operator
 import weakref
 
@@ -36,13 +35,13 @@ def get_simple_patch() -> Patch:
 
 
 class TestInit:
-    """Tests for init'ing Patch"""
+    """Tests for init'ing Patch."""
 
     time1 = np.datetime64("2020-01-01")
 
     @pytest.fixture()
     def random_dt_coord(self):
-        """Create a random patch with a datetime coord"""
+        """Create a random patch with a datetime coord."""
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 200))
         attrs = dict(dx=1, time_step=1 / 250.0, category="DAS", id="test_data1")
@@ -75,7 +74,7 @@ class TestInit:
 
     @pytest.fixture(scope="class")
     def patch_conflicting_attrs_coords(self):
-        """Patch for testing conflicting coordinates/attributes"""
+        """Patch for testing conflicting coordinates/attributes."""
         array = np.random.random((10, 10))
         # create attrs, these should all get overwritten by coords.
         attrs = dict(
@@ -98,22 +97,18 @@ class TestInit:
         return patch
 
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
-        """
-        Ensure the time_min and time_max attrs can be inferred from coord time.
-        """
+        """Ensure the time_min and time_max attrs can be inferred from coord time."""
         patch = random_dt_coord
         assert patch.attrs["time_min"] == self.time1
 
     def test_end_time_inferred_from_dt64_coords(self, random_dt_coord):
-        """
-        Ensure the time_min and time_max attrs can be inferred from coord time.
-        """
+        """Ensure the time_min and time_max attrs can be inferred from coord time."""
         patch = random_dt_coord
         time = patch.coords.coord_map["time"].max()
         assert patch.attrs["time_max"] == time
 
     def test_init_from_array(self, random_patch):
-        """Ensure a trace can be created from raw components; array, coords, attrs"""
+        """Ensure a trace can be created from raw components; array, coords, attrs."""
         assert isinstance(random_patch, Patch)
 
     def test_max_time_populated(self, random_patch):
@@ -235,7 +230,7 @@ class TestNew:
         assert not new_patch.attrs.history
 
     def test_new_coord_dict_order(self, random_patch):
-        """Ensure data can be init'ed with a dict of coords in any orientation"""
+        """Ensure data can be init'ed with a dict of coords in any orientation."""
         patch = random_patch
         axis = patch.dims.index("time")
         data = np.std(patch.data, axis=axis, keepdims=True)
@@ -286,7 +281,7 @@ class TestEmptyPatch:
     """Tests for empty patch objects."""
 
     def test_no_dims(self):
-        """An empty test patch should have no dims or related attrs"""
+        """An empty test patch should have no dims or related attrs."""
         patch = Patch()
         attrs = patch.attrs
         assert len(attrs)
@@ -323,7 +318,7 @@ class TestEquals:
         assert not patch_2.equals(random_patch)
 
     def test_attrs_not_equal(self, random_patch):
-        """Ensure if the attributes are not equal the arrays are not equal"""
+        """Ensure if the attributes are not equal the arrays are not equal."""
         attrs = random_patch.attrs
         new_attr_dict = {}
         new_attr_dict["time_step"] = attrs["time_step"] - np.timedelta64(10, "s")
@@ -332,9 +327,7 @@ class TestEquals:
         assert not patch2.equals(random_patch)
 
     def test_one_null_value_in_attrs(self, random_patch):
-        """
-        Ensure setting a value to null in attrs doesn't eval to equal.
-        """
+        """Ensure setting a value to null in attrs doesn't eval to equal."""
         attrs = dict(random_patch.attrs)
         attrs["tag"] = ""
         patch2 = random_patch.new(attrs=attrs)
@@ -478,9 +471,7 @@ class TestReleaseMemory:
     """Ensure memory is released when the patch is deleted."""
 
     def test_single_patch(self):
-        """
-        Ensure a single patch is gc'ed when it leaves scope.
-        """
+        """Ensure a single patch is gc'ed when it leaves scope."""
         simple_patch = get_simple_patch()
         wr = weakref.ref(simple_patch.data)
         # delete pa and ensure the array was collected.
@@ -654,7 +645,7 @@ class TestAssertHasCoords:
             random_patch.assert_has_coords("foo")
 
     def test_raises_multiple(self, random_patch):
-        """Ensure an error is raised if required coords aren't found"""
+        """Ensure an error is raised if required coords aren't found."""
         match = "does not have required coordinate"
         with pytest.raises(CoordError, match=match):
             random_patch.assert_has_coords(("bar", "depth"))

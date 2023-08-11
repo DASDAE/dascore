@@ -1,6 +1,4 @@
-"""
-Basic operations for patches.
-"""
+"""Basic operations for patches."""
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
@@ -11,8 +9,8 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import PatchType
-from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
+from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.misc import optional_import
@@ -24,16 +22,16 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     """
         Set dimension to non-dimensional coordinate.
 
-        Parameters
-        ----------
+    Parameters
+    ----------
         **kwargs
             A mapping indicating old_dim: new_dim where new_dim refers to
             the name of a non-dimensional coordinate which will become a
             dimensional coordinate. The old dimensional coordinate will
             become a non-dimensional coordinate.
 
-        Examples
-        --------
+    Examples
+    --------
     import dascore.proc.coords    >>> import numpy as np
         >>> import dascore as dc
         >>> patch = dc.get_example_patch()
@@ -73,9 +71,7 @@ def pipe(
 
 
 def to_xarray(self: PatchType):
-    """
-    Return a data array with patch contents.
-    """
+    """Return a data array with patch contents."""
     xr = optional_import("xarray")
     attrs = dict(self.attrs)
     dims = self.dims
@@ -113,7 +109,7 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
 
 def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
     """
-    Determine if the current patch equals a
+    Determine if the current patch equals a.
 
     Parameters
     ----------
@@ -414,7 +410,7 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
     else:
         coords, attrs = patch.coords, patch.attrs
     # handle units of output
-    if isinstance(other, (Quantity, Unit)):
+    if isinstance(other, Quantity | Unit):
         data_units = get_quantity(attrs.data_units)
         data = patch.data if data_units is None else patch.data * data_units
         # other is not numpy array wrapped w/ quantity, convert to quant

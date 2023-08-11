@@ -1,7 +1,6 @@
-"""
-Tests for waterfall plots.
-"""
+"""Tests for waterfall plots."""
 from __future__ import annotations
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
@@ -45,7 +44,7 @@ def patch_random_start(event_patch_1):
 
 
 class TestWaterfall:
-    """Tests for waterfall plot"""
+    """Tests for waterfall plot."""
 
     def test_returns_axes(self, random_patch):
         """Call waterfall plot, return."""
@@ -77,13 +76,13 @@ class TestWaterfall:
         assert ax2 is not None
 
     def test_doc_intro_example(self, event_patch_1):
-        """Simple test to ensure the doc examples can be run"""
+        """Simple test to ensure the doc examples can be run."""
         patch = event_patch_1.pass_filter(time=(None, 300))
         _ = patch.viz.waterfall(scale=0.04)
         _ = patch.transpose("distance", "time").viz.waterfall(scale=0.04)
 
     def test_time_axis_label_int_overflow(self, random_patch):
-        """Make sure the time axis labels are correct (windows compatibility)"""
+        """Make sure the time axis labels are correct (windows compatibility)."""
         ax = random_patch.viz.waterfall()
         name = ["y", "x"][random_patch.dims.index("time")]
         # Get the piece of the label corresponding to the starttime

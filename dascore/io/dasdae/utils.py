@@ -1,6 +1,4 @@
-"""
-DASDAE format utilities
-"""
+"""DASDAE format utilities."""
 from __future__ import annotations
 
 import numpy as np
@@ -9,10 +7,9 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int
-from dascore.utils.misc import suppress_warnings
-
 
 # --- Functions for writing DASDAE format
 
@@ -51,7 +48,7 @@ def _save_array(data, name, group, h5):
 
 
 def _save_coords(patch, patch_group, h5):
-    """Save coordinates"""
+    """Save coordinates."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
         dims = cm.dim_map[name]
@@ -148,7 +145,6 @@ def _read_patch(patch_group, **kwargs):
     # try except.
     if kwargs:
         coords, data = coords.select(array=patch_group["data"], **kwargs)
-        # attrs = attrs.from_dict(attrs, coord_manager=coords)
     else:
         data = patch_group["data"][:]
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)

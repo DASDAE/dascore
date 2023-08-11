@@ -1,7 +1,6 @@
-"""
-Generic tests for prodml support.
-"""
+"""Generic tests for prodml support."""
 from __future__ import annotations
+
 import pytest
 
 import dascore as dc

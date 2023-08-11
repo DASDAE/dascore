@@ -1,6 +1,4 @@
-"""
-Utilities for models.
-"""
+"""Utilities for models."""
 from __future__ import annotations
 
 from collections import ChainMap
@@ -15,7 +13,7 @@ from typing_extensions import Self
 
 from dascore.compat import array
 from dascore.exceptions import AttributeMergeError
-from dascore.units import Quantity, get_quantity_str, get_quantity
+from dascore.units import Quantity, get_quantity, get_quantity_str
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     all_close,
@@ -36,13 +34,13 @@ frozen_dict_serializer = PlainSerializer(lambda x: dict(x))
 DateTime64 = Annotated[
     np.datetime64,
     PlainValidator(to_datetime64),
-    PlainSerializer(to_str, when_used="json"),  # noqa getting undefined name
+    PlainSerializer(to_str, when_used="json"),  # getting undefined name
 ]
 
 TimeDelta64 = Annotated[
     np.timedelta64,
     PlainValidator(to_timedelta64),
-    PlainSerializer(to_str, when_used="json"),  # noqa getting undefined name
+    PlainSerializer(to_str, when_used="json"),  # getting undefined name
 ]
 
 ArrayLike = Annotated[
@@ -73,9 +71,7 @@ FrozenDictType = Annotated[
 
 
 def sensible_model_equals(self, other):
-    """
-    Custom equality to not compare private attrs and handle numpy arrays.
-    """
+    """Custom equality to not compare private attrs and handle numpy arrays."""
     try:
         d1, d2 = self.model_dump(), other.model_dump()
     except (TypeError, ValueError, AttributeError):
@@ -97,7 +93,7 @@ def sensible_model_equals(self, other):
 
 
 def _flatten_str(cls, value):
-    """Some dims are passed as a tuple; we just want str"""
+    """Some dims are passed as a tuple; we just want str."""
     if not isinstance(value, str):
         value = ",".join(value)
     return value

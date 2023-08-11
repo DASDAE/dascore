@@ -1,6 +1,4 @@
-"""
-Tests for Fourier transforms.
-"""
+"""Tests for Fourier transforms."""
 from __future__ import annotations
 
 import numpy as np
@@ -157,12 +155,12 @@ class TestInverseDiscreteFourierTransform:
         self._patches_about_equal(sin_patch, pa2)
 
     def test_raises_on_untransformed_patch(self, sin_patch):
-        """Only patches which have been first transformed can be idft'ed"""
+        """Only patches which have been first transformed can be idft'ed."""
         with pytest.raises(NotImplementedError):
             sin_patch.tran.idft("time")
 
     def test_partial_inverse(self, fft_sin_patch_all, sin_patch):
-        """Ensure inverse works on only a single axis"""
+        """Ensure inverse works on only a single axis."""
         # since we only reverse time it should be the same as forward distance.
         ift = fft_sin_patch_all.tran.idft("time")
         dft = sin_patch.tran.dft("distance")

@@ -1,7 +1,6 @@
-"""
-Tests for QuantXV2 format
-"""
+"""Tests for QuantXV2 format."""
 from __future__ import annotations
+
 import pytest
 
 from dascore.io.core import read
@@ -22,7 +21,7 @@ def quantx_v2_example_path():
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def quantx_v2_das_patch(quantx_v2_example_path):
-    """Read the QuantXV2 data, return contained DataArray"""
+    """Read the QuantXV2 data, return contained DataArray."""
     out = read(quantx_v2_example_path, "quantx")[0]
     attr_time = out.attrs["time_max"]
     coord_time = out.coords["time"].max()

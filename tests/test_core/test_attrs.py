@@ -10,9 +10,9 @@ from dascore.core.attrs import (
     combine_patch_attrs,
     merge_compatible_coords_attrs,
 )
-from dascore.core.coords import get_coord, CoordSummary
-from dascore.exceptions import AttributeMergeError
+from dascore.core.coords import CoordSummary, get_coord
 from dascore.exceptions import (
+    AttributeMergeError,
     IncompatiblePatchError,
 )
 from dascore.utils.misc import register_func
@@ -89,7 +89,7 @@ class TestPatchAttrs:
         out = PatchAttrs(**{"coords": coords})
         assert out.coords
         assert "distance" in out.coords
-        for name, val in out.coords.items():
+        for _name, val in out.coords.items():
             assert isinstance(val, CoordSummary)
 
     def test_coords_with_coord_manager(self, random_patch):
@@ -189,7 +189,7 @@ class TestSummaryAttrs:
         assert isinstance(json, str)
 
     def test_can_roundrip(self, random_summary):
-        """Ensure json can be round-tripped"""
+        """Ensure json can be round-tripped."""
         json = random_summary.model_dump_json()
         random_summary2 = PatchAttrs.model_validate_json(json)
         assert random_summary2 == random_summary
@@ -245,10 +245,10 @@ class TestMisc:
 
 
 class TestMergeModels:
-    """Tests for merging patch attrs"""
+    """Tests for merging patch attrs."""
 
     def test_empty(self):
-        """Empty PatchAttrs should work in all cases"""
+        """Empty PatchAttrs should work in all cases."""
         pa1, pa2 = PatchAttrs(), PatchAttrs()
         assert isinstance(combine_patch_attrs([pa1, pa2]), PatchAttrs)
         assert isinstance(combine_patch_attrs([pa1, pa2], "time"), PatchAttrs)
@@ -327,7 +327,7 @@ class TestMergeCompatibleCoordsAttrs:
             merge_compatible_coords_attrs(random_patch, new)
 
     def test_incompatible_coords(self, random_patch):
-        """Ensure an incompatible error is raised for coords that dont match"""
+        """Ensure an incompatible error is raised for coords that dont match."""
         new_time = random_patch.attrs.time_max
         new = random_patch.update_attrs(time_min=new_time)
         match = "coordinates are not equal"

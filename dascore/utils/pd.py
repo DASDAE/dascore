@@ -1,6 +1,4 @@
-"""
-Pandas utilities.
-"""
+"""Pandas utilities."""
 from __future__ import annotations
 
 import fnmatch
@@ -200,7 +198,7 @@ def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
 
     def _get_slice(value):
         """Ensure the value can rep. a slice."""
-        if not isinstance(value, (slice, Sequence)) or len(value) != 2:
+        if not isinstance(value, slice | Sequence) or len(value) != 2:
             msg = "slice must be a length 2 tuple, you passed {kwargs}"
             raise ParameterError(msg)
         if not isinstance(value, slice):
@@ -341,9 +339,7 @@ def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
 
 
 def get_column_names_from_dim(dims: Sequence[str]) -> list:
-    """
-    Get column names from a sequence of dimensions.
-    """
+    """Get column names from a sequence of dimensions."""
     out = []
     for name in dims:
         out.append(f"{name}_min")
@@ -376,9 +372,7 @@ def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):
 
 
 def list_ser_to_str(ser: pd.Series) -> pd.Series:
-    """
-    Convert a column of str sequences to a string with commas separating values.
-    """
+    """Convert a column of str sequences to a string with commas separating values."""
     values = [",".join(x) if not isinstance(x, str) else x for x in ser.values]
     return pd.Series(values, index=ser.index, dtype=object)
 

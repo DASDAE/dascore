@@ -13,10 +13,7 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 
 
 def _get_terra15_version_str(hdf_fi) -> str:
-    """
-    Return the version string for terra15 file.
-    """
-
+    """Return the version string for terra15 file."""
     # define a few root attrs that act as a "fingerprint" for terra15 files
     expected_attrs = [
         "acoustic_bandwidth_end",
@@ -110,7 +107,7 @@ def _scan_terra15(self, fi):
 
 
 def _get_dar_attrs(data_node, root, tar, dar):
-    """Get the attributes for the terra15 data array (loaded)"""
+    """Get the attributes for the terra15 data array (loaded)."""
     attrs = _get_default_attrs(root._v_attrs)
     attrs["time_min"] = tar.min()
     attrs["time_max"] = tar.max()

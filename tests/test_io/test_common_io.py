@@ -8,6 +8,7 @@ IO functions (i.e., not that they work on various files) should go in
 test_io_core.py
 """
 from __future__ import annotations
+
 from functools import cache
 from io import BytesIO
 from operator import eq, ge, le
@@ -135,14 +136,14 @@ def _assert_coords_attrs_match(patch):
 
 
 def _assert_op_or_close(val1, val2, op):
-    """assert op(val1, val2) or isclose(val1, val2)."""
+    """Assert op(val1, val2) or isclose(val1, val2)."""
     meets_eq = op(val1, val2)
     both_null = pd.isnull(val1) and pd.isnull(val2)
     all_close_vals = all_close(val1, val2)
     if meets_eq or both_null or all_close_vals:
         return
     msg = f"{val1} and {val2} do not pass {op} or all close."
-    assert False, msg
+    raise AssertionError(msg)
 
 
 # --- Tests
@@ -258,7 +259,7 @@ class TestRead:
 
 
 class TestScan:
-    """Tests for generic scanning"""
+    """Tests for generic scanning."""
 
     def test_scan_basics(self, data_file_path):
         """Ensure each file can be scanned."""

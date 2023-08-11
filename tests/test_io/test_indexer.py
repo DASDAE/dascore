@@ -1,7 +1,6 @@
-"""
-Tests for indexing local file systems.
-"""
+"""Tests for indexing local file systems."""
 from __future__ import annotations
+
 import shutil
 from contextlib import suppress
 from pathlib import Path
@@ -35,19 +34,19 @@ def diverse_indexer(diverse_spool_directory):
 
 @pytest.fixture(scope="class")
 def diverse_df(diverse_indexer):
-    """Return the contents of the diverse indexer"""
+    """Return the contents of the diverse indexer."""
     return diverse_indexer()
 
 
 @pytest.fixture()
 def diverse_df_reset_cache(diverse_indexer):
-    """Return the indexer with a reset cache"""
+    """Return the indexer with a reset cache."""
     return DirectoryIndexer(diverse_indexer.path)
 
 
 @pytest.fixture(params=[diverse_indexer, diverse_df_reset_cache])
 def diverse_ind(request):
-    """Aggregate the diverse indexers"""
+    """Aggregate the diverse indexers."""
     return request.getfixturevalue(request.param.__name__)
 
 
@@ -59,10 +58,10 @@ def empty_index(tmp_path_factory):
 
 
 class TestBasics:
-    """Basic tests for indexer"""
+    """Basic tests for indexer."""
 
     def test_str_repr(self, basic_indexer):
-        """Ensure a useful (not the default) str/repr is implemented"""
+        """Ensure a useful (not the default) str/repr is implemented."""
         out = str(basic_indexer)
         assert "object at" not in out
 

@@ -1,6 +1,4 @@
-"""
-A 2D trace object.
-"""
+"""A 2D trace object."""
 from __future__ import annotations
 
 import warnings
@@ -11,8 +9,8 @@ from rich.text import Text
 
 import dascore.proc.coords
 from dascore.compat import DataArray, array
-from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.attrs import PatchAttrs
+from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
@@ -64,7 +62,7 @@ class Patch:
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
     ):
-        if isinstance(data, (DataArray, self.__class__)):
+        if isinstance(data, DataArray | self.__class__):
             data, attrs, coords = data.data, data.attrs, data.coords
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
@@ -82,9 +80,7 @@ class Patch:
         self._data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):
-        """
-        Compare one Patch.
-        """
+        """Compare one Patch."""
         return dascore.proc.equals(self, other)
 
     def __add__(self, other):
@@ -132,7 +128,7 @@ class Patch:
 
     @property
     def coord_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Return a dict of coordinate: (shape, ...)"""
+        """Return a dict of coordinate: (shape, ...)."""
         return self.coords.coord_shapes
 
     @property
@@ -178,7 +174,7 @@ class Patch:
     update_coords = dascore.proc.update_coords
 
     def assign_coords(self, *args, **kwargs):
-        """Deprecated method for update_coords"""
+        """Deprecated method for update_coords."""
         msg = "assign_coords is deprecated, use update_coords instead."
         warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.update_coords(*args, **kwargs)

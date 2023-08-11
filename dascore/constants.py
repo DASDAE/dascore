@@ -7,7 +7,7 @@ from typing import Optional, TypeVar, Union
 import numpy as np
 import pandas as pd
 
-import dascore  # NOQA
+import dascore
 
 PatchType = TypeVar("PatchType", bound="dascore.Patch")
 

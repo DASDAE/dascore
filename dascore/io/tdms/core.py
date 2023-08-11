@@ -1,6 +1,4 @@
-"""
-IO module for reading Silixa's TDMS DAS data format.
-"""
+"""IO module for reading Silixa's TDMS DAS data format."""
 from __future__ import annotations
 
 import dascore as dc
@@ -12,9 +10,7 @@ from .utils import _get_data, _get_data_node, _get_default_attrs, _get_version_s
 
 
 class TDMSFormatterV4713(FiberIO):
-    """
-    Support for Silixa data format (tdms).
-    """
+    """Support for Silixa data format (tdms)."""
 
     name = "TDMS"
     version = "4713"
@@ -30,20 +26,17 @@ class TDMSFormatterV4713(FiberIO):
         stream
             A path to the file which may contain silixa data.
         """
-
         try:
             version_str = _get_version_str(stream)
             if version_str:
                 return "TDMS", version_str
             else:
                 return False
-        except Exception:  # noqa
+        except Exception:
             return False
 
     def scan(self, resource: BinaryReader) -> list[dc.PatchAttrs]:
-        """
-        Scan a silixa tdms file, return summary information about the file's contents.
-        """
+        """Scan a silixa tdms file, return summary information about the file's contents."""
         out = _get_default_attrs(resource)
         out["path"] = getattr(resource, "name", "")
         out["file_format"] = self.name
@@ -57,9 +50,7 @@ class TDMSFormatterV4713(FiberIO):
         distance: tuple[float, float] | None = None,
         **kwargs,
     ) -> dc.BaseSpool:
-        """
-        Read a silixa tdms file, return a DataArray.
-        """
+        """Read a silixa tdms file, return a DataArray."""
         # get all data, total amount of samples and associated attributes
         data_node, channel_length, attrs_full = _get_data_node(
             resource, LEAD_IN_LENGTH=28

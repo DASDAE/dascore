@@ -1,16 +1,13 @@
-"""
-Implements logic to apply formatting changes to patches from transformations.
-"""
+"""Implements logic to apply formatting changes to patches from transformations."""
 from __future__ import annotations
+
 import abc
 
 from dascore.utils.misc import iterate
 
 
 class BaseTransformatter(abc.ABC):
-    """
-    Base model for helping to apply transformation format changes.
-    """
+    """Base model for helping to apply transformation format changes."""
 
     forward_prefix: str = ""
     inverse_prefix: str = ""
@@ -38,9 +35,7 @@ class BaseTransformatter(abc.ABC):
 
 
 class FourierTransformatter(BaseTransformatter):
-    """
-    Formatters
-    """
+    """Formatters."""
 
     forward_prefix: str = "ft_"
     inverse_prefix: str = "ift_"

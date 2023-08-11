@@ -1,7 +1,6 @@
-"""
-Tests for dascore's downloader.
-"""
+"""Tests for dascore's downloader."""
 from __future__ import annotations
+
 import pandas as pd
 import pytest
 

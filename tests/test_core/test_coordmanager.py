@@ -1,6 +1,4 @@
-"""
-Tests for coordinate manager.
-"""
+"""Tests for coordinate manager."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -25,7 +23,6 @@ from dascore.core.coords import (
     CoordRange,
     get_coord,
 )
-
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
@@ -48,14 +45,14 @@ DIMS = ("time", "distance")
 @pytest.fixture(scope="class")
 @register_func(COORD_MANAGERS)
 def basic_coord_manager():
-    """The simplest coord manager"""
+    """The simplest coord manager."""
     return get_coord_manager(COORDS, DIMS)
 
 
 @pytest.fixture(scope="class")
 @register_func(COORD_MANAGERS)
 def coord_manager_with_units(basic_coord_manager):
-    """The simplest coord manager"""
+    """The simplest coord manager."""
     return basic_coord_manager.set_units(time="s", distance="m")
 
 
@@ -182,10 +179,10 @@ class TestBasicCoordManager:
         dim_map = basic_coord_manager.dim_map
         # test new key
         with pytest.raises(TypeError, match=expected_str):
-            dim_map["bob"] = 10  # NOQA
+            dim_map["bob"] = 10
         # test existing key
         with pytest.raises(TypeError, match=expected_str):
-            dim_map[basic_coord_manager.dims[0]] = 10  # NOQA
+            dim_map[basic_coord_manager.dims[0]] = 10
 
     def test_cant_modify_coord_map(self, basic_coord_manager):
         """Ensure the dim map is immutable."""
@@ -193,13 +190,13 @@ class TestBasicCoordManager:
         coord_map = basic_coord_manager.coord_map
         # test new key
         with pytest.raises(TypeError, match=expected_str):
-            coord_map["bob"] = 10  # NOQA
+            coord_map["bob"] = 10
         # test existing key
         with pytest.raises(TypeError, match=expected_str):
-            coord_map[basic_coord_manager.dims[0]] = 10  # NOQA
+            coord_map[basic_coord_manager.dims[0]] = 10
 
     def test_init_with_coord_manager(self, basic_coord_manager):
-        """Ensure initing coord manager works with a single coord manager"""
+        """Ensure initing coord manager works with a single coord manager."""
         out = get_coord_manager(basic_coord_manager)
         assert out == basic_coord_manager
 
@@ -254,21 +251,21 @@ class TestCoordManagerInputs:
         assert isinstance(coord_str, str)
 
     def test_bad_coords(self):
-        """Ensure specifying a bad coordinate raises"""
+        """Ensure specifying a bad coordinate raises."""
         coords = dict(COORDS)
         coords["bill"] = np.arange(10, 100, 10)
         with pytest.raises(CoordError, match="not named the same as dimension"):
             get_coord_manager(coords, DIMS)
 
     def test_nested_coord_too_long(self):
-        """Nested coordinates that are gt 2 should fail"""
+        """Nested coordinates that are gt 2 should fail."""
         coords = dict(COORDS)
         coords["time"] = ("time", to_datetime64(np.arange(10, 100, 10)), "space")
         with pytest.raises(CoordError, match="must be length two"):
             get_coord_manager(coords, DIMS)
 
     def test_invalid_dimensions(self):
-        """Nested coordinates must specify valid dimensions"""
+        """Nested coordinates must specify valid dimensions."""
         coords = dict(COORDS)
         coords["time"] = ("bob", to_datetime64(np.arange(10, 100, 10)))
         with pytest.raises(CoordError, match="invalid dimension"):
@@ -323,7 +320,7 @@ class TestDrop:
         dim = "distance"
         coords, _ = coord_manager_multidim.drop_coord(dim)
         assert dim not in coords.dims
-        for name, dims in coords.dim_map.items():
+        for _name, dims in coords.dim_map.items():
             assert dim not in dims
 
     def test_drop_doesnt_have_coord(self, coord_manager_multidim):
@@ -394,7 +391,7 @@ class TestSelect:
             assert coord.shape[axis] == expected_len
 
     def test_select_trims_associated_coords_2(self, coord_manager_multidim):
-        """Same as test #1, but now we check for trimming non-dimension coord"""
+        """Same as test #1, but now we check for trimming non-dimension coord."""
         cm = coord_manager_multidim
         coord_to_trim = "latitude"
         array = cm[coord_to_trim]
@@ -491,7 +488,7 @@ class TestISelect:
 
 
 class TestEquals:
-    """Tests for coord manager equality"""
+    """Tests for coord manager equality."""
 
     def test_basic_equals(self, coord_manager):
         """All coord managers should equal themselves."""
@@ -526,7 +523,7 @@ class TestTranspose:
         return many_dims
 
     def test_simple_transpose(self, basic_coord_manager):
-        """Ensure the coord manager can be transposed"""
+        """Ensure the coord manager can be transposed."""
         dims = basic_coord_manager.dims
         new_dims = dims[::-1]
         tran = basic_coord_manager.transpose(*new_dims)
@@ -535,7 +532,7 @@ class TestTranspose:
         assert tran.shape == basic_coord_manager.shape[::-1]
 
     def test_empty_ellipses(self, many_dims_cm):
-        """Empty transpose should just reverse order"""
+        """Empty transpose should just reverse order."""
         out = many_dims_cm.transpose()
         assert out.dims == many_dims_cm.dims[::-1]
 
@@ -589,7 +586,7 @@ class TestRenameDims:
         assert "dist" in out.dim_map["latitude"]
 
     def test_rename_same_dims_extra_coords(self, coord_manager_multidim):
-        """Ensure renaming dims the same doesn't mess with multidims"""
+        """Ensure renaming dims the same doesn't mess with multidims."""
         cm = coord_manager_multidim
         dim_map = {x: x for x in cm.dims}
         out = cm.rename_coord(**dim_map)
@@ -812,7 +809,7 @@ class TestMergeCoordManagers:
 
     def _get_offset_coord_manager(self, cm, from_max=True, **kwargs):
         """Get a new coord manager offset by some amount along a dim."""
-        name, value = list(kwargs.items())[0]
+        name, value = next(iter(kwargs.items()))
         coord = cm.coord_map[name]
         start = coord.max() if from_max else coord.min()
         attr_name = f"{name}_min"
@@ -864,7 +861,7 @@ class TestMergeCoordManagers:
 
     @pytest.mark.parametrize("factor", (1.1, 0.9, 1.3, 1.01, 0))
     def test_merge_snap_when_needed(self, basic_coord_manager, factor):
-        """snap should be applied because when other cm is close expected."""
+        """Snap should be applied because when other cm is close expected."""
         cm1 = basic_coord_manager
         time = cm1.coord_map["time"]
         nt = time.step * factor
@@ -996,7 +993,7 @@ class TestSort:
             coord_manager_multidim.sort("distance", "latitude")
 
     def test_related_coords(self, coord_manager_multidim):
-        """Sorting on one coordinate should also sort others that share a dim"""
+        """Sorting on one coordinate should also sort others that share a dim."""
         cm = coord_manager_multidim
         cm_sorted, _ = cm.sort("latitude")
         assert cm_sorted.coord_map["latitude"].sorted
@@ -1062,7 +1059,7 @@ class TestConvertUnits:
         assert dist.units == get_quantity("furlong")
 
     def test_convert_changes_values(self, coord_manager_with_units):
-        """Ensure values are scaled accordingly"""
+        """Ensure values are scaled accordingly."""
         conv = get_quantity("m").to("ft").magnitude
         cm = coord_manager_with_units.convert_units(distance="ft")
         dist1 = coord_manager_with_units.coord_map["distance"]
@@ -1099,7 +1096,7 @@ class TestDisassociate:
         assert "time" not in cm.dims
 
     def test_disassociate_non_dim_coord(self, coord_manager_multidim):
-        """Ensure non-dim coords can be dissociated with no change to dims"""
+        """Ensure non-dim coords can be dissociated with no change to dims."""
         cm = coord_manager_multidim.disassociate_coord("quality")
         assert cm.dim_map["quality"] == ()
         assert cm.dims == coord_manager_multidim.dims
@@ -1109,7 +1106,7 @@ class TestSetDims:
     """Tests for setting dims to non-dimensional coordinates."""
 
     def test_swap_coords(self, coord_manager_multidim):
-        """Simple coord swap"""
+        """Simple coord swap."""
         cm = coord_manager_multidim
         out1 = cm.set_dims(distance="latitude")
         assert "latitude" in out1.dims

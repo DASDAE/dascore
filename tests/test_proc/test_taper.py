@@ -1,7 +1,6 @@
-"""
-Tests for taper processing function.
-"""
+"""Tests for taper processing function."""
 from __future__ import annotations
+
 import numpy as np
 import pytest
 

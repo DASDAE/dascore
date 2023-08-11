@@ -1,6 +1,4 @@
-"""
-Misc Utilities.
-"""
+"""Misc Utilities."""
 from __future__ import annotations
 
 import contextlib
@@ -52,14 +50,14 @@ def _pass_through_method(func):
 
     @functools.wraps(func)
     def _func(self, *args, **kwargs):
-        obj = getattr(self, "_obj")
+        obj = self._obj
         return func(obj, *args, **kwargs)
 
     return _func
 
 
 class _NameSpaceMeta(type):
-    """Metaclass for namespace class"""
+    """Metaclass for namespace class."""
 
     def __setattr__(self, key, value):
         if callable(value):
@@ -90,7 +88,7 @@ class MethodNameSpace(metaclass=_NameSpaceMeta):
         self._obj = obj
 
     def __init_subclass__(cls, **kwargs):
-        """wrap all public methods."""
+        """Wrap all public methods."""
         for key, val in vars(cls).items():
             if callable(val):  # passes to _NameSpaceMeta settattr
                 setattr(cls, key, val)
@@ -186,7 +184,7 @@ def iter_files(
 ) -> Iterable[str]:
     """
     Use os.scan dir to iter files, optionally only for those with given
-    extension (ext) or modified times after mtime
+    extension (ext) or modified times after mtime.
 
     Parameters
     ----------
@@ -325,7 +323,7 @@ def all_diffs_close_enough(diffs):
 
 def unbyte(byte_or_str: bytes | str) -> str:
     """Ensure a string is given by str or possibly bytes."""
-    if isinstance(byte_or_str, (bytes, np.bytes_)):
+    if isinstance(byte_or_str, bytes | np.bytes_):
         byte_or_str = byte_or_str.decode("utf8")
     return byte_or_str
 
@@ -355,9 +353,7 @@ def _get_stencil_weights(array, ref_point, order):
 
 
 def get_stencil_coefs(order, derivative=2):
-    """
-    Get centered coefficients for a derivative of specified order and derivative.
-    """
+    """Get centered coefficients for a derivative of specified order and derivative."""
     dx = np.arange(-order, order + 1)
     return _get_stencil_weights(dx, 0, derivative)
 
@@ -394,7 +390,7 @@ def cached_method(func):
         if not (args or kwargs):
             key = id(func)
         else:
-            key = (id(func),) + args
+            key = (id(func), *args)
             if kwargs:
                 for item in kwargs.items():
                     key += item

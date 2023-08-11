@@ -1,6 +1,4 @@
-"""
-Module for spools, containers of patches.
-"""
+"""Module for spools, containers of patches."""
 from __future__ import annotations
 
 import abc
@@ -32,9 +30,7 @@ from dascore.utils.pd import (
 
 
 class BaseSpool(abc.ABC):
-    """
-    Spool Abstract Base Class (ABC) for defining Spool interface.
-    """
+    """Spool Abstract Base Class (ABC) for defining Spool interface."""
 
     _rich_style = "bold"
 
@@ -47,9 +43,7 @@ class BaseSpool(abc.ABC):
         """Iterate through the Patches in the spool."""
 
     def update(self) -> Self:
-        """
-        Updates the contents of the spool and returns a spool.
-        """
+        """Updates the contents of the spool and returns a spool."""
         return self
 
     @abc.abstractmethod
@@ -85,19 +79,15 @@ class BaseSpool(abc.ABC):
 
     @abc.abstractmethod
     def select(self, **kwargs) -> Self:
-        """
-        Select only part of the data.
-        """
+        """Select only part of the data."""
 
     @abc.abstractmethod
     def get_contents(self) -> pd.DataFrame:
-        """
-        Get a dataframe of the patches that will be returned by the spool.
-        """
+        """Get a dataframe of the patches that will be returned by the spool."""
 
     @abc.abstractmethod
     def __len__(self) -> int:
-        """return len of spool."""
+        """Return len of spool."""
 
     def __eq__(self, other) -> bool:
         """Simple equality checks on spools."""
@@ -138,9 +128,7 @@ class BaseSpool(abc.ABC):
 
 
 class DataFrameSpool(BaseSpool):
-    """
-    An abstract class for spools whose contents are managed by a dataframe.
-    """
+    """An abstract class for spools whose contents are managed by a dataframe."""
 
     # A dataframe which represents contents as they will be output
     _df: pd.DataFrame = CacheDescriptor("_cache", "_get_df")
@@ -189,9 +177,7 @@ class DataFrameSpool(BaseSpool):
         return patch_list[0]
 
     def _get_patches_from_index(self, df_ind):
-        """
-        Given an index (from current df), return the corresponding patch.
-        """
+        """Given an index (from current df), return the corresponding patch."""
         source = self._source_df
         instruction = self._instruction_df
         if isinstance(df_ind, slice):  # handle slicing
@@ -273,9 +259,7 @@ class DataFrameSpool(BaseSpool):
         tolerance: float = 1.5,
         **kwargs,
     ) -> Self:
-        """
-        {doc}
-        """
+        """{doc}."""
         df = self._df.drop(columns=list(self._drop_columns), errors="ignore")
         chunker = ChunkManager(
             overlap=overlap,
@@ -301,8 +285,8 @@ class DataFrameSpool(BaseSpool):
         return new
 
     def select(self, **kwargs) -> Self:
-        """Sub-select certain dimensions for Spool"""
-        filtered_df = adjust_segments(self._df, **kwargs)
+        """Sub-select certain dimensions for Spool."""
+        filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(
             self._instruction_df,
             ignore_bad_kwargs=True,
@@ -317,16 +301,12 @@ class DataFrameSpool(BaseSpool):
 
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
-        """
-        {doc}
-        """
+        """{doc}."""
         return self._df[filter_df(self._df, **self._select_kwargs)]
 
 
 class MemorySpool(DataFrameSpool):
-    """
-    A Spool for storing patches in memory.
-    """
+    """A Spool for storing patches in memory."""
 
     # tuple of attributes to remove from table
 
@@ -347,7 +327,7 @@ class MemorySpool(DataFrameSpool):
         return base
 
     def _load_patch(self, kwargs) -> Self:
-        """Load the patch into memory"""
+        """Load the patch into memory."""
         return kwargs["patch"]
 
 

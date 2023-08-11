@@ -1,6 +1,4 @@
-"""
-Module for wiggle plotting.
-"""
+"""Module for wiggle plotting."""
 from __future__ import annotations
 
 from datetime import timedelta

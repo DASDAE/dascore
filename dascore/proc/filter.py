@@ -24,7 +24,7 @@ def _check_filter_kwargs(kwargs):
     if len(kwargs) != 1:
         msg = "pass filter requires you specify one dimension and filter range."
         raise FilterValueError(msg)
-    dim = list(kwargs.keys())[0]
+    dim = next(iter(kwargs.keys()))
     filt_range = kwargs[dim]
     # strip out units if used.
     mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
@@ -42,7 +42,7 @@ def _check_filter_kwargs(kwargs):
 
 
 def _check_sobel_args(dim, mode, cval):
-    """Check Sobel filter kwargs and return"""
+    """Check Sobel filter kwargs and return."""
     mode_options = {
         "reflect",
         "constant",
@@ -59,7 +59,7 @@ def _check_sobel_args(dim, mode, cval):
     if not isinstance(mode, str):
         msg = "mode parameter should be a string."
         raise FilterValueError(msg)
-    if not isinstance(cval, (float, int)):
+    if not isinstance(cval, float | int):
         msg = "cval parameter should be a float or an int."
         raise FilterValueError(msg)
     if mode not in mode_options:
@@ -212,21 +212,14 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 #
 #
 #     """
-#     dim, filt_min, filt_max = _check_filter_kwargs(kwargs)
-#     axis = patch.dims.index(dim)
-#     sr = _get_sampling_rate(patch, dim)
 #     # get nyquist and low/high in terms of nyquist
-#     sos = _get_sos(sr, filt_min, filt_max, corners)
-#     out = sosfilt(sos, patch.data, axis=axis)
 #     if zerophase:
-#         out = sosfilt(sos, out[::-1])[::-1]
-#     return dascore.Patch(data=out, coords=patch.coords, attrs=patch.attrs)
 
 
 @patch_function()
 def median_filter(patch: PatchType, kernel_size=3) -> PatchType:
     """
-    Apply 2-D median filter
+    Apply 2-D median filter.
 
     Parameters
     ----------

@@ -1,7 +1,6 @@
-"""
-Module for detrending.
-"""
+"""Module for detrending."""
 from __future__ import annotations
+
 from scipy.signal import detrend as scipy_detrend
 
 from dascore.constants import PatchType
@@ -12,7 +11,6 @@ from dascore.utils.patch import patch_function
 def detrend(patch: PatchType, dim, type="linear") -> PatchType:
     """
     Perform detrending along a given dimension (distance or time) of a patch.
-
 
     Parameters
     ----------
