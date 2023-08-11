@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, TypeVar, Union
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
@@ -17,11 +17,11 @@ SpoolType = TypeVar("SpoolType", bound="dascore.BaseSpool")
 DATA_VERSION = "0.0.0"
 
 # Types dascore can convert into time representations
-timeable_types = Union[int, float, str, np.datetime64, pd.Timestamp]
-opt_timeable_types = Optional[timeable_types]
+timeable_types = int | float | str | np.datetime64 | pd.Timestamp
+opt_timeable_types = None | timeable_types
 
 # Number types
-numeric_types = Union[int, float]
+numeric_types = int | float
 
 # The smallest value an int64 can rep. (used as NaT by datetime64)
 MININT64 = np.iinfo(np.int64).min
@@ -30,7 +30,7 @@ MININT64 = np.iinfo(np.int64).min
 MAXINT64 = np.iinfo(np.int64).max
 
 # types used to represent paths
-path_types = Union[str, Path]
+path_types = str | Path
 
 # One second in numpy timedelta speak
 ONE_SECOND = np.timedelta64(1, "s")

@@ -117,8 +117,8 @@ class TestGetSlice:
 class TestIterFiles:
     """Tests for iterating directories of files."""
 
-    sub = {"D": {"C": ".mseed"}, "F": ".json", "G": {"H": ".txt"}}
-    file_paths = {"A": ".txt", "B": sub}
+    sub = {"D": {"C": ".mseed"}, "F": ".json", "G": {"H": ".txt"}}  # noqa
+    file_paths = {"A": ".txt", "B": sub}  # noqa
 
     # --- helper functions
     def setup_test_directory(self, some_dict: dict, path: Path):

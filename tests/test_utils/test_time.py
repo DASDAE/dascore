@@ -25,7 +25,7 @@ class Dummy:
 class TestToDateTime64:
     """Tests for converting things to datetime64."""
 
-    date_strs = ["1970-01-01", "2020-01-03T05:22:11.123123345", "2017-09-18T01"]
+    date_strs = ("1970-01-01", "2020-01-03T05:22:11.123123345", "2017-09-18T01")
 
     def test_float_array(self):
         """Ensure basic tests work."""

@@ -148,7 +148,7 @@ class PatchAttrs(DascoreBaseModel):
         FrozenDict[str, CoordSummary],
         frozen_dict_validator,
         frozen_dict_serializer,
-    ] = {}
+    ] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod

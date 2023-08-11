@@ -9,6 +9,7 @@ import typing
 from collections import defaultdict
 from functools import cache
 from pathlib import Path
+from itertools import pairwise
 
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
@@ -226,7 +227,7 @@ class NumpyDocStrParser:
             ]
             + [len(doc_lines) + 2]
         )
-        for start, stop in zip(dividers[:-1], dividers[1:]):
+        for start, stop in pairwise(dividers):
             # determine header or just use 'pre' for txt before headings
             header = "pre" if start == 0 else doc_lines[start - 1].strip()
             # skips the ----- line where applicable
@@ -286,7 +287,7 @@ class NumpyDocStrParser:
 
     # stylers is used to decide which style function to apply for various
     # sections.
-    stylers = {
+    stylers = {  # noqa
         "parameter": style_parameters,
         "parameters": style_parameters,
         "examples": style_examples,

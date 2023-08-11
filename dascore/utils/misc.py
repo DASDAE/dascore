@@ -9,7 +9,6 @@ import os
 import warnings
 from collections.abc import Iterable, Sequence
 from types import ModuleType
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -94,7 +93,7 @@ class MethodNameSpace(metaclass=_NameSpaceMeta):
                 setattr(cls, key, val)
 
 
-def get_slice_from_monotonic(array, cond=Optional[tuple]) -> slice:
+def get_slice_from_monotonic(array, cond: tuple | None) -> slice:
     """
     Return a slice object which meets conditions in cond on array.
 

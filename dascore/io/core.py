@@ -30,6 +30,7 @@ from dascore.core.attrs import str_validator
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.misc import cached_method, iterate, suppress_warnings
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,
@@ -347,12 +348,14 @@ class FiberIO:
 
     # A dict of methods which should implement automatic type casting.
     # and the index of the parameter to type cast.
-    _automatic_type_casters = {
-        "read": 1,
-        "scan": 1,
-        "write": 2,
-        "get_format": 1,
-    }
+    _automatic_type_casters = FrozenDict(
+        {
+            "read": 1,
+            "scan": 1,
+            "write": 2,
+            "get_format": 1,
+        }
+    )
 
     def read(self, resource, **kwargs) -> SpoolType:
         """
@@ -421,7 +424,7 @@ class FiberIO:
 
     @classmethod
     def get_supported_io_table(cls):
-        """A function for making a table of all the supported formats and the methods."""
+        """Make a table of all the supported formats and the methods."""
         # load all the plugins, so we know about all the FiberIO classes
         FiberIO.manager.load_plugins()
         out = []

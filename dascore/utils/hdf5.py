@@ -24,6 +24,7 @@ import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, max_lens
 from dascore.exceptions import InvalidFileHandler, InvalidIndexVersionError
 from dascore.io.core import PatchFileSummary
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import cached_method, suppress_warnings
 from dascore.utils.pd import (
     _remove_base_path,
@@ -153,19 +154,23 @@ class HDFPatchIndexManager:
     # columns which should be indexed for fast querying
     _query_columns = ("time_min", "time_max")
     # functions applied to encode dataframe before saving to hdf5
-    _column_encoders = {
-        "time_min": to_int,
-        "time_max": to_int,
-        "time_step": to_int,
-        "dims": list_ser_to_str,
-        "path": lambda x: x.astype(str),
-    }
+    _column_encoders = FrozenDict(
+        {
+            "time_min": to_int,
+            "time_max": to_int,
+            "time_step": to_int,
+            "dims": list_ser_to_str,
+            "path": lambda x: x.astype(str),
+        }
+    )
     # functions to apply to decode dataframe after loading from hdf file
-    _column_decorders = {
-        "time_min": ns_to_datetime,
-        "time_max": ns_to_datetime,
-        "time_step": ns_to_timedelta,
-    }
+    _column_decorders = FrozenDict(
+        {
+            "time_min": ns_to_datetime,
+            "time_max": ns_to_datetime,
+            "time_step": ns_to_timedelta,
+        }
+    )
     # base model which determines fields
     _base_model = PatchFileSummary
     # any fields to skip

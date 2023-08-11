@@ -36,7 +36,7 @@ class TDMSFormatterV4713(FiberIO):
             return False
 
     def scan(self, resource: BinaryReader) -> list[dc.PatchAttrs]:
-        """Scan a silixa tdms file, return summary information about the file's contents."""
+        """Scan a tdms file, return summary information about the file's contents."""
         out = _get_default_attrs(resource)
         out["path"] = getattr(resource, "name", "")
         out["file_format"] = self.name

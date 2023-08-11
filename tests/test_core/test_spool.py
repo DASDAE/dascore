@@ -196,7 +196,7 @@ class TestSelect:
             assert attrs["time_max"] <= new_max
 
     def test_multiple_range_selects(self, adjacent_spool_no_overlap):
-        """Ensure multiple range slects can be used in one call (eg time and distance)."""
+        """Ensure multiple range selects can be used in one call."""
         spool = adjacent_spool_no_overlap
         contents = spool.get_contents()
         # get new time/distance ranges and select them

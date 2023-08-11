@@ -29,7 +29,9 @@ class QuantXV2(FiberIO):
             return (self.name, version_str)
 
     def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
-        """Scan an Optasense v2 file, return summary information about the file's contents."""
+        """
+        Scan an Optasense v2 file, return summary information about the file's contents.
+        """
         return _scan_quantx(self, resource)
 
     def read(

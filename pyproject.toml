@@ -112,7 +112,7 @@ WAV = "dascore.io.wav.core:WavIO"
 [tool.ruff]
 
 # enable certain types of linting
-select = ["E", "F", "UP", "D", "I", "N", "T20", "ERA", "RUF"]
+select = ["E", "F", "UP", "RUF"]
 
 # Exclude a variety of commonly ignored directories.
 exclude = [
@@ -142,6 +142,8 @@ exclude = [
 
 # lowest python version supported
 target-version = "py310"
+
+fixable = ["ALL"]
 
 [tool.ruff.mccabe]
 # Unlike Flake8, default to a complexity level of 10.

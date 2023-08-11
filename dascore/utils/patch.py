@@ -6,7 +6,7 @@ import inspect
 import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -24,7 +24,7 @@ from dascore.units import get_quantity
 from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
 from dascore.utils.time import to_float
 
-attr_type = Union[dict[str, Any], str, Sequence[str], None]
+attr_type = dict[str, Any] | str | Sequence[str] | None
 
 
 def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
@@ -215,7 +215,7 @@ def patches_to_df(
     plus a field called 'patch' which contains a reference to the patches.
     """
     if hasattr(patches, "_df"):
-        df = patches._df  # noqa
+        df = patches._df
     # Handle spool case
     elif hasattr(patches, "get_contents"):
         df = patches.get_contents()

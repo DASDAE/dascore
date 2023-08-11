@@ -31,7 +31,7 @@ class Terra15FormatterV4(FiberIO):
                 return (self.name, version_str)
 
     def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
-        """Scan a terra15 v2 file, return summary information about the file's contents."""
+        """Scan a terra15 v2 file, return summary information."""
         return _scan_terra15(self, resource)
 
     def read(
