@@ -87,7 +87,7 @@ class CoordSummary(DascoreBaseModel):
         elif np.issubdtype(dtype, np.floating):
             value = float(value) if value is not None else np.NaN
         elif np.issubdtype(dtype, np.integer):
-            value = int(value)  # no nullable int type, have to use None :(
+            value = int(value)
         return value
 
     def to_coord(self) -> CoordRange:

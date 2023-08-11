@@ -230,7 +230,7 @@ class HDFPatchIndexManager:
         for col, func in self._column_decorders.items():
             df[col] = func(df[col])
         # populate index store and update metadata
-        assert not df.isnull().any().any(), "null values found in index"
+        # assert not df.isnull().any().any(), "null values found in index"
         return df
 
     def get_index(self, time_min=None, time_max=None, **kwargs):

@@ -49,7 +49,7 @@ class DirectorySpool(DataFrameSpool):
         preferred_format: str | None = None,
         select_kwargs: dict | None = None,
     ):
-        super().__init__()
+        super().__init__(select_kwargs=select_kwargs)
         # Init file spool from another file spool
         if isinstance(base_path, self.__class__):
             self.__dict__.update(copy.deepcopy(base_path.__dict__))
@@ -60,7 +60,6 @@ class DirectorySpool(DataFrameSpool):
         elif isinstance(base_path, Path | str):
             self.indexer = DirectoryIndexer(base_path, index_path=index_path)
         self._preferred_format = preferred_format
-        self._select_kwargs = {} if select_kwargs is None else select_kwargs
 
     def __rich__(self):
         """Augment rich string directory spool stuff."""
@@ -131,5 +130,7 @@ class DirectorySpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-        patch = dc.read(**kwargs)[0]
+        final_kwargs = dict(kwargs)
+        final_kwargs.update(self._select_kwargs)
+        patch = dc.read(**final_kwargs)[0]
         return patch

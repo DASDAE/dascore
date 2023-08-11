@@ -45,6 +45,28 @@ def one_directory_spool(one_file_dir):
     return spool.update()
 
 
+@pytest.fixture(scope="class")
+@register_func(DIRECTORY_SPOOLS)
+def non_distance_dir_spool(tmp_path_factory):
+    """Create a directory with a single DAS file."""
+    # patch one simulates a patch that has time but no distance
+    pa1 = dascore.examples.get_example_patch("random_das").rename_coords(
+        distance="depth"
+    )
+    # patch2 has neither time nor distance but time in attrs.
+    pa2 = (
+        dascore.examples.get_example_patch("random_das")
+        .update_attrs(time_min=pa1.attrs.time_max)
+        .rename_coords(time="timey", distance="depth")
+    )
+    coord = pa2.get_coord("timey")
+    pa2 = pa2.update_attrs(time_min=coord.min(), time_max=coord.max())
+    spool = dc.spool([pa1, pa2])
+    path = tmp_path_factory.mktemp("no_distance_spool")
+    dascore.examples.spool_to_directory(spool, path)
+    return dc.spool(path).update()
+
+
 @pytest.fixture(scope="class", params=DIRECTORY_SPOOLS)
 def directory_spool(request):
     """Meta fixture for getting all file spools."""
@@ -375,3 +397,23 @@ class TestFileSpoolIntegrations:
         """Tests for quickstart."""
         spool = all_examples_spool.update()
         assert isinstance(spool, dc.BaseSpool)
+
+    def test_patch_no_distance_coord(self, non_distance_dir_spool):
+        """Ensure patches without distance coords still work."""
+        # str should work
+        assert str(non_distance_dir_spool)
+        contents = non_distance_dir_spool.get_contents()
+        assert len(contents) == 2
+        for patch in non_distance_dir_spool:
+            assert isinstance(patch, dc.Patch)
+
+    def test_select_non_distance(self, non_distance_dir_spool):
+        """We should be able to select on non-time/distance coords."""
+        spool = non_distance_dir_spool
+        depth_tup = (150, 250)
+        selected_spool = spool.select(depth=depth_tup)
+        for patch in selected_spool:
+            # ensure depth has been trimmed.
+            coord = patch.get_coord("depth")
+            assert coord.min() >= depth_tup[0]
+            assert coord.max() <= depth_tup[1]

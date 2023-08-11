@@ -26,6 +26,7 @@ from dascore.utils.pd import (
     filter_df,
     get_column_names_from_dim,
     get_dim_names_from_columns,
+    split_df_query,
 )
 
 
@@ -151,8 +152,9 @@ class DataFrameSpool(BaseSpool):
     def _get_instruction_df(self):
         """Function to get the current df."""
 
-    def __init__(self):
+    def __init__(self, select_kwargs: dict | None = None):
         self._cache = {}
+        self._select_kwargs = {} if select_kwargs is None else select_kwargs
 
     def __getitem__(self, item):
         out = self._get_patches_from_index(item)
@@ -275,17 +277,20 @@ class DataFrameSpool(BaseSpool):
             instructions = chunker.get_instruction_df(in_df, out_df)
         return self.new_from_df(out_df, source_df=self._df, instruction_df=instructions)
 
-    def new_from_df(self, df, source_df=None, instruction_df=None):
+    def new_from_df(self, df, source_df=None, instruction_df=None, select_kwargs=None):
         """Create a new instance from dataframes."""
         new = self.__class__(self)
         df_, source_, inst_ = self._get_dummy_dataframes(df)
         new._df = df
         new._source_df = source_df if source_df is not None else source_
         new._instruction_df = instruction_df if instruction_df is not None else inst_
+        new._select_kwargs = dict(self._select_kwargs)
+        new._select_kwargs.update(select_kwargs or {})
         return new
 
     def select(self, **kwargs) -> Self:
         """Sub-select certain dimensions for Spool."""
+        _, _, extra_kwargs = split_df_query(kwargs, self._df, ignore_bad_kwargs=True)
         filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(
             self._instruction_df,
@@ -296,6 +301,7 @@ class DataFrameSpool(BaseSpool):
             filtered_df,
             source_df=self._source_df,
             instruction_df=inst,
+            select_kwargs=extra_kwargs,
         )
         return out
 
@@ -328,6 +334,8 @@ class MemorySpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory."""
+        # final_kwargs = dict(kwargs)
+        # final_kwargs.update(self._select_kwargs)
         return kwargs["patch"]
 
 

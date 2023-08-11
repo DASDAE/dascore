@@ -58,9 +58,13 @@ def _get_min_max_query(kwargs, df):
     return out
 
 
-def _add_range_query(kwargs, df, ignore_bad_kwargs=False):
+def split_df_query(kwargs, df, ignore_bad_kwargs=False):
     """
-    Add a range query that spans two columns.
+    Split kwargs into normal, range, and unsupported kwargs.
+
+    Normal query kwargs are the ones that apply directly to a single column.
+    Range kwargs specify a range and the df must have {name}_min, {name}_max
+    unsupported kwargs are the keys in kwargs that don't meet these reqs.
 
     For example, if columns 'time_min' and 'time_max' exist but 'time'
     does not, time=(time_1, time_2) will filter df to only include columns
@@ -68,29 +72,30 @@ def _add_range_query(kwargs, df, ignore_bad_kwargs=False):
     """
     col_set = set(df)
     unknown_cols = set(kwargs) - col_set
-    bad_keys = set()
+    unsupported = {}
     range_query = {}
+    out = dict(kwargs)
     for key in unknown_cols:
         min_key, max_key = f"{key}_min", f"{key}_max"
         val = kwargs[key]
         subset = {min_key, max_key}.issubset(col_set)
         if subset and val is not None and len(val) == 2:
             range_query[key] = val
-            kwargs.pop(key, None)
+            out.pop(key, None)
         else:
-            bad_keys.add(key)
-    if len(bad_keys):
-        if not ignore_bad_kwargs:
-            bad_dict = {x: kwargs[x] for x in bad_keys}
-            msg = (
-                "Bad filter parameter found. Either the column does not "
-                f"exist or it's value is invalid. Keys/values are: {bad_dict}"
-            )
-            raise ParameterError(msg)
-        else:
-            for key in bad_keys:
-                kwargs.pop(key, None)
-    return range_query
+            unsupported[key] = val
+    # raise if bad keys are found and not ignored.
+    if len(unsupported) and not ignore_bad_kwargs:
+        bad_dict = {x: kwargs[x] for x in unsupported}
+        msg = (
+            "Bad filter parameter found. Either the column does not "
+            f"exist or it's value is invalid. Keys/values are: {bad_dict}"
+        )
+        raise ParameterError(msg)
+    # otherwise just pop out unsupported kwargs
+    for key in unsupported:
+        out.pop(key, None)
+    return out, range_query, unsupported
 
 
 def _get_flat_and_collection_queries(kwargs):
@@ -282,7 +287,7 @@ def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.array:
     requirements.
     """
     min_max_query = _convert_times(df, _get_min_max_query(kwargs, df))
-    range_query = _add_range_query(kwargs, df, ignore_bad_kwargs)
+    kwargs, range_query, _ = split_df_query(kwargs, df, ignore_bad_kwargs)
     multicolumn_range_query = _convert_times(df, range_query)
     equality_query, collection_query = _get_flat_and_collection_queries(kwargs)
     # get a blank index of True for filters
