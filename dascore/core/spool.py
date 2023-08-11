@@ -179,7 +179,7 @@ class DataFrameSpool(BaseSpool):
         return len(self._df)
 
     def __iter__(self):
-        for ind in self._df.index:
+        for ind in range(len(self._df)):
             yield self._unbox_patch(self._get_patches_from_index(ind))
 
     def _unbox_patch(self, patch_list):
@@ -198,7 +198,8 @@ class DataFrameSpool(BaseSpool):
         else:  # Filter instruction df to only include current index.
             # handle negative index.
             df_ind = df_ind if df_ind >= 0 else len(self._df) + df_ind
-            df1 = instruction[instruction["current_index"] == df_ind]
+            inds = self._df.index[df_ind]
+            df1 = instruction[instruction["current_index"] == inds]
         if df1.empty:
             msg = f"index of [{df_ind}] is out of bounds for spool."
             raise IndexError(msg)
@@ -295,9 +296,14 @@ class DataFrameSpool(BaseSpool):
 
     def select(self, **kwargs) -> Self:
         """Sub-select certain dimensions for Spool"""
-        inst = adjust_segments(self._instruction_df, ignore_bad_kwargs=True, **kwargs)
+        filtered_df = adjust_segments(self._df, **kwargs)
+        inst = adjust_segments(
+            self._instruction_df,
+            ignore_bad_kwargs=True,
+            **kwargs,
+        ).loc[lambda x: x["current_index"].isin(filtered_df.index)]
         out = self.new_from_df(
-            adjust_segments(self._df, **kwargs),
+            filtered_df,
             source_df=self._source_df,
             instruction_df=inst,
         )

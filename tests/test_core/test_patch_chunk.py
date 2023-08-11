@@ -372,3 +372,23 @@ class TestChunkMerge:
         assert len(out) == 1
         for patch in out:
             assert isinstance(patch, dc.Patch)
+
+    def test_merge_select(self, adjacent_spool_no_overlap):
+        """Ensure spools can be merged *then* selected."""
+        # get start/endtimes to encompass the last half of the first patch.
+        # and the first half of the second patch.
+        df = adjacent_spool_no_overlap.get_contents().sort_values("time_min")
+        time = (df["time_max"] - df["time_min"]) / 2 + df["time_min"]
+        time_tup = (time.iloc[0], time.iloc[1])
+        # merge spool together and select
+        merged = adjacent_spool_no_overlap.chunk(time=...)
+        selected = merged.select(time=time_tup)
+        assert len(selected) == 1
+        # get patch, double check start/endtime
+        patch = selected[0]
+        coord = patch.get_coord("time")
+        time_min, time_max, time_step = coord.min(), coord.max(), coord.step
+        assert time_min >= time_tup[0]
+        assert (time_min - time_step) < time_tup[0]
+        assert time_max <= time_tup[1]
+        assert (time_max + time_step) > time_tup[1]
