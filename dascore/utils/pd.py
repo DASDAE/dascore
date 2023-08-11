@@ -15,7 +15,6 @@ from pydantic import BaseModel
 
 from dascore.exceptions import ParameterError
 from dascore.utils.time import to_datetime64, to_timedelta64
-from dascore.utils.misc import iterate
 
 
 @cache
@@ -227,7 +226,7 @@ def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
         yield name, out_slice
 
 
-def adjust_segments(df, ignore_bad_kwargs=False, reset_columns=None, **kwargs):
+def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     """
     Filter a dataframe and adjust its limits.
 
@@ -237,8 +236,6 @@ def adjust_segments(df, ignore_bad_kwargs=False, reset_columns=None, **kwargs):
         The input dataframe
     ignore_bad_kwargs
         Ignore kwargs that don't apply to df, else raise.
-    reset_columns
-        Columns which should be set to a range of df len.
     kwargs
         The keyword arguments for filtering.
     """
@@ -253,9 +250,6 @@ def adjust_segments(df, ignore_bad_kwargs=False, reset_columns=None, **kwargs):
         too_large = stop > max_val
         out.loc[too_large, too_large.name] = max_val
         out.loc[too_small, too_small.name] = min_val
-    # reset current index or index
-    for col in iterate(reset_columns):
-        out[col] = np.arange(len(out))
     return out
 
 
