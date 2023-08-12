@@ -51,14 +51,15 @@ def _get_extents(dims_r, coords):
     return out
 
 
-def _format_time_axis(ax, dims_r):
+def _format_time_axis(ax, dim, axis_name):
     """
     Function to handle formatting time axis for image-type plots.
 
     Tries to snape all axis labels to "nice" values and adds reference
     start time.
     """
-    axis_name = "x" if dims_r[0] == "time" else "y"
+    # Set label to not include units
+    getattr(ax, f"set_{axis_name}label")(dim)
     # set date time formatting so MPL knows this axis is a date
     getattr(ax, f"{axis_name}axis_date")()
     # Set intelligent, zoom-in-able date formatter

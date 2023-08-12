@@ -31,7 +31,7 @@ from dascore.utils.pd import (
     fill_defaults_from_pydantic,
     list_ser_to_str,
 )
-from dascore.utils.time import get_max_min_times, to_int
+from dascore.utils.time import get_max_min_times, to_int, to_datetime64, to_timedelta64
 
 HDF5ExtError = tables.HDF5ExtError
 NoSuchNodeError = tables.NoSuchNodeError
@@ -156,9 +156,9 @@ class HDFPatchIndexManager:
     # functions applied to encode dataframe before saving to hdf5
     _column_encoders = FrozenDict(
         {
-            "time_min": to_int,
-            "time_max": to_int,
-            "time_step": to_int,
+            "time_min": lambda x: to_int(to_datetime64(x)),
+            "time_max": lambda x: to_int(to_datetime64(x)),
+            "time_step": lambda x: to_int(to_timedelta64(x)),
             "dims": list_ser_to_str,
             "path": lambda x: x.astype(str),
         }

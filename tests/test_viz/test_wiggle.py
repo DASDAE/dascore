@@ -17,8 +17,8 @@ class TestWiggle:
         out = random_patch.new(data=data)
         ax = out.viz.wiggle()
         # check labels
-        assert random_patch.dims[0].capitalize() in ax.get_ylabel()
-        assert random_patch.dims[1].capitalize() in ax.get_xlabel()
+        assert random_patch.dims[0].lower() in ax.get_ylabel().lower()
+        assert random_patch.dims[1].lower() in ax.get_xlabel().lower()
         assert isinstance(ax, plt.Axes)
 
     def test_example(self):

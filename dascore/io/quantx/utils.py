@@ -103,8 +103,8 @@ def _read_quantx(
     """Read a Quantx file."""
     _, data_node = _get_version_data_node(root)
     attrs = _get_attrs(data_node, root._v_attrs)
-    t_coord, t_ind = attrs.pop("_t_coord").select(time)
-    d_coord, d_ind = attrs.pop("_d_coord").select(distance)
+    t_coord, t_ind = attrs["coords"]["time"].select(time)
+    d_coord, d_ind = attrs["coords"]["distance"].select(distance)
     # get data and sliced distance coord
     data = data_node.RawData[t_ind, d_ind]
     coords = {"time": t_coord, "distance": d_coord}
@@ -115,17 +115,17 @@ def _read_quantx(
 def _get_attrs(data_node, root_node_attrs):
     """Return the required/default attributes which can be fetched from attributes."""
     out = dict(dims="time,distance", data_category="DAS")
-    time_coord = _get_time_coord(data_node)
-    dist_coord = _get_dist_coord(root_node_attrs)
-    out.update(time_coord.get_attrs_dict("time"))
-    out.update(dist_coord.get_attrs_dict("distance"))
-    out["_t_coord"], out["_d_coord"] = time_coord, dist_coord
+    out["coords"] = {
+        "time": _get_time_coord(data_node),
+        "distance": _get_dist_coord(root_node_attrs),
+    }
     _root_attrs = {
         "uuid": "instrument_id",  # not 100% sure about this one
         "RawDescription": "raw_description",
         "PulseWidth": "pulse_width",
         "PulseWidthUnits": "pulse_width_units",
-        "GaugeLength": "gauge_length_units",
+        "GaugeLength": "gauge_length",
+        "GaugeLengthUnit": "gauge_length_units",
         "schemaVersion": "schema_version",
     }
     out.update(maybe_get_attrs(root_node_attrs, _root_attrs))

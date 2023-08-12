@@ -43,6 +43,14 @@ def patch_random_start(event_patch_1):
     return patch
 
 
+@pytest.fixture(scope="session")
+def patch_two_times(random_patch):
+    """Create a patch with two time dims."""
+    dist = random_patch.coords["distance"]
+    pa = random_patch.update_coords(distance=dc.to_datetime64(dist))
+    return pa
+
+
 class TestWaterfall:
     """Tests for waterfall plot."""
 
@@ -112,3 +120,11 @@ class TestWaterfall:
         )
         ax = new.viz.waterfall()
         check_label_units(new, ax)
+
+    def test_time_no_units(self, patch_two_times):
+        """time-like dims shouldn't show units in label."""
+        pa = patch_two_times
+        dims = pa.dims
+        ax = pa.viz.waterfall()
+        assert ax.get_xlabel() == dims[1]
+        assert ax.get_ylabel() == dims[0]

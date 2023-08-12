@@ -92,8 +92,10 @@ def waterfall(
         _set_scale(im, scale, scale_type, patch)
     for dim, x in zip(dims_r, ["x", "y"]):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
-    if "time" in dims_r:
-        _format_time_axis(ax, dims_r)
+        # format all dims which have time types.
+        coord = patch.get_coord(dim)
+        if np.issubdtype(coord.dtype, np.datetime64):
+            _format_time_axis(ax, dim, x)
     # add color bar with title
     if cmap is not None:
         cb = ax.get_figure().colorbar(im)

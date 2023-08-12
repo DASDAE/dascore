@@ -82,7 +82,8 @@ def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs) -> list[PatchAttrs]:
     _root_attrs = {
         "PulseWidth": "pulse_width",
         "PulseWidthUnits": "pulse_width_units",
-        "GaugeLength": "gauge_length_units",
+        "GaugeLength": "gauge_length",
+        "GaugeLengthUnit": "gauge_length_units",
         "schemaVersion": "schema_version",
     }
     base_info = dict(

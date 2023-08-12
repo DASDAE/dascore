@@ -1,6 +1,8 @@
 """Tests for time variables."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -150,6 +152,19 @@ class TestToDateTime64:
         out = to_datetime64(ar)
         assert out.dtype == np.dtype("<M8[ns]")
 
+    def test_series(self):
+        """Ensure a series od datatime64 works."""
+        ser = pd.Series(to_datetime64(["2020-01-12", "2024-01-02"]))
+        out = to_datetime64(ser)
+        assert out.equals(ser)
+
+    def test_datetime(self):
+        """Ensure datatime works."""
+        dt = datetime.fromisoformat("2021-01-02")
+        out = to_datetime64(dt)
+        assert isinstance(out, np.datetime64)
+        assert out == to_datetime64("2021-01-02")
+
     def test_unsupported_type(self):
         """Ensure unsupported types raise."""
         with pytest.raises(NotImplementedError):
@@ -243,6 +258,13 @@ class TestToTimeDelta64:
             out = to_timedelta64(-val)
             expected = -to_timedelta64(abs(val))
             assert out == expected or (pd.isnull(out) and pd.isnull(expected))
+
+    def test_timedelta(self):
+        """Ensure python timedelta can convert to numpy timedelta64."""
+        td = timedelta(hours=1)
+        out = to_timedelta64(td)
+        assert isinstance(out, np.timedelta64)
+        assert out == to_timedelta64(3600)
 
     def test_unsupported_type(self):
         """Ensure unsupported types raise."""
