@@ -32,16 +32,16 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
 
     Examples
     --------
-    import dascore.proc.coords    >>> import numpy as np
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>> # add new coordinate, random numbers length of time dim
-        >>> my_coord = np.random.random(patch.coord_shapes["time"])
-        >>> out = (
-        ...    patch.update_coords(my_coord=("time", my_coord))  # add my_coord
-        ...    .set_dims(time="my_coord") # set mycoord as dim (rather than time)
-        ... )
-        >>> assert "my_coord" in out.dims
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # add new coordinate, random numbers length of time dim
+    >>> my_coord = np.random.random(patch.coord_shapes["time"])
+    >>> out = (
+    ...    patch.update_coords(my_coord=("time", my_coord))  # add my_coord
+    ...    .set_dims(time="my_coord") # set mycoord as dim (rather than time)
+    ... )
+    >>> assert "my_coord" in out.dims
     """
     cm = self.coords.set_dims(**kwargs)
     return self.new(coords=cm)

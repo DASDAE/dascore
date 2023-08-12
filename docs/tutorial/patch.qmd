@@ -542,4 +542,4 @@ out = patch + patch
 assert np.allclose(patch.data * 2, out.data)
 ```
 
-See [`merge_compatible_coords_attrs`](`dascore.utils.patch.merge_compatible_coords_attrs`) for more details on how attributes and coordinates are handled when performing operations on two patches.
+See [`merge_compatible_coords_attrs`](`dascore.core.attrs.merge_compatible_coords_attrs`) for more details on how attributes and coordinates are handled when performing operations on two patches.
