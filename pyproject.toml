@@ -41,10 +41,10 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
-     "matplotlib",
-     "numpy",
+     "matplotlib>=3.5",
+     "numpy>=1.25",
      "packaging",
-     "pandas",
+     "pandas>=2.0",
      "pooch>=1.2",
      "pydantic>2.0",
      "rich",

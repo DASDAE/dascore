@@ -72,14 +72,6 @@ class PatchFileSummary(DascoreBaseModel):
     def dim_tuple(self):
         return tuple(self.dims.split(","))
 
-    @classmethod
-    def get_summary(cls, patch_attrs: dc.PatchAttrs | Self) -> Self:
-        """Get PatchFileSummary from patch attrs."""
-        if isinstance(patch_attrs, cls):
-            return patch_attrs
-        assert hasattr(patch_attrs, "flat_dump")
-        return cls(**patch_attrs.flat_dump())
-
     @model_validator(mode="before")
     @classmethod
     def translate_d_to_step(cls, data):

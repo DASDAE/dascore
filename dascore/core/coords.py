@@ -1012,20 +1012,3 @@ def get_coord(
         return CoordArray(values=values, units=units)
     else:
         return CoordRange(start=start, stop=stop, step=step, units=units)
-
-
-def get_coord_from_attrs(attrs, name):
-    """
-    Try to get a coordinate from an attributes dict.
-
-    For this to work, attrs must have {name}_min, {name}_max, d_{name}
-    and optionally {name}_units. If the requirements are not met a
-    CoordError is raised.
-    """
-    start, stop = attrs.get(f"{name}_min"), attrs.get(f"{name}_max")
-    step = attrs.get(f"{name}_step")
-    units = attrs.get(f"{name}_units")
-    if all([x is not None for x in [start, stop, step]]):
-        return get_coord(start=start, stop=stop + step, step=step, units=units)
-    msg = f"Could not get coordinate from {attrs}"
-    raise CoordError(msg)
