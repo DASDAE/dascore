@@ -19,6 +19,7 @@ from dascore.constants import SpoolType
 from dascore.core import Patch
 from dascore.examples import get_example_patch
 from dascore.io.core import read
+from dascore.io.indexer import DirectoryIndexer
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 
@@ -78,7 +79,14 @@ def pytest_sessionstart(session):
     dc._debug = True
 
 
-# --- Patch Paths
+@pytest.fixture(scope="session", autouse=True)
+def swap_index_map_path(tmp_path_factory):
+    """For all tests cases, use a temporary index file."""
+    tmp_map_path = tmp_path_factory.mktemp("cache_paths") / "cache_paths.json"
+    setattr(DirectoryIndexer, "index_map_path", tmp_map_path)
+
+
+# --- Patch Fixtures
 
 
 @pytest.fixture(scope="session")

@@ -537,3 +537,11 @@ def merge_compatible_coords_attrs(
     coord_out = _merge_coords(coord1, coord2)
     attrs = _merge_models(attrs1, attrs2, coord_out)
     return coord_out, attrs
+
+
+def decompose_attrs(attr_list):
+    """
+    Function to decompose attributes into series.
+
+
+    """

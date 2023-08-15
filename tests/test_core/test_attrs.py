@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+import dascore as dc
 from dascore.core.attrs import (
     PatchAttrs,
     combine_patch_attrs,
@@ -16,6 +17,7 @@ from dascore.exceptions import (
     IncompatiblePatchError,
 )
 from dascore.utils.misc import register_func
+from dascore.utils.downloader import fetcher
 
 MORE_COORDS_ATTRS = []
 
@@ -356,3 +358,16 @@ class TestMergeCompatibleCoordsAttrs:
         patch = random_patch.update_attrs(new_attr=10)
         coords, attrs = merge_compatible_coords_attrs(patch, random_patch)
         assert attrs.get("new_attr") == 10
+
+
+class TestDecomposeAttrs:
+    """Tests for decomposing attributes."""
+
+    @pytest.fixture(scope="class")
+    def scanned_attrs(self):
+        """Scan all the attrs in the dascore cache, return them."""
+        return dc.scan(fetcher.path)
+
+    def test_decompose_basic(self, scanned_attrs):
+        """Ensure all cached files can be scanned."""
+        assert False

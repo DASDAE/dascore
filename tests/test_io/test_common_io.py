@@ -18,12 +18,10 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-import dascore.proc.coords
 from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
-from dascore.io.quantx import QuantXV2
 from dascore.io.tdms import TDMSFormatterV4713
 from dascore.io.terra15 import (
     Terra15FormatterV4,
@@ -44,7 +42,7 @@ from dascore.utils.misc import all_close, iterate
 # for more details.
 COMMON_IO_READ_TESTS = {
     DASDAEV1(): ("example_dasdae_event_1.h5",),
-    ProdMLV2_0(): ("prodml_2.0.h5",),
+    ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",
         "iDAS005_hdf5_example.626.h5",
@@ -56,7 +54,6 @@ COMMON_IO_READ_TESTS = {
     ),
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
-    QuantXV2(): ("opta_sense_quantx_v2.h5",),
 }
 
 # This tuple is for fiber io which support a write method and can write
@@ -177,6 +174,18 @@ class TestGetFormat:
     def test_random_h5_isnt_format(self, io_instance, generic_hdf5):
         """Ensure a dummy h5 file the format (it isn't any fiber format)."""
         assert not io_instance.get_format(generic_hdf5)
+
+    def test_all_other_files_arent_format(self, io_instance):
+        """All other data files should not show up as this format."""
+        for other_io, data_files in COMMON_IO_READ_TESTS.items():
+            if isinstance(other_io, type(io_instance)):
+                continue
+            for key in data_files:
+                path = fetch(key)
+                out = io_instance.get_format(path)
+                if out:
+                    format_name, version = out
+                    assert version != io_instance.version
 
 
 class TestRead:

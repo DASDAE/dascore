@@ -20,7 +20,6 @@ def _get_prodml_version_str(hdf_fi) -> str:
         return ""
     acq_attrs = acquisition._v_attrs
     expected_attrs = (
-        "AcquisitionDescription",
         "GaugeLength",
         "PulseRate",
         "PulseWidth",
@@ -44,25 +43,32 @@ def _get_raw_node_dict(acquisition_node):
 
 def _get_distance_coord(acq):
     """Get the distance ranges and spacing."""
-    user_settings = acq.Custom.UserSettings._v_attrs
-    start = user_settings.StartDistance
-    # Note: subtracting StopDistance from StartDistance doesn't equal the
-    # length specified in MeasuredLength. If MeasuredLength is multiplied
-    # by Custom/SystemSettings.FiberLengthMultiplier, however, it does. So,
-    # to be consistent with the TDMS reader, we assume this is correct, which
-    # means the SpatialResolution is multiplied by the modifier.
-    stop = user_settings.StopDistance
-    multiplier = acq.Custom.SystemSettings._v_attrs.FibreLengthMultiplier
-    step = user_settings.SpatialResolution * multiplier
-    coord = get_coord(start=start, stop=stop + step, step=step, units="m")
-    return coord
+
+    def get_distance_units(vattrs):
+        """Get distance units, works for both v2 and v3."""
+        name_v2_0 = "SpatialSamplingIntervalUnit"
+        name_v2_1 = "SpatialSamplingInterval.uom"
+        if hasattr(vattrs, name_v2_0):
+            return getattr(vattrs, name_v2_0)
+        if hasattr(vattrs, name_v2_1):
+            return getattr(vattrs, name_v2_1)
+
+    vattrs = acq._v_attrs
+    step = vattrs.SpatialSamplingInterval
+    num_dist_channels = vattrs.NumberOfLoci
+    start = vattrs.StartLocusIndex * step
+    stop = start + num_dist_channels * step
+    units = get_distance_units(vattrs)
+    return get_coord(start=start, stop=stop, units=units, step=step)
 
 
 def _get_time_coord(node):
     """Get the time information from a Raw node."""
     time_attrs = node.RawDataTime._v_attrs
-    start = np.datetime64(time_attrs.PartStartTime.decode().split("+")[0])
-    end = np.datetime64(time_attrs.PartEndTime.decode().split("+")[0])
+    start_str = time_attrs.PartStartTime.decode().split("+")[0]
+    start = np.datetime64(start_str.rstrip("Z"))
+    end_str = time_attrs.PartEndTime.decode().split("+")[0]
+    end = np.datetime64(end_str.rstrip("Z"))
     step = (end - start) / (len(node.RawDataTime) - 1)
     return get_coord(start=start, stop=end + step, step=step, units="s")
 
@@ -82,13 +88,16 @@ def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs) -> list[PatchAttrs]:
     _root_attrs = {
         "PulseWidth": "pulse_width",
         "PulseWidthUnits": "pulse_width_units",
+        "PulseWidth.uom": "pulse_width_units",
+        "PulseRate": "pulse_rate",
+        "PulseRateUnit": "pulse_rate_units",
+        "PulseRate.uom": "pulse_rate_units",
         "GaugeLength": "gauge_length",
         "GaugeLengthUnit": "gauge_length_units",
+        "GaugeLength.uom": "gauge_length_units",
         "schemaVersion": "schema_version",
     }
-    base_info = dict(
-        gauge_length=fi.root.Acquisition._v_attrs.GaugeLength,
-    )
+    base_info = {}
     acq = fi.root.Acquisition
     d_coord = _get_distance_coord(acq)
     base_info.update(d_coord.get_attrs_dict("distance"))
