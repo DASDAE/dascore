@@ -42,7 +42,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence, Sized
-from contextlib import suppress
 from functools import reduce
 from operator import and_, or_
 from typing import Annotated, TypeVar
@@ -64,7 +63,7 @@ from dascore.exceptions import (
 )
 from dascore.utils.display import get_nice_text
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import all_close, cached_method, iterate
+from dascore.utils.misc import all_close, cached_method, iterate, separate_coord_info
 from dascore.utils.models import (
     ArrayLike,
     DascoreBaseModel,
@@ -650,7 +649,6 @@ class CoordManager(DascoreBaseModel):
             # update units, use type so None can be set.
             if (data_units := attr_dict.pop("units", type)) is not type:
                 coord = coord.convert_units(data_units)
-                out[name] = coord
             out[name] = coord.update_limits(**attr_dict)
         return self.new(coord_map=out)
 
@@ -849,7 +847,10 @@ def get_coord_manager(
     dims
         Tuple specify dimension names
     attrs
-        Attributes which can be used to augment/create coordinates.
+        Attributes which can be used to create coordinates that don't
+        already exist. If you want to update the coordinate mananger based
+        on value in attrs use
+        [`update_attrs`](`dascore.core.CoordManager.update_from_attrs`).
 
     Examples
     --------
@@ -876,65 +877,39 @@ def get_coord_manager(
     >>> attrs = dc.get_example_patch().attrs
     >>> cm = get_coord_manager(attrs=attrs)
     """
-
-    def _coord_from_attrs(coord_map, dim_map, attrs, names):
-        """Try to get coordinates from attributes."""
-        for name in names:
-            with suppress(CoordError, KeyError):
-                coord = attrs.coords[name].to_coord()
-                coord_map[name] = coord
-                dim_map[name] = (name,)
-
-    def _update_units(coord_manager, attrs):
-        """Update coordinates to include units from attrs."""
-        if attrs is None:
-            return coord_manager
-        kwargs = {}
-        for name, coord in coord_manager.coord_map.items():
-            attrs_units = attrs.get(f"{name}_units")
-            if coord.units is None and attrs_units is not None:
-                kwargs[name] = attrs_units
-        return coord_manager.set_units(**kwargs)
-
-    def _check_and_fill_coords(coord_map, dim_map, dims, attrs):
-        """Ensure dims are here and fill missing values from attrs if needed."""
-        coord_set = set(coord_map)
-        dim_set = set(dims)
-        missing = dim_set - coord_set
-        if not missing:
-            return
-        # we have missing dimensional coordinates.
-        if attrs is None:
-            msg = (
-                f"All dimensions must have coordinates. The following "
-                f"are missing {missing}"
-            )
-            raise CoordError(msg)
-        # Try to fill in data from attributes, recurse to raise error if any missed.
-        _coord_from_attrs(coord_map, dim_map, attrs, missing)
-        return _check_and_fill_coords(coord_map, dim_map, dims, attrs=None)
-
-    # nothing to do but return coords if not other info provided.
-    if isinstance(coords, CoordManager) and dims is None and attrs is None:
+    # return coords if we already have a coord manager.
+    if isinstance(coords, CoordManager):
+        # maybe try to rename dims.
+        if dims != coords.dims:
+            kwargs = {i: v for i, v in zip(coords.dims, dims, strict=True)}
+            coords = coords.rename_coord(**kwargs)
         return coords
     coords = {} if coords is None else coords
     dims = () if dims is None else dims
-    # need to (try) rename coordinates
-    if isinstance(coords, CoordManager) and dims != coords.dims:
-        kwargs = {i: v for i, v in zip(coords.dims, dims, strict=True)}
-        coords = coords.rename_coord(**kwargs)
-    attrs = dc.PatchAttrs.from_dict(attrs)  # ensure we have attrs
-    coord_map, dim_map = _get_coord_dim_map(coords, dims, attrs)
-    _check_and_fill_coords(coord_map, dim_map, dims, attrs)
+    coord_map, dim_map = _get_coord_dim_map(coords, dims)
+    if attrs:
+        coord_updates, _ = separate_coord_info(attrs, dims)
+        updateable_coords = set(coord_updates) - set(coord_map)
+        for name in updateable_coords:
+            coord_map[name] = get_coord(**coord_updates[name])
     out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
-    out = _update_units(out, attrs)
     return out
 
 
-def _get_coord_dim_map(coords, dims, attrs=None):
+def _get_coord_dim_map(coords, dims):
     """Get coord_map and dim_map from coord input."""
 
-    def _coord_from_simple(name, coord, attrs):
+    def _get_coord(coord):
+        """Get a coordinate from various inputs."""
+        if hasattr(coord, "model_dump"):
+            coord = coord.model_dump()
+        if isinstance(coord, Mapping):  # input is a dict
+            out = get_coord(**coord)
+        else:
+            out = get_coord(values=coord)
+        return out
+
+    def _coord_from_simple(name, coord):
         """Get coordinates from {coord_name: coord} where coord_name is dim name."""
         if name not in dims:
             msg = (
@@ -943,11 +918,10 @@ def _get_coord_dim_map(coords, dims, attrs=None):
                 "(dimension, coord) "
             )
             raise CoordError(msg)
-        step = attrs.get(f"{name}_step") if attrs is not None else None
-        out = get_coord(values=coord, step=step)
+        out = _get_coord(coord)
         return out, (name,)
 
-    def _maybe_coord_from_nested(name, coord, attrs):
+    def _maybe_coord_from_nested(coord):
         """
         Get coordinates from {coord_name: (dim_name, coord)} or
         {coord_name: ((dim_names...,), coord)}.
@@ -968,23 +942,21 @@ def _get_coord_dim_map(coords, dims, attrs=None):
             )
             raise CoordError(msg)
         # pull out any relevant info from attrs.
-        maybe_attrs = attrs or {}
-        units = maybe_attrs.get(f"{name}_units", None)
-        step = maybe_attrs.get(f"{name}_step", None)
-        coord_out = get_coord(values=coord[1], units=units, step=step)
+        coord_out = _get_coord(coord[1])
         assert coord_out.shape == np.shape(coord[1])
         return coord_out, dim_names
 
-    # no need to do anything if we already have coord manager.
     if isinstance(coords, CoordManager):
-        return dict(coords.coord_map), dict(coords.dim_map)
-    # otherwise create coord and dim maps.
+        coords_dump = coords.model_dump()
+        return dict(coords_dump["coord_map"]), dict(coords_dump["dim_map"])
+
     c_map, d_map = {}, {}
+    # iterate coords, get coordinate output.
     for name, coord in coords.items():
         if not isinstance(coord, tuple):
-            c_map[name], d_map[name] = _coord_from_simple(name, coord, attrs)
+            c_map[name], d_map[name] = _coord_from_simple(name, coord)
         else:
-            c_map[name], d_map[name] = _maybe_coord_from_nested(name, coord, attrs)
+            c_map[name], d_map[name] = _maybe_coord_from_nested(coord)
     return c_map, d_map
 
 

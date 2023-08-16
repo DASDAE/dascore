@@ -321,9 +321,10 @@ class TestEquals:
         """Ensure if the attributes are not equal the arrays are not equal."""
         attrs = random_patch.attrs
         new_attr_dict = {}
-        new_attr_dict["time_step"] = attrs["time_step"] - np.timedelta64(10, "s")
+        new_attr_dict["time_step"] = attrs["time_step"] * 0.80
         patch2 = random_patch.new(attrs=new_attr_dict)
         assert patch2.attrs.time_step == new_attr_dict["time_step"]
+
         assert not patch2.equals(random_patch)
 
     def test_one_null_value_in_attrs(self, random_patch):

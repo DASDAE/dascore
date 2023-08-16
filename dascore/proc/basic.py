@@ -181,9 +181,9 @@ def new(
     coords = get_coord_manager(coords, dims)
     if attrs:
         # need to figure out what changed and just pass that to update coords
-        new, old = dict(attrs), dict(self.attrs)
-        diffs = {i: v for i, v in new.items() if new[i] != old.get(i, type)}
+        diffs = self.attrs._diff(attrs)
         coords = coords.update_from_attrs(diffs)
+        attrs = self.attrs.update(**diffs)
     attrs = attrs or self.attrs
     return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 

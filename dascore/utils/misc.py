@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import contextlib
 import functools
+from functools import cache
 import importlib
 import inspect
 import os
+import re
 import warnings
 from collections.abc import Iterable, Sequence
 from collections.abc import Mapping
@@ -16,7 +18,12 @@ import pandas as pd
 from scipy.linalg import solve
 from scipy.special import factorial
 
+import dascore as dc
 from dascore.exceptions import MissingOptionalDependency
+
+
+class _Sentinel:
+    """Dump little sentinel for key checks."""
 
 
 def register_func(list_or_dict: list | dict, key=None):
@@ -373,6 +380,29 @@ def to_str(val):
     return str(val)
 
 
+def _diff_dicts(d1, d2) -> dict:
+    """
+    Get the difference between d1 and d2.
+
+    This is a hinky, specialized function for patch attribute dicts.
+    its not ready for general purpose yet.
+    """
+    out = {}
+    # all_keys = set(d1) | set(d2)
+    common_keys = set(d1) & set(d2)
+    for key in common_keys:
+        val1, val2 = d1.get(key, _Sentinel), d2.get(key, _Sentinel)
+        if isinstance(val1, dict) and isinstance(val2, dict):
+            sub_dict = _diff_dicts(val1, val2)
+            if sub_dict:
+                out[key] = sub_dict
+        elif val1 == val2 or (pd.isnull(val1) and pd.isnull(val2)):
+            continue
+        else:
+            out[key] = val2
+    return out
+
+
 def maybe_get_attrs(obj, attr_map: Mapping):
     """Maybe get attributes from object (if they exist)."""
     out = {}
@@ -381,6 +411,115 @@ def maybe_get_attrs(obj, attr_map: Mapping):
             value = getattr(obj, old_name)
             out[new_name] = unbyte(value)
     return out
+
+
+@cache
+def _get_compiled_suffix_prefix_regex(
+    suffixes: str | tuple[str],
+    prefixes: str | tuple[str] | None,
+):
+    """
+    Get a compiled regex which matches the form prefixes_suffixes.
+    """
+    suffixes = iterate(suffixes)
+    pattern = rf".*_({'|'.join(iterate(suffixes))})"
+    if prefixes is not None:
+        pattern = rf"({'|'.join(iterate(prefixes))})" + pattern
+    return re.compile(pattern)
+
+
+def _matches_prefix_suffix(input_str, suffixes, prefixes=None):
+    """Determine if a string matches given prefixes_suffixes"""
+    regex = _get_compiled_suffix_prefix_regex(suffixes, prefixes)
+    return bool(re.match(regex, input_str))
+
+
+def is_valid_coord_str(input_str, prefixes=None):
+    """
+    Return True if an input string is valid for representing coord info.
+    """
+    _valid_keys = tuple(dc.core.CoordSummary.model_fields)
+    return _matches_prefix_suffix(input_str, _valid_keys, prefixes)
+
+
+def separate_coord_info(
+    obj,
+    dims,
+    required=None,
+) -> tuple[dict, dict]:
+    """
+    Separate coordinate information from attr dict.
+
+    These can be in the flat-form (ie {time_min, time_max, time_step, ...})
+    or a nested coord: {coords: {time: {min, max, step}}
+
+    Parameters
+    ----------
+    obj
+        The object or model to
+    dims
+        The dimension to look for.
+    required
+        If provided, the required attributes.
+    """
+
+    def _meets_required(coord_dict):
+        """Return True coord dict does not meet the minimum required keys."""
+        if required is None:
+            return True
+        return set(coord_dict).issuperset(required)
+
+    def _get_coords_from_top_level(obj, out, dims):
+        """First get coord info from top level"""
+        if dims is None:
+            dims = {x.split("_")[0] for x in obj if is_valid_coord_str(x)}
+        for dim in iterate(dims):
+            potential_coord = {
+                i.split("_")[1]: v for i, v in obj.items() if is_valid_coord_str(i, dim)
+            }
+            # nasty hack for handling d_{dim} for backward compatibility.
+            if (bad_name := f"d_{dim}") in obj:
+                msg = f"d_{dim} is deprecated, use {dim}_step"
+                warnings.warn(msg, DeprecationWarning, stacklevel=3)
+                potential_coord["step"] = obj[bad_name]
+
+            if _meets_required(potential_coord):
+                out[dim] = potential_coord
+
+    def _get_coords_from_coord_level(obj, out):
+        """Get coords from coordinate level."""
+        coords = obj.get("coords", {})
+        if hasattr(coords, "to_summary_dict"):
+            coords = coords.to_summary_dict()
+        for key, value in coords.items():
+            if hasattr(value, "to_summary"):
+                value = value.to_summary()
+            if hasattr(value, "model_dump"):
+                value = value.model_dump()
+            if _meets_required(value):
+                out[key] = value
+
+    def _pop_out_coords(obj, out):
+        """Pop out old keys."""
+        # first coord subdict
+        obj.pop("coords", None)
+        # then top-level
+        for coord_name, sub_dict in out.items():
+            for thing_name in sub_dict:
+                obj.pop(f"{coord_name}_{thing_name}", None)
+            if "step" in sub_dict:
+                obj.pop(f"d_{coord_name}", None)
+
+    out = {}
+    if hasattr(obj, "model_dump"):
+        obj = obj.model_dump()
+    if obj is None:
+        return out
+    obj = dict(obj)
+    _get_coords_from_top_level(obj, out, dims)
+    _get_coords_from_coord_level(obj, out)
+    _pop_out_coords(obj, out)
+    return out, obj
 
 
 def cached_method(func):

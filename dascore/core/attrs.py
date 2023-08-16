@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import ConfigDict, Field, PlainValidator, model_validator, field_validator
+from pydantic import ConfigDict, Field, PlainValidator, model_validator
 from typing_extensions import Self
 
 import dascore as dc
@@ -30,6 +30,8 @@ from dascore.utils.misc import (
     get_middle_value,
     iterate,
     to_str,
+    separate_coord_info,
+    _diff_dicts,
 )
 from dascore.utils.models import (
     CommaSeparatedStr,
@@ -41,7 +43,7 @@ from dascore.utils.models import (
 
 str_validator = PlainValidator(to_str)
 _coord_summary_suffixes = set(CoordSummary.model_fields)
-_coord_required = {i for i, v in CoordSummary.model_fields.items() if v.is_required()}
+_coord_required = {"min", "max"}
 
 
 def _get_coords_dict(data_dict, fields):
@@ -52,66 +54,23 @@ def _get_coords_dict(data_dict, fields):
     grouped into the coords sub dict under "time".
     """
 
-    def _get_coord_dict(data_dict):
-        """Get a dict for stuffing outputs in."""
-        # first handle coords.
-        coords = data_dict.get("coords", {})
-        if isinstance(coords, CoordManager):
-            data_dict["dims"] = coords.dims
-            coords = coords.to_summary_dict()
-        coords = dict(coords)
-        return coords
+    def _get_dims(data_dict):
+        """Try to get dim tuple."""
+        dims = None
+        if "dims" in data_dict:
+            dims = data_dict["dims"]
+        elif hasattr(coord := data_dict.get("coords"), "dims"):
+            dims = coord.dims
+        if isinstance(dims, str):
+            dims = tuple(dims.split(","))
+        return dims
 
-    def _ensure_all_coord_summaries(coords):
-        """Enssure each coordinate entry is a CoordSummary."""
-        # then iterate and convert each coordinate
-        for i, v in coords.items():
-            if isinstance(v, BaseCoord):
-                coords[i] = v.to_summary()
-            # converts normal dicts to coord summary
-            elif not isinstance(v, CoordSummary):
-                coords[i] = CoordSummary(**v)
-        return coords
-
-    def _get_coords_from_attrs(data_dict, fields, coords):
-        """Use fields in attrs to get coord dict."""
-        # finally, pull out any attributes on the top level
-        extra_fields = set(data_dict) - set(fields)
-        new_coords = defaultdict(dict)
-        for extra_field in extra_fields:
-            if len(split := extra_field.split("_")) != 2:
-                continue
-            first, second = split
-            # handle d_{coord_name}, it should now be {coord_name}_step
-            if first == "d":
-                first, second = second, "step"
-                msg = f"{extra_field} is deprecated, use {first}_{second}"
-                warnings.warn(msg, DeprecationWarning, stacklevel=3)
-            # if coords were passed we don't want attrs to overwrite them.
-            if second in _coord_summary_suffixes:
-                # we need to pop out the key either way, but only use
-                # it if we haven't already defined the coord summary
-                val = data_dict[extra_field]
-                if first not in coords:
-                    new_coords[first][second] = val
-
-        # now convert new values to Summaries
-        for i, v in new_coords.items():
-            if not _coord_required.issubset(set(v)):
-                continue
-            new_coords[i] = CoordSummary(**v)
-            # pop out the keys that were used.
-            for key, val in v.items():
-                data_dict.pop(f"{i}_{key}", None)
-        return new_coords
-
-    coords = _get_coord_dict(data_dict)
-    coords_with_summaries = _ensure_all_coord_summaries(coords)
-    new_coords = _get_coords_from_attrs(data_dict, fields, coords_with_summaries)
-    # update coords and return
-    coords.update(new_coords)
-    data_dict["coords"] = coords
-    return data_dict
+    dims = _get_dims(data_dict)
+    coord_info, new_attrs = separate_coord_info(
+        data_dict, dims, required=("min", "max")
+    )
+    new_attrs["coords"] = {i: dc.core.CoordSummary(**v) for i, v in coord_info.items()}
+    return new_attrs
 
 
 @compose_docstring(basic_params=basic_summary_attrs)
@@ -167,16 +126,6 @@ class PatchAttrs(DascoreBaseModel):
             if "dims" not in data:
                 data["dims"] = tuple(data["coords"])
         return data
-
-    @field_validator("coords", mode="before")
-    @classmethod
-    def ensure_coord_summary(cls, value, _info):
-        """Parse the coordinate attributes into coord dict."""
-        if value and isinstance(value, dict):
-            for key, val in value.items():
-                if hasattr(val, "to_summary"):
-                    value[key] = val.to_summary()
-        return value
 
     def __getitem__(self, item):
         return getattr(self, item)
@@ -261,10 +210,12 @@ class PatchAttrs(DascoreBaseModel):
         """Rename one or more dimensions if in kwargs. Return new PatchAttrs."""
         if not (dims := set(kwargs) & set(self.dim_tuple)):
             return self
-        new = dict(self)
+        new = self.model_dump(exclude_defaults=True)
+        coords = new.get("coords", {})
         new_dims = list(self.dim_tuple)
         for old_name, new_name in {x: kwargs[x] for x in dims}.items():
             new_dims[new_dims.index(old_name)] = new_name
+            coords[new_name] = coords.pop(old_name, None)
         new["dims"] = tuple(new_dims)
         return self.__class__(**new)
 
@@ -313,6 +264,18 @@ class PatchAttrs(DascoreBaseModel):
                     out[step_name] = np.NaN
         return out
 
+    def _diff(self, other) -> dict:
+        """
+        Get the difference between this patchattrs and another.
+
+        This returns a (nested) dict of differences.
+        """
+        d1 = self.model_dump(exclude_defaults=True)
+        if hasattr(other, "model_dump"):
+            other = other.model_dump(exclude_defaults=True)
+        diff = _diff_dicts(d1, other)
+        return diff
+
 
 def combine_patch_attrs(
     model_list: Sequence[PatchAttrs],
@@ -320,7 +283,7 @@ def combine_patch_attrs(
     conflicts: Literal["drop", "raise", "keep_first"] = "raise",
     drop_attrs: Sequence[str] | None = None,
     coord: None | BaseCoord = None,
-):
+) -> PatchAttrs:
     """
     Merge Patch Attributes along a dimension.
 
@@ -376,10 +339,10 @@ def combine_patch_attrs(
         # empy dicts
         if not merge_dict_list:
             return dict(merge_dict_list)
-        # make sure at least min/max is defined.
-        if not len(merge_dict_list["min"]) == len(merge_dict_list["max"]):
-            msg = "Cant merge attributes, min and max must be defined for coord."
-            raise AttributeMergeError(msg)
+        # # make sure at least min/max is defined.
+        # if not len(merge_dict_list["min"]) == len(merge_dict_list["max"]):
+        #     msg = "Cant merge attributes, min and max must be defined for coord."
+        #     raise AttributeMergeError(msg)
         # all these should be equal else raise.
         for key in eq_coord_fields:
             if not len(vals := merge_dict_list[key]):
@@ -407,8 +370,11 @@ def combine_patch_attrs(
             model_dicts = [
                 {i: v for i, v in x.items() if i not in drop} for x in model_dicts
             ]
+        # no coordinate to merge on, just return dicts.
         if not coord_name:
             return model_dicts
+        # drop models which don't have required coords
+        model_dicts = [x for x in model_dicts if coord_name in x.get("coords", {})]
         # coordinate can be determined from existing coords.
         if coord is None:
             new_coord = _get_new_coord(model_dicts)
@@ -459,6 +425,9 @@ def combine_patch_attrs(
     mod_dict_list = _handle_other_attrs(mod_dict_list)
     first_class = model_list[0].__class__
     cls = first_class if not first_class == dict else PatchAttrs
+    if not len(mod_dict_list):
+        msg = "Failed to combine patch attrs"
+        raise AttributeMergeError(msg)
     return cls(**mod_dict_list[0])
 
 

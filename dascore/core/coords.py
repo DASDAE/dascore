@@ -515,6 +515,19 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             units=self.units,
         )
 
+    def update(self, **kwargs):
+        """
+        Update parts of the coordinate.
+        """
+        info = self.model_dump()
+        update_fields = {i: v for i, v in kwargs.items() if v != info.get(i)}
+        units = update_fields.pop("units", None)
+        _ = update_fields.pop("dtype", None)
+        out = self.update_limits(**update_fields)
+        if units is not None:
+            out = out.set_units(units)
+        return out
+
 
 class CoordRange(BaseCoord):
     """

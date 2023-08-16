@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+import dascore.core
 from dascore.exceptions import UnknownExample
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
@@ -52,13 +53,27 @@ def _random_patch(
         time_units="s",
         distance_units="m",
     )
-    # create coords
-    time_array = np.arange(array.shape[1]) if time_array is None else time_array
-    dist_array = np.arange(array.shape[0]) if dist_array is None else dist_array
-    coords = dict(
-        distance=d1 + dist_array * attrs["distance_step"],
-        time=t1 + time_array * attrs["time_step"],
-    )
+    # need to pop out dim attrs if coordinates provided.
+    if time_array is not None:
+        attrs.pop("time_min")
+        # need to keep time_step if time_array is len 1 to get coord range
+        if len(time_array) > 1:
+            attrs.pop("time_step")
+    else:
+        time_array = dascore.core.get_coord(
+            values=t1 + np.arange(array.shape[1]) * attrs["time_step"],
+            step=attrs["time_step"],
+            units=attrs["time_units"],
+        )
+    if dist_array is not None:
+        attrs.pop("distance_step")
+    else:
+        dist_array = dascore.core.get_coord(
+            values=d1 + np.arange(array.shape[0]) * attrs["distance_step"],
+            step=attrs["distance_step"],
+            units=attrs["distance_units"],
+        )
+    coords = dict(distance=dist_array, time=time_array)
     # assemble and output.
     out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
     patch = dc.Patch(**out)

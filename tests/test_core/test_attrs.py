@@ -40,7 +40,9 @@ def random_attrs(random_patch) -> PatchAttrs:
 def attrs_coords_1() -> PatchAttrs:
     """Add non-standard coords to attrs."""
     attrs = {"depth_min": 10.0, "depth_max": 12.0, "another_name": "FooBar"}
-    return PatchAttrs(**attrs)
+    out = PatchAttrs(**attrs)
+    assert "depth" in out.coords
+    return out
 
 
 @pytest.fixture(scope="session")
@@ -123,7 +125,7 @@ class TestPatchAttrs:
     def test_deprecated_d_set(self):
         """Ensure setting attributes d_whatever is deprecated."""
         with pytest.warns(DeprecationWarning):
-            PatchAttrs(d_time=10)
+            PatchAttrs(time_min=1, time_max=10, d_time=10)
 
     def test_deprecated_d_get(self, random_attrs):
         """Access attr.d_{whatever} is deprecated."""
@@ -268,10 +270,17 @@ class TestMergeModels:
         """Empty PatchAttrs should work in all cases."""
         pa1, pa2 = PatchAttrs(), PatchAttrs()
         assert isinstance(combine_patch_attrs([pa1, pa2]), PatchAttrs)
-        assert isinstance(combine_patch_attrs([pa1, pa2], "time"), PatchAttrs)
-        assert isinstance(combine_patch_attrs([pa1, pa2], "distance"), PatchAttrs)
         out = combine_patch_attrs([pa1, pa2], drop_attrs="history")
         assert isinstance(out, PatchAttrs)
+
+    def test_empty_with_coord_raises(self):
+        """Attributes which don't have specified coord should raise."""
+        pa1, pa2 = PatchAttrs(), PatchAttrs()
+        match = "Failed to combine"
+        with pytest.raises(AttributeMergeError, match=match):
+            combine_patch_attrs([pa1, pa2], "time")
+        with pytest.raises(AttributeMergeError, match=match):
+            combine_patch_attrs([pa1, pa2], "distance")
 
     def test_simple_merge(self):
         """Happy path, simple merge."""
@@ -296,21 +305,21 @@ class TestMergeModels:
         """Ensure when non-dim fields aren't equal merge raises."""
         pa1 = PatchAttrs(tag="bob")
         pa2 = PatchAttrs()
-        with pytest.raises(AttributeMergeError, match="not all of their non-dim"):
+        match = "not all of their non-dim"
+        with pytest.raises(AttributeMergeError, match=match):
             combine_patch_attrs([pa1, pa2])
 
-    def test_not_all_attributes(self):
-        """Ensure when non-dim fields aren't equal merge raises."""
+    def test_missing_coordinate(self):
+        """When one model has a missing coord it should just get dropped."""
         pa1 = PatchAttrs(bob_min=10, bob_max=12)
         pa2 = PatchAttrs(bob_min=13)
-        match = "min and max must be defined"
-        with pytest.raises(AttributeMergeError, match=match):
-            combine_patch_attrs([pa1, pa2], coord_name="bob")
+        out = combine_patch_attrs([pa1, pa2], coord_name="bob")
+        assert out == pa1
 
-    def test_drop_conflicts(self):
+    def test_drop_conflicts(self, random_patch):
         """Ensure when non-dim fields aren't equal, but are defined, they drop."""
-        pa1 = PatchAttrs(tag="bill", station="UU")
-        pa2 = PatchAttrs(station="TA", tag="bob")
+        pa1 = random_patch.attrs.update(tag="bill", station="UU")
+        pa2 = random_patch.attrs.update(station="TA", tag="bob")
         out = combine_patch_attrs([pa1, pa2], coord_name="time", conflicts="drop")
         defaults = PatchAttrs()
         assert isinstance(out, PatchAttrs)

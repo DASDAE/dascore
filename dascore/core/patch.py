@@ -75,7 +75,7 @@ class Patch:
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
-        self._coords = get_coord_manager(coords, dims, attrs)
+        self._coords = get_coord_manager(coords, dims)  # , attrs)
         self._attrs = PatchAttrs.from_dict(attrs, self.coords)
         self._data = array(self.coords.validate_data(data))
 
