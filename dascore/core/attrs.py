@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import ConfigDict, Field, PlainValidator, model_validator
+from pydantic import ConfigDict, Field, PlainValidator, model_validator, field_validator
 from typing_extensions import Self
 
 import dascore as dc
@@ -95,6 +95,9 @@ def _get_coords_dict(data_dict, fields):
                     new_coords[first][second] = val
         # now convert new values to Summaries
         for i, v in new_coords.items():
+            # skip any incomplete coordinates
+            if not {"min", "max"}.issubset(set(v)):
+                continue
             new_coords[i] = CoordSummary(**v)
         return new_coords
 
@@ -156,7 +159,20 @@ class PatchAttrs(DascoreBaseModel):
         """Parse the coordinate attributes into coord dict."""
         if isinstance(data, dict):
             data = _get_coords_dict(data, cls.model_fields)
+            # add dims as coords if dims is not included.
+            if "dims" not in data:
+                data["dims"] = tuple(data["coords"])
         return data
+
+    @field_validator("coords", mode="before")
+    @classmethod
+    def ensure_coord_summary(cls, value, _info):
+        """Parse the coordinate attributes into coord dict."""
+        if value and isinstance(value, dict):
+            for key, val in value.items():
+                if hasattr(val, "to_summary"):
+                    value[key] = val.to_summary()
+        return value
 
     def __getitem__(self, item):
         return getattr(self, item)
@@ -539,9 +555,66 @@ def merge_compatible_coords_attrs(
     return coord_out, attrs
 
 
-def decompose_attrs(attr_list):
+def decompose_attrs(attr_list: Sequence[PatchAttrs], exclude=("history",)):
     """
     Function to decompose attributes into series.
-
-
     """
+
+    def _get_uri_and_hash(model):
+        """Pop out this models uri and its hash"""
+        uri_key = "uri" if "uri" in model else "path"
+        assert uri_key in model, "all models must have uri or path"
+        uri = model.pop(uri_key)
+        uri_hash = hash(uri)
+        return uri, uri_hash
+
+    def _add_coords(coord_dict, coords, uri_hash):
+        """Add coordinates to structure."""
+        for name, coord in coords.items():
+            coord["index"] = uri_hash
+            coord["units"] = "" if coord["units"] is None else coord["units"]
+            coord_dict[name][coord["dtype"]].append(coord)
+
+    def _add_attrs(attr_dict, model, uri_hash):
+        """Add attrs to coordinate structure."""
+        for name, value in model.items():
+            if name.startswith("_"):
+                continue
+            entry = {"value": value, "index": uri_hash}
+            attr_dict[name][str(type(value))].append(entry)
+
+    def _to_df(dict_list):
+        """Convert a dict list to a dataframe."""
+        df = pd.DataFrame(dict_list).set_index("index").dropna(how="all")
+        # TODO may need to do something faster here, not sure.
+        empty_str = df == ""
+        null = pd.isnull(df)
+        to_keep = ~(empty_str | null).all(axis="columns")
+        return df[to_keep]
+
+    def _pandify(decom):
+        """Convert all the nested dicts to series."""
+        out = {}
+        for key, value in decom.items():
+            if isinstance(value, list):
+                df = _to_df(value)
+                if not df.empty:
+                    out[key] = df
+            else:
+                out[key] = _pandify(value)
+        return out
+
+    dumped = [x.model_dump(exclude=exclude) for x in attr_list]
+    out = {
+        "uri": [],
+        "attrs": defaultdict(lambda: defaultdict(list)),
+        "coords": defaultdict(lambda: defaultdict(list)),
+    }
+    for ind, model in enumerate(dumped):
+        uri, uri_hash = _get_uri_and_hash(model)
+        out["uri"].append({"uri": uri, "index": uri_hash})
+        # need to handle coordinates and regular attrs differently
+        coords = model.pop("coords", {})
+        _add_coords(out["coords"], coords, uri_hash)
+        _add_attrs(out["attrs"], model, uri_hash)
+    return _pandify(out)

@@ -281,6 +281,11 @@ def _type_caster(func, sig, required_type, arg_name):
     """A decorator for casting types for arguments of cast ind."""
     fun_name = func.__name__
 
+    # this is a subclass of a FiberIO subclass and its key methods
+    # have already been wrapped. Just return.
+    if getattr(func, "_type_caster_wrapped", False):
+        return func
+
     @wraps(func)
     def _wraper(*args, _pre_cast=False, **kwargs):
         """Wraps args but performs coercion to get proper stream."""
@@ -312,6 +317,10 @@ def _type_caster(func, sig, required_type, arg_name):
 
     # attach the function and required type for later use
     _wraper.func = func
+    # subclasses of FIBERIO subclasses can wrap this twice, so we mark
+    # it to avoid that scenario.
+    _wraper._type_caster_wrapped = True
+    # also specify required type
     _wraper._required_type = required_type
 
     return _wraper
@@ -590,14 +599,18 @@ def scan(
             # get fiberio
             if not file_format or not file_version:
                 try:
-                    file_format, file_version = get_format(
+                    file_format_, file_version_ = get_format(
                         man,
                         file_format=file_format,
                         file_version=file_version,
                     )
                 except UnknownFiberFormat:  # skip bad entities
                     continue
-            formatter = FiberIO.manager.get_fiberio(file_format, file_version)
+            else:
+                # we need separate loop variables so this doesn't get assumed
+                # to be the version/format in all subsequent values for the loop.
+                file_format_, file_version_ = file_format, file_version
+            formatter = FiberIO.manager.get_fiberio(file_format_, file_version_)
             req_type = getattr(formatter.scan, "_required_type", None)
             # this will get an open file handle to past to get_resource
             patch_thing = man.get_resource(req_type)

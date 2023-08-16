@@ -49,7 +49,8 @@ class ProdMLV2_0(FiberIO):
             "file_format": self.name,
             "file_version": str(file_version),
         }
-        return _get_prodml_attrs(resource, extras=extras, cls=ProdMLPatchAttrs)
+        attrs = _get_prodml_attrs(resource, extras=extras)
+        return [ProdMLPatchAttrs(**x) for x in attrs]
 
     def read(
         self,

@@ -9,6 +9,7 @@ test_io_core.py
 """
 from __future__ import annotations
 
+from contextlib import suppress
 from functools import cache
 from io import BytesIO
 from operator import eq, ge, le
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import numpy as np
 
 import dascore as dc
 from dascore.io import BinaryReader
@@ -111,6 +113,13 @@ def read_spool(data_file_path):
     return out
 
 
+@pytest.fixture(scope="session")
+def scanned_attrs(data_file_path):
+    """Read each file into a spool."""
+    out = dc.scan(data_file_path)
+    return out
+
+
 @pytest.fixture(scope="session", params=COMMON_IO_WRITE_TESTS)
 def fiber_io_writer(request):
     """Meta fixture for IO that implement write."""
@@ -203,6 +212,13 @@ class TestRead:
         for patch in read_spool:
             _assert_coords_attrs_match(patch)
 
+    def test_time_coords_are_datetimes(self, read_spool):
+        """Ensure the time coordinates have the type of datetime."""
+        for patch in read_spool:
+            with suppress(KeyError):
+                time = patch.get_coord("time")
+                assert "datetime64" in str(np.dtype(time.dtype))
+
     def test_read_stream(self, io_path_tuple):
         """If the format supports reading from a stream, test it out."""
         io, path = io_path_tuple
@@ -286,6 +302,28 @@ class TestScan:
         for attrs in attr_list:
             assert attrs.file_format == io.name
             assert attrs.file_version == io.version
+
+    def test_time_coord_is_time(self, scanned_attrs):
+        """Ensure scanned attrs have correct dtype for time."""
+        for patch_attr in scanned_attrs:
+            with suppress(KeyError):
+                time = patch_attr.coords["time"]
+                assert "datetime64" in str(np.dtype(time.dtype))
+
+    def test_dist_coord_is_float_or_int(self, scanned_attrs):
+        """Distance can be either float or int, but must be numeric."""
+        for patch_attr in scanned_attrs:
+            with suppress(KeyError):
+                distance = patch_attr.coords["distance"]
+                dtype = np.dtype(distance.dtype)
+                assert np.issubdtype(dtype, np.number)
+
+    def test_no_bytes(self, scanned_attrs):
+        """Sometimes bytes are returned from scanning, we need str."""
+        for patch_attr in scanned_attrs:
+            model = patch_attr.model_dump()
+            for key, value in model.items():
+                assert not isinstance(value, bytes | np.bytes_)
 
 
 class TestWrite:

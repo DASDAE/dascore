@@ -11,6 +11,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int
 
+
 # --- Functions for writing DASDAE format
 
 
@@ -169,7 +170,14 @@ def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
 def _get_patch_content_from_group(group):
     """Get patch content from a single node."""
     attrs = group._v_attrs
-    out = {i.replace("_attrs_", ""): getattr(attrs, i) for i in attrs._f_list()}
+    out = {}
+    for key in attrs._f_list():
+        value = getattr(attrs, key)
+        new_key = key.replace("_attrs_", "")
+        # need to unpack 0 dim arrays.
+        if isinstance(value, np.ndarray) and not value.shape:
+            value = np.atleast_1d(value)[0]
+        out[new_key] = value
     # rename dims
     out["dims"] = out.pop("_dims")
     return out

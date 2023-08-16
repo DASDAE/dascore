@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pickle
 from io import BytesIO
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -300,6 +301,13 @@ class TestBasics:
 class TestCoordSummary:
     """tests for converting to and from summary coords."""
 
+    cast_data_list: ClassVar = [  # noqa
+        {"min": 400.0, "step": 1.0, "units": "", "max": 1000.0},
+        {"min": 0, "max": 10},
+        {"min": dc.to_datetime64(10), "max": dc.to_datetime64(100)},
+        {"min": dc.to_timedelta64(100), "max": dc.to_timedelta64(200)},
+    ]
+
     @pytest.fixture(scope="session")
     def summary(self, coord) -> CoordSummary:
         """Convert each coord to a summary."""
@@ -336,6 +344,12 @@ class TestCoordSummary:
         match = "Cannot convert summary which is not evenly sampled"
         with pytest.raises(CoordError, match=match):
             random_coord.to_summary().to_coord()
+
+    @pytest.mark.parametrize("data", cast_data_list)
+    def test_dtype_inferred(self, data):
+        """Ensure the dtypes are correctly determined if not specified."""
+        out = CoordSummary(**data)
+        assert np.dtype(out.dtype) == np.dtype(type(data["min"]))
 
 
 class TestGetSliceTuple:
@@ -561,6 +575,16 @@ class TestSelect:
             assert np.all(ind_1 == ind_2)
         else:
             assert ind_1 == ind_2
+
+    def test_select_changes_len(self, coord):
+        """Ensure select changes the length of the coordinate."""
+        if len(coord) < 3 or not coord.sorted:
+            return
+        data = coord.data
+        new, dslice = coord.select((data[2], data[-2]))
+        # plus 3 because end value is inclusive
+        new_len = dslice.stop - dslice.start
+        assert len(new) == new_len
 
 
 class TestEqual:

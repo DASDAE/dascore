@@ -7,7 +7,9 @@ import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.coords import get_coord
+from dascore.core.coordmanager import get_coord_manager
 from dascore.utils.time import to_datetime64, to_timedelta64
+from dascore.utils.misc import maybe_get_attrs
 
 # --- Getting format/version
 
@@ -66,20 +68,6 @@ def _get_scanned_time_info(data_node):
     return starttime, endtime, t_len, time_step
 
 
-def _get_extra_scan_attrs(self, file_version, path, data_node):
-    """Get the extra attributes that go into summary information."""
-    tmin, tmax, _, dt = _get_scanned_time_info(data_node)
-    out = {
-        "time_min": to_datetime64(tmin),
-        "time_max": to_datetime64(tmax),
-        "time_step": to_timedelta64(dt),
-        "path": path,
-        "file_format": self.name,
-        "file_version": str(file_version),
-    }
-    return out
-
-
 def _get_version_data_node(root):
     """Get the version, time, and data node from terra15 file."""
     version = str(root._v_attrs.file_version)
@@ -93,27 +81,19 @@ def _get_version_data_node(root):
     return version, data_node
 
 
-def _scan_terra15(self, fi):
+def _scan_terra15(h5_fi, data_node, extras=None):
     """Scan a terra15 file, return metadata."""
-    root = fi.root
-    root_attrs = fi.root._v_attrs
-    version, data_node = _get_version_data_node(root)
-    out = _get_default_attrs(root_attrs)
-    out.update(_get_extra_scan_attrs(self, version, fi.filename, data_node))
+    out = extras
+    out.update(_get_default_attrs(h5_fi.root._v_attrs))
+    coords = {
+        "time": _get_time_coord(data_node, snap_dims=True),
+        "distance": _get_distance_coord(h5_fi.root),
+    }
+    out["coords"] = coords
     return [dc.PatchAttrs(**out)]
 
 
 # --- Reading patch
-
-
-def _get_dar_attrs(data_node, root, tar, dar):
-    """Get the attributes for the terra15 data array (loaded)."""
-    attrs = _get_default_attrs(root._v_attrs)
-    attrs["time_min"] = tar.min()
-    attrs["time_max"] = tar.max()
-    attrs["distance_min"] = dar.min()
-    attrs["distance_max"] = dar.max()
-    return attrs
 
 
 def _get_raw_time_coord(data_node):
@@ -142,25 +122,27 @@ def _read_terra15(
     to determine the dt (new in dascore>0.0.11).
     """
     _, data_node = _get_version_data_node(root)
-    t_min, t_max, time_len, d_time = _get_scanned_time_info(data_node)
-    if snap_dims:
-        kwargs = dict(start=t_min, stop=t_max + d_time, step=d_time, units="s")
-        time_coord = get_coord(**kwargs)
-    else:
-        time_coord = _get_raw_time_coord(data_node)
-    time_coord, time_slice = time_coord.select(time)
+    time_coord_ = _get_time_coord(data_node, snap_dims)
+    time_coord, time_slice = time_coord_.select(time)
+    time_len = len(time_coord)
     # get data and sliced distance coord
     dist_coord = _get_distance_coord(root)
-    dist_coord, dslice = dist_coord.select(distance)
+    dist_coord, dist_slice = dist_coord.select(distance)
     _data = data_node.data
     # checks for incomplete data blocks
     if _data.shape[0] > time_len:
-        new_stop = time_slice.stop or time_len
-        time_slice = slice(time_slice.start, new_stop)
-    data = data_node.data[time_slice, dslice]
-    coords = {"time": time_coord, "distance": dist_coord}
+        new_start = time_slice.start or 0
+        t_stop = time_slice.stop
+        new_stop = new_start + time_len if t_stop is None else t_stop
+        time_slice = slice(new_start, new_stop)
+    data = data_node.data[time_slice, dist_slice]
+    coords = get_coord_manager(
+        {"time": time_coord, "distance": dist_coord},
+        dims=("time", "distance"),
+    )
     dims = ("time", "distance")
-    attrs = _get_dar_attrs(data_node, root, time_coord, dist_coord)
+    attrs = _get_default_attrs(root._v_attrs)
+    attrs["coords"] = coords
     return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
 
 
@@ -171,37 +153,36 @@ def _get_default_attrs(root_node_attrs):
     Note: missing time, distance absolute ranges. Downstream functions should handle
     this.
     """
-    dmin, dmax, dstep, _ = _get_distance_start_stop_step(root_node_attrs)
-    out = dict(
-        dims="time,distance",
-        distance_min=dmin,
-        distance_max=dmax,
-        distance_step=dstep,
-    )
+    out = {}
     _root_attrs = {
         "data_product": "data_type",
         "serial_number": "instrument_id",
         "data_product_units": "data_units",
+        "pulse_rate": "pulse_rate",
+        "pulse_length": "pulse_length",
+        "gauge_length": "gauge_length",
     }
-
-    for treble_name, out_name in _root_attrs.items():
-        out[out_name] = getattr(root_node_attrs, treble_name)
-
+    out.update(maybe_get_attrs(root_node_attrs, _root_attrs))
     return out
 
 
-def _get_distance_start_stop_step(root):
-    """Get distance values for start, stop, step."""
-    # TODO: At least for the v4 test file, sensing_range_start, sensing_range_stop,
-    # nx, and dx are not consistent, meaning d_min + dx * nx != d_max
-    # so I just used this method. We need to look more into this.
-    attrs = getattr(root, "_v_attrs", root)
-    start, step, samps = attrs.sensing_range_start, attrs.dx, attrs.nx
-    stop = attrs.sensing_range_start + (attrs.nx - 1) * attrs.dx
-    return start, stop, step, samps
+def _get_time_coord(data_node, snap_dims=True):
+    """Get the time coordinate."""
+    t_min, t_max, time_len, d_time = _get_scanned_time_info(data_node)
+    if snap_dims:
+        kwargs = dict(start=t_min, stop=t_max + d_time, step=d_time, units="s")
+        time_coord = get_coord(**kwargs)
+    else:
+        time_coord = _get_raw_time_coord(data_node)
+    return time_coord
 
 
 def _get_distance_coord(root):
     """Get the distance coordinate."""
-    start, stop, step, samps = _get_distance_start_stop_step(root)
+    # TODO: At least for the v4 test file, sensing_range_start, sensing_range_stop,
+    # nx, and dx are not consistent, meaning d_min + dx * nx != d_max
+    # so I just used this method. We need to look more into this.
+    attrs = getattr(root, "_v_attrs", root)
+    start, step = attrs.sensing_range_start, attrs.dx
+    stop = attrs.sensing_range_start + (attrs.nx - 1) * attrs.dx
     return get_coord(start=start, stop=stop + step, step=step, units="m")

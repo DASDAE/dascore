@@ -4,13 +4,11 @@ from __future__ import annotations
 import abc
 from functools import cache
 from operator import gt, lt
-from typing import Annotated, Any, TypeVar
+from typing import Any, TypeVar
 
 import numpy as np
 import pandas as pd
 from pydantic import (
-    PlainValidator,
-    field_validator,
     model_serializer,
     model_validator,
 )
@@ -46,6 +44,36 @@ min_max_type = TypeVar("min_max_type")
 step_type = TypeVar("step_type")
 
 
+def ensure_consistent_dtype(value, name, dtype):
+    """Ensure the values are consistent with dtype."""
+    # For some reason all ints are getting converted to floats using default
+    # pydantic type validation. This just fixes this manually.
+    # TODO: See if this is needed in a few version after pydantic 2.1.1
+    if pd.isnull(value):
+        return value
+    elif np.issubdtype(dtype, np.datetime64):
+        if name == "step":
+            value = dc.to_timedelta64(value)
+        else:
+            value = dc.to_datetime64(value)
+    elif np.issubdtype(dtype, np.timedelta64):
+        value = dc.to_timedelta64(value)
+    # convert numpy numerics back to python
+    elif np.issubdtype(dtype, np.floating):
+        value = float(value) if value is not None else np.NaN
+    elif np.issubdtype(dtype, np.integer):
+        value = int(value)
+    return value
+
+
+def _get_dtype(value, dtype):
+    """Get the data type based on the first argument."""
+    if dtype is not None and dtype != "":
+        return str(dtype)
+    value = type(value)
+    return str(np.dtype(value))
+
+
 class CoordSummary(DascoreBaseModel):
     """
     A summary for coordinates.
@@ -54,9 +82,9 @@ class CoordSummary(DascoreBaseModel):
     coordinates.
     """
 
-    dtype: None | Annotated[str, PlainValidator(lambda x: str(x))] = ""
-    min: min_max_type = None
-    max: min_max_type = None
+    dtype: str
+    min: min_max_type
+    max: min_max_type
     step: step_type | None = None
     units: UnitQuantity | None = None
 
@@ -64,31 +92,18 @@ class CoordSummary(DascoreBaseModel):
     def ser_model(self) -> dict[str, str]:
         return {i: str(v) for i, v in self.model_dump().items()}
 
-    @field_validator("min", "max", "step")
+    @model_validator(mode="before")
     @classmethod
-    def ensure_consistent_dtype(cls, value, _info):
-        """Ensure the values are consistent with dtype."""
-        dtype = _info.data.get("dtype")
-        if not dtype:
-            return value
-        # for some reason all ints are getting converted to floats. This
-        # hack just fixes that. TODO: See if this is needed in a few version
-        # after pydantic 2.1.1
-        if pd.isnull(value):
-            return value
-        elif np.issubdtype(dtype, np.datetime64):
-            if _info.field_name == "step":
-                value = dc.to_timedelta64(value)
-            else:
-                value = dc.to_datetime64(value)
-        elif np.issubdtype(dtype, np.timedelta64):
-            value = dc.to_timedelta64(value)
-        # convert numpy numerics back to python
-        elif np.issubdtype(dtype, np.floating):
-            value = float(value) if value is not None else np.NaN
-        elif np.issubdtype(dtype, np.integer):
-            value = int(value)
-        return value
+    def get_correct_dtype_cast_values(cls, data: Any) -> Any:
+        """Ensure the correct dtype is provided and value conform to it"""
+        if isinstance(data, dict):
+            min_val = data["min"]
+            dtype = _get_dtype(min_val, data.get("dtype"))
+            data["dtype"] = dtype
+            for name in ["min", "max", "step"]:
+                val = data.get(name)
+                data[name] = ensure_consistent_dtype(val, name, dtype)
+        return data
 
     def to_coord(self) -> CoordRange:
         """Convert to coord range, if possible."""

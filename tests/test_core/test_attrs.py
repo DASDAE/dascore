@@ -12,6 +12,7 @@ from dascore.core.attrs import (
     merge_compatible_coords_attrs,
 )
 from dascore.core.coords import CoordSummary, get_coord
+from dascore.core.attrs import decompose_attrs
 from dascore.exceptions import (
     AttributeMergeError,
     IncompatiblePatchError,
@@ -172,6 +173,20 @@ class TestPatchAttrs:
         depth = attrs.coords["depth"]
         dep_min, dep_max = depth.min, depth.max
         assert out["depth"] == (dep_min, dep_max)
+
+    def test_coords_to_coord_summary(self):
+        """Coordinates included in coords should be converted to coord summary"""
+        out = {
+            "station": "01",
+            "coords": {
+                "time": get_coord(start=0, stop=10, step=1),
+                "distance": get_coord(start=10, stop=100, step=1, units="m"),
+            },
+        }
+        attr = dc.PatchAttrs(**out)
+        assert attr.dims == ",".join(("time", "distance"))
+        for name, coord in attr.coords.items():
+            assert isinstance(coord, CoordSummary)
 
 
 class TestSummaryAttrs:
@@ -370,4 +385,5 @@ class TestDecomposeAttrs:
 
     def test_decompose_basic(self, scanned_attrs):
         """Ensure all cached files can be scanned."""
+        decompose_attrs(scanned_attrs)
         assert False

@@ -4,9 +4,9 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.utils.misc import maybe_get_attrs
 
 # --- Getting format/version
 
@@ -83,7 +83,7 @@ def _get_data_unit_and_type(node):
     return out
 
 
-def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs) -> list[PatchAttrs]:
+def _get_prodml_attrs(fi, extras=None) -> list[dict]:
     """Scan a prodML file, return metadata."""
     _root_attrs = {
         "PulseWidth": "pulse_width",
@@ -97,11 +97,11 @@ def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs) -> list[PatchAttrs]:
         "GaugeLength.uom": "gauge_length_units",
         "schemaVersion": "schema_version",
     }
-    base_info = {}
     acq = fi.root.Acquisition
+    base_info = maybe_get_attrs(acq._v_attrs, _root_attrs)
     d_coord = _get_distance_coord(acq)
-    base_info.update(d_coord.get_attrs_dict("distance"))
     raw_nodes = _get_raw_node_dict(acq)
+
     # Iterate each raw data node. I have only ever seen 1 in a file but since
     # it is indexed like Raw[0] there might be more.
     out = []
@@ -113,31 +113,27 @@ def _get_prodml_attrs(fi, extras=None, cls=PatchAttrs) -> list[PatchAttrs]:
         info["dims"] = ["time", "distance"]
         if extras is not None:
             info.update(extras)
-        info["_time_coord"] = t_coord
-        info["_distance_coord"] = d_coord
-        out.append(cls(**info))
+        info["coords"] = {"time": t_coord, "distance": d_coord}
+        out.append(info)
     return out
 
 
 def _get_data_attr(attrs, node, time, distance):
     """Get a new attributes with adjusted time/distance and data array."""
-    coords = {
-        "distance": attrs["_distance_coord"],
-        "time": attrs["_time_coord"],
-    }
-    cm = get_coord_manager(coords, dims=("time", "distance"))
+    cm = get_coord_manager(attrs["coords"], dims=("time", "distance"))
     new_cm, data = cm.select(array=node.RawData, time=time, distance=distance)
     return data, new_cm
 
 
 def _read_prodml(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     """Read the prodml values into a patch."""
-    attr_list = _get_prodml_attrs(fi, cls=attr_cls)
+    attr_list = _get_prodml_attrs(fi)
     nodes = list(_get_raw_node_dict(fi.root.Acquisition).values())
     out = []
     for attrs, node in zip(attr_list, nodes):
         data, coords = _get_data_attr(attrs, node, time, distance)
         dims = ("time", "distance")  # dims are fixed for this file format
         if data.size:
-            out.append(dc.Patch(data=data, attrs=attrs, dims=dims, coords=coords))
+            pattrs = attr_cls(**attrs)
+            out.append(dc.Patch(data=data, attrs=pattrs, dims=dims, coords=coords))
     return out
