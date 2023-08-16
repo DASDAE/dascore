@@ -41,6 +41,7 @@ from dascore.utils.models import (
 
 str_validator = PlainValidator(to_str)
 _coord_summary_suffixes = set(CoordSummary.model_fields)
+_coord_required = {i for i, v in CoordSummary.model_fields.items() if v.is_required()}
 
 
 def _get_coords_dict(data_dict, fields):
@@ -90,15 +91,18 @@ def _get_coords_dict(data_dict, fields):
             if second in _coord_summary_suffixes:
                 # we need to pop out the key either way, but only use
                 # it if we haven't already defined the coord summary
-                val = data_dict.pop(extra_field)
+                val = data_dict[extra_field]
                 if first not in coords:
                     new_coords[first][second] = val
+
         # now convert new values to Summaries
         for i, v in new_coords.items():
-            # skip any incomplete coordinates
-            if not {"min", "max"}.issubset(set(v)):
+            if not _coord_required.issubset(set(v)):
                 continue
             new_coords[i] = CoordSummary(**v)
+            # pop out the keys that were used.
+            for key, val in v.items():
+                data_dict.pop(f"{i}_{key}", None)
         return new_coords
 
     coords = _get_coord_dict(data_dict)
