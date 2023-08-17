@@ -330,41 +330,33 @@ class DataFrameSpool(BaseSpool):
         """
         {doc}
         """
-        try:
-            df = self._df
-            inst_df = self._instruction_df
+        df = self._df
+        inst_df = self._instruction_df
 
-            # make sure a suitable attribute is entered
-            attrs = set(df.columns)
-            if attribute not in attrs:
-                # make sure we can also cover coordinate names instead of the attribute
-                if f"{attribute}_min" in attrs:
-                    attribute = f"{attribute}_min"
-                else:
-                    msg = (
-                        "Invalid attribute. "
-                        "Please use a valid attribute such as: 'time'"
-                    )
-                    raise IndexError(msg)
+        # make sure a suitable attribute is entered
+        attrs = set(df.columns)
+        if attribute not in attrs:
+            # make sure we can also cover coordinate names instead of the attribute
+            if f"{attribute}_min" in attrs:
+                attribute = f"{attribute}_min"
+            else:
+                msg = (
+                    "Invalid attribute. " "Please use a valid attribute such as: 'time'"
+                )
+                raise IndexError(msg)
 
-            # get a mapping from the old current index to the sorted ones
-            sorted_df = df.sort_values(attribute).reset_index(drop=True)
-            old_indices = df.index
-            new_indices = np.arange(len(df))
-            mapper = pd.Series(new_indices, index=old_indices)
+        # get a mapping from the old current index to the sorted ones
+        sorted_df = df.sort_values(attribute).reset_index(drop=True)
+        old_indices = df.index
+        new_indices = np.arange(len(df))
+        mapper = pd.Series(new_indices, index=old_indices)
 
-            # swap out all the old values with new ones
-            new_current_index = inst_df["current_index"].map(mapper)
-            new_instruction_df = inst_df.assign(current_index=new_current_index)
+        # swap out all the old values with new ones
+        new_current_index = inst_df["current_index"].map(mapper)
+        new_instruction_df = inst_df.assign(current_index=new_current_index)
 
-            # create new spool from new dataframes
-            return self.new_from_df(df=sorted_df, instruction_df=new_instruction_df)
-        except IndexError:  # Catch only IndexError
-            msg = "Invalid attribute. Please use a valid attribute such as: 'time'"
-            raise IndexError(msg)
-        except Exception:
-            msg = f"spool of type {self.__class__} has no sort implementation"
-            raise NotImplementedError(msg)
+        # create new spool from new dataframes
+        return self.new_from_df(df=sorted_df, instruction_df=new_instruction_df)
 
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
