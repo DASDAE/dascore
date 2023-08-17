@@ -11,6 +11,8 @@ A Huge thanks to all of our contributors:
 
 [Hafiz Issah](https://github.com/aissah)
 
+[Ahmad Tourei](https://github.com/ahmadtourei/)
+
 [Ge Jin](https://github.com/jinwar)
 
 [Eileen Martin](https://github.com/eileenrmartin)
