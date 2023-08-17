@@ -721,7 +721,7 @@ class TestCoordRange:
     def test_update_limits_start(self, evenly_sampled_coord):
         """Ensure start can be updated."""
         new_start = evenly_sampled_coord.start + 2 * evenly_sampled_coord.step
-        new = evenly_sampled_coord.update_limits(start=new_start)
+        new = evenly_sampled_coord.update_limits(min=new_start)
         assert len(new) == len(evenly_sampled_coord)
         assert new.step == evenly_sampled_coord.step
         assert new.start == new_start
@@ -730,7 +730,7 @@ class TestCoordRange:
         """Ensure end can be updated."""
         new_stop = evenly_sampled_coord.start - 2 * evenly_sampled_coord.step
         step = evenly_sampled_coord.step
-        new = evenly_sampled_coord.update_limits(stop=new_stop - step)
+        new = evenly_sampled_coord.update_limits(max=new_stop - step)
         assert len(new) == len(evenly_sampled_coord)
         assert new.step == evenly_sampled_coord.step
         assert new.stop == new_stop
@@ -746,7 +746,7 @@ class TestCoordRange:
         """Ensure both start/stop can be updated."""
         coord = evenly_sampled_coord
         start, stop = coord.values[2], coord.values[-2]
-        new = coord.update_limits(start=start, stop=stop)
+        new = coord.update_limits(min=start, max=stop)
         assert len(new) == len(coord)
         assert new.start == start
         assert new.stop == stop
@@ -903,7 +903,7 @@ class TestMonotonicCoord:
         """Ensure end can be updated."""
         coord = monotonic_float_coord
         new_stop = coord.max() - 10
-        new = coord.update_limits(stop=new_stop)
+        new = coord.update_limits(max=new_stop)
         assert len(new) == len(coord)
         assert new.max() == new_stop
 
@@ -911,7 +911,7 @@ class TestMonotonicCoord:
         """Ensure the start can be updated."""
         coord = monotonic_float_coord
         new_start = coord.min() - 100
-        new = coord.update_limits(start=new_start)
+        new = coord.update_limits(min=new_start)
         assert len(new) == len(coord)
         assert np.isclose(new.min(), new_start)
 

@@ -44,7 +44,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence, Sized
 from functools import reduce
 from operator import and_, or_
-from typing import Annotated, TypeVar
+from typing import Annotated, TypeVar, Any
 
 import numpy as np
 from pydantic import field_validator, model_validator
@@ -170,6 +170,43 @@ class CoordManager(DascoreBaseModel):
         frozen_dict_serializer,
     ]
 
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_coords(cls, values):
+        """Validate the coordinates and dimensions."""
+        coord_map, dim_map = values["coord_map"], values["dim_map"]
+        dims = values["dims"]
+        try:
+            dim_shapes = {dim: coord_map[dim].shape for dim in dims}
+        except KeyError:
+            missing = set(dims) - set(coord_map)
+            msg = f"All dimensions must have coordinates, {missing} are missing."
+            raise CoordError(msg)
+        # ensure non-dimensional coordinates have the same length as
+        # corresponding coordinates.
+        for name, coord_dims in dim_map.items():
+            expected_shape = tuple(dim_shapes[x][0] for x in coord_dims)
+            shape = coord_map[name].shape
+            if tuple(expected_shape) == shape or not expected_shape:
+                continue
+            msg = (
+                f"coordinate: {name} has a shape of {shape} which does not "
+                f"match the dimension(s) of {coord_dims} which have a shape "
+                f"of {expected_shape}"
+            )
+            raise CoordError(msg)
+        # Ensure dimensional coordinates are associated as such
+        for dim in dims:
+            assert dim_map[dim] == (dim,), f"Incorrect dim association on {dim}"
+
+        return values
+
+    @field_validator("coord_map", "dim_map")
+    @classmethod
+    def _convert_to_frozen_dicts(cls, v):
+        """Ensure mapping fields are immutable."""
+        return FrozenDict(v)
+
     def __getitem__(self, item) -> np.ndarray:
         # in order to not break backward compatibility, we need to return
         # the array. However, using coords.coord_map[item] gives us the
@@ -182,12 +219,6 @@ class CoordManager(DascoreBaseModel):
 
     def __contains__(self, key):
         return key in self.coord_map
-
-    @field_validator("coord_map", "dim_map")
-    @classmethod
-    def _convert_to_frozen_dicts(cls, v):
-        """Ensure mapping fields are immutable."""
-        return FrozenDict(v)
 
     def update_coords(self, **kwargs) -> Self:
         """
@@ -531,32 +562,6 @@ class CoordManager(DascoreBaseModel):
     def __str__(self):
         return str(self.__rich__())
 
-    @model_validator(mode="before")
-    @classmethod
-    def _validate_coords(cls, values):
-        """Validate the coordinates and dimensions."""
-        coord_map, dim_map = values["coord_map"], values["dim_map"]
-        dims = values["dims"]
-        dim_shapes = {dim: coord_map[dim].shape for dim in dims}
-        # ensure non-dimensional coordinates have the same length as
-        # corresponding coordinates.
-        for name, coord_dims in dim_map.items():
-            expected_shape = tuple(dim_shapes[x][0] for x in coord_dims)
-            shape = coord_map[name].shape
-            if tuple(expected_shape) == shape or not expected_shape:
-                continue
-            msg = (
-                f"coordinate: {name} has a shape of {shape} which does not "
-                f"match the dimension(s) of {coord_dims} which have a shape "
-                f"of {expected_shape}"
-            )
-            raise CoordError(msg)
-        # Ensure dimensional coordinates are associated as such
-        for dim in dims:
-            assert dim_map[dim] == (dim,), f"Incorrect dim association on {dim}"
-
-        return values
-
     def equals(self, other) -> bool:
         """Return True if other coordinates are approx equal."""
         if not isinstance(other, self.__class__):
@@ -633,23 +638,25 @@ class CoordManager(DascoreBaseModel):
             new_coords[name] = coord.simplify_units()
         return self.new(coord_map=new_coords)
 
-    def update_from_attrs(self, attrs: Mapping) -> Self:
+    def update_from_attrs(self, attrs: Mapping, coord_info=None) -> Self:
         """Update coordinates based on new attributes."""
-        # a bit wasteful, but we need the coercion from init'ing a PatchAttrs.
-        # this enables, for example, conversion of specified fields to datetime
-        v_attrs = dc.PatchAttrs(**dict(attrs))
+        if coord_info is None:
+            coord_info, _ = separate_coord_info(attrs, dims=self.dims)
         out = dict(self.coord_map)
-        rename = {"min": "start", "max": "stop"}
-        for name in set(v_attrs.coords) & set(self.coord_map):
+        for name in set(coord_info) & set(out):
+            maybe_updates = coord_info[name]
             coord = self.coord_map[name]
             # convert values to dict to determine which should be updated.
-            maybe_update = v_attrs.coords[name].model_dump(exclude_defaults=True)
+            model_contents = coord.to_summary().model_dump(exclude_defaults=True)
+            # see what has changed
+            diff = {
+                i: v for i, v in maybe_updates.items() if v != model_contents.get(i)
+            }
             # need to rename min/max to start/step
-            attr_dict = {rename.get(i, i): v for i, v in maybe_update.items()}
             # update units, use type so None can be set.
-            if (data_units := attr_dict.pop("units", type)) is not type:
+            if (data_units := diff.pop("units", type)) is not type:
                 coord = coord.convert_units(data_units)
-            out[name] = coord.update_limits(**attr_dict)
+            out[name] = coord.update_limits(**diff)
         return self.new(coord_map=out)
 
     def update_to_attrs(self, attrs: dc.PatchAttrs = None) -> dc.PatchAttrs:
@@ -834,7 +841,7 @@ class CoordManager(DascoreBaseModel):
 def get_coord_manager(
     coords: Mapping[str, BaseCoord | np.ndarray] | None = None,
     dims: tuple[str, ...] | None = None,
-    attrs: dc.PatchAttrs | None = None,
+    attrs: dc.PatchAttrs | dict[str, Any] | None = None,
 ) -> CoordManager:
     """
     Create a coordinate manager.
@@ -880,7 +887,7 @@ def get_coord_manager(
     # return coords if we already have a coord manager.
     if isinstance(coords, CoordManager):
         # maybe try to rename dims.
-        if dims != coords.dims:
+        if dims is not None and dims != coords.dims:
             kwargs = {i: v for i, v in zip(coords.dims, dims, strict=True)}
             coords = coords.rename_coord(**kwargs)
         return coords
@@ -892,6 +899,7 @@ def get_coord_manager(
         updateable_coords = set(coord_updates) - set(coord_map)
         for name in updateable_coords:
             coord_map[name] = get_coord(**coord_updates[name])
+            dim_map[name] = (name,)
     out = CoordManager(coord_map=coord_map, dim_map=dim_map, dims=dims)
     return out
 
@@ -1033,7 +1041,7 @@ def merge_coord_managers(
             diff = np.abs(assumed_start - n_coord.min())
             # snap is close enough, update coord.
             if diff > 0 and diff <= tolerance:
-                coord_list[ind] = n_coord.update_limits(start=assumed_start)
+                coord_list[ind] = n_coord.update_limits(min=assumed_start)
             # snap is too far off, bail out.
             elif diff > tolerance:
                 msg = (

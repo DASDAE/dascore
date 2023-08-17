@@ -99,7 +99,7 @@ class CoordSummary(DascoreBaseModel):
         if isinstance(data, dict):
             min_val = data["min"]
             dtype = _get_dtype(min_val, data.get("dtype"))
-            data["dtype"] = dtype
+            data["dtype"] = str(dtype).split("[")[0]
             for name in ["min", "max", "step"]:
                 val = data.get(name)
                 data[name] = ensure_consistent_dtype(val, name, dtype)
@@ -336,7 +336,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return self
 
     @abc.abstractmethod
-    def update_limits(self, start=None, stop=None, step=None, **kwargs) -> Self:
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
         """
         Update the limits or sampling of the coordinates.
 
@@ -347,9 +347,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
         Parameters
         ----------
-        start
-            The new start of the coordiante.
-        stop
+        min
+            The new start of the coordinate.
+        max
             The new stop of the coordinate.
         step
             New step for the coordinate
@@ -358,8 +358,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
         Notes
         -----
-        For ease of use, stop is considered inclusive, meaning the real stop
-        value in the output will be stop + step.
+        max is considered inclusive, meaning for CoordRange stop will be
+        max + step.
         """
 
     @property
@@ -659,15 +659,15 @@ class CoordRange(BaseCoord):
         return out
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)
-    def update_limits(self, start=None, stop=None, step=None, **kwargs) -> Self:
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
         """{doc}."""
-        if all(x is not None for x in [start, stop, step]):
+        if all(x is not None for x in [min, max, step]):
             msg = "At most two parameters can be specified in update_limits."
             raise ValueError(msg)
         # first case, we need to determine new dt.
-        if start is not None and stop is not None:
-            new_step = (stop - start) / len(self)
-            return get_coord(start=start, stop=stop, step=new_step, units=self.units)
+        if min is not None and max is not None:
+            new_step = (max - min) / len(self)
+            return get_coord(start=min, stop=max, step=new_step, units=self.units)
         # For other combinations we just apply adjustments sequentially
         # after ensuring that the types are compatible.
         out = self
@@ -675,17 +675,17 @@ class CoordRange(BaseCoord):
             step = _get_compatible_values(step, type(self.step))
             new_stop = out.start + step * len(out)
             out = out.new(stop=new_stop, step=step)
-        if start is not None:
-            start = _get_compatible_values(start, self.dtype)
-            diff = start - out.start
+        if min is not None:
+            min = _get_compatible_values(min, self.dtype)
+            diff = min - out.start
             new_stop = out.stop + diff
-            out = out.new(start=start, stop=new_stop)
-        if stop is not None:
-            stop = _get_compatible_values(stop, self.dtype)
-            translation = (stop + out.step) - out.stop
+            out = out.new(start=min, stop=new_stop)
+        if max is not None:
+            max = _get_compatible_values(max, self.dtype)
+            translation = (max + out.step) - out.stop
             new_start = self.start + translation
             # we add step so the new range is inclusive of stop.
-            out = out.new(start=new_start, stop=stop + out.step)
+            out = out.new(start=new_start, stop=max + out.step)
         return out.new(**kwargs)
 
     @property
@@ -809,20 +809,20 @@ class CoordArray(BaseCoord):
         return CoordRange(start=start, stop=stop, step=step, units=self.units)
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)
-    def update_limits(self, start=None, stop=None, step=None, **kwargs) -> Self:
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
         """{doc}."""
-        if sum(x is not None for x in [start, stop, step]) > 1:
+        if sum(x is not None for x in [min, max, step]) > 1:
             msg = "At most one parameter can be specified in update_limits."
             raise ValueError(msg)
         out = self
         if not pd.isnull(step):
             out = self.snap().update_limits(step=step)
-        elif start is not None:
-            diff = start - self.min()
+        elif min is not None:
+            diff = min - self.min()
             vals = self.values + diff
             out = get_coord(values=vals, units=self.units)
-        elif stop is not None:
-            diff = stop - self.max()
+        elif max is not None:
+            diff = max - self.max()
             vals = self.values + diff
             out = get_coord(values=vals, units=self.units)
         return out.new(**kwargs)
@@ -961,7 +961,9 @@ def get_coord(
     *,
     values: ArrayLike | None | np.ndarray = None,
     start=None,
+    min=None,
     stop=None,
+    max=None,
     step=None,
     units: None | Unit | Quantity | str = None,
 ) -> BaseCoord:
@@ -974,6 +976,8 @@ def get_coord(
         An array of values.
     start
         The start value of the array, inclusive.
+    min
+        The minimum value, same as start.
     stop
         The stopping value of an array, exclusive.
     step
@@ -1017,6 +1021,11 @@ def get_coord(
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 
+    # maybe convert min/max to start stop.
+    if start is None and min is not None:
+        start = min
+    if stop is None and max is not None:
+        stop = max
     _check_inputs(values, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
     if values is not None:

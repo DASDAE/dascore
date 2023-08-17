@@ -31,7 +31,6 @@ from dascore.utils.misc import (
     iterate,
     to_str,
     separate_coord_info,
-    _diff_dicts,
 )
 from dascore.utils.models import (
     CommaSeparatedStr,
@@ -263,18 +262,6 @@ class PatchAttrs(DascoreBaseModel):
                 elif isinstance(start, float | np.floating):
                     out[step_name] = np.NaN
         return out
-
-    def _diff(self, other) -> dict:
-        """
-        Get the difference between this patchattrs and another.
-
-        This returns a (nested) dict of differences.
-        """
-        d1 = self.model_dump(exclude_defaults=True)
-        if hasattr(other, "model_dump"):
-            other = other.model_dump(exclude_defaults=True)
-        diff = _diff_dicts(d1, other)
-        return diff
 
 
 def combine_patch_attrs(
@@ -541,12 +528,17 @@ def decompose_attrs(attr_list: Sequence[PatchAttrs], exclude=("history",)):
         uri_hash = hash(uri)
         return uri, uri_hash
 
-    def _add_coords(coord_dict, coords, uri_hash):
+    def _add_coords(coord_dict, dim_dict, coords, uri_hash, dims):
         """Add coordinates to structure."""
         for name, coord in coords.items():
+            out_dct = coord_dict if name not in dims else dim_dict
             coord["index"] = uri_hash
             coord["units"] = "" if coord["units"] is None else coord["units"]
-            coord_dict[name][coord["dtype"]].append(coord)
+            # strip off the [] in datetimes/timedeltas. We will ensure the
+            # precision is always ns downstream.
+            if dtype := coord.get("dtype"):
+                coord["dtype"] = dtype.split("[")[0]
+            out_dct[name][coord["dtype"]].append(coord)
 
     def _add_attrs(attr_dict, model, uri_hash):
         """Add attrs to coordinate structure."""
@@ -582,12 +574,14 @@ def decompose_attrs(attr_list: Sequence[PatchAttrs], exclude=("history",)):
         "uri": [],
         "attrs": defaultdict(lambda: defaultdict(list)),
         "coords": defaultdict(lambda: defaultdict(list)),
+        "dims": defaultdict(lambda: defaultdict(list)),
     }
     for ind, model in enumerate(dumped):
         uri, uri_hash = _get_uri_and_hash(model)
         out["uri"].append({"uri": uri, "index": uri_hash})
+        dims = model.get("dims", "").split(",")
         # need to handle coordinates and regular attrs differently
         coords = model.pop("coords", {})
-        _add_coords(out["coords"], coords, uri_hash)
+        _add_coords(out["coords"], out["dims"], coords, uri_hash, dims)
         _add_attrs(out["attrs"], model, uri_hash)
     return _pandify(out)

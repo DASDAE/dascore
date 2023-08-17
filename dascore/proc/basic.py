@@ -13,7 +13,7 @@ from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import optional_import, separate_coord_info
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import patch_function
 
@@ -180,10 +180,14 @@ def new(
         dims = coords.dims if isinstance(coords, CoordManager) else self.dims
     coords = get_coord_manager(coords, dims)
     if attrs:
-        # need to figure out what changed and just pass that to update coords
-        diffs = self.attrs._diff(attrs)
-        coords = coords.update_from_attrs(diffs)
-        attrs = self.attrs.update(**diffs)
+        coord_info, attr_info = separate_coord_info(attrs)
+        coords = coords.update_from_attrs(coord_info, coord_info=coord_info)
+        # anything not used in coord_info should be put back.
+        # for example, data_units might get put in its own coord called data.
+        for unused_dim in set(coord_info) - set(coords.dims):
+            for key, val in coord_info[unused_dim].items():
+                attr_info[f"{unused_dim}_{key}"] = val
+        attrs = self.attrs.update(**attr_info, coords=coords.to_summary_dict())
     attrs = attrs or self.attrs
     return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 

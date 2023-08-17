@@ -392,7 +392,12 @@ class TestDecomposeAttrs:
         """Scan all the attrs in the dascore cache, return them."""
         return dc.scan(fetcher.path)
 
-    def test_decompose_basic(self, scanned_attrs):
-        """Ensure all cached files can be scanned."""
-        decompose_attrs(scanned_attrs)
-        assert False
+    @pytest.fixture(scope="class")
+    def decomposed_attrs(self, scanned_attrs):
+        """Decompose attrs into dicts of lists."""
+        return decompose_attrs(scanned_attrs)
+
+    def test_only_datetime(self, decomposed_attrs):
+        """Ensure all times are datetime64."""
+        time_dtypes = decomposed_attrs["dims"]["time"]
+        assert set(time_dtypes) == {"datetime64"}

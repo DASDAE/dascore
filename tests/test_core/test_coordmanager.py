@@ -275,7 +275,8 @@ class TestCoordManagerInputs:
         """If all dims don't have coords an error should be raised."""
         coords = dict(COORDS)
         coords.pop("distance")
-        with pytest.raises(CoordError, match="All dimensions must have coordinates"):
+        msg = "All dimensions must have coordinates"
+        with pytest.raises(ValidationError, match=msg):
             get_coord_manager(coords, DIMS)
 
     def test_secondary_coord_bad_lengths(self):
@@ -308,6 +309,7 @@ class TestCoordManagerWithAttrs:
         """Coord manager should be able to pull missing info from attributes."""
         attrs = dict(distance_min=1, distance_max=100, distance_step=10)
         coord = {"time": COORDS["time"]}
+        # breakpoint()
         new = get_coord_manager(coord, DIMS, attrs=attrs)
         assert "distance" in new.coord_map
 
@@ -904,7 +906,7 @@ class TestMergeCoordManagers:
         """When coords that won't be merged arent equal merge should fail."""
         cm1 = basic_coord_manager
         dist = cm1.coord_map["distance"]
-        new_dist = dist.update_limits(start=dist.max())
+        new_dist = dist.update_limits(min=dist.max())
         cm2 = cm1.update_coords(distance=new_dist)
         with pytest.raises(CoordMergeError, match="Non merging coordinates"):
             merge_coord_managers([cm1, cm2], "time")

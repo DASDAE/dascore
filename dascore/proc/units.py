@@ -8,16 +8,13 @@ from dascore.units import convert_units as u_covert_units
 from dascore.utils.patch import patch_function
 
 
-def _update_attrs_coord_units(patch: dc.Patch, data_units, coord_unit_dict):
+def _update_attrs_coord_units(patch: dc.Patch, data_units, coords):
     """Update attributes with new units."""
-    attrs = patch.attrs.model_dump()
+    attrs = patch.attrs
+    data_units = data_units or attrs.get("data_units")
     # set data units
-    if data_units is not None:
-        attrs["data_units"] = data_units
-    # # loop and set coordinate units
-    # for name, unit_val in coord_unit_dict.items():
-    #     if name in coords:
-    return patch.attrs.__class__(**attrs)
+    attrs = attrs.update(data_units=data_units, coords=coords.to_summary_dict())
+    return attrs
 
 
 @patch_function()
@@ -50,8 +47,8 @@ def set_units(
     >>> # set the units of the distance coordinate
     >>> patch_feet = patch.set_units(distance='feet')
     """
-    new_attrs = _update_attrs_coord_units(patch, data_units, kwargs)
     new_coords = patch.coords.set_units(**kwargs)
+    new_attrs = _update_attrs_coord_units(patch, data_units, new_coords)
     return patch.new(attrs=new_attrs, coords=new_coords)
 
 
@@ -89,8 +86,8 @@ def convert_units(
     else:
         data = patch.data
     # then update coords and attrs
-    new_attrs = _update_attrs_coord_units(patch, data_units, kwargs)
     coords = patch.coords.convert_units(**kwargs)
+    new_attrs = _update_attrs_coord_units(patch, data_units, coords)
     return patch.new(data=data, attrs=new_attrs, coords=coords)
 
 
@@ -105,14 +102,14 @@ def simplify_units(
     base units and corresponding data/labels multiplied by a conversion factor.
     """
     # get data and data units
-    attrs = dict(patch.attrs)
+    attrs = patch.attrs
     d_factor, d_units = get_factor_and_unit(attrs.get("data_units"), simplify=True)
     data = patch.data * d_factor if d_factor != 1 else patch.data
-    attrs["data_units"] = d_units
     # update coords and coord units in attrs
     coords = patch.coords.simplify_units()
     for name, coord in coords.coord_map.items():
         label = f"{name}_units"
         if label in attrs:
             attrs[label] = coord.units
-    return patch.new(data=data, coords=coords, attrs=attrs, dims=patch.dims)
+    new_attrs = attrs.update(data_units=d_units, coords=coords.to_summary_dict())
+    return patch.new(data=data, coords=coords, attrs=new_attrs, dims=patch.dims)

@@ -9,6 +9,7 @@ import inspect
 import os
 import re
 import warnings
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from collections.abc import Mapping
 from types import ModuleType
@@ -380,29 +381,6 @@ def to_str(val):
     return str(val)
 
 
-def _diff_dicts(d1, d2) -> dict:
-    """
-    Get the difference between d1 and d2.
-
-    This is a hinky, specialized function for patch attribute dicts.
-    its not ready for general purpose yet.
-    """
-    out = {}
-    # all_keys = set(d1) | set(d2)
-    common_keys = set(d1) & set(d2)
-    for key in common_keys:
-        val1, val2 = d1.get(key, _Sentinel), d2.get(key, _Sentinel)
-        if isinstance(val1, dict) and isinstance(val2, dict):
-            sub_dict = _diff_dicts(val1, val2)
-            if sub_dict:
-                out[key] = sub_dict
-        elif val1 == val2 or (pd.isnull(val1) and pd.isnull(val2)):
-            continue
-        else:
-            out[key] = val2
-    return out
-
-
 def maybe_get_attrs(obj, attr_map: Mapping):
     """Maybe get attributes from object (if they exist)."""
     out = {}
@@ -444,8 +422,9 @@ def is_valid_coord_str(input_str, prefixes=None):
 
 def separate_coord_info(
     obj,
-    dims,
-    required=None,
+    dims: tuple[str] | None = None,
+    required: Sequence[str] | None = None,
+    cant_be_alone: tuple[str] = ("units", "dtype"),
 ) -> tuple[dict, dict]:
     """
     Separate coordinate information from attr dict.
@@ -460,19 +439,30 @@ def separate_coord_info(
     dims
         The dimension to look for.
     required
-        If provided, the required attributes.
+        If provided, the required attributes (e.g., min, max, step).
+    cant_be_alone
+        names which cannot be on their own.
     """
 
     def _meets_required(coord_dict):
         """Return True coord dict does not meet the minimum required keys."""
-        if required is None:
+        if not coord_dict:
+            return False
+        if required is None and (set(coord_dict) - cant_be_alone):
             return True
         return set(coord_dict).issuperset(required)
 
+    def _get_dims(obj):
+        """Try to ascertain dims from keys in obj."""
+        potential_keys = defaultdict(set)
+        for key in obj:
+            if not is_valid_coord_str(key):
+                continue
+            potential_keys[key.split("_")[0]].add(key.split("_")[1])
+        return tuple(i for i, v in potential_keys.items() if _meets_required(v))
+
     def _get_coords_from_top_level(obj, out, dims):
         """First get coord info from top level"""
-        if dims is None:
-            dims = {x.split("_")[0] for x in obj if is_valid_coord_str(x)}
         for dim in iterate(dims):
             potential_coord = {
                 i.split("_")[1]: v for i, v in obj.items() if is_valid_coord_str(i, dim)
@@ -499,8 +489,8 @@ def separate_coord_info(
             if _meets_required(value):
                 out[key] = value
 
-    def _pop_out_coords(obj, out):
-        """Pop out old keys."""
+    def _pop_keys(obj, out):
+        """Pop out old keys for attrs, and unused keys from out."""
         # first coord subdict
         obj.pop("coords", None)
         # then top-level
@@ -510,15 +500,23 @@ def separate_coord_info(
             if "step" in sub_dict:
                 obj.pop(f"d_{coord_name}", None)
 
+    # sequence of short-circuit checks
     out = {}
+    required = set(required) if required is not None else set()
+    cant_be_alone = set(cant_be_alone)
+    if obj is None:
+        return out, {}
     if hasattr(obj, "model_dump"):
         obj = obj.model_dump()
-    if obj is None:
-        return out
+    if dims is None:
+        dims = _get_dims(obj)
+    # this is already a dict of coord info.
+    if set(dims) == set(obj):
+        return obj, {}
     obj = dict(obj)
     _get_coords_from_top_level(obj, out, dims)
     _get_coords_from_coord_level(obj, out)
-    _pop_out_coords(obj, out)
+    _pop_keys(obj, out)
     return out, obj
 
 
