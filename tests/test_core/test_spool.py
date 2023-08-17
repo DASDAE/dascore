@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
 from dascore.exceptions import InvalidSpoolError
+from dascore.utils.misc import CacheDescriptor
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -222,6 +223,53 @@ class TestSelect:
             assert patch.attrs["time_max"] <= time_max
             assert patch.attrs["distance_min"] >= distance_min
             assert patch.attrs["distance_max"] <= distance_max
+
+
+class TestSort:
+    """
+    Tests for sorting spools.
+    """
+
+    # A dataframe which represents contents as they will be output
+    _df: pd.DataFrame = CacheDescriptor("_cache", "_get_df")
+
+    def test_sorting_attr_not_exists(self, diverse_spool):
+        """
+        Test sorting by an attribute that does not exist in the DataFrame.
+        """
+        try:
+            diverse_spool.sort("dummy_attribute")
+        except IndexError as e:
+            assert (
+                str(e)
+                == "Invalid attribute. Please use a valid attribute such as: 'time'"
+            )
+        else:
+            assert False, "Expected an IndexError but no exception was raised."
+
+    def test_sorting_attr_exists(self, diverse_spool):
+        """
+        Test sorting by an attribute that exists in the DataFrame.
+        """
+        sorted_spool = diverse_spool.sort("time_min")
+        df = sorted_spool._df
+        assert df["time_min"].is_monotonic_increasing
+
+    def test_sorting_attr_time(self, diverse_spool):
+        """
+        Test sorting by the 'time' attribute that that may not be in the DataFrame.
+        """
+        sorted_spool = diverse_spool.sort("time")
+        df = sorted_spool._df
+        assert df["time_min"].is_monotonic_increasing
+
+    def test_sorting_attr_distance(self, diverse_spool):
+        """
+        Test sorting by the 'distance' attribute that may not be exist in the DataFrame.
+        """
+        sorted_spool = diverse_spool.sort("distance")
+        df = sorted_spool._df
+        assert df["distance_min"].is_monotonic_increasing
 
 
 class TestGetSpool:
