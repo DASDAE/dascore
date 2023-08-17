@@ -17,7 +17,13 @@ First, pull the latest changes and tags, and then run a test in the dascore repo
 
 ```bash
 git checkout master
+```
+
+```bash
 git pull origin master --tags
+```
+
+```bash
 pip install -e ".[dev]"
 ```
 
