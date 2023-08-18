@@ -83,12 +83,13 @@ def convert_units(
     if data_units is not None:
         current_units = patch.attrs.data_units
         data = u_covert_units(patch.data, data_units, current_units)
+        attrs = patch.attrs.update(data_units=data_units)
     else:
         data = patch.data
+        attrs = None
     # then update coords and attrs
     coords = patch.coords.convert_units(**kwargs)
-    new_attrs = _update_attrs_coord_units(patch, data_units, coords)
-    return patch.new(data=data, attrs=new_attrs, coords=coords)
+    return patch.new(data=data, coords=coords, attrs=attrs)
 
 
 @patch_function()

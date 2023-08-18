@@ -259,6 +259,46 @@ class CoordManager(DascoreBaseModel):
         dims = tuple(x for x in self.dims if x not in coords_to_drop)
         return get_coord_manager(out, dims=dims)
 
+    def update_from_attrs(
+        self, attrs: Mapping | dc.PatchAttrs
+    ) -> tuple[Self, dc.PatchAttrs]:
+        """
+        Update coordinates from attrs.
+
+        This will also return a PatchAttrs which conforms to coords.
+
+        Parameters
+        ----------
+        attrs
+            The attribute source, either PatchAttrs instance or mapping.
+        """
+        coord_info, attr_info = separate_coord_info(attrs, dims=self.dims)
+        out = dict(self.coord_map)
+        for name in set(coord_info) & set(out):
+            maybe_updates = coord_info[name]
+            coord = self.coord_map[name]
+            # convert values to dict to determine which should be updated.
+            model_contents = coord.to_summary().model_dump(exclude_defaults=True)
+            # see what has changed
+            diff = {
+                i: v for i, v in maybe_updates.items() if v != model_contents.get(i)
+            }
+            # need to rename min/max to start/step
+            # update units, use type so None can be set.
+            if (data_units := diff.pop("units", type)) is not type:
+                coord = coord.convert_units(data_units)
+            out[name] = coord.update_limits(**diff)
+        coords = self.new(coord_map=out)
+        # anything not used in coord_info should be put back.
+        # for example, data_units might get put in its own coord called data.
+        for unused_dim in set(coord_info) - set(coords.dims):
+            for key, val in coord_info[unused_dim].items():
+                attr_info[f"{unused_dim}_{key}"] = val
+        attr_info["coords"] = coords.to_summary_dict()
+        attr_info["dims"] = coords.dims
+        attrs = dc.PatchAttrs.from_dict(attr_info)
+        return coords, attrs
+
     def sort(
         self, *coords, array: MaybeArray = None, reverse: bool = False
     ) -> tuple[Self, MaybeArray]:
@@ -638,27 +678,6 @@ class CoordManager(DascoreBaseModel):
             new_coords[name] = coord.simplify_units()
         return self.new(coord_map=new_coords)
 
-    def update_from_attrs(self, attrs: Mapping, coord_info=None) -> Self:
-        """Update coordinates based on new attributes."""
-        if coord_info is None:
-            coord_info, _ = separate_coord_info(attrs, dims=self.dims)
-        out = dict(self.coord_map)
-        for name in set(coord_info) & set(out):
-            maybe_updates = coord_info[name]
-            coord = self.coord_map[name]
-            # convert values to dict to determine which should be updated.
-            model_contents = coord.to_summary().model_dump(exclude_defaults=True)
-            # see what has changed
-            diff = {
-                i: v for i, v in maybe_updates.items() if v != model_contents.get(i)
-            }
-            # need to rename min/max to start/step
-            # update units, use type so None can be set.
-            if (data_units := diff.pop("units", type)) is not type:
-                coord = coord.convert_units(data_units)
-            out[name] = coord.update_limits(**diff)
-        return self.new(coord_map=out)
-
     def update_to_attrs(self, attrs: dc.PatchAttrs = None) -> dc.PatchAttrs:
         """Update attrs from information in coordinates."""
         attr_dict = {} if attrs is None else attrs.model_dump()
@@ -899,8 +918,14 @@ def get_coord_manager(
             kwargs = {i: v for i, v in zip(coords.dims, dims, strict=True)}
             coords = coords.rename_coord(**kwargs)
         return coords
+    # this allows a simple dict without dims to be passed and dims pulled
+    # from dict keys.
+    if dims is None:
+        if isinstance(coords, Mapping) and all(isinstance(x, str) for x in coords):
+            dims = tuple(coords.keys())
+        else:
+            dims = ()
     coords = {} if coords is None else coords
-    dims = () if dims is None else dims
     coord_map, dim_map = _get_coord_dim_map(coords, dims)
     if attrs:
         coord_updates, _ = separate_coord_info(attrs, dims)

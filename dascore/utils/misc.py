@@ -514,8 +514,8 @@ def separate_coord_info(
     if set(dims) == set(obj):
         return obj, {}
     obj = dict(obj)
-    _get_coords_from_top_level(obj, out, dims)
     _get_coords_from_coord_level(obj, out)
+    _get_coords_from_top_level(obj, out, dims)
     _pop_keys(obj, out)
     return out, obj
 

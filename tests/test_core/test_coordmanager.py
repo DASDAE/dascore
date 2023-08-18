@@ -612,7 +612,7 @@ class TestUpdateFromAttrs:
         for dim in basic_coord_manager.dims:
             coord = basic_coord_manager.coord_map[dim]
             attrs = {f"{dim}_max": coord.min()}
-            new = basic_coord_manager.update_from_attrs(attrs)
+            new, _ = basic_coord_manager.update_from_attrs(attrs)
             new_coord = new.coord_map[dim]
             assert len(new_coord) == len(coord)
             assert new_coord.max() == coord.min()
@@ -623,7 +623,7 @@ class TestUpdateFromAttrs:
             coord = basic_coord_manager.coord_map[dim]
             attrs = {f"{dim}_min": coord.max()}
             dist = coord.max() - coord.min()
-            new = basic_coord_manager.update_from_attrs(attrs)
+            new, _ = basic_coord_manager.update_from_attrs(attrs)
             new_coord = new.coord_map[dim]
             new_dist = new_coord.max() - new_coord.min()
             assert dist == new_dist
@@ -636,12 +636,33 @@ class TestUpdateFromAttrs:
             coord = basic_coord_manager.coord_map[dim]
             attrs = {f"{dim}_step": coord.step * 10}
             dist = coord.max() - coord.min()
-            new = basic_coord_manager.update_from_attrs(attrs)
+            new, _ = basic_coord_manager.update_from_attrs(attrs)
             new_coord = new.coord_map[dim]
             new_dist = new_coord.max() - new_coord.min()
             assert (dist * 10) == new_dist
             assert len(new_coord) == len(coord)
             assert new_coord.min() == coord.min()
+
+    def test_attrs_as_dict(self, basic_coord_manager):
+        """Ensure the attrs returned has coords attached."""
+        coord = basic_coord_manager.coord_map["time"]
+        attrs = {"time_max": coord.min()}
+        cm, attrs = basic_coord_manager.update_from_attrs(attrs)
+        assert attrs.coords == cm.to_summary_dict()
+        assert attrs.dim_tuple == cm.dims
+
+    def test_attrs_as_patch_attr(self, basic_coord_manager):
+        """Ensure this also works when attrs is a patch attr."""
+        attrs = dc.PatchAttrs(time_min=to_datetime64("2022-01-01"))
+        cm, new_attrs = basic_coord_manager.update_from_attrs(attrs)
+        assert new_attrs.coords == cm.to_summary_dict()
+        assert new_attrs.dim_tuple == cm.dims
+
+    def test_consistent_attrs_leaves_coords_unchanged(self, random_patch):
+        """Attrs which are already consistent should leave coord unchanged."""
+        attrs, coords = random_patch.attrs, random_patch.coords
+        new_coords, new_attrs = coords.update_from_attrs(attrs)
+        assert new_coords == coords
 
 
 class TestUpdateToAttrs:
@@ -824,7 +845,7 @@ class TestMergeCoordManagers:
         coord = cm.coord_map[name]
         start = coord.max() if from_max else coord.min()
         attr_name = f"{name}_min"
-        new = cm.update_from_attrs({attr_name: start + value})
+        new, _ = cm.update_from_attrs({attr_name: start + value})
         return new
 
     def test_merge_simple(self, basic_coord_manager):

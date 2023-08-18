@@ -14,7 +14,6 @@ from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.exceptions import CoordError
 from dascore.proc.basic import apply_operator
-from dascore.units import get_quantity
 
 
 def get_simple_patch() -> Patch:
@@ -348,7 +347,10 @@ class TestEquals:
     def test_transposed_patches_not_equal(self, random_patch):
         """Transposed patches are not considered equal."""
         transposed = random_patch.transpose()
+        # make sure dims are NE
+        assert transposed.attrs.dims != random_patch.attrs.dims
         assert transposed.dims != random_patch.dims
+        # and test equality
         assert not random_patch.equals(transposed)
 
     def test_one_coord_not_equal(self, wacky_dim_patch):
@@ -438,11 +440,13 @@ class TestUpdateAttrs:
     def test_update_units(self, random_patch):
         """Ensure units can be updated in attrs."""
         new_dist = "ft"
-        patch = random_patch.update_attrs(distance_units=new_dist)
-        coord = patch.get_coord("distance")
-        assert coord.units == get_quantity(new_dist)
+        patch1 = random_patch.update_attrs(distance_units=new_dist)
         patch2 = random_patch.convert_units(distance=new_dist)
-        assert patch == patch2
+        coord1 = patch1.get_coord("distance")
+        coord2 = patch2.get_coord("distance")
+        coord3 = random_patch.get_coord("distance").convert_units(new_dist)
+        assert coord1 == coord2 == coord3
+        assert patch1 == patch2
 
 
 class TestSqueeze:

@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 from rich.text import Text
 
+import dascore as dc
 import dascore.proc.coords
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
@@ -71,21 +72,24 @@ class Patch:
             dims = coords.dims
         # Try to generate coords from ranges in attrs
         if coords is None and attrs is not None:
-            coords = PatchAttrs.coords_from_dims(attrs)
+            attrs = dc.PatchAttrs.from_dict(attrs)
+            coords = attrs.coords_from_dims()
             dims = dims if dims is not None else attrs.dim_tuple
         # Ensure required info is here
         non_attrs = [x is None for x in [data, coords, dims]]
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
-        try:
-            self._coords = get_coord_manager(coords, dims).update_from_attrs(attrs)
-        except ValueError:
-            msg = "Coords and attrs are incompatible, cannot create Patch."
-            raise ValueError(msg)
-        self._attrs = PatchAttrs.from_dict(attrs).update(
-            dims=self.coords.dims, coords=self._coords.to_summary_dict()
-        )
+        coords = get_coord_manager(coords, dims=dims)
+        # the only case we allow attrs to include coords is if they are both
+        # dicts, in which case attrs might have unit info for coords.
+        if isinstance(attrs, Mapping) and attrs:
+            coords, attrs = coords.update_from_attrs(attrs)
+        else:
+            # ensure attrs conforms to coords
+            attrs = dc.PatchAttrs.from_dict(attrs).update(coords=coords)
+        self._coords = coords
+        self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):

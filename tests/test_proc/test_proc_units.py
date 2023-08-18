@@ -84,6 +84,12 @@ class TestConvertUnits:
         assert out.attrs.data_units == get_quantity(unit_str)
         assert np.allclose(out.data * 10, unit_patch.data)
 
+    def test_attrs_preserved(self, unit_patch):
+        """The attributes should not change."""
+        patch = unit_patch.update_attrs(tag="bob")
+        out = patch.convert_units("km/s")
+        assert patch.attrs.tag == out.attrs.tag
+
     def test_bad_data_conversion_raises(self, unit_patch):
         """Ensure asking for incompatible units raises."""
         with pytest.raises(UnitError):

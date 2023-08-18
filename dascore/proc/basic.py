@@ -13,7 +13,7 @@ from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
-from dascore.utils.misc import optional_import, separate_coord_info
+from dascore.utils.misc import optional_import
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import patch_function
 
@@ -103,8 +103,7 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     # pop out coords so new coords has priority.
     if len(attrs) == 1 and "history" in attrs:
         return _fast_attr_update(self, PatchAttrs(**new_attrs))
-    new_coords = self.coords.update_from_attrs(attrs)
-    new_attrs["coords"] = new_coords.to_summary_dict()
+    new_coords, new_attrs = self.coords.update_from_attrs(new_attrs)
     out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
     return self.__class__(self.data, **out)
 
@@ -152,10 +151,10 @@ def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
 
 def new(
     self: PatchType,
-    data: None | ArrayLike | np.ndarray = None,
+    data: ArrayLike | np.ndarray | None = None,
     coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,
-    dims: None | Sequence[str] = None,
-    attrs: None | Mapping | PatchAttrs = None,
+    dims: Sequence[str] | None = None,
+    attrs: Mapping | PatchAttrs | None = None,
 ) -> PatchType:
     """
     Return a copy of the Patch with updated data, coords, dims, or attrs.
@@ -175,6 +174,10 @@ def new(
         first axis of data, the second to the second dimension, and so on.
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict.
+
+    Notes
+    -----
+    - If both coords and attrs are defined, attrs will have priority.
     """
     data = data if data is not None else self.data
     coords = coords if coords is not None else self.coords
@@ -182,16 +185,10 @@ def new(
         dims = coords.dims if isinstance(coords, CoordManager) else self.dims
     coords = get_coord_manager(coords, dims)
     if attrs:
-        coord_info, attr_info = separate_coord_info(attrs)
-        coords = coords.update_from_attrs({}, coord_info=coord_info)
-        # anything not used in coord_info should be put back.
-        # for example, data_units might get put in its own coord called data.
-        for unused_dim in set(coord_info) - set(coords.dims):
-            for key, val in coord_info[unused_dim].items():
-                attr_info[f"{unused_dim}_{key}"] = val
-        attrs = self.attrs.update(**attr_info, coords=coords.to_summary_dict())
+        coords, attrs = coords.update_from_attrs(attrs)
     else:
-        attrs = dc.PatchAttrs.from_dict(attrs or self.attrs).update(coords=coords)
+        _attrs = dc.PatchAttrs.from_dict(attrs or self.attrs)
+        attrs = _attrs.update(coords=coords)
     return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 
 

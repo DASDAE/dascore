@@ -13,6 +13,7 @@ from pydantic import ConfigDict, Field, PlainValidator, model_validator
 from typing_extensions import Self
 
 import dascore as dc
+import dascore.core
 from dascore.constants import (
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
@@ -171,7 +172,6 @@ class PatchAttrs(DascoreBaseModel):
     def from_dict(
         cls,
         attr_map: Mapping | PatchAttrs,
-        coord_manager: dc.core.coordmanager.CoordManager | None = None,
     ) -> Self:
         """
         Get a new instance of the PatchAttrs.
@@ -183,17 +183,10 @@ class PatchAttrs(DascoreBaseModel):
         ----------
         attr_map
             Anything convertible to a dict that contains the attr info.
-        coord_manager
-            A coordinate manager to fill in/overwrite attributes.
-
         """
-        if isinstance(attr_map, cls) and coord_manager is None:
+        if isinstance(attr_map, cls):
             return attr_map
         out = {} if attr_map is None else attr_map
-        if coord_manager is None:
-            return cls(**out)
-        out["dims"] = ",".join(coord_manager.dims)
-        out["coords"] = coord_manager.to_summary_dict()
         return cls(**out)
 
     @property
@@ -218,6 +211,10 @@ class PatchAttrs(DascoreBaseModel):
         """Update an attribute in the model, return new model."""
         out = dict(self)
         out.update(kwargs)
+        if coords := kwargs.get("coords"):
+            cm = dascore.core.get_coord_manager(coords)
+            out["dims"] = cm.dims
+            out["coords"] = cm.to_summary_dict()
         return self.__class__(**out)
 
     def drop_private(self) -> Self:
