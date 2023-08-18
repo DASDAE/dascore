@@ -5,7 +5,7 @@ from __future__ import annotations
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import maybe_get_attrs
+from dascore.utils.misc import maybe_get_attrs, unbyte
 
 # --- Getting format/version
 
@@ -27,7 +27,9 @@ def _get_prodml_version_str(hdf_fi) -> str:
         "uuid",
     )
     is_prodml = all([hasattr(acq_attrs, x) for x in expected_attrs])
-    return str(acq_attrs.schemaVersion.decode()) if is_prodml else ""
+    # in some prodml schemaVersion is str, in other float; this handles both.
+    version_str = str(unbyte(acq_attrs.schemaVersion))
+    return version_str if is_prodml else ""
 
 
 def _get_raw_node_dict(acquisition_node):
@@ -64,9 +66,9 @@ def _get_distance_coord(acq):
 def _get_time_coord(node):
     """Get the time information from a Raw node."""
     time_attrs = node.RawDataTime._v_attrs
-    start_str = time_attrs.PartStartTime.decode().split("+")[0]
+    start_str = unbyte(time_attrs.PartStartTime).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
-    end_str = time_attrs.PartEndTime.decode().split("+")[0]
+    end_str = unbyte(time_attrs.PartEndTime).split("+")[0]
     end = dc.to_datetime64(end_str.rstrip("Z"))
     step = (end - start) / (len(node.RawDataTime) - 1)
     return get_coord(start=start, stop=end + step, step=step, units="s")
@@ -76,8 +78,8 @@ def _get_data_unit_and_type(node):
     """Get the data type and units."""
     attrs = node._v_attrs
     out = dict(
-        data_type=attrs.RawDescription.decode().lower().replace(" ", "_"),
-        data_units=attrs.RawDataUnit.decode(),
+        data_type=unbyte(attrs.RawDescription).lower().replace(" ", "_"),
+        data_units=unbyte(attrs.RawDataUnit),
     )
     return out
 
