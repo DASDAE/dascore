@@ -124,22 +124,14 @@ def _get_time_coord(attrs, num_samps):
     return coord
 
 
-def _get_default_attrs(tdms_file, get_all_attrs=None):
+def _get_default_attrs(tdms_file, attrs=None):
     """Return the required/default attributes which can be fetched from attributes."""
-    if get_all_attrs is None:
-        all_attrs, _ = _get_all_attrs(tdms_file)
-    else:
-        all_attrs = get_all_attrs
+    all_attrs = attrs if attrs is not None else _get_all_attrs(tdms_file)[0]
     # cull attributes to only include defaults (TODO: think about why?)
     out = {
         default_attr: all_attrs[default_attr]
         for default_attr in DEFAULT_ATTRS
         if default_attr in all_attrs
-    }
-    # add coordinates
-    out["coords"] = {
-        "distance": all_attrs["_distance_coord"],
-        "time": all_attrs["_time_coord"],
     }
     return out
 
@@ -236,8 +228,7 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
         / np.dtype(fileinfo["data_type"]).itemsize
     )
     t_coord = _get_time_coord(out, numofsamples)
-    out["_time_coord"] = t_coord
-    out["_distance_coord"] = d_coord
+    out["coords"] = {"time": t_coord, "distance": d_coord}
     out.update(t_coord.get_attrs_dict("time"))
     out.update(d_coord.get_attrs_dict("distance"))
     return out, fileinfo
@@ -252,7 +243,7 @@ def _get_fileinfo(tdms_file, LEAD_IN_LENGTH=28):
     return fileinfo, attrs
 
 
-def _get_data_node(tdms_file, LEAD_IN_LENGTH=28):
+def _get_data(tdms_file, LEAD_IN_LENGTH=28):
     """Get all the data saved in the current file."""
 
     def get_segment_data(fileinfo, nch, dmap, nso, rdo):
@@ -334,15 +325,3 @@ def _get_data_node(tdms_file, LEAD_IN_LENGTH=28):
             channel_length = cchannel_length
 
     return data_node, channel_length, attrs
-
-
-def _get_data(time, distance, time_coord, dist_coord, data_node):
-    """
-    Get the data array. Slice based on input and check for 0 blocks. Also
-    return sliced coordinates.
-    """
-    # need to handle empty data blocks. This happens when data is stopped
-    # recording before the pre-allocated file is filled.
-    time_new, t_ind = time_coord.select(time)
-    dist_new, d_ind = dist_coord.select(distance)
-    return data_node[t_ind, d_ind], time_new, dist_new

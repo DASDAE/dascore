@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from dascore.units import get_quantity_str
@@ -39,14 +40,15 @@ def _get_extents(dims_r, coords):
     for dim in dims_r:
         array = coords[dim]
         lims[dim] += [array.min(), array.max()]
-    # special handling for time
-    if "time" in coords:
+    # find datetime coords and convert to numpy mtimes
+    time_dims = [i for i, v in coords.items() if np.issubdtype(v.dtype, np.datetime64)]
+    for name in time_dims:
         # We can get a warning about loss of precision in ns, doesn't matter.
         with suppress_warnings(UserWarning):
-            time_min = pd.to_datetime(lims["time"][0]).to_pydatetime()
-            time_max = pd.to_datetime(lims["time"][1]).to_pydatetime()
+            time_min = pd.to_datetime(lims[name][0]).to_pydatetime()
+            time_max = pd.to_datetime(lims[name][1]).to_pydatetime()
         # convert to julian date to appease matplotlib
-        lims["time"] = [mdates.date2num(time_min), mdates.date2num(time_max)]
+        lims[name] = [mdates.date2num(time_min), mdates.date2num(time_max)]
     out = [x for dim in dims_r for x in lims[dim]]
     return out
 
