@@ -221,6 +221,49 @@ class TestSelect:
             assert patch.attrs["distance_max"] <= distance_max
 
 
+class TestSort:
+    """
+    Tests for sorting spools.
+    """
+
+    def test_base_spool_sort_raises(self, random_spool):
+        expected_str = "spool of type"
+        with pytest.raises(NotImplementedError, match=expected_str):
+            BaseSpool.sort(random_spool, "time")
+
+    def test_sorting_attr_not_exists(self, diverse_spool):
+        """
+        Test sorting by an attribute that does not exist in the DataFrame.
+        """
+        expected_str = "Invalid attribute"
+        with pytest.raises(IndexError, match=expected_str):
+            diverse_spool.sort("dummy_attribute")
+
+    def test_sorting_attr_exists(self, diverse_spool):
+        """
+        Test sorting by an attribute that exists in the DataFrame.
+        """
+        sorted_spool = diverse_spool.sort("time_min")
+        df = sorted_spool.get_contents()
+        assert df["time_min"].is_monotonic_increasing
+
+    def test_sorting_attr_time(self, diverse_spool):
+        """
+        Test sorting by the 'time' attribute that that may not be in the DataFrame.
+        """
+        sorted_spool = diverse_spool.sort("time")
+        df = sorted_spool.get_contents()
+        assert df["time_min"].is_monotonic_increasing
+
+    def test_sorting_attr_distance(self, diverse_spool):
+        """
+        Test sorting by the 'distance' attribute that may not be exist in the DataFrame.
+        """
+        sorted_spool = diverse_spool.sort("distance")
+        df = sorted_spool.get_contents()
+        assert df["distance_min"].is_monotonic_increasing
+
+
 class TestGetSpool:
     """Test getting spool from various sources."""
 
