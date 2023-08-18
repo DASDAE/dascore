@@ -188,7 +188,7 @@ def new(
         coords, attrs = coords.update_from_attrs(attrs)
     else:
         _attrs = dc.PatchAttrs.from_dict(attrs or self.attrs)
-        attrs = _attrs.update(coords=coords)
+        attrs = _attrs.update(coords=coords, dims=coords.dims)
     return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 
 

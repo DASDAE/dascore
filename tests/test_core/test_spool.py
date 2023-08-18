@@ -77,6 +77,12 @@ class TestIndexing:
             assert isinstance(patch1, dc.Patch)
             assert patch1 == patch2
 
+    def test_out_of_bounds_raises(self, random_spool):
+        """Out of bounds queries to raise IndexError."""
+        match = "out of bounds for spool"
+        with pytest.raises(IndexError, match=match):
+            _ = random_spool[len(random_spool)]
+
 
 class TestSlicing:
     """Tests for slicing spools to get sub-spools."""

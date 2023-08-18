@@ -1,7 +1,6 @@
 """Tests for coordinate manager."""
 from __future__ import annotations
 
-from collections.abc import Sequence
 
 import numpy as np
 import pytest
@@ -244,6 +243,10 @@ class TestBasicCoordManager:
         """Ensure coord managers can be converted to summary dicts."""
         sum_dict = coord_manager.to_summary_dict()
         assert set(sum_dict) == set(coord_manager.coord_map)
+
+    def test_size(self, coord_manager):
+        """Ensure all coord managers have a size."""
+        assert isinstance(coord_manager.size, int | np.int_)
 
 
 class TestCoordManagerInputs:
@@ -669,49 +672,6 @@ class TestUpdateFromAttrs:
         attrs, coords = random_patch.attrs, random_patch.coords
         new_coords, new_attrs = coords.update_from_attrs(attrs)
         assert new_coords == coords
-
-
-class TestUpdateToAttrs:
-    """Tests to ensure coordinate manager can update attributes."""
-
-    def assert_dim_coords_consistent(self, coord_manager, attrs):
-        """Ensure attrs are consistent with coords."""
-        for dim in coord_manager.dims:
-            coord = coord_manager.coord_map[dim]
-            start = getattr(attrs, f"{dim}_min")
-            stop = getattr(attrs, f"{dim}_max")
-            step = getattr(attrs, f"{dim}_step")
-            assert start == coord.min()
-            assert stop == coord.max()
-            assert step == coord.step
-            vals_from_coord = coord.values
-            vals_from_attrs = attrs.coords[dim].to_coord().values
-            eqs = np.all(np.equal(vals_from_coord, vals_from_attrs))
-            assert eqs or np.allclose(vals_from_attrs, vals_from_coord)
-
-    def test_empty(self, basic_coord_manager):
-        """Ensure attributes can be generated coords."""
-        attrs = basic_coord_manager.update_to_attrs()
-        assert isinstance(attrs, dc.PatchAttrs)
-        self.assert_dim_coords_consistent(basic_coord_manager, attrs)
-
-    def test_unrelated(self, basic_coord_manager, random_patch):
-        """Passing an unrelated attrs should wipe relevant fields."""
-        old_attrs = random_patch.attrs
-        attrs = basic_coord_manager.update_to_attrs(old_attrs)
-        assert isinstance(attrs, dc.PatchAttrs)
-        # all non-coord related fields should have remained the same.
-        fields = set(old_attrs.model_dump()) - {"coords", "dims"}
-
-        for key in fields:
-            # ensure the field transferred
-            assert hasattr(attrs, key)
-            # then make sure the values are the same
-            v1, v2 = getattr(old_attrs, key), getattr(attrs, key)
-            if isinstance(v1, Sequence):
-                assert set(v1) == set(v2)
-            else:
-                assert v1 == v2
 
 
 class TestUpdateCoords:

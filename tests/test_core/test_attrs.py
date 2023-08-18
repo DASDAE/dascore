@@ -242,6 +242,11 @@ class TestRenameDimension:
         assert out.dim_tuple[time_ind] == new_name
         assert len(out.dim_tuple) == len(attrs.dim_tuple)
 
+    def test_empty_rename(self, random_attrs):
+        """Passing no kwargs should return same attrs."""
+        attrs = random_attrs.rename_dimension()
+        assert attrs == random_attrs
+
 
 class TestDropPrivate:
     """Tests for dropping private attrs."""
@@ -263,7 +268,17 @@ class TestMisc:
             from dascore.core.schema import PatchAttrs  # noqa
 
 
-class TestMergeModels:
+class TestUpdateAttrs:
+    """ "Tests for updating attributes."""
+
+    def test_attrs_can_update(self, random_attrs):
+        """Ensure attributes can update coordinates."""
+        attrs = random_attrs.update(distance_units="miles")
+        expected = dc.get_quantity("miles")
+        assert dc.get_quantity(attrs.coords["distance"].units) == expected
+
+
+class TestMergeAttrs:
     """Tests for merging patch attrs."""
 
     def test_empty(self):
@@ -329,11 +344,17 @@ class TestMergeModels:
     def test_keep_disjoint_values(self, random_patch):
         """Ensure when disjoint values should be kept they are."""
         random_attrs = random_patch.attrs
-        new = dict(random_attrs)
-        new["jazz_hands"] = 1984
-        attrs1 = PatchAttrs(**new)
+        attrs1 = random_attrs.update(jazz_hands=1984)
         out = combine_patch_attrs([attrs1, random_attrs], conflicts="keep_first")
         assert out.jazz_hands == 1984
+
+    def test_unequal_raises(self, random_attrs):
+        """When attrs have unequal coords it should raise an error."""
+        attr1 = random_attrs
+        attr2 = attr1.update(distance_units="miles")
+        match = "Cant merge patch attrs"
+        with pytest.raises(AttributeMergeError, match=match):
+            combine_patch_attrs([attr1, attr2], coord_name="distance")
 
 
 class TestMergeCompatibleCoordsAttrs:

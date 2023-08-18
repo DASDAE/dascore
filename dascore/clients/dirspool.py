@@ -67,8 +67,7 @@ class DirectorySpool(DataFrameSpool):
         path = self.indexer.path
         kwargs = self._select_kwargs
         out = base + Text(f"\n    Path: {path}")
-        if kwargs:
-            out += Text(f"\n    Select kwargs: {kwargs}")
+        out += Text(f"\n    Select kwargs: {kwargs}") if kwargs else Text("")
         return out
 
     def _get_df(self):

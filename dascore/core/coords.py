@@ -525,7 +525,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         _ = update_fields.pop("dtype", None)
         out = self.update_limits(**update_fields)
         if units is not None:
-            out = out.set_units(units)
+            out = out.convert_units(units)
         return out
 
 
@@ -1014,9 +1014,6 @@ def get_coord(
         if is_monotonic:
             diffs = view2 - view1
             unique_diff = np.unique(diffs)
-            # here we are dealing with a length 0 or 1 array.
-            if len(data) < 2:
-                return None, None, None, False
             if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
                 _min = data[0]
                 _max = data[-1]

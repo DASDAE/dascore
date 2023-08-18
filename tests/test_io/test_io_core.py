@@ -97,6 +97,17 @@ class TestPatchFileSummary:
         out = PatchFileSummary(d_time=10)
         assert out.time_step == dc.to_timedelta64(10)
 
+    def test_dim_typle(self):
+        """Ensure patch file summaries can be converted to tuples."""
+        out = PatchFileSummary(d_time=10, dims="time,distance")
+        assert out.dim_tuple == ("time", "distance")
+
+    def test_flat_dump(self):
+        """Simple test to show summary can be flat dumped."""
+        # flat dump is just here for compatibility with dc.PatchAttrs
+        out = PatchFileSummary(d_time=10, dims="time,distance")
+        assert isinstance(out.flat_dump(), dict)
+
 
 class TestFormatManager:
     """Tests for the format manager."""

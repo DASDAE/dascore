@@ -202,6 +202,10 @@ class TestInit:
         patch = dc.Patch(data=data, coords={"x": x, "y": y}, dims=("x", "y"))
         assert isinstance(patch, dc.Patch)
 
+    def test_patch_has_size(self, random_patch):
+        """Ensure patches have same size as data."""
+        assert random_patch.size == random_patch.data.size
+
 
 class TestNew:
     """Tests for `Patch.new` method."""

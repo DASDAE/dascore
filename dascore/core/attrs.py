@@ -209,12 +209,18 @@ class PatchAttrs(DascoreBaseModel):
 
     def update(self, **kwargs) -> Self:
         """Update an attribute in the model, return new model."""
-        out = dict(self)
-        out.update(kwargs)
-        if coords := kwargs.get("coords"):
-            cm = dascore.core.get_coord_manager(coords)
-            out["dims"] = cm.dims
-            out["coords"] = cm.to_summary_dict()
+        coord_info, attr_info = separate_coord_info(kwargs, dims=self.dim_tuple)
+        out = self.model_dump(exclude_unset=True)
+        out.update(attr_info)
+        out_coord_dict = out["coords"]
+        for name, coord_dict in coord_info.items():
+            if name not in out_coord_dict:
+                out_coord_dict[name] = coord_dict
+            else:
+                out_coord_dict[name].update(coord_dict)
+        # silly check to clear coords
+        if not kwargs.get("coords", True):
+            out["coords"] = {}
         return self.__class__(**out)
 
     def drop_private(self) -> Self:
@@ -319,10 +325,6 @@ def combine_patch_attrs(
         # empy dicts
         if not merge_dict_list:
             return dict(merge_dict_list)
-        # # make sure at least min/max is defined.
-        # if not len(merge_dict_list["min"]) == len(merge_dict_list["max"]):
-        #     msg = "Cant merge attributes, min and max must be defined for coord."
-        #     raise AttributeMergeError(msg)
         # all these should be equal else raise.
         for key in eq_coord_fields:
             if not len(vals := merge_dict_list[key]):

@@ -283,11 +283,7 @@ class CoordManager(DascoreBaseModel):
             diff = {
                 i: v for i, v in maybe_updates.items() if v != model_contents.get(i)
             }
-            # need to rename min/max to start/step
-            # update units, use type so None can be set.
-            if (data_units := diff.pop("units", type)) is not type:
-                coord = coord.convert_units(data_units)
-            out[name] = coord.update_limits(**diff)
+            out[name] = coord.update(**diff)
         coords = self.new(coord_map=out)
         # anything not used in coord_info should be put back.
         # for example, data_units might get put in its own coord called data.
@@ -678,13 +674,6 @@ class CoordManager(DascoreBaseModel):
             new_coords[name] = coord.simplify_units()
         return self.new(coord_map=new_coords)
 
-    def update_to_attrs(self, attrs: dc.PatchAttrs = None) -> dc.PatchAttrs:
-        """Update attrs from information in coordinates."""
-        attr_dict = {} if attrs is None else attrs.model_dump()
-        attr_dict["dims"] = self.dims
-        attr_dict["coords"] = self.to_summary_dict()
-        return dc.PatchAttrs(**attr_dict)
-
     def transpose(self, *dims: str | type(Ellipsis)) -> Self:
         """Transpose the coordinates."""
 
@@ -989,9 +978,11 @@ def _get_coord_dim_map(coords, dims):
         assert coord_out.shape == np.shape(coord[1])
         return coord_out, dim_names
 
-    if isinstance(coords, CoordManager):
-        coords_dump = coords.model_dump()
-        return dict(coords_dump["coord_map"]), dict(coords_dump["dim_map"])
+    assert not isinstance(coords, CoordManager)
+    # this is a dead code path, but may be needed later, leaving for now.
+    # if isinstance(coords, CoordManager):
+    #     coords_dump = coords.model_dump()
+    #     return dict(coords_dump["coord_map"]), dict(coords_dump["dim_map"])
 
     c_map, d_map = {}, {}
     # iterate coords, get coordinate output.

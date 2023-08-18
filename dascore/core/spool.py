@@ -203,11 +203,13 @@ class DataFrameSpool(BaseSpool):
         else:  # Filter instruction df to only include current index.
             # handle negative index.
             df_ind = df_ind if df_ind >= 0 else len(self._df) + df_ind
-            inds = self._df.index[df_ind]
+            try:
+                inds = self._df.index[df_ind]
+            except IndexError:
+                msg = f"index of [{df_ind}] is out of bounds for spool."
+                raise IndexError(msg)
             df1 = instruction[instruction["current_index"] == inds]
-        if df1.empty:
-            msg = f"index of [{df_ind}] is out of bounds for spool."
-            raise IndexError(msg)
+        assert not df1.empty
         joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
         return self._patch_from_instruction_df(joined)
 
