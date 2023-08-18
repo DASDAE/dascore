@@ -62,8 +62,7 @@ def select(patch: PatchType, *, copy=False, relative=False, **kwargs) -> PatchTy
         return patch
     if copy:
         data = data.copy()
-    attrs, dims = patch.attrs, patch.dims
-    return patch.__class__(data, attrs=attrs, coords=new_coords, dims=dims)
+    return patch.new(data=data, coords=new_coords)
 
 
 @patch_function(history=None)

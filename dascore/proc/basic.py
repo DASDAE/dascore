@@ -98,18 +98,20 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
         return new
 
     # since we update history so often, we make a fast track for it.
-    new_attrs = dict(self.attrs)
+    new_attrs = self.attrs.model_dump(exclude_unset=True)
     new_attrs.update(attrs)
+    # pop out coords so new coords has priority.
     if len(attrs) == 1 and "history" in attrs:
         return _fast_attr_update(self, PatchAttrs(**new_attrs))
     new_coords = self.coords.update_from_attrs(attrs)
+    new_attrs["coords"] = new_coords.to_summary_dict()
     out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
     return self.__class__(self.data, **out)
 
 
 def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
     """
-    Determine if the current patch equals a.
+    Determine if the current patch equals another.
 
     Parameters
     ----------
@@ -181,14 +183,15 @@ def new(
     coords = get_coord_manager(coords, dims)
     if attrs:
         coord_info, attr_info = separate_coord_info(attrs)
-        coords = coords.update_from_attrs(coord_info, coord_info=coord_info)
+        coords = coords.update_from_attrs({}, coord_info=coord_info)
         # anything not used in coord_info should be put back.
         # for example, data_units might get put in its own coord called data.
         for unused_dim in set(coord_info) - set(coords.dims):
             for key, val in coord_info[unused_dim].items():
                 attr_info[f"{unused_dim}_{key}"] = val
         attrs = self.attrs.update(**attr_info, coords=coords.to_summary_dict())
-    attrs = attrs or self.attrs
+    else:
+        attrs = dc.PatchAttrs.from_dict(attrs or self.attrs).update(coords=coords)
     return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 
 

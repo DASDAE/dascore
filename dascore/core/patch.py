@@ -11,6 +11,7 @@ import dascore.proc.coords
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coords import BaseCoord
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
@@ -25,13 +26,16 @@ class Patch:
     Parameters
     ----------
     data
-        The data representing fiber optic measurements.
+        The array data representing fiber optic measurements.
     coords
-        The coordinates, or dimensional labels for the data. These can be
-        passed in three forms:
+        The coordinates, or dimensional labels for the data.
+        A few types of input are permitted. If a mapping (eg dict) the value
+        should conform to one of the following three forms:
         {coord_name: coord}
         {coord_name: ((dimensions,), coord)}
         {coord_name: (dimensions, coord)}
+        Where coord can be a numpy array or [`BaseCoord`](`dascore.core.BaseCoord`).
+        A [`CoordManager`](`dascore.core.CoordManger`) is also acceptable.
     dims
         A sequence of dimension strings. The first entry corresponds to the
         first axis of data, the second to the second dimension, and so on.
@@ -46,8 +50,7 @@ class Patch:
 
     - If coords and attrs are provided, attrs will have priority. This means
     if there is a conflict between information contained in both, the coords
-    will be recalculated. However, any missing data in attrs will be filled in
-    if available in coords.
+    will be recalculated.
     """
 
     data: ArrayLike
@@ -58,7 +61,7 @@ class Patch:
     def __init__(
         self,
         data: ArrayLike | DataArray | None = None,
-        coords: Mapping[str, ArrayLike] | None | CoordManager = None,
+        coords: Mapping[str, ArrayLike | BaseCoord] | CoordManager | None = None,
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
     ):
@@ -75,8 +78,14 @@ class Patch:
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
-        self._coords = get_coord_manager(coords, dims, attrs)
-        self._attrs = PatchAttrs.from_dict(attrs, self.coords)
+        try:
+            self._coords = get_coord_manager(coords, dims).update_from_attrs(attrs)
+        except ValueError:
+            msg = "Coords and attrs are incompatible, cannot create Patch."
+            raise ValueError(msg)
+        self._attrs = PatchAttrs.from_dict(attrs).update(
+            dims=self.coords.dims, coords=self._coords.to_summary_dict()
+        )
         self._data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):

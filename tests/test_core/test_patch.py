@@ -73,7 +73,7 @@ class TestInit:
         return Patch(**out)
 
     @pytest.fixture(scope="class")
-    def patch_conflicting_attrs_coords(self):
+    def test_conflicting_attrs_coords_raises(self):
         """Patch for testing conflicting coordinates/attributes."""
         array = np.random.random((10, 10))
         # create attrs, these should all get overwritten by coords.
@@ -93,8 +93,9 @@ class TestInit:
         # assemble and output.
         dims = ("distance", "time")
         out = dict(data=array, coords=coords, attrs=attrs, dims=dims)
-        patch = dc.Patch(**out)
-        return patch
+        msg = "Coords and attrs are incompatible."
+        with pytest.raises(ValueError, match=msg):
+            dc.Patch(**out)
 
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
         """Ensure the time_min and time_max attrs can be inferred from coord time."""
@@ -182,19 +183,6 @@ class TestInit:
         time_shape = patch.shape[patch.dims.index("time")]
         assert time_shape == len(patch.coords["time"])
         assert time_shape == len(patch.coords["time"])
-
-    def test_init_conflicting_coord_dims(self, patch_conflicting_attrs_coords):
-        """Test initing a patch which has conflicting info in coords/dims."""
-        patch = patch_conflicting_attrs_coords
-        coords = patch.coords.coord_map
-        attrs = patch.attrs
-        for name, coord in coords.items():
-            assert getattr(attrs, f"{name}_min") == coord.min()
-            assert getattr(attrs, f"{name}_max") == coord.max()
-            if pd.isnull(coord.step):
-                assert pd.isnull(getattr(attrs, f"{name}_step"))
-            else:
-                assert getattr(attrs, f"{name}_step") == coord.step
 
     def test_init_no_coords(self, random_patch):
         """Ensure a new patch can be inited from only attrs."""

@@ -15,6 +15,8 @@ class TestRfft:
     @pytest.fixture(scope="class")
     def rfft_patch(self, random_patch):
         """Return the random patched transformed along time w/ rrft."""
+        out = rfft(random_patch, dim="time")
+
         with suppress_warnings(DeprecationWarning):
             out = rfft(random_patch, dim="time")
         return out

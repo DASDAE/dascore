@@ -67,10 +67,7 @@ def decimate(
         # Need to copy so array isn't a slice and holds onto reference of parent
         data = np.array(data) if copy else data
     # Update delta_dim since spacing along dimension has changed.
-    attrs = dict(patch.attrs)
-    attrs[f"{dim}_step"] = patch.attrs[f"{dim}_step"] * factor
-    out = dc.Patch(data=data, coords=coords, attrs=attrs, dims=patch.dims)
-    return out
+    return patch.new(data=data, coords=coords)
 
 
 @patch_function()
@@ -241,20 +238,18 @@ def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
 
     See Also
     --------
-    [iresample](`dascore.proc.resample.iresample`)
+    [resample](`dascore.proc.resample.resample`)
     [decimate](`dascore.proc.resample.decimate`)
     """
     dim, axis, new_length = get_dim_value_from_kwargs(patch, kwargs)
     coord = patch.coords[dim]
-    out, new_coord = compat.resample(
+    data, new_coord = compat.resample(
         patch.data, new_length, t=coord, axis=axis, window=window
     )
     # update coordinates
-    new_coords = {x: patch.coords[x] for x in patch.dims}
-    new_coords[dim] = new_coord
+    new_coords = patch.coords.update_coords(**{dim: new_coord})
     # update attributes
     new_attrs = dict(patch.attrs)
     new_attrs[f"{dim}_step"] = new_coord[1] - new_coord[0]
     new_attrs[f"{dim}_max"] = np.max(new_coord)
-    patch_inputs = dict(data=out, attrs=new_attrs, dims=patch.dims, coords=new_coords)
-    return patch.__class__(**patch_inputs)
+    return patch.new(data=data, coords=new_coords)

@@ -839,7 +839,7 @@ class CoordManager(DascoreBaseModel):
 
 
 def get_coord_manager(
-    coords: Mapping[str, BaseCoord | np.ndarray] | None = None,
+    coords: Mapping[str, BaseCoord | np.ndarray] | CoordManager | None = None,
     dims: tuple[str, ...] | None = None,
     attrs: dc.PatchAttrs | dict[str, Any] | None = None,
 ) -> CoordManager:
@@ -849,15 +849,17 @@ def get_coord_manager(
     Parameters
     ----------
     coords
-        A mapping with coordinates. These can be of the form: {name, array},
-        {name: (dim_name, array)}, or {name: ((dim_names,) array.
+        Information about coordinates. These can be a mapping of the
+        form: {name, array}, {name: (dim_name, array)}, or
+        {name: ((dim_names,) array). Can also be a
+        [`CoordManager`](`dascore.core.CoordManager`).
     dims
         Tuple specify dimension names
     attrs
-        Attributes which can be used to create coordinates that don't
-        already exist. If you want to update the coordinate mananger based
-        on value in attrs use
-        [`update_attrs`](`dascore.core.CoordManager.update_from_attrs`).
+        Attributes which can be used to create coordinates.
+        Cannot be used with coords argument.
+        If you want to update [`CoordManager`](`dascore.core.CoordManager`)
+        use [`update_attrs`](`dascore.core.CoordManager.update_from_attrs`).
 
     Examples
     --------
@@ -884,6 +886,12 @@ def get_coord_manager(
     >>> attrs = dc.get_example_patch().attrs
     >>> cm = get_coord_manager(attrs=attrs)
     """
+    if coords is not None and attrs is not None:
+        msg = (
+            "Cannot use both attrs and coords in get_coord_manager. "
+            "Perhaps you want CoordManager.update_from_attrs?"
+        )
+        raise ParameterError(msg)
     # return coords if we already have a coord manager.
     if isinstance(coords, CoordManager):
         # maybe try to rename dims.

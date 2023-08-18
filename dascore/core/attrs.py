@@ -21,7 +21,7 @@ from dascore.constants import (
     max_lens,
 )
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, CoordRange, CoordSummary
+from dascore.core.coords import BaseCoord, CoordSummary
 from dascore.exceptions import AttributeMergeError, IncompatiblePatchError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
@@ -98,10 +98,8 @@ class PatchAttrs(DascoreBaseModel):
     data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
     data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
     data_units: UnitQuantity | None = None
-
     instrument_id: str = Field("", max_length=max_lens["instrument_id"])
     cable_id: str = Field("", max_length=max_lens["cable_id"])
-
     tag: str = Field("", max_length=max_lens["tag"])
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
@@ -166,9 +164,7 @@ class PatchAttrs(DascoreBaseModel):
         """Return coordinates from dimensions assuming evenly sampled."""
         out = {}
         for dim in self.dim_tuple:
-            start, stop = self[f"{dim}_min"], self[f"{dim}_max"]
-            step = self[f"{dim}_step"]
-            out[dim] = CoordRange(start=start, stop=stop + step, step=step)
+            out[dim] = self.coords[dim].to_coord()
         return out
 
     @classmethod
@@ -193,7 +189,7 @@ class PatchAttrs(DascoreBaseModel):
         """
         if isinstance(attr_map, cls) and coord_manager is None:
             return attr_map
-        out = {} if attr_map is None else dict(attr_map)
+        out = {} if attr_map is None else attr_map
         if coord_manager is None:
             return cls(**out)
         out["dims"] = ",".join(coord_manager.dims)

@@ -124,6 +124,17 @@ def coord_manager(request) -> CoordManager:
     return request.getfixturevalue(request.param)
 
 
+class TestGetCoordManager:
+    """Test suite for `get_coord_manger` helper function."""
+
+    def test_coords_and_attrs_raise(self, random_patch):
+        """Ensure using coords and attrs raises."""
+        msg = "Cannot use both attrs and coords"
+        coords, attrs = random_patch.coords, random_patch.attrs
+        with pytest.raises(ParameterError, match=msg):
+            get_coord_manager(coords=coords, attrs=attrs)
+
+
 class TestBasicCoordManager:
     """Ensure basic things work with coord managers."""
 
@@ -308,9 +319,7 @@ class TestCoordManagerWithAttrs:
     def test_missing_dim(self):
         """Coord manager should be able to pull missing info from attributes."""
         attrs = dict(distance_min=1, distance_max=100, distance_step=10)
-        coord = {"time": COORDS["time"]}
-        # breakpoint()
-        new = get_coord_manager(coord, DIMS, attrs=attrs)
+        new = get_coord_manager(None, ("distance",), attrs=attrs)
         assert "distance" in new.coord_map
 
 

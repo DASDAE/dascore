@@ -87,7 +87,7 @@ def _wacky_dim_coord_patch():
     # distance is neither monotonic nor evenly sampled.
     dist_ar = np.random.random(100) + np.arange(100) * 0.3
     # time is monotonic, not evenly sampled.
-    time_ar = np.cumsum(np.random.random(1_000))
+    time_ar = dc.to_datetime64(np.cumsum(np.random.random(1_000)))
     patch = _random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
     # check attrs
     attrs = patch.attrs
@@ -135,7 +135,6 @@ def _sin_wave_patch(
     for freq in freqs:
         sin_data = amplitude * np.sin(2.0 * np.pi * freq * t_array)
         data += sin_data[..., np.newaxis]
-
     patch = dc.Patch(
         data=data,
         coords={"time": time, "distance": distance},

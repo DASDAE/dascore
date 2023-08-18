@@ -190,14 +190,6 @@ def patch_function(
     return _wrapper
 
 
-def copy_attrs(attrs) -> dict:
-    """Make a copy of the attributes dict so it can be mutated."""
-    out = dict(attrs)
-    if "history" in out:
-        out["history"] = list(out["history"])
-    return out
-
-
 def patches_to_df(
     patches: Sequence[PatchType] | SpoolType | pd.DataFrame,
 ) -> pd.DataFrame:

@@ -966,6 +966,7 @@ def get_coord(
     max=None,
     step=None,
     units: None | Unit | Quantity | str = None,
+    dtype: str | np.dtype = None,
 ) -> BaseCoord:
     """
     Given multiple types of input, return a coordinate.
@@ -984,6 +985,9 @@ def get_coord(
         The sampling spacing of an array.
     units
         Indication of units.
+    dtype
+        Only used for compatibility with kwargs produced by other
+        functions. Doesn't do anything.
 
     Notes
     -----
@@ -1011,7 +1015,7 @@ def get_coord(
             diffs = view2 - view1
             unique_diff = np.unique(diffs)
             # here we are dealing with a length 0 or 1 array.
-            if len(view2) < 2:
+            if len(data) < 2:
                 return None, None, None, False
             if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
                 _min = data[0]
