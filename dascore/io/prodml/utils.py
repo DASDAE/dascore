@@ -1,7 +1,6 @@
 """Utilities for terra15."""
 from __future__ import annotations
 
-import numpy as np
 
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
@@ -66,9 +65,9 @@ def _get_time_coord(node):
     """Get the time information from a Raw node."""
     time_attrs = node.RawDataTime._v_attrs
     start_str = time_attrs.PartStartTime.decode().split("+")[0]
-    start = np.datetime64(start_str.rstrip("Z"))
+    start = dc.to_datetime64(start_str.rstrip("Z"))
     end_str = time_attrs.PartEndTime.decode().split("+")[0]
-    end = np.datetime64(end_str.rstrip("Z"))
+    end = dc.to_datetime64(end_str.rstrip("Z"))
     step = (end - start) / (len(node.RawDataTime) - 1)
     return get_coord(start=start, stop=end + step, step=step, units="s")
 

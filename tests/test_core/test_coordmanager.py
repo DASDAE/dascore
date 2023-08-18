@@ -134,6 +134,12 @@ class TestGetCoordManager:
         with pytest.raises(ParameterError, match=msg):
             get_coord_manager(coords=coords, attrs=attrs)
 
+    def test_coords_from_attrs(self, random_patch):
+        """Ensure we can get coordinates from patch attrs."""
+        attrs = random_patch.attrs
+        cm = get_coord_manager(attrs=attrs)
+        assert "time" in cm.coord_map
+
 
 class TestBasicCoordManager:
     """Ensure basic things work with coord managers."""

@@ -48,6 +48,7 @@ def _update_index_map(updates, cache_path) -> dict:
     """Update index map to track new index."""
     data = _get_index_map(cache_path=cache_path)
     data.update(updates)
+    Path(cache_path).parent.mkdir(exist_ok=True, parents=True)
     with open(cache_path, "w") as fi:
         json.dump(data, fi)
     return data
@@ -103,20 +104,24 @@ class DirectoryIndexer(AbstractIndexer):
     """
 
     ext = ""
-    _namespace = "/dc_index"
+    _namespace = ""
     _index_name = ".dascore_index.h5"  # name of index file
 
     # A user-specific file which tracks where indices are stored if not on
     # the same directory as the path to index.
     index_map_path = pooch.os_cache("dascore") / "caches" / "cache_paths.json"
 
-    def __init__(self, path: str | Path, index_path=None):
+    def __init__(self, path: str | Path, cache_size: int = 5, index_path=None):
+        self.max_size = cache_size
         self.path = Path(path).absolute()
         self.index_path = Path(self._find_index_file(self.path, index_path))
         self._current_index = 0
         self._index_table = HDFPatchIndexManager(
             self.index_path,
             self._namespace,
+        )
+        self.cache = pd.DataFrame(
+            index=range(cache_size), columns="t1 t2 kwargs cindex".split()
         )
 
     def _find_index_file(self, data_path, index_path=None):
@@ -212,6 +217,35 @@ class DirectoryIndexer(AbstractIndexer):
         kdf_kwargs = {i: v for i, v in kwargs.items() if i in READ_HDF5_KWARGS}
         kwargs = {i: v for i, v in kwargs.items() if i not in READ_HDF5_KWARGS}
         return kdf_kwargs, kwargs
+
+    def _set_cache(self, index, starttime, endtime, kwargs):
+        """Cache the current index."""
+        ser = pd.Series(
+            {
+                "t1": starttime,
+                "t2": endtime,
+                "cindex": index,
+                "kwargs": self._kwargs_to_str(kwargs),
+            }
+        )
+        self.cache.loc[self._get_next_index()] = ser
+
+    def clear_cache(self):
+        """Removes all cached dataframes."""
+        self.cache = pd.DataFrame(
+            index=range(self.max_size), columns="t1 t2 kwargs cindex".split()
+        )
+
+    def _get_next_index(self):
+        """
+        Get the next index value on cache.
+        Note we can't use itertools.cycle here because it cant be pickled.
+        """
+        if self._current_index == len(self.cache.index) - 1:
+            self._current_index = 0
+        else:
+            self._current_index += 1
+        return self.cache.index[self._current_index]
 
     def _kwargs_to_str(self, kwargs):
         """Convert kwargs to a string."""

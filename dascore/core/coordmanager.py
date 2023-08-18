@@ -878,7 +878,7 @@ def get_coord_manager(
         Attributes which can be used to create coordinates.
         Cannot be used with coords argument.
         If you want to update [`CoordManager`](`dascore.core.CoordManager`)
-        use [`update_attrs`](`dascore.core.CoordManager.update_from_attrs`).
+        use [`update_from_attrs`](`dascore.core.CoordManager.update_from_attrs`).
 
     Examples
     --------
@@ -923,6 +923,8 @@ def get_coord_manager(
     if dims is None:
         if isinstance(coords, Mapping) and all(isinstance(x, str) for x in coords):
             dims = tuple(coords.keys())
+        elif attrs is not None and "dims" in attrs or hasattr(attrs, "dims"):
+            dims = tuple(attrs["dims"].split(","))
         else:
             dims = ()
     coords = {} if coords is None else coords

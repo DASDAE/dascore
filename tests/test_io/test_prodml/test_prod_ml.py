@@ -19,7 +19,7 @@ def quantx_v2_example_path():
 @pytest.fixture(scope="session")
 def quantx_v2_das_patch(quantx_v2_example_path):
     """Read the QuantXV2 data, return contained DataArray."""
-    out = read(quantx_v2_example_path, "quantx")[0]
+    out = read(quantx_v2_example_path, "prodml")[0]
     attr_time = out.attrs["time_max"]
     coord_time = out.coords["time"].max()
     assert attr_time == coord_time

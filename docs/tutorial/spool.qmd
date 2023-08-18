@@ -58,10 +58,9 @@ index_path = Path(tempfile.mkdtemp()) / "index.h5"
 
 # update will create an index of the contents for fast querying/access
 spool = dc.spool(directory_path, index_path=index_path).update()
-
-# new spools will also need to specify the index path
-spool_new = dc.spool(directory_path, index_path=index_path).update()
 ```
+
+New spools created on the same directory will know where to find the index file, **unless** there is a valid index file already in the directory.
 
 :::{.callout-warning}
 If you remove files from a directory that has already been indexed, you should delete the index file and then call `update` again on the spool like this:

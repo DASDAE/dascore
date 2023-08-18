@@ -35,8 +35,9 @@ class Patch:
         {coord_name: coord}
         {coord_name: ((dimensions,), coord)}
         {coord_name: (dimensions, coord)}
-        Where coord can be a numpy array or [`BaseCoord`](`dascore.core.BaseCoord`).
-        A [`CoordManager`](`dascore.core.CoordManger`) is also acceptable.
+        Where coord can be a numpy array or a
+        [`BaseCoord`](`dascore.core.coords.BaseCoord`) object.
+        A [`CoordManager`](`dascore.core.coordmanager.CoordManager`) is also acceptable.
     dims
         A sequence of dimension strings. The first entry corresponds to the
         first axis of data, the second to the second dimension, and so on.

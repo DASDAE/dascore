@@ -57,6 +57,13 @@ class TestSetUnits:
             coord = new.get_coord(coord_name)
             assert coord.units == get_quantity(unit_str)
 
+    def test_set_data_and_coord_units(self, random_patch):
+        """Ensure we can set data and coordinate units in 1 go."""
+        out = random_patch.set_units("m/s", distance="ft")
+        assert isinstance(random_patch, dc.Patch)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m/s")
+        assert get_quantity(out.attrs.distance_units) == get_quantity("ft")
+
 
 class TestConvertUnits:
     """Tests for converting from one unit to another."""
@@ -98,6 +105,14 @@ class TestConvertUnits:
             unit_patch.convert_units("M")
         with pytest.raises(UnitError):
             unit_patch.convert_units("s")
+
+    def test_update_data_and_coord_units(self, random_patch):
+        """Ensure we can update data and coordinate units in 1 go."""
+        patch = random_patch.set_units("m/s", distance="ft")
+        out = patch.convert_units("ft/s", distance="m")
+        assert isinstance(random_patch, dc.Patch)
+        assert get_quantity(out.attrs.data_units) == get_quantity("ft/s")
+        assert get_quantity(out.attrs.distance_units) == get_quantity("m")
 
 
 class TestSimplifyUnits:

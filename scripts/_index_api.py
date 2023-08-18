@@ -115,7 +115,7 @@ def parse_project(obj, key=None):
         except (TypeError, ValueError):
             sig = None
 
-        docstr = inspect.getdoc(obj)
+        docstr = inspect.getdoc(obj) or ""
         dtype = get_type(obj, parent_is_class)
         data = defaultdict(list)
         data["docstring"] = docstr
@@ -159,6 +159,7 @@ def parse_project(obj, key=None):
         obj = _unwrap_obj(obj)
         obj_id = str(id(obj))
         path = _get_file_path(obj)
+
         # this is something outside of dascore or we have already seen it.
         if str(base_path) not in str(path) or obj_id in data_dict:
             return
@@ -194,7 +195,7 @@ def parse_project(obj, key=None):
                         continue
                     sub_key = f"{key}.{sub_name}"
                     # make sure this is where the method is defined else skip
-                    if sub_path != path:
+                    if str(sub_path) != str(path):
                         continue
                     traverse(sub_obj, data_dict, base_path, sub_key, True)
 

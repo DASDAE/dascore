@@ -83,7 +83,7 @@ def convert_units(
     if data_units is not None:
         current_units = patch.attrs.data_units
         data = u_covert_units(patch.data, data_units, current_units)
-        attrs = patch.attrs.update(data_units=data_units)
+        attrs = patch.attrs.update(data_units=data_units, coords={})
     else:
         data = patch.data
         attrs = None
