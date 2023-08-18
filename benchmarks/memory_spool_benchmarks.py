@@ -1,6 +1,4 @@
-"""
-Benchmark for generic memory spool operations.
-"""
+"""Benchmark for generic memory spool operations."""
 from __future__ import annotations
 
 import dascore as dc
@@ -10,7 +8,7 @@ class ChunkSuite:
     """Benchmark for chunking patches inside spools."""
 
     def setup(self):
-        """get test spools."""
+        """Get test spools."""
         self._spool_no_gap = dc.get_example_spool("random_das", length=10)
         self._spool_no_overlap = dc.get_example_spool(
             "random_das", length=10, time_gap=10
@@ -51,13 +49,13 @@ class SelectSuite:
     """Suite of selection timing."""
 
     def setup(self):
-        """get test spools."""
+        """Get test spools."""
         self._spool_no_gap = dc.get_example_spool("random_das", length=10)
         self._spool_no_gap_df = self._spool_no_gap.get_contents()
         self._diverse_spool = dc.get_example_spool("diverse_das")
 
     def time_select_full_range(self):
-        """timing selecting the full time range."""
+        """Timing selecting the full time range."""
         df, spool = self._spool_no_gap_df, self._spool_no_gap
         t1, t2 = df["time_min"].min(), df["time_max"].max()
         spool.select(time=(t1, t2))
@@ -65,7 +63,7 @@ class SelectSuite:
         spool.select(time=(t1, None))
 
     def time_select_half_range(self):
-        """time selecting and trimming"""
+        """Time selecting and trimming."""
         df, spool = self._spool_no_gap_df, self._spool_no_gap
         t1, t2 = df["time_min"].min(), df["time_max"].max()
         duration = (t2 - t1) / 2

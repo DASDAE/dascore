@@ -84,8 +84,10 @@ class JingleV1(FiberIO):
         """
         Used to get metadata about a file without reading the whole file.
 
-        This should return a list of `PatchFileSummary` objects from the
-        dascore.core.schema module.
+        This should return a list of
+        [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) objects
+        from the [dascore.core.attrs](`dascore.core.attrs`) module, or a
+        format-specific subclass.
         """
 
     def write(self, patch, path, **kwargs):

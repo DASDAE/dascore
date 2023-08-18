@@ -1,6 +1,4 @@
-"""
-Benchmarks for patch functions.
-"""
+"""Benchmarks for patch functions."""
 from __future__ import annotations
 
 import numpy as np
@@ -10,14 +8,12 @@ from dascore.utils.patch import get_start_stop_step
 
 
 class ProcessingSuite:
-    """
-    Suite for processing functions.
-    """
+    """Suite for processing functions."""
 
     patch: dc.Patch
 
     def setup(self):
-        """just load the default patch."""
+        """Just load the default patch."""
         self.patch = dc.get_example_patch()
 
     def time_pass_filter(self):
@@ -28,7 +24,7 @@ class ProcessingSuite:
         self.patch.pass_filter(time=(10, 100))
 
     def time_median_filter(self):
-        """Time the median filter"""
+        """Time the median filter."""
         self.patch.median_filter(kernel_size=(5, 3))
         self.patch.median_filter(kernel_size=5)
 
@@ -50,7 +46,7 @@ class ProcessingSuite:
         self.patch.decimate(time=10, filter_type=None)
 
     def time_select(self):
-        """timing select."""
+        """Timing select."""
         self.patch.select(distance=(100, 200))
         t1 = self.patch.attrs["time_min"] + np.timedelta64(1, "s")
         t2 = t1 + np.timedelta64(3, "s")
@@ -63,28 +59,28 @@ class TransformSuite:
     """Timing for various transformations."""
 
     def setup(self):
-        """just load the default patch."""
+        """Just load the default patch."""
         self.patch = dc.get_example_patch()
         self.dft_patch = self.patch.tran.dft("time")
 
     def time_indefinite_integrate(self):
-        """integrate along time axis."""
+        """Integrate along time axis."""
         self.patch.tran.integrate(dim="time", defininte=False)
 
     def time_definite_integrate(self):
-        """integrate along time axis."""
+        """Integrate along time axis."""
         self.patch.tran.integrate(dim="time", defininte=True)
 
     def time_differentiate(self):
-        """differentiate along time axis"""
+        """Differentiate along time axis."""
         self.patch.tran.differentiate(dim="time")
 
     def time_dft(self):
-        """The discrete fourier transform"""
+        """The discrete fourier transform."""
         self.patch.tran.dft(dim="time")
 
     def time_idft(self):
-        """The inverse of the fourier transform"""
+        """The inverse of the fourier transform."""
         self.dft_patch.tran.idft()
 
 
@@ -94,11 +90,11 @@ class VizSuite:
     patch: dc.Patch
 
     def setup(self):
-        """just load the default patch."""
+        """Just load the default patch."""
         self.patch = dc.get_example_patch()
 
     def teardown(self):
-        """just load the default patch."""
+        """Just load the default patch."""
         import matplotlib.pyplot as plt
 
         plt.close("all")

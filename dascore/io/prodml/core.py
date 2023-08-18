@@ -1,20 +1,28 @@
-"""
-IO module for reading prodML data.
-"""
+"""IO module for reading prodML data."""
 from __future__ import annotations
+
+import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.core.schema import PatchFileSummary
 from dascore.io import FiberIO, HDF5Reader
+from dascore.utils.models import UnitQuantity, UTF8Str
 
 from .utils import _get_prodml_attrs, _get_prodml_version_str, _read_prodml
 
 
+class ProdMLPatchAttrs(dc.PatchAttrs):
+    """Patch attrs for ProdML"""
+
+    pulse_width: float = np.NAN
+    pulse_width_units: UnitQuantity | None = None
+    gauge_length: float = np.NaN
+    gauge_length_units: UnitQuantity | None = None
+    schema_version: UTF8Str = ""
+
+
 class ProdMLV2_0(FiberIO):
-    """
-    Support for ProdML V 2.0.
-    """
+    """Support for ProdML V 2.0."""
 
     name = "PRODML"
     preferred_extensions = ("hdf5", "h5")
@@ -33,17 +41,16 @@ class ProdMLV2_0(FiberIO):
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: HDF5Reader) -> list[PatchFileSummary]:
-        """
-        Scan a prodml file, return summary information about the file's contents.
-        """
+    def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
+        """Scan a prodml file, return summary information about the file's contents."""
         file_version = _get_prodml_version_str(resource)
         extras = {
             "path": resource.filename,
             "file_format": self.name,
             "file_version": str(file_version),
         }
-        return _get_prodml_attrs(resource, extras=extras, cls=PatchFileSummary)
+        attrs = _get_prodml_attrs(resource, extras=extras)
+        return [ProdMLPatchAttrs(**x) for x in attrs]
 
     def read(
         self,
@@ -52,16 +59,14 @@ class ProdMLV2_0(FiberIO):
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
     ) -> dc.BaseSpool:
-        """
-        Read a ProdML file.
-        """
-        patches = _read_prodml(resource, time=time, distance=distance)
+        """Read a ProdML file."""
+        patches = _read_prodml(
+            resource, time=time, distance=distance, attr_cls=ProdMLPatchAttrs
+        )
         return dc.spool(patches)
 
 
 class ProdMLV2_1(ProdMLV2_0):
-    """
-    Support for ProdML V 2.1.
-    """
+    """Support for ProdML V 2.1."""
 
     version = "2.1"

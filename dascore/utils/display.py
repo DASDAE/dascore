@@ -1,7 +1,6 @@
-"""
-Utils for displaying dascore objects.
-"""
+"""Utils for displaying dascore objects."""
 from __future__ import annotations
+
 import textwrap
 from functools import singledispatch
 
@@ -131,15 +130,13 @@ def array_to_text(data, units=None) -> Text:
 
 
 def attrs_to_text(attrs) -> Text:
-    """
-    Convert pydantic model to text.
-    """
-    default = dc.PatchAttrs()
+    """Convert pydantic model to text."""
+    attrs = dc.PatchAttrs.from_dict(attrs).model_dump(exclude_defaults=True)
+    # pop coords and dims since they show up in other places.
+    attrs.pop("coords", None), attrs.pop("dims", None)
     txt = Text("➤ ") + Text("Attributes", style=dascore_styles["dc_yellow"])
     txt += Text("\n")
     for name, attr in dict(attrs).items():
-        if default.get(name, None) == attr or not (attr):
-            continue
         # determine styles here based on keys
         style = None
         if name.endswith("units"):

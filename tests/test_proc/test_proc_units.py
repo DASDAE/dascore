@@ -1,11 +1,11 @@
-"""
-Tests for unit dealings on patches.
-"""
+"""Tests for unit dealings on patches."""
 from __future__ import annotations
+
 import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.exceptions import UnitError
 from dascore.units import get_quantity
 from dascore.utils.time import dtype_time_like
@@ -27,7 +27,7 @@ class TestSetUnits:
         unit_str = "furlong"  # A silly unit that wont be used on patch
         for dim in patch.dims:
             expected_quant = get_quantity(unit_str)
-            coord = random_patch_with_lat_lon.get_coord(dim)
+            coord = patch.get_coord(dim)
             new = patch.set_units(**{dim: unit_str})
             attr = new.attrs
             # first check attributes
@@ -50,12 +50,19 @@ class TestSetUnits:
         non_dims = set(cmap) - set(patch.dims)
         for coord_name in non_dims:
             new = patch.set_units(**{coord_name: unit_str})
-            # coord string should not show up in the attrs
+            # coord string should show up in the attrs
             attr_name = f"{coord_name}_units"
-            assert not hasattr(new.attrs, attr_name)
-            # the but coord should be set
-            coord = new.coords.coord_map[coord_name]
+            assert getattr(new.attrs, attr_name) == get_quantity(unit_str)
+            # and the coord should be set
+            coord = new.get_coord(coord_name)
             assert coord.units == get_quantity(unit_str)
+
+    def test_set_data_and_coord_units(self, random_patch):
+        """Ensure we can set data and coordinate units in 1 go."""
+        out = random_patch.set_units("m/s", distance="ft")
+        assert isinstance(random_patch, dc.Patch)
+        assert get_quantity(out.attrs.data_units) == get_quantity("m/s")
+        assert get_quantity(out.attrs.distance_units) == get_quantity("ft")
 
 
 class TestConvertUnits:
@@ -84,6 +91,12 @@ class TestConvertUnits:
         assert out.attrs.data_units == get_quantity(unit_str)
         assert np.allclose(out.data * 10, unit_patch.data)
 
+    def test_attrs_preserved(self, unit_patch):
+        """The attributes should not change."""
+        patch = unit_patch.update_attrs(tag="bob")
+        out = patch.convert_units("km/s")
+        assert patch.attrs.tag == out.attrs.tag
+
     def test_bad_data_conversion_raises(self, unit_patch):
         """Ensure asking for incompatible units raises."""
         with pytest.raises(UnitError):
@@ -92,6 +105,14 @@ class TestConvertUnits:
             unit_patch.convert_units("M")
         with pytest.raises(UnitError):
             unit_patch.convert_units("s")
+
+    def test_update_data_and_coord_units(self, random_patch):
+        """Ensure we can update data and coordinate units in 1 go."""
+        patch = random_patch.set_units("m/s", distance="ft")
+        out = patch.convert_units("ft/s", distance="m")
+        assert isinstance(random_patch, dc.Patch)
+        assert get_quantity(out.attrs.data_units) == get_quantity("ft/s")
+        assert get_quantity(out.attrs.distance_units) == get_quantity("m")
 
 
 class TestSimplifyUnits:

@@ -1,21 +1,19 @@
-"""
-IO module for reading Terra15 DAS data.
-"""
+"""IO module for reading Terra15 DAS data."""
 from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
-from dascore.core.schema import PatchFileSummary
 from dascore.io import FiberIO, HDF5Reader
-from dascore.utils.hdf5 import open_hdf5_file
-
-from .utils import _get_terra15_version_str, _read_terra15, _scan_terra15
+from .utils import (
+    _get_terra15_version_str,
+    _read_terra15,
+    _scan_terra15,
+    _get_version_data_node,
+)
 
 
 class Terra15FormatterV4(FiberIO):
-    """
-    Support for Terra15 data format, version 4.
-    """
+    """Support for Terra15 data format, version 4."""
 
     name = "TERRA15"
     preferred_extensions = ("hdf5", "h5")
@@ -30,16 +28,19 @@ class Terra15FormatterV4(FiberIO):
         resource
             A path to the file which may contain terra15 data.
         """
-        with open_hdf5_file(resource, "r") as fi:
-            version_str = _get_terra15_version_str(fi)
-            if version_str:
-                return (self.name, version_str)
+        version_str = _get_terra15_version_str(resource)
+        if version_str:
+            return (self.name, version_str)
 
-    def scan(self, resource: HDF5Reader) -> list[PatchFileSummary]:
-        """
-        Scan a terra15 v2 file, return summary information about the file's contents.
-        """
-        return _scan_terra15(self, resource)
+    def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
+        """Scan a terra15 v2 file, return summary information."""
+        version, data_node = _get_version_data_node(resource.root)
+        extras = {
+            "path": resource.filename,
+            "file_format": self.name,
+            "file_version": str(version),
+        }
+        return _scan_terra15(resource, data_node, extras)
 
     def read(
         self,
@@ -70,16 +71,12 @@ class Terra15FormatterV4(FiberIO):
 
 
 class Terra15FormatterV5(Terra15FormatterV4):
-    """
-    Support for Terra15 data format, version 5.
-    """
+    """Support for Terra15 data format, version 5."""
 
     version = "5"
 
 
 class Terra15FormatterV6(Terra15FormatterV4):
-    """
-    Support for Terra15 data format, version 5.
-    """
+    """Support for Terra15 data format, version 5."""
 
     version = "6"

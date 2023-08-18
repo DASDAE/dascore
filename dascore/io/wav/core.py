@@ -1,6 +1,4 @@
-"""
-Core module for wave format.
-"""
+"""Core module for wave format."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,9 +12,7 @@ from dascore.utils.patch import check_patch_dims
 
 
 class WavIO(FiberIO):
-    """
-    IO support for wav (audio) format.
-    """
+    """IO support for wav (audio) format."""
 
     name = "WAV"
 
@@ -81,5 +77,5 @@ class WavIO(FiberIO):
         # normalize and detrend
         pat = pat.detrend("time", "linear").normalize("time", norm="max")
         data = pat.data
-        sample_rate = resample or np.round(ONE_SECOND / pat.attrs["d_time"])
+        sample_rate = resample or np.round(ONE_SECOND / pat.attrs["time_step"])
         return data.astype(np.float32), int(sample_rate)

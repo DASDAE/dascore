@@ -1,6 +1,4 @@
-"""
-Utility for working with time.
-"""
+"""Utility for working with time."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -48,8 +46,9 @@ def _str_to_datetime64(obj: str) -> np.datetime64:
 
 @to_datetime64.register(float)
 @to_datetime64.register(int)
+@to_datetime64.register(np.number)
 def _float_to_datetime(num: float | int) -> np.datetime64:
-    """Convert a float to a single datetime"""
+    """Convert a float to a single datetime."""
     ar = np.array([num])
     return _array_to_datetime64(ar)[0]
 
@@ -58,9 +57,7 @@ def _float_to_datetime(num: float | int) -> np.datetime64:
 @to_datetime64.register(list)
 @to_datetime64.register(tuple)
 def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
-    """
-    Convert an array of floating point timestamps to an array of np.datatime64.
-    """
+    """Convert an array of floating point timestamps to an array of np.datatime64."""
     array = np.array(array)
     nans = pd.isnull(array)
     # dealing with objects
@@ -91,10 +88,27 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     return out
 
 
+@to_datetime64.register(pd.Series)
+def _float_to_datetime(ser: pd.Series) -> pd.Series:
+    """Convert a float to a single datetime."""
+    ar = to_datetime64(ser.values)
+    return pd.Series(ar, index=ser.index)
+
+
 @to_datetime64.register(np.datetime64)
 def _pass_datetime(datetime):
     """Simply return the datetime."""
     return np.datetime64(datetime, "ns")
+
+
+@to_datetime64.register(datetime)
+def _datetime_to_datetime64(dt: datetime):
+    """Convert python datetime to datetime64."""
+    # because pandas NaT has datettime in its MRO we need to check
+    # if this is nullish and return NaT if so.
+    if pd.isnull(dt):
+        return np.datetime64("NaT")
+    return to_datetime64(np.datetime64(dt))
 
 
 @to_datetime64.register(pd.Timestamp)
@@ -103,7 +117,7 @@ def _pandas_timestamp(datetime: pd.Timestamp):
 
 
 @singledispatch
-def to_timedelta64(obj: float | np.ndarray | str):
+def to_timedelta64(obj: float | np.ndarray | str | timedelta):
     """
     Convert an object to timedelta64.
 
@@ -126,6 +140,7 @@ def to_timedelta64(obj: float | np.ndarray | str):
 
 @to_timedelta64.register(float)
 @to_timedelta64.register(int)
+@to_timedelta64.register(np.number)
 def _float_to_timedelta64(num: float | int) -> np.datetime64:
     """Convert a float to a single datetime."""
     ar = np.array([num])
@@ -136,9 +151,7 @@ def _float_to_timedelta64(num: float | int) -> np.datetime64:
 @to_timedelta64.register(list)
 @to_timedelta64.register(tuple)
 def _array_to_timedelta64(array: np.array) -> np.datetime64:
-    """
-    Convert an array of floating point timestamps to an array of np.datatime64.
-    """
+    """Convert an array of floating point timestamps to an array of np.datatime64."""
     array = np.array(array)
     nans = pd.isnull(array)
     array[nans] = 0
@@ -167,27 +180,32 @@ def _array_to_timedelta64(array: np.array) -> np.datetime64:
 
 @to_timedelta64.register(pd.Series)
 def _series_to_timedelta64_series(ser: pd.Series) -> pd.Series:
-    """
-    Convert a series to a series of timedelta64.
-    """
-    return pd.to_timedelta(ser)
+    """Convert a series to a series of timedelta64."""
+    out = to_timedelta64(ser.values)
+    return pd.Series(out, index=ser.index)
 
 
 @to_timedelta64.register(np.timedelta64)
 def _pass_time_delta(time_delta):
-    """simply return the time delta as ns precision."""
+    """Simply return the time delta as ns precision."""
     return time_delta.astype("<m8[ns]")
 
 
 @to_timedelta64.register(pd.Timedelta)
 def _unpack_pandas_time_delta(time_delta: pd.Timedelta):
-    """simply return the time delta."""
+    """Simply return the time delta."""
     return time_delta.to_numpy()
+
+
+@to_timedelta64.register(timedelta)
+def _timedelta_to_timedelta64(td):
+    """Return timedelta64."""
+    return to_timedelta64(np.timedelta64(td))
 
 
 @to_timedelta64.register(str)
 def _time_delta_from_str(time_delta_str: str):
-    """simply return the time delta."""
+    """Simply return the time delta."""
     split = time_delta_str.split(" ")
     assert len(split) == 2
     val, units = split
@@ -211,8 +229,9 @@ def to_int(obj: timeable_types | np.ndarray) -> np.ndarray:
 
 @to_int.register(float)
 @to_int.register(int)
+@to_int.register(np.number)
 def _float_to_num(num: float | int) -> float | int:
-    """convert number to int"""
+    """Convert number to int."""
     return int(num)
 
 
@@ -220,9 +239,7 @@ def _float_to_num(num: float | int) -> float | int:
 @to_int.register(list)
 @to_int.register(tuple)
 def _array_to_int(array: np.ndarray) -> np.ndarray:
-    """
-    Convert an array of floating point timestamps to an array of np.datatime64.
-    """
+    """Convert an array of floating point timestamps to an array of np.datatime64."""
     array = np.array(array)
     if not len(array):
         return array
@@ -275,9 +292,7 @@ def to_float(obj: timeable_types | np.ndarray) -> np.ndarray:
 @to_float.register(list)
 @to_float.register(tuple)
 def _array_to_float(array: np.ndarray) -> np.ndarray:
-    """
-    Convert an array of floating point timestamps to an array of np.datatime64.
-    """
+    """Convert an array of floating point timestamps to an array of np.datatime64."""
     array = np.array(array)
     if not len(array):
         return array.astype(np.float64)
@@ -314,12 +329,10 @@ def _time_delta_to_float(time_delta: np.timedelta64):
 
 
 def is_datetime64(obj) -> bool:
-    """
-    Return True if object is a datetime64 (or equivalent) or an array of such.
-    """
+    """Return True if object is a datetime64 (or equivalent) or an array of such."""
     if isinstance(obj, np.datetime64):
         return True
-    if isinstance(obj, (np.ndarray, list, tuple, pd.Series)):
+    if isinstance(obj, np.ndarray | list | tuple | pd.Series):
         if np.issubdtype(np.array(obj).dtype, np.datetime64):
             return True
     if isinstance(obj, pd.Timestamp):
@@ -328,12 +341,10 @@ def is_datetime64(obj) -> bool:
 
 
 def is_timedelta64(obj) -> bool:
-    """
-    Return True if object is a timedelta64 (or equivalent) or an array of such.
-    """
+    """Return True if object is a timedelta64 (or equivalent) or an array of such."""
     if isinstance(obj, np.timedelta64):
         return True
-    if isinstance(obj, (np.ndarray, list, tuple, pd.Series)):
+    if isinstance(obj, np.ndarray | list | tuple | pd.Series):
         if np.issubdtype(np.array(obj).dtype, np.timedelta64):
             return True
     if isinstance(obj, pd.Timedelta):

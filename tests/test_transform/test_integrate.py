@@ -1,12 +1,11 @@
-"""
-Module for performing integrations.
-"""
+"""Module for performing integrations."""
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.transform.integrate import integrate
 from dascore.units import get_quantity
 from dascore.utils.misc import broadcast_for_index
@@ -15,7 +14,7 @@ from dascore.utils.time import to_float
 
 @pytest.fixture(scope="session")
 def ones_patch(random_patch):
-    """return a patch of ones with nornal axis."""
+    """Return a patch of ones with nornal axis."""
     array = np.ones_like(random_patch.data)
     return random_patch.new(data=array)
 
@@ -40,12 +39,12 @@ class TestIndefiniteIntegrals:
             assert np.allclose(flat, np.sort(flat))
 
     def test_integrate_non_evenly_sampled(self, wacky_dim_patch):
-        """Ensure we can integrate along non-evenly sampled dims"""
+        """Ensure we can integrate along non-evenly sampled dims."""
         out = wacky_dim_patch.tran.integrate(dim="time", definite=False)
         assert isinstance(out, dc.Patch)
 
     def test_units(self, random_patch):
-        """Ensure output units are as expected"""
+        """Ensure output units are as expected."""
         patch = random_patch.set_units("m/s")
         dims = ("time", "distance")
         expected_units = ("s", "m")
@@ -98,6 +97,6 @@ class TestDefiniteIntegration:
         assert out.shape == tuple([1] * len(random_patch.shape))
 
     def test_integrate_non_evenly_sampled_dim(self, wacky_dim_patch):
-        """Simple test to integrate along non-evenly sampled dimension"""
+        """Simple test to integrate along non-evenly sampled dimension."""
         out = wacky_dim_patch.tran.integrate(dim="time", definite=True)
         assert isinstance(out, dc.Patch)

@@ -1,6 +1,4 @@
-"""
-Test for basic IO and related functions.
-"""
+"""Test for basic IO and related functions."""
 from __future__ import annotations
 
 import copy
@@ -14,40 +12,39 @@ import pytest
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
-from dascore.io.core import FiberIO
+from dascore.io.core import FiberIO, PatchFileSummary
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.time import to_datetime64
-
 
 tvar = TypeVar("tvar", int, float, str, Path)
 
 
 class _FiberFormatTestV1(FiberIO):
-    """A test format v1"""
+    """A test format v1."""
 
     name = "_TestFormatter"
     version = "1"
 
 
 class _FiberFormatTestV2(FiberIO):
-    """A test format v2"""
+    """A test format v2."""
 
     name = "_TestFormatter"
     version = "2"
 
 
 class _FiberImplementer(FiberIO):
-    """A fiber io which implements all the methods (poorly)"""
+    """A fiber io which implements all the methods (poorly)."""
 
     name = "_Implementer"
     version = "2"
 
     def read(self, resource, **kwargs):
-        """dummy read"""
+        """Dummy read."""
 
     def write(self, spool: SpoolType, resource):
-        """Dummy write"""
+        """Dummy write."""
 
     def scan(self, resource: BinaryReader):
         """Dummy scan."""
@@ -63,15 +60,15 @@ class _FiberCaster(FiberIO):
     version = "2"
 
     def read(self, resource: BinaryReader, **kwargs) -> SpoolType:
-        """Just ensure read was cast to correct type"""
+        """Just ensure read was cast to correct type."""
         assert isinstance(resource, BinaryReader)
 
     def write(self, spool: SpoolType, resource: BinaryWriter):
-        """ditto for write"""
+        """Ditto for write."""
         assert isinstance(resource, BinaryWriter)
 
     def get_format(self, resource: Path) -> tuple[str, str] | bool:
-        """and get format"""
+        """And get format."""
         assert isinstance(resource, Path)
         return False
 
@@ -87,9 +84,29 @@ class _FiberUnsupportedTypeHints(FiberIO):
     version = "2"
 
     def read(self, resource: tvar, **kwargs):
-        """dummy read"""
+        """Dummy read."""
         with open(resource) as fi:
             return fi.read()
+
+
+class TestPatchFileSummary:
+    """Tests for getting patch file information."""
+
+    def test_d_translates(self):
+        """Ensure d_{whatever} translates to step_{whatever}."""
+        out = PatchFileSummary(d_time=10)
+        assert out.time_step == dc.to_timedelta64(10)
+
+    def test_dim_typle(self):
+        """Ensure patch file summaries can be converted to tuples."""
+        out = PatchFileSummary(d_time=10, dims="time,distance")
+        assert out.dim_tuple == ("time", "distance")
+
+    def test_flat_dump(self):
+        """Simple test to show summary can be flat dumped."""
+        # flat dump is just here for compatibility with dc.PatchAttrs
+        out = PatchFileSummary(d_time=10, dims="time,distance")
+        assert isinstance(out.flat_dump(), dict)
 
 
 class TestFormatManager:
@@ -102,9 +119,7 @@ class TestFormatManager:
         return manager
 
     def test_specific_format_and_version(self, format_manager):
-        """
-        Specifying a known format and version should return exactly one formatter.
-        """
+        """Specifying a known format and version should return exactly one formatter."""
         out = list(format_manager.yield_fiberio("DASDAE", "1"))
         assert len(out) == 1
         assert isinstance(out[0], DASDAEV1)
@@ -141,13 +156,13 @@ class TestFormatManager:
             list(format_manager.yield_fiberio(version="1"))
 
     def test_format_bad_version(self, format_manager):
-        """Ensure providing a bad version but valid format raises"""
+        """Ensure providing a bad version but valid format raises."""
         with pytest.raises(UnknownFiberFormat, match="known versions"):
             iterator = format_manager.yield_fiberio(format="DASDAE", version="-1")
             list(iterator)
 
     def test_format_format_no_version(self, format_manager):
-        """Ensure providing a bad version but valid format raises"""
+        """Ensure providing a bad version but valid format raises."""
         with pytest.raises(UnknownFiberFormat, match="known versions"):
             iterator = format_manager.yield_fiberio(format="DASDAE", version="-1")
             list(iterator)
@@ -160,7 +175,7 @@ class TestFormatManager:
 
 
 class TestFormatter:
-    """Tests for adding file supports through Formatter"""
+    """Tests for adding file supports through Formatter."""
 
     # the methods a formatter can implement.
 
@@ -171,11 +186,10 @@ class TestFormatter:
 
     def test_empty_formatter_raises(self):
         """An empty formatter can't exist; it at least needs a name."""
-
         with pytest.raises(InvalidFiberIO):
 
             class empty_formatter(FiberIO):
-                """formatter with no name"""
+                """formatter with no name."""
 
     def test_empty_formatter_undefined_methods(self, random_patch):
         """
@@ -220,7 +234,7 @@ class TestGetFormat:
             dc.get_format(dummy_text_file)
 
     def test_missing_file(self):
-        """Ensure a missing file raises"""
+        """Ensure a missing file raises."""
         with pytest.raises(FileNotFoundError):
             dc.get_format("bad/file")
 
@@ -241,7 +255,7 @@ class TestScan:
         return out
 
     def test_scan_no_good_files(self, tmp_path):
-        """Scan with no fiber files should return []"""
+        """Scan with no fiber files should return []."""
         dummy_file = tmp_path / "data.txt"
         dummy_file.touch()
         out = dc.scan(dummy_file)
@@ -254,13 +268,13 @@ class TestScan:
         assert len(out) == 0
 
     def test_scan_bad_files(self, tmp_path):
-        """Trying to scan a directory should raise a nice error"""
+        """Trying to scan a directory should raise a nice error."""
         new = tmp_path / "myfile.txt"
         with pytest.raises(FileNotFoundError):
             _ = dc.scan(new)
 
     def test_scan_patch(self, random_patch):
-        """Scan should also work on a patch"""
+        """Scan should also work on a patch."""
         out = dc.scan_to_df(random_patch)
         attrs = random_patch.attrs
         assert len(out) == 1
@@ -298,7 +312,7 @@ class TestCastType:
         path = tmp_path / "write_fiber_cast.txt"
         io = _FiberCaster()
         # this passes if it doesnt raise.
-        io.write(random_spool, path)  # noqa
+        io.write(random_spool, path)
 
     def test_non_standard_name(self, dummy_text_file):
         """Ensure non-standard names still work."""
@@ -312,7 +326,7 @@ class TestCastType:
         assert out == Path(dummy_text_file).read_text()
 
     def test_unsupported_type(self, dummy_text_file):
-        """Ensure FiberIO from above works with dascore.read"""
+        """Ensure FiberIO from above works with dascore.read."""
         name = _FiberUnsupportedTypeHints.name
         version = _FiberUnsupportedTypeHints.version
         out = dc.read(dummy_text_file, name, version)

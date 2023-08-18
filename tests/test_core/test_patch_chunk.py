@@ -5,6 +5,7 @@ This is separated from spool tests because these need to be quite
 extensive.
 """
 from __future__ import annotations
+
 import random
 
 import numpy as np
@@ -24,15 +25,13 @@ def spool_dt_perturbed(random_patch) -> dc.BaseSpool:
     current_max = random_patch.attrs.time_max
     patches = []
     for dt in dts:
-        patch = random_patch.update_attrs(time_min=current_max, d_time=dt)
+        patch = random_patch.update_attrs(time_min=current_max, time_step=dt)
         patches.append(patch)
     return dc.spool(patches)
 
 
 class TestChunk:
-    """
-    Tests for merging/chunking patches.
-    """
+    """Tests for merging/chunking patches."""
 
     @pytest.fixture(scope="class")
     def random_spool_df(self, random_spool):
@@ -47,9 +46,7 @@ class TestChunk:
         assert sp1 == sp2
 
     def test_merge_chunk_adjacent_no_overlap(self, adjacent_spool_no_overlap):
-        """
-        Ensure chunking works on simple case of contiguous data w/ no overlap.
-        """
+        """Ensure chunking works on simple case of contiguous data w/ no overlap."""
         new = adjacent_spool_no_overlap.chunk(time=None)
         out_list = list(new)
         assert len(new) == len(out_list) == 1
@@ -64,7 +61,7 @@ class TestChunk:
         assert merged_len == 1
 
     def test_chunk_doesnt_modify_original(self, random_spool):
-        """Chunking shouldn't modify original spool"""
+        """Chunking shouldn't modify original spool."""
         first = random_spool.get_contents().copy()
         _ = random_spool.chunk(time=2)
         second = random_spool.get_contents().copy()
@@ -85,7 +82,7 @@ class TestChunk:
         assert chunk_df[cols].equals(new_content[cols])
 
     def test_merge_empty_spool(self, tmp_path_factory):
-        """Ensure merge doesn't raise on empty spools"""
+        """Ensure merge doesn't raise on empty spools."""
         spool = dc.spool([])
         merged = spool.chunk(time=None)
         assert len(merged) == 0
@@ -93,7 +90,7 @@ class TestChunk:
     def test_chunk_across_boundary(self, random_spool, random_spool_df):
         """Ensure query across a boundary works."""
         df = random_spool_df
-        dt = df["d_time"][0]
+        dt = df["time_step"][0]
         time_1 = df.loc[0, "time_max"] - to_timedelta64(1.00000123123)
         time_2 = time_1 + to_timedelta64(1)
         spool = random_spool.select(time=(time_1, time_2)).chunk(time=None)
@@ -105,7 +102,7 @@ class TestChunk:
     def test_uneven_chunk_iteration(self, random_spool, random_spool_df):
         """Ensure uneven start/end still yield consistent slices."""
         df = random_spool_df
-        dt = df["d_time"][0]
+        dt = df["time_step"][0]
         one_sec = to_timedelta64(1)
         time_1 = df.loc[0, "time_max"] - to_timedelta64(1.00000123123)
         time_2 = time_1 + to_timedelta64(10)
@@ -127,7 +124,7 @@ class TestChunk:
         patch = new[0]
         assert patch.attrs.time_min == spool[0].attrs.time_min
         assert patch.attrs.time_max == spool[-1].attrs.time_max
-        assert patch.attrs.d_time == spool[0].attrs.d_time
+        assert patch.attrs.time_step == spool[0].attrs.time_step
 
 
 class TestChunkMerge:
@@ -141,27 +138,23 @@ class TestChunkMerge:
         """
         pa1 = random_patch
         t2 = random_patch.attrs["time_max"]
-        d_time = random_patch.attrs["d_time"] * 1_000
-        pa2 = random_patch.update_attrs(time_min=t2 + d_time)
+        time_step = random_patch.attrs["time_step"] * 1_000
+        pa2 = random_patch.update_attrs(time_min=t2 + time_step)
         t3 = pa2.attrs["time_max"]
-        pa3 = pa2.update_attrs(time_min=t3 + d_time)
+        pa3 = pa2.update_attrs(time_min=t3 + time_step)
         return dc.spool([pa2, pa1, pa3])
 
     @pytest.fixture()
     def spool_complete_overlap(self, random_patch) -> dc.BaseSpool:
-        """
-        Create a spool which overlaps each other completely.
-        """
+        """Create a spool which overlaps each other completely."""
         return dc.spool([random_patch, random_patch])
 
     @pytest.fixture()
     def spool_slight_gap(self, random_patch) -> dc.BaseSpool:
-        """
-        Create a spool which has a 1.1 * dt gap.
-        """
+        """Create a spool which has a 1.1 * dt gap."""
         pa1 = random_patch
         t2 = random_patch.attrs["time_max"]
-        dt = random_patch.attrs["d_time"]
+        dt = random_patch.attrs["time_step"]
         pa2 = random_patch.update_attrs(time_min=t2 + dt * 1.1)
         t3 = pa2.attrs["time_max"]
         pa3 = pa2.update_attrs(time_min=t3 + dt * 1.1)
@@ -169,9 +162,7 @@ class TestChunkMerge:
 
     @pytest.fixture(scope="class")
     def adjacent_spool_overlap(self, adjacent_spool_no_overlap):
-        """
-        Create a spool with several patches that have 50% overlap.
-        """
+        """Create a spool with several patches that have 50% overlap."""
         patches = list(adjacent_spool_no_overlap)
         out = [patches[0]]
         for ind in range(1, len(patches)):
@@ -201,7 +192,7 @@ class TestChunkMerge:
     def distance_adjacent(self, random_patch):
         """Create a spool with two distance adjacent patches."""
         pa1 = random_patch
-        new_dist = pa1.attrs.distance_min + pa1.attrs.d_distance
+        new_dist = pa1.attrs.distance_min + pa1.attrs.distance_step
         pa2 = pa1.update_attrs(distance_min=new_dist)
         return dc.spool([pa1, pa2])
 
@@ -233,7 +224,7 @@ class TestChunkMerge:
         spacing = time[1:] - time[:-1]
         unique_spacing = np.unique(spacing)
         assert len(unique_spacing) == 1
-        assert unique_spacing[0] == out_patch.attrs["d_time"]
+        assert unique_spacing[0] == out_patch.attrs["time_step"]
 
     def test_no_overlap(self, desperate_spool_no_overlap):
         """Spools with no overlap should not be merged."""
@@ -261,21 +252,9 @@ class TestChunkMerge:
         assert pa1 == pa2
 
     def test_merge_transposed_patches(self, spool_complete_overlap):
-        """Ensure if one of the patches is transposed merge still works"""
+        """Ensure if one of the patches is transposed merge still works."""
         # TODO for now this won't work; its probably a silly edge case to complicate
         # the code over, but maybe revisit.
-
-        # spoo = spool_complete_overlap
-        # # transpose patch and remove transpose from history so patch will
-        # # merge with other patch
-        # new_patch = spoo[0].transpose().update_attrs(history=spoo[1].attrs["history"])
-        # new = dc.spool(
-        #     [new_patch, spoo[1]],
-        # )
-        # new_merged = new.chunk(time=None)
-        # old_merged = spool_complete_overlap.chunk(time=None)
-        # assert len(new_merged) == len(old_merged) == 1
-        # assert new_merged[0].equals(old_merged[0])
 
     def test_merge_monotonic_no_overlap(self, adjacent_spool_monotonic):
         """Ensure monotonic coords can merge."""
@@ -312,8 +291,8 @@ class TestChunkMerge:
         assert len(sp) == 1
         pa = sp[0]
         assert isinstance(pa, dc.Patch)
-        # d_distance should remain identical
-        assert distance_adjacent[0].attrs.d_distance == sp[0].attrs.d_distance
+        # distance_step should remain identical
+        assert distance_adjacent[0].attrs.distance_step == sp[0].attrs.distance_step
         # ensure correct bounds are there.
         old_df = distance_adjacent.get_contents()
         new_df = sp.get_contents()
@@ -333,12 +312,12 @@ class TestChunkMerge:
         old_spool = memory_spool_small_dt_differences
         new_spool = old_spool.chunk(time=None)
         old_contents = old_spool.get_contents()
-        d_time_expected = get_middle_value(old_contents["d_time"])
+        time_step_expected = get_middle_value(old_contents["time_step"])
         assert len(new_spool) == 1
         # need to iterate to make sure patch can be loaded.
         for patch in new_spool:
             assert isinstance(patch, dc.Patch)
-            assert patch.attrs.d_time == d_time_expected
+            assert patch.attrs.time_step == time_step_expected
 
     def test_merge_patches_very_different_dt(self, memory_spool_small_dt_differences):
         """Slightly different dt values should still merge."""
@@ -346,14 +325,14 @@ class TestChunkMerge:
         patches_1 = [x for x in spool]
         # create new patches with higher dt, this creates overlap that should
         # be trimmed out.
-        patches_2 = [x.update_attrs(d_time=x.attrs.d_time * 33) for x in spool]
+        patches_2 = [x.update_attrs(time_step=x.attrs.time_step * 33) for x in spool]
         patches = patches_2 + patches_1
         random.shuffle(patches)  # mix the patches, ensure order isnt required.
         new_spool = dc.spool(patches).chunk(time=None)
         assert len(new_spool) == 2
-        time_steps = new_spool.get_contents()["d_time"]
+        time_steps = new_spool.get_contents()["time_step"]
         for patch, time_step in zip(new_spool, time_steps):
-            diff = np.abs(patch.attrs.d_time - time_step)
+            diff = np.abs(patch.attrs.time_step - time_step)
             assert diff / time_step < 0.01
 
     def test_overlap_merge_doesnt_change_dt(self, adjacent_spool_overlap):
@@ -364,7 +343,9 @@ class TestChunkMerge:
         patch_new, patch_old = spool[0], adjacent_spool_overlap[0]
         new_at, old_at = patch_new.attrs, patch_old.attrs
         assert new_at["time_max"] == contents["time_max"].max()
-        assert new_at["d_time"] == old_at["d_time"] == contents["d_time"].iloc[0]
+        assert (
+            new_at["time_step"] == old_at["time_step"] == contents["time_step"].iloc[0]
+        )
 
     def test_perturbed_dt(self, spool_dt_perturbed):
         """Ensure patches still merge if dt is slightly off."""

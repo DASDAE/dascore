@@ -1,7 +1,6 @@
-"""
-Utilities for basic IO tasks.
-"""
+"""Utilities for basic IO tasks."""
 from __future__ import annotations
+
 import abc
 import typing
 from contextlib import suppress
@@ -28,7 +27,7 @@ class BinaryWriter(Protocol):
 
     @abc.abstractmethod
     def read(self, *args, **kwargs):
-        """Read resource contents"""
+        """Read resource contents."""
 
     @abc.abstractmethod
     def seek(self, *args, **kwargs):
@@ -47,7 +46,7 @@ class BinaryReader(Protocol):
 
     @abc.abstractmethod
     def write(self, *args, **kwargs):
-        """Write resource contents"""
+        """Write resource contents."""
 
     @abc.abstractmethod
     def seek(self, *args, **kwargs):
@@ -85,14 +84,13 @@ class HDF5Reader(Protocol):
 @cache
 def _get_required_type(required_type, arg_name=None):
     """Get the type hint for the first argument."""
-
     if required_type not in HANDLE_FUNCTIONS:
         # here we try to get the type from the function type hints
         # but we need to skip things that aren't functions
         is_func_y = isfunction(required_type) or ismethod(required_type)
         if not is_func_y or not (hints := get_type_hints(required_type)):
             return required_type
-        arg_name = arg_name if arg_name is not None else list(hints)[0]
+        arg_name = arg_name if arg_name is not None else next(iter(hints))
         return hints.get(arg_name)
     return required_type
 
@@ -113,7 +111,7 @@ def get_handle_from_resource(uri, required_type):
 
 @register_func(HANDLE_FUNCTIONS, key=Path)
 def _get_path(uri):
-    """Get a path from uri"""
+    """Get a path from uri."""
     return Path(uri)
 
 
@@ -204,7 +202,7 @@ class IOResourceManager:
         return source
 
     def get_resource(self, required_type: RequiredType) -> RequiredType:
-        """Get the requested resource from"""
+        """Get the requested resource from."""
         # no required type, just return source of manager.
         if required_type is None:
             return self.source

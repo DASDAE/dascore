@@ -1,9 +1,9 @@
-"""
-Tests for coordinate object.
-"""
+"""Tests for coordinate object."""
 from __future__ import annotations
+
 import pickle
 from io import BytesIO
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -16,18 +16,18 @@ from dascore.core.coords import (
     CoordDegenerate,
     CoordMonotonicArray,
     CoordRange,
+    CoordSummary,
     get_coord,
-    get_coord_from_attrs,
 )
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_quantity
-from dascore.utils.misc import register_func, all_close
-from dascore.utils.time import is_datetime64, is_timedelta64, dtype_time_like, to_float
+from dascore.utils.misc import all_close, register_func
+from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
 COORDS = []
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_coord():
     """Create coordinates which are evenly sampled."""
@@ -35,7 +35,7 @@ def evenly_sampled_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_reversed_coord():
     """Create coordinates which are evenly sampled."""
@@ -43,7 +43,7 @@ def evenly_sampled_reversed_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_float_coord_with_units():
     """Create coordinates which are evenly sampled and have units."""
@@ -51,7 +51,7 @@ def evenly_sampled_float_coord_with_units():
     return get_coord(values=ar, units="m")
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_float_reverse_units_coord():
     """Create coordinates which are evenly sampled and have units."""
@@ -59,7 +59,7 @@ def evenly_sampled_float_reverse_units_coord():
     return get_coord(values=ar, units="m")
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_date_coord():
     """Create coordinates which are evenly sampled."""
@@ -67,7 +67,7 @@ def evenly_sampled_date_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def evenly_sampled_time_delta_coord():
     """Create coordinates which are evenly sampled."""
@@ -75,7 +75,7 @@ def evenly_sampled_time_delta_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def monotonic_float_coord():
     """Create coordinates which are evenly sampled."""
@@ -83,7 +83,7 @@ def monotonic_float_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def reverse_monotonic_float_coord():
     """Create coordinates which are evenly sampled."""
@@ -91,7 +91,7 @@ def reverse_monotonic_float_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def monotonic_datetime_coord():
     """Create coordinates which are evenly sampled."""
@@ -99,7 +99,7 @@ def monotonic_datetime_coord():
     return get_coord(values=dc.to_datetime64(ar))
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def random_coord():
     """Create coordinates which are evenly sampled."""
@@ -107,7 +107,7 @@ def random_coord():
     return get_coord(values=ar)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 @register_func(COORDS)
 def random_date_coord():
     """Create coordinates which are evenly sampled."""
@@ -115,13 +115,13 @@ def random_date_coord():
     return get_coord(values=dc.to_datetime64(ar))
 
 
-@pytest.fixture(scope="class", params=COORDS)
+@pytest.fixture(scope="session", params=COORDS)
 def coord(request) -> BaseCoord:
-    """Meta-fixture for returning all coords"""
+    """Meta-fixture for returning all coords."""
     return request.getfixturevalue(request.param)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="session")
 def two_d_coord():
     """ "return a 2D coordinate."""
     ar = np.ones((10, 10))
@@ -129,7 +129,7 @@ def two_d_coord():
 
 
 def assert_value_in_one_step(coord, index, value, greater=True):
-    """Ensure value at index is within one step of value"""
+    """Ensure value at index is within one step of value."""
     # reverse greater for reverse monotonic
     coord_value = coord.values[index]
     if greater:
@@ -147,11 +147,11 @@ class TestBasics:
     """A suite of basic tests for coordinates."""
 
     def test_coord_init(self, coord):
-        """simply run to insure all coords initialize."""
+        """Simply run to insure all coords initialize."""
         assert isinstance(coord, BaseCoord)
 
     def test_bad_init(self):
-        """Ensure no parameters raises error"""
+        """Ensure no parameters raises error."""
         with pytest.raises(CoordError):
             get_coord()
 
@@ -240,7 +240,7 @@ class TestBasics:
             assert out.sorted
 
     def test_default_units(self):
-        """Default units should be None"""
+        """Default units should be None."""
         out = get_coord(values=np.arange(10))
         assert out.units is None
 
@@ -280,7 +280,7 @@ class TestBasics:
         assert np.allclose(out_mm.values / 1000, out_m.values)
 
     def test_convert_offset_units(self):
-        """Ensure units can be converted/set for offset units"""
+        """Ensure units can be converted/set for offset units."""
         array = np.arange(10)
         f_array = array * (9 / 5) + 32.0
         coord = get_coord(values=array, units="degC")
@@ -288,7 +288,7 @@ class TestBasics:
         assert np.allclose(f_array, out.values)
 
     def test_unit_str(self, evenly_sampled_coord):
-        """Ensure the unit string returns a string"""
+        """Ensure the unit string returns a string."""
         coord = evenly_sampled_coord.set_units("m/s")
         assert isinstance(coord.unit_str, str)
 
@@ -296,6 +296,60 @@ class TestBasics:
         """Accessing a value out of the range of array should raise."""
         with pytest.raises(IndexError, match="exceeds coord length"):
             _ = evenly_sampled_coord[len(evenly_sampled_coord)]
+
+
+class TestCoordSummary:
+    """tests for converting to and from summary coords."""
+
+    cast_data_list: ClassVar = [  # noqa
+        {"min": 400.0, "step": 1.0, "units": "", "max": 1000.0},
+        {"min": 0, "max": 10},
+        {"min": dc.to_datetime64(10), "max": dc.to_datetime64(100)},
+        {"min": dc.to_timedelta64(100), "max": dc.to_timedelta64(200)},
+    ]
+
+    @pytest.fixture(scope="session")
+    def summary(self, coord) -> CoordSummary:
+        """Convert each coord to a summary."""
+        return coord.to_summary()
+
+    def test_dtype_consistent(self, summary, coord):
+        """Ensure the datatype is preserved."""
+        dtype = np.dtype(summary.dtype)
+        min_ar = np.array(summary.min)
+        max_ar = np.array(summary.max)
+        assert np.issubdtype(min_ar.dtype, dtype)
+        assert np.issubdtype(max_ar.dtype, dtype)
+
+    def test_to_summary(self, coord):
+        """Ensure all coords can be converted to a summary."""
+        out = coord.to_summary()
+        assert isinstance(out, CoordSummary)
+
+    def test_coord_range_round_trip(self, coord):
+        """Coord ranges should round-trip to summaries and back."""
+        if not coord.evenly_sampled:
+            return
+        summary = coord.to_summary()
+        back = summary.to_coord()
+        assert back == coord
+
+        if not back.to_summary() == summary:
+            coord.to_summary()
+
+        assert back.to_summary() == summary
+
+    def test_to_summary_raises(self, random_coord):
+        """Ensure to_summary raises if not evenly sampled."""
+        match = "Cannot convert summary which is not evenly sampled"
+        with pytest.raises(CoordError, match=match):
+            random_coord.to_summary().to_coord()
+
+    @pytest.mark.parametrize("data", cast_data_list)
+    def test_dtype_inferred(self, data):
+        """Ensure the dtypes are correctly determined if not specified."""
+        out = CoordSummary(**data)
+        assert np.dtype(out.dtype) == np.dtype(type(data["min"]))
 
 
 class TestGetSliceTuple:
@@ -461,7 +515,7 @@ class TestSelect:
         assert coord.select((None, v2))[0] == coord
 
     def test_wide_select_bounds(self, coord):
-        """Wide (lt and gt limits) select bounds should be fine"""
+        """Wide (lt and gt limits) select bounds should be fine."""
 
         def _is_equal(coord1, coord2, indexer):
             """Assert coord and indexer are equal."""
@@ -521,6 +575,16 @@ class TestSelect:
             assert np.all(ind_1 == ind_2)
         else:
             assert ind_1 == ind_2
+
+    def test_select_changes_len(self, coord):
+        """Ensure select changes the length of the coordinate."""
+        if len(coord) < 3 or not coord.sorted:
+            return
+        data = coord.data
+        new, dslice = coord.select((data[2], data[-2]))
+        # plus 3 because end value is inclusive
+        new_len = dslice.stop - dslice.start
+        assert len(new) == new_len
 
 
 class TestEqual:
@@ -645,7 +709,7 @@ class TestCoordRange:
         assert new.start - new.step <= datetime
 
     def test_sort(self, evenly_sampled_coord):
-        """Ensure sort returns equal coord"""
+        """Ensure sort returns equal coord."""
         out, _ = evenly_sampled_coord.sort()
         assert out == evenly_sampled_coord
 
@@ -657,7 +721,7 @@ class TestCoordRange:
     def test_update_limits_start(self, evenly_sampled_coord):
         """Ensure start can be updated."""
         new_start = evenly_sampled_coord.start + 2 * evenly_sampled_coord.step
-        new = evenly_sampled_coord.update_limits(start=new_start)
+        new = evenly_sampled_coord.update_limits(min=new_start)
         assert len(new) == len(evenly_sampled_coord)
         assert new.step == evenly_sampled_coord.step
         assert new.start == new_start
@@ -666,7 +730,7 @@ class TestCoordRange:
         """Ensure end can be updated."""
         new_stop = evenly_sampled_coord.start - 2 * evenly_sampled_coord.step
         step = evenly_sampled_coord.step
-        new = evenly_sampled_coord.update_limits(stop=new_stop - step)
+        new = evenly_sampled_coord.update_limits(max=new_stop - step)
         assert len(new) == len(evenly_sampled_coord)
         assert new.step == evenly_sampled_coord.step
         assert new.stop == new_stop
@@ -682,7 +746,7 @@ class TestCoordRange:
         """Ensure both start/stop can be updated."""
         coord = evenly_sampled_coord
         start, stop = coord.values[2], coord.values[-2]
-        new = coord.update_limits(start=start, stop=stop)
+        new = coord.update_limits(min=start, max=stop)
         assert len(new) == len(coord)
         assert new.start == start
         assert new.stop == stop
@@ -773,7 +837,7 @@ class TestMonotonicCoord:
         assert new.max() <= 40
 
     def test_sort(self, monotonic_float_coord):
-        """Ensure sort returns equal coord"""
+        """Ensure sort returns equal coord."""
         out, _ = monotonic_float_coord.sort()
         assert out == monotonic_float_coord
 
@@ -839,7 +903,7 @@ class TestMonotonicCoord:
         """Ensure end can be updated."""
         coord = monotonic_float_coord
         new_stop = coord.max() - 10
-        new = coord.update_limits(stop=new_stop)
+        new = coord.update_limits(max=new_stop)
         assert len(new) == len(coord)
         assert new.max() == new_stop
 
@@ -847,7 +911,7 @@ class TestMonotonicCoord:
         """Ensure the start can be updated."""
         coord = monotonic_float_coord
         new_start = coord.min() - 100
-        new = coord.update_limits(start=new_start)
+        new = coord.update_limits(min=new_start)
         assert len(new) == len(coord)
         assert np.isclose(new.min(), new_start)
 
@@ -878,7 +942,7 @@ class TestMonotonicCoord:
         assert wide_coord == coord
 
     def test_properties_mono(self, monotonic_float_coord):
-        """check a few properties for monotonic float coord."""
+        """Check a few properties for monotonic float coord."""
         coord = monotonic_float_coord
         assert coord.sorted
         assert not coord.evenly_sampled
@@ -886,7 +950,7 @@ class TestMonotonicCoord:
         assert not coord.degenerate
 
     def test_properties_reverse_mono(self, reverse_monotonic_float_coord):
-        """check a few properties for reverse monotonic float coord."""
+        """Check a few properties for reverse monotonic float coord."""
         coord = reverse_monotonic_float_coord
         assert not coord.sorted
         assert not coord.evenly_sampled
@@ -909,7 +973,7 @@ class TestNonOrderedArrayCoords:
     """Tests for non-ordered array coords."""
 
     def test_select(self, random_coord):
-        """Ensure selecting returns an ndarray"""
+        """Ensure selecting returns an ndarray."""
         min_v, max_v = np.min(random_coord.values), np.max(random_coord.values)
         dist = max_v - min_v
         val1, val2 = min_v + 0.2 * dist, max_v - 0.2 * dist
@@ -978,7 +1042,7 @@ class TestDegenerateCoords:
         assert basic_degenerate.empty() == basic_degenerate
 
     def test_min_max(self, basic_degenerate):
-        """Ensure min/max are nullish"""
+        """Ensure min/max are nullish."""
         assert pd.isnull(basic_degenerate.min())
         assert pd.isnull(basic_degenerate.max())
 
@@ -996,34 +1060,6 @@ class TestDegenerateCoords:
         assert not coord.sorted
         assert not coord.reverse_sorted
         assert coord.degenerate
-
-
-class TestCoordFromAttrs:
-    """Tests for creating coordinates from attrs."""
-
-    def test_missing_info_raises(self):
-        """Ensure missing values raise CoordError."""
-        attrs = dict(time_min=0, time_max=10)
-        with pytest.raises(CoordError, match="Could not get coordinate"):
-            get_coord_from_attrs(attrs, name="time")
-
-    def test_int_coords(self):
-        """Happy path for getting coords."""
-        attrs = dict(time_min=0, time_max=10, d_time=1)
-        coord = get_coord_from_attrs(attrs, name="time")
-        assert isinstance(coord, BaseCoord)
-        assert isinstance(coord, CoordRange)
-        assert coord.start == 0
-        assert coord.stop == 11
-        assert coord.step == 1
-        assert coord.values[0] == 0
-        assert coord.values[-1] == 10
-
-    def test_init_attr_with_units(self):
-        """Ensure units are also set."""
-        attrs = dict(time_min=0, time_max=10, d_time=1, time_units="s")
-        coord = get_coord_from_attrs(attrs, name="time")
-        assert dc.get_unit(coord.units) == dc.get_unit("s")
 
 
 class TestCoercion:

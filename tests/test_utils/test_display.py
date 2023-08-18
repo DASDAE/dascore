@@ -1,7 +1,6 @@
-"""
-Tests for displaying dascore objects.
-"""
+"""Tests for displaying dascore objects."""
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 

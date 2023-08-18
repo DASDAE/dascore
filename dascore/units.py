@@ -1,6 +1,4 @@
-"""
-Module for handling units.
-"""
+"""Module for handling units."""
 from __future__ import annotations
 
 from functools import cache
@@ -9,7 +7,7 @@ from typing import TypeVar
 import numpy as np
 import pandas as pd
 import pint
-from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit  # noqa
+from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
 
 from dascore.exceptions import UnitError
 from dascore.utils.misc import unbyte
@@ -32,6 +30,8 @@ def get_registry():
 
     # allow multiplication with offset units.
     ureg.autoconvert_offset_to_baseunit = True
+    # set shortest display for units.
+    ureg.default_format = "~"
     pint.set_application_registry(ureg)
     return ureg
 
@@ -56,6 +56,7 @@ def _str_to_quant(qunat_str):
 
 def get_quantity(value: str_or_none) -> Quantity | None:
     """Convert a value to a pint quantity."""
+    value = unbyte(value)
     if value is None or value is ... or value == "":
         return None
     if isinstance(value, Quantity):
@@ -66,13 +67,13 @@ def get_quantity(value: str_or_none) -> Quantity | None:
 def get_factor_and_unit(
     value: str_or_none, simplify: bool = False
 ) -> tuple[float, str_or_none]:
-    """Convert a mixed unit/scaling factor to scale_factor and unit str"""
+    """Convert a mixed unit/scaling factor to scale_factor and unit str."""
     quant = get_quantity(value)
     if quant is None:
         return 1.0, None
     if simplify:
         quant = quant.to_base_units()
-    return quant.magnitude, str(quant.units)
+    return quant.magnitude, get_quantity_str(quant.units)
 
 
 @cache
@@ -137,7 +138,7 @@ def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
 
 
 def invert_quantity(unit: pint.Unit | str) -> pint.Unit:
-    """Invert a unit"""
+    """Invert a unit."""
     # just get magnitude for isnull test to avoid warning of casting
     # quantity to array.
     unit_test = unit.magnitude if hasattr(unit, "magnitude") else unit

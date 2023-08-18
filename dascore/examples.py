@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+import dascore.core
 from dascore.exceptions import UnknownExample
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
@@ -29,23 +30,21 @@ def _random_patch(
     station="",
     tag="random",
     shape=(300, 2_000),
-    d_time=to_timedelta64(1 / 250),
-    d_distance=1,
+    time_step=to_timedelta64(1 / 250),
+    distance_step=1,
     time_array=None,
     dist_array=None,
 ):
-    """
-    Generate a random DAS Patch.
-    """
+    """Generate a random DAS Patch."""
     # get input data
     rand = np.random.RandomState(13)
     array = rand.random(shape)
     # create attrs
-    t1 = np.atleast_1d(np.datetime64(starttime))
+    t1 = np.atleast_1d(np.datetime64(starttime))[0]
     d1 = np.atleast_1d(start_distance)
     attrs = dict(
-        d_distance=d_distance,
-        d_time=to_timedelta64(d_time),
+        distance_step=distance_step,
+        time_step=to_timedelta64(time_step),
         category="DAS",
         time_min=t1,
         network=network,
@@ -54,13 +53,27 @@ def _random_patch(
         time_units="s",
         distance_units="m",
     )
-    # create coords
-    time_array = np.arange(array.shape[1]) if time_array is None else time_array
-    dist_array = np.arange(array.shape[0]) if dist_array is None else dist_array
-    coords = dict(
-        distance=d1 + dist_array * attrs["d_distance"],
-        time=t1 + time_array * attrs["d_time"],
-    )
+    # need to pop out dim attrs if coordinates provided.
+    if time_array is not None:
+        attrs.pop("time_min")
+        # need to keep time_step if time_array is len 1 to get coord range
+        if len(time_array) > 1:
+            attrs.pop("time_step")
+    else:
+        time_array = dascore.core.get_coord(
+            values=t1 + np.arange(array.shape[1]) * attrs["time_step"],
+            step=attrs["time_step"],
+            units=attrs["time_units"],
+        )
+    if dist_array is not None:
+        attrs.pop("distance_step")
+    else:
+        dist_array = dascore.core.get_coord(
+            values=d1 + np.arange(array.shape[0]) * attrs["distance_step"],
+            step=attrs["distance_step"],
+            units=attrs["distance_units"],
+        )
+    coords = dict(distance=dist_array, time=time_array)
     # assemble and output.
     out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
     patch = dc.Patch(**out)
@@ -74,12 +87,12 @@ def _wacky_dim_coord_patch():
     # distance is neither monotonic nor evenly sampled.
     dist_ar = np.random.random(100) + np.arange(100) * 0.3
     # time is monotonic, not evenly sampled.
-    time_ar = np.cumsum(np.random.random(1_000))
+    time_ar = dc.to_datetime64(np.cumsum(np.random.random(1_000)))
     patch = _random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
     # check attrs
     attrs = patch.attrs
-    assert pd.isnull(attrs.d_time)
-    assert pd.isnull(attrs.d_distance)
+    assert pd.isnull(attrs.coords["time"].step)
+    assert pd.isnull(attrs.coords["time"].step)
     return patch
 
 
@@ -116,22 +129,21 @@ def _sin_wave_patch(
     # Get time and distance coords
     distance = np.arange(1, channel_count + 1, 1)
     time = to_timedelta64(t_array) + np.datetime64(time_min)
-    freqs = [frequency] if isinstance(frequency, (float, int)) else frequency
+    freqs = [frequency] if isinstance(frequency, float | int) else frequency
     # init empty data and add frequencies.
     data = np.zeros((len(time), len(distance)))
     for freq in freqs:
         sin_data = amplitude * np.sin(2.0 * np.pi * freq * t_array)
         data += sin_data[..., np.newaxis]
-
     patch = dc.Patch(
         data=data,
         coords={"time": time, "distance": distance},
         dims=("time", "distance"),
         attrs={
             "time_min": to_datetime64(time_min),
-            "d_time": 1 / sample_rate,
+            "time_step": 1 / sample_rate,
             "distance_min": 1,
-            "d_distance": 1,
+            "distance_step": 1,
             "distance_max": 3,
         },
     )
@@ -187,7 +199,7 @@ def _random_spool(
     for _ in range(length):
         patch = _random_patch(starttime=starttime, **kwargs)
         out.append(patch)
-        diff = to_timedelta64(time_gap) + patch.attrs.d_time
+        diff = to_timedelta64(time_gap) + patch.attrs.coords["time"].step
         starttime = patch.attrs["time_max"] + diff
     return dc.spool(out)
 
@@ -205,7 +217,8 @@ def _diverse_spool():
     spool_overlaps = _random_spool(
         time_gap=-np.timedelta64(10, "ms"), station="overlaps"
     )
-    dt = to_timedelta64(spool_big_gaps[0].attrs["d_time"] / np.timedelta64(1, "s"))
+    time_step = spool_big_gaps[0].attrs.coords["time"].step
+    dt = to_timedelta64(time_step / np.timedelta64(1, "s"))
     spool_small_gaps = _random_spool(time_gap=dt, station="smallg")
     spool_way_late = _random_spool(
         length=1, starttime=np.datetime64("2030-01-01"), station="wayout"

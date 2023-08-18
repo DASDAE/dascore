@@ -4,6 +4,7 @@ A few mappings that might be useful.
 We can't simply use types.MappingProxyType because it can't be pickled.
 """
 from __future__ import annotations
+
 from collections.abc import Mapping as ABCMap
 
 
@@ -46,7 +47,7 @@ class FrozenDict(ABCMap):
         return f"<{self.__class__.__name__} {self._dict!r}>"
 
     def _hash_contents(self):
-        """Returns a hash of the dictionary"""
+        """Returns a hash of the dictionary."""
         out = 0
         for key, value in self._dict.items():
             out ^= hash((key, value))

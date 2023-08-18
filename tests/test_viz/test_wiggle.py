@@ -1,13 +1,12 @@
-"""
-Tests for wiggle plots.
-"""
+"""Tests for wiggle plots."""
 from __future__ import annotations
+
 import matplotlib.pyplot as plt
 import numpy as np
 
 
 class TestWiggle:
-    """Tests for wiggle plot"""
+    """Tests for wiggle plot."""
 
     def test_returns_axes(self, random_patch):
         """Call waterfall plot, return."""
@@ -18,12 +17,12 @@ class TestWiggle:
         out = random_patch.new(data=data)
         ax = out.viz.wiggle()
         # check labels
-        assert random_patch.dims[0].capitalize() in ax.get_ylabel()
-        assert random_patch.dims[1].capitalize() in ax.get_xlabel()
+        assert random_patch.dims[0].lower() in ax.get_ylabel().lower()
+        assert random_patch.dims[1].lower() in ax.get_xlabel().lower()
         assert isinstance(ax, plt.Axes)
 
     def test_example(self):
-        """test the example from the docs"""
+        """Test the example from the docs."""
         import dascore as dc
 
         patch = dc.examples._sin_wave_patch(

@@ -1,9 +1,9 @@
-"""
-pytest configuration for dascore
-"""
+"""pytest configuration for dascore."""
 from __future__ import annotations
+
 import os
 import shutil
+from contextlib import suppress
 from pathlib import Path
 
 import matplotlib
@@ -17,7 +17,9 @@ import dascore.examples as ex
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import SpoolType
 from dascore.core import Patch
+from dascore.examples import get_example_patch
 from dascore.io.core import read
+from dascore.io.indexer import DirectoryIndexer
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 
@@ -46,7 +48,6 @@ def pytest_addoption(parser):
 
 def pytest_collection_modifyitems(config, items):
     """Configure pytest command line options."""
-
     marks = {}
     if not config.getoption("--integration"):
         msg = "needs --integration option to run"
@@ -78,7 +79,14 @@ def pytest_sessionstart(session):
     dc._debug = True
 
 
-# --- Patch Paths
+@pytest.fixture(scope="session", autouse=True)
+def swap_index_map_path(tmp_path_factory):
+    """For all tests cases, use a temporary index file."""
+    tmp_map_path = tmp_path_factory.mktemp("cache_paths") / "cache_paths.json"
+    setattr(DirectoryIndexer, "index_map_path", tmp_map_path)
+
+
+# --- Patch Fixtures
 
 
 @pytest.fixture(scope="session")
@@ -131,18 +139,18 @@ def idas_h5_example_path():
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def terra15_das_patch(terra15_das_example_path) -> Patch:
-    """Read the terra15 data, return contained DataArray"""
+    """Read the terra15 data, return contained DataArray."""
     out = read(terra15_das_example_path, "terra15")[0]
     attr_time = out.attrs["time_max"]
-    coord_time = out.coords.coord_map["time"].max()
-    assert attr_time == coord_time
+    coortime_step = out.coords.coord_map["time"].max()
+    assert attr_time == coortime_step
     return out
 
 
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def prodml_v2_0_patch(prodml_v2_0_example_path) -> Patch:
-    """Read the prodML v2.0 patch"""
+    """Read the prodML v2.0 patch."""
     out = read(prodml_v2_0_example_path, "prodml")[0]
     return out
 
@@ -150,7 +158,7 @@ def prodml_v2_0_patch(prodml_v2_0_example_path) -> Patch:
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def prodml_v2_1_patch(prodml_v2_1_example_path) -> Patch:
-    """Read the prodML v2.1 patch"""
+    """Read the prodML v2.1 patch."""
     out = read(prodml_v2_1_example_path, "prodml")[0]
     return out
 
@@ -159,8 +167,6 @@ def prodml_v2_1_patch(prodml_v2_1_example_path) -> Patch:
 @register_func(PATCH_FIXTURES)
 def random_patch() -> Patch:
     """Init a random array."""
-    from dascore.examples import get_example_patch
-
     return get_example_patch("random_das")
 
 
@@ -259,14 +265,14 @@ def adjacent_spool_directory(tmp_path_factory, adjacent_spool_no_overlap):
 @pytest.fixture()
 @register_func(SPOOL_FIXTURES)
 def terra15_das_spool(terra15_das_example_path) -> SpoolType:
-    """Return the spool of Terra15 Das Array"""
+    """Return the spool of Terra15 Das Array."""
     return read(terra15_das_example_path, file_format="terra15")
 
 
 @pytest.fixture(scope="session")
 @register_func(SPOOL_FIXTURES)
 def terra15_das_unfinished_path() -> Path:
-    """Return the spool of Terra15 Das Array"""
+    """Return the spool of Terra15 Das Array."""
     out = fetch("terra15_das_unfinished.hdf5")
     assert out.exists()
     return out
@@ -290,16 +296,16 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
     """
     pa1 = random_patch
     t2 = random_patch.attrs["time_max"]
-    d_time = random_patch.attrs["d_time"]
+    time_step = random_patch.attrs["time_step"]
 
-    pa2 = random_patch.update_attrs(time_min=t2 + d_time)
+    pa2 = random_patch.update_attrs(time_min=t2 + time_step)
     t3 = pa2.attrs["time_max"]
 
-    pa3 = pa2.update_attrs(time_min=t3 + d_time)
+    pa3 = pa2.update_attrs(time_min=t3 + time_step)
 
-    expected_time = pa3.attrs["time_max"] - pa1.attrs["time_min"]
+    expectetime_step = pa3.attrs["time_max"] - pa1.attrs["time_min"]
     actual_time = pa3.coords["time"].max() - pa1.coords["time"].min()
-    assert expected_time == actual_time
+    assert expectetime_step == actual_time
     return dc.spool([pa2, pa1, pa3])
 
 
@@ -349,7 +355,7 @@ def memory_spool_dim_1_patches():
     """
     spool = dc.get_example_spool(
         "random_das",
-        d_time=0.999767552,
+        time_step=0.999767552,
         shape=(100, 1),
         length=10,
         starttime="2023-06-13T15:38:00.49953408",
@@ -360,15 +366,14 @@ def memory_spool_dim_1_patches():
 @pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
 def all_examples_spool(terra15_das_example_path):
-    """
-    Create a spool from all the examples.
-    """
+    """Create a spool from all the examples."""
     parent = terra15_das_example_path.parent
     spool = dc.spool(parent)
     try:
         spool = spool.update()
-    except Exception:  # noqa
-        spool.indexer.index_path.unlink()  # delete index if problems found
+    except Exception:
+        with suppress(FileNotFoundError):
+            spool.indexer.index_path.unlink()  # delete index if problems found
         spool = spool.update()  # then re-index
     return spool
 
@@ -376,11 +381,11 @@ def all_examples_spool(terra15_das_example_path):
 @pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
 def memory_spool_small_dt_differences(random_spool):
-    """Create a memory spool with slightly different d_times"""
+    """Create a memory spool with slightly different time_steps."""
     out = []
     for num, patch in enumerate(random_spool):
-        dt = patch.attrs.d_time + num * np.timedelta64(1, "ns")
-        new = patch.update_attrs(d_time=dt)
+        dt = patch.attrs.time_step + num * np.timedelta64(1, "ns")
+        new = patch.update_attrs(time_step=dt)
         out.append(new)
     spool = dc.spool(out)
     assert len(out) == len(spool)

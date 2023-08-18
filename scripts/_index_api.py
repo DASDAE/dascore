@@ -1,6 +1,4 @@
-"""
-A script to create an index of the structure of the DASCore package.
-"""
+"""A script to create an index of the structure of the DASCore package."""
 from __future__ import annotations
 
 import inspect
@@ -84,8 +82,8 @@ def _yield_get_submodules(obj, base_path):
             yield mod_name, mod
 
 
-def parse_project(obj, key=None):  # NOQA
-    """Parse the project create dict of data and data_type"""
+def parse_project(obj, key=None):
+    """Parse the project create dict of data and data_type."""
 
     def get_type(
         obj, parent_is_class=False
@@ -112,13 +110,12 @@ def parse_project(obj, key=None):  # NOQA
 
         These can be feed to render templates.
         """
-
         try:
             sig = inspect.signature(obj)
         except (TypeError, ValueError):
             sig = None
 
-        docstr = inspect.getdoc(obj)
+        docstr = inspect.getdoc(obj) or ""
         dtype = get_type(obj, parent_is_class)
         data = defaultdict(list)
         data["docstring"] = docstr
@@ -158,10 +155,11 @@ def parse_project(obj, key=None):  # NOQA
         return data
 
     def traverse(obj, data_dict, base_path, key=None, parent_is_class=False):
-        """Traverse tree, populate data_dict"""
+        """Traverse tree, populate data_dict."""
         obj = _unwrap_obj(obj)
         obj_id = str(id(obj))
         path = _get_file_path(obj)
+
         # this is something outside of dascore or we have already seen it.
         if str(base_path) not in str(path) or obj_id in data_dict:
             return
@@ -197,7 +195,7 @@ def parse_project(obj, key=None):  # NOQA
                         continue
                     sub_key = f"{key}.{sub_name}"
                     # make sure this is where the method is defined else skip
-                    if sub_path != path:
+                    if str(sub_path) != str(path):
                         continue
                     traverse(sub_obj, data_dict, base_path, sub_key, True)
 
@@ -205,7 +203,6 @@ def parse_project(obj, key=None):  # NOQA
     data_dict = {}
     traverse(obj, data_dict, base_path)
 
-    # traverse(obj, key, data_dict, str(base_path), parent_path=base_path)
     return data_dict
 
 

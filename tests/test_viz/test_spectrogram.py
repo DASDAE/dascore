@@ -1,17 +1,16 @@
-"""
-Tests for plotting a spectrogram.
-"""
+"""Tests for plotting a spectrogram."""
 from __future__ import annotations
+
 import matplotlib.pyplot as plt
 import pytest
 
 
 class TestPlotSpectrogram:
-    """Test for basic"""
+    """Test for basic."""
 
     @pytest.fixture()
     def spectro_axis(self, random_patch):
-        """return the axis from the spectrogram function."""
+        """Return the axis from the spectrogram function."""
         patch = random_patch.aggregate(dim="distance")
         return patch.viz.spectrogram()
 

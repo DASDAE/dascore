@@ -1,6 +1,4 @@
-"""
-Transformations to strain rates.
-"""
+"""Transformations to strain rates."""
 from __future__ import annotations
 
 from dascore.constants import PatchType

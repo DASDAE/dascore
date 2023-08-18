@@ -49,7 +49,7 @@ class DirectorySpool(DataFrameSpool):
         preferred_format: str | None = None,
         select_kwargs: dict | None = None,
     ):
-        super().__init__()
+        super().__init__(select_kwargs=select_kwargs)
         # Init file spool from another file spool
         if isinstance(base_path, self.__class__):
             self.__dict__.update(copy.deepcopy(base_path.__dict__))
@@ -57,10 +57,9 @@ class DirectorySpool(DataFrameSpool):
         # Init file spool from indexer
         elif isinstance(base_path, AbstractIndexer):
             self.indexer = base_path
-        elif isinstance(base_path, (Path, str)):
+        elif isinstance(base_path, Path | str):
             self.indexer = DirectoryIndexer(base_path, index_path=index_path)
         self._preferred_format = preferred_format
-        self._select_kwargs = {} if select_kwargs is None else select_kwargs
 
     def __rich__(self):
         """Augment rich string directory spool stuff."""
@@ -68,13 +67,14 @@ class DirectorySpool(DataFrameSpool):
         path = self.indexer.path
         kwargs = self._select_kwargs
         out = base + Text(f"\n    Path: {path}")
-        if kwargs:
-            out += Text(f"\n    Select kwargs: {kwargs}")
+        out += Text(f"\n    Select kwargs: {kwargs}") if kwargs else Text("")
         return out
 
     def _get_df(self):
         """Get the dataframe of current contents."""
-        out = adjust_segments(self._source_df, **self._select_kwargs)
+        out = adjust_segments(
+            self._source_df, ignore_bad_kwargs=True, **self._select_kwargs
+        )
         return out
 
     def _get_instruction_df(self):
@@ -123,10 +123,13 @@ class DirectorySpool(DataFrameSpool):
         This is significantly faster than iterating rows.
         """
         df = df.copy(deep=False).replace("", None)
-        df["path"] = str(self.spool_path) + df["path"]
+        # note: need to add extra / here since we no longer store it in db.
+        df["path"] = (str(self.spool_path) + "/") + df["path"]
         return super()._df_to_dict_list(df)
 
     def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-        patch = dc.read(**kwargs)[0]
+        final_kwargs = dict(kwargs)
+        final_kwargs.update(self._select_kwargs)
+        patch = dc.read(**final_kwargs)[0]
         return patch

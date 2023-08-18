@@ -1,6 +1,4 @@
-"""
-Utilities for chunking dataframes.
-"""
+"""Utilities for chunking dataframes."""
 from __future__ import annotations
 
 from collections.abc import Collection
@@ -116,7 +114,7 @@ class ChunkManager:
     tolerance
         The upper limit of a gap to tolerate in terms of the sampling
         along the desired dimension. E.G., the default value means entities
-        with gaps <= 1.5 * d_{name} will be merged.
+        with gaps <= 1.5 * {name}_step will be merged.
     **kawrgs
         kwargs specify the column along which to chunk. The key specifies the
         column along which to chunk, typically, `time` or `distance`, and the
@@ -144,7 +142,7 @@ class ChunkManager:
         self._validate_chunker()
 
     def _validate_kwargs(self, kwargs):
-        """Ensure kwargs is len one and has a valid"""
+        """Ensure kwargs is len one and has a valid."""
         if not len(kwargs) == 1:
             msg = (
                 f"Chunking only supported along one dimension. You passed "
@@ -185,15 +183,15 @@ class ChunkManager:
         group_num = has_gap.astype(np.int64).cumsum()
         return group_num[start.index]
 
-    def _get_sampling_group_num(self, df, tolerance=0.05) -> pd.Series:
+    def _get_sampling_group_num(self, step, tolerance=0.05) -> pd.Series:
         """
         Because sampling can be off a little, this adds some tolerance for
         how sampling affects groups.
 
-        Tolerance affects how close samples have to be to be considered
+        Tolerance affects how close samples have to be in order to count as
         the same. 5% is used here.
         """
-        col = df[f"d_{self._name}"].values
+        col = step.values
         sort_args = np.argsort(col)
         sorted_col = col[sort_args]
         roll_forward = np.roll(sorted_col, shift=1)
@@ -201,13 +199,11 @@ class ChunkManager:
         out_of_threshold = diff > tolerance
         group_number = numpy.cumsum(out_of_threshold)
         # undo sorting
-        out = pd.Series(group_number[np.argsort(sort_args)], index=df.index)
+        out = pd.Series(group_number[np.argsort(sort_args)], index=step.index)
         return out
 
     def _get_duration_overlap(self, duration, start, step, overlap=None):
-        """
-        Get duration and overlap from kwargs.
-        """
+        """Get duration and overlap from kwargs."""
         overlap = overlap if overlap is not None else self._overlap
         # cast step to time delta if start is datetime
         if is_datetime64(start):
@@ -220,7 +216,7 @@ class ChunkManager:
         """Reconstruct the dataframe."""
         cols = f"{name}_min", f"{name}_max"
         out = pd.DataFrame(start_stop, columns=list(cols))
-        out[f"d_{name}"] = get_middle_value(df[f"d_{name}"].values)
+        out[f"{name}_step"] = get_middle_value(df[f"{name}_step"].values)
         merger = df.drop(columns=out.columns)
         for col in merger:
             vals = merger[col].unique()
@@ -268,7 +264,7 @@ class ChunkManager:
         return out
 
     def _get_instructions(self, sub_source, sub_chunk):
-        """get source mapping to chunk."""
+        """Get source mapping to chunk."""
         min_name, max_name = f"{self._name}_min", f"{self._name}_max"
         # sort inputs based on start of range, as long as we don't reset index
         # we should be ok.
@@ -351,7 +347,7 @@ class ChunkManager:
         being consistent and group columns matching.
         """
         cont_g = self._get_continuity_group_number(start, stop, step)
-        samp_g = self._get_sampling_group_num(df)
+        samp_g = self._get_sampling_group_num(step)
         col_g = self._get_col_group(df, cont_g)
         group_series = [x.astype(str) for x in [samp_g, col_g, cont_g]]
         group = reduce(lambda x, y: x + "_" + y, group_series)
@@ -364,7 +360,7 @@ class ChunkManager:
         """
         Chunk a dataframe into new contiguous segments.
 
-        The dataframe must have column names {key}_max, {key}_min, and d_{key}
+        The dataframe must have column names {key}_max, {key}_min, and {key}_step
         where {key} is the key used in the kwargs.
 
         Parameters

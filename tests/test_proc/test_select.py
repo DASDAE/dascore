@@ -1,6 +1,4 @@
-"""
-Tests for selecting data from patches.
-"""
+"""Tests for selecting data from patches."""
 from __future__ import annotations
 
 import numpy as np
@@ -12,9 +10,7 @@ class TestSelect:
     """Tests for selecting data from patch."""
 
     def test_select_by_distance(self, random_patch):
-        """
-        Ensure distance can be used to filter patch.
-        """
+        """Ensure distance can be used to filter patch."""
         dmin, dmax = 100, 200
         pa = random_patch.select(distance=(dmin, dmax))
         assert pa.data.shape < random_patch.data.shape
@@ -23,9 +19,7 @@ class TestSelect:
         assert pa.attrs["distance_max"] <= 200
 
     def test_select_by_absolute_time(self, random_patch):
-        """
-        Ensure the data can be sub-selected using absolute time.
-        """
+        """Ensure the data can be sub-selected using absolute time."""
         shape = random_patch.data.shape
         t1 = random_patch.attrs["time_min"] + np.timedelta64(1, "s")
         t2 = t1 + np.timedelta64(3, "s")
@@ -54,7 +48,7 @@ class TestSelect:
         assert pa2 == random_patch
 
     def test_select_distance_leaves_time_attr_unchanged(self, random_patch):
-        """Ensure selecting on distance doesn't change time"""
+        """Ensure selecting on distance doesn't change time."""
         dist = random_patch.coords["distance"]
         dist_max, dist_mean = np.max(dist), np.mean(dist)
         out = random_patch.select(distance=(dist_mean, dist_max - 1))
@@ -69,7 +63,7 @@ class TestSelect:
         assert np.size(out.data) == 0
 
     def test_select_relative_start_end(self, random_patch):
-        """Ensure relative select works on start to end"""
+        """Ensure relative select works on start to end."""
         patch1 = random_patch.select(time=(1, -1), relative=True)
         t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
         t2 = random_patch.attrs.time_max - dc.to_timedelta64(1)
@@ -77,7 +71,7 @@ class TestSelect:
         assert patch1 == patch2
 
     def test_select_relative_end_end(self, random_patch):
-        """Ensure relative works for end to end"""
+        """Ensure relative works for end to end."""
         patch1 = random_patch.select(time=(-3, -1), relative=True)
         t1 = random_patch.attrs.time_max - dc.to_timedelta64(1)
         t2 = random_patch.attrs.time_max - dc.to_timedelta64(3)
@@ -85,7 +79,7 @@ class TestSelect:
         assert patch1 == patch2
 
     def test_select_relative_start_start(self, random_patch):
-        """Ensure relative start ot start"""
+        """Ensure relative start ot start."""
         patch1 = random_patch.select(time=(1, 3), relative=True)
         t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
         t2 = random_patch.attrs.time_min + dc.to_timedelta64(3)
@@ -93,14 +87,14 @@ class TestSelect:
         assert patch1 == patch2
 
     def test_select_relative_start_open(self, random_patch):
-        """Ensure relative start to open end"""
+        """Ensure relative start to open end."""
         patch1 = random_patch.select(time=(1, None), relative=True)
         t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
         patch2 = random_patch.select(time=(t1, None))
         assert patch1 == patch2
 
     def test_select_relative_end_open(self, random_patch):
-        """Ensure relative start to open end"""
+        """Ensure relative start to open end."""
         patch1 = random_patch.select(time=(-1, None), relative=True)
         t1 = random_patch.attrs.time_max - dc.to_timedelta64(1)
         patch2 = random_patch.select(time=(t1, None))

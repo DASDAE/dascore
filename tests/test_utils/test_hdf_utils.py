@@ -1,7 +1,6 @@
-"""
-Tests for hdf5 utils.
-"""
+"""Tests for hdf5 utils."""
 from __future__ import annotations
+
 from pathlib import Path
 
 import pandas as pd
@@ -27,13 +26,13 @@ class TestGetHDF5Handlder:
 
     @pytest.fixture()
     def simple_hdf_file_handler_read(self, simple_hdf_path):
-        """Return a tables file handler in read mode"""
+        """Return a tables file handler in read mode."""
         with tables.open_file(simple_hdf_path, mode="r") as fi:
             yield fi
 
     @pytest.fixture()
     def simple_hdf_file_handler_append(self, simple_hdf_path):
-        """Return a tables file handler in append mode"""
+        """Return a tables file handler in append mode."""
         with tables.open_file(simple_hdf_path, mode="a") as fi:
             yield fi
 
@@ -48,9 +47,7 @@ class TestGetHDF5Handlder:
             assert isinstance(fi, tables.File)
 
     def test_read_only_filehandle_raises(self, simple_hdf_file_handler_read):
-        """
-        If write is requested but read handler is provided an error should raise.
-        """
+        """If write is requested but read handler is provided an error should raise."""
         with pytest.raises(InvalidFileHandler, match="but mode"):
             with open_hdf5_file(simple_hdf_file_handler_read, mode="w"):
                 pass
@@ -94,16 +91,14 @@ class TestHDFPatchIndexManager:
         index_manager.write_update(df)
 
     def test_empty_tuple(self, index_manager, random_spool):
-        """
-        Empty dims should convert to empty string.
-        """
+        """Empty dims should convert to empty string."""
         df = dc.scan_to_df(random_spool).assign(
             dims=[() for _ in range(len(random_spool))],
         )
         index_manager.write_update(df)
 
     def test_has_content(self, index_manager_with_content, tmp_path):
-        """`has_index` should return True if data have been writen else False"""
+        """`has_index` should return True if data have been writen else False."""
         assert index_manager_with_content.has_index
         # create hdf5 file with no index
         path = tmp_path / "empty.h5"

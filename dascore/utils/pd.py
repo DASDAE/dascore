@@ -1,6 +1,4 @@
-"""
-Pandas utilities.
-"""
+"""Pandas utilities."""
 from __future__ import annotations
 
 import fnmatch
@@ -13,6 +11,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
+import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -31,8 +30,9 @@ def _remove_base_path(series: pd.Series, base="") -> pd.Series:
     if series.empty:
         return series
     unix_paths = series.str.replace(os.sep, "/")
-    unix_base_path = str(base).replace(os.sep, "/")
-    return unix_paths.str.replace(unix_base_path, "", regex=False)
+    unix_base_path = (str(base) + "/").replace(os.sep, "/")
+    out = unix_paths.str.replace(unix_base_path, "", regex=False)
+    return out
 
 
 def _get_min_max_query(kwargs, df):
@@ -58,9 +58,13 @@ def _get_min_max_query(kwargs, df):
     return out
 
 
-def _add_range_query(kwargs, df, ignore_bad_kwargs=False):
+def split_df_query(kwargs, df, ignore_bad_kwargs=False):
     """
-    Add a range query that spans two columns.
+    Split kwargs into normal, range, and unsupported kwargs.
+
+    Normal query kwargs are the ones that apply directly to a single column.
+    Range kwargs specify a range and the df must have {name}_min, {name}_max
+    unsupported kwargs are the keys in kwargs that don't meet these reqs.
 
     For example, if columns 'time_min' and 'time_max' exist but 'time'
     does not, time=(time_1, time_2) will filter df to only include columns
@@ -68,29 +72,30 @@ def _add_range_query(kwargs, df, ignore_bad_kwargs=False):
     """
     col_set = set(df)
     unknown_cols = set(kwargs) - col_set
-    bad_keys = set()
+    unsupported = {}
     range_query = {}
+    out = dict(kwargs)
     for key in unknown_cols:
         min_key, max_key = f"{key}_min", f"{key}_max"
         val = kwargs[key]
         subset = {min_key, max_key}.issubset(col_set)
         if subset and val is not None and len(val) == 2:
             range_query[key] = val
-            kwargs.pop(key, None)
+            out.pop(key, None)
         else:
-            bad_keys.add(key)
-    if len(bad_keys):
-        if not ignore_bad_kwargs:
-            bad_dict = {x: kwargs[x] for x in bad_keys}
-            msg = (
-                "Bad filter parameter found. Either the column does not "
-                f"exist or it's value is invalid. Keys/values are: {bad_dict}"
-            )
-            raise ParameterError(msg)
-        else:
-            for key in bad_keys:
-                kwargs.pop(key, None)
-    return range_query
+            unsupported[key] = val
+    # raise if bad keys are found and not ignored.
+    if len(unsupported) and not ignore_bad_kwargs:
+        bad_dict = {x: kwargs[x] for x in unsupported}
+        msg = (
+            "Bad filter parameter found. Either the column does not "
+            f"exist or it's value is invalid. Keys/values are: {bad_dict}"
+        )
+        raise ParameterError(msg)
+    # otherwise just pop out unsupported kwargs
+    for key in unsupported:
+        out.pop(key, None)
+    return out, range_query, unsupported
 
 
 def _get_flat_and_collection_queries(kwargs):
@@ -174,15 +179,16 @@ def _convert_times(df, some_dict):
 
 def get_interval_columns(df, name, arrays=False):
     """Return a series of start, stop, step for columns."""
-    names = f"{name}_min", f"{name}_max", f"d_{name}"
+    names = f"{name}_min", f"{name}_max", f"{name}_step"
     missing_cols = set(names) - set(df.columns)
     if missing_cols:
         msg = f"Dataframe is missing {missing_cols} to chunk on {name}"
         raise KeyError(msg)
+    start, stop, step = df[names[0]], df[names[1]], df[names[2]]
     if not arrays:
-        return df[names[0]], df[names[1]], df[names[2]]
+        return start, stop, step
     else:
-        return df[names[0]].values, df[names[1]].values, df[names[2]].values
+        return start.values, stop.values, step.values
 
 
 def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
@@ -197,7 +203,9 @@ def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
 
     def _get_slice(value):
         """Ensure the value can rep. a slice."""
-        assert isinstance(value, (slice, Sequence)) and len(value) == 2
+        if not isinstance(value, slice | Sequence) or len(value) != 2:
+            msg = "slice must be a length 2 tuple, you passed {kwargs}"
+            raise ParameterError(msg)
         if not isinstance(value, slice):
             value = slice(*value)
         return value
@@ -279,7 +287,7 @@ def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.array:
     requirements.
     """
     min_max_query = _convert_times(df, _get_min_max_query(kwargs, df))
-    range_query = _add_range_query(kwargs, df, ignore_bad_kwargs)
+    kwargs, range_query, _ = split_df_query(kwargs, df, ignore_bad_kwargs)
     multicolumn_range_query = _convert_times(df, range_query)
     equality_query, collection_query = _get_flat_and_collection_queries(kwargs)
     # get a blank index of True for filters
@@ -327,23 +335,21 @@ def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
     """
     cols = set(df.columns)
     possible_dims = {
-        x.replace("_min", "").replace("_max", "").replace("d_", "") for x in cols
+        x.replace("_min", "").replace("_max", "").replace("_step", "") for x in cols
     }
     out = {
-        x for x in possible_dims if {f"{x}_min", f"{x}_max", f"d_{x}"}.issubset(cols)
+        x for x in possible_dims if {f"{x}_min", f"{x}_max", f"{x}_step"}.issubset(cols)
     }
     return sorted(out)
 
 
 def get_column_names_from_dim(dims: Sequence[str]) -> list:
-    """
-    Get column names from a sequence of dimensions.
-    """
+    """Get column names from a sequence of dimensions."""
     out = []
     for name in dims:
         out.append(f"{name}_min")
         out.append(f"{name}_max")
-        out.append(f"d_{name}")
+        out.append(f"{name}_step")
     return out
 
 
@@ -371,16 +377,18 @@ def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):
 
 
 def list_ser_to_str(ser: pd.Series) -> pd.Series:
-    """
-    Convert a column of str sequences to a string with commas separating values.
-    """
+    """Convert a column of str sequences to a string with commas separating values."""
     values = [",".join(x) if not isinstance(x, str) else x for x in ser.values]
     return pd.Series(values, index=ser.index, dtype=object)
 
 
-def _model_list_to_df(mod_list: Sequence[BaseModel]) -> pd.DataFrame:
-    """Get a dataframe from a sequence of pydantic models."""
-    df = pd.DataFrame([dict(x) for x in mod_list])
+def _model_list_to_df(mod_list: Sequence[dc.PatchAttrs], exclude=None) -> pd.DataFrame:
+    """
+    Get a dataframe from a sequence of pydantic models.
+
+    Optionally, exclude certain columns
+    """
+    df = pd.DataFrame([x.flat_dump(exclude=exclude) for x in mod_list])
     if "dims" in df.columns:
         df["dims"] = list_ser_to_str(df["dims"])
     return df
@@ -407,7 +415,7 @@ def _remove_overlaps(df, name):
         adjusted = stop_roll + step
         return np.where(start_lt_stop, adjusted, start)
 
-    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"d_{name}"
+    min_name, max_name, step_name = f"{name}_min", f"{name}_max", f"{name}_step"
     assert df[min_name].is_monotonic_increasing, "df must be sorted"
     start = df[min_name].values
     stop = df[max_name].values

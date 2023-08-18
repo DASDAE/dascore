@@ -1,6 +1,4 @@
-"""
-Module for performing integration on patches.
-"""
+"""Module for performing integration on patches."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -119,5 +117,6 @@ def integrate(
     else:
         array, coords = _get_indefinite_integral(patch, dxs_or_vals, axes)
     new_units = _get_data_units_from_dims(patch, dims, mul)
-    attrs = patch.attrs.update(data_units=new_units)
+    # we need to reset coords so coords has priority in update.
+    attrs = patch.attrs.update(data_units=new_units, coords={})
     return patch.new(data=array, attrs=attrs, coords=coords)

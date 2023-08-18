@@ -1,6 +1,4 @@
-"""
-Tests for Fourier transforms.
-"""
+"""Tests for Fourier transforms."""
 from __future__ import annotations
 
 import numpy as np
@@ -12,13 +10,13 @@ from dascore.utils.misc import suppress_warnings
 
 
 class TestRfft:
-    """
-    Tests for the real fourier transform.
-    """
+    """Tests for the real fourier transform."""
 
     @pytest.fixture(scope="class")
     def rfft_patch(self, random_patch):
-        """return the random patched transformed along time w/ rrft."""
+        """Return the random patched transformed along time w/ rrft."""
+        out = rfft(random_patch, dim="time")
+
         with suppress_warnings(DeprecationWarning):
             out = rfft(random_patch, dim="time")
         return out

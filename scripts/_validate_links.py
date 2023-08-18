@@ -1,7 +1,6 @@
-"""
-Script to validate links in qmd files.
-"""
+"""Script to validate links in qmd files."""
 from __future__ import annotations
+
 import json
 import re
 from functools import cache

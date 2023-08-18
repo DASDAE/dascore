@@ -8,6 +8,8 @@ IO functions (i.e., not that they work on various files) should go in
 test_io_core.py
 """
 from __future__ import annotations
+
+from contextlib import suppress
 from functools import cache
 from io import BytesIO
 from operator import eq, ge, le
@@ -15,13 +17,13 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import numpy as np
 
 import dascore as dc
 from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
-from dascore.io.quantx import QuantXV2
 from dascore.io.tdms import TDMSFormatterV4713
 from dascore.io.terra15 import (
     Terra15FormatterV4,
@@ -42,7 +44,7 @@ from dascore.utils.misc import all_close, iterate
 # for more details.
 COMMON_IO_READ_TESTS = {
     DASDAEV1(): ("example_dasdae_event_1.h5",),
-    ProdMLV2_0(): ("prodml_2.0.h5",),
+    ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",
         "iDAS005_hdf5_example.626.h5",
@@ -54,7 +56,6 @@ COMMON_IO_READ_TESTS = {
     ),
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
-    QuantXV2(): ("opta_sense_quantx_v2.h5",),
 }
 
 # This tuple is for fiber io which support a write method and can write
@@ -112,6 +113,13 @@ def read_spool(data_file_path):
     return out
 
 
+@pytest.fixture(scope="session")
+def scanned_attrs(data_file_path):
+    """Read each file into a spool."""
+    out = dc.scan(data_file_path)
+    return out
+
+
 @pytest.fixture(scope="session", params=COMMON_IO_WRITE_TESTS)
 def fiber_io_writer(request):
     """Meta fixture for IO that implement write."""
@@ -134,19 +142,19 @@ def _assert_coords_attrs_match(patch):
 
 
 def _assert_op_or_close(val1, val2, op):
-    """assert op(val1, val2) or isclose(val1, val2)."""
+    """Assert op(val1, val2) or isclose(val1, val2)."""
     meets_eq = op(val1, val2)
     both_null = pd.isnull(val1) and pd.isnull(val2)
     all_close_vals = all_close(val1, val2)
     if meets_eq or both_null or all_close_vals:
         return
     msg = f"{val1} and {val2} do not pass {op} or all close."
-    assert False, msg
+    raise AssertionError(msg)
 
 
 # --- Tests
 
-DIM_RELATED_ATTRS = ("{dim}_min", "{dim}_max", "d_{dim}")
+DIM_RELATED_ATTRS = ("{dim}_min", "{dim}_max", "{dim}_step")
 
 
 class TestGetFormat:
@@ -176,6 +184,18 @@ class TestGetFormat:
         """Ensure a dummy h5 file the format (it isn't any fiber format)."""
         assert not io_instance.get_format(generic_hdf5)
 
+    def test_all_other_files_arent_format(self, io_instance):
+        """All other data files should not show up as this format."""
+        for other_io, data_files in COMMON_IO_READ_TESTS.items():
+            if isinstance(other_io, type(io_instance)):
+                continue
+            for key in data_files:
+                path = fetch(key)
+                out = io_instance.get_format(path)
+                if out:
+                    format_name, version = out
+                    assert version != io_instance.version
+
 
 class TestRead:
     """Test suite for reading formats."""
@@ -191,6 +211,13 @@ class TestRead:
         """The attributes and coordinate should match in min/max/step."""
         for patch in read_spool:
             _assert_coords_attrs_match(patch)
+
+    def test_time_coords_are_datetimes(self, read_spool):
+        """Ensure the time coordinates have the type of datetime."""
+        for patch in read_spool:
+            with suppress(KeyError):
+                time = patch.get_coord("time")
+                assert "datetime64" in str(np.dtype(time.dtype))
 
     def test_read_stream(self, io_path_tuple):
         """If the format supports reading from a stream, test it out."""
@@ -214,13 +241,13 @@ class TestRead:
         a patch containing the requested data is returned.
         """
         io, path = io_path_tuple
-        attrs = dc.scan(path)
-        assert len(attrs)
+        attrs_from_file = dc.scan(path)
+        assert len(attrs_from_file)
         # skip files that have more than one patch for now
         # TODO just write better test logic to handle this case.
-        if len(attrs) > 1:
-            pytest.skip("Havent implemented test for multipatch files.")
-        attrs_init = attrs[0]
+        if len(attrs_from_file) > 1:
+            pytest.skip("Haven't implemented test for multipatch files.")
+        attrs_init = attrs_from_file[0]
         for dim in attrs_init.dim_tuple:
             start = getattr(attrs_init, f"{dim}_min")
             stop = getattr(attrs_init, f"{dim}_max")
@@ -257,7 +284,7 @@ class TestRead:
 
 
 class TestScan:
-    """Tests for generic scanning"""
+    """Tests for generic scanning."""
 
     def test_scan_basics(self, data_file_path):
         """Ensure each file can be scanned."""
@@ -275,6 +302,28 @@ class TestScan:
         for attrs in attr_list:
             assert attrs.file_format == io.name
             assert attrs.file_version == io.version
+
+    def test_time_coord_is_time(self, scanned_attrs):
+        """Ensure scanned attrs have correct dtype for time."""
+        for patch_attr in scanned_attrs:
+            with suppress(KeyError):
+                time = patch_attr.coords["time"]
+                assert "datetime64" in str(np.dtype(time.dtype))
+
+    def test_dist_coord_is_float_or_int(self, scanned_attrs):
+        """Distance can be either float or int, but must be numeric."""
+        for patch_attr in scanned_attrs:
+            with suppress(KeyError):
+                distance = patch_attr.coords["distance"]
+                dtype = np.dtype(distance.dtype)
+                assert np.issubdtype(dtype, np.number)
+
+    def test_no_bytes(self, scanned_attrs):
+        """Sometimes bytes are returned from scanning, we need str."""
+        for patch_attr in scanned_attrs:
+            model = patch_attr.model_dump()
+            for key, value in model.items():
+                assert not isinstance(value, bytes | np.bytes_)
 
 
 class TestWrite:

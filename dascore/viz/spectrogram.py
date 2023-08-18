@@ -1,6 +1,4 @@
-"""
-A spectrogram visualization
-"""
+"""A spectrogram visualization."""
 from __future__ import annotations
 
 import matplotlib.colors as colors
@@ -52,7 +50,7 @@ def spectrogram(
         If True call plt.show() else just return axis.
     """
     data, name = _get_1d_array_dim_name(patch)
-    d_dim = patch.attrs[f"d_{name}"]
+    d_dim = patch.attrs[f"{name}_step"]
     if name == "time":
         d_dim = d_dim / np.timedelta64(1, "s")
     freqs, dim_x, spec = scipy_spectrogram(data, 1 / d_dim)

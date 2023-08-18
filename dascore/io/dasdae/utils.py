@@ -1,16 +1,16 @@
-"""
-DASDAE format utilities
-"""
+"""DASDAE format utilities."""
 from __future__ import annotations
+
 import numpy as np
 
 import dascore as dc
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.schema import PatchAttrs, PatchFileSummary
-from dascore.utils.hdf5 import open_hdf5_file
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int
+
 
 # --- Functions for writing DASDAE format
 
@@ -49,7 +49,7 @@ def _save_array(data, name, group, h5):
 
 
 def _save_coords(patch, patch_group, h5):
-    """Save coordinates"""
+    """Save coordinates."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
         dims = cm.dim_map[name]
@@ -87,7 +87,8 @@ def _get_attrs(patch_group):
         if isinstance(val, np.ndarray) and not val.shape:
             val = np.array([val])[0]
         out[key] = val
-    return PatchAttrs(**out)
+    with suppress_warnings(DeprecationWarning):
+        return PatchAttrs(**out)
 
 
 def _read_array(table_array):
@@ -150,24 +151,33 @@ def _read_patch(patch_group, **kwargs):
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
 
-def _get_contents_from_patch_groups(path, file_version, file_format="DASDAE"):
+def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
     """Get the contents from each patch group."""
     out = []
-    with open_hdf5_file(path) as h5:
-        for group in h5.iter_nodes("/waveforms"):
-            contents = _get_patch_content_from_group(group)
-            # populate file info
-            contents["file_version"] = file_version
-            contents["file_format"] = file_format
-            contents["path"] = h5.filename
-            out.append(PatchFileSummary(**contents))
+    for group in h5.iter_nodes("/waveforms"):
+        contents = _get_patch_content_from_group(group)
+        # populate file info
+        contents["file_version"] = file_version
+        contents["file_format"] = file_format
+        contents["path"] = h5.filename
+        # suppressing warnings because old dasdae files will issue warning
+        # due to d_dim rather than dim_step. TODO fix test files in the future
+        with suppress_warnings(DeprecationWarning):
+            out.append(dc.PatchAttrs(**contents))
     return out
 
 
 def _get_patch_content_from_group(group):
     """Get patch content from a single node."""
     attrs = group._v_attrs
-    out = {i.replace("_attrs_", ""): getattr(attrs, i) for i in attrs._f_list()}
+    out = {}
+    for key in attrs._f_list():
+        value = getattr(attrs, key)
+        new_key = key.replace("_attrs_", "")
+        # need to unpack 0 dim arrays.
+        if isinstance(value, np.ndarray) and not value.shape:
+            value = np.atleast_1d(value)[0]
+        out[new_key] = value
     # rename dims
     out["dims"] = out.pop("_dims")
     return out

@@ -1,6 +1,4 @@
-"""
-Module to transform a Patch into spectrograms.
-"""
+"""Module to transform a Patch into spectrograms."""
 from __future__ import annotations
 
 from operator import mul
@@ -8,17 +6,20 @@ from operator import mul
 from scipy.signal import spectrogram as scipy_spectrogram
 
 from dascore.constants import PatchType
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.schema import PatchAttrs
 from dascore.utils.misc import iterate
-from dascore.utils.patch import _get_dx_or_spacing_and_axes
-from dascore.utils.patch import patch_function, _get_data_units_from_dims
+from dascore.utils.patch import (
+    _get_data_units_from_dims,
+    _get_dx_or_spacing_and_axes,
+    patch_function,
+)
 from dascore.utils.time import (
-    to_timedelta64,
     is_datetime64,
     is_timedelta64,
     to_datetime64,
+    to_timedelta64,
 )
 from dascore.utils.transformatter import FourierTransformatter
 
@@ -62,7 +63,7 @@ def _get_new_dims(patch, dim, new_coord_name):
     """
     dims = list(patch.dims)
     dims[dims.index(dim)] = new_coord_name
-    return tuple(dims + [dim])
+    return tuple([*dims, dim])
 
 
 @patch_function()

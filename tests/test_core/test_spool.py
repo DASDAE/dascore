@@ -1,7 +1,6 @@
-"""
-Test for spool functions.
-"""
+"""Test for spool functions."""
 from __future__ import annotations
+
 import copy
 
 import pandas as pd
@@ -44,7 +43,7 @@ class TestSpoolEquals:
         assert {1: 2} != random_spool
 
     def test_chunked_differently(self, random_spool):
-        """Spools with different chunking should !="""
+        """Spools with different chunking should !=."""
         sp1 = random_spool.chunk(time=1.12)
         assert sp1 != random_spool
 
@@ -65,7 +64,7 @@ class TestIndexing:
     """Tests for indexing spools to retrieve patches."""
 
     def test_simple_index(self, random_spool):
-        """Ensure indexing a spool returns a patch"""
+        """Ensure indexing a spool returns a patch."""
         for ind in range(len(random_spool)):
             patch = random_spool[ind]
             assert isinstance(patch, dc.Patch)
@@ -77,6 +76,12 @@ class TestIndexing:
             patch2 = random_spool[-ind + len(random_spool)]
             assert isinstance(patch1, dc.Patch)
             assert patch1 == patch2
+
+    def test_out_of_bounds_raises(self, random_spool):
+        """Out of bounds queries to raise IndexError."""
+        match = "out of bounds for spool"
+        with pytest.raises(IndexError, match=match):
+            _ = random_spool[len(random_spool)]
 
 
 class TestSlicing:
@@ -113,10 +118,10 @@ class TestSlicing:
 
 
 class TestSpoolIterable:
-    """Tests for iterating Spools"""
+    """Tests for iterating Spools."""
 
     def test_len(self, random_spool):
-        """Ensure the spool has a length"""
+        """Ensure the spool has a length."""
         assert len(random_spool) == len(list(random_spool))
 
     def test_index(self, random_spool):
@@ -124,7 +129,7 @@ class TestSpoolIterable:
         assert isinstance(random_spool[0], dc.Patch)
 
     def test_list_o_patches(self, random_spool):
-        """Ensure random_string can be iterated"""
+        """Ensure random_string can be iterated."""
         for pa in random_spool:
             assert isinstance(pa, dc.Patch)
         patch_list = list(random_spool)
@@ -138,7 +143,7 @@ class TestSpoolIterable:
             _ = random_spool[spool_len]
 
     def test_index_returns_corresponding_patch(self, random_spool):
-        """Ensure the index returns the correct patch"""
+        """Ensure the index returns the correct patch."""
         spool_list = list(random_spool)
         for num, (patch1, patch2) in enumerate(zip(spool_list, random_spool)):
             patch3 = random_spool[num]
@@ -197,9 +202,7 @@ class TestSelect:
             assert attrs["time_max"] <= new_max
 
     def test_multiple_range_selects(self, adjacent_spool_no_overlap):
-        """
-        Ensure multiple range slects can be used in one call (eg time and distance).
-        """
+        """Ensure multiple range selects can be used in one call."""
         spool = adjacent_spool_no_overlap
         contents = spool.get_contents()
         # get new time/distance ranges and select them
@@ -277,7 +280,7 @@ class TestGetSpool:
             assert p1.equals(p2)
 
     def test_spool_from_patch_sequence(self, random_spool):
-        """Ensure a list of patches returns a spool"""
+        """Ensure a list of patches returns a spool."""
         spool_list = dc.spool(list(random_spool))
         spool_tuple = dc.spool(tuple(random_spool))
         for p1, p2, p3 in zip(spool_tuple, spool_list, random_spool):

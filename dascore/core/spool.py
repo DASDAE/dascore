@@ -1,6 +1,4 @@
-"""
-Module for spools, containers of patches.
-"""
+"""Module for spools, containers of patches."""
 from __future__ import annotations
 
 import abc
@@ -14,6 +12,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
+import dascore.io
 from dascore.constants import PatchType, numeric_types, timeable_types
 from dascore.exceptions import InvalidSpoolError
 from dascore.utils.chunk import ChunkManager
@@ -28,13 +27,12 @@ from dascore.utils.pd import (
     filter_df,
     get_column_names_from_dim,
     get_dim_names_from_columns,
+    split_df_query,
 )
 
 
 class BaseSpool(abc.ABC):
-    """
-    Spool Abstract Base Class (ABC) for defining Spool interface.
-    """
+    """Spool Abstract Base Class (ABC) for defining Spool interface."""
 
     _rich_style = "bold"
 
@@ -47,9 +45,7 @@ class BaseSpool(abc.ABC):
         """Iterate through the Patches in the spool."""
 
     def update(self) -> Self:
-        """
-        Updates the contents of the spool and returns a spool.
-        """
+        """Updates the contents of the spool and returns a spool."""
         return self
 
     @abc.abstractmethod
@@ -85,15 +81,11 @@ class BaseSpool(abc.ABC):
 
     @abc.abstractmethod
     def select(self, **kwargs) -> Self:
-        """
-        Select only part of the data.
-        """
+        """Select only part of the data."""
 
     @abc.abstractmethod
     def get_contents(self) -> pd.DataFrame:
-        """
-        Get a dataframe of the patches that will be returned by the spool.
-        """
+        """Get a dataframe of the patches that will be returned by the spool."""
 
     @abc.abstractmethod
     def sort(self, attribute) -> Self:
@@ -112,7 +104,7 @@ class BaseSpool(abc.ABC):
 
     @abc.abstractmethod
     def __len__(self) -> int:
-        """return len of spool."""
+        """Return len of spool."""
 
     def __eq__(self, other) -> bool:
         """Simple equality checks on spools."""
@@ -153,9 +145,7 @@ class BaseSpool(abc.ABC):
 
 
 class DataFrameSpool(BaseSpool):
-    """
-    An abstract class for spools whose contents are managed by a dataframe.
-    """
+    """An abstract class for spools whose contents are managed by a dataframe."""
 
     # A dataframe which represents contents as they will be output
     _df: pd.DataFrame = CacheDescriptor("_cache", "_get_df")
@@ -178,8 +168,9 @@ class DataFrameSpool(BaseSpool):
     def _get_instruction_df(self):
         """Function to get the current df."""
 
-    def __init__(self):
+    def __init__(self, select_kwargs: dict | None = None):
         self._cache = {}
+        self._select_kwargs = {} if select_kwargs is None else select_kwargs
 
     def __getitem__(self, item):
         out = self._get_patches_from_index(item)
@@ -204,9 +195,7 @@ class DataFrameSpool(BaseSpool):
         return patch_list[0]
 
     def _get_patches_from_index(self, df_ind):
-        """
-        Given an index (from current df), return the corresponding patch.
-        """
+        """Given an index (from current df), return the corresponding patch."""
         source = self._source_df
         instruction = self._instruction_df
         if isinstance(df_ind, slice):  # handle slicing
@@ -214,16 +203,19 @@ class DataFrameSpool(BaseSpool):
         else:  # Filter instruction df to only include current index.
             # handle negative index.
             df_ind = df_ind if df_ind >= 0 else len(self._df) + df_ind
-            inds = self._df.index[df_ind]
+            try:
+                inds = self._df.index[df_ind]
+            except IndexError:
+                msg = f"index of [{df_ind}] is out of bounds for spool."
+                raise IndexError(msg)
             df1 = instruction[instruction["current_index"] == inds]
-        if df1.empty:
-            msg = f"index of [{df_ind}] is out of bounds for spool."
-            raise IndexError(msg)
+        assert not df1.empty
         joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
         return self._patch_from_instruction_df(joined)
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
+        out = []
         df_dict_list = self._df_to_dict_list(joined)
         expected_len = len(joined["current_index"].unique())
         for patch_kwargs in df_dict_list:
@@ -236,11 +228,15 @@ class DataFrameSpool(BaseSpool):
                 for i, v in kwargs.items()
                 if i in patch.dims or i in patch.coords.coord_map
             }
-            patch_kwargs["patch"] = patch.select(**select_kwargs)
-            # out_list.append(patch.select(**select_kwargs))
-        if len(df_dict_list) > expected_len:
-            df_dict_list = _force_patch_merge(df_dict_list)
-        return [x["patch"] for x in df_dict_list]
+            trimmed_patch: dc.Patch = patch.select(**select_kwargs)
+            # its unfortunate, but currently we need to regenerate the patch
+            # dict because the index doesn't carry all the dimensional info
+            info = trimmed_patch.attrs.flat_dump(exclude=["history"])
+            info["patch"] = trimmed_patch
+            out.append(info)
+        if len(out) > expected_len:
+            out = _force_patch_merge(out)
+        return [x["patch"] for x in out]
 
     @staticmethod
     def _get_dummy_dataframes(input_df):
@@ -283,9 +279,7 @@ class DataFrameSpool(BaseSpool):
         tolerance: float = 1.5,
         **kwargs,
     ) -> Self:
-        """
-        {doc}
-        """
+        """{doc}."""
         df = self._df.drop(columns=list(self._drop_columns), errors="ignore")
         chunker = ChunkManager(
             overlap=overlap,
@@ -301,18 +295,21 @@ class DataFrameSpool(BaseSpool):
             instructions = chunker.get_instruction_df(in_df, out_df)
         return self.new_from_df(out_df, source_df=self._df, instruction_df=instructions)
 
-    def new_from_df(self, df, source_df=None, instruction_df=None):
+    def new_from_df(self, df, source_df=None, instruction_df=None, select_kwargs=None):
         """Create a new instance from dataframes."""
         new = self.__class__(self)
         df_, source_, inst_ = self._get_dummy_dataframes(df)
         new._df = df
         new._source_df = source_df if source_df is not None else source_
         new._instruction_df = instruction_df if instruction_df is not None else inst_
+        new._select_kwargs = dict(self._select_kwargs)
+        new._select_kwargs.update(select_kwargs or {})
         return new
 
     def select(self, **kwargs) -> Self:
         """Sub-select certain dimensions for Spool."""
-        filtered_df = adjust_segments(self._df, **kwargs)
+        _, _, extra_kwargs = split_df_query(kwargs, self._df, ignore_bad_kwargs=True)
+        filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(
             self._instruction_df,
             ignore_bad_kwargs=True,
@@ -322,6 +319,7 @@ class DataFrameSpool(BaseSpool):
             filtered_df,
             source_df=self._source_df,
             instruction_df=inst,
+            select_kwargs=extra_kwargs,
         )
         return out
 
@@ -360,16 +358,12 @@ class DataFrameSpool(BaseSpool):
 
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
-        """
-        {doc}
-        """
+        """{doc}."""
         return self._df[filter_df(self._df, **self._select_kwargs)]
 
 
 class MemorySpool(DataFrameSpool):
-    """
-    A Spool for storing patches in memory.
-    """
+    """A Spool for storing patches in memory."""
 
     # tuple of attributes to remove from table
 
@@ -390,7 +384,9 @@ class MemorySpool(DataFrameSpool):
         return base
 
     def _load_patch(self, kwargs) -> Self:
-        """Load the patch into memory"""
+        """Load the patch into memory."""
+        # final_kwargs = dict(kwargs)
+        # final_kwargs.update(self._select_kwargs)
         return kwargs["patch"]
 
 
@@ -421,10 +417,8 @@ def spool_from_str(path, **kwargs):
     # A single file was passed. If the file format supports quick scanning
     # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
-        from dascore.io.core import FiberIO
-
         _format, _version = dc.get_format(path)
-        formatter = FiberIO.manager.get_fiberio(_format, _version)
+        formatter = dascore.io.FiberIO.manager.get_fiberio(_format, _version)
         if formatter.implements_scan:
             from dascore.clients.filespool import FileSpool
 

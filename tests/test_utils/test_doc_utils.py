@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import textwrap
 
-from dascore.core.schema import PatchAttrs
+from dascore.core.attrs import PatchAttrs
 from dascore.utils.docs import compose_docstring, format_dtypes
 
 
@@ -20,7 +20,7 @@ class TestDocsting:
     """tests for obsplus' simple docstring substitution function."""
 
     def count_white_space(self, some_str):
-        """count the number of whitespace chars in a str"""
+        """Count the number of whitespace chars in a str."""
         return len(some_str) - len(some_str.lstrip(" "))
 
     def test_docstring(self):
@@ -29,9 +29,9 @@ class TestDocsting:
             """
         Parameters
         ----------
-        a: int
+        a
             a
-        b int
+        b
             b
         """
         )
@@ -43,7 +43,7 @@ class TestDocsting:
             """
 
         assert "Parameters" in testfun1.__doc__
-        line = [x for x in testfun1.__doc__.split("\n") if "Parameters" in x][0]
+        line = next(x for x in testfun1.__doc__.split("\n") if "Parameters" in x)
         base_spaces = line.split("Parameters")[0]
         assert len(base_spaces) == 12
 
@@ -55,7 +55,7 @@ class TestDocsting:
         def dummy_func():
             """
             Some useful information indeed:
-                {params}
+                {params}.
             """
 
         doc_str_list = dummy_func.__doc__.split("\n")

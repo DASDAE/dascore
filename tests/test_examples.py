@@ -1,7 +1,6 @@
-"""
-Tests for example fetching.
-"""
+"""Tests for example fetching."""
 from __future__ import annotations
+
 import pytest
 
 import dascore as dc
@@ -9,7 +8,7 @@ from dascore.exceptions import UnknownExample
 
 
 class TestGetExamplePatch:
-    """Test suite for `get_example_patch`"""
+    """Test suite for `get_example_patch`."""
 
     def test_default(self):
         """Ensure calling get_example_patch with no args returns patch."""
@@ -22,13 +21,13 @@ class TestGetExamplePatch:
             dc.get_example_patch("NotAnExampleRight????")
 
     def test_example_1(self):
-        """Ensure example 1 returns a Patch"""
+        """Ensure example 1 returns a Patch."""
         out = dc.get_example_patch("example_event_1")
         assert isinstance(out, dc.Patch)
 
 
 class TestGetExampleSpool:
-    """Test suite for `get_example_spool`"""
+    """Test suite for `get_example_spool`."""
 
     def test_default(self):
         """Ensure calling get_example_spool with no args returns a Spool."""

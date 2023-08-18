@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, TypeVar, Union
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
 
-import dascore  # NOQA
+import dascore
 
 PatchType = TypeVar("PatchType", bound="dascore.Patch")
 
@@ -17,14 +17,11 @@ SpoolType = TypeVar("SpoolType", bound="dascore.BaseSpool")
 DATA_VERSION = "0.0.0"
 
 # Types dascore can convert into time representations
-timeable_types = Union[int, float, str, np.datetime64, pd.Timestamp]
-opt_timeable_types = Optional[timeable_types]
+timeable_types = int | float | str | np.datetime64 | pd.Timestamp
+opt_timeable_types = None | timeable_types
 
 # Number types
-numeric_types = Union[int, float]
-
-# expected DAS attributes
-REQUIRED_DAS_ATTRS = ("d_time", "d_distance")
+numeric_types = int | float
 
 # The smallest value an int64 can rep. (used as NaT by datetime64)
 MININT64 = np.iinfo(np.int64).min
@@ -33,7 +30,7 @@ MININT64 = np.iinfo(np.int64).min
 MAXINT64 = np.iinfo(np.int64).max
 
 # types used to represent paths
-path_types = Union[str, Path]
+path_types = str | Path
 
 # One second in numpy timedelta speak
 ONE_SECOND = np.timedelta64(1, "s")
@@ -81,18 +78,6 @@ max_lens = {
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
 
-# A set of attributes which are used in Patch equality checks.
-COMPARE_ATTRS = {
-    "d_time",
-    "d_distance",
-    "data_type",
-    "category" "time_min",
-    "time_max",
-    "distance_min",
-    "distance_max",
-    "instrument_id",
-}
-
 # Large and small np.datetime64[ns] (used when defaults are needed)
 SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
@@ -117,11 +102,6 @@ NUMPY_TIME_UNIT_MAPPING = {
     "day": "D",
 }
 
-
-class _DegenerateDimension:
-    """Used to mark which dimensions of an array have gone to 0."""
-
-
 # A description of basic patch metadata.
 basic_summary_attrs = f"""
 data_type
@@ -132,7 +112,7 @@ data_category
     are {VALID_DATA_CATEGORIES}.
 data_units
     The units in which the data are recorded (e.g., strain_rate).
-d_time
+time_step
     The temporal sample spacing. If the patch is not evenly sampled
     this should be set to `np.timedelta64('NaT')`
 time_min
@@ -142,7 +122,7 @@ time_max
 time_units
     The units of the time axis (in most cases should be seconds) or
     specified by datetime64 arrays in time coordinate.
-d_distance
+distance_step
     The spatial sampling rate, set to NaN if the patch is not evenly sampled
     in space.
 distance_min
@@ -177,6 +157,7 @@ network
 history
     A list of strings indicating what processing has occurred on the patch.
 """
+
 
 # Rich styles for various object displays.
 dascore_styles = dict(

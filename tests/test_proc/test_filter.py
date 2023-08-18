@@ -1,7 +1,6 @@
-"""
-Tests for filters.
-"""
+"""Tests for filters."""
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -19,7 +18,7 @@ class TestPassFilterChecks:
             _ = random_patch.pass_filter()
 
     def test_wrong_kwarg_length_raises(self, random_patch):
-        """only len two sequence is allowed."""
+        """Only len two sequence is allowed."""
         with pytest.raises(FilterValueError, match="length two sequence"):
             _ = random_patch.pass_filter(time=[1])
         with pytest.raises(FilterValueError, match="length two sequence"):
@@ -67,7 +66,7 @@ class TestPassFilterChecks:
 
     def test_high_time_raises(self, random_patch):
         """Ensure too high freq band in time axis raises."""
-        nyquest = 0.5 / (random_patch.attrs.d_time / dc.to_timedelta64(1))
+        nyquest = 0.5 / (random_patch.attrs.time_step / dc.to_timedelta64(1))
         Hz = dc.get_quantity("Hz")
         filt = (1 * Hz, nyquest * 1.1 * Hz)
         match = "possible filter bounds are"
@@ -79,7 +78,7 @@ class TestPassFilter:
     """Simple tests to make sure filter logic runs."""
 
     def test_time_bandpass_runs(self, random_patch):
-        """Ensure filtering along time_axis works"""
+        """Ensure filtering along time_axis works."""
         out = random_patch.pass_filter(time=(10, 100))
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
@@ -91,7 +90,7 @@ class TestPassFilter:
         assert not np.any(pd.isnull(out.data))
 
     def test_time_highpass_runs(self, random_patch):
-        """Ensure a highpass on time runs"""
+        """Ensure a highpass on time runs."""
         out = random_patch.pass_filter(time=(10.2, None))
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
@@ -190,22 +189,22 @@ class TestSobelFilter:
 
 
 class TestMedianFilter:
-    """Simple tests on median filter"""
+    """Simple tests on median filter."""
 
     def test_median_filter_default(self, random_patch):
-        """apply default values"""
+        """Apply default values."""
         out = random_patch.median_filter()
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
     def test_median_filter_user_single_value(self, random_patch):
-        """apply default values"""
+        """Apply default values."""
         out = random_patch.median_filter(kernel_size=5)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
     def test_median_filter_user_multi_value(self, random_patch):
-        """apply default values"""
+        """Apply default values."""
         out = random_patch.median_filter(kernel_size=(5, 3))
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))

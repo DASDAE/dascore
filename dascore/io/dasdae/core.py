@@ -1,6 +1,4 @@
-"""
-Core module for reading and writing DASDAE format.
-"""
+"""Core module for reading and writing DASDAE format."""
 from __future__ import annotations
 
 import contextlib
@@ -9,7 +7,6 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.core.schema import PatchFileSummary
 from dascore.io import FiberIO, HDF5Reader, HDF5Writer
 from dascore.utils.hdf5 import HDFPatchIndexManager, NodeError
 from dascore.utils.patch import get_default_patch_name
@@ -104,9 +101,7 @@ class DASDAEV1(FiberIO):
         return False
 
     def read(self, resource: HDF5Reader, **kwargs) -> SpoolType:
-        """
-        Read a dascore file.
-        """
+        """Read a dascore file."""
         patches = []
         try:
             waveform_group = resource.root["/waveforms"]
@@ -134,7 +129,7 @@ class DASDAEV1(FiberIO):
             # We need to change the path back to the file rather than internal
             # HDF5 path so it works with FileSpool and such.
             records = indexer.get_index().assign(path=str(resource)).to_dict("records")
-            return [PatchFileSummary(**x) for x in records]
+            return [dc.PatchAttrs(**x) for x in records]
         else:
             file_format = self.name
             version = resource.root._v_attrs.__DASDAE_version__

@@ -1,14 +1,13 @@
-"""
-Module for applying aggregations along a specified axis.
-"""
+"""Module for applying aggregations along a specified axis."""
 from __future__ import annotations
+
 from functools import partial
 from typing import Literal
 
 import numpy as np
 
 from dascore.constants import PatchType
-from dascore.utils.patch import copy_attrs, patch_function
+from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
 
 
@@ -59,11 +58,4 @@ def aggregate(
         name: coords[name] if name != dim else np.array([new_coord_val])
         for name in patch.dims
     }
-    # set
-    new_attrs = copy_attrs(patch.attrs)
-    new_attrs[f"{dim}_min"] = new_coord_val
-    new_attrs[f"{dim}_max"] = new_coord_val
-    new_attrs[f"d_{dim}"] = np.NaN
-    return patch.__class__(
-        new_data, attrs=new_attrs, coords=new_coords, dims=list(new_coords)
-    )
+    return patch.new(data=new_data, coords=new_coords)

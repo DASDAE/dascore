@@ -1,6 +1,4 @@
-"""
-Create the html tables for parameters and such from dataframes.
-"""
+"""Create the html tables for parameters and such from dataframes."""
 from __future__ import annotations
 
 import hashlib
@@ -11,6 +9,7 @@ import typing
 from collections import defaultdict
 from functools import cache
 from pathlib import Path
+from itertools import pairwise
 
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
@@ -42,7 +41,7 @@ def get_template(name):
 
 
 def _simple_plural(text):
-    """return plural form of string"""
+    """Return plural form of string."""
     if text.endswith("s"):
         return text + "es"
     return text + "s"
@@ -57,9 +56,7 @@ def sha_256(path_or_str: Path | str) -> str:
 
 
 def build_table(df: pd.DataFrame, caption=None):
-    """
-    An opinionated function to make a dataframe into html table.
-    """
+    """An opinionated function to make a dataframe into html table."""
     df = df.drop_duplicates()
     template = get_template("table.html")
     columns = [x.capitalize() for x in df.columns]
@@ -83,7 +80,7 @@ def _deduplicate_list(seq):
 
 
 def unpact_annotation(obj, data_dict, address_dict) -> str:
-    """Convert an annotation to string with linking"""
+    """Convert an annotation to string with linking."""
     str_id = str(id(obj))
     str_rep = str(obj)
     # this is a basic type, just get its name.
@@ -133,7 +130,7 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
     # probably a literal, just give up here
     else:
         if isinstance(obj, str):  # make str look like str
-            out = f"'{str(obj)}'"
+            out = f"'{obj!s}'"
         else:
             out = str(obj)
     return out.strip()
@@ -151,7 +148,7 @@ def build_signature(data, data_dict, address_dict):
         return f": {annotation_str}"
 
     def get_param_prefix(kind):
-        """Get the prefix for a parameter (eg ** in **kwargs)"""
+        """Get the prefix for a parameter (eg ** in **kwargs)."""
         if kind == inspect.Parameter.VAR_POSITIONAL:
             return "*"
         elif kind == inspect.Parameter.VAR_KEYWORD:
@@ -218,7 +215,7 @@ class NumpyDocStrParser:
         self._data = data
 
     def parse_sections(self, docstr):
-        """Parse the sections of the docstring"""
+        """Parse the sections of the docstring."""
         out = {}
         doc_lines = docstr.split("\n")
         dividers = (
@@ -230,7 +227,7 @@ class NumpyDocStrParser:
             ]
             + [len(doc_lines) + 2]
         )
-        for start, stop in zip(dividers[:-1], dividers[1:]):
+        for start, stop in pairwise(dividers):
             # determine header or just use 'pre' for txt before headings
             header = "pre" if start == 0 else doc_lines[start - 1].strip()
             # skips the ----- line where applicable
@@ -262,7 +259,7 @@ class NumpyDocStrParser:
         return to_quarto_code(example_str)
 
     def style_notes(self, notes_str):
-        """styles notes section of str."""
+        """Styles notes section of str."""
         template = get_template("notes.md")
         return template.render(note_text=notes_str)
 
@@ -290,7 +287,7 @@ class NumpyDocStrParser:
 
     # stylers is used to decide which style function to apply for various
     # sections.
-    stylers = {
+    stylers = {  # noqa
         "parameter": style_parameters,
         "parameters": style_parameters,
         "examples": style_examples,
@@ -305,9 +302,7 @@ def to_quarto_code(code_lines):
     option_chars = "#|"
 
     def _get_blocks(code_lines):
-        """
-        Get code blocks. Code blocks are divided by titles "###"
-        """
+        """Get code blocks. Code blocks are divided by titles "###"."""
         code_blocks = defaultdict(list)
         current_key = ""
         for line in code_lines:
@@ -323,7 +318,7 @@ def to_quarto_code(code_lines):
         return doc_str_line
 
     def _strip_code(code_str):
-        """Strip off spaces and the doctest stuff (..., >>>, etc)"""
+        """Strip off spaces and the doctest stuff (..., >>>, etc)."""
         out = []
         code_lines = code_str.splitlines()
         # first determine if this is a docstring or not
@@ -361,7 +356,7 @@ def to_quarto_code(code_lines):
         return code_segments, options
 
     def _strip_blocks(code_blocks):
-        """strip empty lines from start and end of list of codes."""
+        """Strip empty lines from start and end of list of codes."""
         while len(code_blocks) and not code_blocks[0].strip():
             code_blocks = code_blocks[1:]
         while len(code_blocks) and not code_blocks[-1].strip():
@@ -376,7 +371,7 @@ def to_quarto_code(code_lines):
             stripped_block = _strip_blocks(code_blocks)
             if not stripped_block:
                 continue
-            new_code = title + ["```{python}"] + options + stripped_block + ["```"]
+            new_code = [*title, "```{python}", *options, *stripped_block, "```"]
             out.append("\n".join(new_code).lstrip())
         return "\n".join(out)
 
@@ -436,7 +431,7 @@ class Render:
         owner_repo = os.environ.get("GITHUB_REPOSITORY", GITHUB_REPOSITORY)
         branch = os.environ.get("GITHUB_REF", GITHUB_REF).split("/")[-1]
         source_url = (
-            f"{github_url}/{owner_repo}/blob/{branch}/{str(rel_path)}"
+            f"{github_url}/{owner_repo}/blob/{branch}/{rel_path!s}"
             f"#L{line_start + 1}-L{line_end}"
         )
         return source_url
@@ -523,7 +518,7 @@ def create_json_mapping(data_dict, obj_dict, api_path):
 
 
 def write_api_markdown(data_dict, api_path, address_dict, debug=False):
-    """write all the markdown to disk."""
+    """Write all the markdown to disk."""
     files_to_delete = set(Path(api_path).rglob("*.qmd"))
     for obj_id, data in data_dict.items():
         # get path and ensure parents exist
@@ -550,7 +545,7 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
 
 
 def _clear_empty_directories(parent_path):
-    """recursively delete empty directories."""
+    """Recursively delete empty directories."""
 
     def _dir_empty(path):
         """Return True if directory is empty."""

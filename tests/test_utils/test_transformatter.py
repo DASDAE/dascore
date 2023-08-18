@@ -1,7 +1,6 @@
-"""
-Tests for transformatter.
-"""
+"""Tests for transformatter."""
 from __future__ import annotations
+
 import pytest
 
 from dascore.utils.transformatter import FourierTransformatter
@@ -14,7 +13,7 @@ def ft_reformatter():
 
 
 class TestFTDimensionRename:
-    """Tests for renaming dimensions using FT transformer"""
+    """Tests for renaming dimensions using FT transformer."""
 
     dims = ("distance", "time")
 

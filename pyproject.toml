@@ -41,10 +41,10 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
-     "matplotlib",
-     "numpy",
+     "matplotlib>=3.5",
+     "numpy>=1.25",
      "packaging",
-     "pandas",
+     "pandas>=2.0",
      "pooch>=1.2",
      "pydantic>2.0",
      "rich",
@@ -103,13 +103,15 @@ TDMS__V4713 = "dascore.io.tdms.core:TDMSFormatterV4713"
 TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
 TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
 TERRA15__V6 = "dascore.io.terra15.core:Terra15FormatterV6"
-QUANTX__V2 = "dascore.io.quantx.core:QuantXV2"
 WAV = "dascore.io.wav.core:WavIO"
 
 
 # --- External tool configuration
 
 [tool.ruff]
+
+# enable certain types of linting
+select = ["E", "F", "UP", "RUF"]
 
 # Exclude a variety of commonly ignored directories.
 exclude = [
@@ -140,6 +142,18 @@ exclude = [
 # lowest python version supported
 target-version = "py310"
 
+fixable = ["ALL"]
+
 [tool.ruff.mccabe]
 # Unlike Flake8, default to a complexity level of 10.
 max-complexity = 10
+
+# config for docstring parsing
+[tool.ruff.pydocstyle]
+convention = "numpy"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Ignore hdf5 warnings from pytables, See pytables #1035
+    'ignore::Warning:tables:'
+]

@@ -1,7 +1,6 @@
-"""
-Tests for FileSpool.
-"""
+"""Tests for FileSpool."""
 from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
@@ -12,8 +11,8 @@ import dascore as dc
 import dascore.examples
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
-from dascore.core.schema import PatchFileSummary
 from dascore.exceptions import ParameterError
+from dascore.io.core import PatchFileSummary
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func
 
@@ -44,6 +43,28 @@ def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
     spool = DirectorySpool(one_file_dir)
     return spool.update()
+
+
+@pytest.fixture(scope="class")
+@register_func(DIRECTORY_SPOOLS)
+def non_distance_dir_spool(tmp_path_factory):
+    """Create a directory with a single DAS file."""
+    # patch one simulates a patch that has time but no distance
+    pa1 = dascore.examples.get_example_patch("random_das").rename_coords(
+        distance="depth"
+    )
+    # patch2 has neither time nor distance but time in attrs.
+    pa2 = (
+        dascore.examples.get_example_patch("random_das")
+        .update_attrs(time_min=pa1.attrs.time_max)
+        .rename_coords(time="timey", distance="depth")
+    )
+    coord = pa2.get_coord("timey")
+    pa2 = pa2.update_attrs(time_min=coord.min(), time_max=coord.max())
+    spool = dc.spool([pa1, pa2])
+    path = tmp_path_factory.mktemp("no_distance_spool")
+    dascore.examples.spool_to_directory(spool, path)
+    return dc.spool(path).update()
 
 
 @pytest.fixture(scope="class", params=DIRECTORY_SPOOLS)
@@ -90,7 +111,7 @@ class TestDirectoryIndex:
 
     def test_index_columns(self, basic_index_df):
         """Ensure expected columns show up in the index."""
-        schema_fields = PatchFileSummary.get_index_columns()
+        schema_fields = list(PatchFileSummary.model_fields)
         assert set(basic_index_df).issuperset(schema_fields)
 
     def test_patches_extracted(self, basic_file_spool):
@@ -116,9 +137,7 @@ class TestDirectoryIndex:
         isinstance(spool, dc.BaseSpool)
 
     def test_specify_index_path(self, random_patch, tmp_path_factory):
-        """
-        Ensure an external path can be specified for the index. See #129.
-        """
+        """Ensure an external path can be specified for the index. See #129."""
         bank_path = tmp_path_factory.mktemp("bank")
         index_path = tmp_path_factory.mktemp("index") / "index.h5"
         random_patch.io.write(bank_path / "contents.h5", "dasdae")
@@ -127,9 +146,11 @@ class TestDirectoryIndex:
         # ensure the index was created in the expected place
         assert spool1.indexer.index_path == index_path
         # ensure the default index file was not written
-        spool2 = dc.spool(bank_path)
-        default_index_path = spool2.indexer.index_path
+        default_index_path = bank_path / spool1.indexer._index_name
         assert not default_index_path.exists()
+        # future banks should remember this path.
+        spool2 = dc.spool(bank_path)
+        assert spool2.indexer.index_path == spool1.indexer.index_path
         # next ensure the index path is used
         spool3 = dc.spool(bank_path, index_path=index_path)
         df = spool3.get_contents()
@@ -157,9 +178,9 @@ class TestDirectoryIndex:
         df = dc.spool(base_path).update().get_contents()
         # ensure each sub-directory is represented
         paths = df["path"]
-        assert any(paths.str.startswith("/sub_0"))
-        assert any(paths.str.startswith("/sub_0/sub_1"))
-        assert any(paths.str.startswith("/sub_0/sub_1/sub_2"))
+        assert any(paths.str.startswith("sub_0"))
+        assert any(paths.str.startswith("sub_0/sub_1"))
+        assert any(paths.str.startswith("sub_0/sub_1/sub_2"))
 
 
 class TestSelect:
@@ -250,17 +271,15 @@ class TestSelect:
         assert isinstance(patch, dc.Patch)
 
     def test_nice_error_message_bad_select(self, diverse_directory_spool):
-        """Ensure a nice error message is raised for bad"""
-        with pytest.raises(ParameterError, match="Bad filter parameter"):
+        """Ensure a nice error message is raised for bad filter param."""
+        with pytest.raises(ParameterError, match="must be a length 2 tuple"):
             _ = diverse_directory_spool.select(time=None)[0]
 
     def test_select_correct_history_str(self, diverse_directory_spool):
-        """
-        Ensure no history string is added for selecting. See #142/#147.
-        """
+        """Ensure no history string is added for selecting. See #142/#147."""
         spool = diverse_directory_spool
         t1 = spool[0].attrs.time_min
-        dt = spool[0].attrs.d_time
+        dt = spool[0].attrs.time_step
         selected_spool = spool.select(time=(t1, t1 + 30 * dt))
         patch = selected_spool[0]
         history = patch.attrs.history
@@ -314,7 +333,7 @@ class TestBasicChunk:
         content = spool.get_contents()
         assert patch.attrs.time_min == content["time_min"].min()
         assert patch.attrs.time_max == content["time_max"].max()
-        assert patch.attrs.d_time == spool[0].attrs.d_time
+        assert patch.attrs.time_step == spool[0].attrs.time_step
 
     def test_chunk_out_of_order_index(self, dir_spool_index_out_of_order):
         """Ensure when the index isn't ordered chunk can still work."""
@@ -327,7 +346,7 @@ class TestBasicChunk:
             diff = np.abs(dur - time)
             # because we try to avoid overlaps, the segments can be up to 2
             # samples shorter than what was asked for. Maybe revisit this?
-            assert diff <= 2 * (patch.attrs.d_time / ONE_SECOND)
+            assert diff <= 2 * (patch.attrs.time_step / ONE_SECOND)
 
 
 class TestGetContents:
@@ -361,7 +380,7 @@ class TestFileSpoolIntegrations:
             assert attrs["time_max"] <= endtime
             patch_duration = (attrs["time_max"] - attrs["time_min"]) / ONE_SECOND
             diff = patch_duration - duration
-            assert abs(diff) <= 1.5 * attrs["d_time"] / ONE_SECOND
+            assert abs(diff) <= 1.5 * attrs["time_step"] / ONE_SECOND
 
     def test_chunk_select(self, dir_spool_index_out_of_order):
         """Ensure chunking can be performed first, then selecting."""
@@ -377,6 +396,26 @@ class TestFileSpoolIntegrations:
         assert len(select) == 1
 
     def test_doc_example(self, all_examples_spool):
-        """Tests for quickstart"""
+        """Tests for quickstart."""
         spool = all_examples_spool.update()
         assert isinstance(spool, dc.BaseSpool)
+
+    def test_patch_no_distance_coord(self, non_distance_dir_spool):
+        """Ensure patches without distance coords still work."""
+        # str should work
+        assert str(non_distance_dir_spool)
+        contents = non_distance_dir_spool.get_contents()
+        assert len(contents) == 2
+        for patch in non_distance_dir_spool:
+            assert isinstance(patch, dc.Patch)
+
+    def test_select_non_distance(self, non_distance_dir_spool):
+        """We should be able to select on non-time/distance coords."""
+        spool = non_distance_dir_spool
+        depth_tup = (150, 250)
+        selected_spool = spool.select(depth=depth_tup)
+        for patch in selected_spool:
+            # ensure depth has been trimmed.
+            coord = patch.get_coord("depth")
+            assert coord.min() >= depth_tup[0]
+            assert coord.max() <= depth_tup[1]

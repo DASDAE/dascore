@@ -1,7 +1,6 @@
-"""
-Tests for chunking dataframes.
-"""
+"""Tests for chunking dataframes."""
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -22,15 +21,15 @@ def contiguous_df():
     dt = np.timedelta64(10, "ms")
     df = pd.DataFrame(time, columns=["time_min", "time_max"])
     df["distance_min"], df["distance_max"] = 0, 10
-    df["d_time"] = dt
-    df["d_distance"] = 1
+    df["time_step"] = dt
+    df["distance_step"] = 1
     return df
 
 
 @pytest.fixture()
 def contiguous_sr_spaced_df(contiguous_df):
-    """separate df by one sample rate."""
-    sr = contiguous_df.loc[:, "d_time"]
+    """Separate df by one sample rate."""
+    sr = contiguous_df.loc[:, "time_step"]
     out = contiguous_df.copy()
     out["time_max"] = out["time_max"] - sr
     return out
@@ -65,7 +64,7 @@ class TestGetIntervals:
         assert np.allclose(out, expected)
 
     def test_times_no_overlap(self):
-        """Test using datetime64 and timedelta64"""
+        """Test using datetime64 and timedelta64."""
         start = np.datetime64("2017-01-03")
         step = np.timedelta64(1, "s")
         stop = start + 50 * step
@@ -97,7 +96,7 @@ class TestBasicChunkDF:
         time_span = df1["time_max"].max() - df1["time_min"].min()
         df2["time_min"] += time_span
         df2["time_max"] += time_span
-        df2["d_time"] = df1["d_time"] * 2
+        df2["time_step"] = df1["time_step"] * 2
         out = pd.concat([df1, df2], axis=0).reset_index(drop=True)
         return out
 
@@ -108,14 +107,14 @@ class TestBasicChunkDF:
         chunker = ChunkManager(time=new_time_interval)
         _, out = chunker.chunk(contiguous_df)
         assert len(out) == 2 * len(contiguous_df)
-        d_time = out["d_time"].iloc[0]
-        new_interval = (out["time_max"] - out["time_min"] + d_time).max()
+        time_step = out["time_step"].iloc[0]
+        new_interval = (out["time_max"] - out["time_min"] + time_step).max()
         assert new_interval == new_time_interval
 
     def test_rechunk_contiguous_with_sr_separation(self, contiguous_sr_spaced_df):
-        """Ensure it still works on data seperated by one sample"""
+        """Ensure it still works on data seperated by one sample."""
         df = contiguous_sr_spaced_df
-        sr = df["d_time"]
+        sr = df["time_step"]
         time_interval = (sr + df["time_max"] - df["time_min"]).max()
         new_time_interval = time_interval / 2
         chunker = ChunkManager(time=new_time_interval)
@@ -129,10 +128,10 @@ class TestBasicChunkDF:
         df = df_different_sample_rates
         chunker = ChunkManager(overlap=None, time=23)
         _, out = chunker.chunk(df)
-        dt = np.sort(np.unique(out["d_time"]))
+        dt = np.sort(np.unique(out["time_step"]))
         assert len(dt) == 2, "both dt should remain"
         # the second part of the df should start at the one minute mark
-        df2 = out[out["d_time"] == dt[1]]
+        df2 = out[out["time_step"] == dt[1]]
         time_min = df2.iloc[0]["time_min"]
         assert time_min.minute == 1
 
@@ -148,7 +147,7 @@ class TestBasicChunkDF:
         over = to_timedelta64(10)
         chunker1 = ChunkManager(overlap=over, time=20)
         _, out = chunker1.chunk(contiguous_df)
-        expected = over - contiguous_df["d_time"].iloc[0]
+        expected = over - contiguous_df["time_step"].iloc[0]
         olap = out.shift()["time_max"] - out["time_min"]
         assert np.all(pd.isnull(olap) | (olap == expected))
         # now ensure floats work for overlap param
@@ -162,7 +161,7 @@ class TestBasicChunkDF:
         df = terra15_file_spool.get_contents()
         dur = (df["time_max"] - df["time_min"]).iloc[0]
         seg_len = dur / 3
-        dt = df["d_time"].iloc[0]
+        dt = df["time_step"].iloc[0]
         chunker = ChunkManager(keep_partial=True, time=seg_len)
         _, chunk_df = chunker.chunk(df)
         duration = chunk_df["time_max"] - chunk_df["time_min"]
@@ -197,7 +196,7 @@ class TestChunkToMerge:
     def gapy_df(self, contiguous_df):
         """Create a dataframe with gaps."""
         df = contiguous_df.copy()
-        df["time_max"] -= df["d_time"] * 15
+        df["time_max"] -= df["time_step"] * 15
         return df
 
     @pytest.fixture()
@@ -234,7 +233,7 @@ class TestChunkToMerge:
 
 
 class TestInstructionDF:
-    """Sanity checks on intermediary df"""
+    """Sanity checks on intermediary df."""
 
     def test_indices(self, contiguous_df):
         """Ensure the input/output index belong to input/output df."""
@@ -258,7 +257,7 @@ class TestInstructionDF:
         in_df, out_df = chunker.chunk(df)
         instruction = chunker.get_instruction_df(in_df, out_df)
         # ensure each output has exactly one station.
-        for current_index, sub in instruction.groupby("current_index"):
+        for _current_index, sub in instruction.groupby("current_index"):
             source = df.loc[sub.index]
             # there should only be on station in the source for this group
             unique_stations = source["station"].unique()

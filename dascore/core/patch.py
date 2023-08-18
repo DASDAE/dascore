@@ -1,6 +1,4 @@
-"""
-A 2D trace object.
-"""
+"""A 2D trace object."""
 from __future__ import annotations
 
 import warnings
@@ -9,10 +7,12 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 from rich.text import Text
 
-import dascore.proc
+import dascore as dc
+import dascore.proc.coords
 from dascore.compat import DataArray, array
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.schema import PatchAttrs
+from dascore.core.coords import BaseCoord
 from dascore.io import PatchIO
 from dascore.transform import TransformPatchNameSpace
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
@@ -27,19 +27,23 @@ class Patch:
     Parameters
     ----------
     data
-        The data representing fiber optic measurements.
+        The array data representing fiber optic measurements.
     coords
-        The coordinates, or dimensional labels for the data. These can be
-        passed in three forms:
+        The coordinates, or dimensional labels for the data.
+        A few types of input are permitted. If a mapping (eg dict) the value
+        should conform to one of the following three forms:
         {coord_name: coord}
         {coord_name: ((dimensions,), coord)}
         {coord_name: (dimensions, coord)}
+        Where coord can be a numpy array or a
+        [`BaseCoord`](`dascore.core.coords.BaseCoord`) object.
+        A [`CoordManager`](`dascore.core.coordmanager.CoordManager`) is also acceptable.
     dims
         A sequence of dimension strings. The first entry corresponds to the
         first axis of data, the second to the second dimension, and so on.
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict or
-        [PatchAttrs](`dascore.core.schema.PatchAttrs')
+        [PatchAttrs](`dascore.core.attrs.PatchAttrs')
 
     Notes
     -----
@@ -48,8 +52,7 @@ class Patch:
 
     - If coords and attrs are provided, attrs will have priority. This means
     if there is a conflict between information contained in both, the coords
-    will be recalculated. However, any missing data in attrs will be filled in
-    if available in coords.
+    will be recalculated.
     """
 
     data: ArrayLike
@@ -60,31 +63,38 @@ class Patch:
     def __init__(
         self,
         data: ArrayLike | DataArray | None = None,
-        coords: Mapping[str, ArrayLike] | None | CoordManager = None,
+        coords: Mapping[str, ArrayLike | BaseCoord] | CoordManager | None = None,
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
     ):
-        if isinstance(data, (DataArray, self.__class__)):
+        if isinstance(data, DataArray | self.__class__):
             data, attrs, coords = data.data, data.attrs, data.coords
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
         # Try to generate coords from ranges in attrs
         if coords is None and attrs is not None:
-            coords = PatchAttrs.coords_from_dims(attrs)
+            attrs = dc.PatchAttrs.from_dict(attrs)
+            coords = attrs.coords_from_dims()
             dims = dims if dims is not None else attrs.dim_tuple
         # Ensure required info is here
         non_attrs = [x is None for x in [data, coords, dims]]
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
-        self._coords = get_coord_manager(coords, dims, attrs)
-        self._attrs = PatchAttrs.from_dict(attrs, self.coords)
+        coords = get_coord_manager(coords, dims=dims)
+        # the only case we allow attrs to include coords is if they are both
+        # dicts, in which case attrs might have unit info for coords.
+        if isinstance(attrs, Mapping) and attrs:
+            coords, attrs = coords.update_from_attrs(attrs)
+        else:
+            # ensure attrs conforms to coords
+            attrs = dc.PatchAttrs.from_dict(attrs).update(coords=coords)
+        self._coords = coords
+        self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):
-        """
-        Compare one Patch.
-        """
+        """Compare one Patch."""
         return dascore.proc.equals(self, other)
 
     def __add__(self, other):
@@ -132,7 +142,7 @@ class Patch:
 
     @property
     def coord_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Return a dict of coordinate: (shape, ...)"""
+        """Return a dict of coordinate: (shape, ...)."""
         return self.coords.coord_shapes
 
     @property
@@ -178,9 +188,9 @@ class Patch:
     update_coords = dascore.proc.update_coords
 
     def assign_coords(self, *args, **kwargs):
-        """Deprecated method for update_coords"""
+        """Deprecated method for update_coords."""
         msg = "assign_coords is deprecated, use update_coords instead."
-        warnings.warn(msg, DeprecationWarning)
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.update_coords(*args, **kwargs)
 
     set_units = dascore.proc.set_units

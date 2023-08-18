@@ -13,6 +13,7 @@ A few notes:
     until that gets fixed.
 """
 from __future__ import annotations
+
 from _benchmark_uilts import (
     BASE_PATH,
     REFERENCE_BRANCH,

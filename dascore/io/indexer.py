@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import abc
+import json
 import os
 import time
 from pathlib import Path
+from functools import cache
+from contextlib import suppress
 
 import pandas as pd
+import pooch
 from typing_extensions import Self
 
 import dascore as dc
@@ -22,6 +26,46 @@ from dascore.utils.time import get_max_min_times, to_timedelta64
 READ_HDF5_KWARGS = frozenset(
     {"columns", "where", "mode", "errors", "start", "stop", "key", "chunksize"}
 )
+
+
+@cache
+def _get_index_map(cache_path) -> dict:
+    """
+    Get a dict of index locations.
+
+    Note: this is purposefully mutable; handle with care.
+    """
+    path = Path(cache_path)
+    if path.exists():
+        with path.open("r") as fi:
+            out = json.load(fi)
+    else:
+        out = {}
+    return out
+
+
+def _update_index_map(updates, cache_path) -> dict:
+    """Update index map to track new index."""
+    data = _get_index_map(cache_path=cache_path)
+    data.update(updates)
+    Path(cache_path).parent.mkdir(exist_ok=True, parents=True)
+    with open(cache_path, "w") as fi:
+        json.dump(data, fi)
+    return data
+
+
+def _directory_writable(path):
+    """Return True if the directory is writable else False."""
+    name = "._dascore_write_test_delete_me"
+    path = Path(path) / name
+    path.parent.mkdir(exist_ok=True, parents=True)
+    try:
+        open(path, "w").close()
+    except (PermissionError, IsADirectoryError):
+        return False
+    else:
+        os.remove(path)
+    return True
 
 
 class AbstractIndexer:
@@ -54,32 +98,61 @@ class DirectoryIndexer(AbstractIndexer):
     ----------
     path
         The path to a directory containing DAS files.
-    cache_size
-        The number of queries to store in memory to avoid frequent reads
-        of the index file. It is rare this needs to be modified.
     index_path
         The path to the index. By default, the index will be created on the
-        top level of the data directory.
+        top level of the data directory. If another index is
     """
 
-    # hdf5 compression defaults
     ext = ""
-    namespace = ""
-    index_name = ".dascore_index.h5"  # name of index file
-    executor = None  # an executor for using parallelism
+    _namespace = ""
+    _index_name = ".dascore_index.h5"  # name of index file
+
+    # A user-specific file which tracks where indices are stored if not on
+    # the same directory as the path to index.
+    index_map_path = pooch.os_cache("dascore") / "caches" / "cache_paths.json"
 
     def __init__(self, path: str | Path, cache_size: int = 5, index_path=None):
         self.max_size = cache_size
         self.path = Path(path).absolute()
-        self.index_path = Path(index_path or self.path / self.index_name)
-        self.cache = pd.DataFrame(
-            index=range(cache_size), columns="t1 t2 kwargs cindex".split()
-        )
+        self.index_path = Path(self._find_index_file(self.path, index_path))
         self._current_index = 0
         self._index_table = HDFPatchIndexManager(
             self.index_path,
-            self.namespace,
+            self._namespace,
         )
+        self.cache = pd.DataFrame(
+            index=range(cache_size), columns="t1 t2 kwargs cindex".split()
+        )
+
+    def _find_index_file(self, data_path, index_path=None):
+        """
+        Find the path to the index file.
+        """
+        data_path = Path(data_path).absolute()
+        # user specified index path
+        if index_path:
+            update = {str(data_path): str(Path(index_path).absolute())}
+            _update_index_map(update, cache_path=str(self.index_map_path))
+            return index_path
+        # see if expected path is in data path
+        expected_path = data_path / self._index_name
+        with suppress(PermissionError):
+            if expected_path.exists():
+                return expected_path
+        # else load path map and see if it knows where the index is.
+        path_map = _get_index_map(cache_path=str(self.index_map_path))
+        if out := path_map.get(str(data_path)):
+            return out
+        # if not, set the path to either the data path, if writable,
+        # else the dascore cache
+        if not _directory_writable(data_path):
+            new_path = "_dascore_index_" + str(abs(hash(data_path))) + ".h5"
+            index_path = self.index_map_path.parent / new_path
+            update = {str(data_path): str(index_path.absolute())}
+            _update_index_map(update, cache_path=str(self.index_map_path))
+        else:
+            index_path = data_path / self._index_name
+        return index_path
 
     def get_contents(self, buffer=ONE_SECOND_IN_NS, **kwargs) -> pd.DataFrame:
         """
@@ -121,7 +194,12 @@ class DirectoryIndexer(AbstractIndexer):
         con2 = index["time_max"] <= (time_min - buffer)
         pre_filter_df = index[~(con1 | con2)]
         out = pre_filter_df[
-            filter_df(pre_filter_df, time=(time_min, time_max), **kwargs)
+            filter_df(
+                pre_filter_df,
+                time=(time_min, time_max),
+                ignore_bad_kwargs=True,
+                **kwargs,
+            )
         ]
         return out
 
@@ -152,12 +230,6 @@ class DirectoryIndexer(AbstractIndexer):
         )
         self.cache.loc[self._get_next_index()] = ser
 
-    def _kwargs_to_str(self, kwargs):
-        """Convert kwargs to a string."""
-        keys = sorted(list(kwargs.keys()))
-        out = str([(item, kwargs[item]) for item in keys])
-        return out
-
     def clear_cache(self):
         """Removes all cached dataframes."""
         self.cache = pd.DataFrame(
@@ -167,7 +239,6 @@ class DirectoryIndexer(AbstractIndexer):
     def _get_next_index(self):
         """
         Get the next index value on cache.
-
         Note we can't use itertools.cycle here because it cant be pickled.
         """
         if self._current_index == len(self.cache.index) - 1:
@@ -175,6 +246,12 @@ class DirectoryIndexer(AbstractIndexer):
         else:
             self._current_index += 1
         return self.cache.index[self._current_index]
+
+    def _kwargs_to_str(self, kwargs):
+        """Convert kwargs to a string."""
+        keys = sorted(list(kwargs.keys()))
+        out = str([(item, kwargs[item]) for item in keys])
+        return out
 
     def _get_file_iterator(self, paths: path_types | None = None, only_new=True):
         """Return an iterator of potential un-indexed files."""
@@ -197,9 +274,7 @@ class DirectoryIndexer(AbstractIndexer):
         return iter_files(paths, ext=self.ext, mtime=mtime)
 
     def _enforce_min_version(self):
-        """
-        Ensure the minimum version is met, else delete index file.
-        """
+        """Ensure the minimum version is met, else delete index file."""
         try:
             self._index_table.validate_version()
         except InvalidIndexVersionError:
@@ -216,7 +291,7 @@ class DirectoryIndexer(AbstractIndexer):
         update_time = time.time()
         new_files = list(self._get_file_iterator(paths=paths, only_new=True))
         smooth_iterator = track(new_files, f"Indexing {self.path.name}")
-        data_list = [y.model_dump() for x in smooth_iterator for y in dc.scan(x)]
+        data_list = [y.flat_dump() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
         if not df.empty:
             # ensure the base path is not in the path column

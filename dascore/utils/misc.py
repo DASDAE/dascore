@@ -1,24 +1,30 @@
-"""
-Misc Utilities.
-"""
+"""Misc Utilities."""
 from __future__ import annotations
 
 import contextlib
 import functools
+from functools import cache
 import importlib
 import inspect
 import os
+import re
 import warnings
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
+from collections.abc import Mapping
 from types import ModuleType
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 from scipy.linalg import solve
 from scipy.special import factorial
 
+import dascore as dc
 from dascore.exceptions import MissingOptionalDependency
+
+
+class _Sentinel:
+    """Dump little sentinel for key checks."""
 
 
 def register_func(list_or_dict: list | dict, key=None):
@@ -52,14 +58,14 @@ def _pass_through_method(func):
 
     @functools.wraps(func)
     def _func(self, *args, **kwargs):
-        obj = getattr(self, "_obj")
+        obj = self._obj
         return func(obj, *args, **kwargs)
 
     return _func
 
 
 class _NameSpaceMeta(type):
-    """Metaclass for namespace class"""
+    """Metaclass for namespace class."""
 
     def __setattr__(self, key, value):
         if callable(value):
@@ -90,13 +96,13 @@ class MethodNameSpace(metaclass=_NameSpaceMeta):
         self._obj = obj
 
     def __init_subclass__(cls, **kwargs):
-        """wrap all public methods."""
+        """Wrap all public methods."""
         for key, val in vars(cls).items():
             if callable(val):  # passes to _NameSpaceMeta settattr
                 setattr(cls, key, val)
 
 
-def get_slice_from_monotonic(array, cond=Optional[tuple]) -> slice:
+def get_slice_from_monotonic(array, cond: tuple | None) -> slice:
     """
     Return a slice object which meets conditions in cond on array.
 
@@ -186,7 +192,7 @@ def iter_files(
 ) -> Iterable[str]:
     """
     Use os.scan dir to iter files, optionally only for those with given
-    extension (ext) or modified times after mtime
+    extension (ext) or modified times after mtime.
 
     Parameters
     ----------
@@ -310,6 +316,8 @@ def get_middle_value(array):
 
 def all_diffs_close_enough(diffs):
     """Check if all the diffs are 'close' handling timedeltas."""
+    if not len(diffs):
+        return False
     diffs = np.array(diffs)
     is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
     is_td = np.issubdtype(diffs.dtype, np.datetime64)
@@ -323,7 +331,7 @@ def all_diffs_close_enough(diffs):
 
 def unbyte(byte_or_str: bytes | str) -> str:
     """Ensure a string is given by str or possibly bytes."""
-    if isinstance(byte_or_str, (bytes, np.bytes_)):
+    if isinstance(byte_or_str, bytes | np.bytes_):
         byte_or_str = byte_or_str.decode("utf8")
     return byte_or_str
 
@@ -353,9 +361,7 @@ def _get_stencil_weights(array, ref_point, order):
 
 
 def get_stencil_coefs(order, derivative=2):
-    """
-    Get centered coefficients for a derivative of specified order and derivative.
-    """
+    """Get centered coefficients for a derivative of specified order and derivative."""
     dx = np.arange(-order, order + 1)
     return _get_stencil_weights(dx, 0, derivative)
 
@@ -375,6 +381,145 @@ def to_str(val):
     return str(val)
 
 
+def maybe_get_attrs(obj, attr_map: Mapping):
+    """Maybe get attributes from object (if they exist)."""
+    out = {}
+    for old_name, new_name in attr_map.items():
+        if hasattr(obj, old_name):
+            value = getattr(obj, old_name)
+            out[new_name] = unbyte(value)
+    return out
+
+
+@cache
+def _get_compiled_suffix_prefix_regex(
+    suffixes: str | tuple[str],
+    prefixes: str | tuple[str] | None,
+):
+    """
+    Get a compiled regex which matches the form prefixes_suffixes.
+    """
+    suffixes = iterate(suffixes)
+    pattern = rf".*_({'|'.join(iterate(suffixes))})"
+    if prefixes is not None:
+        pattern = rf"({'|'.join(iterate(prefixes))})" + pattern
+    return re.compile(pattern)
+
+
+def _matches_prefix_suffix(input_str, suffixes, prefixes=None):
+    """Determine if a string matches given prefixes_suffixes"""
+    regex = _get_compiled_suffix_prefix_regex(suffixes, prefixes)
+    return bool(re.match(regex, input_str))
+
+
+def is_valid_coord_str(input_str, prefixes=None):
+    """
+    Return True if an input string is valid for representing coord info.
+    """
+    _valid_keys = tuple(dc.core.CoordSummary.model_fields)
+    return _matches_prefix_suffix(input_str, _valid_keys, prefixes)
+
+
+def separate_coord_info(
+    obj,
+    dims: tuple[str] | None = None,
+    required: Sequence[str] | None = None,
+    cant_be_alone: tuple[str] = ("units", "dtype"),
+) -> tuple[dict, dict]:
+    """
+    Separate coordinate information from attr dict.
+
+    These can be in the flat-form (ie {time_min, time_max, time_step, ...})
+    or a nested coord: {coords: {time: {min, max, step}}
+
+    Parameters
+    ----------
+    obj
+        The object or model to
+    dims
+        The dimension to look for.
+    required
+        If provided, the required attributes (e.g., min, max, step).
+    cant_be_alone
+        names which cannot be on their own.
+    """
+
+    def _meets_required(coord_dict):
+        """Return True coord dict does not meet the minimum required keys."""
+        if not coord_dict:
+            return False
+        if required is None and (set(coord_dict) - cant_be_alone):
+            return True
+        return set(coord_dict).issuperset(required)
+
+    def _get_dims(obj):
+        """Try to ascertain dims from keys in obj."""
+        potential_keys = defaultdict(set)
+        for key in obj:
+            if not is_valid_coord_str(key):
+                continue
+            potential_keys[key.split("_")[0]].add(key.split("_")[1])
+        return tuple(i for i, v in potential_keys.items() if _meets_required(v))
+
+    def _get_coords_from_top_level(obj, out, dims):
+        """First get coord info from top level"""
+        for dim in iterate(dims):
+            potential_coord = {
+                i.split("_")[1]: v for i, v in obj.items() if is_valid_coord_str(i, dim)
+            }
+            # nasty hack for handling d_{dim} for backward compatibility.
+            if (bad_name := f"d_{dim}") in obj:
+                msg = f"d_{dim} is deprecated, use {dim}_step"
+                warnings.warn(msg, DeprecationWarning, stacklevel=3)
+                potential_coord["step"] = obj[bad_name]
+
+            if _meets_required(potential_coord):
+                out[dim] = potential_coord
+
+    def _get_coords_from_coord_level(obj, out):
+        """Get coords from coordinate level."""
+        coords = obj.get("coords", {})
+        if hasattr(coords, "to_summary_dict"):
+            coords = coords.to_summary_dict()
+        for key, value in coords.items():
+            if hasattr(value, "to_summary"):
+                value = value.to_summary()
+            if hasattr(value, "model_dump"):
+                value = value.model_dump()
+            if _meets_required(value):
+                out[key] = value
+
+    def _pop_keys(obj, out):
+        """Pop out old keys for attrs, and unused keys from out."""
+        # first coord subdict
+        obj.pop("coords", None)
+        # then top-level
+        for coord_name, sub_dict in out.items():
+            for thing_name in sub_dict:
+                obj.pop(f"{coord_name}_{thing_name}", None)
+            if "step" in sub_dict:
+                obj.pop(f"d_{coord_name}", None)
+
+    # sequence of short-circuit checks
+    out = {}
+    required = set(required) if required is not None else set()
+    cant_be_alone = set(cant_be_alone)
+    if obj is None:
+        return out, {}
+    if hasattr(obj, "model_dump"):
+        obj = obj.model_dump()
+    if dims is None:
+        dims = _get_dims(obj)
+    # this is already a dict of coord info.
+    if set(dims) == set(obj):
+        return obj, {}
+    obj = dict(obj)
+    _get_coords_from_coord_level(obj, out)
+    _get_coords_from_top_level(obj, out, dims)
+    _pop_keys(obj, out)
+    return out, obj
+
+
 def cached_method(func):
     """
     Cache decorated method.
@@ -392,7 +537,7 @@ def cached_method(func):
         if not (args or kwargs):
             key = id(func)
         else:
-            key = (id(func),) + args
+            key = (id(func), *args)
             if kwargs:
                 for item in kwargs.items():
                     key += item

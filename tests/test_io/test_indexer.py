@@ -1,8 +1,9 @@
-"""
-Tests for indexing local file systems.
-"""
+"""Tests for indexing local file systems."""
 from __future__ import annotations
+
+import os
 import shutil
+import platform
 from contextlib import suppress
 from pathlib import Path
 
@@ -35,19 +36,19 @@ def diverse_indexer(diverse_spool_directory):
 
 @pytest.fixture(scope="class")
 def diverse_df(diverse_indexer):
-    """Return the contents of the diverse indexer"""
+    """Return the contents of the diverse indexer."""
     return diverse_indexer()
 
 
 @pytest.fixture()
 def diverse_df_reset_cache(diverse_indexer):
-    """Return the indexer with a reset cache"""
+    """Return the indexer with a reset cache."""
     return DirectoryIndexer(diverse_indexer.path)
 
 
 @pytest.fixture(params=[diverse_indexer, diverse_df_reset_cache])
 def diverse_ind(request):
-    """Aggregate the diverse indexers"""
+    """Aggregate the diverse indexers."""
     return request.getfixturevalue(request.param.__name__)
 
 
@@ -58,11 +59,57 @@ def empty_index(tmp_path_factory):
     return DirectoryIndexer(path).update()
 
 
+class TestFindIndex:
+    """Tests for finding the index."""
+
+    @pytest.fixture(scope="class")
+    def unwritable_directory(self, tmp_path_factory):
+        """Return an un-writable directory."""
+        # currently this doesn't work on windows so we need to skip any test
+        # that depend on this fixture if running on windows
+        if "windows" in platform.system().lower():
+            pytest.skip("Cant run this test on windows")
+        path = tmp_path_factory.mktemp("read_only_data_file")
+        os.chmod(path, 0o444)
+        return path
+
+    def test_directory_cant_write(self, unwritable_directory):
+        """Ensure correct path is found when a read-only directory is used"""
+        dir_index = DirectoryIndexer(unwritable_directory)
+        index_path = dir_index.index_path
+        index_map_path = dir_index.index_map_path
+        assert index_map_path.parent == index_path.parent
+
+    def test_specify_index_path(self, tmp_path_factory):
+        """Ensure specifying a Path works."""
+        data_path = tmp_path_factory.mktemp("data_dir")
+        index_path = tmp_path_factory.mktemp("index_dir") / "index.h5"
+        dir_index = DirectoryIndexer(data_path, index_path=index_path)
+        assert dir_index.index_path == index_path
+        # loading a new data dir should now remember where this is.
+        dir_index2 = DirectoryIndexer(data_path)
+        assert dir_index2.index_path == index_path
+
+    def test_writeable_dir_index_not_there(self, tmp_path_factory):
+        """Tests for when there is writeable directory."""
+        path = tmp_path_factory.mktemp("normal_indexer_test")
+        dir_indexer = DirectoryIndexer(path)
+        assert dir_indexer.index_path.parent == path
+
+    def test_writable_dir_index_exists(self, tmp_path_factory):
+        """A test case where the index does exist."""
+        path = tmp_path_factory.mktemp("normal_indexer_test")
+        index_path = path / DirectoryIndexer._index_name
+        index_path.open("w").close()
+        dir_indexer = DirectoryIndexer(path)
+        assert dir_indexer.index_path == index_path
+
+
 class TestBasics:
-    """Basic tests for indexer"""
+    """Basic tests for indexer."""
 
     def test_str_repr(self, basic_indexer):
-        """Ensure a useful (not the default) str/repr is implemented"""
+        """Ensure a useful (not the default) str/repr is implemented."""
         out = str(basic_indexer)
         assert "object at" not in out
 

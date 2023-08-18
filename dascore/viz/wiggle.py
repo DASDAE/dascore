@@ -1,6 +1,4 @@
-"""
-Module for wiggle plotting.
-"""
+"""Module for wiggle plotting."""
 from __future__ import annotations
 
 from datetime import timedelta
@@ -91,8 +89,10 @@ def wiggle(
 
     for dim, x in zip(dims_r, ["x", "y"]):
         getattr(ax, f"set_{x}label")(str(dim).capitalize())
-    if "time" in dims_r:
-        _format_time_axis(ax, dims_r)
+        # format all dims which have time types.
+        coord = patch.get_coord(dim)
+        if np.issubdtype(coord.dtype, np.datetime64):
+            _format_time_axis(ax, dim, x)
     ax.invert_yaxis()  # invert y axis so origin is at top
     if show:
         plt.show()

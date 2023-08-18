@@ -13,9 +13,9 @@ import numpy as np
 import numpy.fft as nft
 
 from dascore.constants import PatchType
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.schema import PatchAttrs
 from dascore.units import invert_quantity
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
@@ -68,9 +68,7 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real):
 
 
 def _get_dft_attrs(patch, dims, new_coords):
-    """
-    Get new attributes for transformed patch.
-    """
+    """Get new attributes for transformed patch."""
     new = dict(patch.attrs)
     new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
@@ -180,9 +178,7 @@ def _get_idft_dims_steps_axis(patch, dim):
 
 
 def _get_idft_coords_and_sizes(patch, dims, steps, new_dims, axes, real):
-    """
-    Get the new coords for the idft and expected sizes to pass to numpy.
-    """
+    """Get the new coords for the idft and expected sizes to pass to numpy."""
     shapes = patch.shape
     coord_map = patch.coords.disassociate_coord(dims).get_coord_tuple_map()
     sizes = []

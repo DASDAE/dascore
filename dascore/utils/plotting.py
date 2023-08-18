@@ -1,12 +1,12 @@
-"""
-Utilities for plotting with matplotlib.
-"""
+"""Utilities for plotting with matplotlib."""
 from __future__ import annotations
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
+from dascore.units import get_quantity_str
 from dascore.utils.misc import suppress_warnings
 
 
@@ -14,7 +14,7 @@ def _get_dim_label(patch, dim):
     """Create a label for the given dimension, including units if defined."""
     attrs = patch.attrs
     maybe_units = attrs.get(f"{dim}_units")
-    unit_str = f"({maybe_units})" if maybe_units else ""
+    unit_str = f"({get_quantity_str(maybe_units)})" if maybe_units else ""
     return str(dim) + unit_str
 
 
@@ -26,7 +26,7 @@ def _get_cmap(cmap):
 
 
 def _get_ax(ax):
-    """Get an axis if ax is None"""
+    """Get an axis if ax is None."""
     if ax is None:
         _, ax = plt.subplots(1)
     return ax
@@ -40,26 +40,28 @@ def _get_extents(dims_r, coords):
     for dim in dims_r:
         array = coords[dim]
         lims[dim] += [array.min(), array.max()]
-    # special handling for time
-    if "time" in coords:
+    # find datetime coords and convert to numpy mtimes
+    time_dims = [i for i, v in coords.items() if np.issubdtype(v.dtype, np.datetime64)]
+    for name in time_dims:
         # We can get a warning about loss of precision in ns, doesn't matter.
         with suppress_warnings(UserWarning):
-            time_min = pd.to_datetime(lims["time"][0]).to_pydatetime()
-            time_max = pd.to_datetime(lims["time"][1]).to_pydatetime()
+            time_min = pd.to_datetime(lims[name][0]).to_pydatetime()
+            time_max = pd.to_datetime(lims[name][1]).to_pydatetime()
         # convert to julian date to appease matplotlib
-        lims["time"] = [mdates.date2num(time_min), mdates.date2num(time_max)]
+        lims[name] = [mdates.date2num(time_min), mdates.date2num(time_max)]
     out = [x for dim in dims_r for x in lims[dim]]
     return out
 
 
-def _format_time_axis(ax, dims_r):
+def _format_time_axis(ax, dim, axis_name):
     """
     Function to handle formatting time axis for image-type plots.
 
     Tries to snape all axis labels to "nice" values and adds reference
     start time.
     """
-    axis_name = "x" if dims_r[0] == "time" else "y"
+    # Set label to not include units
+    getattr(ax, f"set_{axis_name}label")(dim)
     # set date time formatting so MPL knows this axis is a date
     getattr(ax, f"{axis_name}axis_date")()
     # Set intelligent, zoom-in-able date formatter

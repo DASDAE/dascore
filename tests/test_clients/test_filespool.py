@@ -1,7 +1,6 @@
-"""
-Tests for the file spool.
-"""
+"""Tests for the file spool."""
 from __future__ import annotations
+
 import pytest
 
 import dascore as dc
