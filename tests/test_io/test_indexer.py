@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import platform
 from contextlib import suppress
 from pathlib import Path
 
@@ -64,6 +65,10 @@ class TestFindIndex:
     @pytest.fixture(scope="class")
     def unwritable_directory(self, tmp_path_factory):
         """Return an un-writable directory."""
+        # currently this doesn't work on windows so we need to skip any test
+        # that depend on this fixture if running on windows
+        if "windows" in platform.system().lower():
+            pytest.skip("Cant run this test on windows")
         path = tmp_path_factory.mktemp("read_only_data_file")
         os.chmod(path, 0o444)
         return path
