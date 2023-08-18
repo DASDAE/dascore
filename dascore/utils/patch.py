@@ -35,7 +35,7 @@ def _format_values(val):
         out = np.array2string(
             val,
             precision=FLOAT_PRECISION,
-            threshold=dascore_styles['patch_history_array_threshold']
+            threshold=dascore_styles["patch_history_array_threshold"],
         )
     else:
         out = val
