@@ -162,6 +162,7 @@ history
 # Rich styles for various object displays.
 dascore_styles = dict(
     np_array_threshold=100,  # max number of elements to show in array
+    patch_history_array_threshold=10,  # max elements of array in hist str.
     dc_blue="#002868",
     dc_red="#cf0029",
     dc_yellow="#ffc934",

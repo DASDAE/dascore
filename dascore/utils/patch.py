@@ -23,8 +23,23 @@ from dascore.exceptions import (
 from dascore.units import get_quantity
 from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
 from dascore.utils.time import to_float
+from dascore.constants import FLOAT_PRECISION, dascore_styles
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
+
+
+def _format_values(val):
+    """string formatting for values for history string."""
+    if isinstance(val, np.ndarray):
+        # make sure numpy strings arent too long!
+        out = np.array2string(
+            val,
+            precision=FLOAT_PRECISION,
+            threshold=dascore_styles["patch_history_array_threshold"],
+        )
+    else:
+        out = val
+    return out
 
 
 def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
@@ -34,8 +49,12 @@ def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
     callargs.pop("self", None)
     kwargs_ = callargs.pop("kwargs", {})
     arguments = []
-    arguments += [f"{k}={v!r}" for k, v in callargs.items() if v is not None]
-    arguments += [f"{k}={v!r}" for k, v in kwargs_.items() if v is not None]
+    arguments += [
+        f"{k}={_format_values(v)!r}" for k, v in callargs.items() if v is not None
+    ]
+    arguments += [
+        f"{k}={_format_values(v)!r}" for k, v in kwargs_.items() if v is not None
+    ]
     arguments.sort()
     out = f"{func.__name__}("
     if arguments:
