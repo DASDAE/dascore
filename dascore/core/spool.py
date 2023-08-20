@@ -5,6 +5,7 @@ import abc
 from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
+from collections.abc import Generator
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,7 @@ from typing_extensions import Self
 import dascore as dc
 import dascore.io
 from dascore.constants import PatchType, numeric_types, timeable_types
-from dascore.exceptions import InvalidSpoolError
+from dascore.exceptions import InvalidSpoolError, ParameterError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
@@ -44,9 +45,46 @@ class BaseSpool(abc.ABC):
     def __iter__(self) -> PatchType:
         """Iterate through the Patches in the spool."""
 
-    def update(self) -> Self:
-        """Updates the contents of the spool and returns a spool."""
-        return self
+    @abc.abstractmethod
+    def __len__(self) -> int:
+        """Return len of spool."""
+
+    def __rich__(self):
+        """Rich rep. of spool."""
+        text = get_dascore_text() + Text(" ")
+        text += Text(self.__class__.__name__, style=self._rich_style)
+        text += Text(" 🧵 ")
+        patch_len = len(self)
+        text += Text(f"({patch_len:d}")
+        text += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
+        return text
+
+    def __str__(self):
+        return str(self.__rich__())
+
+    __repr__ = __str__
+
+    def __eq__(self, other) -> bool:
+        """Simple equality checks on spools."""
+
+        def _vals_equal(dict1, dict2):
+            if set(dict1) != set(dict2):
+                return False
+            for key in set(dict1):
+                val1, val2 = dict1[key], dict2[key]
+                if isinstance(val1, dict):
+                    if not _vals_equal(val1, val2):
+                        return False
+                elif hasattr(val1, "equals"):
+                    if not val1.equals(val2):
+                        return False
+                elif val1 != val2:
+                    return False
+            return True
+
+        my_dict = self.__dict__
+        other_dict = getattr(other, "__dict__", {})
+        return _vals_equal(my_dict, other_dict)
 
     @abc.abstractmethod
     def chunk(
@@ -87,61 +125,43 @@ class BaseSpool(abc.ABC):
     def get_contents(self) -> pd.DataFrame:
         """Get a dataframe of the patches that will be returned by the spool."""
 
-    @abc.abstractmethod
+    # --- optional methods
+
     def sort(self, attribute) -> Self:
         """
         Sort the Spool based on a specific attribute.
 
         Parameters
         ---------------
-        atribute
+        attribute
             The attribute or coordinate used for sorting. If a coordinate name
             is used, the sorting will be based on the minimum value.
         """
-        raise NotImplementedError(
-            f"spool of type {self.__class__} has no sort implementation"
-        )
+        msg = f"spool of type {self.__class__} has no sort implementation"
+        raise NotImplementedError(msg)
 
-    @abc.abstractmethod
-    def __len__(self) -> int:
-        """Return len of spool."""
+    def split(
+        self,
+        spool_size: int | None = None,
+        spool_count: int | None = None,
+    ) -> Generator[Self, None, None]:
+        """
+        Yield sub-patches based on specified parameters.
 
-    def __eq__(self, other) -> bool:
-        """Simple equality checks on spools."""
+        Parameters
+        ----------
+        spool_size
+            The number of patches desired in each output spool. The last
+            spool may have fewer patches.
+        spool_count
+            The number of spools
+        """
+        msg = f"spool of type {self.__class__} has no split implementation"
+        raise NotImplementedError(msg)
 
-        def _vals_equal(dict1, dict2):
-            if set(dict1) != set(dict2):
-                return False
-            for key in set(dict1):
-                val1, val2 = dict1[key], dict2[key]
-                if isinstance(val1, dict):
-                    if not _vals_equal(val1, val2):
-                        return False
-                elif hasattr(val1, "equals"):
-                    if not val1.equals(val2):
-                        return False
-                elif val1 != val2:
-                    return False
-            return True
-
-        my_dict = self.__dict__
-        other_dict = getattr(other, "__dict__", {})
-        return _vals_equal(my_dict, other_dict)
-
-    def __rich__(self):
-        """Rich rep. of spool."""
-        text = get_dascore_text() + Text(" ")
-        text += Text(self.__class__.__name__, style=self._rich_style)
-        text += Text(" 🧵 ")
-        patch_len = len(self)
-        text += Text(f"({patch_len:d}")
-        text += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
-        return text
-
-    def __str__(self):
-        return str(self.__rich__())
-
-    __repr__ = __str__
+    def update(self) -> Self:
+        """Updates the contents of the spool and returns a spool."""
+        return self
 
 
 class DataFrameSpool(BaseSpool):
@@ -355,6 +375,17 @@ class DataFrameSpool(BaseSpool):
 
         # create new spool from new dataframes
         return self.new_from_df(df=sorted_df, instruction_df=new_instruction_df)
+
+    @compose_docstring(doc=BaseSpool.split.__doc__)
+    def split(
+        self,
+        spool_size: int | None = None,
+        spool_count: int | None = None,
+    ) -> Generator[Self, None, None]:
+        """{doc}"""
+        if spool_count is not None and spool_count is not None:
+            msg = "spool_count and spool_size cannot both be defined."
+            raise ParameterError(msg)
 
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
