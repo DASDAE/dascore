@@ -9,8 +9,14 @@ import pytest
 import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
-from dascore.exceptions import InvalidSpoolError
+from dascore.exceptions import InvalidSpoolError, ParameterError
 from dascore.utils.time import to_datetime64, to_timedelta64
+
+
+@pytest.fixture(scope="session")
+def random_spool_len_10():
+    """Return a spool of length 10."""
+    return dc.examples.get_example_spool(length=10)
 
 
 class TestSpoolBasics:
@@ -268,6 +274,20 @@ class TestSort:
         sorted_spool = diverse_spool.sort("distance")
         df = sorted_spool.get_contents()
         assert df["distance_min"].is_monotonic_increasing
+
+
+class TestSplit:
+    """Tests splitting spools into smaller spools."""
+
+    def test_both_parameters_raises(self, random_spool):
+        """Ensure split raises when both spool_size and spool_count are defined."""
+        msg = "spool_count and spool_size cannot"
+        with pytest.raises(ParameterError, match=msg):
+            random_spool.split(spool_size=1, spool_count=2)
+
+    def test_spool_size(self, random_spool_len_10):
+        """Ensure spool size can be split."""
+        # spools = list(random_spool_len_10.split(spool_size=3))
 
 
 class TestGetSpool:
