@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
 from collections.abc import Generator
+from typing import TypeVar
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -14,13 +16,13 @@ from typing_extensions import Self
 
 import dascore as dc
 import dascore.io
-from dascore.constants import PatchType, numeric_types, timeable_types
+from dascore.constants import PatchType, numeric_types, timeable_types, ExecutorType
 from dascore.exceptions import InvalidSpoolError, ParameterError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import CacheDescriptor
+from dascore.utils.misc import CacheDescriptor, _spool_map
 from dascore.utils.patch import _force_patch_merge, patches_to_df
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
@@ -30,6 +32,9 @@ from dascore.utils.pd import (
     get_dim_names_from_columns,
     split_df_query,
 )
+
+
+T = TypeVar("T")
 
 
 class BaseSpool(abc.ABC):
@@ -154,7 +159,9 @@ class BaseSpool(abc.ABC):
             The number of patches desired in each output spool. The last
             spool may have fewer patches.
         spool_count
-            The number of spools
+            The number of spools to include. If spool_count is greater than
+            the length of the spool then the output will be smaller than
+            spool_count, with one patch per spool.
         """
         msg = f"spool of type {self.__class__} has no split implementation"
         raise NotImplementedError(msg)
@@ -162,6 +169,27 @@ class BaseSpool(abc.ABC):
     def update(self) -> Self:
         """Updates the contents of the spool and returns a spool."""
         return self
+
+    def map(
+        self,
+        func: Callable[[dc.Patch, ...], T],
+        *,
+        client: ExecutorType | None = None,
+        **kwargs,
+    ) -> Generator[T]:
+        """
+        Map a function of all the contents of the spool.
+
+        Parameters
+        ----------
+        func
+            A callable which takes a patch as its first argument.
+        client
+            A client, or executor, which has a `map` method.
+        **kwargs
+            kwargs passed to func.
+        """
+        yield from _spool_map(self, func, client=client, **kwargs)
 
 
 class DataFrameSpool(BaseSpool):
@@ -383,9 +411,14 @@ class DataFrameSpool(BaseSpool):
         spool_count: int | None = None,
     ) -> Generator[Self, None, None]:
         """{doc}"""
-        if spool_count is not None and spool_count is not None:
-            msg = "spool_count and spool_size cannot both be defined."
+        if not ((spool_count is not None) ^ (spool_size is not None)):
+            msg = "Spool.split requires either spool_count or spool_size."
             raise ParameterError(msg)
+        start = 0
+        step = int(np.ceil(len(self) / spool_count) if spool_count else spool_size)
+        while start < len(self):
+            yield self[start : start + step]
+            start += step
 
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
@@ -416,8 +449,6 @@ class MemorySpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory."""
-        # final_kwargs = dict(kwargs)
-        # final_kwargs.update(self._select_kwargs)
         return kwargs["patch"]
 
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -12,6 +12,15 @@ import dascore
 PatchType = TypeVar("PatchType", bound="dascore.Patch")
 
 SpoolType = TypeVar("SpoolType", bound="dascore.BaseSpool")
+
+
+@runtime_checkable
+class ExecutorType(Protocol):
+    """Protocol for Executors that DASCore can use."""
+
+    def map(self, func, iterables, **kwargs):
+        """Map function for applying concurrency of some flavor."""
+
 
 # Bump this to force re-downloading of all data file
 DATA_VERSION = "0.0.0"
