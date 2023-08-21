@@ -5,7 +5,7 @@ from __future__ import annotations
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import maybe_get_attrs, unbyte
+from dascore.utils.misc import maybe_get_attrs, unbyte, iterate
 
 # --- Getting format/version
 
@@ -119,9 +119,24 @@ def _get_prodml_attrs(fi, extras=None) -> list[dict]:
     return out
 
 
+def _get_dims(node):
+    """Get the dimension names in the form of a tuple."""
+    # we use distance rather than locus, setup mapping to relect this.
+    map_ = {"locus": "distance", "Locus": "distance", "Time": "time"}
+    dims = unbyte(getattr(node.RawData._v_attrs, "Dimensions", "time, distance"))
+    if isinstance(dims, str):
+        dims = dims.replace(",", " ")
+        dims = tuple(map_.get(x, x) for x in dims.split())
+    else:
+        unbytes = [unbyte(x) for x in iterate(dims)]
+        dims = tuple(map_.get(x, x) for x in unbytes)
+    return dims
+
+
 def _get_data_attr(attrs, node, time, distance):
     """Get a new attributes with adjusted time/distance and data array."""
-    cm = get_coord_manager(attrs["coords"], dims=("time", "distance"))
+    dims = _get_dims(node)
+    cm = get_coord_manager(attrs["coords"], dims=dims)
     new_cm, data = cm.select(array=node.RawData, time=time, distance=distance)
     return data, new_cm
 
@@ -133,8 +148,7 @@ def _read_prodml(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     out = []
     for attrs, node in zip(attr_list, nodes):
         data, coords = _get_data_attr(attrs, node, time, distance)
-        dims = ("time", "distance")  # dims are fixed for this file format
         if data.size:
             pattrs = attr_cls(**attrs)
-            out.append(dc.Patch(data=data, attrs=pattrs, dims=dims, coords=coords))
+            out.append(dc.Patch(data=data, attrs=pattrs, coords=coords))
     return out
