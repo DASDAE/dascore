@@ -24,7 +24,7 @@ from dascore.exceptions import MissingOptionalDependency
 
 
 class _Sentinel:
-    """Dump little sentinel for key checks."""
+    """Sentinel for key checks."""
 
 
 def register_func(list_or_dict: list | dict, key=None):
@@ -549,3 +549,31 @@ def cached_method(func):
         return out
 
     return wrapper
+
+
+class _MapFuncWrapper:
+    """A class for unwrapping spools to base applies."""
+
+    def __init__(self, func, kwargs):
+        self._func = func
+        self._kwargs = kwargs
+
+    def __call__(self, spool):
+        return [self._func(x, **self._kwargs) for x in spool]
+
+
+def _spool_map(spool, func, client=None, **kwargs):
+    """
+    Map a func over a spool.
+    """
+    # no client; simple for loop.
+    if client is None:
+        for patch in spool:
+            yield func(patch, **kwargs)
+        return
+    # Now things get interesting. We need to split the spool here
+    # so that patches don't get serialized.
+    spools = spool.split(spool_count=os.cpu_count())
+    new_func = _MapFuncWrapper(func, kwargs)
+    for out in client.map(new_func, spools):
+        yield from out
