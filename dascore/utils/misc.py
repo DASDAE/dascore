@@ -562,7 +562,7 @@ class _MapFuncWrapper:
         return [self._func(x, **self._kwargs) for x in spool]
 
 
-def _spool_map(spool, func, client=None, **kwargs):
+def _spool_map(spool, func, spool_count=None, spool_size=None, client=None, **kwargs):
     """
     Map a func over a spool.
     """
@@ -573,7 +573,9 @@ def _spool_map(spool, func, client=None, **kwargs):
         return
     # Now things get interesting. We need to split the spool here
     # so that patches don't get serialized.
-    spools = spool.split(spool_count=os.cpu_count())
+    if spool_count is None and spool_size is None:
+        spool_count = os.cpu_count()
+    spools = spool.split(spool_count=spool_count, spool_size=spool_size)
     new_func = _MapFuncWrapper(func, kwargs)
     for out in client.map(new_func, spools):
         yield from out
