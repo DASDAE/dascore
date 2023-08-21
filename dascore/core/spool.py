@@ -175,6 +175,8 @@ class BaseSpool(abc.ABC):
         func: Callable[[dc.Patch, ...], T],
         *,
         client: ExecutorType | None = None,
+        spool_count: int | None = None,
+        spool_size: int | None = None,
         **kwargs,
     ) -> Generator[T]:
         """
@@ -186,10 +188,30 @@ class BaseSpool(abc.ABC):
             A callable which takes a patch as its first argument.
         client
             A client, or executor, which has a `map` method.
+        spool_count
+            The total number of spools which get mapped to a client.
+            Does nothing if client is None and can't be used with spool_size.
+        spool_size
+            The number of patches in each spool mapped to a client.
+            Does nothing if client is None and can't be used with spool_count.
         **kwargs
             kwargs passed to func.
+
+        Notes
+        -----
+        When a client is specified, the spool is split then passed to the
+        client's map method. This is to avoid serializing loaded patches.
+        See [`Spool.split`](`dacore.core.spool.BaseSpool.split`) for more
+        details about the `spool_count` and `spool_size` parameters.
+
+        Examples
+        --------
+        >>> import dascore
+
         """
-        yield from _spool_map(self, func, client=client, **kwargs)
+        yield from _spool_map(
+            self, func, client=client, spool_count=None, spool_size=None, **kwargs
+        )
 
 
 class DataFrameSpool(BaseSpool):

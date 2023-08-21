@@ -73,7 +73,7 @@ class TestSpoolEquals:
         assert random_spool == random_spool
 
     def test_unequal_attr(self, random_spool):
-        """Simulate some attribute which isnt equal."""
+        """Simulate some attribute which isn't equal."""
         new1 = copy.deepcopy(random_spool)
         new1.__dict__["bad_attr"] = 1
         new2 = copy.deepcopy(random_spool)
