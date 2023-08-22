@@ -33,7 +33,6 @@ from dascore.utils.pd import (
     split_df_query,
 )
 
-
 T = TypeVar("T")
 
 
