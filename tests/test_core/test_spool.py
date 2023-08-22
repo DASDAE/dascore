@@ -377,6 +377,26 @@ class TestMap:
         assert len(out) == len(random_spool)
         assert dc.spool(out) == random_spool
 
+    def test_map_docstring(self, random_spool):
+        """Ensure the docstring examples work."""
+        results_list = list(
+            random_spool.chunk(time=5).map(lambda x: np.std(x.data, axis=0))
+        )
+        out = np.stack(results_list, axis=-1)
+        assert out.size
+
+    def test_map_docs(self, random_spool):
+        """Test the doc code for map."""
+
+        def get_dist_max(patch):
+            """Function which will be mapped to each patch in spool."""
+            return patch.aggregate("time", "max")
+
+        out = list(random_spool.chunk(time=5, overlap=1).map(get_dist_max))
+        new_spool = dc.spool(out)
+        merged = new_spool.chunk(time=None)
+        assert isinstance(merged[0], dc.Patch)
+
 
 class TestGetSpool:
     """Test getting spool from various sources."""

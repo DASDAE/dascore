@@ -147,7 +147,7 @@ subspool = spool.select(tag='some*')
 
 # chunk
 
-Chunk controls how data are grouped together in patches. It can be used to merge contiguous patches together, specify the size of patches for processing, specify overlap with previous segments, etc.
+The [`chunk`](`dascore.core.spool.BaseSpool.chunk`) method controls how data are grouped together in patches within the spool. It can be used to merge contiguous patches together, specify the size of patches for processing, specify overlap with previous patches, etc.
 
 ```{python}
 import dascore as dc
@@ -159,4 +159,21 @@ subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
 
 # merge all contiguous segments along time dimension
 merged_spool = spool.chunk(time=None)
+```
+
+# map
+
+The [`map`](`dascore.core.spool.BaseSpool.map`) method applies a function to all patches in the spool. It provides an efficient way to process large datasets, especially when combined with clients (aka executors).
+
+For example, imagine we want to calculate the maximum value for each channel (distance) for 4 second increments with 1 second overlap.
+
+```{.python}
+import dascore as dc
+spool = dc.get_example_spool()
+
+def get_dist_max(patch):
+    """Function which will be mapped to each patch in spool."""
+    return patch.aggregate("time", "max")
+
+out = spool.chunk(time=5, overlap=1).map(get_dist_max)
 ```

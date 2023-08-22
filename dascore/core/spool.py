@@ -201,16 +201,31 @@ class BaseSpool(abc.ABC):
         -----
         When a client is specified, the spool is split then passed to the
         client's map method. This is to avoid serializing loaded patches.
-        See [`Spool.split`](`dacore.core.spool.BaseSpool.split`) for more
+        See [`Spool.split`](`dascore.core.spool.BaseSpool.split`) for more
         details about the `spool_count` and `spool_size` parameters.
 
         Examples
         --------
-        >>> import dascore
-
+        >>> import numpy as np
+        >>> import dascore as dc
+        >>>
+        >>> spool = dc.get_example_spool("random_das")
+        >>>
+        >>> # Calculate the std for each channel in 5 second chunks
+        >>> results_list = list(
+        ...     spool.chunk(time=5)
+        ...     .map(lambda x: np.std(x.data, axis=0))
+        ... )
+        >>> # stack back into array. dims are (distance, time chunk)
+        >>> out = np.stack(results_list, axis=-1)
         """
         yield from _spool_map(
-            self, func, client=client, spool_count=None, spool_size=None, **kwargs
+            self,
+            func,
+            client=client,
+            spool_count=spool_count,
+            spool_size=spool_size,
+            **kwargs,
         )
 
 
@@ -226,7 +241,7 @@ class DataFrameSpool(BaseSpool):
     # kwargs for filtering contents
     _select_kwargs: Mapping | None = FrozenDict()
     # attributes which effect merge groups for internal patches
-    _group_columns = ("network", "station", "dims", "data_type", "history", "tag")
+    _group_columns = ("network", "station", "dims", "data_type", "tag")
     _drop_columns = ("patch",)
 
     def _get_df(self):
