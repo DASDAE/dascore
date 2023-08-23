@@ -106,7 +106,7 @@ class BaseSpool(abc.ABC):
         ----------
         overlap
             The amount of overlap between each segment, starting with the end of
-            first patch. Negative values can be used to induce gaps.
+            first patch. Negative values can be used to create gaps.
         keep_partial
             If True, keep the segments which are smaller than chunk size.
             This often occurs because of data gaps or at end of chunks.
@@ -119,15 +119,55 @@ class BaseSpool(abc.ABC):
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.units import s
+        >>>
+        >>> spool = dc.get_example_spool("random_das")
+        >>> # get spools with time duration of 10 seconds
+        >>> time_chunked = spool.chunk(time=10, overlap=1)
+        >>> # merge along time axis
+        >>> time_merged = spool.chunk(time=...)
         """
 
     @abc.abstractmethod
     def select(self, **kwargs) -> Self:
-        """Select only part of the data."""
+        """
+        Sub-select parts of the spool.
+
+        Can be used to specify dimension ranges, or unix-style matches
+        on string attributes.
+
+        Parameters
+        ----------
+        **kwargs
+            Specifies query. Can be of the form {dim_name=(start, stop)}
+            or {attr_name=query}.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("diverse_das")
+        >>> # subselect data in a particular time range
+        >>> time = ('2020-01-03', '2020-01-03T00:00:10')
+        >>> time_spool = spool.select(time=time)
+        >>> # subselect based on matching tag parameter
+        >>> tag_spool = spool.select(tag='some*')
+        """
 
     @abc.abstractmethod
     def get_contents(self) -> pd.DataFrame:
-        """Get a dataframe of the patches that will be returned by the spool."""
+        """
+        Get a dataframe of the spool contents.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("random_das")
+        >>> df = spool.get_contents()
+        """
 
     # --- optional methods
 
@@ -136,10 +176,19 @@ class BaseSpool(abc.ABC):
         Sort the Spool based on a specific attribute.
 
         Parameters
-        ---------------
+        ----------
         attribute
             The attribute or coordinate used for sorting. If a coordinate name
             is used, the sorting will be based on the minimum value.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool()
+        >>> # sort spool based on values in time coordinate.
+        >>> spool_time_sorted = spool.sort("time")
+        >>> # sort spool based on values in tag
+        >>> spool_tag_sorted = spool.sort("tag")
         """
         msg = f"spool of type {self.__class__} has no sort implementation"
         raise NotImplementedError(msg)
@@ -161,12 +210,23 @@ class BaseSpool(abc.ABC):
             The number of spools to include. If count is greater than
             the length of the spool then the output will be smaller than
             count, with one patch per spool.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("diverse_das")
+        >>> # split spool into list of spools each with 3 patches.
+        >>> split = spool.split(size=3)
+        >>> # split spool into 3 evenly sized (if possible) spools
+        >>> split = spool.split(count=3)
         """
         msg = f"spool of type {self.__class__} has no split implementation"
         raise NotImplementedError(msg)
 
     def update(self) -> Self:
-        """Updates the contents of the spool and returns a spool."""
+        """
+        Updates the contents of the spool and returns a spool.
+        """
         return self
 
     def map(
@@ -205,18 +265,18 @@ class BaseSpool(abc.ABC):
 
         Examples
         --------
-        >>> import numpy as np
-        >>> import dascore as dc
-        >>>
-        >>> spool = dc.get_example_spool("random_das")
-        >>>
-        >>> # Calculate the std for each channel in 5 second chunks
-        >>> results_list = list(
-        ...     spool.chunk(time=5)
-        ...     .map(lambda x: np.std(x.data, axis=0))
-        ... )
-        >>> # stack back into array. dims are (distance, time chunk)
-        >>> out = np.stack(results_list, axis=-1)
+        import numpy as np
+        import dascore as dc
+
+        spool = dc.get_example_spool("random_das")
+
+        # Calculate the std for each channel in 5 second chunks
+        results = (
+             spool.chunk(time=5)
+             .map(lambda x: np.std(x.data, axis=0))
+        )
+        # stack back into array. dims are (distance, time chunk)
+        out = np.stack(results, axis=-1)
         """
         return _spool_map(
             self,
@@ -390,8 +450,9 @@ class DataFrameSpool(BaseSpool):
         new._select_kwargs.update(select_kwargs or {})
         return new
 
+    @compose_docstring(doc=BaseSpool.select.__doc__)
     def select(self, **kwargs) -> Self:
-        """Sub-select certain dimensions for Spool."""
+        """{doc}"""
         _, _, extra_kwargs = split_df_query(kwargs, self._df, ignore_bad_kwargs=True)
         filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(
@@ -504,7 +565,7 @@ def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSp
 
 @spool.register(str)
 @spool.register(Path)
-def spool_from_str(path, **kwargs):
+def _spool_from_str(path, **kwargs):
     """Get a spool from a path."""
     path = Path(path)
     # A directory was passed, create Directory Spool
@@ -533,19 +594,19 @@ def spool_from_str(path, **kwargs):
 
 
 @spool.register(BaseSpool)
-def spool_from_spool(spool, **kwargs):
+def _spool_from_spool(spool, **kwargs):
     """Return a spool from a spool."""
     return spool
 
 
 @spool.register(list)
 @spool.register(tuple)
-def spool_from_patch_list(patch_list, **kwargs):
+def _spool_from_patch_list(patch_list, **kwargs):
     """Return a spool from a sequence of patches."""
     return MemorySpool(patch_list)
 
 
 @spool.register(dc.Patch)
-def spool_from_patch(patch):
+def _spool_from_patch(patch):
     """Get a spool from a single patch."""
     return MemorySpool([patch])

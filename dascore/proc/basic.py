@@ -248,7 +248,7 @@ def angle(patch: PatchType) -> PatchType:
     return patch.new(data=np.angle(patch.data))
 
 
-@patch_function()
+@patch_function(history=None)
 def transpose(self: PatchType, *dims: str) -> PatchType:
     """
     Transpose the data array to any dimension order desired.

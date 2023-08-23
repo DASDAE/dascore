@@ -561,7 +561,7 @@ class _MapFuncWrapper:
         self._progress = progress
 
     def __call__(self, spool):
-        desc = f"Applying {self._func.__name__} to {spool}"
+        desc = f"Applying {self._func.__name__} to spool"
         iterable = track(spool, desc) if self._progress else spool
         return [self._func(x, **self._kwargs) for x in iterable]
 
@@ -584,7 +584,7 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
         Keywords passed to func.
     """
     # no client; simple for loop.
-    desc = f"Applying {func.__name__} to {spool}"
+    desc = f"Applying {func.__name__} to spool"
     if client is None:
         iterable = track(spool, desc) if progress else spool
         return [func(patch, **kwargs) for patch in iterable]

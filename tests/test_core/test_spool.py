@@ -395,6 +395,7 @@ class TestMap:
         out = list(random_spool.chunk(time=5, overlap=1).map(get_dist_max))
         new_spool = dc.spool(out)
         merged = new_spool.chunk(time=None)
+        assert merged
         assert isinstance(merged[0], dc.Patch)
 
 
