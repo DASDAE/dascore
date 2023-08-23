@@ -1081,6 +1081,34 @@ class TestCoercion:
         assert out.dtype == coord.dtype
 
 
+class TestGetSampleCount:
+    """Tests for getting the number of samples from a coordinate."""
+
+    def test_uneven_raises(self, monotonic_float_coord):
+        """Unevenly sampled counts should raise."""
+        msg = "Coordinate is not evenly sampled"
+        with pytest.raises(CoordError, match=msg):
+            monotonic_float_coord.get_sample_count(10)
+
+    def test_dt_lt_step(self, evenly_sampled_coord):
+        """Ensure sample count is 1 when value < dt"""
+        dt = evenly_sampled_coord.step * 0.1
+        out = evenly_sampled_coord.get_sample_count(dt)
+        assert out == 1
+
+    def test_datetime(self, evenly_sampled_date_coord):
+        """Ensure evenly sampled date coords work."""
+        dt = evenly_sampled_date_coord.step
+        out = evenly_sampled_date_coord.get_sample_count(12 * dt)
+        assert out == 12
+
+    def test_timedelta(self, evenly_sampled_time_delta_coord):
+        """Ensure timedelta works."""
+        dt = evenly_sampled_time_delta_coord.step
+        out = evenly_sampled_time_delta_coord.get_sample_count(12 * dt)
+        assert out == 12
+
+
 class TestIssues:
     """Tests for special issues related to coords."""
 
