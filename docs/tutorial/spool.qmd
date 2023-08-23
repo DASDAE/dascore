@@ -97,7 +97,7 @@ new_spool = spool[1:]
 
 # get_contents
 
-Returns a dataframe listing contents. This method may not be supported on all spools, especially those interfacing with remote resources.
+The [`get_contents`](`dascore.core.spool.BaseSpool.get_contents`) method returns a dataframe listing the spool contents. This method may not be supported on all spools, especially those interfacing with large remote resources.
 
 ```{python}
 #| output: false
@@ -118,8 +118,7 @@ display(contents.drop(columns=['patch']))
 
 # select
 
-Selects a subset of a spool and returns a new spool. `get_contents` will now
-reflect a subset of the original data requested by the select operation.
+The [select](`dascore.core.spool.BaseSpool.select`) method selects a subset of a spool and returns a new spool. [`get_contents`](`dascore.core.spool.BaseSpool.get_contents`) will now reflect a subset of the original data requested by the select operation.
 
 ```{python}
 import dascore as dc
@@ -129,8 +128,7 @@ spool = dc.get_example_spool()
 subspool = spool.select(time=('2020-01-03T00:00:09', None))
 ```
 
-In addition to trimming the data along a specified dimension (as shown above),
-select can be used to filter patches that meet a specified criteria.
+In addition to trimming the data along a specified dimension (as shown above), select can be used to filter patches that meet a specified criteria.
 
 
 ```{python}
@@ -147,7 +145,7 @@ subspool = spool.select(tag='some*')
 
 # chunk
 
-Chunk controls how data are grouped together in patches. It can be used to merge contiguous patches together, specify the size of patches for processing, specify overlap with previous segments, etc.
+The [`chunk`](`dascore.core.spool.BaseSpool.chunk`) method controls how data are grouped together in patches within the spool. It can be used to merge contiguous patches together, specify the size of patches for processing, specify overlap with previous patches, etc.
 
 ```{python}
 import dascore as dc
@@ -159,4 +157,28 @@ subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
 
 # merge all contiguous segments along time dimension
 merged_spool = spool.chunk(time=None)
+```
+
+# map
+
+The [`map`](`dascore.core.spool.BaseSpool.map`) method applies a function to all patches in the spool. It provides an efficient way to process large datasets, especially when combined with clients (aka executors).
+
+For example, imagine we want to calculate the maximum value for each channel (distance) for 4 second increments with 1 second overlap.
+
+```{python}
+import dascore as dc
+spool = dc.get_example_spool()
+
+# define function for mapping to each patch
+def get_dist_max(patch):
+    """Function which will be mapped to each patch in spool."""
+    return patch.aggregate("time", "max")
+
+# chunk and apply function
+map_out = spool.chunk(time=5, overlap=1).map(get_dist_max)
+
+# combine output back into a single patch
+agg_patch = dc.spool(map_out).chunk(time=None)[0]
+
+print(agg_patch)
 ```

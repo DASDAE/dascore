@@ -9,8 +9,9 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.core.spool import DataFrameSpool
+from dascore.core.spool import DataFrameSpool, BaseSpool
 from dascore.io.core import FiberIO
+from dascore.utils.docs import compose_docstring
 
 
 class FileSpool(DataFrameSpool):
@@ -65,11 +66,12 @@ class FileSpool(DataFrameSpool):
         """Given a row from the managed dataframe, return a patch."""
         return dc.read(**kwargs)[0]
 
+    @compose_docstring(doc=BaseSpool.update.__doc__)
     def update(self: SpoolType) -> Self:
         """
-        Update the spool.
+        {doc}
 
-        If the file format supports indexing (e.g. DASDAE) this will
+        Note: If the file format supports indexing (e.g. DASDAE) this will
         trigger an indexing of the file.
         """
         formater = FiberIO.manager.get_fiberio(self._file_format, self._file_version)

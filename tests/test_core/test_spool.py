@@ -2,15 +2,36 @@
 from __future__ import annotations
 
 import copy
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
+import numpy as np
 import pandas as pd
 import pytest
 
 import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
-from dascore.exceptions import InvalidSpoolError
+from dascore.exceptions import InvalidSpoolError, ParameterError
 from dascore.utils.time import to_datetime64, to_timedelta64
+
+
+def _gigo(garbage):
+    """Dummy func which can be serialized."""
+    return garbage
+
+
+class _SerialClient:
+    """Serial client for testing mapping logic."""
+
+    def map(self, func, iterable_thing, **kwargs):
+        for thing in iterable_thing:
+            yield func(thing, **kwargs)
+
+
+@pytest.fixture(scope="session")
+def random_spool_len_10():
+    """Return a spool of length 10."""
+    return dc.examples.get_example_spool(length=10)
 
 
 class TestSpoolBasics:
@@ -52,7 +73,7 @@ class TestSpoolEquals:
         assert random_spool == random_spool
 
     def test_unequal_attr(self, random_spool):
-        """Simulate some attribute which isnt equal."""
+        """Simulate some attribute which isn't equal."""
         new1 = copy.deepcopy(random_spool)
         new1.__dict__["bad_attr"] = 1
         new2 = copy.deepcopy(random_spool)
@@ -268,6 +289,114 @@ class TestSort:
         sorted_spool = diverse_spool.sort("distance")
         df = sorted_spool.get_contents()
         assert df["distance_min"].is_monotonic_increasing
+
+
+class TestSplit:
+    """Tests splitting spools into smaller spools."""
+
+    @pytest.fixture(scope="class")
+    def split_10(self, random_spool_len_10):
+        """Split the spools using spool size."""
+        spools = tuple(random_spool_len_10.split(size=3))
+        return spools
+
+    def test_both_parameters_raises(self, random_spool):
+        """Ensure split raises when both spool_size and spool_count are defined."""
+        msg = "requires either spool_count or spool_size"
+        with pytest.raises(ParameterError, match=msg):
+            list(random_spool.split(size=1, count=2))
+
+    def test_spool_size(self, split_10):
+        """Ensure spool size can be split."""
+        # because there are 10 patches in the spool its len should be 4
+        assert len(split_10) == 4
+        for i in range(3):
+            assert len(split_10[i]) == 3
+        assert len(split_10[-1]) == 1
+
+    def test_yielded_spools_indexable(self, split_10):
+        """Ensure we can pull the first patch from each spool."""
+        for spool in split_10:
+            patch = spool[0]
+            assert isinstance(patch, dc.Patch)
+
+    def test_spool_count(self, random_spool):
+        """Ensure we can split based on desired size of spool."""
+        split = list(random_spool.split(size=2))
+        assert len(split) == 2
+        assert len(split[0]) == 2
+        assert len(split[1]) == 1
+
+    def test_base_split_raises(self, random_spool):
+        """Ensure BaseSpool split raises NoteImplementedError."""
+        msg = "has no split implementation"
+        with pytest.raises(NotImplementedError, match=msg):
+            BaseSpool.split(
+                random_spool,
+            )
+
+
+class TestMap:
+    """Test for mapping spool contents onto functions."""
+
+    @pytest.fixture(scope="class")
+    def thread_client(self):
+        return ThreadPoolExecutor()
+
+    @pytest.fixture(scope="class")
+    def proc_client(self):
+        return ProcessPoolExecutor()
+
+    def test_simple(self, random_spool):
+        """Simplest case for mapping a function on all patches."""
+        out = list(random_spool.map(lambda x: x))
+        assert len(out) == len(random_spool)
+        assert dc.spool(out) == random_spool
+
+    def test_non_patch_return(self, random_spool):
+        """Ensure outputs don't have to be patches."""
+        out = list(random_spool.map(lambda x: np.max(x.data)))
+        for val in out:
+            assert isinstance(val, np.float_)
+
+    def test_dummy_client(self, random_spool):
+        """Ensure a client arguments works."""
+        out = list(random_spool.map(lambda x: x, client=_SerialClient()))
+        assert len(out) == len(random_spool)
+        assert dc.spool(out) == random_spool
+
+    def test_thread_client(self, random_spool, thread_client):
+        """Ensure a thread client works"""
+        out = list(random_spool.map(lambda x: x, client=thread_client))
+        assert len(out) == len(random_spool)
+        assert dc.spool(out) == random_spool
+
+    def test_process_client(self, random_spool, proc_client):
+        """Ensure process pool also works."""
+        out = list(random_spool.map(_gigo, client=proc_client))
+        assert len(out) == len(random_spool)
+        assert dc.spool(out) == random_spool
+
+    def test_map_docstring(self, random_spool):
+        """Ensure the docstring examples work."""
+        results_list = list(
+            random_spool.chunk(time=5).map(lambda x: np.std(x.data, axis=0))
+        )
+        out = np.stack(results_list, axis=-1)
+        assert out.size
+
+    def test_map_docs(self, random_spool):
+        """Test the doc code for map."""
+
+        def get_dist_max(patch):
+            """Function which will be mapped to each patch in spool."""
+            return patch.aggregate("time", "max")
+
+        out = list(random_spool.chunk(time=5, overlap=1).map(get_dist_max))
+        new_spool = dc.spool(out)
+        merged = new_spool.chunk(time=None)
+        assert merged
+        assert isinstance(merged[0], dc.Patch)
 
 
 class TestGetSpool:
