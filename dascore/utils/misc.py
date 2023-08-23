@@ -21,6 +21,7 @@ from scipy.special import factorial
 
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependency
+from dascore.utils.progress import track
 
 
 class _Sentinel:
@@ -554,28 +555,43 @@ def cached_method(func):
 class _MapFuncWrapper:
     """A class for unwrapping spools to base applies."""
 
-    def __init__(self, func, kwargs):
+    def __init__(self, func, kwargs, progress=True):
         self._func = func
         self._kwargs = kwargs
+        self._progress = progress
 
     def __call__(self, spool):
-        return [self._func(x, **self._kwargs) for x in spool]
+        desc = f"Applying {self._func.__name__} to {spool}"
+        iterable = track(spool, desc) if self._progress else spool
+        return [self._func(x, **self._kwargs) for x in iterable]
 
 
-def _spool_map(spool, func, spool_count=None, spool_size=None, client=None, **kwargs):
+def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     """
     Map a func over a spool.
+
+    Parameters
+    ----------
+    spool
+        The spool object ot apply func to
+    size
+        The number of patches for each spool (ie chunksize)
+    client
+        An object with a map method for applying concurrency.
+    progress
+        If True, display a progress bar.
+    **kwargs
+        Keywords passed to func.
     """
     # no client; simple for loop.
+    desc = f"Applying {func.__name__} to {spool}"
     if client is None:
-        for patch in spool:
-            yield func(patch, **kwargs)
-        return
+        iterable = track(spool, desc) if progress else spool
+        return [func(patch, **kwargs) for patch in iterable]
     # Now things get interesting. We need to split the spool here
     # so that patches don't get serialized.
-    if spool_count is None and spool_size is None:
-        spool_count = os.cpu_count()
-    spools = spool.split(spool_count=spool_count, spool_size=spool_size)
-    new_func = _MapFuncWrapper(func, kwargs)
-    for out in client.map(new_func, spools):
-        yield from out
+    if size is None:
+        size = len(spool) / os.cpu_count()
+    spools = spool.split(size=size)
+    new_func = _MapFuncWrapper(func, kwargs, progress=progress)
+    return [x for y in client.map(new_func, spools) for x in y]

@@ -146,21 +146,21 @@ class BaseSpool(abc.ABC):
 
     def split(
         self,
-        spool_size: int | None = None,
-        spool_count: int | None = None,
+        size: int | None = None,
+        count: int | None = None,
     ) -> Generator[Self, None, None]:
         """
         Yield sub-patches based on specified parameters.
 
         Parameters
         ----------
-        spool_size
+        size
             The number of patches desired in each output spool. The last
             spool may have fewer patches.
-        spool_count
-            The number of spools to include. If spool_count is greater than
+        count
+            The number of spools to include. If count is greater than
             the length of the spool then the output will be smaller than
-            spool_count, with one patch per spool.
+            count, with one patch per spool.
         """
         msg = f"spool of type {self.__class__} has no split implementation"
         raise NotImplementedError(msg)
@@ -174,10 +174,10 @@ class BaseSpool(abc.ABC):
         func: Callable[[dc.Patch, ...], T],
         *,
         client: ExecutorType | None = None,
-        spool_count: int | None = None,
-        spool_size: int | None = None,
+        size: int | None = None,
+        progress: bool = True,
         **kwargs,
-    ) -> Generator[T]:
+    ) -> list[T]:
         """
         Map a function of all the contents of the spool.
 
@@ -187,12 +187,12 @@ class BaseSpool(abc.ABC):
             A callable which takes a patch as its first argument.
         client
             A client, or executor, which has a `map` method.
-        spool_count
-            The total number of spools which get mapped to a client.
-            Does nothing if client is None and can't be used with spool_size.
-        spool_size
+        size
             The number of patches in each spool mapped to a client.
-            Does nothing if client is None and can't be used with spool_count.
+            If not set, defaults to the number of processors on the host.
+            Does nothing unless client is defined.
+        progress
+            If True, display a progress bar.
         **kwargs
             kwargs passed to func.
 
@@ -218,12 +218,12 @@ class BaseSpool(abc.ABC):
         >>> # stack back into array. dims are (distance, time chunk)
         >>> out = np.stack(results_list, axis=-1)
         """
-        yield from _spool_map(
+        return _spool_map(
             self,
             func,
             client=client,
-            spool_count=spool_count,
-            spool_size=spool_size,
+            size=size,
+            progress=progress,
             **kwargs,
         )
 
@@ -240,7 +240,7 @@ class DataFrameSpool(BaseSpool):
     # kwargs for filtering contents
     _select_kwargs: Mapping | None = FrozenDict()
     # attributes which effect merge groups for internal patches
-    _group_columns = ("network", "station", "dims", "data_type", "tag")
+    _group_columns = ("network", "station", "dims", "data_type", "tag", "history")
     _drop_columns = ("patch",)
 
     def _get_df(self):
@@ -443,15 +443,15 @@ class DataFrameSpool(BaseSpool):
     @compose_docstring(doc=BaseSpool.split.__doc__)
     def split(
         self,
-        spool_size: int | None = None,
-        spool_count: int | None = None,
+        size: int | None = None,
+        count: int | None = None,
     ) -> Generator[Self, None, None]:
         """{doc}"""
-        if not ((spool_count is not None) ^ (spool_size is not None)):
+        if not ((count is not None) ^ (size is not None)):
             msg = "Spool.split requires either spool_count or spool_size."
             raise ParameterError(msg)
         start = 0
-        step = int(np.ceil(len(self) / spool_count) if spool_count else spool_size)
+        step = int(np.ceil(len(self) / count if count else size))
         while start < len(self):
             yield self[start : start + step]
             start += step

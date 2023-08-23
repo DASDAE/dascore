@@ -297,14 +297,14 @@ class TestSplit:
     @pytest.fixture(scope="class")
     def split_10(self, random_spool_len_10):
         """Split the spools using spool size."""
-        spools = tuple(random_spool_len_10.split(spool_size=3))
+        spools = tuple(random_spool_len_10.split(size=3))
         return spools
 
     def test_both_parameters_raises(self, random_spool):
         """Ensure split raises when both spool_size and spool_count are defined."""
         msg = "requires either spool_count or spool_size"
         with pytest.raises(ParameterError, match=msg):
-            list(random_spool.split(spool_size=1, spool_count=2))
+            list(random_spool.split(size=1, count=2))
 
     def test_spool_size(self, split_10):
         """Ensure spool size can be split."""
@@ -322,7 +322,7 @@ class TestSplit:
 
     def test_spool_count(self, random_spool):
         """Ensure we can split based on desired size of spool."""
-        split = list(random_spool.split(spool_size=2))
+        split = list(random_spool.split(size=2))
         assert len(split) == 2
         assert len(split[0]) == 2
         assert len(split[1]) == 1
