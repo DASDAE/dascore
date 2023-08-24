@@ -218,7 +218,7 @@ class ChunkManager:
         out = pd.DataFrame(start_stop, columns=list(cols))
         out[f"{name}_step"] = get_middle_value(df[f"{name}_step"].values)
         merger = df.drop(columns=out.columns)
-        for col in merger:
+        for col in set(merger.columns):
             vals = merger[col].unique()
             if len(vals) > 1:
                 msg = (

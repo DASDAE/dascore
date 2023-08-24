@@ -5,6 +5,9 @@ import abc
 from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
+from collections.abc import Generator
+from typing import TypeVar
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -13,13 +16,13 @@ from typing_extensions import Self
 
 import dascore as dc
 import dascore.io
-from dascore.constants import PatchType, numeric_types, timeable_types
-from dascore.exceptions import InvalidSpoolError
+from dascore.constants import PatchType, numeric_types, timeable_types, ExecutorType
+from dascore.exceptions import InvalidSpoolError, ParameterError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import CacheDescriptor
+from dascore.utils.misc import CacheDescriptor, _spool_map
 from dascore.utils.patch import _force_patch_merge, patches_to_df
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
@@ -29,6 +32,8 @@ from dascore.utils.pd import (
     get_dim_names_from_columns,
     split_df_query,
 )
+
+T = TypeVar("T")
 
 
 class BaseSpool(abc.ABC):
@@ -44,67 +49,24 @@ class BaseSpool(abc.ABC):
     def __iter__(self) -> PatchType:
         """Iterate through the Patches in the spool."""
 
-    def update(self) -> Self:
-        """Updates the contents of the spool and returns a spool."""
-        return self
-
-    @abc.abstractmethod
-    def chunk(
-        self,
-        overlap: numeric_types | timeable_types | None = None,
-        keep_partial: bool = False,
-        snap_coords: bool = True,
-        tolerance: float = 1.5,
-        **kwargs,
-    ) -> Self:
-        """
-        Chunk the data in the spool along specified dimensions.
-
-        Parameters
-        ----------
-        overlap
-            The amount of overlap between each segment, starting with the end of
-            first patch. Negative values can be used to induce gaps.
-        keep_partial
-            If True, keep the segments which are smaller than chunk size.
-            This often occurs because of data gaps or at end of chunks.
-        snap_coords
-            If True, snap the coords on joined patches such that the spacing
-            remains constant.
-        tolerance
-            The number of samples a block of data can be spaced and still be
-            considered contiguous.
-        kwargs
-            kwargs are used to specify the dimension along which to chunk, eg:
-            `time=10` chunks along the time axis in 10 second increments.
-        """
-
-    @abc.abstractmethod
-    def select(self, **kwargs) -> Self:
-        """Select only part of the data."""
-
-    @abc.abstractmethod
-    def get_contents(self) -> pd.DataFrame:
-        """Get a dataframe of the patches that will be returned by the spool."""
-
-    @abc.abstractmethod
-    def sort(self, attribute) -> Self:
-        """
-        Sort the Spool based on a specific attribute.
-
-        Parameters
-        ---------------
-        atribute
-            The attribute or coordinate used for sorting. If a coordinate name
-            is used, the sorting will be based on the minimum value.
-        """
-        raise NotImplementedError(
-            f"spool of type {self.__class__} has no sort implementation"
-        )
-
     @abc.abstractmethod
     def __len__(self) -> int:
         """Return len of spool."""
+
+    def __rich__(self):
+        """Rich rep. of spool."""
+        text = get_dascore_text() + Text(" ")
+        text += Text(self.__class__.__name__, style=self._rich_style)
+        text += Text(" 🧵 ")
+        patch_len = len(self)
+        text += Text(f"({patch_len:d}")
+        text += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
+        return text
+
+    def __str__(self):
+        return str(self.__rich__())
+
+    __repr__ = __str__
 
     def __eq__(self, other) -> bool:
         """Simple equality checks on spools."""
@@ -128,20 +90,202 @@ class BaseSpool(abc.ABC):
         other_dict = getattr(other, "__dict__", {})
         return _vals_equal(my_dict, other_dict)
 
-    def __rich__(self):
-        """Rich rep. of spool."""
-        text = get_dascore_text() + Text(" ")
-        text += Text(self.__class__.__name__, style=self._rich_style)
-        text += Text(" 🧵 ")
-        patch_len = len(self)
-        text += Text(f"({patch_len:d}")
-        text += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
-        return text
+    @abc.abstractmethod
+    def chunk(
+        self,
+        overlap: numeric_types | timeable_types | None = None,
+        keep_partial: bool = False,
+        snap_coords: bool = True,
+        tolerance: float = 1.5,
+        **kwargs,
+    ) -> Self:
+        """
+        Chunk the data in the spool along specified dimensions.
 
-    def __str__(self):
-        return str(self.__rich__())
+        Parameters
+        ----------
+        overlap
+            The amount of overlap between each segment, starting with the end of
+            first patch. Negative values can be used to create gaps.
+        keep_partial
+            If True, keep the segments which are smaller than chunk size.
+            This often occurs because of data gaps or at end of chunks.
+        snap_coords
+            If True, snap the coords on joined patches such that the spacing
+            remains constant.
+        tolerance
+            The number of samples a block of data can be spaced and still be
+            considered contiguous.
+        kwargs
+            kwargs are used to specify the dimension along which to chunk, eg:
+            `time=10` chunks along the time axis in 10 second increments.
 
-    __repr__ = __str__
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.units import s
+        >>>
+        >>> spool = dc.get_example_spool("random_das")
+        >>> # get spools with time duration of 10 seconds
+        >>> time_chunked = spool.chunk(time=10, overlap=1)
+        >>> # merge along time axis
+        >>> time_merged = spool.chunk(time=...)
+        """
+
+    @abc.abstractmethod
+    def select(self, **kwargs) -> Self:
+        """
+        Sub-select parts of the spool.
+
+        Can be used to specify dimension ranges, or unix-style matches
+        on string attributes.
+
+        Parameters
+        ----------
+        **kwargs
+            Specifies query. Can be of the form {dim_name=(start, stop)}
+            or {attr_name=query}.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("diverse_das")
+        >>> # subselect data in a particular time range
+        >>> time = ('2020-01-03', '2020-01-03T00:00:10')
+        >>> time_spool = spool.select(time=time)
+        >>> # subselect based on matching tag parameter
+        >>> tag_spool = spool.select(tag='some*')
+        """
+
+    @abc.abstractmethod
+    def get_contents(self) -> pd.DataFrame:
+        """
+        Get a dataframe of the spool contents.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("random_das")
+        >>> df = spool.get_contents()
+        """
+
+    # --- optional methods
+
+    def sort(self, attribute) -> Self:
+        """
+        Sort the Spool based on a specific attribute.
+
+        Parameters
+        ----------
+        attribute
+            The attribute or coordinate used for sorting. If a coordinate name
+            is used, the sorting will be based on the minimum value.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool()
+        >>> # sort spool based on values in time coordinate.
+        >>> spool_time_sorted = spool.sort("time")
+        >>> # sort spool based on values in tag
+        >>> spool_tag_sorted = spool.sort("tag")
+        """
+        msg = f"spool of type {self.__class__} has no sort implementation"
+        raise NotImplementedError(msg)
+
+    def split(
+        self,
+        size: int | None = None,
+        count: int | None = None,
+    ) -> Generator[Self, None, None]:
+        """
+        Yield sub-patches based on specified parameters.
+
+        Parameters
+        ----------
+        size
+            The number of patches desired in each output spool. The last
+            spool may have fewer patches.
+        count
+            The number of spools to include. If count is greater than
+            the length of the spool then the output will be smaller than
+            count, with one patch per spool.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("diverse_das")
+        >>> # split spool into list of spools each with 3 patches.
+        >>> split = spool.split(size=3)
+        >>> # split spool into 3 evenly sized (if possible) spools
+        >>> split = spool.split(count=3)
+        """
+        msg = f"spool of type {self.__class__} has no split implementation"
+        raise NotImplementedError(msg)
+
+    def update(self) -> Self:
+        """
+        Updates the contents of the spool and returns a spool.
+        """
+        return self
+
+    def map(
+        self,
+        func: Callable[[dc.Patch, ...], T],
+        *,
+        client: ExecutorType | None = None,
+        size: int | None = None,
+        progress: bool = True,
+        **kwargs,
+    ) -> list[T]:
+        """
+        Map a function of all the contents of the spool.
+
+        Parameters
+        ----------
+        func
+            A callable which takes a patch as its first argument.
+        client
+            A client, or executor, which has a `map` method.
+        size
+            The number of patches in each spool mapped to a client.
+            If not set, defaults to the number of processors on the host.
+            Does nothing unless client is defined.
+        progress
+            If True, display a progress bar.
+        **kwargs
+            kwargs passed to func.
+
+        Notes
+        -----
+        When a client is specified, the spool is split then passed to the
+        client's map method. This is to avoid serializing loaded patches.
+        See [`Spool.split`](`dascore.core.spool.BaseSpool.split`) for more
+        details about the `spool_count` and `spool_size` parameters.
+
+        Examples
+        --------
+        import numpy as np
+        import dascore as dc
+
+        spool = dc.get_example_spool("random_das")
+
+        # Calculate the std for each channel in 5 second chunks
+        results = (
+             spool.chunk(time=5)
+             .map(lambda x: np.std(x.data, axis=0))
+        )
+        # stack back into array. dims are (distance, time chunk)
+        out = np.stack(results, axis=-1)
+        """
+        return _spool_map(
+            self,
+            func,
+            client=client,
+            size=size,
+            progress=progress,
+            **kwargs,
+        )
 
 
 class DataFrameSpool(BaseSpool):
@@ -156,7 +300,7 @@ class DataFrameSpool(BaseSpool):
     # kwargs for filtering contents
     _select_kwargs: Mapping | None = FrozenDict()
     # attributes which effect merge groups for internal patches
-    _group_columns = ("network", "station", "dims", "data_type", "history", "tag")
+    _group_columns = ("network", "station", "dims", "data_type", "tag", "history")
     _drop_columns = ("patch",)
 
     def _get_df(self):
@@ -306,8 +450,9 @@ class DataFrameSpool(BaseSpool):
         new._select_kwargs.update(select_kwargs or {})
         return new
 
+    @compose_docstring(doc=BaseSpool.select.__doc__)
     def select(self, **kwargs) -> Self:
-        """Sub-select certain dimensions for Spool."""
+        """{doc}"""
         _, _, extra_kwargs = split_df_query(kwargs, self._df, ignore_bad_kwargs=True)
         filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(
@@ -356,6 +501,22 @@ class DataFrameSpool(BaseSpool):
         # create new spool from new dataframes
         return self.new_from_df(df=sorted_df, instruction_df=new_instruction_df)
 
+    @compose_docstring(doc=BaseSpool.split.__doc__)
+    def split(
+        self,
+        size: int | None = None,
+        count: int | None = None,
+    ) -> Generator[Self, None, None]:
+        """{doc}"""
+        if not ((count is not None) ^ (size is not None)):
+            msg = "Spool.split requires either spool_count or spool_size."
+            raise ParameterError(msg)
+        start = 0
+        step = int(np.ceil(len(self) / count if count else size))
+        while start < len(self):
+            yield self[start : start + step]
+            start += step
+
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
         """{doc}."""
@@ -385,8 +546,6 @@ class MemorySpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory."""
-        # final_kwargs = dict(kwargs)
-        # final_kwargs.update(self._select_kwargs)
         return kwargs["patch"]
 
 
@@ -406,7 +565,7 @@ def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSp
 
 @spool.register(str)
 @spool.register(Path)
-def spool_from_str(path, **kwargs):
+def _spool_from_str(path, **kwargs):
     """Get a spool from a path."""
     path = Path(path)
     # A directory was passed, create Directory Spool
@@ -435,19 +594,19 @@ def spool_from_str(path, **kwargs):
 
 
 @spool.register(BaseSpool)
-def spool_from_spool(spool, **kwargs):
+def _spool_from_spool(spool, **kwargs):
     """Return a spool from a spool."""
     return spool
 
 
 @spool.register(list)
 @spool.register(tuple)
-def spool_from_patch_list(patch_list, **kwargs):
+def _spool_from_patch_list(patch_list, **kwargs):
     """Return a spool from a sequence of patches."""
     return MemorySpool(patch_list)
 
 
 @spool.register(dc.Patch)
-def spool_from_patch(patch):
+def _spool_from_patch(patch):
     """Get a spool from a single patch."""
     return MemorySpool([patch])

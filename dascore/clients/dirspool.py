@@ -13,9 +13,10 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.core.spool import DataFrameSpool
+from dascore.core.spool import DataFrameSpool, BaseSpool
 from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
 from dascore.utils.pd import adjust_segments
+from dascore.utils.docs import compose_docstring
 
 
 class DirectorySpool(DataFrameSpool):
@@ -91,24 +92,16 @@ class DirectorySpool(DataFrameSpool):
         """Return the path in which the spool contents are found."""
         return self.indexer.path
 
+    @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
         """
-        Return a dataframe of the contents of the data files.
-
-        Parameters
-        ----------
-        time
-            If not None, a tuple of start/end time where either can be None
-            indicating an open interval.
+        {doc}
         """
         return self._df
 
+    @compose_docstring(doc=BaseSpool.update.__doc__)
     def update(self) -> Self:
-        """
-        Updates the contents of the spool and returns a spool.
-
-        Resets any previous selection.
-        """
+        """{doc}"""
         out = self.__class__(
             base_path=self.indexer.update(),
             preferred_format=self._preferred_format,

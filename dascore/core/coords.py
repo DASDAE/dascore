@@ -528,6 +528,26 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             out = out.convert_units(units)
         return out
 
+    def get_sample_count(self, value) -> int:
+        """
+        Return the number of samples represented by a value.
+
+        This is calculated by dividing the value by dt and rounding up.
+        Therefore, the output will always be greater or equal to 1.
+
+        Parameters
+        ----------
+        value
+            The value (supports units).
+        """
+        if not self.evenly_sampled:
+            msg = "Coordinate is not evenly sampled, cant get sample count."
+            raise CoordError(msg)
+        compat_val = self._get_compatible_value(value, relative=True)
+        duration = compat_val - self.min()
+        samples = int(np.ceil(duration / self.step))
+        return samples
+
 
 class CoordRange(BaseCoord):
     """
