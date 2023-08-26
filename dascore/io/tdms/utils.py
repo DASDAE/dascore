@@ -104,7 +104,6 @@ def _get_version_str(tdms_file, LEAD_IN_LENGTH=28) -> str:
     # lead_in is 28 bytes:
     # [string of length 4][int32][int32][int64][int64]
     fields = struct.unpack("<4siiQQ", lead_in)
-
     # TODO: validate file
     if fields[0].decode() in "TDSm":
         version_str = str(fields[2])
@@ -156,17 +155,16 @@ def _read_attr(tdms_file):
 
 def _get_distance_coord(attr):
     """Get distance coordinate from attribute."""
-    # get time/distance coords
-    d_start = attr.pop("Start Distance (m)")
-    d_step = attr.pop("SpatialResolution[m]") * attr["Fibre Length Multiplier"]
-    _stop = attr.pop("Stop Distance (m)")
-    # Note: I found files where the end was slightly less than one channel spacing
-    # as a result the distance array was one channels short. Adding 10% of the
-    # channels spacing to distance_max fixes the issue without causing problems
-    # for files that don't have this rounding error.
-    index = int(np.round((_stop - d_start) / d_step, 1))
-    stop = d_start + index * d_step + d_step / 10
-    d_coord = get_coord(start=d_start, stop=stop, step=d_step, units="m")
+    # Note: some TDMS files actually have "Start Distance (m)" and
+    # "Stop Distance (m)" fields, but not all. These also don't really
+    # match the distance calculated below. We need to figure out why and what
+    # is the correct way to do this, but this seems safe for now.
+    multiplier = attr["Fibre Length Multiplier"]
+    total_length = attr["MeasureLength[m]"] * multiplier
+    start = attr["StartPosition[m]"] + total_length
+    step = attr["SpatialResolution[m]"] * multiplier
+    stop = start + (attr["n_channels"]) * step
+    d_coord = get_coord(start=start, stop=stop, step=step, units="m")
     return d_coord
 
 
