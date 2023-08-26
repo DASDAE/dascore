@@ -649,7 +649,9 @@ def get_format(
         path = man.source
         if not os.path.exists(path):
             raise FileNotFoundError(f"{path} does not exist.")
-        ext = Path(path).suffix or None
+        # get extension (minus .)
+        suffix = Path(path).suffix
+        ext = suffix[1:] if suffix else None
         iterator = FiberIO.manager.yield_fiberio(
             file_format, file_version, extension=ext
         )
