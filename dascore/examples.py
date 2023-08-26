@@ -80,6 +80,65 @@ def _random_patch(
     return patch
 
 
+@register_func(EXAMPLE_PATCHES, key="random_das_time_dist")
+def _random_patch_time_dist(
+    *,
+    starttime="2017-09-18",
+    start_distance=0,
+    network="",
+    station="",
+    tag="random",
+    shape=(2_000, 300),
+    time_step=to_timedelta64(1 / 250),
+    distance_step=1,
+    time_array=None,
+    dist_array=None,
+):
+    """Generate a random DAS Patch."""
+    # get input data
+    rand = np.random.RandomState(13)
+    array = rand.random(shape)
+    # create attrs
+    t1 = np.atleast_1d(np.datetime64(starttime))[0]
+    d1 = np.atleast_1d(start_distance)
+    attrs = dict(
+        time_step=to_timedelta64(time_step),
+        distance_step=distance_step,
+        category="DAS",
+        time_min=t1,
+        network=network,
+        station=station,
+        tag=tag,
+        time_units="s",
+        distance_units="m",
+    )
+    # need to pop out dim attrs if coordinates provided.
+    if time_array is not None:
+        attrs.pop("time_min")
+        # need to keep time_step if time_array is len 1 to get coord range
+        if len(time_array) > 1:
+            attrs.pop("time_step")
+    else:
+        time_array = dascore.core.get_coord(
+            values=t1 + np.arange(array.shape[1]) * attrs["time_step"],
+            step=attrs["time_step"],
+            units=attrs["time_units"],
+        )
+    if dist_array is not None:
+        attrs.pop("distance_step")
+    else:
+        dist_array = dascore.core.get_coord(
+            values=d1 + np.arange(array.shape[0]) * attrs["distance_step"],
+            step=attrs["distance_step"],
+            units=attrs["distance_units"],
+        )
+    coords = dict(time=time_array, distance=dist_array)
+    # assemble and output.
+    out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
+    patch = dc.Patch(**out)
+    return patch
+
+
 @register_func(EXAMPLE_PATCHES, key="wacky_dim_coords_patch")
 def _wacky_dim_coord_patch():
     """Creates a patch with one Monotonic and one Array coord."""
