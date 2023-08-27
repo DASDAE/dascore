@@ -285,6 +285,7 @@ class TestBasics:
         f_array = array * (9 / 5) + 32.0
         coord = get_coord(values=array, units="degC")
         out = coord.convert_units("degF")
+        assert out.shape == f_array.shape
         assert np.allclose(f_array, out.values)
 
     def test_unit_str(self, evenly_sampled_coord):
@@ -819,6 +820,16 @@ class TestCoordRange:
         ar = np.arange(start, stop, step)
         coord = get_coord(start=start, stop=stop, step=step)
         assert coord.shape == ar.shape
+
+    def test_unchanged_len(self):
+        """Ensure an array converted to Coord range has same len. See #229."""
+        t_array = np.linspace(0.0, 1, 44100)
+        t_coord = get_coord(values=t_array)
+        assert t_array.shape == t_coord.shape
+        # now test datetime
+        time = dc.to_timedelta64(t_array) + np.datetime64("2020-01-01")
+        time_coord = get_coord(values=time)
+        assert len(time) == len(time_coord)
 
 
 class TestMonotonicCoord:

@@ -15,7 +15,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 from dascore.utils.patch import get_default_patch_name
-from dascore.utils.time import to_datetime64, to_timedelta64
+from dascore.utils.time import to_timedelta64
 
 EXAMPLE_PATCHES = {}
 EXAMPLE_SPOOLS = {}
@@ -139,13 +139,6 @@ def _sin_wave_patch(
         data=data,
         coords={"time": time, "distance": distance},
         dims=("time", "distance"),
-        attrs={
-            "time_min": to_datetime64(time_min),
-            "time_step": 1 / sample_rate,
-            "distance_min": 1,
-            "distance_step": 1,
-            "distance_max": 3,
-        },
     )
     return patch
 
