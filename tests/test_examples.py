@@ -25,6 +25,11 @@ class TestGetExamplePatch:
         out = dc.get_example_patch("example_event_1")
         assert isinstance(out, dc.Patch)
 
+    def test_sin_wav(self):
+        """Ensure the sin wave example can be loaded. See issee 229."""
+        out = dc.get_example_patch("sin_wav")
+        assert isinstance(out, dc.Patch)
+
 
 class TestGetExampleSpool:
     """Test suite for `get_example_spool`."""

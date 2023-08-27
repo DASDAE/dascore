@@ -1024,6 +1024,18 @@ def get_coord(
                 msg = "When data is not defined, start, stop, and step must be."
                 raise CoordError(msg)
 
+    def _get_new_max(data, min, step):
+        """Get the new length to use"""
+
+        # for int based data types we need to modify the end time
+        # otherwise this will just go nuts
+        dtype = getattr(min, "dtype", None)
+        if dtype_time_like(dtype) or np.issubdtype(dtype, np.integer):
+            max = min + (len(data) - 1) * step
+        else:
+            max = data[-1]
+        return max
+
     def _maybe_get_start_stop_step(data):
         """Get start, stop, step, is_monotonic."""
         data = np.array(data)
@@ -1036,9 +1048,10 @@ def get_coord(
             unique_diff = np.unique(diffs)
             if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
                 _min = data[0]
-                _max = data[-1]
                 # this is a poor man's median that preserves dtype
-                _step = np.sort(diffs)[len(diffs) // 2]
+                sorted_diffs = np.sort(diffs)
+                _step = sorted_diffs[len(sorted_diffs) // 2]
+                _max = _get_new_max(data, _min, _step)
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 
