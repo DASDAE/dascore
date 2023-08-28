@@ -15,9 +15,9 @@ from io import BytesIO
 from operator import eq, ge, le
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
-import numpy as np
 
 import dascore as dc
 from dascore.io import BinaryReader

@@ -16,12 +16,7 @@ from pathlib import Path
 
 @cache
 def get_cross_ref_dict() -> dict[str, str]:
-    """
-    Load cross-reference dictionaries.
-
-    Returns
-    -------
-    """
+    """Load cross-reference dictionaries."""
     out = {}
     path = Path(__file__).absolute()
     count = 0

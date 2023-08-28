@@ -29,8 +29,8 @@ from dascore.constants import (
 from dascore.core.attrs import str_validator
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
-from dascore.utils.misc import cached_method, iterate, suppress_warnings
 from dascore.utils.mapping import FrozenDict
+from dascore.utils.misc import cached_method, iterate, suppress_warnings
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,
@@ -70,6 +70,7 @@ class PatchFileSummary(DascoreBaseModel):
 
     @property
     def dim_tuple(self):
+        """Return a tuple of dimensions (eg ("time", "distance"))."""
         return tuple(self.dims.split(","))
 
     @model_validator(mode="before")

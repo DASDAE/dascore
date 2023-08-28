@@ -11,7 +11,6 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int
 
-
 # --- Functions for writing DASDAE format
 
 

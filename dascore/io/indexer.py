@@ -5,9 +5,9 @@ import abc
 import json
 import os
 import time
-from pathlib import Path
-from functools import cache
 from contextlib import suppress
+from functools import cache
+from pathlib import Path
 
 import pandas as pd
 import pooch
@@ -125,9 +125,7 @@ class DirectoryIndexer(AbstractIndexer):
         )
 
     def _find_index_file(self, data_path, index_path=None):
-        """
-        Find the path to the index file.
-        """
+        """Find the path to the index file."""
         data_path = Path(data_path).absolute()
         # user specified index path
         if index_path:

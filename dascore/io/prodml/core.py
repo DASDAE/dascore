@@ -12,7 +12,7 @@ from .utils import _get_prodml_attrs, _get_prodml_version_str, _read_prodml
 
 
 class ProdMLPatchAttrs(dc.PatchAttrs):
-    """Patch attrs for ProdML"""
+    """Patch attrs for ProdML."""
 
     pulse_width: float = np.NAN
     pulse_width_units: UnitQuantity | None = None

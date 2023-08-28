@@ -31,7 +31,7 @@ from dascore.utils.pd import (
     fill_defaults_from_pydantic,
     list_ser_to_str,
 )
-from dascore.utils.time import get_max_min_times, to_int, to_datetime64, to_timedelta64
+from dascore.utils.time import get_max_min_times, to_datetime64, to_int, to_timedelta64
 
 HDF5ExtError = tables.HDF5ExtError
 NoSuchNodeError = tables.NoSuchNodeError
@@ -43,7 +43,7 @@ ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
 
 class _HDF5Store(pd.HDFStore):
     """
-    This is a work-around for pandas HDF5 store not accepting
+    A work-around for pandas HDF5 store not accepting
     pytables.File objects.
     """
 
@@ -346,7 +346,7 @@ class HDFPatchIndexManager:
     @cached_method
     def validate_version(self):
         """
-        This method handles issues with version mismatches.
+        Handles issues with version mismatches.
 
         If this is the case, there is no guarantee it will work, but no knowing
         if it won't...

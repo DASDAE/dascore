@@ -3,15 +3,14 @@ from __future__ import annotations
 
 import contextlib
 import functools
-from functools import cache
 import importlib
 import inspect
 import os
 import re
 import warnings
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from functools import cache
 from types import ModuleType
 
 import numpy as np
@@ -397,9 +396,7 @@ def _get_compiled_suffix_prefix_regex(
     suffixes: str | tuple[str],
     prefixes: str | tuple[str] | None,
 ):
-    """
-    Get a compiled regex which matches the form prefixes_suffixes.
-    """
+    """Get a compiled regex which matches the form prefixes_suffixes."""
     suffixes = iterate(suffixes)
     pattern = rf".*_({'|'.join(iterate(suffixes))})"
     if prefixes is not None:
@@ -408,15 +405,13 @@ def _get_compiled_suffix_prefix_regex(
 
 
 def _matches_prefix_suffix(input_str, suffixes, prefixes=None):
-    """Determine if a string matches given prefixes_suffixes"""
+    """Determine if a string matches given prefixes_suffixes."""
     regex = _get_compiled_suffix_prefix_regex(suffixes, prefixes)
     return bool(re.match(regex, input_str))
 
 
 def is_valid_coord_str(input_str, prefixes=None):
-    """
-    Return True if an input string is valid for representing coord info.
-    """
+    """Return True if an input string is valid for representing coord info."""
     _valid_keys = tuple(dc.core.CoordSummary.model_fields)
     return _matches_prefix_suffix(input_str, _valid_keys, prefixes)
 
@@ -463,7 +458,7 @@ def separate_coord_info(
         return tuple(i for i, v in potential_keys.items() if _meets_required(v))
 
     def _get_coords_from_top_level(obj, out, dims):
-        """First get coord info from top level"""
+        """First get coord info from top level."""
         for dim in iterate(dims):
             potential_coord = {
                 i.split("_")[1]: v for i, v in obj.items() if is_valid_coord_str(i, dim)

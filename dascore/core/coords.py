@@ -90,12 +90,13 @@ class CoordSummary(DascoreBaseModel):
 
     @model_serializer(when_used="json")
     def ser_model(self) -> dict[str, str]:
+        """Serialize the model to json."""
         return {i: str(v) for i, v in self.model_dump().items()}
 
     @model_validator(mode="before")
     @classmethod
     def get_correct_dtype_cast_values(cls, data: Any) -> Any:
-        """Ensure the correct dtype is provided and value conform to it"""
+        """Ensure the correct dtype is provided and value conform to it."""
         if isinstance(data, dict):
             min_val = data["min"]
             dtype = _get_dtype(min_val, data.get("dtype"))
@@ -516,9 +517,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         )
 
     def update(self, **kwargs):
-        """
-        Update parts of the coordinate.
-        """
+        """Update parts of the coordinate."""
         info = self.model_dump()
         update_fields = {i: v for i, v in kwargs.items() if v != info.get(i)}
         units = update_fields.pop("units", None)

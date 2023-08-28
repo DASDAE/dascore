@@ -116,7 +116,7 @@ class TestConvertUnits:
 
 
 class TestSimplifyUnits:
-    """ "Ensure units can be simplified."""
+    """Ensure units can be simplified."""
 
     @pytest.fixture(scope="class")
     def patch_complicated_units(self, random_patch):

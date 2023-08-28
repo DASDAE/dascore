@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
-from collections.abc import Generator
 from typing import TypeVar
-from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -16,7 +14,7 @@ from typing_extensions import Self
 
 import dascore as dc
 import dascore.io
-from dascore.constants import PatchType, numeric_types, timeable_types, ExecutorType
+from dascore.constants import ExecutorType, PatchType, numeric_types, timeable_types
 from dascore.exceptions import InvalidSpoolError, ParameterError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
@@ -224,9 +222,7 @@ class BaseSpool(abc.ABC):
         raise NotImplementedError(msg)
 
     def update(self) -> Self:
-        """
-        Updates the contents of the spool and returns a spool.
-        """
+        """Updates the contents of the spool and returns a spool."""
         return self
 
     def map(
@@ -452,7 +448,7 @@ class DataFrameSpool(BaseSpool):
 
     @compose_docstring(doc=BaseSpool.select.__doc__)
     def select(self, **kwargs) -> Self:
-        """{doc}"""
+        """{doc}."""
         _, _, extra_kwargs = split_df_query(kwargs, self._df, ignore_bad_kwargs=True)
         filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
         inst = adjust_segments(
@@ -470,9 +466,7 @@ class DataFrameSpool(BaseSpool):
 
     @compose_docstring(doc=BaseSpool.sort.__doc__)
     def sort(self, attribute) -> Self:
-        """
-        {doc}
-        """
+        """{doc}."""
         df = self._df
         inst_df = self._instruction_df
 
@@ -507,7 +501,7 @@ class DataFrameSpool(BaseSpool):
         size: int | None = None,
         count: int | None = None,
     ) -> Generator[Self, None, None]:
-        """{doc}"""
+        """{doc}."""
         if not ((count is not None) ^ (size is not None)):
             msg = "Spool.split requires either spool_count or spool_size."
             raise ParameterError(msg)

@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import os
-import shutil
 import platform
+import shutil
 from contextlib import suppress
 from pathlib import Path
 
@@ -74,7 +74,7 @@ class TestFindIndex:
         return path
 
     def test_directory_cant_write(self, unwritable_directory):
-        """Ensure correct path is found when a read-only directory is used"""
+        """Ensure correct path is found when a read-only directory is used."""
         dir_index = DirectoryIndexer(unwritable_directory)
         index_path = dir_index.index_path
         index_map_path = dir_index.index_map_path

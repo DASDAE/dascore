@@ -1,11 +1,10 @@
 """Utilities for terra15."""
 from __future__ import annotations
 
-
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import maybe_get_attrs, unbyte, iterate
+from dascore.utils.misc import iterate, maybe_get_attrs, unbyte
 
 # --- Getting format/version
 
