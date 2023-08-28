@@ -9,16 +9,16 @@ import dascore as dc
 from dascore.core.attrs import (
     PatchAttrs,
     combine_patch_attrs,
+    decompose_attrs,
     merge_compatible_coords_attrs,
 )
 from dascore.core.coords import CoordSummary, get_coord
-from dascore.core.attrs import decompose_attrs
 from dascore.exceptions import (
     AttributeMergeError,
     IncompatiblePatchError,
 )
-from dascore.utils.misc import register_func
 from dascore.utils.downloader import fetcher
+from dascore.utils.misc import register_func
 
 MORE_COORDS_ATTRS = []
 
@@ -177,7 +177,7 @@ class TestPatchAttrs:
         assert out["depth"] == (dep_min, dep_max)
 
     def test_coords_to_coord_summary(self):
-        """Coordinates included in coords should be converted to coord summary"""
+        """Coordinates included in coords should be converted to coord summary."""
         out = {
             "station": "01",
             "coords": {
@@ -269,7 +269,7 @@ class TestMisc:
 
 
 class TestUpdateAttrs:
-    """ "Tests for updating attributes."""
+    """Tests for updating attributes."""
 
     def test_attrs_can_update(self, random_attrs):
         """Ensure attributes can update coordinates."""

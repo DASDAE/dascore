@@ -4,11 +4,12 @@ from __future__ import annotations
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.io import FiberIO, HDF5Reader
+
 from .utils import (
     _get_terra15_version_str,
+    _get_version_data_node,
     _read_terra15,
     _scan_terra15,
-    _get_version_data_node,
 )
 
 

@@ -6,10 +6,10 @@ from tables.exceptions import NoSuchNodeError
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
-from dascore.core.coords import get_coord
 from dascore.core.coordmanager import get_coord_manager
-from dascore.utils.time import to_datetime64, to_timedelta64
+from dascore.core.coords import get_coord
 from dascore.utils.misc import maybe_get_attrs
+from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- Getting format/version
 

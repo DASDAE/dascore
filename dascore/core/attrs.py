@@ -30,8 +30,8 @@ from dascore.utils.misc import (
     all_diffs_close_enough,
     get_middle_value,
     iterate,
-    to_str,
     separate_coord_info,
+    to_str,
 )
 from dascore.utils.models import (
     CommaSeparatedStr,
@@ -135,7 +135,7 @@ class PatchAttrs(DascoreBaseModel):
         return len(self.model_dump())
 
     def __getattr__(self, item):
-        """This enables dynamic attributes such as time_min, time_max, etc."""
+        """Enables dynamic attributes such as time_min, time_max, etc."""
         split = item.split("_")
         # this only works on names like time_max, distance_step, etc.
         if not len(split) == 2:
@@ -511,12 +511,10 @@ def merge_compatible_coords_attrs(
 
 
 def decompose_attrs(attr_list: Sequence[PatchAttrs], exclude=("history",)):
-    """
-    Function to decompose attributes into series.
-    """
+    """Function to decompose attributes into series."""
 
     def _get_uri_and_hash(model):
-        """Pop out this models uri and its hash"""
+        """Pop out this models uri and its hash."""
         uri_key = "uri" if "uri" in model else "path"
         assert uri_key in model, "all models must have uri or path"
         uri = model.pop(uri_key)

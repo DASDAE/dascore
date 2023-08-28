@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypeVar, Protocol, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
 
 import numpy as np
 import pandas as pd

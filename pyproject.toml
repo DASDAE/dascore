@@ -42,7 +42,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 
 dependencies = [
      "matplotlib>=3.5",
-     "numpy>=1.25",
+     "numpy>=1.24",
      "packaging",
      "pandas>=2.0",
      "pooch>=1.2",
@@ -111,7 +111,7 @@ WAV = "dascore.io.wav.core:WavIO"
 [tool.ruff]
 
 # enable certain types of linting
-select = ["E", "F", "UP", "RUF"]
+select = ["E", "F", "UP", "RUF", "I001", "D", "FA"]
 
 # Exclude a variety of commonly ignored directories.
 exclude = [
@@ -143,6 +143,9 @@ exclude = [
 target-version = "py310"
 
 fixable = ["ALL"]
+
+# List of codes to ignore
+ignore = ["D105", "D107", "D401", "D205"]
 
 [tool.ruff.mccabe]
 # Unlike Flake8, default to a complexity level of 10.

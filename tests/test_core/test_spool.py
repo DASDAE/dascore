@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -249,43 +249,34 @@ class TestSelect:
 
 
 class TestSort:
-    """
-    Tests for sorting spools.
-    """
+    """Tests for sorting spools."""
 
     def test_base_spool_sort_raises(self, random_spool):
+        """Ensure base spool's sort raises."""
         expected_str = "spool of type"
         with pytest.raises(NotImplementedError, match=expected_str):
             BaseSpool.sort(random_spool, "time")
 
     def test_sorting_attr_not_exists(self, diverse_spool):
-        """
-        Test sorting by an attribute that does not exist in the DataFrame.
-        """
+        """Test sorting by an attribute that does not exist in the DataFrame."""
         expected_str = "Invalid attribute"
         with pytest.raises(IndexError, match=expected_str):
             diverse_spool.sort("dummy_attribute")
 
     def test_sorting_attr_exists(self, diverse_spool):
-        """
-        Test sorting by an attribute that exists in the DataFrame.
-        """
+        """Test sorting by an attribute that exists in the DataFrame."""
         sorted_spool = diverse_spool.sort("time_min")
         df = sorted_spool.get_contents()
         assert df["time_min"].is_monotonic_increasing
 
     def test_sorting_attr_time(self, diverse_spool):
-        """
-        Test sorting by the 'time' attribute that that may not be in the DataFrame.
-        """
+        """Test sorting by the 'time' attribute that that may not be in the df."""
         sorted_spool = diverse_spool.sort("time")
         df = sorted_spool.get_contents()
         assert df["time_min"].is_monotonic_increasing
 
     def test_sorting_attr_distance(self, diverse_spool):
-        """
-        Test sorting by the 'distance' attribute that may not be exist in the DataFrame.
-        """
+        """Test sorting by the 'distance' attribute that may not exist in the df."""
         sorted_spool = diverse_spool.sort("distance")
         df = sorted_spool.get_contents()
         assert df["distance_min"].is_monotonic_increasing
@@ -341,10 +332,12 @@ class TestMap:
 
     @pytest.fixture(scope="class")
     def thread_client(self):
+        """A ThreadPoolExecutor."""
         return ThreadPoolExecutor()
 
     @pytest.fixture(scope="class")
     def proc_client(self):
+        """A ProcessPoolExecutor."""
         return ProcessPoolExecutor()
 
     def test_simple(self, random_spool):
@@ -366,7 +359,7 @@ class TestMap:
         assert dc.spool(out) == random_spool
 
     def test_thread_client(self, random_spool, thread_client):
-        """Ensure a thread client works"""
+        """Ensure a thread client works."""
         out = list(random_spool.map(lambda x: x, client=thread_client))
         assert len(out) == len(random_spool)
         assert dc.spool(out) == random_spool

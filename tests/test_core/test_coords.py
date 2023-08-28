@@ -123,7 +123,7 @@ def coord(request) -> BaseCoord:
 
 @pytest.fixture(scope="session")
 def two_d_coord():
-    """ "return a 2D coordinate."""
+    """Return a 2D coordinate."""
     ar = np.ones((10, 10))
     return get_coord(values=ar, units="m/s")
 
@@ -1102,7 +1102,7 @@ class TestGetSampleCount:
             monotonic_float_coord.get_sample_count(10)
 
     def test_dt_lt_step(self, evenly_sampled_coord):
-        """Ensure sample count is 1 when value < dt"""
+        """Ensure sample count is 1 when value < dt."""
         dt = evenly_sampled_coord.step * 0.1
         out = evenly_sampled_coord.get_sample_count(dt)
         assert out == 1

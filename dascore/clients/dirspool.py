@@ -13,10 +13,10 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.core.spool import DataFrameSpool, BaseSpool
+from dascore.core.spool import BaseSpool, DataFrameSpool
 from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
-from dascore.utils.pd import adjust_segments
 from dascore.utils.docs import compose_docstring
+from dascore.utils.pd import adjust_segments
 
 
 class DirectorySpool(DataFrameSpool):
@@ -94,14 +94,12 @@ class DirectorySpool(DataFrameSpool):
 
     @compose_docstring(doc=BaseSpool.get_contents.__doc__)
     def get_contents(self) -> pd.DataFrame:
-        """
-        {doc}
-        """
+        """{doc}."""
         return self._df
 
     @compose_docstring(doc=BaseSpool.update.__doc__)
     def update(self) -> Self:
-        """{doc}"""
+        """{doc}."""
         out = self.__class__(
             base_path=self.indexer.update(),
             preferred_format=self._preferred_format,

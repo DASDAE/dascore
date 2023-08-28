@@ -39,6 +39,8 @@ class TestDocsting:
         @compose_docstring(params=params)
         def testfun1():
             """
+            A simple test function.
+
             {params}
             """
 

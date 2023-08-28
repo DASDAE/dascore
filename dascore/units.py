@@ -256,9 +256,9 @@ def get_filter_units(
 
 def __getattr__(name):
     """
-    This is a bit of magic; it allows arbitrary units to be imported from
-    this module. For example:
+    Allows arbitrary units to be imported from this module.
 
+    For example:
     from dascore.units import m
 
     is the same as

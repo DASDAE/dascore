@@ -69,7 +69,7 @@ class TestPatchFunction:
             require_bob(random_patch)
 
     def test_require_attr_exists(self, random_patch):
-        """ "test for requiring an attr exists but not checking value."""
+        """Test for requiring an attr exists but not checking value."""
         pa1 = random_patch.update_attrs(bob=1)
         pa2 = pa1.update_attrs(bob=2)
         # both these should not raise

@@ -44,7 +44,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence, Sized
 from functools import reduce
 from operator import and_, or_
-from typing import Annotated, TypeVar, Any
+from typing import Annotated, Any, TypeVar
 
 import numpy as np
 from pydantic import field_validator, model_validator
@@ -86,8 +86,9 @@ def _validate_select_coords(coord, coord_name):
 
 def _indirect_coord_updates(cm, dim_name, coord_name, reduction, new_coords):
     """
-    Applies trim to coordinates when other associated coordinates
-    Are trimmed.
+    Applies trim to coordinates.
+
+    Assumes other associated coordinates are trimmed.
     """
     other_coords = set(cm.dim_to_coord_map[dim_name]) - {coord_name}
     # perform indirect updates.
