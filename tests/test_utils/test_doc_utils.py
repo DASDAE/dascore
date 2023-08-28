@@ -38,7 +38,11 @@ class TestDocsting:
 
         @compose_docstring(params=params)
         def testfun1():
-            """{params}."""
+            """
+            A simple test function.
+
+            {params}
+            """
 
         assert "Parameters" in testfun1.__doc__
         line = next(x for x in testfun1.__doc__.split("\n") if "Parameters" in x)
