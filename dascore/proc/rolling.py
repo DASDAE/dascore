@@ -1,113 +1,131 @@
 """Processing for applying roller operations."""
+from __future__ import annotations
+
+from functools import cache
 
 import numpy as np
+
+import dascore as dc
 from dascore.utils.patch import get_dim_value_from_kwargs
+from dascore.exceptions import ParameterError
 
 
 class PatchRoller:
-    """A class to apply roller operations to patches."""
+    """
+    A class to apply roller operations to patches.
 
-    def __init__(self, patch, *, window=None, step=None, center=False, **kwargs):
+    Parameters
+    ----------
+    patch
+        The patch to apply rolling function(s) to.
+    step
+        The step between rolling windows (aka stride). Units are also supported.
+        Defaults to 1.
+    center
+        If True, center the moving window else the label value occurs at the end
+        of the window.
+    **kwargs
+        Used to specify the coordinate.
+    """
+
+    def __init__(self, patch: dc.Patch, *, step=None, center=False, **kwargs):
         self.patch = patch
-
         self.center = center
-        self.kwargs = kwargs
-        dim, axis, value = get_dim_value_from_kwargs(patch, self.kwargs)
+        # get window sizes in samples
+        dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
         self.axis = axis
-        coord = patch.get_coord(dim)
-        if dim == "time":
-            window = coord.get_sample_count(value)
-            step = 1 if step is None else coord.get_sample_count(step)
-        else:
-            window = value
-            step = 1 if step is None else step
-        self.window = window
-        self.step = step
+        self.dim = dim
+        self.coord = patch.get_coord(dim)
+        self.window = self.coord.get_sample_count(value)
+        self.step = 1 if step is None else self.coord.get_sample_count(step)
+        if self.window > len(self.coord) or self.step > len(self.coord):
+            msg = (
+                "Window or step size is larger than total number of samples in "
+                "the specified dimension."
+            )
+            raise ParameterError(msg)
+        self._roll_hist = f"rolling({dim}={value}, step={step}, center={center})"
 
-        assert (
-            window < patch.data.shape[axis] or step < patch.data.shape[axis]
-        ), "Window or step size is larger than total number \
-        of samples in the specified coordinate."
+    @cache
+    def get_coords(self):
+        """
+        Get the new coordinates for "rolled" patch.
+
+        Accounts for centered or non-centered coordinates. If the window
+        length is even, the first half value is used.
+        """
+        if self.center:
+            half = self.window // 2
+            start = int(np.floor(half))
+            stop = int(np.ceil(half))
+            new = self.coord[start : -stop : self.step]
+        else:
+            new = self.coord[self.window - 1 :: self.step]
+        return self.patch.coords.update_coords(**{self.dim: new})
+
+    def _get_attrs_with_apply_history(self, func):
+        """Get new attrs that has history from apply attached."""
+        new_history = list(self.patch.attrs.history)
+        func_name = getattr(func, "__name__", "")
+        new_history.append(f"{self._roll_hist}.apply({func_name})")
+        attrs = self.patch.attrs.update(history=new_history, coords={})
+        return attrs
 
     def apply(self, function):
-        patch = self.patch
-        window_size = self.window
-        step_size = self.step
-        center = self.center
-        axis = self.axis
+        """
+        Apply a function over the specified moving window.
 
-        time_samples = len(patch.coords["time"])
-        distance_samples = len(patch.coords["distance"])
-
-        if axis == 0:
-            if patch.dims[0] == "time":
-                iter_range = range(0, time_samples, step_size)
-                shape = (int(time_samples / step_size), int(distance_samples))
-                out = np.empty(shape)
-                for j, k in enumerate(iter_range):
-                    if k + window_size > time_samples:
-                        out[j, :] = np.full((1, distance_samples), np.nan)
-                    else:
-                        out[j, :] = function(
-                            patch.data[k : k + window_size, :], axis=axis
-                        )
-            elif patch.dims[0] == "distance":
-                iter_range = range(0, distance_samples, step_size)
-                shape = (int(distance_samples / step_size), int(time_samples))
-                out = np.empty(shape)
-                for j, k in enumerate(iter_range):
-                    if k + window_size > distance_samples:
-                        out[j, :] = np.full((1, time_samples), np.nan)
-                    else:
-                        out[j, :] = function(
-                            patch.data[k : k + window_size, :], axis=axis
-                        )
-        elif axis == 1:
-            if patch.dims[0] == "time":
-                iter_range = range(0, distance_samples, step_size)
-                shape = (time_samples, int(distance_samples / step_size))
-                out = np.empty(shape)
-                for j, k in enumerate(iter_range):
-                    if k + window_size > distance_samples:
-                        out[:, j] = np.full((time_samples, 1), np.nan)
-                    else:
-                        out[:, j] = function(
-                            patch.data[:, k : k + window_size], axis=axis
-                        )
-            elif patch.dims[0] == "distance":
-                iter_range = range(0, time_samples, step_size)
-                shape = (int(distance_samples), int(time_samples / step_size))
-                out = np.empty(shape)
-                for j, k in enumerate(iter_range):
-                    if k + window_size > time_samples:
-                        out[:, j] = np.full((distance_samples), np.nan)
-                    else:
-                        out[:, j] = function(
-                            patch.data[:, k : k + window_size], axis=axis
-                        )
-
-        if center:
-            out = np.roll(out, int(window_size / 2), axis=axis)
-
-        return out
+        Parameters
+        ----------
+        function
+            The function which is applied. This must accept a numpy array
+            with the same number of dimensions as input patch, then return an
+            array with the same shape except axis is removed.
+        """
+        # TODO look at replacing this with a call to `as_strided` that
+        # accounts for strides.
+        array = np.lib.stride_tricks.sliding_window_view(
+            self.patch.data,
+            self.window,
+            self.axis,
+        )
+        # get slice to account for step (stride)
+        step_slice = [slice(None, None)] * len(self.patch.data.shape)
+        step_slice.append(slice(None, None))
+        step_slice[self.axis] = slice(None, None, self.step)
+        out = function(array[tuple(step_slice)], axis=-1)
+        new_coords = self.get_coords()
+        attrs = self._get_attrs_with_apply_history(function)
+        return self.patch.new(data=out, coords=new_coords, attrs=attrs)
 
     def mean(self):
+        """Apply mean to moving window."""
         return self.apply(np.mean)
 
     def median(self):
+        """Apply median to moving window."""
         return self.apply(np.median)
 
     def min(self):
+        """Apply min to moving window."""
         return self.apply(np.min)
 
     def max(self):
+        """Apply max to moving window."""
         return self.apply(np.max)
 
+    def std(self):
+        """Apply standard deviation to moving window."""
+        return self.apply(np.std)
 
-def rolling(patch, step=None, center=False, **kwargs):
+    def sum(self):
+        """Apply sum to moving window."""
+        return self.apply(np.sum)
+
+
+def rolling(patch: dc.Patch, step=None, center=False, **kwargs) -> PatchRoller:
     """
-    Apply a rolling function along a specified dimension
-    with a specified factor as the window size.
+    Apply a rolling function along a specified dimension.
 
     Parameters
     ----------
@@ -120,15 +138,15 @@ def rolling(patch, step=None, center=False, **kwargs):
         If False, set the window labels as the right edge of the window index.
         If True, set the window labels as the center of the window index.
     **kwargs
-        Used to pass dimension and factor.
+        Used to pass dimension and window size.
         For example `time=10` represents window size of
         10*(default unit) along the time axis.
 
     Examples
     --------
-    # Simple example for rolling mean function
+    >>> # Simple example for rolling mean function
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> mean_values = patch.rolling(time=10, step=10)
+    >>> mean_patch = patch.rolling(time=10, step=5).mean()
     """
     return PatchRoller(patch, step=step, center=center, **kwargs)
