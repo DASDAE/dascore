@@ -216,7 +216,7 @@ def rolling(patch, step=None, center=False, **kwargs):
     >>> import dascore as dc
     >>> from dascore.units import s
     >>> patch = dc.get_example_patch()
-    >>> patch_mean = patch.rolling(time=10*s, step=10*s).mean()
+    >>> patch_mean = patch.rolling(time=1*s, step=0.5*s).mean()
     >>> # we can drop the nan values at the beginning of array
     >>> rolling_mean_values = patch_mean.data
     >>> valid_data = ~np.isnan(rolling_mean_values).any(axis=0)
