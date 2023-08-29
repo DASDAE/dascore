@@ -3,10 +3,26 @@
 import numpy as np
 
 from dascore.utils.patch import get_dim_value_from_kwargs
+from dascore.exceptions import ParameterError
 
 
 class PatchRoller:
-    """A class to apply roller operations to patches."""
+    """
+    A class to apply roller operations to patches.
+
+    Parameters
+    ----------
+    patch
+        The patch to apply rolling function(s) to.
+    step
+        The step between rolling windows (aka stride). Units are also supported.
+        Defaults to 1.
+    center
+        If True, center the moving window else the label value occurs at the end
+        of the window.
+    **kwargs
+        Used to specify the coordinate.
+    """
 
     def __init__(self, patch, *, window=None, step=None, center=False, **kwargs):
         self.patch = patch
@@ -15,20 +31,29 @@ class PatchRoller:
         self.kwargs = kwargs
         dim, axis, value = get_dim_value_from_kwargs(patch, self.kwargs)
         self.axis = axis
-        coord = patch.get_coord(dim)
+        self.dim = dim
+        self.coord = patch.get_coord(dim)
         if dim == "time":
-            window = coord.get_sample_count(value)
-            step = 1 if step is None else coord.get_sample_count(step)
+            window = self.coord.get_sample_count(value)
+            step = 1 if step is None else self.coord.get_sample_count(step)
         else:
-            window = coord.get_sample_count(value)
-            step = 1 if step is None else coord.get_sample_count(step)
+            window = self.coord.get_sample_count(value)
+            step = 1 if step is None else self.coord.get_sample_count(step)
         self.window = window
         self.step = step
 
-        assert (
-            window < patch.data.shape[axis] or step < patch.data.shape[axis]
-        ), "Window or step size is larger than total number \
-        of samples in the specified coordinate."
+        if self.window > len(self.coord) or self.step > len(self.coord):
+            msg = (
+                "Window or step size is larger than total number of samples in "
+                "the specified dimension."
+            )
+            raise ParameterError(msg)
+
+        if self.window == 0 or self.step == 0:
+            msg = "Window or step size can't be zero."
+            raise ParameterError(msg)
+
+        self._roll_hist = f"rolling({dim}={value}, step={step}, center={center})"
 
     def apply(self, function):
         patch = self.patch
@@ -62,7 +87,7 @@ class PatchRoller:
                     samples = np.array(patch.coords["time"])[::step_size]
                     new_coords = {x: patch.coords[x] for x in patch.dims}
                     new_coords["time"] = samples
-                    new_attrs["time_step"] = window_size / sampling_rate
+                    new_attrs["time_step"] = step_size / sampling_rate
                     new_attrs["min_time"] = np.min(samples)
                     new_attrs["max_time"] = np.max(samples)
             elif patch.dims[0] == "distance":
@@ -73,7 +98,7 @@ class PatchRoller:
                 )
                 out = np.empty(shape)
                 for j, k in enumerate(iter_range):
-                    if k < window_size:
+                    if k < window_size - 1:
                         out[j, :] = np.full((1, time_samples), np.nan)
                     else:
                         out[j, :] = function(
@@ -83,7 +108,7 @@ class PatchRoller:
                     samples = np.array(patch.coords["distance"])[::step_size]
                     new_coords = {x: patch.coords[x] for x in patch.dims}
                     new_coords["distance"] = samples
-                    new_attrs["distance_step"] = window_size / channel_spacing
+                    new_attrs["distance_step"] = step_size / channel_spacing
                     new_attrs["min_distance"] = np.min(samples)
                     new_attrs["max_distance"] = np.max(samples)
         elif axis == 1:
@@ -105,7 +130,7 @@ class PatchRoller:
                     samples = np.array(patch.coords["distance"])[::step_size]
                     new_coords = {x: patch.coords[x] for x in patch.dims}
                     new_coords["distance"] = samples
-                    new_attrs["distance_step"] = window_size / channel_spacing
+                    new_attrs["distance_step"] = step_size / channel_spacing
                     new_attrs["min_distance"] = np.min(samples)
                     new_attrs["max_distance"] = np.max(samples)
             elif patch.dims[0] == "distance":
@@ -126,7 +151,7 @@ class PatchRoller:
                     samples = np.array(patch.coords["time"])[::step_size]
                     new_coords = {x: patch.coords[x] for x in patch.dims}
                     new_coords["time"] = samples
-                    new_attrs["time_step"] = window_size / sampling_rate
+                    new_attrs["time_step"] = step_size / sampling_rate
                     new_attrs["min_time"] = np.min(samples)
                     new_attrs["max_time"] = np.max(samples)
         if center:
@@ -139,16 +164,28 @@ class PatchRoller:
         return rolling_patch
 
     def mean(self):
+        """Apply mean to moving window."""
         return self.apply(np.mean)
 
     def median(self):
+        """Apply median to moving window."""
         return self.apply(np.median)
 
     def min(self):
+        """Apply min to moving window."""
         return self.apply(np.min)
 
     def max(self):
+        """Apply max to moving window."""
         return self.apply(np.max)
+
+    def std(self):
+        """Apply standard deviation to moving window."""
+        return self.apply(np.std)
+
+    def sum(self):
+        """Apply sum to moving window."""
+        return self.apply(np.sum)
 
 
 def rolling(patch, step=None, center=False, **kwargs):
@@ -175,11 +212,24 @@ def rolling(patch, step=None, center=False, **kwargs):
     Examples
     --------
     # Simple example for rolling mean function
+    >>> import numpy as np
     >>> import dascore as dc
-
     >>> from dascore.units import s
-
     >>> patch = dc.get_example_patch()
-    >>> mean_values = patch.rolling(time=10*s, step=10*s)
+    >>> patch_mean = patch.rolling(time=10*s, step=10*s).mean()
+    >>> # we can drop the nan values at the beginning of array
+    >>> rolling_mean_values = patch_mean.data
+    >>> valid_data = ~np.isnan(rolling_mean_values).any(axis=0)
+    >>> rolling_mean_values_no_nan = rolling_mean_values[:, valid_data]
+    >>> new_attrs = dict(patch_mean.attrs)
+    >>> samples = np.array(patch_mean.coords["time"])[:, valid_data]
+    >>> new_coords = {x: patch_mean.coords[x] for x in patch.dims}
+    >>> new_coords["time"] = samples
+    >>> new_attrs["min_time"] = np.min(samples)
+    >>> new_attrs["max_time"] = np.max(samples)
+    >>> patch_mean_no_nan = patch.new(
+    >>>     data=rolling_mean_values_no_nan, attrs=new_attrs,
+    >>>     dims=patch.dims, coords=new_coords
+    >>> )
     """
     return PatchRoller(patch, step=step, center=center, **kwargs)

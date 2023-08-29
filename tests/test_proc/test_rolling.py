@@ -169,3 +169,5 @@ class TestRolling:
         assert isinstance(rolling.median(), dc.Patch)
         assert isinstance(rolling.min(), dc.Patch)
         assert isinstance(rolling.max(), dc.Patch)
+        assert isinstance(rolling.std(), dc.Patch)
+        assert isinstance(rolling.sum(), dc.Patch)
