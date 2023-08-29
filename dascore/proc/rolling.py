@@ -222,7 +222,7 @@ def rolling(patch, step=None, center=False, **kwargs):
     >>> valid_data = ~np.isnan(rolling_mean_values).any(axis=0)
     >>> rolling_mean_values_no_nan = rolling_mean_values[:, valid_data]
     >>> new_attrs = dict(patch_mean.attrs)
-    >>> samples = np.array(patch_mean.coords["time"])[:, valid_data]
+    >>> samples = np.array(patch_mean.coords["time"])[valid_data]
     >>> new_coords = {x: patch_mean.coords[x] for x in patch.dims}
     >>> new_coords["time"] = samples
     >>> new_attrs["min_time"] = np.min(samples)
