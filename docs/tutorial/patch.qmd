@@ -57,7 +57,7 @@ from dascore.utils.time import to_timedelta64
 array = np.random.random(size=(300, 2_000))
 
 # Create attributes, or metadata
-t1 = np.datetime64("2017-09-18")
+t1 = dc.to_datetime64("2017-09-18")
 attrs = dict(
     d_distance=1,
     d_time=to_timedelta64(1 / 250),

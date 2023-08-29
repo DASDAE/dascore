@@ -217,7 +217,7 @@ class Patch:
     normalize = dascore.proc.normalize
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
-    rolling = dascore.proc.rolling
+    rolling = dascore.proc.rolling.rolling
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
