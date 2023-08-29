@@ -213,25 +213,31 @@ def rolling(patch, step=None, center=False, **kwargs):
     --------
     # Simple example for rolling mean function
     >>> import numpy as np
+
     >>> import dascore as dc
     >>> from dascore.units import s
+
+
     >>> patch = dc.get_example_patch()
     >>> patch_mean = patch.rolling(time=1*s, step=0.5*s).mean()
-    >>> # we can drop the nan values at the beginning of array
+
+    >>> # We can drop the nan values at the beginning of array
     >>> rolling_mean_values = patch_mean.data
     >>> valid_data = ~np.isnan(rolling_mean_values).any(axis=0)
     >>> rolling_mean_values_no_nan = rolling_mean_values[:, valid_data]
+
     >>> new_attrs = dict(patch_mean.attrs)
     >>> samples = np.array(patch_mean.coords["time"])[valid_data]
     >>> new_coords = {x: patch_mean.coords[x] for x in patch.dims}
     >>> new_coords["time"] = samples
     >>> new_attrs["min_time"] = np.min(samples)
     >>> new_attrs["max_time"] = np.max(samples)
-    >>> patch_mean_no_nan = patch.new(
-            data=rolling_mean_values_no_nan,
-            attrs=new_attrs,
-            dims=patch.dims,
-            coords=new_coords
-        )
+
+    >>> patch_mean_no_nan = patch.new_data(
+    ...     data=rolling_mean_values_no_nan,
+    ...     attrs=new_attrs,
+    ...     dims=patch.dims,
+    ...     coords=new_coords
+    ... )
     """
     return PatchRoller(patch, step=step, center=center, **kwargs)
