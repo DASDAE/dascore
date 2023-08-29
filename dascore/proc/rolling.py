@@ -233,7 +233,7 @@ def rolling(patch, step=None, center=False, **kwargs):
     >>> new_attrs["min_time"] = np.min(samples)
     >>> new_attrs["max_time"] = np.max(samples)
 
-    >>> patch_mean_no_nan = patch.new_data(
+    >>> patch_mean_no_nan = patch.new(
     ...     data=rolling_mean_values_no_nan,
     ...     attrs=new_attrs,
     ...     dims=patch.dims,
