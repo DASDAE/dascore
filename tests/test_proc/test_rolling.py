@@ -88,11 +88,18 @@ class TestRolling:
     def test_3D_patch(self, range_patch_3d):
         """Ensure rolling works with 3D patch."""
         patch = range_patch_3d
+        # first try along time axis.
         out = patch.rolling(time=3).min()
-
-        expected = patch.data[:-2]
-        out = patch.rolling(time=3).min()
-        assert np.allclose(expected, out.data)
+        expected = np.arange(range_patch_3d.shape[0] - 2)
+        assert np.allclose(out.data, expected[:, None, None])
+        # then distance
+        out = patch.rolling(distance=3).min()
+        expected = np.arange(range_patch_3d.shape[0])
+        assert np.allclose(out.data, expected[:, None, None])
+        # then smell
+        out = patch.rolling(smell=3).min()
+        expected = np.arange(range_patch_3d.shape[0])
+        assert np.allclose(out.data, expected[:, None, None])
 
     def test_window_too_big_raises(self, random_patch):
         """When the window is too large it should raise."""
