@@ -2,49 +2,33 @@
 from __future__ import annotations
 
 from functools import cache
+from typing import Literal, Any
 
 import numpy as np
+import pandas as pd
+from pydantic import Field
 
 import dascore as dc
 from dascore.utils.patch import get_dim_value_from_kwargs
 from dascore.exceptions import ParameterError
+from dascore.utils.models import DascoreBaseModel
 
 
-class PatchRoller:
+class _PatchRollerInfo(DascoreBaseModel):
     """
-    A class to apply roller operations to patches.
+    A dataclass for storing info on rolling operation.
 
-    Parameters
-    ----------
-    patch
-        The patch to apply rolling function(s) to.
-    step
-        The step between rolling windows (aka stride). Units are also supported.
-        Defaults to 1.
-    center
-        If True, center the moving window else the label value occurs at the end
-        of the window.
-    **kwargs
-        Used to specify the coordinate.
+    Should be subclassed to implement rolling methods.
     """
 
-    def __init__(self, patch: dc.Patch, *, step=None, center=False, **kwargs):
-        self.patch = patch
-        self.center = center
-        # get window sizes in samples
-        dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
-        self.axis = axis
-        self.dim = dim
-        self.coord = patch.get_coord(dim)
-        self.window = self.coord.get_sample_count(value)
-        self.step = 1 if step is None else self.coord.get_sample_count(step)
-        if self.window > len(self.coord) or self.step > len(self.coord):
-            msg = (
-                "Window or step size is larger than total number of samples in "
-                "the specified dimension."
-            )
-            raise ParameterError(msg)
-        self._roll_hist = f"rolling({dim}={value}, step={step}, center={center})"
+    patch: Any  # cant set to patch due to circular import
+    window: int
+    step: int
+    dim: str
+    axis: int
+    center: bool
+    roll_hist: str = ""
+    func_kwargs: dict = Field(default_factory=dict)
 
     @cache
     def get_coords(self):
@@ -54,18 +38,45 @@ class PatchRoller:
         Accounts for centered or non-centered coordinates. If the window
         length is even, the first half value is used.
         """
-        coord = self.coord
+        coord = self.patch.get_coord(self.dim)
         if self.step > 1:
-            coord = self.coord[:: self.step]
+            coord = coord[:: self.step]
         return self.patch.coords.update_coords(**{self.dim: coord})
 
-    def _get_attrs_with_apply_history(self, func):
+    def _get_attrs_with_apply_history(self, func_or_str):
         """Get new attrs that has history from apply attached."""
         new_history = list(self.patch.attrs.history)
-        func_name = getattr(func, "__name__", "")
-        new_history.append(f"{self._roll_hist}.apply({func_name})")
+        if callable(func_or_str):
+            func_name = getattr(func_or_str, "__name__", "")
+            hist_str = f"{self.roll_hist}.apply({func_name})"
+        else:
+            hist_str = f"{self.roll_hist}.{func_or_str}()"
+        new_history.append(hist_str)
         attrs = self.patch.attrs.update(history=new_history, coords={})
         return attrs
+
+    def __hash__(self):
+        return id(self)
+
+
+class _NumpyPatchRoller(_PatchRollerInfo):
+    """
+    A class to apply roller operations to patches.
+
+    Parameters
+    ----------
+    """
+
+    @cache
+    def get_start_index(self):
+        """
+        Get the start index to account for non-zero step size.
+
+        This only applies for numpy engine.
+        """
+        wsize = self.window - 1
+        out = np.ceil(wsize / self.step) * self.step - wsize
+        return int(out)
 
     def _pad_roll_array(self, data):
         """Pad"""
@@ -77,7 +88,7 @@ class PatchRoller:
             assert padded.shape == self.patch.data.shape
         if self.center:
             # roll array along axis to center
-            padded = np.roll(padded, self.window // 2, axis=self.axis)
+            padded = np.roll(padded, -self.window // 2, axis=self.axis)
         return padded
 
     def apply(self, function):
@@ -93,7 +104,7 @@ class PatchRoller:
         """
         # TODO look at replacing this with a call to `as_strided` that
         # accounts for strides.
-        array = np.lib.stride_tricks.sliding_window_view(
+        slide_view = np.lib.stride_tricks.sliding_window_view(
             self.patch.data,
             self.window,
             self.axis,
@@ -102,11 +113,13 @@ class PatchRoller:
         step_slice = [slice(None, None)] * len(self.patch.data.shape)
         step_slice.append(slice(None, None))
         # this accounts for NaNs that pad the start of the array.
-        start = (self.step - ((self.window - 2) % self.step)) % self.step
+        start = self.get_start_index()
         # start = (self.window - 1) % self.step
         step_slice[self.axis] = slice(start, None, self.step)
         # apply function, then pad with zeros and roll
-        raw = function(array[tuple(step_slice)], axis=-1).astype(np.float_)
+        kwargs = self.func_kwargs
+        trimmed_slide_view = slide_view[tuple(step_slice)]
+        raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float_)
         out = self._pad_roll_array(raw)
         new_coords = self.get_coords()
         attrs = self._get_attrs_with_apply_history(function)
@@ -137,24 +150,109 @@ class PatchRoller:
         return self.apply(np.sum)
 
 
-def rolling(patch: dc.Patch, step=None, center=False, **kwargs) -> PatchRoller:
+class _PandasPatchRoller(_PatchRollerInfo):
+    """
+    A class to apply pandas rolling operations.
+    """
+
+    @cache
+    def _get_df(self) -> pd.DataFrame:
+        """Get the dataframe from patch data."""
+        if len(self.patch.dims) > 2:
+            msg = "Cannot use Pandas engine on patches with more than 2 dims."
+            raise ParameterError(msg)
+        df = pd.DataFrame(self.patch.data)
+        return df
+
+    @cache
+    def _get_rolling(self):
+        """Get rolling."""
+        df = self._get_df()
+        roll = df.rolling(
+            window=self.window,
+            step=self.step,
+            axis=self.axis,
+            center=self.center,
+        )
+        return roll
+
+    def _repack_patch(self, df, attrs=None):
+        """Repack patch into dataframe."""
+        data = df.values
+        # get rid of extra dims if original data doesn't have them.
+        if len(data.shape) != len(self.patch.data.shape):
+            data = np.squeeze(data)
+        coords = self.get_coords()
+        return self.patch.new(data=data, coords=coords, attrs=attrs)
+
+    def _call_rolling_func(self, name, *args, **kwargs):
+        """Helper function for calling a rolling function."""
+        rolling = self._get_rolling()
+        df = getattr(rolling, name)(*args, **kwargs)
+        attrs = self._get_attrs_with_apply_history(name)
+        return self._repack_patch(df, attrs=attrs)
+
+    def apply(self, func):
+        df = self._get_rolling().apply(func, **self.func_kwargs)
+        attrs = self._get_attrs_with_apply_history(func)
+        return self._repack_patch(df, attrs=attrs)
+
+    def mean(self):
+        """Apply mean"""
+        return self._call_rolling_func(name="mean")
+
+    def median(self):
+        """Apply median to moving window."""
+        return self._call_rolling_func(name="median")
+
+    def min(self):
+        """Apply min to moving window."""
+        return self._call_rolling_func(name="min")
+
+    def max(self):
+        """Apply max to moving window."""
+        return self._call_rolling_func(name="max")
+
+    def std(self):
+        """Apply standard deviation to moving window."""
+        return self._call_rolling_func(name="std")
+
+    def sum(self):
+        """Apply sum to moving window."""
+        return self._call_rolling_func(name="sum")
+
+
+def rolling(
+    patch: dc.Patch,
+    step=None,
+    center=False,
+    engine: Literal["numpy", "pandas", None] = None,
+    **kwargs,
+) -> _NumpyPatchRoller:
     """
     Apply a rolling function along a specified dimension.
 
     Parameters
     ----------
     step
-        The window is evaluated at every step result,
-        equivalent to slicing at every step.
-        If the step argument is not None or 1,
-        the result will have a different shape than the input.
+        The window is evaluated at every step result, equivalent to slicing
+        at every step. If the step argument is not None, the result will
+        have a different shape than the input.
     center
         If False, set the window labels as the right edge of the window index.
         If True, set the window labels as the center of the window index.
+    engine
+        Determines how the rolling operations are applied. If None, try to
+        determine which will be fastest for a given step. Options are:
+            "numpy" - which uses np.lib.stride_tricks.sliding_window_view.
+            "pandas" - which uses pandas.rolling.
+        If step < 10 samples, pandas is probably faster, otherwise numpy is
+        faster.
     **kwargs
         Used to pass dimension and window size.
         For example `time=10` represents window size of
         10*(default unit) along the time axis.
+
 
     Examples
     --------
@@ -162,8 +260,8 @@ def rolling(patch: dc.Patch, step=None, center=False, **kwargs) -> PatchRoller:
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> mean_patch = patch.rolling(time=10, step=5).mean()
-    >>> # note this will contain
-
+    >>> # drop nan at the start of the time axis.
+    >>> out = mean_patch.dropna("time")
 
     Notes
     -----
@@ -190,4 +288,37 @@ def rolling(patch: dc.Patch, step=None, center=False, **kwargs) -> PatchRoller:
     if window = 3 and step = 3
         [NaN, 2.0]
     """
-    return PatchRoller(patch, step=step, center=center, **kwargs)
+
+    def _get_engine(step, engine, patch):
+        """Get the engine"""
+        engines = {"numpy": _NumpyPatchRoller, "pandas": _PandasPatchRoller}
+        if cls := engines.get(engine):
+            return cls
+        if step < 10 and len(patch.dims) < 2:
+            return _PandasPatchRoller
+        return _NumpyPatchRoller
+
+    # get window sizes in samples
+    dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
+    roll_hist = f"rolling({dim}={value}, step={step}, center={center}, engine={engine})"
+    coord = patch.get_coord(dim)
+    window = coord.get_sample_count(value)
+    step = 1 if step is None else coord.get_sample_count(step)
+    if window > len(coord) or step > len(coord):
+        msg = (
+            "Window or step size is larger than total number of samples in "
+            "the specified dimension."
+        )
+        raise ParameterError(msg)
+
+    cls = _get_engine(step, engine, patch)
+    out = cls(
+        patch=patch,
+        window=window,
+        step=step,
+        dim=dim,
+        axis=axis,
+        center=center,
+        roll_hist=roll_hist,
+    )
+    return out

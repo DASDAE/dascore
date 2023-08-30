@@ -1,4 +1,5 @@
 """Tests for applying rolling functions on patch's data."""
+from __future__ import annotations
 
 import numpy as np
 import pytest
@@ -9,18 +10,19 @@ from dascore.exceptions import ParameterError
 from dascore.units import m
 
 
+@pytest.fixture(scope="class")
+def range_patch(random_patch):
+    """Return a patch with sequential values for its 0th dim."""
+    new_data = np.ones_like(random_patch.data)
+    range_array = np.arange(0, new_data.shape[0])[:, None]
+    return random_patch.new(data=new_data * range_array)
+
+
 class TestRolling:
     """Tests for applying rolling functions on patch's data."""
 
     window = 16
     step = 8
-
-    @pytest.fixture(scope="class")
-    def range_patch(self, random_patch):
-        """Return a patch with sequential values for its 0th dim."""
-        new_data = np.ones_like(random_patch.data)
-        range_array = np.arange(0, new_data.shape[0])[:, None]
-        return random_patch.new(data=new_data * range_array)
 
     @pytest.fixture(scope="class")
     def dist_roll_range_patch(self, range_patch):
@@ -57,16 +59,21 @@ class TestRolling:
         """Ensure apply works with various step sizes."""
         # first calculate rolling max on time axis.
         step = range_patch.get_coord("distance").step
-        out = (
-            range_patch.rolling(distance=self.window * step, step=self.step * step)
-            .max()
-            .dropna("distance")
-        )
+        roll = range_patch.rolling(distance=self.window * step, step=self.step * step)
+
+        out = roll.max().dropna("distance")
+        start = roll.get_start_index()
         # Determine what output should be.
         vals = np.arange(self.window - 1, range_patch.shape[0])
-        start = (self.step - ((self.window - 2) % self.step)) % self.step
         expected = vals[start :: self.step, None]
         assert np.allclose(out.data, expected)
+
+    def test_window_size_one(self, random_patch):
+        """Ensure we can get a window size of one."""
+        time_step = random_patch.get_coord("time").step
+        out = random_patch.rolling(time=time_step, step=None).mean()
+        # window size of 1 with no step results in the same as input.
+        assert out.equals(random_patch)
 
     def test_1D_patch(self):
         """Ensure rolling works with 1D patch."""
@@ -76,7 +83,8 @@ class TestRolling:
             dims=("time",),
         )
         expected = patch.data[:-2]
-        out = patch.rolling(time=3).min().dropna("time")
+        roll = patch.rolling(time=3)
+        out = roll.min().dropna("time")
         assert np.allclose(expected, out.data)
 
     def test_3D_patch(self, range_patch_3d):
@@ -113,8 +121,17 @@ class TestRolling:
         assert isinstance(rolling.max(), dc.Patch)
         assert isinstance(rolling.std(), dc.Patch)
 
-    @pytest.mark.parametrize("_", list(range(10)))
-    def test_apply_axis_0_dist_time(self, range_patch, _):
+    def test_center(self, random_patch):
+        """Ensure the center option places NaN at start and end."""
+        out = random_patch.rolling(time=1, center=True).mean()
+        time_ax = out.dims.index("time")
+        first_label = np.take(out.data, -1, axis=time_ax)
+        assert np.all(np.isnan(first_label))
+        last_label = np.take(out.data, 0, axis=time_ax)
+        assert np.all(np.isnan(last_label))
+
+    @pytest.mark.parametrize("_", list(range(5)))
+    def test_compare_to_pandas(self, range_patch, _):
         """Test the apply method of PatchRoller when distance coordinate is entered
         and the first axis is distance.
         """
@@ -129,14 +146,20 @@ class TestRolling:
             distance=(window * channel_spacing) * m,
             step=(step * channel_spacing) * m,
         )
-        applied_result = roller.apply(np.mean).data
+        applied_result = roller.apply(np.mean).dropna("distance").data
         # do the same with pandas and compare result
         df = pd.DataFrame(patch.data)
         rolling_mean_pandas = df.rolling(window, step=step, axis=axis).mean()
         valid_data = ~np.isnan(np.array(rolling_mean_pandas)).any(axis=1)
         filtered_data_pandas = np.array(rolling_mean_pandas)[valid_data]
-        assert applied_result.shape == np.array(rolling_mean_pandas).shape
+        assert applied_result.shape == filtered_data_pandas.shape
         assert np.allclose(applied_result, filtered_data_pandas)
+
+    def test_pandas_engine_raises_3d_patch(self, range_patch_3d):
+        """Pandas engine should raise when required with a 4d patch."""
+        msg = "Cannot use Pandas engine on patches with more than"
+        with pytest.raises(ParameterError, match=msg):
+            range_patch_3d.rolling(time=1, engine="pandas").mean()
 
     # @pytest.mark.parametrize("_", list(range(10)))
     # def test_apply_axis_1_dist_time(self, _):
@@ -253,3 +276,57 @@ class TestRolling:
 
     #     assert applied_result.shape == np.array(rolling_mean_pandas).shape
     #     assert np.allclose(filtered_data_rolling, filtered_data_pandas)
+
+
+class TestNumpyVsPandasRolling:
+    """Ensure numpy rolling return the same results as pandas rolling."""
+
+    # window size/step in terms of steps
+    combinations = (
+        (1, 1),
+        (120, 60),
+        (100, 100),
+        (13, 7),
+        (40, 80),
+    )
+
+    @pytest.mark.parametrize("data", combinations)
+    def test_time_dim(self, data: tuple[int, int], range_patch):
+        """Ensure pandas and numpy engine return same results along time."""
+        coord = range_patch.get_coord("time")
+        dt = coord.step
+        win, step = dt * data[0], dt * data[1]
+        numpy_roll = range_patch.rolling(time=win, step=step, engine="numpy")
+        pandas_roll = range_patch.rolling(time=win, step=step, engine="pandas")
+
+        nump_out = numpy_roll.mean()
+        pand_out = pandas_roll.mean()
+
+        is_close = np.isclose(nump_out.data, pand_out.data)
+        is_nan = np.isnan(nump_out.data) & np.isnan(pand_out.data)
+        assert np.all(is_close | is_nan)
+
+    @pytest.mark.parametrize("data", combinations)
+    def test_dist_dim(self, data: tuple[int, int], range_patch):
+        """Ensure pandas and numpy engine return same results along distance."""
+        coord = range_patch.get_coord("distance")
+        dt = coord.step
+        win, step = dt * data[0], dt * data[1]
+        numpy_roll = range_patch.rolling(distance=win, step=step, engine="numpy")
+        pandas_roll = range_patch.rolling(distance=win, step=step, engine="pandas")
+
+        nump_out = numpy_roll.mean()
+        pand_out = pandas_roll.mean()
+
+        is_close = np.isclose(nump_out.data, pand_out.data)
+        is_nan = np.isnan(nump_out.data) & np.isnan(pand_out.data)
+        assert np.all(is_close | is_nan)
+
+    def test_center_same(self, range_patch):
+        """Ensure center values are handled the same."""
+        dt = range_patch.get_coord("time").step
+        numpy_out = range_patch.rolling(time=13 * dt, center=True).sum()
+        pandas_out = range_patch.rolling(time=13 * dt, center=True).sum()
+        numpy_isnan = np.isnan(numpy_out.data)
+        pandas_isnan = np.isnan(pandas_out.data)
+        assert np.all(np.equal(numpy_isnan, pandas_isnan))
