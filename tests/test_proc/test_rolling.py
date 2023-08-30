@@ -111,16 +111,6 @@ class TestRolling:
         with pytest.raises(ParameterError, match=msg):
             random_patch.rolling(time=duration * 2)
 
-    def test_misc(self, random_patch):
-        """Test miscellaneous functionality."""
-        time_step = random_patch.get_coord("time").step
-        rolling = random_patch.rolling(time=6 * time_step, step=2 * time_step)
-        assert isinstance(rolling.mean(), dc.Patch)
-        assert isinstance(rolling.median(), dc.Patch)
-        assert isinstance(rolling.min(), dc.Patch)
-        assert isinstance(rolling.max(), dc.Patch)
-        assert isinstance(rolling.std(), dc.Patch)
-
     def test_center(self, random_patch):
         """Ensure the center option places NaN at start and end."""
         out = random_patch.rolling(time=1, center=True).mean()
@@ -150,8 +140,7 @@ class TestRolling:
         # do the same with pandas and compare result
         df = pd.DataFrame(patch.data)
         rolling_mean_pandas = df.rolling(window, step=step, axis=axis).mean()
-        valid_data = ~np.isnan(np.array(rolling_mean_pandas)).any(axis=1)
-        filtered_data_pandas = np.array(rolling_mean_pandas)[valid_data]
+        filtered_data_pandas = rolling_mean_pandas.dropna(axis=axis).values
         assert applied_result.shape == filtered_data_pandas.shape
         assert np.allclose(applied_result, filtered_data_pandas)
 
@@ -160,6 +149,36 @@ class TestRolling:
         msg = "Cannot use Pandas engine on patches with more than"
         with pytest.raises(ParameterError, match=msg):
             range_patch_3d.rolling(time=1, engine="pandas").mean()
+
+    def test_misc(self, random_patch):
+        """Test miscellaneous functionality."""
+        time_step = random_patch.get_coord("time").step
+        window = 10 * time_step
+        step = 10 * time_step
+        rollers = (
+            random_patch.rolling(time=window, step=step, engine="numpy"),
+            random_patch.rolling(time=window, step=step, engine="pandas"),
+        )
+        for roller in rollers:
+            assert isinstance(roller.mean(), dc.Patch)
+            assert isinstance(roller.median(), dc.Patch)
+            assert isinstance(roller.min(), dc.Patch)
+            assert isinstance(roller.max(), dc.Patch)
+            assert isinstance(roller.std(), dc.Patch)
+            assert isinstance(roller.sum(), dc.Patch)
+
+    def test_pandas_apply(self, random_patch):
+        """test pandas apply works."""
+        # This can be very slow so we use a large window and step size.
+        dt = random_patch.get_coord("time").step
+        time_len = random_patch.shape[random_patch.dims.index("time")]
+        window = (time_len - 1) * dt
+        step = (time_len - 1) * dt
+        roll1 = random_patch.rolling(time=window, step=step, engine="pandas")
+        roll2 = random_patch.rolling(time=window, step=step, engine="numpy")
+        patch_1 = roll1.apply(np.sum)
+        patch_2 = roll2.apply(np.sum)
+        assert patch_2.shape == patch_1.shape
 
     # @pytest.mark.parametrize("_", list(range(10)))
     # def test_apply_axis_1_dist_time(self, _):

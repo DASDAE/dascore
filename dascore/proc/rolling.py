@@ -98,9 +98,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         Parameters
         ----------
         function
-            The function which is applied. This must accept a numpy array
-            with the same number of dimensions as input patch, then return an
-            array with the same shape except axis is removed.
+            The function which is applied. Must accept an axis argument.
         """
         # TODO look at replacing this with a call to `as_strided` that
         # accounts for strides.
