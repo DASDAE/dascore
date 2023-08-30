@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import dascore as dc
 from dascore.exceptions import IncompatiblePatchError, UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
@@ -275,3 +276,66 @@ class TestApplyOperator:
         other = 10 * get_quantity("m")
         with pytest.raises(UnitError):
             apply_operator(pa1, other, np.add)
+
+
+class TestDropNa:
+    """Tests for dropping nullish values in a patch."""
+
+    @pytest.fixture(scope="session")
+    def patch_with_null(self):
+        """Return a patch which has nullish values."""
+        return dc.get_example_patch("patch_with_null")
+
+    @pytest.fixture(scope="class")
+    def patch_3d_with_null(self, range_patch_3d):
+        """Return a patch which has nullish values."""
+        data = np.array(range_patch_3d.data).astype(np.float_)
+        nans = [(1, 1, 1), (0, 9, 9)]
+        for nan_ind in nans:
+            data[nan_ind] = np.NaN
+        patch = range_patch_3d.new(data=data)
+        return patch
+
+    def test_drop_time_any(self, patch_with_null):
+        """Ensure we can drop NaN along time axis."""
+        patch = patch_with_null.dropna("time")
+        # we know that each label has at least 1 nan so size should be 0
+        coord = patch.get_coord("time")
+        assert len(coord) == 0
+
+    def test_drop_time_all(self, patch_with_null):
+        """Ensure we can drop NaN along time axis."""
+        patch = patch_with_null.dropna("time", how="all")
+        # we should have dropped the first time label
+        before_coord = patch_with_null.get_coord("time")
+        after_coord = patch.get_coord("time")
+        assert len(before_coord) == len(after_coord) + 1
+        # also should have no columns with all NaN
+        axis = patch_with_null.dims.index("time")
+        assert axis == 1
+        expected = np.all(pd.isnull(patch.data), axis=0)
+        assert not np.any(expected)
+
+    def test_drop_distance_all(self, patch_with_null):
+        """Ensure we can drop NaN along distance axis."""
+        patch = patch_with_null.dropna("distance", how="all")
+        # we should have dropped the first time label
+        before_coord = patch_with_null.get_coord("distance")
+        after_coord = patch.get_coord("distance")
+        assert len(before_coord) == len(after_coord) + 1
+        # also should have no columns with all NaN
+        axis = patch_with_null.dims.index("distance")
+        assert axis == 0
+        expected = np.all(pd.isnull(patch.data), axis=1)
+        assert not np.any(expected)
+
+    def test_3d(self, patch_3d_with_null):
+        """Ensure 3D patches can have NaNs dropped."""
+        patch = patch_3d_with_null
+        # first test all; it shouldn't change anything
+        out = patch.dropna("time", how="all")
+        assert out.shape == patch.shape
+        # then test any; it should drop 2 labels
+        axis = out.dims.index("time")
+        out = patch.dropna("time", how="any")
+        assert out.shape[axis] == patch.shape[axis] - 2

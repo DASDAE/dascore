@@ -6,7 +6,6 @@ import pandas as pd
 
 import dascore as dc
 from dascore.exceptions import ParameterError
-from dascore.proc.rolling import PatchRoller
 from dascore.units import m
 
 
@@ -30,26 +29,15 @@ class TestRolling:
         out = range_patch.rolling(distance=dist_step * self.window).max()
         return out
 
-    @pytest.fixture(scope="class")
-    def range_patch_3d(self):
-        """Return a 3D patch for testing."""
-        data = np.broadcast_to(np.arange(10)[:, None, None], (10, 10, 10))
-        coords = {
-            "time": np.arange(10),
-            "distance": np.arange(10),
-            "smell": np.arange(10),
-        }
-        patch = dc.Patch(data=data, coords=coords, dims=tuple(coords))
-        return patch
-
     def test_apply_correct_no_step(self, dist_roll_range_patch):
         """Ensure the apply is correct without using a step size."""
+        data_no_nan = dist_roll_range_patch.dropna("distance").data
         # determine what the values should be:
         ax_0_len = dist_roll_range_patch.shape[0]
         samps = self.window - 1
-        expected_values = np.arange(samps, ax_0_len + samps)[:, None]
+        expected_values = np.arange(samps, ax_0_len)[:, None]
         # and assert they are indeed that.
-        assert np.allclose(dist_roll_range_patch.data, expected_values)
+        assert np.allclose(data_no_nan, expected_values)
 
     def test_along_time(self, range_patch):
         """Ensure time axis also works."""
@@ -59,22 +47,25 @@ class TestRolling:
         # Note: we start at 0 here because range is along 0th axis and
         # time is first axis so all windows are the same values.
         expected = (np.arange(0, shape[0]) * self.window)[:, None]
-        assert np.allclose(out.data, expected)
+        assert np.allclose(out.dropna("time").data, expected)
         # this should also work if patch is transposed.
         trans = range_patch.transpose()
         out = trans.rolling(time=time_step * self.window).sum()
-        assert np.allclose(out.data, expected.transpose())
+        assert np.allclose(out.dropna("time").data, expected.transpose())
 
     def test_apply_with_step(self, range_patch):
         """Ensure apply works with various step sizes."""
         # first calculate rolling max on time axis.
         step = range_patch.get_coord("distance").step
-        out = range_patch.rolling(
-            distance=self.window * step, step=self.step * step
-        ).max()
+        out = (
+            range_patch.rolling(distance=self.window * step, step=self.step * step)
+            .max()
+            .dropna("distance")
+        )
         # Determine what output should be.
         vals = np.arange(self.window - 1, range_patch.shape[0])
-        expected = vals[:: self.step, None]
+        start = (self.step - ((self.window - 2) % self.step)) % self.step
+        expected = vals[start :: self.step, None]
         assert np.allclose(out.data, expected)
 
     def test_1D_patch(self):
@@ -85,22 +76,22 @@ class TestRolling:
             dims=("time",),
         )
         expected = patch.data[:-2]
-        out = patch.rolling(time=3).min()
+        out = patch.rolling(time=3).min().dropna("time")
         assert np.allclose(expected, out.data)
 
     def test_3D_patch(self, range_patch_3d):
         """Ensure rolling works with 3D patch."""
         patch = range_patch_3d
         # first try along time axis.
-        out = patch.rolling(time=3).min()
+        out = patch.rolling(time=3).min().dropna("time")
         expected = np.arange(range_patch_3d.shape[0] - 2)
         assert np.allclose(out.data, expected[:, None, None])
         # then distance
-        out = patch.rolling(distance=3).min()
+        out = patch.rolling(distance=3).min().dropna("distance")
         expected = np.arange(range_patch_3d.shape[0])
         assert np.allclose(out.data, expected[:, None, None])
         # then smell
-        out = patch.rolling(smell=3).min()
+        out = patch.rolling(smell=3).min().dropna("smell")
         expected = np.arange(range_patch_3d.shape[0])
         assert np.allclose(out.data, expected[:, None, None])
 
@@ -122,34 +113,29 @@ class TestRolling:
         assert isinstance(rolling.max(), dc.Patch)
         assert isinstance(rolling.std(), dc.Patch)
 
-    @pytest.mark.parametrize("_", list(range(1)))
-    def test_apply_axis_0_dist_time(self, _):
+    @pytest.mark.parametrize("_", list(range(10)))
+    def test_apply_axis_0_dist_time(self, range_patch, _):
         """Test the apply method of PatchRoller when distance coordinate is entered
         and the first axis is distance.
         """
-        random_das_dist_time = dc.get_example_patch("random_das")
-        # axis = 0
-        axis = random_das_dist_time.dims.index("distance")
-        channel_spacing = random_das_dist_time.attrs["distance_step"]
-        window = np.random.randint(1, 100)
-        step = np.random.randint(1, 100)
-        roller = PatchRoller(
-            random_das_dist_time,
+        patch = range_patch
+        axis = patch.dims.index("distance")
+        # random window and step sizes for each trial run.
+        window = np.random.randint(1, patch.shape[axis])
+        step = np.random.randint(1, patch.shape[axis])
+        # setup patch and apply mean.
+        channel_spacing = patch.attrs["distance_step"]
+        roller = patch.rolling(
             distance=(window * channel_spacing) * m,
             step=(step * channel_spacing) * m,
         )
         applied_result = roller.apply(np.mean).data
-
-        # valid_data = ~np.isnan(applied_result).any(axis=1)
-        # filtered_data_rolling = applied_result[valid_data]
-
-        df = pd.DataFrame(random_das_dist_time.data)
+        # do the same with pandas and compare result
+        df = pd.DataFrame(patch.data)
         rolling_mean_pandas = df.rolling(window, step=step, axis=axis).mean()
-
         valid_data = ~np.isnan(np.array(rolling_mean_pandas)).any(axis=1)
         filtered_data_pandas = np.array(rolling_mean_pandas)[valid_data]
-
-        # assert applied_result.shape == np.array(rolling_mean_pandas).shape
+        assert applied_result.shape == np.array(rolling_mean_pandas).shape
         assert np.allclose(applied_result, filtered_data_pandas)
 
     # @pytest.mark.parametrize("_", list(range(10)))

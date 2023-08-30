@@ -207,6 +207,20 @@ def event_patch_1():
     return dc.get_example_patch("example_event_1")
 
 
+@pytest.fixture(scope="class")
+@register_func(PATCH_FIXTURES)
+def range_patch_3d():
+    """Return a 3D patch for testing."""
+    data = np.broadcast_to(np.arange(10)[:, None, None], (10, 10, 10))
+    coords = {
+        "time": np.arange(10),
+        "distance": np.arange(10),
+        "smell": np.arange(10),
+    }
+    patch = dc.Patch(data=data, coords=coords, dims=tuple(coords))
+    return patch
+
+
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def wacky_dim_patch():

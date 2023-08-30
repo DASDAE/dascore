@@ -139,6 +139,18 @@ def _random_patch_time_dist(
     return patch
 
 
+@register_func(EXAMPLE_PATCHES, key="patch_with_null")
+def _patch_with_null():
+    """Create a patch which has nullish values."""
+    patch = _random_patch()
+    data = np.array(patch.data)
+    data[data > 0.9] = np.NaN
+    # also set the first row and column to NaN
+    data[:, 0] = np.NaN
+    data[0, :] = np.NaN
+    return patch.new(data=data)
+
+
 @register_func(EXAMPLE_PATCHES, key="wacky_dim_coords_patch")
 def _wacky_dim_coord_patch():
     """Creates a patch with one Monotonic and one Array coord."""
