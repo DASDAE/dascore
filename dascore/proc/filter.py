@@ -10,12 +10,14 @@ from collections.abc import Sequence
 
 import pandas as pd
 from scipy import ndimage
-from scipy.signal import iirfilter, medfilt2d, sosfilt, sosfiltfilt, zpk2sos
+from scipy.ndimage import median_filter as nd_median_filter
+from scipy.signal import iirfilter, sosfilt, sosfiltfilt, zpk2sos
 
 import dascore
-from dascore.constants import PatchType
+from dascore.constants import PatchType, samples_arg_description
 from dascore.exceptions import FilterValueError
 from dascore.units import get_filter_units
+from dascore.utils.docs import compose_docstring
 from dascore.utils.patch import get_dim_sampling_rate, patch_function
 
 
@@ -222,30 +224,34 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 
 
 @patch_function()
-def median_filter(patch: PatchType, kernel_size=3) -> PatchType:
+@compose_docstring(sample_explination=samples_arg_description)
+def median_filter(patch: PatchType, samples=False, **kwargs) -> PatchType:
     """
     Apply 2-D median filter.
 
     Parameters
     ----------
-    kernel_size: array_like, optional
-        A scalar or a list of length 2, giving the size of the median filter window
-        in each dimension. Elements of kernel_size should be odd. If kernel_size is
-        a scalar, then this scalar is used as the size in each dimension. Default is
-        a kernel of size (3, 3).
+    **kwargs
+        Used to specify the shape of the median filter in each dimension.
+        See examples for more info.
+    samples
+        {sample_explination}
 
     Examples
     --------
     >>> import dascore
+    >>> from dascore.units import m, s
     >>> pa = dascore.get_example_patch()
-
-    >>>  # 1. Apply median filter with 9 time intervals and 5 channels
-    >>> filtered_pa = pa.median_filter((9,5))
-
-    Written by Ge Jin (gjin@mines.edu)
-
+    >>>
+    >>>  # 1. Apply median filter only over time distance with 1 sec window
+    >>> filtered_pa_1 = pa.median_filter(time=1)
+    >>>  # 2. Apply median filter over both time and distance
+    >>>  # using a 1 second time window and 10 m distance window
+    >>> filtered_pa_2 = pa.median_filter(time=1 * s, distance=10 * m)
+    >>>  # 3. Apply median filter with 9 time samples and 5 distance samples
+    >>> filtered_pa = pa.median_filter(
+    ...     time=9, distance=5, samples=True,
+    ... )
     """
-    out = medfilt2d(patch.data, kernel_size=kernel_size)
-    return dascore.Patch(
-        data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
-    )
+    out = nd_median_filter(patch.data)
+    return out

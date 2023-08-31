@@ -1119,6 +1119,34 @@ class TestGetSampleCount:
         out = evenly_sampled_time_delta_coord.get_sample_count(12 * dt)
         assert out == 12
 
+    @pytest.mark.parametrize("sample", (0, 10, 100, 42, 13))
+    def test_samples(self, evenly_sampled_coord, sample):
+        """Ensure value is returned when samples==True."""
+        assert len(evenly_sampled_coord) >= sample
+        out = evenly_sampled_coord.get_sample_count(sample, samples=True)
+        assert out == sample
+
+    def test_overask_raises(self, evenly_sampled_coord):
+        """Asking for more samples than length of coordinate should raise."""
+        max_len = len(evenly_sampled_coord)
+        duration = evenly_sampled_coord.max() - evenly_sampled_coord.min()
+        step = evenly_sampled_coord.step
+        # test for using samples kwargWindow or step size is larger than
+        msg = "results in a window larger than coordinate"
+        with pytest.raises(ParameterError, match=msg):
+            evenly_sampled_coord.get_sample_count(max_len + 2, samples=True)
+        # test for using normal mode
+        with pytest.raises(ParameterError, match=msg):
+            evenly_sampled_coord.get_sample_count(duration + 2 * step)
+
+    def test_non_int_raises_with_samples(self, evenly_sampled_coord):
+        """Non integer values should raise when sample=True."""
+        match = "must be integers"
+        with pytest.raises(ParameterError, match=match):
+            evenly_sampled_coord.get_sample_count(1.2, samples=True)
+        with pytest.raises(ParameterError, match=match):
+            evenly_sampled_coord.get_sample_count("bob", samples=True)
+
 
 class TestIssues:
     """Tests for special issues related to coords."""

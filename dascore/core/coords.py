@@ -527,7 +527,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             out = out.convert_units(units)
         return out
 
-    def get_sample_count(self, value) -> int:
+    def get_sample_count(self, value, samples=False) -> int:
         """
         Return the number of samples represented by a value.
 
@@ -538,14 +538,28 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         ----------
         value
             The value (supports units).
+        samples
+            If True, value is already in units of samples.
         """
         if not self.evenly_sampled:
             msg = "Coordinate is not evenly sampled, cant get sample count."
             raise CoordError(msg)
-        compat_val = self._get_compatible_value(value, relative=True)
-        duration = compat_val - self.min()
-        samples = int(np.ceil(duration / self.step))
-        return samples
+        if samples:
+            if not isinstance(value, int | np.integer):
+                msg = "When samples==True values must be integers."
+                raise ParameterError(msg)
+            samples = int(value)
+        else:
+            compat_val = self._get_compatible_value(value, relative=True)
+            duration = compat_val - self.min()
+            samples = int(np.ceil(duration / self.step))
+        if samples > len(self):
+            msg = (
+                f"value of {value} results in a window larger than coordinate "
+                f"length of {len(self)}"
+            )
+            raise ParameterError(msg)
+        return min(samples, len(self))
 
 
 class CoordRange(BaseCoord):
@@ -1024,8 +1038,7 @@ def get_coord(
                 raise CoordError(msg)
 
     def _get_new_max(data, min, step):
-        """Get the new length to use"""
-
+        """Get the new length to use."""
         # for int based data types we need to modify the end time
         # otherwise this will just go nuts
         dtype = getattr(min, "dtype", None)
