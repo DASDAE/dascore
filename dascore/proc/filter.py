@@ -18,7 +18,11 @@ from dascore.constants import PatchType, samples_arg_description
 from dascore.exceptions import FilterValueError
 from dascore.units import get_filter_units
 from dascore.utils.docs import compose_docstring
-from dascore.utils.patch import get_dim_sampling_rate, patch_function
+from dascore.utils.patch import (
+    get_dim_sampling_rate,
+    get_multiple_dim_value_from_kwargs,
+    patch_function,
+)
 
 
 def _check_filter_kwargs(kwargs):
@@ -223,35 +227,67 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 #     if zerophase:
 
 
+def _create_size_and_axes(patch, kwargs, samples):
+    """Return"""
+    dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
+    axes = [x["axis"] for x in dimfo.values()]
+    size = [1] * len(patch.dims)
+    for dim, info in dimfo.items():
+        axis = info["axis"]
+        coord = patch.get_coord(dim)
+        window = coord.get_sample_count(info["value"], samples=samples)
+        size[axis] = window
+    return tuple(size), tuple(axes)
+
+
 @patch_function()
 @compose_docstring(sample_explination=samples_arg_description)
-def median_filter(patch: PatchType, samples=False, **kwargs) -> PatchType:
+def median_filter(
+    patch: PatchType, samples=False, mode="reflect", cval=0.0, **kwargs
+) -> PatchType:
     """
     Apply 2-D median filter.
 
     Parameters
     ----------
+    patch
+        The patch to filter
+    samples
+        {sample_explination}
+    mode
+        The mode for handling edges.
+    cval
+        The constant value for when mode == constant.
     **kwargs
         Used to specify the shape of the median filter in each dimension.
         See examples for more info.
-    samples
-        {sample_explination}
 
     Examples
     --------
     >>> import dascore
     >>> from dascore.units import m, s
     >>> pa = dascore.get_example_patch()
-    >>>
-    >>>  # 1. Apply median filter only over time distance with 1 sec window
-    >>> filtered_pa_1 = pa.median_filter(time=1)
+
+    >>>  # 1. Apply median filter only over time distance with 0.10 sec window
+    >>> filtered_pa_1 = pa.median_filter(time=0.1)
+
     >>>  # 2. Apply median filter over both time and distance
-    >>>  # using a 1 second time window and 10 m distance window
-    >>> filtered_pa_2 = pa.median_filter(time=1 * s, distance=10 * m)
-    >>>  # 3. Apply median filter with 9 time samples and 5 distance samples
+    >>>  # using a 0.1 second time window and 2 m distance window
+    >>> filtered_pa_2 = pa.median_filter(time=0.1 * s, distance=2 * m)
+
+    >>>  # 3. Apply median filter with 3 time samples and 4 distance samples
     >>> filtered_pa = pa.median_filter(
-    ...     time=9, distance=5, samples=True,
+    ...     time=3, distance=4, samples=True,
     ... )
+
+    Notes
+    -----
+    See scipy.ndimage.median_filter for more info on implementation
+    and arguments.
+
+    Values specified with kwargs should be small, for example < 10 samples
+    otherwise this can take a long time and use lots of memory.
     """
-    out = nd_median_filter(patch.data)
-    return out
+    size, _ = _create_size_and_axes(patch, kwargs, samples)
+    new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)
+    return patch.new(data=new_data)
