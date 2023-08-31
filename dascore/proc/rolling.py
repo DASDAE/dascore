@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 from functools import cache
-from typing import Literal, Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 from pydantic import Field
 
 import dascore as dc
-from dascore.utils.patch import get_dim_value_from_kwargs
 from dascore.exceptions import ParameterError
 from dascore.utils.models import DascoreBaseModel
+from dascore.utils.patch import get_dim_value_from_kwargs
 
 
 class _PatchRollerInfo(DascoreBaseModel):
@@ -60,12 +60,7 @@ class _PatchRollerInfo(DascoreBaseModel):
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):
-    """
-    A class to apply roller operations to patches.
-
-    Parameters
-    ----------
-    """
+    """A class to apply roller operations to patches."""
 
     @cache
     def get_start_index(self):
@@ -79,7 +74,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         return int(out)
 
     def _pad_roll_array(self, data):
-        """Pad"""
+        """Pad."""
         num_nans = 1 + (self.window - 2) // self.step
         pad_width = [(0, 0)] * len(data.shape)
         pad_width[self.axis] = (num_nans, 0)
@@ -149,9 +144,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
 
 
 class _PandasPatchRoller(_PatchRollerInfo):
-    """
-    A class to apply pandas rolling operations.
-    """
+    """A class to apply pandas rolling operations."""
 
     @cache
     def _get_df(self) -> pd.DataFrame:
@@ -196,7 +189,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
         return self._repack_patch(df, attrs=attrs)
 
     def mean(self):
-        """Apply mean"""
+        """Apply mean."""
         return self._call_rolling_func(name="mean")
 
     def median(self):
@@ -292,7 +285,7 @@ def rolling(
     """
 
     def _get_engine(step, engine, patch):
-        """Get the engine"""
+        """Get the engine."""
         engines = {"numpy": _NumpyPatchRoller, "pandas": _PandasPatchRoller}
         if cls := engines.get(engine):
             return cls

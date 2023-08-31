@@ -1024,8 +1024,7 @@ def get_coord(
                 raise CoordError(msg)
 
     def _get_new_max(data, min, step):
-        """Get the new length to use"""
-
+        """Get the new length to use."""
         # for int based data types we need to modify the end time
         # otherwise this will just go nuts
         dtype = getattr(min, "dtype", None)

@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import pandas as pd
+import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError
@@ -176,7 +176,7 @@ class TestRolling:
             assert isinstance(roller.sum(), dc.Patch)
 
     def test_pandas_apply(self, random_patch):
-        """test pandas apply works."""
+        """Test pandas apply works."""
         # This can be very slow so we use a large window and step size.
         dt = random_patch.get_coord("time").step
         time_len = random_patch.shape[random_patch.dims.index("time")]
