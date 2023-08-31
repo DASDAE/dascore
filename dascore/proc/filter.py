@@ -169,8 +169,13 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 
     Parameters
     ----------
-    **kwargs
-        Used to specify the dimension, mode, and for the 'constant' mode, cval.
+    dim
+        The dimension along which to apply
+    mode
+        Determines how the input array is extended when the filter
+        overlaps with a border.
+    cval
+        Fill value when mode="constant".
 
     Examples
     --------
@@ -184,7 +189,7 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
     >>> sobel_arbitrary = pa.sobel_filter(dim='time', mode='constant', cval=1)
 
     >>> # 3. Apply Sobel filter along both axes
-    >>> sobel_time_space = pa.sobel_filter('time',).sobel_filter('distance')
+    >>> sobel_time_space = pa.sobel_filter('time').sobel_filter('distance')
     """
     dim, mode, cval = _check_sobel_args(dim, mode, cval)
     axis = patch.dims.index(dim)
@@ -240,7 +245,6 @@ def median_filter(patch: PatchType, kernel_size=3) -> PatchType:
     Written by Ge Jin (gjin@mines.edu)
 
     """
-    # get nyquist and low/high in terms of nyquist
     out = medfilt2d(patch.data, kernel_size=kernel_size)
     return dascore.Patch(
         data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims

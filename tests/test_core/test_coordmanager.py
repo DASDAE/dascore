@@ -751,6 +751,12 @@ class TestSqueeze:
         out = cm.squeeze("time")
         assert "time" not in out.dims
 
+    def test_squeeze_no_dim(self, coord_manager_degenerate_time):
+        """Ensure all degenerate dims are squeezed when no dim specified."""
+        cm = coord_manager_degenerate_time
+        out = cm.squeeze()
+        assert "time" not in out.dims
+
 
 class TestNonDimCoords:
     """Tests for adding non-dimensional coordinates."""

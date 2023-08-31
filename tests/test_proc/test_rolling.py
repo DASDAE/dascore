@@ -125,11 +125,12 @@ class TestRolling:
         """Test the apply method of PatchRoller when distance coordinate is entered
         and the first axis is distance.
         """
+        random = np.random.RandomState(42)
         patch = range_patch
         axis = patch.dims.index("distance")
         # random window and step sizes for each trial run.
-        window = np.random.randint(1, patch.shape[axis])
-        step = np.random.randint(1, patch.shape[axis])
+        window = random.randint(1, patch.shape[axis])
+        step = random.randint(1, patch.shape[axis])
         # setup patch and apply mean.
         channel_spacing = patch.attrs["distance_step"]
         roller = patch.rolling(
@@ -179,122 +180,6 @@ class TestRolling:
         patch_1 = roll1.apply(np.sum)
         patch_2 = roll2.apply(np.sum)
         assert patch_2.shape == patch_1.shape
-
-    # @pytest.mark.parametrize("_", list(range(10)))
-    # def test_apply_axis_1_dist_time(self, _):
-    #     """Test the apply method of PatchRoller when time coordinate is entered
-    #     and the first axis is distance.
-    #     """
-    #     random_das_dist_time = dc.get_example_patch("random_das")
-    #     axis = 1
-    #     sampling_interval = random_das_dist_time.attrs["time_step"] / np.timedelta64(
-    #         1, "s"
-    #     )
-    #     window = np.random.randint(1, 100)
-    #     step = np.random.randint(1, 100)
-    #     roller = PatchRoller(
-    #         random_das_dist_time,
-    #         time=(window * sampling_interval) * s,
-    #         step=(step * sampling_interval) * s,
-    #     )
-    #     applied_result = roller.apply(np.mean).data
-
-    #     valid_data = ~np.isnan(applied_result).any(axis=0)
-    #     filtered_data_rolling = applied_result[:, valid_data]
-
-    #     df = pd.DataFrame(random_das_dist_time.data)
-    #     rolling_mean_pandas = df.rolling(window, step=step, axis=axis).mean()
-
-    #     valid_data = ~np.isnan(np.array(rolling_mean_pandas)).any(axis=0)
-    #     filtered_data_pandas = np.array(rolling_mean_pandas)[:, valid_data]
-
-    #     assert applied_result.shape == np.array(rolling_mean_pandas).shape
-    #     assert np.allclose(filtered_data_rolling, filtered_data_pandas)
-
-    # @pytest.mark.parametrize("_", list(range(10)))
-    # def test_apply_axis_0_time_dist(self, _):
-    #     """Test the apply method of PatchRoller when time coordinate is entered
-    #     and the first axis is time.
-    #     """
-    #     random_das_time_dist = dc.get_example_patch("random_das_time_dist")
-    #     axis = 0
-    #     sampling_interval = random_das_time_dist.attrs["time_step"] / np.timedelta64(
-    #         1, "s"
-    #     )
-    #     window = np.random.randint(1, 100)
-    #     step = np.random.randint(1, 100)
-    #     roller = PatchRoller(
-    #         random_das_time_dist,
-    #         time=(window * sampling_interval) * s,
-    #         step=(step * sampling_interval) * s,
-    #     )
-    #     applied_result = roller.apply(np.mean).data
-
-    #     valid_data = ~np.isnan(applied_result).any(axis=1)
-    #     filtered_data_rolling = applied_result[valid_data]
-
-    #     df = pd.DataFrame(random_das_time_dist.data)
-    #     rolling_mean_pandas = df.rolling(window, step=step, axis=axis).mean()
-
-    #     valid_data = ~np.isnan(np.array(rolling_mean_pandas)).any(axis=1)
-    #     filtered_data_pandas = np.array(rolling_mean_pandas)[valid_data]
-
-    #     assert applied_result.shape == np.array(rolling_mean_pandas).shape
-    #     assert np.allclose(filtered_data_rolling, filtered_data_pandas)
-
-    # @pytest.mark.parametrize("_", list(range(10)))
-    # def test_apply_axis_1_time_dist(self, _):
-    #     """Test the apply method of PatchRoller when distance coordinate is entered
-    #     and the first axis is time."""
-    #     random_das_time_dist = dc.get_example_patch("random_das_time_dist")
-    #     axis = 1
-    #     channel_spacing = random_das_time_dist.attrs["distance_step"]
-    #     window = np.random.randint(1, 100)
-    #     step = np.random.randint(1, 100)
-    #     roller = PatchRoller(
-    #         random_das_time_dist,
-    #         distance=(window * channel_spacing) * m,
-    #         step=(step * channel_spacing) * m,
-    #     )
-    #     applied_result = roller.apply(np.mean).data
-
-    #     valid_data = ~np.isnan(applied_result).any(axis=0)
-    #     filtered_data_rolling = applied_result[:, valid_data]
-
-    #     df = pd.DataFrame(random_das_time_dist.data)
-    #     rolling_mean_pandas = df.rolling(window, step=step, axis=axis).mean()
-
-    #     valid_data = ~np.isnan(np.array(rolling_mean_pandas)).any(axis=0)
-    #     filtered_data_pandas = np.array(rolling_mean_pandas)[:, valid_data]
-
-    #     assert applied_result.shape == np.array(rolling_mean_pandas).shape
-    #     assert np.allclose(filtered_data_rolling, filtered_data_pandas)
-
-    # def test_center(self):
-    #     """Test the center option in PatchRoller."""
-    #     random_das_dist_time = dc.get_example_patch("random_das")
-    #     axis = 0
-    #     channel_spacing = random_das_dist_time.attrs["distance_step"]
-    #     window = np.random.randint(1, 100)
-    #     step = np.random.randint(1, 100)
-    #     roller = PatchRoller(
-    #         random_das_dist_time,
-    #         distance=(window * channel_spacing) * m,
-    #         step=(step * channel_spacing) * m,
-    #     )
-    #     applied_result = roller.apply(np.mean).data
-
-    #     valid_data = ~np.isnan(applied_result).any(axis=1)
-    #     filtered_data_rolling = applied_result[valid_data]
-
-    #     df = pd.DataFrame(random_das_dist_time.data)
-    #     rolling_mean_pandas = df.rolling(window, step=step, axis=axis).mean()
-
-    #     valid_data = ~np.isnan(np.array(rolling_mean_pandas)).any(axis=1)
-    #     filtered_data_pandas = np.array(rolling_mean_pandas)[valid_data]
-
-    #     assert applied_result.shape == np.array(rolling_mean_pandas).shape
-    #     assert np.allclose(filtered_data_rolling, filtered_data_pandas)
 
 
 class TestNumpyVsPandasRolling:
@@ -349,3 +234,15 @@ class TestNumpyVsPandasRolling:
         numpy_isnan = np.isnan(numpy_out.data)
         pandas_isnan = np.isnan(pandas_out.data)
         assert np.all(np.equal(numpy_isnan, pandas_isnan))
+
+    def test_dimension_order(self, range_patch):
+        """Ensure the dimension order doesn't matter."""
+        for patch in [range_patch, range_patch.transpose()]:
+            for dim in patch.dims:
+                coord = patch.get_coord(dim)
+                step = coord.step
+                total_len = len(coord) - 2
+                kwargs = {dim: step * total_len, "step": total_len * step}
+                pandas_out = patch.rolling(**kwargs).mean().dropna(dim)
+                numpy_out = patch.rolling(**kwargs).mean().dropna(dim)
+                assert pandas_out == numpy_out

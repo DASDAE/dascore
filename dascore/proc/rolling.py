@@ -244,20 +244,21 @@ def rolling(
         determine which will be fastest for a given step. Options are:
             "numpy" - which uses np.lib.stride_tricks.sliding_window_view.
             "pandas" - which uses pandas.rolling.
-        If step < 10 samples, pandas is probably faster, otherwise numpy is
-        faster.
+        If step < 10 samples, pandas is faster for all operations other than apply.
+        If step > 10 samples, or `apply` is the desired rolling operation, numpy
+        is probably better.
     **kwargs
         Used to pass dimension and window size.
         For example `time=10` represents window size of
         10*(default unit) along the time axis.
-
 
     Examples
     --------
     >>> # Simple example for rolling mean function
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> mean_patch = patch.rolling(time=10, step=5).mean()
+    >>> # apply rolling over 1 second with 0.5 step
+    >>> mean_patch = patch.rolling(time=1, step=0.5).mean()
     >>> # drop nan at the start of the time axis.
     >>> out = mean_patch.dropna("time")
 
@@ -272,18 +273,21 @@ def rolling(
     will appear at the start of the dimension. You can use
     [`patch.dropna`](`dascore.Patch.dropna`) to remove the NaN values.
 
-    Second, the step parameter is equivalent applying striding along the
-    specified dimension.
+    Second, the step parameter is equivalent applying to the output along the
+    specified dimension. For example, if step=2 the output of the chosen
+    dimension will be 1/2 of the input length.
 
-    To understand how this works, consider a patch with a simple 1D array:
-        a = [0, 1, 2, 3, 4, 5]
-    If window = 2 the output is
+    Here are a few examples to help illustrate how rolling works.
+
+    Consider a patch with a simple 1D array in the dimension "time":
+        [0, 1, 2, 3, 4, 5]
+    If time = 2 * dt the output is
         [NaN, 0.5, 1.5, 2.5, 3.5, 4.5]
-    If window = 3 the output is
+    If time = 3 * dt the output is
         [NaN, NaN, 1.0, 2.0, 3.0, 4.0]
-    if window = 3 and step = 2
+    if time = 3 * dt and step = 2 * dt
         [NaN, 1.0, 3.0]
-    if window = 3 and step = 3
+    if time = 3 * dt and step = 3 * dt
         [NaN, 2.0]
     """
 

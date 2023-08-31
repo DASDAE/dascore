@@ -231,7 +231,7 @@ out = (
     .pass_filter(time=(..., 10))  # apply a low-pass 10 Hz butterworth filter
 )
 ```
-The processing methods are located in the [dascore.proc](`dascore.proc`) module.
+The processing methods are located in the [dascore.proc](`dascore.proc`) module. The [patch processing tutorial](processing.qmd) provides more information about various processing routines.
 
 # Visualization
 

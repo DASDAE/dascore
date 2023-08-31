@@ -20,15 +20,15 @@ from dascore.utils.patch import patch_function
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     """
-        Set dimension to non-dimensional coordinate.
+    Set dimension to non-dimensional coordinate.
 
     Parameters
     ----------
-        **kwargs
-            A mapping indicating old_dim: new_dim where new_dim refers to
-            the name of a non-dimensional coordinate which will become a
-            dimensional coordinate. The old dimensional coordinate will
-            become a non-dimensional coordinate.
+    **kwargs
+        A mapping indicating old_dim: new_dim where new_dim refers to
+        the name of a non-dimensional coordinate which will become a
+        dimensional coordinate. The old dimensional coordinate will
+        become a non-dimensional coordinate.
 
     Examples
     --------
@@ -403,7 +403,7 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
     >>> new = apply_operator(patch, noise, np.add)
     >>> assert np.allclose(new.data, patch.data + noise)
     >>> # subtract one patch from another. Coords and attrs must be compatible
-    >>> new = patch - patch
+    >>> new = apply_operator(patch, patch, np.subtract)
     >>> assert np.allclose(new.data, 0)
     """
     if isinstance(other, dc.Patch):
@@ -456,11 +456,11 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
     --------
     >>> import dascore as dc
     >>> # load an example patch which has some NaN values.
-    >>> patch = dc.get_example_spool("patch_with_null")
+    >>> patch = dc.get_example_patch("patch_with_null")
     >>> # drop all time labels that have a single null value
     >>> out = patch.dropna("time", how="any")
     >>> # drop all distance labels that have all null values
-    >>> out = patch.drop("distance", how="all")
+    >>> out = patch.dropna("distance", how="all")
     """
     axis = patch.dims.index(dim)
     func = np.any if how == "any" else np.all

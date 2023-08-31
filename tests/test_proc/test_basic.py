@@ -278,6 +278,22 @@ class TestApplyOperator:
             apply_operator(pa1, other, np.add)
 
 
+class TestSqueeze:
+    """Tests for squeeze."""
+
+    def test_remove_dimension(self, random_patch):
+        """Tests for removing random dimensions."""
+        out = random_patch.aggregate("time").squeeze("time")
+        assert "time" not in out.dims
+        assert len(out.data.shape) == 1, "data should be 1d"
+
+    def test_tutorial_example(self, random_patch):
+        """Ensure the tutorial snippet works."""
+        flat_patch = random_patch.iselect(distance=0)
+        squeezed = flat_patch.squeeze()
+        assert len(squeezed.dims) < len(flat_patch.dims)
+
+
 class TestDropNa:
     """Tests for dropping nullish values in a patch."""
 
