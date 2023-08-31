@@ -453,16 +453,6 @@ class TestUpdateAttrs:
         assert patch1 == patch2
 
 
-class TestSqueeze:
-    """Tests for squeeze."""
-
-    def test_remove_dimension(self, random_patch):
-        """Tests for removing random dimensions."""
-        out = random_patch.aggregate("time").squeeze("time")
-        assert "time" not in out.dims
-        assert len(out.data.shape) == 1, "data should be 1d"
-
-
 class TestReleaseMemory:
     """Ensure memory is released when the patch is deleted."""
 

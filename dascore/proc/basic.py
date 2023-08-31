@@ -20,15 +20,15 @@ from dascore.utils.patch import patch_function
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     """
-        Set dimension to non-dimensional coordinate.
+    Set dimension to non-dimensional coordinate.
 
     Parameters
     ----------
-        **kwargs
-            A mapping indicating old_dim: new_dim where new_dim refers to
-            the name of a non-dimensional coordinate which will become a
-            dimensional coordinate. The old dimensional coordinate will
-            become a non-dimensional coordinate.
+    **kwargs
+        A mapping indicating old_dim: new_dim where new_dim refers to
+        the name of a non-dimensional coordinate which will become a
+        dimensional coordinate. The old dimensional coordinate will
+        become a non-dimensional coordinate.
 
     Examples
     --------
@@ -403,7 +403,7 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
     >>> new = apply_operator(patch, noise, np.add)
     >>> assert np.allclose(new.data, patch.data + noise)
     >>> # subtract one patch from another. Coords and attrs must be compatible
-    >>> new = patch - patch
+    >>> new = apply_operator(patch, patch, np.subtract)
     >>> assert np.allclose(new.data, 0)
     """
     if isinstance(other, dc.Patch):
@@ -431,3 +431,51 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
         new_data = operator(patch.data, other)
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
+
+
+@patch_function()
+def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchType:
+    """
+    Return a patch with nullish values dropped along dimension.
+
+    Parameters
+    ----------
+    patch
+        The patch which may contain nullish values.
+    dim
+        The dimension along which to drop nullish values.
+    how
+        "any" or "all". If "any" drop label if any null values.
+        If "all" drop label if all values are nullish.
+
+    Notes
+    -----
+    "nullish" is defined by `pandas.isnull`.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> # load an example patch which has some NaN values.
+    >>> patch = dc.get_example_patch("patch_with_null")
+    >>> # drop all time labels that have a single null value
+    >>> out = patch.dropna("time", how="any")
+    >>> # drop all distance labels that have all null values
+    >>> out = patch.dropna("distance", how="all")
+    """
+    axis = patch.dims.index(dim)
+    func = np.any if how == "any" else np.all
+    to_drop = pd.isnull(patch.data)
+    # need to iterate each non-dim axis and collapse with func
+    axes = set(range(len(patch.shape))) - {axis}
+    to_drop = func(to_drop, axis=tuple(axes))
+    to_keep = ~to_drop
+    assert len(to_keep.shape) == 1
+    assert to_keep.shape[0] == patch.data.shape[axis]
+    # get slices for trimming data.
+    slices = [slice(None)] * len(patch.dims)
+    slices[axis] = to_keep
+    new_data = patch.data[tuple(slices)]
+    coord = patch.get_coord(dim)
+    cm = patch.coords.update_coords(**{dim: coord[to_keep]})
+    attrs = patch.attrs.update(coords={})
+    return patch.new(data=new_data, coords=cm, attrs=attrs)

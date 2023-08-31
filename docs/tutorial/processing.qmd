@@ -1,10 +1,68 @@
 ---
-title: Processing
+title: Patch Processing
 execute:
   warning: false
 ---
 The following shows some simple examples of patch processing. See the
 [proc module documentation](`dascore.proc`) for a list of processing functions.
+
+
+# Basic
+
+There are several "basic" processing functions which manipulate the patch metadata, shape, etc. Many of these are covered in the [patch tutorial](patch.qmd), but here are a few that aren't:
+
+## Transpose
+The [`transpose` patch function](`dascore.Patch.transpose`) patch function simply transposes the dimensions of the patch, either by rotating the dimensions or to a new specified dimension.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+print(f"dims before transpose: {patch.dims}")
+transposed = patch.transpose()
+print(f"dims after transpose: {transposed.dims}")
+# dims can be manually specified as well
+transposed = patch.transpose("time", "distance")
+```
+
+## Squeeze
+The [`squeeze` patch function](`dascore.Patch.squeeze`) removes dimensions which have a single value (just like numpy.squeeze).
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+# select first distance value to make distance dim flat.
+flat_patch = patch.iselect(distance=0)
+print(f"Pre-squeeze dims: {flat_patch.shape}")
+
+squeezed = flat_patch.squeeze()
+print(f"Post-squeeze dims: {squeezed.shape}")
+```
+
+## Dropna
+
+The [`dropna` patch function](`dascore.Patch.dropna`) patch function drops "nullish" values from a given label.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# create a patch with nan values
+data = np.array(patch.data)
+data[:, 0] = np.NaN
+patch_with_nan = patch.new(data=data)
+
+# drop Nan along axis 1
+dim = patch_with_nan.dims[1]
+no_na_patch = patch_with_nan.dropna(dim)
+
+assert not np.any(np.isnan(no_na_patch.data))
+```
+
 
 # Decimate
 
@@ -128,3 +186,22 @@ patch = (
 
 patch.viz.waterfall(show=True, scale=0.15);
 ```
+
+
+# Rolling
+The [rolling patch function](`dascore.Patch.rolling`) implements moving window operators similar to [pandas rolling](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html). It is useful for smoothing, calculating aggregated statistics, etc.
+
+Here is an example of using a rolling mean to smooth along the time axis for an example event:
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch("example_event_1")
+# apply moving mean window over every 10 samples
+dt = patch.get_coord('time').step
+
+smoothed = patch.rolling(time=50*dt).mean()
+smoothed.viz.waterfall(scale=.1);
+```
+
+Notice the NaN values at the start of the time axis. These can be trimmed with [`Patch`.dropna](`dascore.Patch.dropna`).

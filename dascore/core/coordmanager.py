@@ -748,12 +748,15 @@ class CoordManager(DascoreBaseModel):
         ----------
         dim
             The dimension name, or sequence of dimension names, to drop.
+            If None, drop all length 1 dims
 
         Raises
         ------
         CoordError if the selected dimension has a length gt 1.
         """
         to_drop = []
+        if dim is None:
+            dim = [x for x in self.dims if len(self.coord_map[x]) <= 1]
         bad_dim = set(iterate(dim)) - set(self.dims)
         if bad_dim:
             msg = (

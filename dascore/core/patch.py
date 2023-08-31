@@ -203,6 +203,7 @@ class Patch:
     iselect = dascore.proc.iselect
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
+    dropna = dascore.proc.dropna
     pass_filter = dascore.proc.pass_filter
     sobel_filter = dascore.proc.sobel_filter
     median_filter = dascore.proc.median_filter
@@ -217,6 +218,7 @@ class Patch:
     normalize = dascore.proc.normalize
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
+    rolling = dascore.proc.rolling
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
