@@ -103,8 +103,15 @@ class TestRolling:
         expected = np.arange(range_patch_3d.shape[0])
         assert np.allclose(out.data, expected[:, None, None])
 
+    def test_window_zero_raises(self, random_patch):
+        """When the window or step is entered 0 it should raise."""
+        random_patch.get_coord("time")
+        msg = "Window or step size can't be zero"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.rolling(time=0)
+
     def test_window_too_big_raises(self, random_patch):
-        """When the window is too large it should raise."""
+        """When the window or step is too large it should raise."""
         coord = random_patch.get_coord("time")
         duration = coord.max() - coord.min()
         msg = "Window or step size is larger than"

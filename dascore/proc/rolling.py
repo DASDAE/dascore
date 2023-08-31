@@ -306,6 +306,10 @@ def rolling(
     coord = patch.get_coord(dim)
     window = coord.get_sample_count(value)
     step = 1 if step is None else coord.get_sample_count(step)
+    if window == 0 or step == 0:
+        msg = "Window or step size can't be zero. Use any positive values."
+        raise ParameterError(msg)
+
     if window > len(coord) or step > len(coord):
         msg = (
             "Window or step size is larger than total number of samples in "
