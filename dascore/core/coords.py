@@ -1024,8 +1024,7 @@ def get_coord(
                 raise CoordError(msg)
 
     def _get_new_max(data, min, step):
-        """Get the new length to use"""
-
+        """Get the new length to use."""
         # for int based data types we need to modify the end time
         # otherwise this will just go nuts
         dtype = getattr(min, "dtype", None)
@@ -1062,6 +1061,9 @@ def get_coord(
     _check_inputs(values, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
     if values is not None:
+        if not isinstance(values, np.ndarray | BaseCoord):
+            values = np.array(values)
+        # values = np.array(values)  # ensure we have a numpy array
         if isinstance(values, BaseCoord):  # just return coordinate
             return values
         if np.size(values) == 0:

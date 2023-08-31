@@ -1128,3 +1128,9 @@ class TestIssues:
         time_vals = event_patch_1.coords["time"]
         coord = get_coord(values=time_vals)
         assert coord.evenly_sampled
+
+    def test_len_1_list(self):
+        """A len 1 list should work as input to get_coords."""
+        coord = get_coord(values=[0])
+        assert isinstance(coord, BaseCoord)
+        assert len(coord) == 1
