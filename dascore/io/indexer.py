@@ -5,6 +5,7 @@ import abc
 import json
 import os
 import time
+import warnings
 from contextlib import suppress
 from functools import cache
 from pathlib import Path
@@ -276,8 +277,24 @@ class DirectoryIndexer(AbstractIndexer):
         try:
             self._index_table.validate_version()
         except InvalidIndexVersionError:
+            msg = (
+                f"The index file at {self.path} is not compatible with this"
+                f" version of DASCore ({dc.__last_version__}). "
+                f"Recreating the index now."
+            )
+            warnings.warn(msg, UserWarning)
             os.remove(self.index_path)
             self.update()
+
+    def get_index_metadata(self):
+        """Return a dict of metadata about the index."""
+        self.update()
+        up_time = dc.to_datetime64(self._index_table.last_updated_timestamp)
+        out = {
+            "index_version": self._index_table._index_version,
+            "last_update": up_time,
+        }
+        return out
 
     def update(self, paths=None) -> Self:
         """

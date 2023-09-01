@@ -1,7 +1,6 @@
 """Processing for applying roller operations."""
 from __future__ import annotations
 
-from functools import cache
 from typing import Any, Literal
 
 import numpy as np
@@ -56,14 +55,10 @@ class _PatchRollerInfo(DascoreBaseModel):
         attrs = self.patch.attrs.update(history=new_history, coords={})
         return attrs
 
-    def __hash__(self):
-        return id(self)
-
 
 class _NumpyPatchRoller(_PatchRollerInfo):
     """A class to apply roller operations to patches."""
 
-    @cache
     def get_start_index(self):
         """
         Get the start index to account for non-zero step size.
