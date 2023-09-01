@@ -292,6 +292,11 @@ class DirectoryIndexer(AbstractIndexer):
         data_list = [y.flat_dump() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
         if not df.empty:
+            # Some users were surprised the spool wasn't sorted. We still cant
+            # guarantee all spools will be sorted but we can make sure most are
+            # by sorting the contents before dumping to index.
+            if "time_min" in df.columns:
+                df = df.sort_values("time_min").reset_index(drop=True)
             # ensure the base path is not in the path column
             assert "path" in set(df.columns), f"{df} has no path column"
             self._index_table.write_update(df, update_time, base_path=self.path)

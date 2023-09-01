@@ -242,7 +242,7 @@ def _array_to_int(array: np.ndarray) -> np.ndarray:
     """Convert an array of floating point timestamps to an array of np.datatime64."""
     array = np.array(array)
     if not len(array):
-        return array
+        return array.astype(np.int64)
     # dealing with an array of datetime64 or empty array
     is_dt = np.issubdtype(array.dtype, np.datetime64)
     is_td = np.issubdtype(array.dtype, np.timedelta64)
