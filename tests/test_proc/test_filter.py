@@ -6,7 +6,12 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import CoordDataError, FilterValueError, UnitError
+from dascore.exceptions import (
+    CoordDataError,
+    FilterValueError,
+    ParameterError,
+    UnitError,
+)
 
 
 class TestPassFilterChecks:
@@ -191,20 +196,25 @@ class TestSobelFilter:
 class TestMedianFilter:
     """Simple tests on median filter."""
 
-    def test_median_filter_default(self, random_patch):
+    def test_median_no_kwargs_raises(self, random_patch):
         """Apply default values."""
-        out = random_patch.median_filter()
+        msg = "You must specify one or more dimension in keyword args."
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.median_filter()
+
+    def test_median_filter_time(self, random_patch):
+        """Test median filter in time dimension."""
+        out = random_patch.median_filter(time=0.5)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_median_filter_user_single_value(self, random_patch):
+    def test_median_filter_time_distance(self, random_patch):
         """Apply default values."""
-        out = random_patch.median_filter(kernel_size=5)
+        out = random_patch.median_filter(time=0.05, distance=2)
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_median_filter_user_multi_value(self, random_patch):
+    def test_median_filter_ones(self, random_patch):
         """Apply default values."""
-        out = random_patch.median_filter(kernel_size=(5, 3))
-        assert isinstance(out, dc.Patch)
-        assert not np.any(pd.isnull(out.data))
+        out = random_patch.median_filter(time=1, distance=1, samples=True)
+        assert out == random_patch

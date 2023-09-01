@@ -10,13 +10,19 @@ from collections.abc import Sequence
 
 import pandas as pd
 from scipy import ndimage
-from scipy.signal import iirfilter, medfilt2d, sosfilt, sosfiltfilt, zpk2sos
+from scipy.ndimage import median_filter as nd_median_filter
+from scipy.signal import iirfilter, sosfilt, sosfiltfilt, zpk2sos
 
 import dascore
-from dascore.constants import PatchType
+from dascore.constants import PatchType, samples_arg_description
 from dascore.exceptions import FilterValueError
 from dascore.units import get_filter_units
-from dascore.utils.patch import get_dim_sampling_rate, patch_function
+from dascore.utils.docs import compose_docstring
+from dascore.utils.patch import (
+    get_dim_sampling_rate,
+    get_multiple_dim_value_from_kwargs,
+    patch_function,
+)
 
 
 def _check_filter_kwargs(kwargs):
@@ -221,31 +227,67 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 #     if zerophase:
 
 
+def _create_size_and_axes(patch, kwargs, samples):
+    """Return"""
+    dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
+    axes = [x["axis"] for x in dimfo.values()]
+    size = [1] * len(patch.dims)
+    for dim, info in dimfo.items():
+        axis = info["axis"]
+        coord = patch.get_coord(dim)
+        window = coord.get_sample_count(info["value"], samples=samples)
+        size[axis] = window
+    return tuple(size), tuple(axes)
+
+
 @patch_function()
-def median_filter(patch: PatchType, kernel_size=3) -> PatchType:
+@compose_docstring(sample_explination=samples_arg_description)
+def median_filter(
+    patch: PatchType, samples=False, mode="reflect", cval=0.0, **kwargs
+) -> PatchType:
     """
     Apply 2-D median filter.
 
     Parameters
     ----------
-    kernel_size: array_like, optional
-        A scalar or a list of length 2, giving the size of the median filter window
-        in each dimension. Elements of kernel_size should be odd. If kernel_size is
-        a scalar, then this scalar is used as the size in each dimension. Default is
-        a kernel of size (3, 3).
+    patch
+        The patch to filter
+    samples
+        {sample_explination}
+    mode
+        The mode for handling edges.
+    cval
+        The constant value for when mode == constant.
+    **kwargs
+        Used to specify the shape of the median filter in each dimension.
+        See examples for more info.
 
     Examples
     --------
     >>> import dascore
+    >>> from dascore.units import m, s
     >>> pa = dascore.get_example_patch()
 
-    >>>  # 1. Apply median filter with 9 time intervals and 5 channels
-    >>> filtered_pa = pa.median_filter((9,5))
+    >>>  # 1. Apply median filter only over time distance with 0.10 sec window
+    >>> filtered_pa_1 = pa.median_filter(time=0.1)
 
-    Written by Ge Jin (gjin@mines.edu)
+    >>>  # 2. Apply median filter over both time and distance
+    >>>  # using a 0.1 second time window and 2 m distance window
+    >>> filtered_pa_2 = pa.median_filter(time=0.1 * s, distance=2 * m)
 
+    >>>  # 3. Apply median filter with 3 time samples and 4 distance samples
+    >>> filtered_pa = pa.median_filter(
+    ...     time=3, distance=4, samples=True,
+    ... )
+
+    Notes
+    -----
+    See scipy.ndimage.median_filter for more info on implementation
+    and arguments.
+
+    Values specified with kwargs should be small, for example < 10 samples
+    otherwise this can take a long time and use lots of memory.
     """
-    out = medfilt2d(patch.data, kernel_size=kernel_size)
-    return dascore.Patch(
-        data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims
-    )
+    size, _ = _create_size_and_axes(patch, kwargs, samples)
+    new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)
+    return patch.new(data=new_data)

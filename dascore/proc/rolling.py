@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 from functools import cache
-from typing import Literal, Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 from pydantic import Field
 
 import dascore as dc
-from dascore.utils.patch import get_dim_value_from_kwargs
+from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
+from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DascoreBaseModel
+from dascore.utils.patch import get_dim_value_from_kwargs
 
 
 class _PatchRollerInfo(DascoreBaseModel):
@@ -60,12 +62,7 @@ class _PatchRollerInfo(DascoreBaseModel):
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):
-    """
-    A class to apply roller operations to patches.
-
-    Parameters
-    ----------
-    """
+    """A class to apply roller operations to patches."""
 
     @cache
     def get_start_index(self):
@@ -79,7 +76,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         return int(out)
 
     def _pad_roll_array(self, data):
-        """Pad"""
+        """Pad."""
         num_nans = 1 + (self.window - 2) // self.step
         pad_width = [(0, 0)] * len(data.shape)
         pad_width[self.axis] = (num_nans, 0)
@@ -149,9 +146,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
 
 
 class _PandasPatchRoller(_PatchRollerInfo):
-    """
-    A class to apply pandas rolling operations.
-    """
+    """A class to apply pandas rolling operations."""
 
     @cache
     def _get_df(self) -> pd.DataFrame:
@@ -196,7 +191,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
         return self._repack_patch(df, attrs=attrs)
 
     def mean(self):
-        """Apply mean"""
+        """Apply mean."""
         return self._call_rolling_func(name="mean")
 
     def median(self):
@@ -220,11 +215,13 @@ class _PandasPatchRoller(_PatchRollerInfo):
         return self._call_rolling_func(name="sum")
 
 
+@compose_docstring(sample_explination=samples_arg_description)
 def rolling(
     patch: dc.Patch,
     step=None,
     center=False,
     engine: Literal["numpy", "pandas", None] = None,
+    samples=False,
     **kwargs,
 ) -> _NumpyPatchRoller:
     """
@@ -247,6 +244,8 @@ def rolling(
         If step < 10 samples, pandas is faster for all operations other than apply.
         If step > 10 samples, or `apply` is the desired rolling operation, numpy
         is probably better.
+    samples
+        {sample_explination}
     **kwargs
         Used to pass dimension and window size.
         For example `time=10` represents window size of
@@ -292,7 +291,7 @@ def rolling(
     """
 
     def _get_engine(step, engine, patch):
-        """Get the engine"""
+        """Get the engine."""
         engines = {"numpy": _NumpyPatchRoller, "pandas": _PandasPatchRoller}
         if cls := engines.get(engine):
             return cls
@@ -304,19 +303,11 @@ def rolling(
     dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
     roll_hist = f"rolling({dim}={value}, step={step}, center={center}, engine={engine})"
     coord = patch.get_coord(dim)
-    window = coord.get_sample_count(value)
-    step = 1 if step is None else coord.get_sample_count(step)
+    window = coord.get_sample_count(value, samples=samples)
+    step = 1 if step is None else coord.get_sample_count(step, samples=samples)
     if window == 0 or step == 0:
         msg = "Window or step size can't be zero. Use any positive values."
         raise ParameterError(msg)
-
-    if window > len(coord) or step > len(coord):
-        msg = (
-            "Window or step size is larger than total number of samples in "
-            "the specified dimension."
-        )
-        raise ParameterError(msg)
-
     cls = _get_engine(step, engine, patch)
     out = cls(
         patch=patch,
