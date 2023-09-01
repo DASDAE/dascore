@@ -590,3 +590,20 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     spools = spool.split(size=size)
     new_func = _MapFuncWrapper(func, kwargs, progress=progress)
     return [x for y in client.map(new_func, spools) for x in y]
+
+
+def _dict_list_diffs(dict_list):
+    """Return the keys which are not equal dicts in a list."""
+    out = []
+    first = dict_list[0]
+    first_keys = set(first)
+    for other in dict_list[1:]:
+        if other == first:
+            continue
+        other_keys = set(other)
+        (first_keys - other_keys) & (other_keys - first_keys)
+        common_keys = other_keys & first_keys
+        for key in common_keys:
+            if first[key] != other[key]:
+                out.append(key)
+    return out

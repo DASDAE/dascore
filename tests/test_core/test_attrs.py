@@ -311,7 +311,8 @@ class TestMergeAttrs:
         """Ensure drop_attrs does its job."""
         pa1 = PatchAttrs(history=["a", "b"])
         pa2 = PatchAttrs()
-        with pytest.raises(AttributeMergeError, match="not all of their non-dim"):
+        msg = "the following non-dim attrs are not equal"
+        with pytest.raises(AttributeMergeError, match=msg):
             combine_patch_attrs([pa1, pa2])
         out = combine_patch_attrs([pa1, pa2], drop_attrs="history")
         assert isinstance(out, PatchAttrs)
@@ -320,8 +321,8 @@ class TestMergeAttrs:
         """Ensure when non-dim fields aren't equal merge raises."""
         pa1 = PatchAttrs(tag="bob")
         pa2 = PatchAttrs()
-        match = "not all of their non-dim"
-        with pytest.raises(AttributeMergeError, match=match):
+        msg = "the following non-dim attrs are not equal"
+        with pytest.raises(AttributeMergeError, match=msg):
             combine_patch_attrs([pa1, pa2])
 
     def test_missing_coordinate(self):

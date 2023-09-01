@@ -27,6 +27,7 @@ from dascore.exceptions import AttributeMergeError, IncompatiblePatchError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
+    _dict_list_diffs,
     all_diffs_close_enough,
     get_middle_value,
     iterate,
@@ -393,12 +394,16 @@ def combine_patch_attrs(
         if conflicts == "keep_first":
             return [dict(ChainMap(*mod_dict_list))]
         no_null_ = _replace_null_with_None(mod_dict_list)
-        all_eq = all(no_null_[0] == x for x in no_null_)
+        all_eq = all(no_null_[0] == x for x in no_null_[1:])
         if all_eq:
             return mod_dict_list
-        # now the fun part.
         if conflicts == "raise":
-            msg = "Cannot merge models, not all of their non-dim attrs are equal."
+            # determine which keys are not equal to help debug.
+            uneq_keys = _dict_list_diffs(mod_dict_list)
+            msg = (
+                "Cannot merge models, the following non-dim attrs are not "
+                f"equal: {uneq_keys}"
+            )
             raise AttributeMergeError(msg)
         final_dict = reduce(_keep_eq, mod_dict_list)
         return [final_dict]
