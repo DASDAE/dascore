@@ -5,6 +5,7 @@ import abc
 import json
 import os
 import time
+import warnings
 from contextlib import suppress
 from functools import cache
 from pathlib import Path
@@ -276,8 +277,24 @@ class DirectoryIndexer(AbstractIndexer):
         try:
             self._index_table.validate_version()
         except InvalidIndexVersionError:
+            msg = (
+                f"The index file at {self.path} is not compatible with this"
+                f" version of DASCore ({dc.__last_version__}). "
+                f"Recreating the index now."
+            )
+            warnings.warn(msg, UserWarning)
             os.remove(self.index_path)
             self.update()
+
+    def get_index_metadata(self):
+        """Return a dict of metadata about the index."""
+        self.update()
+        up_time = dc.to_datetime64(self._index_table.last_updated_timestamp)
+        out = {
+            "index_version": self._index_table._index_version,
+            "last_update": up_time,
+        }
+        return out
 
     def update(self, paths=None) -> Self:
         """
@@ -292,6 +309,11 @@ class DirectoryIndexer(AbstractIndexer):
         data_list = [y.flat_dump() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
         if not df.empty:
+            # Some users were surprised the spool wasn't sorted. We still cant
+            # guarantee all spools will be sorted but we can make sure most are
+            # by sorting the contents before dumping to index.
+            if "time_min" in df.columns:
+                df = df.sort_values("time_min").reset_index(drop=True)
             # ensure the base path is not in the path column
             assert "path" in set(df.columns), f"{df} has no path column"
             self._index_table.write_update(df, update_time, base_path=self.path)

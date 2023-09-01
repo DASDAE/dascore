@@ -848,7 +848,7 @@ class CoordArray(BaseCoord):
             msg = "At most one parameter can be specified in update_limits."
             raise ValueError(msg)
         out = self
-        if not pd.isnull(step):
+        if not pd.isnull(step) and len(self):
             out = self.snap().update_limits(step=step)
         elif min is not None:
             diff = min - self.min()
@@ -1075,6 +1075,9 @@ def get_coord(
     _check_inputs(values, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
     if values is not None:
+        if not isinstance(values, np.ndarray | BaseCoord):
+            values = np.array(values)
+        # values = np.array(values)  # ensure we have a numpy array
         if isinstance(values, BaseCoord):  # just return coordinate
             return values
         if np.size(values) == 0:

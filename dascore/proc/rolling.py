@@ -1,7 +1,6 @@
 """Processing for applying roller operations."""
 from __future__ import annotations
 
-from functools import cache
 from typing import Any, Literal
 
 import numpy as np
@@ -32,7 +31,6 @@ class _PatchRollerInfo(DascoreBaseModel):
     roll_hist: str = ""
     func_kwargs: dict = Field(default_factory=dict)
 
-    @cache
     def get_coords(self):
         """
         Get the new coordinates for "rolled" patch.
@@ -57,14 +55,10 @@ class _PatchRollerInfo(DascoreBaseModel):
         attrs = self.patch.attrs.update(history=new_history, coords={})
         return attrs
 
-    def __hash__(self):
-        return id(self)
-
 
 class _NumpyPatchRoller(_PatchRollerInfo):
     """A class to apply roller operations to patches."""
 
-    @cache
     def get_start_index(self):
         """
         Get the start index to account for non-zero step size.
@@ -148,7 +142,6 @@ class _NumpyPatchRoller(_PatchRollerInfo):
 class _PandasPatchRoller(_PatchRollerInfo):
     """A class to apply pandas rolling operations."""
 
-    @cache
     def _get_df(self) -> pd.DataFrame:
         """Get the dataframe from patch data."""
         if len(self.patch.dims) > 2:
@@ -157,7 +150,6 @@ class _PandasPatchRoller(_PatchRollerInfo):
         df = pd.DataFrame(self.patch.data)
         return df
 
-    @cache
     def _get_rolling(self):
         """Get rolling."""
         df = self._get_df()

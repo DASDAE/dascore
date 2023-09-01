@@ -345,12 +345,7 @@ class HDFPatchIndexManager:
 
     @cached_method
     def validate_version(self):
-        """
-        Handles issues with version mismatches.
-
-        If this is the case, there is no guarantee it will work, but no knowing
-        if it won't...
-        """
+        """Handles issues with version mismatches."""
         # get the version from file, if the file doesnt exist then None
         version = self._version_or_none
         if version is not None:
