@@ -21,7 +21,7 @@ WRITTEN_FILES = []
 @register_func(WRITTEN_FILES)
 def written_dascore_v1_random(random_patch, tmp_path_factory):
     """Write the example patch to disk."""
-    path = tmp_path_factory.mktemp("dascore_file") / "test.hdf5"
+    path = tmp_path_factory.mktemp("dasdae_file") / "test.hdf5"
     dc.write(random_patch, path, "dasdae", file_version="1")
     return path
 
@@ -93,6 +93,12 @@ class TestWriteDASDAE:
         df = dc.spool(new_path).get_contents()
         assert len(df) == len(df_pre) + 1
         assert (df["time_min"] == to_datetime64("1990-01-01")).any()
+
+    def test_write_again(self, written_dascore_v1_random, random_patch):
+        """Ensure a patch can be written again to file (should overwrite old)."""
+        random_patch.io.write(written_dascore_v1_random, "dasdae")
+        read_patch = dc.spool(written_dascore_v1_random)
+        assert random_patch == read_patch
 
 
 class TestReadDASDAE:
@@ -186,17 +192,16 @@ class TestRoundTrips:
         new_patch = spool[0]
         assert patch.equals(new_patch)
 
-    def test_roundtrip_1_dim_patch(self, tmp_path_factory):
+    def test_roundtrip_1_dim_patch(self, tmp_path_factory, random_patch):
         """A spool with a dimension of length 1 should roundtrip."""
         path = tmp_path_factory.mktemp("round_trip_dim_1") / "out.h5"
-        patch = dc.get_example_patch(
-            "random_das",
-            time_step=0.999767552,
-            shape=(100, 1),
-            starttime="2023-06-13T15:38:00.49953408",
-        )
-        patch.io.write(path, "dasdae")
+        patch = random_patch
+        # get degenerate patch
+        time = patch.get_coord("time")
+        time_max = time.max() + 3 * time.step
+        empty_patch = patch.select(time=(time_max, ...))
+        empty_patch.io.write(path, "dasdae")
         formatter = DASDAEV1()
         spool = formatter.read(path)
         new_patch = spool[0]
-        assert patch.equals(new_patch)
+        assert empty_patch.equals(new_patch)

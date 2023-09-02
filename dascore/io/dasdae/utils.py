@@ -14,6 +14,11 @@ from dascore.utils.time import to_int
 # --- Functions for writing DASDAE format
 
 
+def _create_or_get_group(h5, group, name):
+    """Create a new group or get existing."""
+    h5.create_group(group, name)
+
+
 def _write_meta(hfile, file_version):
     """Write metadata to hdf5 file."""
     attrs = hfile.root._v_attrs
