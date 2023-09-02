@@ -82,7 +82,7 @@ def _get_data_unit_and_type(node):
         "RawDataUnit": "data_units",
     }
     out = maybe_get_attrs(attrs, attr_map)
-    if (data_type := attr_map.get("data_type")) is not None:
+    if (data_type := out.get("data_type")) is not None:
         clean = data_type.lower().replace(" ", "_")
         out["data_type"] = clean if clean in VALID_DATA_TYPES else ""
     return out
