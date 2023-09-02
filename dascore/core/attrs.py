@@ -399,7 +399,9 @@ def combine_patch_attrs(
             uneq_keys = _dict_list_diffs(mod_dict_list)
             msg = (
                 "Cannot merge models, the following non-dim attrs are not "
-                f"equal: {uneq_keys}"
+                f"equal: {uneq_keys}. Consider setting the `conflict` or "
+                f"`attr_conflict` arguments for more flexibility in merging "
+                f"unequal coordinates."
             )
             raise AttributeMergeError(msg)
         final_dict = reduce(_keep_eq, mod_dict_list)
