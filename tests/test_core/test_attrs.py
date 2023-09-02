@@ -325,11 +325,12 @@ class TestMergeAttrs:
 
     def test_conflicts(self):
         """Ensure when non-dim fields aren't equal merge raises."""
-        pa1 = PatchAttrs(tag="bob")
-        pa2 = PatchAttrs()
+        pa1 = PatchAttrs(tag="bob", another=2, same=42)
+        pa2 = PatchAttrs(tag="bob", another=2, same=42)
+        pa3 = PatchAttrs(another=1, same=42, different=10)
         msg = "the following non-dim attrs are not equal"
         with pytest.raises(AttributeMergeError, match=msg):
-            combine_patch_attrs([pa1, pa2])
+            combine_patch_attrs([pa1, pa2, pa3])
 
     def test_missing_coordinate(self):
         """When one model has a missing coord it should just get dropped."""

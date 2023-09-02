@@ -76,13 +76,14 @@ class BaseSpool(abc.ABC):
         """Simple equality checks on spools."""
 
         def _vals_equal(dict1, dict2):
-            if set(dict1) != set(dict2):
+            if (set1 := set(dict1)) != set(dict2):
                 return False
-            for key in set(dict1):
+            for key in set1:
                 val1, val2 = dict1[key], dict2[key]
                 if isinstance(val1, dict):
                     if not _vals_equal(val1, val2):
-                        return False
+                        return
+                # this is primarily for dataframes which have equals method.
                 elif hasattr(val1, "equals"):
                     if not val1.equals(val2):
                         return False
@@ -320,9 +321,12 @@ class DataFrameSpool(BaseSpool):
     def _get_instruction_df(self):
         """Function to get the current df."""
 
-    def __init__(self, select_kwargs: dict | None = None):
+    def __init__(
+        self, select_kwargs: dict | None = None, merge_kwargs: dict | None = None
+    ):
         self._cache = {}
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
+        self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
 
     def __getitem__(self, item):
         out = self._get_patches_from_index(item)
