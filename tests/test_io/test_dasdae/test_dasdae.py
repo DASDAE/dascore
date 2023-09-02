@@ -97,7 +97,7 @@ class TestWriteDASDAE:
     def test_write_again(self, written_dascore_v1_random, random_patch):
         """Ensure a patch can be written again to file (should overwrite old)."""
         random_patch.io.write(written_dascore_v1_random, "dasdae")
-        read_patch = dc.spool(written_dascore_v1_random)
+        read_patch = dc.spool(written_dascore_v1_random)[0]
         assert random_patch == read_patch
 
 
@@ -192,9 +192,9 @@ class TestRoundTrips:
         new_patch = spool[0]
         assert patch.equals(new_patch)
 
-    def test_roundtrip_1_dim_patch(self, tmp_path_factory, random_patch):
-        """A spool with a dimension of length 1 should roundtrip."""
-        path = tmp_path_factory.mktemp("round_trip_dim_1") / "out.h5"
+    def test_roundtrip_empty_time_patch(self, tmp_path_factory, random_patch):
+        """A patch with a dimension of length 0 should roundtrip."""
+        path = tmp_path_factory.mktemp("round_trip_time_degenerate") / "out.h5"
         patch = random_patch
         # get degenerate patch
         time = patch.get_coord("time")
@@ -205,3 +205,18 @@ class TestRoundTrips:
         spool = formatter.read(path)
         new_patch = spool[0]
         assert empty_patch.equals(new_patch)
+
+    def test_roundtrip_dim_1_patch(self, tmp_path_factory, random_patch):
+        """A patch with length 1 time axis should roundtrip."""
+        path = tmp_path_factory.mktemp("round_trip_dim_1") / "out.h5"
+        patch = dc.get_example_patch(
+            "random_das",
+            time_step=0.999767552,
+            shape=(100, 1),
+            starttime="2023-06-13T15:38:00.49953408",
+        )
+        patch.io.write(path, "dasdae")
+        formatter = DASDAEV1()
+        spool = formatter.read(path)
+        new_patch = spool[0]
+        assert patch.equals(new_patch)
