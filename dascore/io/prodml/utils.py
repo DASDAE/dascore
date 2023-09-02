@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dascore as dc
+from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.utils.misc import iterate, maybe_get_attrs, unbyte
@@ -76,10 +77,14 @@ def _get_time_coord(node):
 def _get_data_unit_and_type(node):
     """Get the data type and units."""
     attrs = node._v_attrs
-    out = dict(
-        data_type=unbyte(attrs.RawDescription).lower().replace(" ", "_"),
-        data_units=unbyte(attrs.RawDataUnit),
-    )
+    attr_map = {
+        "RawDescription": "data_type",
+        "RawDataUnit": "data_units",
+    }
+    out = maybe_get_attrs(attrs, attr_map)
+    if (data_type := out.get("data_type")) is not None:
+        clean = data_type.lower().replace(" ", "_")
+        out["data_type"] = clean if clean in VALID_DATA_TYPES else ""
     return out
 
 
