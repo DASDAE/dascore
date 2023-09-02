@@ -5,7 +5,7 @@ import abc
 from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -14,7 +14,13 @@ from typing_extensions import Self
 
 import dascore as dc
 import dascore.io
-from dascore.constants import ExecutorType, PatchType, numeric_types, timeable_types
+from dascore.constants import (
+    ExecutorType,
+    PatchType,
+    attr_conflict_description,
+    numeric_types,
+    timeable_types,
+)
 from dascore.exceptions import InvalidSpoolError, ParameterError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
@@ -89,12 +95,14 @@ class BaseSpool(abc.ABC):
         return _vals_equal(my_dict, other_dict)
 
     @abc.abstractmethod
+    @compose_docstring(conflict_desc=attr_conflict_description)
     def chunk(
         self,
         overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float = 1.5,
+        attr_conflict: Literal["drop", "raise", "keep_first"] = "raise",
         **kwargs,
     ) -> Self:
         """
@@ -114,6 +122,8 @@ class BaseSpool(abc.ABC):
         tolerance
             The number of samples a block of data can be spaced and still be
             considered contiguous.
+        attr_conflict
+            {conflict_desc}
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
@@ -295,8 +305,10 @@ class DataFrameSpool(BaseSpool):
     _instruction_df: pd.DataFrame = CacheDescriptor("_cache", "_get_instruction_df")
     # kwargs for filtering contents
     _select_kwargs: Mapping | None = FrozenDict()
+    # kwargs for merging patches
+    _merge_kwargs: Mapping | None = FrozenDict()
     # attributes which effect merge groups for internal patches
-    _group_columns = ("network", "station", "dims", "data_type", "tag", "history")
+    _group_columns = ("network", "station", "dims", "data_type", "tag")
     _drop_columns = ("patch",)
 
     def _get_df(self):
@@ -375,7 +387,7 @@ class DataFrameSpool(BaseSpool):
             info["patch"] = trimmed_patch
             out.append(info)
         if len(out) > expected_len:
-            out = _force_patch_merge(out)
+            out = _force_patch_merge(out, merge_kwargs=self._merge_kwargs)
         return [x["patch"] for x in out]
 
     @staticmethod
@@ -417,6 +429,7 @@ class DataFrameSpool(BaseSpool):
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float = 1.5,
+        attr_conflict: Literal["drop", "raise", "keep_first"] = "raise",
         **kwargs,
     ) -> Self:
         """{doc}."""
@@ -426,6 +439,7 @@ class DataFrameSpool(BaseSpool):
             keep_partial=keep_partial,
             group_columns=self._group_columns,
             tolerance=tolerance,
+            attr_conflict=attr_conflict,
             **kwargs,
         )
         in_df, out_df = chunker.chunk(df)
@@ -433,9 +447,21 @@ class DataFrameSpool(BaseSpool):
             instructions = None
         else:
             instructions = chunker.get_instruction_df(in_df, out_df)
-        return self.new_from_df(out_df, source_df=self._df, instruction_df=instructions)
+        return self.new_from_df(
+            out_df,
+            source_df=self._df,
+            instruction_df=instructions,
+            merge_kwargs={"conflicts": attr_conflict},
+        )
 
-    def new_from_df(self, df, source_df=None, instruction_df=None, select_kwargs=None):
+    def new_from_df(
+        self,
+        df,
+        source_df=None,
+        instruction_df=None,
+        select_kwargs=None,
+        merge_kwargs=None,
+    ):
         """Create a new instance from dataframes."""
         new = self.__class__(self)
         df_, source_, inst_ = self._get_dummy_dataframes(df)
@@ -444,6 +470,8 @@ class DataFrameSpool(BaseSpool):
         new._instruction_df = instruction_df if instruction_df is not None else inst_
         new._select_kwargs = dict(self._select_kwargs)
         new._select_kwargs.update(select_kwargs or {})
+        new._merge_kwargs = dict(self._merge_kwargs)
+        new._merge_kwargs.update(merge_kwargs or {})
         return new
 
     @compose_docstring(doc=BaseSpool.select.__doc__)
@@ -487,11 +515,9 @@ class DataFrameSpool(BaseSpool):
         old_indices = df.index
         new_indices = np.arange(len(df))
         mapper = pd.Series(new_indices, index=old_indices)
-
         # swap out all the old values with new ones
         new_current_index = inst_df["current_index"].map(mapper)
         new_instruction_df = inst_df.assign(current_index=new_current_index)
-
         # create new spool from new dataframes
         return self.new_from_df(df=sorted_df, instruction_df=new_instruction_df)
 

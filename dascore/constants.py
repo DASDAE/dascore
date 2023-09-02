@@ -174,6 +174,15 @@ dimension. Must be integers. Otherwise, values are assumed to have
 same units as the specified dimension, or have units attached.
 """
 
+attr_conflict_description = """
+Indicates how to handle conflicts in attributes other than those
+indicated by dim. If "drop" simply drop conflicting attributes,
+or attributes not shared by all models. If "raise" raise an
+[AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when
+issues are encountered. If "keep_first", just keep the first value
+for each attribute.
+"""
+
 
 # Rich styles for various object displays.
 dascore_styles = dict(
