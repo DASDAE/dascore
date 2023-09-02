@@ -190,6 +190,12 @@ class TestPatchAttrs:
         for name, coord in attr.coords.items():
             assert isinstance(coord, CoordSummary)
 
+    def test_items(self, random_patch):
+        """Ensure items works like a dict."""
+        attrs = random_patch.attrs
+        out = dict(attrs.items())
+        assert out == attrs.model_dump()
+
 
 class TestSummaryAttrs:
     """Tests for summarizing a schema."""
