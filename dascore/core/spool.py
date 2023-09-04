@@ -103,7 +103,7 @@ class BaseSpool(abc.ABC):
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float = 1.5,
-        attr_conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        conflict: Literal["drop", "raise", "keep_first"] = "raise",
         **kwargs,
     ) -> Self:
         """
@@ -123,7 +123,7 @@ class BaseSpool(abc.ABC):
         tolerance
             The number of samples a block of data can be spaced and still be
             considered contiguous.
-        attr_conflict
+        conflict
             {conflict_desc}
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
@@ -433,7 +433,7 @@ class DataFrameSpool(BaseSpool):
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float = 1.5,
-        attr_conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        conflict: Literal["drop", "raise", "keep_first"] = "raise",
         **kwargs,
     ) -> Self:
         """{doc}."""
@@ -443,7 +443,7 @@ class DataFrameSpool(BaseSpool):
             keep_partial=keep_partial,
             group_columns=self._group_columns,
             tolerance=tolerance,
-            attr_conflict=attr_conflict,
+            conflict=conflict,
             **kwargs,
         )
         in_df, out_df = chunker.chunk(df)
@@ -455,7 +455,7 @@ class DataFrameSpool(BaseSpool):
             out_df,
             source_df=self._df,
             instruction_df=instructions,
-            merge_kwargs={"conflicts": attr_conflict},
+            merge_kwargs={"conflicts": conflict},
         )
 
     def new_from_df(

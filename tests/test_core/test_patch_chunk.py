@@ -391,7 +391,7 @@ class TestChunkMerge:
         with pytest.raises(CoordMergeError, match=match):
             spool.chunk(time=...)
         # however, when we specify drop attrs this shouldn't.
-        out = spool.chunk(time=..., attr_conflict="keep_first")
+        out = spool.chunk(time=..., conflict="keep_first")
         assert isinstance(out, dc.BaseSpool)
         assert len(out) == 1
         # make sure we can read the patch

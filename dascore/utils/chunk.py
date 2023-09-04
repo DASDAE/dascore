@@ -117,7 +117,7 @@ class ChunkManager:
         The upper limit of a gap to tolerate in terms of the sampling
         along the desired dimension. E.G., the default value means entities
         with gaps <= 1.5 * {name}_step will be merged.
-    attr_conflict
+    conflict
         {attr_conflict}
     **kawrgs
         kwargs specify the column along which to chunk. The key specifies the
@@ -136,7 +136,7 @@ class ChunkManager:
         group_columns: Collection[str] | None = None,
         keep_partial=False,
         tolerance=1.5,
-        attr_conflict="raise",
+        conflict="raise",
         **kwargs,
     ):
         self._overlap = overlap
@@ -144,7 +144,7 @@ class ChunkManager:
         self._keep_partials = keep_partial
         self._tolerance = tolerance
         self._name, self._value = self._validate_kwargs(kwargs)
-        self._attr_conflict = attr_conflict
+        self._attr_conflict = conflict
         self._validate_chunker()
 
     def _validate_kwargs(self, kwargs):
