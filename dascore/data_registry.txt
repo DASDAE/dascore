@@ -10,3 +10,6 @@ example_dasdae_event_1.h5 854530af7ea10bab54dd0f6458c5d67d8b334ee6e4032b75702fa4
 opta_sense_quantx_v2.h5 fca8c8b19a9e253f9252c14de3f2a7778391a763f39142fffc63ab0cc3fa9cc7 https://github.com/dasdae/test_data/raw/master/das/opta_sense_quantx_v2.h5
 prodml_2.0.h5 8f8eded106acab0b4266c5c752cc702363cb09391f5fddf1534429e94e4e9ab2 https://github.com/dasdae/test_data/raw/master/das/prodml_2.0.h5
 prodml_2.1.h5 47875ae1fa17d99849cdb595e9fa6853d162605c1556be90225f37aaa123dded https://github.com/dasdae/test_data/raw/master/das/prodml_2.1.h5
+h5_simple_1.h5 52803b26a5738da541cc9b32b867434cad0a845686c47dd93551b8eb431f8bc0 https://github.com/dasdae/test_data/raw/master/da/h5_simple_1.h5
+h5_simple_2.h5 8a70b873c5c2c172871ecd63760d24fa2c305c015e2ca1c84018c6864d2fb304 https://github.com/dasdae/test_data/raw/master/da/h5_simple_2.h5
+conoco_segy_1.sgy 3944297d7c27dd265b40d56d4797f1a14caa5c2bed9f0af020b0f6ea193d4dfd https://github.com/dasdae/test_data/raw/master/da/conoco_segy_1.sgy
