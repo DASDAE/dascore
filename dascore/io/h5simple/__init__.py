@@ -7,4 +7,4 @@ The FORESEE data in PubDAS motivated this module.
 """
 from __future__ import annotations
 
-from .core import GenericH5
+from .core import H5Simple

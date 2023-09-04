@@ -570,7 +570,7 @@ def _spool_from_str(path, **kwargs):
     # A single file was passed. If the file format supports quick scanning
     # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
-        _format, _version = dc.get_format(path)
+        _format, _version = dc.get_format(path, **kwargs)
         formatter = dascore.io.FiberIO.manager.get_fiberio(_format, _version)
         if formatter.implements_scan:
             from dascore.clients.filespool import FileSpool
