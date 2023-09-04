@@ -12,6 +12,7 @@ import pytest
 from packaging.version import parse as get_version
 
 import dascore as dc
+from dascore.examples import spool_to_directory
 from dascore.io.indexer import DirectoryIndexer
 from dascore.utils.patch import get_default_patch_name
 
@@ -171,6 +172,22 @@ class TestGetContents:
 class TestUpdate:
     """Tests for updating index."""
 
+    def make_simple_index_with_version(self, path, version):
+        """Helper function to make a simple index with desired version."""
+        patch = dc.get_example_patch()
+        spool_to_directory([patch], path)
+        # this ensure the version is set to fake version
+        old_version = dc.__last_version__
+        # for some reason monkeypatch fixture wasnt setting version back
+        # so I had to manually set and revert dascore version.
+        setattr(dc, "__last_version__", version)
+        spool = dc.spool(path).update()
+        setattr(dc, "__last_version__", old_version)
+        # ensure version monkey patch worked.
+        meta = spool.indexer.get_index_metadata()
+        assert meta["index_version"] == version
+        return path
+
     @pytest.fixture(scope="class")
     def spool_directory_with_non_das_file(self, two_patch_directory, tmp_path_factory):
         """Create a directory with some das files and some non-das files."""
@@ -184,6 +201,25 @@ class TestUpdate:
         with open(new / "not_das.open", "w") as fi:
             fi.write("cant be das, can it?")
         return new
+
+    @pytest.fixture()
+    def index_old_version(self, monkeypatch, tmp_path_factory):
+        """Create an index which has an old, incompatible version."""
+        # cant use random_patch fixture due to scope-mismatch w/ monkeypatch.
+        path = tmp_path_factory.mktemp("index_old_version ")
+        self.make_simple_index_with_version(path, "0.0.1")
+        return path
+
+    @pytest.fixture()
+    def index_new_version(self, monkeypatch, tmp_path_factory):
+        """Create an index which has an old, incompatible version."""
+        # cant use random_patch fixture due to scope-mismatch w/ monkeypatch.
+        path = tmp_path_factory.mktemp("index_new_version ")
+        # a ridiculously high version
+        fake_version = "1000.0.1"
+        assert get_version(fake_version) > get_version(dc.__last_version__)
+        self.make_simple_index_with_version(path, fake_version)
+        return path
 
     def test_add_one_patch(self, empty_index, random_patch):
         """Ensure a new patch added to the directory shows up."""
@@ -199,3 +235,16 @@ class TestUpdate:
         # if this doesn't fail the test passes
         updated = indexer.update()
         assert isinstance(updated, DirectoryIndexer)
+
+    def test_old_index_recreated(self, index_old_version):
+        """Ensure the old index is recreated when update is called."""
+        msg = "Recreating the index now."
+        with pytest.warns(UserWarning, match=msg):
+            dc.spool(index_old_version).update()
+
+    def test_new_version_warngs(self, index_new_version):
+        """Ensure an index file with a newer version of dascore issues a warning."""
+        msg = "The index was created with a newer version of dascore"
+        dc.spool(index_new_version)
+        with pytest.warns(UserWarning, match=msg):
+            dc.spool(index_new_version).update()

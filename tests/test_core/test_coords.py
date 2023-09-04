@@ -121,6 +121,13 @@ def coord(request) -> BaseCoord:
     return request.getfixturevalue(request.param)
 
 
+@pytest.fixture()
+def degenerate_time_coord():
+    """Return a simply degenerate coord."""
+    ar = np.empty((0, 10), dtype="datetime64[ns]")
+    return get_coord(values=ar)
+
+
 @pytest.fixture(scope="session")
 def two_d_coord():
     """Return a 2D coordinate."""
@@ -1021,12 +1028,6 @@ class TestNonOrderedArrayCoords:
 class TestDegenerateCoords:
     """Tests for degenerate coordinates."""
 
-    @pytest.fixture()
-    def basic_degenerate(self):
-        """Return a simply degenerate coord."""
-        ar = np.empty((0, 10), dtype="datetime64[ns]")
-        return get_coord(values=ar)
-
     def test_init_degen(self):
         """Ensure degen is inited by any sort of empty array."""
         arrays = [
@@ -1040,22 +1041,22 @@ class TestDegenerateCoords:
             assert out.dtype == ar.dtype
             assert len(out) == 0
 
-    def test_select(self, basic_degenerate):
+    def test_select(self, degenerate_time_coord):
         """Selecting should simply return the same degenerate."""
-        coord = basic_degenerate
+        coord = degenerate_time_coord
         assert coord.select((10, 100))[0] == coord
         assert coord.select((None, 100))[0] == coord
         assert coord.select((10, None))[0] == coord
         assert coord.select((None, None))[0] == coord
 
-    def test_empty(self, basic_degenerate):
+    def test_empty(self, degenerate_time_coord):
         """Ensure empty just returns self."""
-        assert basic_degenerate.empty() == basic_degenerate
+        assert degenerate_time_coord.empty() == degenerate_time_coord
 
-    def test_min_max(self, basic_degenerate):
+    def test_min_max(self, degenerate_time_coord):
         """Ensure min/max are nullish."""
-        assert pd.isnull(basic_degenerate.min())
-        assert pd.isnull(basic_degenerate.max())
+        assert pd.isnull(degenerate_time_coord.min())
+        assert pd.isnull(degenerate_time_coord.max())
 
     def test_degenerate_with_step_from_array(self):
         """CoordRange should be possible empty."""
@@ -1119,6 +1120,34 @@ class TestGetSampleCount:
         out = evenly_sampled_time_delta_coord.get_sample_count(12 * dt)
         assert out == 12
 
+    @pytest.mark.parametrize("sample", (0, 10, 100, 42, 13))
+    def test_samples(self, evenly_sampled_coord, sample):
+        """Ensure value is returned when samples==True."""
+        assert len(evenly_sampled_coord) >= sample
+        out = evenly_sampled_coord.get_sample_count(sample, samples=True)
+        assert out == sample
+
+    def test_overask_raises(self, evenly_sampled_coord):
+        """Asking for more samples than length of coordinate should raise."""
+        max_len = len(evenly_sampled_coord)
+        duration = evenly_sampled_coord.max() - evenly_sampled_coord.min()
+        step = evenly_sampled_coord.step
+        # test for using samples kwargWindow or step size is larger than
+        msg = "results in a window larger than coordinate"
+        with pytest.raises(ParameterError, match=msg):
+            evenly_sampled_coord.get_sample_count(max_len + 2, samples=True)
+        # test for using normal mode
+        with pytest.raises(ParameterError, match=msg):
+            evenly_sampled_coord.get_sample_count(duration + 2 * step)
+
+    def test_non_int_raises_with_samples(self, evenly_sampled_coord):
+        """Non integer values should raise when sample=True."""
+        match = "must be integers"
+        with pytest.raises(ParameterError, match=match):
+            evenly_sampled_coord.get_sample_count(1.2, samples=True)
+        with pytest.raises(ParameterError, match=match):
+            evenly_sampled_coord.get_sample_count("bob", samples=True)
+
 
 class TestIssues:
     """Tests for special issues related to coords."""
@@ -1128,3 +1157,16 @@ class TestIssues:
         time_vals = event_patch_1.coords["time"]
         coord = get_coord(values=time_vals)
         assert coord.evenly_sampled
+
+    def test_len_1_list(self):
+        """A len 1 list should work as input to get_coords."""
+        coord = get_coord(values=[0])
+        assert isinstance(coord, BaseCoord)
+        assert len(coord) == 1
+
+    def test_update_degenerate_from_attrs(self, degenerate_time_coord):
+        """Ensure updating dt on degenerate time coord doesn't fail."""
+        # before this would cause infinite recursion.
+        out = degenerate_time_coord.update(step=10)
+        assert isinstance(out, BaseCoord)
+        assert len(out) == 0

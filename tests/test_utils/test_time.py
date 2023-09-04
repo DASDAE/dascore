@@ -337,6 +337,12 @@ class TestToInt:
         with pytest.raises(NotImplementedError):
             to_int(Dummy())
 
+    def test_empy_dt_array(self):
+        """Ensure an empty datatime array gets converted to int."""
+        array = np.empty(0, dtype="datetime64[ns]")
+        out = to_int(array)
+        assert np.issubdtype(out.dtype, np.integer)
+
 
 class TestIsDateTime:
     """Ensure is_datetime64 detects datetimes."""

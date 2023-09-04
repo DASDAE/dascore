@@ -17,6 +17,7 @@ from dascore.core.attrs import combine_patch_attrs
 from dascore.core.coordmanager import merge_coord_managers
 from dascore.exceptions import (
     CoordDataError,
+    ParameterError,
     PatchAttributeError,
     PatchDimError,
 )
@@ -408,6 +409,20 @@ def get_dim_value_from_kwargs(patch, kwargs):
     dim = next(iter(overlap))
     axis = dims.index(dim)
     return dim, axis, kwargs[dim]
+
+
+def get_multiple_dim_value_from_kwargs(patch, kwargs):
+    """Get multiple dim, axis and values from kwargs."""
+    dims = patch.dims
+    overlap = set(dims) & set(kwargs)
+    if not overlap:
+        msg = "You must specify one or more dimension in keyword args."
+        raise ParameterError(msg)
+    out = {}
+    for dim in overlap:
+        axis = patch.dims.index(dim)
+        out[dim] = {"dim": dim, "axis": axis, "value": kwargs[dim]}
+    return out
 
 
 def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:

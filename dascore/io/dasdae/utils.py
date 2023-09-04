@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+from tables import NodeError
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
@@ -12,6 +13,26 @@ from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int
 
 # --- Functions for writing DASDAE format
+
+
+def _create_or_get_group(h5, group, name):
+    """Create a new group or get existing."""
+    try:
+        group = h5.create_group(group, name)
+    except NodeError:
+        group = getattr(group, name)
+    return group
+
+
+def _create_or_squash_array(h5, group, name, data):
+    """Create a new array, if it exists delete and re-create."""
+    try:
+        array = h5.create_array(group, name, data)
+    except NodeError:
+        old_node = getattr(group, name)
+        h5.remove_node(old_node)
+        array = h5.create_array(group, name, data)
+    return array
 
 
 def _write_meta(hfile, file_version):
@@ -26,7 +47,8 @@ def _save_attrs_and_dims(patch, patch_group):
     """Save the attributes."""
     # copy attrs to group attrs
     # TODO will need to test if objects are serializable
-    for i, v in patch.attrs.items():
+    attr_dict = patch.attrs.model_dump(exclude_unset=True)
+    for i, v in attr_dict.items():
         patch_group._v_attrs[f"_attrs_{i}"] = v
     patch_group._v_attrs["_dims"] = ",".join(patch.dims)
 
@@ -38,13 +60,9 @@ def _save_array(data, name, group, h5):
     is_td = np.issubdtype(data.dtype, np.timedelta64)
     if is_dt or is_td:
         data = to_int(data)
-    out = h5.create_array(
-        group,
-        name,
-        data,
-    )
-    out._v_attrs["is_datetime64"] = is_dt
-    out._v_attrs["is_timedelta64"] = is_td
+    array_node = _create_or_squash_array(h5, group, name, data)
+    array_node._v_attrs["is_datetime64"] = is_dt
+    array_node._v_attrs["is_timedelta64"] = is_td
 
 
 def _save_coords(patch, patch_group, h5):
@@ -64,12 +82,12 @@ def _save_coords(patch, patch_group, h5):
 def _save_patch(patch, wave_group, h5):
     """Save the patch to disk."""
     name = get_default_patch_name(patch)
-    patch_group = h5.create_group(wave_group, name)
+    patch_group = _create_or_get_group(h5, wave_group, name)
     _save_attrs_and_dims(patch, patch_group)
     _save_coords(patch, patch_group, h5)
     # add data
     if patch.data.shape:
-        h5.create_array(patch_group, "data", patch.data)
+        _create_or_squash_array(h5, patch_group, "data", patch.data)
 
 
 # --- Functions for reading

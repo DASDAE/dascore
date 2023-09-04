@@ -167,6 +167,13 @@ history
     A list of strings indicating what processing has occurred on the patch.
 """
 
+# description of samples argument
+samples_arg_description = """
+If True, the values in kwargs and step represent samples along a
+dimension. Must be integers. Otherwise, values are assumed to have
+same units as the specified dimension, or have units attached.
+"""
+
 
 # Rich styles for various object displays.
 dascore_styles = dict(

@@ -114,7 +114,7 @@ class TestRolling:
         """When the window or step is too large it should raise."""
         coord = random_patch.get_coord("time")
         duration = coord.max() - coord.min()
-        msg = "Window or step size is larger than"
+        msg = "results in a window larger than coordinate"
         with pytest.raises(ParameterError, match=msg):
             random_patch.rolling(time=duration * 2)
 
