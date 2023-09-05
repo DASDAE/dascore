@@ -67,3 +67,7 @@ class TestSnapDims:
             coord = out.coords.coord_map[dim]
             assert coord.sorted
             assert coord.evenly_sampled
+
+
+class TestUpdateCoords:
+    """Tests for updating coordinates."""

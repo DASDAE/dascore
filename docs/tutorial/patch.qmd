@@ -58,19 +58,18 @@ array = np.random.random(size=(300, 2_000))
 
 # Create attributes, or metadata
 t1 = dc.to_datetime64("2017-09-18")
+time_step = to_timedelta64(1 / 250)
+distance_step = 1
 attrs = dict(
-    d_distance=1,
-    d_time=to_timedelta64(1 / 250),
     category="DAS",
     id="test_data1",
-    time_min=t1,
     data_units="um/(m * s)"
 )
 
 # Create coordinates, labels for each axis in the array.
 coords = dict(
-    distance=np.arange(array.shape[0]) * attrs["d_distance"],
-    time=t1 + np.arange(array.shape[1]) * attrs["d_time"],
+    distance=np.arange(array.shape[0]) * distance_step,
+    time=t1 + np.arange(array.shape[1]) * time_step,
 )
 
 # define dimensions (first label corresponds to data axis 0)

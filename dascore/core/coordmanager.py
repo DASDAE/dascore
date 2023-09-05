@@ -63,7 +63,13 @@ from dascore.exceptions import (
 )
 from dascore.utils.display import get_nice_text
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import all_close, cached_method, iterate, separate_coord_info
+from dascore.utils.misc import (
+    _matches_prefix_suffix,
+    all_close,
+    cached_method,
+    iterate,
+    separate_coord_info,
+)
 from dascore.utils.models import (
     ArrayLike,
     DascoreBaseModel,
@@ -246,18 +252,37 @@ class CoordManager(DascoreBaseModel):
                         out.append(coord_name)
             return out
 
+        def _divide_kwargs(kwargs):
+            """Divide kwargs into coords to update, drop, add, etc."""
+            prefix = self.dims
+            suffix = ("step", "min", "max")
+            coord_updates = {
+                x: kwargs.pop(x)
+                for x in set(kwargs)
+                if _matches_prefix_suffix(x, prefixes=prefix, suffixes=suffix)
+            }
+            coords_to_drop = [i for i, v in kwargs.items() if v is None]
+            # convert input to coord_map/dim_map
+            coords_to_add = {i: v for i, v in kwargs.items() if v is not None}
+            return coord_updates, coords_to_drop, coords_to_add
+
+        coord_updates, coord_to_drop, coord_to_add = _divide_kwargs(kwargs)
         # get coords to drop from selecting None
-        coords_to_drop = [i for i, v in kwargs.items() if v is None]
-        # convert input to coord_map/dim_map
-        _coords_to_add = {i: v for i, v in kwargs.items() if v is not None}
-        coord_map, dim_map = _get_coord_dim_map(_coords_to_add, self.dims)
+        coord_map, dim_map = _get_coord_dim_map(coord_to_add, self.dims)
         # find coords to drop because their dimension changed.
-        coord_drops = _get_dim_change_drop(coord_map, dim_map)
+        indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
-        coords, _ = self.drop_coord(coords_to_drop + coord_drops)
+        coords, _ = self.drop_coord(coord_to_drop + indirect_coord_drops)
         out = coords._get_dim_array_dict()
-        out.update({i: v for i, v in kwargs.items() if i not in coords_to_drop})
-        dims = tuple(x for x in self.dims if x not in coords_to_drop)
+        out.update({i: v for i, v in kwargs.items() if i not in coord_to_drop})
+        # update based on keywords
+        for item, value in coord_updates.items():
+            coord_name, attr = item.split("_")
+            new = list(out[coord_name])
+            coord = get_coord(values=new[1])
+            new[1] = coord.update(**{attr: value})
+            out[coord_name] = tuple(new)
+        dims = tuple(x for x in self.dims if x not in coord_to_drop)
         return get_coord_manager(out, dims=dims)
 
     def update_from_attrs(

@@ -34,8 +34,8 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
         # also add related coords indicating start/stop
         for name in dims:
             coord = patch.get_coord(name).data
-            new_coords[f"{name}_min"] = (name, np.array([coord.min()]))
-            new_coords[f"{name}_max"] = (name, np.array([coord.max()]))
+            new_coords[f"pre_integrate_{name}_min"] = (name, np.array([coord.min()]))
+            new_coords[f"pre_integrate_{name}_max"] = (name, np.array([coord.max()]))
         cm = patch.coords.update_coords(**new_coords)
         return array, cm
 

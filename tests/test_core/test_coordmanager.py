@@ -730,6 +730,14 @@ class TestUpdateCoords:
         cm2, _ = basic_coord_manager.drop_coord("time")
         assert cm1 == cm2
 
+    def test_update_only_start(self, basic_coord_manager):
+        """Ensure start_coord can be used to update."""
+        time1 = basic_coord_manager.coord_map["time"]
+        new_start = time1.max()
+        cm = basic_coord_manager.update_coords(time_min=new_start)
+        time2 = cm.coord_map["time"]
+        assert time2.min() == new_start
+
 
 class TestSqueeze:
     """Tests for squeezing degenerate dimensions."""
