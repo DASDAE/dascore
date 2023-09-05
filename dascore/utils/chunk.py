@@ -8,8 +8,9 @@ import numpy
 import numpy as np
 import pandas as pd
 
-from dascore.constants import numeric_types, timeable_types
+from dascore.constants import attr_conflict_description, numeric_types, timeable_types
 from dascore.exceptions import CoordMergeError, ParameterError
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_middle_value
 from dascore.utils.pd import (
     _remove_overlaps,
@@ -94,6 +95,7 @@ def get_intervals(
     return np.stack([starts, ends]).T
 
 
+@compose_docstring(attr_conflict=attr_conflict_description)
 class ChunkManager:
     """
     A class for managing the chunking of data defined in a dataframe.
@@ -115,6 +117,8 @@ class ChunkManager:
         The upper limit of a gap to tolerate in terms of the sampling
         along the desired dimension. E.G., the default value means entities
         with gaps <= 1.5 * {name}_step will be merged.
+    conflict
+        {attr_conflict}
     **kawrgs
         kwargs specify the column along which to chunk. The key specifies the
         column along which to chunk, typically, `time` or `distance`, and the
@@ -132,6 +136,7 @@ class ChunkManager:
         group_columns: Collection[str] | None = None,
         keep_partial=False,
         tolerance=1.5,
+        conflict="raise",
         **kwargs,
     ):
         self._overlap = overlap
@@ -139,6 +144,7 @@ class ChunkManager:
         self._keep_partials = keep_partial
         self._tolerance = tolerance
         self._name, self._value = self._validate_kwargs(kwargs)
+        self._attr_conflict = conflict
         self._validate_chunker()
 
     def _validate_kwargs(self, kwargs):
@@ -146,7 +152,7 @@ class ChunkManager:
         if not len(kwargs) == 1:
             msg = (
                 f"Chunking only supported along one dimension. You passed "
-                f"You passed kwargs: {kwargs}"
+                f"kwargs: {kwargs}"
             )
             raise ParameterError(msg)
         ((key, value),) = kwargs.items()
@@ -218,12 +224,21 @@ class ChunkManager:
         out = pd.DataFrame(start_stop, columns=list(cols))
         out[f"{name}_step"] = get_middle_value(df[f"{name}_step"].values)
         merger = df.drop(columns=out.columns)
+        # get dims to determine which columns are still compared. Some test
+        # dfs don't have dims though, so it should still work without dims col.
+        dims = set(df.iloc[0].get("dims", "").split(","))
         for col in set(merger.columns):
+            prefix = col.split("_")[0]
+            # If we have specified to ignore or remove conflicting attrs
+            # we don't need to check them here, but we do still check dims.
+            if self._attr_conflict != "raise" and prefix not in dims:
+                continue
             vals = merger[col].unique()
             if len(vals) > 1:
                 msg = (
                     f"Cannot merge on dim {self._name} because all values for "
-                    f"{col} are not equal."
+                    f"{col} are not equal. Consider using the `attr_conflict` "
+                    f"argument to loosen this restriction."
                 )
                 raise CoordMergeError(msg)
 

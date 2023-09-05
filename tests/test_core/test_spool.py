@@ -67,6 +67,8 @@ class TestSpoolEquals:
         """Spools with different chunking should !=."""
         sp1 = random_spool.chunk(time=1.12)
         assert sp1 != random_spool
+        sp2 = random_spool.chunk(time=1.00)
+        assert sp2 != sp1
 
     def test_eq_self(self, random_spool):
         """A spool should always eq itself."""
@@ -78,6 +80,14 @@ class TestSpoolEquals:
         new1.__dict__["bad_attr"] = 1
         new2 = copy.deepcopy(random_spool)
         new2.__dict__["bad_attr"] = 2
+        assert new1 != new2
+
+    def test_unequal_dicts(self, random_spool):
+        """Simulate some dicts which don't have the same values."""
+        new1 = copy.deepcopy(random_spool)
+        new1.__dict__["bad_attr"] = {1: 2}
+        new2 = copy.deepcopy(random_spool)
+        new2.__dict__["bad_attr"] = {2: 3}
         assert new1 != new2
 
 

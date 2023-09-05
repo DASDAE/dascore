@@ -204,6 +204,15 @@ class TestChunkMerge:
         pa2 = pa1.update_attrs(distance_min=new_dist)
         return dc.spool([pa1, pa2])
 
+    @pytest.fixture(scope="class")
+    def adjacent_spool_different_attrs(self, adjacent_spool_no_overlap):
+        """An adjacent spool with on attribute that is different on each patch."""
+        out = []
+        for num, patch in enumerate(adjacent_spool_no_overlap):
+            out.append(patch.update_attrs(my_attr=num))
+        # since
+        return dc.spool(out)
+
     def test_merge_unequal_other(self, distance_adjacent):
         """When distance values are not equal time shouldn't be merge-able."""
         with pytest.raises(CoordMergeError):
@@ -373,3 +382,18 @@ class TestChunkMerge:
         assert (time_min - time_step) < time_tup[0]
         assert time_max <= time_tup[1]
         assert (time_max + time_step) > time_tup[1]
+
+    def test_attrs_conflict(self, adjacent_spool_different_attrs):
+        """Test various cases for specifying what to do when attrs conflict."""
+        spool = adjacent_spool_different_attrs
+        # when we don't specify to ignore or drop attrs this should raise.
+        match = "all values for my_attr"
+        with pytest.raises(CoordMergeError, match=match):
+            spool.chunk(time=...)
+        # however, when we specify drop attrs this shouldn't.
+        out = spool.chunk(time=..., conflict="keep_first")
+        assert isinstance(out, dc.BaseSpool)
+        assert len(out) == 1
+        # make sure we can read the patch
+        patch = out[0]
+        assert isinstance(patch, dc.Patch)
