@@ -624,6 +624,7 @@ def get_format(
     path: str | Path | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
+    **kwargs,
 ) -> tuple[str, str]:
     """
     Return the name of the format contained in the file and version number.
