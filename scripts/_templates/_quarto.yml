@@ -29,7 +29,6 @@ website:
 
   image: "_static/logo.png"
   favicon: "_static/logo.png"
-  twitter-card: true
   repo-subdir: docs
   repo-branch: master
   repo-actions: [edit]
@@ -60,10 +59,6 @@ website:
         file: api/dascore.qmd
 
     right:
-
-      - icon: twitter
-        href: https://twitter.com/dasdae_org
-        aria-label: DASDAE Twitter
 
       - icon: github
         href: https://github.com/dasdae/dascore
