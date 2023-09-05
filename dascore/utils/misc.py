@@ -438,13 +438,17 @@ def separate_coord_info(
         If provided, the required attributes (e.g., min, max, step).
     cant_be_alone
         names which cannot be on their own.
+
+    Returns
+    -------
+    coord_dict and attrs_dict.
     """
 
     def _meets_required(coord_dict):
-        """Return True coord dict does not meet the minimum required keys."""
+        """Return True coord dict meets the minimum required keys."""
         if not coord_dict:
             return False
-        if required is None and (set(coord_dict) - cant_be_alone):
+        if not required and (set(coord_dict) - cant_be_alone):
             return True
         return set(coord_dict).issuperset(required)
 
@@ -594,16 +598,16 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
 
 def _dict_list_diffs(dict_list):
     """Return the keys which are not equal dicts in a list."""
-    out = []
+    out = set()
     first = dict_list[0]
     first_keys = set(first)
     for other in dict_list[1:]:
         if other == first:
             continue
         other_keys = set(other)
-        (first_keys - other_keys) & (other_keys - first_keys)
+        out |= (other_keys - first_keys) | (first_keys - other_keys)
         common_keys = other_keys & first_keys
         for key in common_keys:
             if first[key] != other[key]:
-                out.append(key)
-    return out
+                out.add(key)
+    return sorted(out)

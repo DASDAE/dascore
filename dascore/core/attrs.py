@@ -18,6 +18,7 @@ from dascore.constants import (
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
     PatchType,
+    attr_conflict_description,
     basic_summary_attrs,
     max_lens,
 )
@@ -264,6 +265,7 @@ class PatchAttrs(DascoreBaseModel):
         return out
 
 
+@compose_docstring(conflict_desc=attr_conflict_description)
 def combine_patch_attrs(
     model_list: Sequence[PatchAttrs],
     coord_name: str | None = None,
@@ -281,12 +283,7 @@ def combine_patch_attrs(
     coord_name
         The coordinate, usually a dimension coord, along which to merge.
     conflicts
-        Indicates how to handle conflicts in attributes other than those
-        indicated by dim. If "drop" simply drop conflicting attributes,
-        or attributes not shared by all models. If "raise" raise an
-        [AttributeMergeError](`dascore.exceptions.AttributeMergeError`] when
-        issues are encountered. If "keep_first", just keep the first value
-        for each attribute.
+        {conflict_desc}
     drop_attrs
         If provided, attributes which should be dropped.
     coord
@@ -402,7 +399,9 @@ def combine_patch_attrs(
             uneq_keys = _dict_list_diffs(mod_dict_list)
             msg = (
                 "Cannot merge models, the following non-dim attrs are not "
-                f"equal: {uneq_keys}"
+                f"equal: {uneq_keys}. Consider setting the `conflict` or "
+                f"`attr_conflict` arguments for more flexibility in merging "
+                f"unequal coordinates."
             )
             raise AttributeMergeError(msg)
         final_dict = reduce(_keep_eq, mod_dict_list)

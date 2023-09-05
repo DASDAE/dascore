@@ -281,7 +281,7 @@ def merge_patches(
     return dc.spool(patches).chunk(**{dim: None}, tolerance=tolerance)
 
 
-def _force_patch_merge(patch_dict_list):
+def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     """
     Force a merge of the patches along a dimension.
 
@@ -325,6 +325,7 @@ def _force_patch_merge(patch_dict_list):
 
     df = pd.DataFrame(patch_dict_list)
     merge_dim = _get_merge_col(df)
+    merge_kwargs = merge_kwargs if merge_kwargs is not None else {}
     if merge_dim is None:  # nothing to merge, complete overlap
         return [patch_dict_list[0]]
     dims = df["dims"].iloc[0].split(",")
@@ -338,7 +339,7 @@ def _force_patch_merge(patch_dict_list):
     new_data = np.concatenate(datas, axis=axis)
     new_coord = _get_new_coord(df, merge_dim, coords)
     coord = new_coord.coord_map[merge_dim] if merge_dim in dims else None
-    new_attrs = combine_patch_attrs(attrs, merge_dim, coord=coord)
+    new_attrs = combine_patch_attrs(attrs, merge_dim, coord=coord, **merge_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
