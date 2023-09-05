@@ -146,7 +146,7 @@ class ChunkManager:
         if not len(kwargs) == 1:
             msg = (
                 f"Chunking only supported along one dimension. You passed "
-                f"You passed kwargs: {kwargs}"
+                f"kwargs: {kwargs}"
             )
             raise ParameterError(msg)
         ((key, value),) = kwargs.items()
