@@ -96,14 +96,12 @@ class PatchAttrs(DascoreBaseModel):
     instrument_id: str = Field(
         description="A unique id for the instrument which generated the data.",
         default="",
+        max_length=max_lens["instrument_id"],
     )
     experiment_id: str = Field(
         description="A unique identifier linking this data to an experiment.",
         default="",
-    )
-    experiment_id: str = Field(
-        description="A unique identifier linking this data to an experiment.",
-        default="",
+        max_length=max_lens["experiment_id"],
     )
     tag: str = Field(
         default="", max_length=max_lens["tag"], description="A custom string field."

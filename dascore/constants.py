@@ -78,7 +78,7 @@ max_lens = {
     "station": 12,
     "dims": 40,
     "file_version": 9,
-    "cable_id": 50,
+    "experiment_id": 50,
     "instrument_id": 50,
     "data_type": 20,
     "data_category": 4,
