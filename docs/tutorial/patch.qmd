@@ -183,7 +183,7 @@ print(patch)
 
 # Selecting (trimming)
 
-Patches are trimmed using the [`select`](`dascore.Patch.select`) method.  `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `None` or `...` indicating an open interval.
+Patches are trimmed using the [`select`](`dascore.Patch.select`) method. Most commonly, `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `None` or `...` indicating an open interval.
 
 ```{python}
 import numpy as np
@@ -221,20 +221,19 @@ new = patch.select(time=(-2, -1), relative=True)
 new = patch.select(distance=(..., -100 * ft), relative=True)
 ```
 
-[`iselect`](`dascore.Patch.iselect`) provides the same functionality, but for index-based trimming.
+The `samples` keyword tells `select` the meaning of the query is in samples. Unlike absolute selections, these are **always** relative to the data contained in the patch (eg 0 refers to the first sample along the dimension).
 
 ```{python}
 import dascore as dc
 
 patch = dc.get_example_patch()
 
-# Trim patch to only include first 10 time rows (or columns)
-new = patch.iselect(time=(..., 10))
+# trim patch to only include first 10 time rows (or columns)
+new = patch.select(time=(..., 10), samples=True)
 
-# get the last dimension column/row
-new = patch.iselect(distance=-1)
+# Only include the last distance column or row
+new = patch.select(distance=-1, samples=True)
 ```
-
 
 # Processing
 
@@ -250,11 +249,11 @@ out = (
     .pass_filter(time=(..., 10))  # apply a low-pass 10 Hz butterworth filter
 )
 ```
-The processing methods are located in the [dascore.proc](`dascore.proc`) module. The [patch processing tutorial](processing.qmd) provides more information about various processing routines.
+The processing methods are located in the [dascore.proc](`dascore.proc`) module. The [patch processing tutorial](processing.qmd) provides more information about processing routines.
 
 # Visualization
 
-DASCore provides various visualization functions found in the [dascore.viz](`dascore.viz`) package or using the `Patch.viz` namespace. DASCore generally only implements simple, matplotlib based visualizations but other DASDAE packages will do more interesting visualizations.
+DASCore provides some visualization functions in the [dascore.viz](`dascore.viz`) module or using the `Patch.viz` namespace. DASCore generally only implements simple, matplotlib based visualizations but other DASDAE packages will likely do more interesting visualizations.
 
 ```{python}
 import dascore as dc
@@ -299,7 +298,7 @@ pa1 = pa.update_attrs(network='exp1', new_attr=42)
 ```{python}
 #| echo: false
 assert pa1.attrs.network == "exp1"
-assert pa1.new_attr == 42
+assert pa1.attrs.new_attr == 42
 ```
 
 
@@ -308,38 +307,47 @@ assert pa1.new_attr == 42
 [`Patch.update_coords`](`dascore.core.patch.Patch.update_coords`) returns a new patch with the coordinates changed in some way. These changes can include:
  - Modifying (updating) existing coordinates
  - Adding new coordinates
- - Dropping coordinates
  - Changing coordinate dimensional association
 
 
-For updating information about the coordinates
+### Modifying coordinates
 
-`Patch.update_attrs` also tries to keep the patch attributes consistent.
-For example, changing the start, end, or sampling of a dimension should
-update the other attributes affected by the change.
+Coordinates can be updated by specifying a new array which should take the place of the old one:
 
 ```{python}
 import dascore as dc
+
 pa = dc.get_example_patch()
 
-# update start time should also shift endtime
-pa1 = pa.update_attrs(time_min='2000-01-01')
+# one 1 second to all values in the time array.
+one_second = dc.to_timedelta64(1)
+old_time = pa.coords['time']
+new = pa.update_coords(time=old_time + one_second)
+```
 
-print(pa.attrs['time_min'])
-print(pa1.attrs['time_min'])
+Or by specifying new min, max, or step values for a coordinate.
+
+```{python}
+import dascore as dc
+
+pa = dc.get_example_patch()
+
+# change the starting time of the array
+new_time = pa.coords['time'].min() + one_second
+new = pa.update_coords(time_min=new_time)
 ```
 
 
+### Adding coordinates
 
-It is common to have additional coordinates, such as latitude/longitude,  attached to a particular dimension (e.g., distance). There are two ways to add coordinates to a patch:
+It is common to have additional coordinates, such as latitude/longitude attached to a particular dimension (e.g., distance). It is also possible to add coordinates that are not associated with any dimensions.
 
-## Update Coordinates
-
-The [update_coords](`dascore.Patch.update_coords`) method will return a new patch with the coordinate added, if it didn't exist in the original, or replaced, if it did.
 
 ```{python}
 import numpy as np
+
 import dascore as dc
+
 pa = dc.get_example_patch()
 coords = pa.coords
 dist = coords['distance']
@@ -356,12 +364,35 @@ out_2 = pa.update_coords(
     longitude=('distance', lon),
 )
 
-# Add multi-dimensional coordinates
+# Add coordinate associted with multiple dimensions
 quality = np.ones_like(pa.data)
 out_3 = pa.update_coords(
     quality=(pa.dims, quality)
 )
+
+# add coordinate associated with no dimension
+no_dim_coord = pa.update_coords(non_dim=(None, np.arange(10)))
 ```
+
+### Changing coordinate dimensional association
+
+The dimensions each coordinate is associated with can be changed. For example, to remove a coordinate's dimension association:
+
+```{python}
+import dascore as dc
+
+# this patch has latitude and longitude coordinates
+patch = dc.get_example_patch("random_patch_with_lat_lon")
+
+# drop latitude, this wont affect the data or other coordinates
+lat = patch.coords['latitude']
+patch_detached_lat = patch.update_coords(latitude=(None, lat))
+```
+
+## Drop Coords
+
+
+
 
 # Method Chaining
 
@@ -569,8 +600,8 @@ from dascore.units import furlongs
 
 patch = dc.get_example_patch()
 
-# adding two patches together simply adds their data and checks/merges their
-# coords and attrs.
+# adding two patches together simply adds their data their
+# and checks/merges coords and attrs.
 out = patch + patch
 
 assert np.allclose(patch.data * 2, out.data)
