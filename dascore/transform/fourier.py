@@ -123,11 +123,11 @@ def dft(
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> # perform dft (fft) on time axis
-    >>> dft_time = patch.tran.dft(dim="time")
+    >>> dft_time = patch.dft(dim="time")
     >>> # make it a real fft (no negative frequencies)
-    >>> dft_time_real = patch.tran.dft(dim="time", real=True)
+    >>> dft_time_real = patch.dft(dim="time", real=True)
     >>> # dft on specified dimensions, specify real dimension
-    >>> dft_some_real = patch.tran.dft(dim=("time", "distance"), real="time")
+    >>> dft_some_real = patch.dft(dim=("time", "distance"), real="time")
     """
     dims = list(iterate(dim if dim is not None else patch.dims))
     patch.assert_has_coords(dims)
@@ -249,9 +249,9 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> # perform dft (fft) on time axis
-    >>> dft_time = patch.tran.dft(dim="time")
+    >>> dft_time = patch.dft(dim="time")
     >>> # get inverse dft, transformed axis are ascertained automatically
-    >>> idft = dft_time.tran.idft()
+    >>> idft = dft_time.idft()
     """
     dims, steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
     new_dims = FourierTransformatter().rename_dims(dims, forward=False)

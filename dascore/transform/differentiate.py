@@ -72,9 +72,9 @@ def differentiate(
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> # 2nd order stencil for 1st derivative along time dimension
-    >>> patch_diff_1 = patch.tran.differentiate(dim='time', order=2)
+    >>> patch_diff_1 = patch.differentiate(dim='time', order=2)
     >>> # 1st derivative along all dimensions
-    >>> patch_diff_2 = patch.tran.differentiate(dim=None)
+    >>> patch_diff_2 = patch.differentiate(dim=None)
     """
     dims = iterate(dim if dim is not None else patch.dims)
     dx_or_spacing, axes = _get_dx_or_spacing_and_axes(patch, dims)

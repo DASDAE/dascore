@@ -104,11 +104,11 @@ def integrate(
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> # integrate along time axis, preserve patch shape with indefinite integral
-    >>> time_integrated = patch.tran.integrate(dim="time", definite=False)
+    >>> time_integrated = patch.integrate(dim="time", definite=False)
     >>> # integrate along distance axis, collapse distance coordinate
-    >>> dist_integrated = patch.tran.integrate(dim="distance", definite=True)
+    >>> dist_integrated = patch.integrate(dim="distance", definite=True)
     >>> # integrate along all dimensions.
-    >>> all_integrated = patch.tran.integrate(dim=None, definite=False)
+    >>> all_integrated = patch.integrate(dim=None, definite=False)
     """
     dims = iterate(dim if dim is not None else patch.dims)
     dxs_or_vals, axes = _get_dx_or_spacing_and_axes(patch, dims)

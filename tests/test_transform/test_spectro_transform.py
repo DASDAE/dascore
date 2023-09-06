@@ -15,12 +15,12 @@ class TestSpectroTransform:
     def spec_patch(self, random_patch):
         """Simple patch trasnformed to spectrogram."""
         patch = random_patch.set_units("m/s")
-        return patch.tran.spectrogram("time")
+        return patch.spectrogram("time")
 
     def test_units(self, random_patch):
         """Ensure units were properly converted."""
         patch = random_patch.set_units("m/s")
-        spec_patch = patch.tran.spectrogram("time")
+        spec_patch = patch.spectrogram("time")
         # first check coord units
         coord1 = patch.get_coord("time")
         coord2 = spec_patch.get_coord("ft_time")
@@ -56,10 +56,10 @@ class TestSpectroTransform:
 
     def test_transpose(self, random_patch):
         """Ensure when patch dim order is different it still works."""
-        out = random_patch.transpose().tran.spectrogram("time")
+        out = random_patch.transpose().spectrogram("time")
         assert set(out.dims) == (set(random_patch.dims) | {"ft_time"})
 
     def test_distance_dim(self, random_patch):
         """Ensure distance dimension works."""
-        out = random_patch.transpose().tran.spectrogram("distance")
+        out = random_patch.transpose().spectrogram("distance")
         assert set(out.dims) == (set(random_patch.dims) | {"ft_distance"})

@@ -14,7 +14,7 @@ on:
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
-  CACHE_NUMBER: 1
+  CACHE_NUMBER: 2
 
 # Cancel previous runs when this one starts.
 concurrency:

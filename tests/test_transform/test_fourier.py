@@ -88,7 +88,7 @@ class TestDiscreteFourierTransform:
 
     def test_real_fft(self, sin_patch):
         """Ensure real fft works."""
-        out = sin_patch.tran.dft("time", real=True)
+        out = sin_patch.dft("time", real=True)
         coord = out.get_coord("ft_time")
         freq_ax = out.dims.index("ft_time")
         assert coord.min() == 0
@@ -109,7 +109,7 @@ class TestDiscreteFourierTransform:
     def test_real_multiple_dims(self, sin_patch):
         """Ensure the real axis can be specified."""
         patch = sin_patch
-        out = patch.tran.dft(dim=("distance", "time"), real="distance")
+        out = patch.dft(dim=("distance", "time"), real="distance")
         assert all(x.startswith("ft_") for x in out.dims)
         real_coord = out.get_coord("ft_distance")
         assert real_coord.min() == 0
@@ -120,8 +120,8 @@ class TestDiscreteFourierTransform:
         transforms correctly.
         """
         pa1, pa2 = sin_patch, fft_sin_patch_time
-        vals1 = (pa1**2).tran.integrate("time", definite=True)
-        vals2 = (pa2.abs() ** 2).tran.integrate("ft_time", definite=True)
+        vals1 = (pa1**2).integrate("time", definite=True)
+        vals2 = (pa2.abs() ** 2).integrate("ft_time", definite=True)
         assert np.allclose(vals1.data, vals2.data)
 
 
@@ -150,21 +150,21 @@ class TestInverseDiscreteFourierTransform:
 
     def test_undo_real_dft(self, sin_patch):
         """Ensure real dft is properly handled."""
-        pa1 = sin_patch.tran.dft(dim="time", real=True)
-        pa2 = pa1.tran.idft().real()
+        pa1 = sin_patch.dft(dim="time", real=True)
+        pa2 = pa1.idft().real()
         self._patches_about_equal(sin_patch, pa2)
 
     def test_raises_on_untransformed_patch(self, sin_patch):
         """Only patches which have been first transformed can be idft'ed."""
         with pytest.raises(NotImplementedError):
-            sin_patch.tran.idft("time")
+            sin_patch.idft("time")
 
     def test_partial_inverse(self, fft_sin_patch_all, sin_patch):
         """Ensure inverse works on only a single axis."""
         # since we only reverse time it should be the same as forward distance.
-        ift = fft_sin_patch_all.tran.idft("time")
-        dft = sin_patch.tran.dft("distance")
+        ift = fft_sin_patch_all.idft("time")
+        dft = sin_patch.dft("distance")
         self._patches_about_equal(ift, dft)
         # and then if we reverse distance it should be the same as original
-        full_inverse = ift.tran.idft("distance")
+        full_inverse = ift.idft("distance")
         self._patches_about_equal(full_inverse, sin_patch)

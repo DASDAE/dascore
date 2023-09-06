@@ -47,7 +47,7 @@ class TestDifferentiateOrder2:
         """Ensure calling differentiate with all dims works."""
         patch = random_patch
         for dim in patch.dims:  # test all dimensions.
-            out = random_patch.tran.differentiate(dim=dim)
+            out = random_patch.differentiate(dim=dim)
             axis = patch.dims.index(dim)
             # ensure the differentiation was applied
             sampling = to_float(patch.get_coord(dim).step)
@@ -58,7 +58,7 @@ class TestDifferentiateOrder2:
     def test_units(self, random_patch):
         """Ensure data units are updated but coord units shouldn't change."""
         patch = random_patch.set_units("m/s")
-        out = patch.tran.differentiate(dim="time")
+        out = patch.differentiate(dim="time")
         expected_units = get_quantity("m/s^2")
         # none of the coordinates/ units should have changed.
         assert out.coords == patch.coords
@@ -110,18 +110,18 @@ class TestCompareOrders:
 
     def test_different_orders(self, linear_patch, order):
         """Different order stencils should be approx equal with simple data."""
-        patch = linear_patch.tran.differentiate("distance", order=order)
+        patch = linear_patch.differentiate("distance", order=order)
         # since linear_patch is just linear along distance axis this should be 1.0
         assert np.allclose(patch.data, 1.0)
 
     def test_diff_all_dims_plus(self, x_plus_y_patch, order):
         """Ensure diffs over all dimensions on x+y patch."""
-        p1 = x_plus_y_patch.tran.differentiate(dim=None, order=order)
+        p1 = x_plus_y_patch.differentiate(dim=None, order=order)
         # since dxdy(3x + 2y) = 0
         assert np.allclose(p1.data, 0.0)
 
     def test_diff_all_dims_mult(self, x_times_y_patch, order):
         """Ensure diffs over all dimensions on x+y patch."""
-        p1 = x_times_y_patch.tran.differentiate(dim=None, order=order)
+        p1 = x_times_y_patch.differentiate(dim=None, order=order)
         # since dxdy(3x * 2y) = 6
         assert np.allclose(p1.data, 6.0)

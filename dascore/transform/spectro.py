@@ -88,12 +88,12 @@ def spectrogram(patch: PatchType, dim: str = "time", **kwargs) -> PatchType:
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> # calculate spectrogram along time axis
-    >>> time_spec = patch.tran.spectrogram("time")
+    >>> time_spec = patch.spectrogram("time")
     >>> # note the new dimensions
     >>> print(time_spec.dims)
     ('distance', 'ft_time', 'time')
     >>> # perform fourier transforms along distance dimensions
-    >>> dist_spec = patch.tran.spectrogram("distance")
+    >>> dist_spec = patch.spectrogram("distance")
     """
     assert len(iterate(dim)) == 1, "only one dimension allowed."
     coord = patch.get_coord(dim)
