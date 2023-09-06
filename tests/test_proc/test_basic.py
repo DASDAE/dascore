@@ -289,7 +289,7 @@ class TestSqueeze:
 
     def test_tutorial_example(self, random_patch):
         """Ensure the tutorial snippet works."""
-        flat_patch = random_patch.iselect(distance=0)
+        flat_patch = random_patch.select(distance=0, samples=True)
         squeezed = flat_patch.squeeze()
         assert len(squeezed.dims) < len(flat_patch.dims)
 

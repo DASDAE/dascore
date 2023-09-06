@@ -200,7 +200,6 @@ class Patch:
     # --- processing funcs
 
     select = dascore.proc.select
-    iselect = dascore.proc.iselect
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna

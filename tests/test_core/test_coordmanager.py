@@ -370,6 +370,27 @@ class TestDrop:
 class TestSelect:
     """Tests for filtering coordinates."""
 
+    # index ranges to compare with normal select.
+    slice_inds = (
+        (None, 5),
+        (..., 5),
+        (1, 5),
+        (1, None),
+        (1, ...),
+        (..., ...),
+        (None, None),
+        (3, 4),
+        (-4, -1),
+        (1, -1),
+    )
+    # single index values to test
+    inds = (
+        0,
+        1,
+        -1,
+        -2,
+    )
+
     def test_2d_coord_raises(self, coord_manager_multidim):
         """Select shouldn't work on 2D coordinates."""
         with pytest.raises(CoordError, match="Only 1 dimensional"):
@@ -430,34 +451,9 @@ class TestSelect:
         assert new.shape == ar.shape
         assert out == basic_coord_manager
 
-
-class TestISelect:
-    """Tests for index-based selections."""
-
-    # index ranges to compare with normal select.
-    slice_inds = (
-        (None, 5),
-        (..., 5),
-        (1, 5),
-        (1, None),
-        (1, ...),
-        (..., ...),
-        (None, None),
-        (3, 4),
-        (-4, -1),
-        (1, -1),
-    )
-    # single index values to test
-    inds = (
-        0,
-        1,
-        -1,
-        -2,
-    )
-
     @pytest.mark.parametrize("slice_range", slice_inds)
     def test_compare_to_select(self, basic_coord_manager, slice_range):
-        """Ensure select and iselect behave the same with equiv. data."""
+        """Ensure select with and without samples behaves the same with equiv. data."""
         cm = basic_coord_manager
         for name, coord in cm.coord_map.items():
             ind_tuple = slice_range
@@ -472,20 +468,20 @@ class TestISelect:
                 assert all_close(out1.values, out2.values)
             # then check that the whole coord_manager are equal
             cm1 = cm.select(**{name: value_tuple})
-            cm2 = cm.iselect(**{name: ind_tuple})
+            cm2 = cm.select(**{name: ind_tuple}, samples=True)
             assert cm1 == cm2
 
     @pytest.mark.parametrize("index", inds)
     def test_single_values(self, basic_coord_manager, index):
         """
         Single values should be treated like slice(val, val+1)
-        as not to collapse the dimensions.
+        as not to collapse the dimensions when samples=True.
         """
         cm = basic_coord_manager
         data = np.empty(cm.shape)
         for dim in basic_coord_manager.dims:
             kwargs = {dim: index}
-            out1, new_data = cm.iselect(array=data, **kwargs)
+            out1, new_data = cm.select(array=data, samples=True, **kwargs)
             dim_ind = cm.dims.index(dim)
             # now the array should have a len(1) in the selected dimension.
             assert out1.shape[dim_ind] == new_data.shape[dim_ind] == 1
@@ -497,7 +493,7 @@ class TestISelect:
         """Ensure trim also trims related dimensions."""
         cm = coord_manager_multidim
         data = np.empty(cm.shape)
-        out, new_data = cm.iselect(array=data, time=slice(2, 4))
+        out, new_data = cm.select(array=data, time=slice(2, 4), samples=True)
         for name, coord in out.coord_map.items():
             dims = cm.dim_map[name]
             if "time" not in dims:
@@ -737,6 +733,15 @@ class TestUpdateCoords:
         cm = basic_coord_manager.update_coords(time_min=new_start)
         time2 = cm.coord_map["time"]
         assert time2.min() == new_start
+
+    def test_dissociate(self, basic_coord_manager):
+        """Ensure coordinates can be dissociated with update_coords."""
+        time = basic_coord_manager.coord_map["time"]
+        new_time = time.values + dc.to_timedelta64(1)
+        new = basic_coord_manager.update_coords(new_time=("time", new_time))
+        assert "new_time" in new.dim_map and "new_time" in new.coord_map
+        dissociated = new.update_coords(new_time=(None, new_time))
+        assert dissociated.dim_map["new_time"] == ()
 
 
 class TestSqueeze:

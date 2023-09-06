@@ -98,17 +98,46 @@ class PatchAttrs(DascoreBaseModel):
         arbitrary_types_allowed=True,
     )
 
-    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
-    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
-    data_units: UnitQuantity | None = None
-    instrument_id: str = Field("", max_length=max_lens["instrument_id"])
-    cable_id: str = Field("", max_length=max_lens["cable_id"])
-    tag: str = Field("", max_length=max_lens["tag"])
-    station: str = Field("", max_length=max_lens["station"])
-    network: str = Field("", max_length=max_lens["network"])
-    history: str | Sequence[str] = Field(default_factory=list)
+    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = Field(
+        description="Describes the quantity being measured.", default=""
+    )
+    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = Field(
+        description="Describes the type of data.",
+        default="",
+    )
+    data_units: UnitQuantity | None = Field(
+        default=None, description="The units of the data measurements"
+    )
+    instrument_id: str = Field(
+        description="A unique id for the instrument which generated the data.",
+        default="",
+    )
+    experiment_id: str = Field(
+        description="A unique identifier linking this data to an experiment.",
+        default="",
+    )
+    experiment_id: str = Field(
+        description="A unique identifier linking this data to an experiment.",
+        default="",
+    )
+    tag: str = Field(
+        default="", max_length=max_lens["tag"], description="A custom string field."
+    )
+    station: str = Field(
+        default="", max_length=max_lens["station"], description="A station code."
+    )
+    network: str = Field(
+        default="", max_length=max_lens["network"], description="A network code."
+    )
+    history: str | Sequence[str] = Field(
+        default_factory=list, description="A list of processing performed on the patch."
+    )
 
-    dims: CommaSeparatedStr = Field("", max_length=max_lens["dims"])
+    dims: CommaSeparatedStr = Field(
+        default="",
+        max_length=max_lens["dims"],
+        description="A tuple of comma-separated dimensions names.",
+    )
 
     coords: Annotated[
         FrozenDict[str, CoordSummary],

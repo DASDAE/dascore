@@ -123,7 +123,7 @@ def _to_slice(limits):
     return slice(start, stop)
 
 
-def _get_indexers_and_new_coords_dict(cm, kwargs, index=False, relative=False):
+def _get_indexers_and_new_coords_dict(cm, kwargs, samples=False, relative=False):
     """Function to get reductions for each dimension."""
     dim_reductions = {x: slice(None, None) for x in cm.dims}
     dimap = cm.dim_map
@@ -136,7 +136,7 @@ def _get_indexers_and_new_coords_dict(cm, kwargs, index=False, relative=False):
         _validate_select_coords(coord, coord_name)
         dim_name = dimap[coord_name][0]
         # different logic if we are using indices or values
-        if not index:
+        if not samples:
             new_coord, reductions = coord.select(limits, relative=relative)
         else:
             reductions = _to_slice(limits)
@@ -542,31 +542,8 @@ class CoordManager(DascoreBaseModel):
             dim_map[coord_name] = tuple(old_to_new[x] for x in coord_dims)
         return self.__class__(dims=dims, coord_map=coord_map, dim_map=dim_map)
 
-    def iselect(self, array: MaybeArray = None, **kwargs) -> tuple[Self, MaybeArray]:
-        """
-        Perform index-based selection on coordinates.
-
-        Parameters
-        ----------
-        array
-            An array to which the selection will be applied.
-        **kwargs
-            Used to specify select arguments. Can be of the form
-            {coord_name: (lower_index, upper_index) or coord_name: index}.
-            As is standard in python, negative indices refer to the end of
-            sequence.
-        """
-        new_coords, indexers = _get_indexers_and_new_coords_dict(
-            self,
-            kwargs,
-            relative=False,
-            index=True,
-        )
-        new_cm = self.update_coords(**new_coords)
-        return new_cm, self._get_new_data(indexers, array)
-
     def select(
-        self, array: MaybeArray = None, relative=False, **kwargs
+        self, array: MaybeArray = None, relative=False, samples=False, **kwargs
     ) -> tuple[Self, MaybeArray]:
         """
         Perform value-based selection on coordinates.
@@ -577,12 +554,14 @@ class CoordManager(DascoreBaseModel):
             An array to which the selection will be applied.
         relative
             If True, coordinate updates are relative.
+        samples
+            If True, the query meaning is in samples.
         **kwargs
             Used to specify select arguments. Can be of the form
             {coord_name: (lower_limit, upper_limit)}.
         """
         new_coords, indexers = _get_indexers_and_new_coords_dict(
-            self, kwargs, index=False, relative=relative
+            self, kwargs, samples=samples, relative=relative
         )
         new_cm = self.update_coords(**new_coords)
         return new_cm, self._get_new_data(indexers, array)

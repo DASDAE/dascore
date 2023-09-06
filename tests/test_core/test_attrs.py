@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
@@ -430,3 +431,12 @@ class TestDecomposeAttrs:
         """Ensure all times are datetime64."""
         time_dtypes = decomposed_attrs["dims"]["time"]
         assert set(time_dtypes) == {"datetime64"}
+
+
+class TestGetAttrSummary:
+    """Test getting dataframe of summary info."""
+
+    def test_summary(self, random_attrs):
+        """Ensure a dataframe is returned."""
+        out = random_attrs.get_summary_df()
+        assert isinstance(out, pd.DataFrame)

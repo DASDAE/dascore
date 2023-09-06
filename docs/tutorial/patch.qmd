@@ -26,22 +26,38 @@ pa1 = dc.get_example_patch("random_das")
 pa2 = dc.get_example_patch("example_event_1")
 ```
 
+Other supported example patches are:
+```{python}
+#| echo: false
+from pprint import pprint
+
+import dascore as dc
+
+pprint(sorted(dc.examples.EXAMPLE_PATCHES))
+```
+
 ## Load a File
 
-We first download a small example fiber file from a URL in the DASCore library (you need an internet connection). Next, we read it into a [spool](`dascore.core.spool.BaseSpool`) object then get the first (and only) patch. Spools are covered in more detail in the [next section](spool.qmd).
+A single file can be loaded like this:
 
 ```{python}
 import dascore as dc
 from dascore.utils.downloader import fetch
 
-path = fetch("terra15_das_1_trimmed.hdf5")  # path to a datafile
+# first we download an example data file. You can replace
+# this with the path to your file.
+path = fetch("terra15_das_1_trimmed.hdf5")
 
+# then we get the first patch in the spool
 pa = dc.spool(path)[0]
 ```
 
-## Create a Patch from Scratch
+Spools are covered in more detail in the [next section](spool.qmd).
 
-Patches can be created from using:
+
+## Manually creating a Patch
+
+Patches can be created from:
 
 - A data array
 - Coordinates for labeling each axis
@@ -57,9 +73,6 @@ from dascore.utils.time import to_timedelta64
 array = np.random.random(size=(300, 2_000))
 
 # Create attributes, or metadata
-t1 = dc.to_datetime64("2017-09-18")
-time_step = to_timedelta64(1 / 250)
-distance_step = 1
 attrs = dict(
     category="DAS",
     id="test_data1",
@@ -67,6 +80,9 @@ attrs = dict(
 )
 
 # Create coordinates, labels for each axis in the array.
+t1 = dc.to_datetime64("2017-09-18")
+time_step = to_timedelta64(1 / 250)
+distance_step = 1
 coords = dict(
     distance=np.arange(array.shape[0]) * distance_step,
     time=t1 + np.arange(array.shape[1]) * time_step,
@@ -95,7 +111,7 @@ print(f"Data contents are\n{patch.data}")
 ```
 
 :::{.callout-note}
-The data arrays are should be read-only. This means you can't modify them, but should first make a copy.
+The data arrays should be read-only. This means you can't modify them, but should first make a copy.
 
 ```python
 import numpy as np
@@ -110,7 +126,7 @@ array[:10] = 12  # then this works
 
 ## Coords
 
-DASCore implements a special class, called a [CoordinateManager](`dascore.core.coordmanager.CoordManager`), which managers dimension names, coordinate labels, etc. This class behaves like a dict, so coordinate arrays are easily accessed via their names.
+DASCore implements a special class, called a [CoordinateManager](`dascore.core.coordmanager.CoordManager`), which managers dimension names, coordinate labels, etc. `CoordinateManager` behaves like a dictionary for getting coordinate arrays (labels):
 
 ```{python}
 import dascore as dc
@@ -132,19 +148,27 @@ Coords also have a useful string representation:
 print(coords)
 ```
 
-You can read more about the coordinate manager in [its doc page](`dascore.core.coordmanager`).
+:::{callout.note}
+There are two types of entities included in coordinates:
+ - Dimension (dims): the name and labels associated with a patch dimension (e.g. time, distance)
+ - Coordinate (coords): the name and labels for non-dimension data associated with a dimension (e.g. latitude, longitude)
+
+All dimensions are coordinates but not all coordinates are dimensions.
+:::
+
+The rest of the `CoordManager` features are mostly used internally by DASCore, but you can read more about it [on the `CoordManager` doc page](`dascore.core.coordmanager`).
 
 ## Attrs
 
-The metadata stored in `Patch.attrs` is a [pydnatic model](https://docs.pydantic.dev/usage/models/) which enforces some basic schema validation. You can print the schema info like this:
+The metadata stored in `Patch.attrs` is a [pydnatic model](https://docs.pydantic.dev/usage/models/) which enforces some basic schema validation. You can get a table of the attribute descriptions like this:
 
 ```python
 import dascore as dc
 
-print(dc.PatchAttrs.__doc__)
+print(dc.PatchAttrs.get_summary_df())
 ```
 
-There may also be other attributes added by specific fiber formats.
+Specific data formats may also add attributes (e.g. "gauge_length").
 
 ## String Rep.
 
@@ -156,10 +180,6 @@ import dascore as dc
 patch = dc.get_example_patch()
 print(patch)
 ```
-
-:::{callout-note}
-For various reasons, Patches should be treated as *immutable*, meaning they should not be modified in place, but rather new patches are created when something needs to be modified.
-:::
 
 # Selecting (trimming)
 
@@ -250,9 +270,7 @@ patch.viz.waterfall(show=True, scale=0.2);
 
 # Modifying Patches
 
-Because patches should be treated as immutable objects, you can't just modify
-them with normal item assignment. There are a few methods that return new
-patches with modifications, however, that are functionally the same.
+Because patches should be treated as immutable objects, they can't be modified with normal item assignment. There are a few methods that return new patches with modifications, however, that are functionally the same.
 
 ## New
 
@@ -268,17 +286,33 @@ new = pa.new(data=pa.data * 10)
 
 ## Update Attrs
 
-[`Patch.update_attrs`](`dascore.core.patch.Patch.update_attrs`) is for making small changes
-to the patch attrs (metadata) while keeping the unaffected metadata (`Patch.new` would require
-you replace the entirety of attrs).
+[`Patch.update_attrs`](`dascore.core.patch.Patch.update_attrs`) is for making small changes to the patch attrs (metadata) while keeping the unaffected metadata (`Patch.new` would require you replace the entirety of attrs).
 
 ```{python}
 import dascore as dc
 pa = dc.get_example_patch()
 
 # update existing attribute 'network' and create new attr 'new_attr'
-pa1 = pa.update_attrs(**{'network': 'exp1', 'new_attr': 42})
+pa1 = pa.update_attrs(network='exp1', new_attr=42)
 ```
+
+```{python}
+#| echo: false
+assert pa1.attrs.network == "exp1"
+assert pa1.new_attr == 42
+```
+
+
+## Update Coords
+
+[`Patch.update_coords`](`dascore.core.patch.Patch.update_coords`) returns a new patch with the coordinates changed in some way. These changes can include:
+ - Modifying (updating) existing coordinates
+ - Adding new coordinates
+ - Dropping coordinates
+ - Changing coordinate dimensional association
+
+
+For updating information about the coordinates
 
 `Patch.update_attrs` also tries to keep the patch attributes consistent.
 For example, changing the start, end, or sampling of a dimension should
@@ -293,6 +327,40 @@ pa1 = pa.update_attrs(time_min='2000-01-01')
 
 print(pa.attrs['time_min'])
 print(pa1.attrs['time_min'])
+```
+
+
+
+It is common to have additional coordinates, such as latitude/longitude,  attached to a particular dimension (e.g., distance). There are two ways to add coordinates to a patch:
+
+## Update Coordinates
+
+The [update_coords](`dascore.Patch.update_coords`) method will return a new patch with the coordinate added, if it didn't exist in the original, or replaced, if it did.
+
+```{python}
+import numpy as np
+import dascore as dc
+pa = dc.get_example_patch()
+coords = pa.coords
+dist = coords['distance']
+time = coords['time']
+
+# Add a single coordinate associated with distance dimension
+lat = np.arange(0, len(dist)) * .001 -109.857952
+out_1 = pa.update_coords(latitude=('distance', lat))
+
+# Add multiple coordinates associated with distance dimension
+lon = np.arange(0, len(dist)) *.001 + 41.544654
+out_2 = pa.update_coords(
+    latitude=('distance', lat),
+    longitude=('distance', lon),
+)
+
+# Add multi-dimensional coordinates
+quality = np.ones_like(pa.data)
+out_3 = pa.update_coords(
+    quality=(pa.dims, quality)
+)
 ```
 
 # Method Chaining
@@ -330,39 +398,6 @@ pa = (
 )
 ```
 
-# Adding Coordinates
-
-It is common to have additional coordinates, such as latitude/longitude,  attached to a particular dimension (e.g., distance). There are two ways to add coordinates to a patch:
-
-## Update Coordinates
-
-The [update_coords](`dascore.Patch.update_coords`) method will return a new patch with the coordinate added, if it didn't exist in the original, or replaced, if it did.
-
-```{python}
-import numpy as np
-import dascore as dc
-pa = dc.get_example_patch()
-coords = pa.coords
-dist = coords['distance']
-time = coords['time']
-
-# Add a single coordinate associated with distance dimension
-lat = np.arange(0, len(dist)) * .001 -109.857952
-out_1 = pa.update_coords(latitude=('distance', lat))
-
-# Add multiple coordinates associated with distance dimension
-lon = np.arange(0, len(dist)) *.001 + 41.544654
-out_2 = pa.update_coords(
-    latitude=('distance', lat),
-    longitude=('distance', lon),
-)
-
-# Add multi-dimensional coordinates
-quality = np.ones_like(pa.data)
-out_3 = pa.update_coords(
-    quality=(pa.dims, quality)
-)
-```
 
 ## Coords in Patch Initialization
 
