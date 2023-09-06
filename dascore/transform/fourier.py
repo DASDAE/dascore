@@ -48,7 +48,7 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real):
 
     # first disassociate old coordinates. We do this rather than drop them
     # so the idft can find them and exactly restore old coords.
-    old_cm = patch.coords.disassociate_coord(dims)
+    old_cm = patch.coords.disassociate_coord(*dims)
     new_coords = old_cm.get_coord_tuple_map()
     ft = FourierTransformatter()
     for i, dim in enumerate(dims):
@@ -177,10 +177,10 @@ def _get_idft_dims_steps_axis(patch, dim):
     return dims, steps, axis, has_real
 
 
-def _get_idft_coords_and_sizes(patch, dims, steps, new_dims, axes, real):
+def _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real):
     """Get the new coords for the idft and expected sizes to pass to numpy."""
     shapes = patch.shape
-    coord_map = patch.coords.disassociate_coord(dims).get_coord_tuple_map()
+    coord_map = patch.coords.disassociate_coord(*dims).get_coord_tuple_map()
     sizes = []
     for old_dim, new_dim, ax in zip(dims, new_dims, axes):
         # if old dim is stored
@@ -197,7 +197,7 @@ def _get_idft_coords_and_sizes(patch, dims, steps, new_dims, axes, real):
             sizes.append(len(potential_coord))
     ft = FourierTransformatter()
     new_dims = ft.rename_dims(patch.dims, index=axes, forward=False)
-    cm = get_coord_manager(coord_map, dims=new_dims).drop_coord(dims)[0]
+    cm = get_coord_manager(coord_map, dims=new_dims).drop_coords(*dims)[0]
     out_size = np.array(sizes) if len(sizes) else None
     return cm, out_size
 
@@ -256,7 +256,7 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     dims, steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
     new_dims = FourierTransformatter().rename_dims(dims, forward=False)
     func = nft.irfftn if real else nft.ifftn
-    coords, sizes = _get_idft_coords_and_sizes(patch, dims, steps, new_dims, axes, real)
+    coords, sizes = _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real)
     # now unshift data and undo scaling
     ax_slice = slice(None, -1) if real else slice(None)
     scale_factor = np.prod([to_float(coords.coord_map[x].step) for x in new_dims])

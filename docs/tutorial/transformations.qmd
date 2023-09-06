@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-In DASCore, transformations are operations which change the units of a patch. Transforms can be found in the [transform module](`dascore.transform`) or access via the `Patch.tran` attribute.
+In DASCore, transformations are operations which change the units of a patch. Transforms can be found in the [transform module](`dascore.transform`) or access as `Patch` methods.
 
 # Discrete Fourier Transforms
 
@@ -17,7 +17,7 @@ import dascore as dc
 # get example, set unit to velocity (just for demonstration)
 patch = dc.get_example_patch().set_units("m/s")
 
-transformed = patch.tran.dft(dim="time")
+transformed = patch.dft(dim="time")
 
 # note how the dimension name has changed
 print(f"old_dims: {patch.dims} new dims: {transformed.dims}")
@@ -36,15 +36,15 @@ In many cases, it is advantages to only calculate the fourier transform correspo
 
 ```{python}
 # Transform distance axis to Fourier domain using real fourier transform
-real_transform = patch.tran.dft(dim='distance', real=True)
+real_transform = patch.dft(dim='distance', real=True)
 print(real_transform.get_coord("ft_distance"))
 ```
 
-Of course, this operation can be undone using the [idft](`dascore.transform.fourier.idft`)
+The Inverse Discrete Fourier Transform [idft](`dascore.transform.fourier.idft`) undoes the transformation.
 
 ```{python}
 # transform back to time domain, take only real component.
-patch_2 = transformed.tran.idft().real()
+patch_2 = transformed.idft().real()
 assert np.allclose(patch_2.data, patch.data)
 ```
 
@@ -71,7 +71,7 @@ We can transform and visualize it in the F-k domain using the dft.
 
 ```{python}
 # Apply transform on all dimensions
-fk_patch = patch.tran.dft(patch.dims)
+fk_patch = patch.dft(patch.dims)
 
 # We can't plot complex arrays so only plot amplitude
 ax = fk_patch.abs().viz.waterfall()

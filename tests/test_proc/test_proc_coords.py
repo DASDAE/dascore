@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+
+from dascore.exceptions import ParameterError
 
 
 class TestSortCoords:
@@ -69,5 +72,16 @@ class TestSnapDims:
             assert coord.evenly_sampled
 
 
-class TestUpdateCoords:
-    """Tests for updating coordinates."""
+class TestDropCoords:
+    """Tests for dropping coordinates."""
+
+    def test_drop_non_dim(self, random_patch_with_lat_lon):
+        """Ensure non_dim coords can be dropped."""
+        out = random_patch_with_lat_lon.drop_coords("latitude")
+        assert "latitude" not in out.coords.coord_map
+
+    def test_drop_dim_raises(self, random_patch):
+        """Ensure a dimensional coordinate can be dropped."""
+        msg = "Cannot drop dimensional coordinates"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.drop_coords("time")

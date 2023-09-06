@@ -1,13 +1,13 @@
 """Processing operations that have much to do with coordinates."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from typing_extensions import Self
 
 from dascore.constants import PatchType
 from dascore.core.coords import BaseCoord
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, ParameterError
 from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
 
@@ -167,3 +167,30 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
     """
     new_coord = self.coords.update_coords(**kwargs)
     return self.new(coords=new_coord, dims=new_coord.dims)
+
+
+@patch_function()
+def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
+    """
+    Update the coordiantes of a patch.
+
+    Will either add new coordinates, or update existing ones.
+
+    Parameters
+    ----------
+    *coords
+        One or more coordinates to drop.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> pa = dc.get_example_patch("random_patch_with_lat_lon")
+    >>> # Drop non-dimensional coordinate latitude
+    >>> pa_no_lat = pa.drop_coords("latitude")
+    """
+    if dim_coords := set(coords) & set(self.dims):
+        msg = f"Cannot drop dimensional coordinates: {dim_coords}"
+        raise ParameterError(msg)
+    new_coord, data = self.coords.drop_coords(*coords, array=self.data)
+    return self.new(coords=new_coord, dims=new_coord.dims, data=data)

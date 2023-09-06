@@ -337,21 +337,21 @@ class TestDrop:
     def test_drop(self, coord_manager_multidim):
         """Ensure coordinates can be dropped."""
         dim = "distance"
-        coords, _ = coord_manager_multidim.drop_coord(dim)
+        coords, _ = coord_manager_multidim.drop_coords(dim)
         assert dim not in coords.dims
         for _name, dims in coords.dim_map.items():
             assert dim not in dims
 
     def test_drop_doesnt_have_coord(self, coord_manager_multidim):
         """Trying to drop a dim that doesnt exist should just return."""
-        out, _ = coord_manager_multidim.drop_coord("bob")
+        out, _ = coord_manager_multidim.drop_coords("bob")
         assert out == coord_manager_multidim
 
     def test_trims_array(self, coord_manager_multidim):
         """Trying to drop a dim that doesnt exist should just return."""
         array = np.ones(coord_manager_multidim.shape)
         axis = coord_manager_multidim.dims.index("time")
-        cm, new_array = coord_manager_multidim.drop_coord("time", array)
+        cm, new_array = coord_manager_multidim.drop_coords("time", array=array)
         assert new_array.shape[axis] == 0
 
     def test_drop_non_dim_coord(self, coord_manager_multidim):
@@ -360,7 +360,7 @@ class TestDrop:
         array = np.ones(cm.shape)
         coords_to_drop = set(cm.coord_map) - set(cm.dims)
         for coord in coords_to_drop:
-            cm_new, array_new = cm.drop_coord(coord, array=array)
+            cm_new, array_new = cm.drop_coords(coord, array=array)
             # array should not have changed.
             assert array.shape == array_new.shape
             assert np.all(np.equal(array, array_new))
@@ -723,7 +723,7 @@ class TestUpdateCoords:
     def test_update_none_drops(self, basic_coord_manager):
         """Ensure when passing coord=None the coord is dropped."""
         cm1 = basic_coord_manager.update_coords(time=None)
-        cm2, _ = basic_coord_manager.drop_coord("time")
+        cm2, _ = basic_coord_manager.drop_coords("time")
         assert cm1 == cm2
 
     def test_update_only_start(self, basic_coord_manager):
@@ -1107,7 +1107,7 @@ class TestDisassociate:
         assert time_dim == ()
         assert "time" not in cm.dims
         # but if both time and quality are dissociated nothing should be dropped.
-        cm = coord_manager_multidim.disassociate_coord(("time", "quality"))
+        cm = coord_manager_multidim.disassociate_coord("time", "quality")
         assert {"time", "quality"}.issubset(set(cm.coord_map))
         assert "time" not in cm.dims
 

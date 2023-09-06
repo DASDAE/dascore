@@ -162,10 +162,10 @@ The rest of the `CoordManager` features are mostly used internally by DASCore, b
 
 The metadata stored in `Patch.attrs` is a [pydnatic model](https://docs.pydantic.dev/usage/models/) which enforces some basic schema validation. You can get a table of the attribute descriptions like this:
 
-```python
+```{python}
 import dascore as dc
 
-print(dc.PatchAttrs.get_summary_df())
+dc.PatchAttrs.get_summary_df()
 ```
 
 Specific data formats may also add attributes (e.g. "gauge_length").
@@ -374,6 +374,7 @@ out_3 = pa.update_coords(
 no_dim_coord = pa.update_coords(non_dim=(None, np.arange(10)))
 ```
 
+
 ### Changing coordinate dimensional association
 
 The dimensions each coordinate is associated with can be changed. For example, to remove a coordinate's dimension association:
@@ -389,9 +390,20 @@ lat = patch.coords['latitude']
 patch_detached_lat = patch.update_coords(latitude=(None, lat))
 ```
 
-## Drop Coords
+## Dropping Coordinates
 
+Non-dimensional coordinates can be dropped using `Patch.drop_coords`. Dimensional coordinates, however, cannot be dropped as it would values the patch data to become degenerate.
 
+```{python}
+import dascore as dc
+
+# this patch has latitude and longitude coordinates
+patch = dc.get_example_patch("random_patch_with_lat_lon")
+
+# drop latitude, this wont affect the data or other coordinates
+patch_dropped_lat = patch.drop_coords("latitude")
+print(patch_dropped_lat.coords)
+```
 
 
 # Method Chaining

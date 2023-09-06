@@ -272,7 +272,7 @@ class CoordManager(DascoreBaseModel):
         # find coords to drop because their dimension changed.
         indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
-        coords, _ = self.drop_coord(coord_to_drop + indirect_coord_drops)
+        coords, _ = self.drop_coords(*(coord_to_drop + indirect_coord_drops))
         out = coords._get_dim_array_dict()
         out.update({i: v for i, v in kwargs.items() if i not in coord_to_drop})
         # update based on keywords
@@ -445,9 +445,9 @@ class CoordManager(DascoreBaseModel):
         )
         return out
 
-    def drop_coord(
+    def drop_coords(
         self,
-        coord: str | Sequence[str],
+        *coords: str | Sequence[str],
         array: MaybeArray = None,
     ) -> tuple[Self, MaybeArray]:
         """
@@ -458,11 +458,11 @@ class CoordManager(DascoreBaseModel):
 
         Parameters
         ----------
-        coord
+        *coords
             The name of the coordinate or dimension.
         """
         dim_drop_list = []
-        coords_to_drop = set(iterate(coord))
+        coords_to_drop = {x for x in iterate(coords)}
         # If there are either no coords to drop or this cm doesn't have them.
         if not coords_to_drop or not (set(self.coord_map) & coords_to_drop):
             return self, array
@@ -483,7 +483,7 @@ class CoordManager(DascoreBaseModel):
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
         return new, self._get_new_data(index, array)
 
-    def disassociate_coord(self, coord: str | Sequence[str]) -> Self:
+    def disassociate_coord(self, *coord: str) -> Self:
         """
         Disassociate some coordinates from dimensions.
 
@@ -495,15 +495,15 @@ class CoordManager(DascoreBaseModel):
         coord
             The coordinate name(s) to disassociated from their dimensions.
         """
-        new = {x: (None, self.coord_map[x]) for x in iterate(coord)}
-        return self.drop_coord(coord)[0].update_coords(**new)
+        new = {x: (None, self.coord_map[x]) for x in coord}
+        return self.drop_coords(*coord)[0].update_coords(**new)
 
     def drop_disassociated_coords(self) -> Self:
         """Drop all coordinates not associated with a dimension."""
         cmap = self.coord_map
         dim_map = self.dim_map
         no_dim_coords = [x for x in cmap if dim_map[x] == ()]
-        return self.drop_coord(no_dim_coords)
+        return self.drop_coords(*no_dim_coords)
 
     def set_dims(self, **kwargs: str) -> Self:
         """
@@ -774,7 +774,7 @@ class CoordManager(DascoreBaseModel):
                 msg = f"cant squeeze dim {name} because it has non-zero length"
                 raise CoordError(msg)
             to_drop.append(name)
-        return self.drop_coord(to_drop)[0]
+        return self.drop_coords(*to_drop)[0]
 
     def decimate(self, **kwargs) -> tuple[Self, tuple[slice, ...]]:
         """
@@ -1045,7 +1045,7 @@ def merge_coord_managers(
         if not (drop_coords := all_coords - common_coords):
             return managers
         coords_to_drop = [x[0] for x in drop_coords]
-        return [x.drop_coord(coords_to_drop)[0] for x in managers]
+        return [x.drop_coords(*coords_to_drop)[0] for x in managers]
 
     def _get_non_merge_coords(managers, non_merger_names):
         """Ensure all non-merge coords are equal."""

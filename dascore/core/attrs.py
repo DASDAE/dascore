@@ -13,13 +13,11 @@ from pydantic import ConfigDict, Field, PlainValidator, model_validator
 from typing_extensions import Self
 
 import dascore as dc
-import dascore.core
 from dascore.constants import (
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
     PatchType,
     attr_conflict_description,
-    basic_summary_attrs,
     max_lens,
 )
 from dascore.core.coordmanager import CoordManager
@@ -75,21 +73,8 @@ def _get_coords_dict(data_dict, fields):
     return new_attrs
 
 
-@compose_docstring(basic_params=basic_summary_attrs)
 class PatchAttrs(DascoreBaseModel):
-    """
-    The expected attributes for a Patch.
-
-    Parameter
-    ---------
-    {basic_params}
-
-    Notes
-    -----
-    These attributes go into the HDF5 index used by dascore. Therefore,
-    when they are changed the index version needs to be incremented so
-    previous indices are invalidated.
-    """
+    """The expected attributes for a Patch."""
 
     model_config = ConfigDict(
         title="Patch Summary",
