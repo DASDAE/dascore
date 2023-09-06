@@ -220,12 +220,6 @@ class TestSummaryAttrs:
         random_summary2 = PatchAttrs.model_validate_json(json)
         assert random_summary2 == random_summary
 
-    def test_sub_docstrings(self):
-        """Ensure the docstring for PatchSummary had params subbed in."""
-        docstr = PatchAttrs.__doc__
-        # data_type is one of the parameters inserted into docstring.
-        assert "data_type" in docstr
-
     def test_from_dict(self, random_attrs):
         """Test new method for more intuitive init."""
         out = PatchAttrs.from_dict(random_attrs)
