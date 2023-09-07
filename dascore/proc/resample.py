@@ -131,7 +131,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
 
 @patch_function()
 def resample(
-    patch: PatchType, window=None, interp_kind="linear", **kwargs
+    patch: PatchType, window=None, interp_kind="linear", samples=False, **kwargs
 ) -> PatchType:
     """
     Resample along a single dimension using Fourier Method and interpolation.
@@ -142,8 +142,8 @@ def resample(
     Since Fourier methods only support adding or removing an integer number
     of frequency bins, the exact desired sampling rate is often not achievable
     with resampling alone. If the fourier resampling doesn't produce the exact
-    an interpolation (see [interpolate](`dascore.proc.interpolate`)) is used to
-    achieve the desired sampling rate.
+    result, an interpolation (see [interpolate](`dascore.proc.interpolate`))
+    is used to achieve the desired sampling rate.
 
     Parameters
     ----------
@@ -155,6 +155,9 @@ def resample(
     interp_kind
         The interpolation type if output of fourier resampling doesn't produce
         exactly the right sampling rate.
+    samples
+        If true, the values in kwargs represent the number of samples along
+        The specified dimension.
     **kwargs
         keyword arguments to specify dimension and new sampling value. Units
         can also be used to specify sampling_period or frequency.
@@ -179,77 +182,40 @@ def resample(
     >>> # Resample distance dimension to a sampling period of 15m
     >>> from dascore.units import m
     >>> new = patch.resample(distance=15 * m)
+    >>> # Resample time axis such that there are 50 samples total
+    >>> new = patch.resample(time=50, samples=True)
 
     See Also
     --------
     [decimate](`dascore.proc.resample.decimate`)
     [interpolate](`dascore.proc.resample.interpolate`)
-    [iresample](`dascore.proc.resample.iresample`)
     """
-    dim, axis, new_d_dim = get_dim_value_from_kwargs(patch, kwargs)
-    d_dim = patch.attrs[f"{dim}_step"]  # current sampling rate
-    coord_units = dc.get_quantity(patch.coords.coord_map[dim].units)
-    # inverse coord unit to trick filter units into giving correct units.
-    if coord_units is not None:
-        coord_units = 1 / coord_units
-    new_d_dim, _ = get_filter_units(new_d_dim, new_d_dim, to_unit=coord_units)
-    # nasty hack so that ints/floats get converted to seconds.
-    if isinstance(d_dim, np.timedelta64):
-        new_d_dim = to_timedelta64(new_d_dim)
-    current_sig_len = patch.data.shape[axis]
-    new_len = current_sig_len * (d_dim / new_d_dim)
-    out = iresample.func(patch, window=window, **{dim: int(np.round(new_len))})
+    dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
+    coord = patch.get_coord(dim, require_sorted=True, require_evenly_sampled=True)
+    new_step = None
+    if not samples:
+        step = coord.step
+        coord_units = dc.get_quantity(coord.units)
+        # inverse coord unit to trick filter units into giving correct units.
+        if coord_units is not None:
+            coord_units = 1 / coord_units
+        new_step, _ = get_filter_units(value, value, to_unit=coord_units)
+        # nasty hack so that ints/floats get converted to seconds.
+        if isinstance(step, np.timedelta64):
+            new_step = to_timedelta64(new_step)
+        current_sig_len = patch.data.shape[axis]
+        new_len = current_sig_len * (step / new_step)
+    else:
+        new_len = value
+    # do the resampling
+    data, new_coord = compat.resample(
+        patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
+    )
+    cm = patch.coords.update_coords(**{dim: new_coord})
+    out = patch.new(data=data, coords=cm)
     # Interpolate if new sampling rate is not very close to desired sampling rate.
-    if not np.isclose(new_len, np.round(new_len)):
+    if not samples and not np.isclose(new_len, np.round(new_len)):
         start, stop, step = get_start_stop_step(out, dim)
-        new_coord = np.arange(start, stop, new_d_dim)
+        new_coord = np.arange(start, stop, new_step)
         out = interpolate(out, kind=interp_kind, **{dim: new_coord})
     return out
-
-
-@patch_function()
-def iresample(patch: PatchType, window=None, **kwargs) -> PatchType:
-    """
-    Resample a patch along a single dimension using Fourier Method.
-
-    Unlike [resample](`dascore.proc.resample`) this function requires the
-    number of samples for the selected dimension.
-
-    Parameters
-    ----------
-    patch
-        The patch to resample.
-    window
-        The Fourier-domain window that tapers the Fourier spectrum. See
-        scipy.signal.resample for details.
-    **kwargs
-         keyword arguments to specify dimension.
-
-    Notes
-    -----
-    Simply uses scipy.signal.resample.
-
-    Examples
-    --------
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> # Resample time axis such that there are 50 samples total
-    >>> new = patch.iresample(time=50)
-
-    See Also
-    --------
-    [resample](`dascore.proc.resample.resample`)
-    [decimate](`dascore.proc.resample.decimate`)
-    """
-    dim, axis, new_length = get_dim_value_from_kwargs(patch, kwargs)
-    coord = patch.coords[dim]
-    data, new_coord = compat.resample(
-        patch.data, new_length, t=coord, axis=axis, window=window
-    )
-    # update coordinates
-    new_coords = patch.coords.update_coords(**{dim: new_coord})
-    # update attributes
-    new_attrs = dict(patch.attrs)
-    new_attrs[f"{dim}_step"] = new_coord[1] - new_coord[0]
-    new_attrs[f"{dim}_max"] = np.max(new_coord)
-    return patch.new(data=data, coords=new_coords)

@@ -202,6 +202,15 @@ class Patch:
     # --- processing funcs
 
     select = dascore.proc.select
+
+    def iselect(self, *args, **kwargs):
+        """Deprecated  form of select."""
+        msg = (
+            "patch.iselect is deprecated. Please use patch.select with " "samples=True"
+        )
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
+        return self.select(*args, samples=True, **kwargs)
+
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
@@ -214,7 +223,16 @@ class Patch:
     imag = dascore.proc.imag
     angle = dascore.proc.angle
     resample = dascore.proc.resample
-    iresample = dascore.proc.iresample
+
+    def iresample(self, *args, **kwargs):
+        """Deprecated method."""
+        msg = (
+            "patch.iresample is deprecated. Please use patch.resample "
+            "with samples=True"
+        )
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
+        return self.resample(*args, samples=True, **kwargs)
+
     interpolate = dascore.proc.interpolate
     normalize = dascore.proc.normalize
     standardize = dascore.proc.standardize

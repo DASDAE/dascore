@@ -501,6 +501,11 @@ class TestSelect:
             time_id = dims.index("time")
             assert coord.shape[time_id] == 2
 
+    def test_samples_slice(self, coord_manager):
+        """Ensure we can select when samples=True using ... or None."""
+        new, _ = coord_manager.select(time=..., samples=True)
+        assert new == coord_manager
+
 
 class TestEquals:
     """Tests for coord manager equality."""
