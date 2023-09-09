@@ -111,8 +111,8 @@ website:
     - id: Recipes
       title: 'Recipes'
       contents:
-        - recipes/overview.qmd
-        - plotting_channel_number.qmd
+        - text: Plotting channel number 
+        - href: recipes/plotting_channel_number.qmd
 
         - text: How to Contribute?
           href: recipes/how_to_contribute.qmd
