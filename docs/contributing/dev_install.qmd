@@ -50,8 +50,15 @@ pre-commit install -f
 If you have already installed dascore but it has been a while, please do the following before creating a new branch:
 
 ```bash
+conda activate dascore
+```
+```bash
 git checkout master
+```
+```bash
 git pull origin master --tags
+```
+```bash
 pip install -e ".[dev]"
 ```
 
