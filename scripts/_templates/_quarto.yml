@@ -111,8 +111,10 @@ website:
     - id: Recipes
       title: 'Recipes'
       contents:
+        - recipes/overview.qmd
+
         - text: Plotting channel number 
-        - href: recipes/plotting_channel_number.qmd
+          href: recipes/plotting_channel_number.qmd
 
         - text: How to Contribute?
           href: recipes/how_to_contribute.qmd
@@ -148,6 +150,9 @@ website:
 
         - text: "Adding a new format"
           href: contributing/new_format.qmd
+
+        - text: "Publish a new release"
+          href: contributing/publish_a_new_release.qmd
 
         - text: "Code of Conduct"
           href: contributing/code_of_conduct.qmd

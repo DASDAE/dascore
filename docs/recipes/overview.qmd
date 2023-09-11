@@ -12,6 +12,6 @@ own.
 
 # Contributing
 
-[Contributing to documentation](contributing_to_documentation.qmd)
-
 [Contributing step by step](how_to_contribute.qmd)
+
+[Contributing to documentation](contributing_to_documentation.qmd)
