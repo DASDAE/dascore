@@ -49,8 +49,9 @@ class DirectorySpool(DataFrameSpool):
         index_path: Path | None = None,
         preferred_format: str | None = None,
         select_kwargs: dict | None = None,
+        merge_kwargs: dict | None = None,
     ):
-        super().__init__(select_kwargs=select_kwargs)
+        super().__init__(select_kwargs=select_kwargs, merge_kwargs=merge_kwargs)
         # Init file spool from another file spool
         if isinstance(base_path, self.__class__):
             self.__dict__.update(copy.deepcopy(base_path.__dict__))
@@ -60,6 +61,7 @@ class DirectorySpool(DataFrameSpool):
             self.indexer = base_path
         elif isinstance(base_path, Path | str):
             self.indexer = DirectoryIndexer(base_path, index_path=index_path)
+        assert hasattr(self, "indexer"), "indexer not set."
         self._preferred_format = preferred_format
 
     def __rich__(self):

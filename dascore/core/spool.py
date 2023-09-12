@@ -329,13 +329,14 @@ class DataFrameSpool(BaseSpool):
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
 
     def __getitem__(self, item):
-        out = self._get_patches_from_index(item)
         # a single index was used, should return a single patch
         if not isinstance(item, slice):
-            out = self._unbox_patch(out)
-        # a slice was used, return a sub-spool
-        else:
-            out = self.__class__(out)
+            out = self._unbox_patch(self._get_patches_from_index(item))
+        else:  # a slice was used, return a sub-spool
+            df = self._df.iloc[item]
+            return self.new_from_df(
+                df=df,
+            )
         return out
 
     def __len__(self):
