@@ -359,6 +359,28 @@ class TestGetContents:
         assert set(df.columns).issuperset(set(expected))
 
 
+class TestIndexing:
+    """Tests for indexing directory spool."""
+
+    def test_slice_to_start(self, diverse_directory_spool):
+        """Ensure a slice returns a subspool (shouldn't load data)."""
+        out = diverse_directory_spool[0:2]
+        assert isinstance(out, out.__class__)
+
+    def test_slice_to_end(self, diverse_directory_spool):
+        """Ensure a slice from the end returns a subspool."""
+        out = diverse_directory_spool[-2:]
+        assert isinstance(out, out.__class__)
+
+    def test_sliced_spool_has_indexer(self, diverse_directory_spool):
+        """Ensure the sliced spool still has its indexer."""
+        out = diverse_directory_spool[1:3]
+        assert hasattr(out, "indexer")
+        assert out.indexer.path == diverse_directory_spool.indexer.path
+        # ensure we can still load patches from sliced dirspool
+        assert isinstance(out[0], dc.Patch)
+
+
 class TestFileSpoolIntegrations:
     """Small integration tests for the file spool."""
 
