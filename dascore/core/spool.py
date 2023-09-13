@@ -328,15 +328,11 @@ class DataFrameSpool(BaseSpool):
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
 
-    def __getitem__(self, item):
-        # a single index was used, should return a single patch
-        if not isinstance(item, slice):
+    def __getitem__(self, item) -> PatchType | BaseSpool:
+        if isinstance(item, slice):  # a slice was used, return a sub-spool
+            out = self.new_from_df(df=self._df.iloc[item])
+        else:  # a single index was used, should return a single patch
             out = self._unbox_patch(self._get_patches_from_index(item))
-        else:  # a slice was used, return a sub-spool
-            df = self._df.iloc[item]
-            return self.new_from_df(
-                df=df,
-            )
         return out
 
     def __len__(self):
