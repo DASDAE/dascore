@@ -5,6 +5,7 @@ from functools import cached_property
 from typing import Annotated
 
 import numpy as np
+import pandas as pd
 from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
 from typing_extensions import Self
 
@@ -108,5 +109,18 @@ class DascoreBaseModel(BaseModel):
         for item, value in kwargs.items():
             out[item] = value
         return self.__class__(**out)
+
+    @classmethod
+    def get_summary_df(cls):
+        """Get dataframe of attributes and descriptions for display."""
+        fields = cls.model_fields
+        names_desc = {
+            i: v.description
+            for i, v in fields.items()
+            if getattr(v, "description", False)
+        }
+        out = pd.Series(names_desc).to_frame(name="description")
+        out.index.name = "attribute"
+        return out
 
     __eq__ = sensible_model_equals

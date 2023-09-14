@@ -78,7 +78,7 @@ max_lens = {
     "station": 12,
     "dims": 40,
     "file_version": 9,
-    "cable_id": 50,
+    "experiment_id": 50,
     "instrument_id": 50,
     "data_type": 20,
     "data_category": 4,
@@ -110,62 +110,6 @@ NUMPY_TIME_UNIT_MAPPING = {
     "week": "W",
     "day": "D",
 }
-
-# A description of basic patch metadata.
-basic_summary_attrs = f"""
-data_type
-    The type of data collected (the meaning of the data). Valid values
-    are {VALID_DATA_TYPES}.
-data_category
-    The category of instrument which recorded the data. Valid values
-    are {VALID_DATA_CATEGORIES}.
-data_units
-    The units in which the data are recorded (e.g., strain_rate).
-time_step
-    The temporal sample spacing. If the patch is not evenly sampled
-    this should be set to `np.timedelta64('NaT')`
-time_min
-    The time represented by the first sample in the patch.
-time_max
-    The time represented by the last sample in the patch.
-time_units
-    The units of the time axis (in most cases should be seconds) or
-    specified by datetime64 arrays in time coordinate.
-distance_step
-    The spatial sampling rate, set to NaN if the patch is not evenly sampled
-    in space.
-distance_min
-    The along-fiber distance of the first channel in the patch.
-distance_max
-    The along-fiber distance of the last channel in the patch.
-d_distance
-    The spatial sampling rate, set to NaN if the patch is not evenly sampled
-    in space.
-distance_units
-    The units of the distance axis. In most cases should be 'm'.
-instrument_id
-    A unique identifier of the instrument.
-cable_id
-    A Unique identifier of the cable, or composition of cables.
-distance_units
-    The units of distance, defaults to m.
-network
-    The network code an ascii-compatible string up to 2 characters.
-station
-    The station code an ascii-compatible string up to 5 characters
-instrument_id
-    The identifier of the instrument.
-dims
-    A tuple of dimension names in the same order as the data dimensions.
-tag
-    A custom string up to 100 chars.
-station
-    A network code (up to 8 chars).
-network
-    A network code (up to 8 chars).
-history
-    A list of strings indicating what processing has occurred on the patch.
-"""
 
 # description of samples argument
 samples_arg_description = """

@@ -33,7 +33,7 @@ import dascore as dc
 
 patch = dc.get_example_patch()
 # select first distance value to make distance dim flat.
-flat_patch = patch.iselect(distance=0)
+flat_patch = patch.select(distance=0, samples=True)
 print(f"Pre-squeeze dims: {flat_patch.shape}")
 
 squeezed = flat_patch.squeeze()

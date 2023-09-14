@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import dascore as dc
 from dascore.units import Hz, m, s
@@ -250,18 +251,19 @@ class TestResample:
         patch_time_even = patch.interpolate(time=None)
         assert isinstance(patch_time_even, dc.Patch)
 
-
-class TestIResample:
-    """Tests for resampling based on numbers of sample per dimension."""
-
     def test_iresample_time(self, random_patch):
         """Tests iresample in time dim."""
         time_samples = 40
-        out = random_patch.iresample(time=time_samples)
+        out = random_patch.resample(time=time_samples, samples=True)
         assert len(out.coords["time"]) == time_samples
 
     def test_iresample_distance(self, random_patch):
         """Test for resampling distance to set len."""
         dist = 42
-        out = random_patch.iresample(distance=dist)
+        out = random_patch.resample(distance=dist, samples=True)
         assert len(out.coords["distance"]) == dist
+
+    def test_iresample_deprecated(self, random_patch):
+        """Ensure iresample issues deprecation warning."""
+        with pytest.warns(DeprecationWarning):
+            random_patch.iresample(distance=42)

@@ -337,21 +337,21 @@ class TestDrop:
     def test_drop(self, coord_manager_multidim):
         """Ensure coordinates can be dropped."""
         dim = "distance"
-        coords, _ = coord_manager_multidim.drop_coord(dim)
+        coords, _ = coord_manager_multidim.drop_coords(dim)
         assert dim not in coords.dims
         for _name, dims in coords.dim_map.items():
             assert dim not in dims
 
     def test_drop_doesnt_have_coord(self, coord_manager_multidim):
         """Trying to drop a dim that doesnt exist should just return."""
-        out, _ = coord_manager_multidim.drop_coord("bob")
+        out, _ = coord_manager_multidim.drop_coords("bob")
         assert out == coord_manager_multidim
 
     def test_trims_array(self, coord_manager_multidim):
         """Trying to drop a dim that doesnt exist should just return."""
         array = np.ones(coord_manager_multidim.shape)
         axis = coord_manager_multidim.dims.index("time")
-        cm, new_array = coord_manager_multidim.drop_coord("time", array)
+        cm, new_array = coord_manager_multidim.drop_coords("time", array=array)
         assert new_array.shape[axis] == 0
 
     def test_drop_non_dim_coord(self, coord_manager_multidim):
@@ -360,7 +360,7 @@ class TestDrop:
         array = np.ones(cm.shape)
         coords_to_drop = set(cm.coord_map) - set(cm.dims)
         for coord in coords_to_drop:
-            cm_new, array_new = cm.drop_coord(coord, array=array)
+            cm_new, array_new = cm.drop_coords(coord, array=array)
             # array should not have changed.
             assert array.shape == array_new.shape
             assert np.all(np.equal(array, array_new))
@@ -369,6 +369,27 @@ class TestDrop:
 
 class TestSelect:
     """Tests for filtering coordinates."""
+
+    # index ranges to compare with normal select.
+    slice_inds = (
+        (None, 5),
+        (..., 5),
+        (1, 5),
+        (1, None),
+        (1, ...),
+        (..., ...),
+        (None, None),
+        (3, 4),
+        (-4, -1),
+        (1, -1),
+    )
+    # single index values to test
+    inds = (
+        0,
+        1,
+        -1,
+        -2,
+    )
 
     def test_2d_coord_raises(self, coord_manager_multidim):
         """Select shouldn't work on 2D coordinates."""
@@ -430,34 +451,9 @@ class TestSelect:
         assert new.shape == ar.shape
         assert out == basic_coord_manager
 
-
-class TestISelect:
-    """Tests for index-based selections."""
-
-    # index ranges to compare with normal select.
-    slice_inds = (
-        (None, 5),
-        (..., 5),
-        (1, 5),
-        (1, None),
-        (1, ...),
-        (..., ...),
-        (None, None),
-        (3, 4),
-        (-4, -1),
-        (1, -1),
-    )
-    # single index values to test
-    inds = (
-        0,
-        1,
-        -1,
-        -2,
-    )
-
     @pytest.mark.parametrize("slice_range", slice_inds)
     def test_compare_to_select(self, basic_coord_manager, slice_range):
-        """Ensure select and iselect behave the same with equiv. data."""
+        """Ensure select with and without samples behaves the same with equiv. data."""
         cm = basic_coord_manager
         for name, coord in cm.coord_map.items():
             ind_tuple = slice_range
@@ -472,20 +468,20 @@ class TestISelect:
                 assert all_close(out1.values, out2.values)
             # then check that the whole coord_manager are equal
             cm1 = cm.select(**{name: value_tuple})
-            cm2 = cm.iselect(**{name: ind_tuple})
+            cm2 = cm.select(**{name: ind_tuple}, samples=True)
             assert cm1 == cm2
 
     @pytest.mark.parametrize("index", inds)
     def test_single_values(self, basic_coord_manager, index):
         """
         Single values should be treated like slice(val, val+1)
-        as not to collapse the dimensions.
+        as not to collapse the dimensions when samples=True.
         """
         cm = basic_coord_manager
         data = np.empty(cm.shape)
         for dim in basic_coord_manager.dims:
             kwargs = {dim: index}
-            out1, new_data = cm.iselect(array=data, **kwargs)
+            out1, new_data = cm.select(array=data, samples=True, **kwargs)
             dim_ind = cm.dims.index(dim)
             # now the array should have a len(1) in the selected dimension.
             assert out1.shape[dim_ind] == new_data.shape[dim_ind] == 1
@@ -497,13 +493,18 @@ class TestISelect:
         """Ensure trim also trims related dimensions."""
         cm = coord_manager_multidim
         data = np.empty(cm.shape)
-        out, new_data = cm.iselect(array=data, time=slice(2, 4))
+        out, new_data = cm.select(array=data, time=slice(2, 4), samples=True)
         for name, coord in out.coord_map.items():
             dims = cm.dim_map[name]
             if "time" not in dims:
                 continue
             time_id = dims.index("time")
             assert coord.shape[time_id] == 2
+
+    def test_samples_slice(self, coord_manager):
+        """Ensure we can select when samples=True using ... or None."""
+        new, _ = coord_manager.select(time=..., samples=True)
+        assert new == coord_manager
 
 
 class TestEquals:
@@ -727,8 +728,25 @@ class TestUpdateCoords:
     def test_update_none_drops(self, basic_coord_manager):
         """Ensure when passing coord=None the coord is dropped."""
         cm1 = basic_coord_manager.update_coords(time=None)
-        cm2, _ = basic_coord_manager.drop_coord("time")
+        cm2, _ = basic_coord_manager.drop_coords("time")
         assert cm1 == cm2
+
+    def test_update_only_start(self, basic_coord_manager):
+        """Ensure start_coord can be used to update."""
+        time1 = basic_coord_manager.coord_map["time"]
+        new_start = time1.max()
+        cm = basic_coord_manager.update_coords(time_min=new_start)
+        time2 = cm.coord_map["time"]
+        assert time2.min() == new_start
+
+    def test_dissociate(self, basic_coord_manager):
+        """Ensure coordinates can be dissociated with update_coords."""
+        time = basic_coord_manager.coord_map["time"]
+        new_time = time.values + dc.to_timedelta64(1)
+        new = basic_coord_manager.update_coords(new_time=("time", new_time))
+        assert "new_time" in new.dim_map and "new_time" in new.coord_map
+        dissociated = new.update_coords(new_time=(None, new_time))
+        assert dissociated.dim_map["new_time"] == ()
 
 
 class TestSqueeze:
@@ -1094,7 +1112,7 @@ class TestDisassociate:
         assert time_dim == ()
         assert "time" not in cm.dims
         # but if both time and quality are dissociated nothing should be dropped.
-        cm = coord_manager_multidim.disassociate_coord(("time", "quality"))
+        cm = coord_manager_multidim.disassociate_coord("time", "quality")
         assert {"time", "quality"}.issubset(set(cm.coord_map))
         assert "time" not in cm.dims
 

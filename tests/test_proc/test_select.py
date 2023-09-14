@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 import dascore as dc
 
@@ -100,34 +101,25 @@ class TestSelect:
         patch2 = random_patch.select(time=(t1, None))
         assert patch1 == patch2
 
-
-class TestISelect:
-    """Tests for Index-based selection."""
-
-    # Note: since this uses nearly all the same logic as select, it
-    # is not necessary to test it as extensively.
-    def test_time_slice(self, random_patch):
+    def test_time_slice_samples(self, random_patch):
         """Ensure a simple time slice works."""
-        pa1 = random_patch.iselect(time=(1, 5))
-        pa2 = random_patch.iselect(time=slice(1, 5))
+        pa1 = random_patch.select(time=(1, 5), samples=True)
+        pa2 = random_patch.select(time=slice(1, 5), samples=True)
         assert pa1 == pa2
 
-    def test_non_slice(self, random_patch):
+    def test_non_slice_samples(self, random_patch):
         """Ensure a non-slice doesnt change patch."""
-        pa1 = random_patch.iselect(distance=(..., ...))
-        pa2 = random_patch.iselect(distance=(None, ...))
-        pa3 = random_patch.iselect(distance=slice(None, None))
-        pa4 = random_patch.iselect(distance=...)
+        pa1 = random_patch.select(distance=(..., ...), samples=True)
+        pa2 = random_patch.select(distance=(None, ...), samples=True)
+        pa3 = random_patch.select(distance=slice(None, None), samples=True)
+        pa4 = random_patch.select(distance=...)
         assert pa1 == pa2 == pa3 == pa4
 
-    def test_copy(self, random_patch):
-        """Ensure the copy keyword works."""
-        out1 = random_patch.iselect(time=slice(1, 10), copy=True)
-        # base is None means this isnt a view
-        assert out1.data.base is None
-        out2 = random_patch.iselect(time=slice(1, 10), copy=False)
-        # base is not None means it is a view
-        assert out2.data.base is not None
+    def test_iselect_deprecated(self, random_patch):
+        """Ensure Patch.iselect raises deprecation error."""
+        msg = "iselect is deprecated"
+        with pytest.warns(DeprecationWarning, match=msg):
+            _ = random_patch.iselect(time=(10, -10))
 
 
 class TestSelectHistory:

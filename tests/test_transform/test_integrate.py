@@ -40,7 +40,7 @@ class TestIndefiniteIntegrals:
 
     def test_integrate_non_evenly_sampled(self, wacky_dim_patch):
         """Ensure we can integrate along non-evenly sampled dims."""
-        out = wacky_dim_patch.tran.integrate(dim="time", definite=False)
+        out = wacky_dim_patch.integrate(dim="time", definite=False)
         assert isinstance(out, dc.Patch)
 
     def test_units(self, random_patch):
@@ -49,7 +49,7 @@ class TestIndefiniteIntegrals:
         dims = ("time", "distance")
         expected_units = ("s", "m")
         for dim, eu in zip(dims, expected_units):
-            out = patch.tran.integrate(dim=dim)
+            out = patch.integrate(dim=dim)
             data_units1 = get_quantity(patch.attrs.data_units)
             data_units2 = get_quantity(out.attrs.data_units)
             assert data_units2 == (data_units1 * get_quantity(eu))
@@ -67,7 +67,7 @@ class TestDefiniteIntegration:
         patch = ones_patch
         for dim in patch.dims:
             ax = patch.dims.index(dim)
-            out = patch.tran.integrate(dim=dim, definite=True)
+            out = patch.integrate(dim=dim, definite=True)
             assert out.shape[ax] == 1
             step = to_float(patch.get_coord(dim).step)
             expected_data = np.trapz(patch.data, dx=step, axis=ax)
@@ -82,7 +82,7 @@ class TestDefiniteIntegration:
     def test_units(self, random_patch):
         """Ensure data units are updated and coord units are unchanged."""
         patch = random_patch.set_units("m/s")
-        out = patch.tran.integrate(dim="time", definite=True)
+        out = patch.integrate(dim="time", definite=True)
         data_units1 = get_quantity(patch.attrs.data_units)
         data_units2 = get_quantity(out.attrs.data_units)
         assert data_units2 == (data_units1 * get_quantity("s"))
@@ -93,10 +93,10 @@ class TestDefiniteIntegration:
 
     def test_integrate_all_dims(self, random_patch):
         """Ensure all dims can be integrated."""
-        out = random_patch.tran.integrate(dim=None, definite=True)
+        out = random_patch.integrate(dim=None, definite=True)
         assert out.shape == tuple([1] * len(random_patch.shape))
 
     def test_integrate_non_evenly_sampled_dim(self, wacky_dim_patch):
         """Simple test to integrate along non-evenly sampled dimension."""
-        out = wacky_dim_patch.tran.integrate(dim="time", definite=True)
+        out = wacky_dim_patch.integrate(dim="time", definite=True)
         assert isinstance(out, dc.Patch)

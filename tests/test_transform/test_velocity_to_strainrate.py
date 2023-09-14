@@ -14,7 +14,7 @@ class TestStrainRateConversion:
     @pytest.fixture(scope="class")
     def patch_strain_rate_default(self, terra15_das_patch):
         """Return the default terra15 converted to strain rate."""
-        return terra15_das_patch.tran.velocity_to_strain_rate()
+        return terra15_das_patch.velocity_to_strain_rate()
 
     def test_attrs(self, patch_strain_rate_default):
         """Ensure the attributes were updated with strain_rate."""
@@ -30,7 +30,7 @@ class TestStrainRateConversion:
     def test_raises_on_strain_rate(self, patch_strain_rate_default):
         """It does not make sense to apply this twice."""
         with pytest.raises(PatchAttributeError, match="velocity"):
-            _ = patch_strain_rate_default.tran.velocity_to_strain_rate()
+            _ = patch_strain_rate_default.velocity_to_strain_rate()
 
     def test_update_units(self, patch_strain_rate_default, terra15_das_patch):
         """Ensure units are updated. See issue #144."""

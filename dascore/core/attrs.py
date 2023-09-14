@@ -13,13 +13,11 @@ from pydantic import ConfigDict, Field, PlainValidator, model_validator
 from typing_extensions import Self
 
 import dascore as dc
-import dascore.core
 from dascore.constants import (
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
     PatchType,
     attr_conflict_description,
-    basic_summary_attrs,
     max_lens,
 )
 from dascore.core.coordmanager import CoordManager
@@ -75,21 +73,8 @@ def _get_coords_dict(data_dict, fields):
     return new_attrs
 
 
-@compose_docstring(basic_params=basic_summary_attrs)
 class PatchAttrs(DascoreBaseModel):
-    """
-    The expected attributes for a Patch.
-
-    Parameter
-    ---------
-    {basic_params}
-
-    Notes
-    -----
-    These attributes go into the HDF5 index used by dascore. Therefore,
-    when they are changed the index version needs to be incremented so
-    previous indices are invalidated.
-    """
+    """The expected attributes for a Patch."""
 
     model_config = ConfigDict(
         title="Patch Summary",
@@ -98,17 +83,44 @@ class PatchAttrs(DascoreBaseModel):
         arbitrary_types_allowed=True,
     )
 
-    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
-    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
-    data_units: UnitQuantity | None = None
-    instrument_id: str = Field("", max_length=max_lens["instrument_id"])
-    cable_id: str = Field("", max_length=max_lens["cable_id"])
-    tag: str = Field("", max_length=max_lens["tag"])
-    station: str = Field("", max_length=max_lens["station"])
-    network: str = Field("", max_length=max_lens["network"])
-    history: str | Sequence[str] = Field(default_factory=list)
+    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = Field(
+        description="Describes the quantity being measured.", default=""
+    )
+    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = Field(
+        description="Describes the type of data.",
+        default="",
+    )
+    data_units: UnitQuantity | None = Field(
+        default=None, description="The units of the data measurements"
+    )
+    instrument_id: str = Field(
+        description="A unique id for the instrument which generated the data.",
+        default="",
+        max_length=max_lens["instrument_id"],
+    )
+    experiment_id: str = Field(
+        description="A unique identifier linking this data to an experiment.",
+        default="",
+        max_length=max_lens["experiment_id"],
+    )
+    tag: str = Field(
+        default="", max_length=max_lens["tag"], description="A custom string field."
+    )
+    station: str = Field(
+        default="", max_length=max_lens["station"], description="A station code."
+    )
+    network: str = Field(
+        default="", max_length=max_lens["network"], description="A network code."
+    )
+    history: str | Sequence[str] = Field(
+        default_factory=list, description="A list of processing performed on the patch."
+    )
 
-    dims: CommaSeparatedStr = Field("", max_length=max_lens["dims"])
+    dims: CommaSeparatedStr = Field(
+        default="",
+        max_length=max_lens["dims"],
+        description="A tuple of comma-separated dimensions names.",
+    )
 
     coords: Annotated[
         FrozenDict[str, CoordSummary],

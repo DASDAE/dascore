@@ -55,7 +55,7 @@ class PatchFileSummary(DascoreBaseModel):
     data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
     data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
     instrument_id: str = Field("", max_length=max_lens["instrument_id"])
-    cable_id: str = Field("", max_length=max_lens["cable_id"])
+    experiment_id: str = Field("", max_length=max_lens["experiment_id"])
     tag: str = Field("", max_length=max_lens["tag"])
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])

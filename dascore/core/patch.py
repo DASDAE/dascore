@@ -6,15 +6,16 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 from rich.text import Text
+from typing_extensions import Self
 
 import dascore as dc
 import dascore.proc.coords
+from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
 from dascore.io import PatchIO
-from dascore.transform import TransformPatchNameSpace
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
@@ -186,6 +187,7 @@ class Patch:
     sort_coords = dascore.proc.sort_coords
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
+    drop_coords = dascore.proc.drop_coords
 
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords."""
@@ -200,7 +202,13 @@ class Patch:
     # --- processing funcs
 
     select = dascore.proc.select
-    iselect = dascore.proc.iselect
+
+    def iselect(self, *args, **kwargs):
+        """Deprecated  form of select."""
+        msg = "patch.iselect is deprecated. Use patch.select with samples=True"
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
+        return self.select(*args, samples=True, **kwargs)
+
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
@@ -213,12 +221,30 @@ class Patch:
     imag = dascore.proc.imag
     angle = dascore.proc.angle
     resample = dascore.proc.resample
-    iresample = dascore.proc.iresample
+
+    def iresample(self, *args, **kwargs):
+        """Deprecated method."""
+        msg = (
+            "patch.iresample is deprecated. Please use patch.resample "
+            "with samples=True"
+        )
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
+        return self.resample(*args, samples=True, **kwargs)
+
     interpolate = dascore.proc.interpolate
     normalize = dascore.proc.normalize
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
     rolling = dascore.proc.rolling
+
+    # --- transformation functions
+    differentiate = transform.differentiate
+    rfft = transform.rfft
+    dft = transform.dft
+    idft = transform.idft
+    integrate = transform.integrate
+    spectrogram = transform.spectrogram
+    velocity_to_strain_rate = transform.velocity_to_strain_rate
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
@@ -230,9 +256,14 @@ class Patch:
         return VizPatchNameSpace(self)
 
     @property
-    def tran(self) -> TransformPatchNameSpace:
+    def tran(self) -> Self:
         """The transformation namespace."""
-        return TransformPatchNameSpace(self)
+        msg = (
+            "The tran namespace is deprecated. Its methods can now be "
+            "accessed as normal path methods (eg patch.dft)"
+        )
+        warnings.warn(msg, DeprecationWarning)
+        return self
 
     @property
     def io(self) -> PatchIO:

@@ -30,7 +30,10 @@ attr_type = dict[str, Any] | str | Sequence[str] | None
 
 def _format_values(val):
     """String formatting for values for history string."""
-    if isinstance(val, np.ndarray):
+    if isinstance(val, list | tuple):
+        out = ",".join(_format_values(x) for x in val)
+        out = f"({out})" if isinstance(val, tuple) else f"[{out}]"
+    elif isinstance(val, np.ndarray):
         # make sure numpy strings arent too long!
         out = np.array2string(
             val,
@@ -38,7 +41,7 @@ def _format_values(val):
             threshold=dascore_styles["patch_history_array_threshold"],
         )
     else:
-        out = val
+        out = str(val)
     return out
 
 

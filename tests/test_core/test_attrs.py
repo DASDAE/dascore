@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
@@ -219,12 +220,6 @@ class TestSummaryAttrs:
         random_summary2 = PatchAttrs.model_validate_json(json)
         assert random_summary2 == random_summary
 
-    def test_sub_docstrings(self):
-        """Ensure the docstring for PatchSummary had params subbed in."""
-        docstr = PatchAttrs.__doc__
-        # data_type is one of the parameters inserted into docstring.
-        assert "data_type" in docstr
-
     def test_from_dict(self, random_attrs):
         """Test new method for more intuitive init."""
         out = PatchAttrs.from_dict(random_attrs)
@@ -430,3 +425,12 @@ class TestDecomposeAttrs:
         """Ensure all times are datetime64."""
         time_dtypes = decomposed_attrs["dims"]["time"]
         assert set(time_dtypes) == {"datetime64"}
+
+
+class TestGetAttrSummary:
+    """Test getting dataframe of summary info."""
+
+    def test_summary(self, random_attrs):
+        """Ensure a dataframe is returned."""
+        out = random_attrs.get_summary_df()
+        assert isinstance(out, pd.DataFrame)

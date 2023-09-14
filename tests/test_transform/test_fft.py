@@ -15,8 +15,6 @@ class TestRfft:
     @pytest.fixture(scope="class")
     def rfft_patch(self, random_patch):
         """Return the random patched transformed along time w/ rrft."""
-        out = rfft(random_patch, dim="time")
-
         with suppress_warnings(DeprecationWarning):
             out = rfft(random_patch, dim="time")
         return out
@@ -42,7 +40,7 @@ class TestRfft:
         """Ensure data units have been updated."""
         patch = random_patch.update_attrs(data_units="m/s")
         with suppress_warnings(DeprecationWarning):
-            fft_patch = patch.tran.rfft("time")
+            fft_patch = patch.rfft("time")
         dunits1 = get_quantity(patch.attrs.data_units)
         dunits2 = get_quantity(fft_patch.attrs.data_units)
         assert dunits2 == dunits1 * get_quantity("second")

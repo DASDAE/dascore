@@ -33,7 +33,7 @@ def rfft(patch: PatchType, dim="time") -> PatchType:
 
     ft = FourierTransformatter()
     data = patch.data
-    sr = 1 / to_float(patch.attrs[f"d_{dim}"])
+    sr = 1 / to_float(patch.attrs[f"{dim}_step"])
     freqs = np.fft.rfftfreq(data.shape[axis], sr)
     new_data = np.fft.rfft(data, axis=axis)
     # get new dims and data units
