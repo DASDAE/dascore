@@ -328,14 +328,11 @@ class DataFrameSpool(BaseSpool):
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
 
-    def __getitem__(self, item):
-        out = self._get_patches_from_index(item)
-        # a single index was used, should return a single patch
-        if not isinstance(item, slice):
-            out = self._unbox_patch(out)
-        # a slice was used, return a sub-spool
-        else:
-            out = self.__class__(out)
+    def __getitem__(self, item) -> PatchType | BaseSpool:
+        if isinstance(item, slice):  # a slice was used, return a sub-spool
+            out = self.new_from_df(df=self._df.iloc[item])
+        else:  # a single index was used, should return a single patch
+            out = self._unbox_patch(self._get_patches_from_index(item))
         return out
 
     def __len__(self):
@@ -354,17 +351,14 @@ class DataFrameSpool(BaseSpool):
         """Given an index (from current df), return the corresponding patch."""
         source = self._source_df
         instruction = self._instruction_df
-        if isinstance(df_ind, slice):  # handle slicing
-            df1 = instruction.loc[instruction["current_index"].values[df_ind]]
-        else:  # Filter instruction df to only include current index.
-            # handle negative index.
-            df_ind = df_ind if df_ind >= 0 else len(self._df) + df_ind
-            try:
-                inds = self._df.index[df_ind]
-            except IndexError:
-                msg = f"index of [{df_ind}] is out of bounds for spool."
-                raise IndexError(msg)
-            df1 = instruction[instruction["current_index"] == inds]
+        # handle negative index.
+        df_ind = df_ind if df_ind >= 0 else len(self._df) + df_ind
+        try:
+            inds = self._df.index[df_ind]
+        except IndexError:
+            msg = f"index of [{df_ind}] is out of bounds for spool."
+            raise IndexError(msg)
+        df1 = instruction[instruction["current_index"] == inds]
         assert not df1.empty
         joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
         return self._patch_from_instruction_df(joined)
