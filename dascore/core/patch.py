@@ -205,9 +205,7 @@ class Patch:
 
     def iselect(self, *args, **kwargs):
         """Deprecated  form of select."""
-        msg = (
-            "patch.iselect is deprecated. Please use patch.select with " "samples=True"
-        )
+        msg = "patch.iselect is deprecated. Use patch.select with samples=True"
         warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.select(*args, samples=True, **kwargs)
 

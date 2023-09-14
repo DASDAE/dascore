@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 import dascore as dc
 
@@ -113,6 +114,12 @@ class TestSelect:
         pa3 = random_patch.select(distance=slice(None, None), samples=True)
         pa4 = random_patch.select(distance=...)
         assert pa1 == pa2 == pa3 == pa4
+
+    def test_iselect_deprecated(self, random_patch):
+        """Ensure Patch.iselect raises deprecation error."""
+        msg = "iselect is deprecated"
+        with pytest.warns(DeprecationWarning, match=msg):
+            _ = random_patch.iselect(time=(10, -10))
 
 
 class TestSelectHistory:
