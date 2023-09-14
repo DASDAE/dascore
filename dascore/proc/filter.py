@@ -155,7 +155,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     dim, (arg1, arg2) = _check_filter_kwargs(kwargs)
     axis = patch.dims.index(dim)
     coord_units = patch.coords.coord_map[dim].units
-    filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units)
+    filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units, dim=dim)
     sr = get_dim_sampling_rate(patch, dim)
     # get nyquist and low/high in terms of nyquist
     sos = _get_sos(sr, filt_min, filt_max, corners)
