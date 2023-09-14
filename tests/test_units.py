@@ -173,6 +173,13 @@ class TestGetFilterUnits:
         with pytest.raises(UnitError, match=match):
             get_filter_units(1.0 * m, 10.0 * m, s)
 
+    def test_specifying_units_unitless_dimension_raises(self):
+        """Check an error is raised when units are used on a unitless dimension."""
+        msg = "Cannot use units on dimension"
+        m = dc.get_unit("m")
+        with pytest.raises(UnitError, match=msg):
+            get_filter_units(1 * m, 2 * m, None)
+
 
 class TestDTypeCompatible:
     """Ensure dtype compatibility check works."""

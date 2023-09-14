@@ -176,7 +176,10 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
 
 
 def get_filter_units(
-    arg1: Quantity | float, arg2: Quantity | float, to_unit: str | Quantity
+    arg1: Quantity | float,
+    arg2: Quantity | float,
+    to_unit: str | Quantity,
+    dim: None | str = None,
 ) -> tuple[float, float]:
     """
     Get a tuple for applying filter based on dimension coordinates.
@@ -190,6 +193,9 @@ def get_filter_units(
     to_unit
         The units to which the filter should be applied. The returned
         units will be 1/to_units.
+    dim
+        The dimension name the opration is applied on. Only used for
+        raising a more helpful error message.
 
     Examples
     --------
@@ -233,17 +239,27 @@ def get_filter_units(
             raise UnitError(str(e))
         return mag, units_inversed
 
+    def _check_to_units(to_unit, dim):
+        """Ensure to units are valid."""
+        if to_unit is None:
+            dim_str = "" if dim is None else dim
+            msg = (
+                f"Cannot use units on dimension {dim_str} because it has " f"no units."
+            )
+            raise UnitError(msg)
+
     # fast-path for non-unit, non-quantity inputs.
     unitable = (Quantity, Unit)
     arg1 = None if arg1 is ... else arg1
     arg2 = None if arg2 is ... else arg2
     if not (isinstance(arg1, unitable) or isinstance(arg2, unitable)):
         return arg1, arg2
+    # if we are here it means at least on unit is specified. Check to_unit.
+    _check_to_units(to_unit, dim)
     # get inverse of desired output units and ensure units are pure.
     to_quant = get_quantity(to_unit)
     assert to_quant.magnitude == 1.0
     to_units = get_quantity(to_unit).units
-    # get
     quant1, quant2 = get_quantity(arg1), get_quantity(arg2)
     _ensure_same_units(quant1, quant2)
     out1, inverted1 = get_inverted_quant(quant1, to_units)
