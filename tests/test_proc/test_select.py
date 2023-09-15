@@ -50,10 +50,10 @@ class TestSelect:
 
     def test_select_distance_leaves_time_attr_unchanged(self, random_patch):
         """Ensure selecting on distance doesn't change time."""
-        dist = random_patch.coords["distance"]
+        dist = random_patch.coords.get_array("distance")
         dist_max, dist_mean = np.max(dist), np.mean(dist)
         out = random_patch.select(distance=(dist_mean, dist_max - 1))
-        assert out.attrs["time_max"] == out.coords["time"].max()
+        assert out.attrs["time_max"] == out.coords.max("time")
 
     def test_select_emptify_array(self, random_patch):
         """If select range excludes data range patch should be emptied."""

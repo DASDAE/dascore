@@ -48,7 +48,7 @@ def wiggle(
     data = patch.data
     dims = patch.dims
     dims_r = tuple(reversed(dims))
-    coords = {dimen: patch.coords[dimen] for dimen in dims}
+    coords = {dimen: patch.coords.get_array(dimen) for dimen in dims}
 
     if dim == "time":
         max_of_traces = abs(data).max(axis=1)

@@ -28,7 +28,7 @@ class TestWriteWav:
         """Sanity checks on wav directory."""
         assert wave_dir.exists()
         wavs = list(wave_dir.rglob("*.wav"))
-        assert len(wavs) == len(audio_patch.coords["distance"])
+        assert len(wavs) == len(audio_patch.coords.get_array("distance"))
 
     def test_write_single_file(self, audio_patch, tmp_path_factory):
         """Ensure a single file can be written."""

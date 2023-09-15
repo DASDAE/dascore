@@ -21,7 +21,7 @@ class TestInterpolate:
         new_coord = np.arange(start, stop, new_sampling)
         out = random_patch.interpolate(distance=new_coord)
         assert out.data.shape[axis] == len(new_coord)
-        assert np.allclose(out.coords["distance"], new_coord)
+        assert np.allclose(out.coords.get_array("distance"), new_coord)
 
     def test_interp_down_sample_distance(self, random_patch):
         """Ensure interp can be used to downsample data."""
@@ -31,7 +31,7 @@ class TestInterpolate:
         new_coord = np.arange(start, stop, new_sampling)
         out = random_patch.interpolate(distance=new_coord)
         assert out.data.shape[axis] == len(new_coord)
-        assert np.allclose(out.coords["distance"], new_coord)
+        assert np.allclose(out.coords.get_array("distance"), new_coord)
 
     def test_uneven_sampling_rates(self, random_patch):
         """Uneven sampling should now work fine."""
@@ -55,7 +55,7 @@ class TestInterpolate:
         """Ensure the endtime/starttime in coords and dims are consistent."""
         dist = [0, 42, 84, 126, 168, 210, 252, 294]
         out = random_patch.interpolate(distance=dist)
-        coord = out.coords["distance"]
+        coord = out.coords.get_array("distance")
         assert out.attrs["distance_max"] == coord.max()
         assert out.attrs["distance_min"] == coord.min()
         assert out.attrs["distance_step"] == np.median(np.diff(coord))
@@ -73,11 +73,11 @@ class TestDecimate:
     def test_decimate_no_lowpass(self, random_patch):
         """Simple decimation."""
         p1 = random_patch
-        old_time = p1.coords["time"]
+        old_time = p1.coords.get_array("time")
         old_dt = old_time[1:] - old_time[:-1]
         # apply decimation,
         pa2 = random_patch.decimate(time=2)
-        new_time = pa2.coords["time"]
+        new_time = pa2.coords.get_array("time")
         new_dt = new_time[1:] - new_time[:-1]
         # ensure distance between time samples and shapes have changed
         len_ratio = np.round(len(old_dt) / len(new_dt))
@@ -88,7 +88,7 @@ class TestDecimate:
     def test_update_time_max(self, random_patch):
         """Ensure the time_max is updated after decimation."""
         out = random_patch.decimate(time=10)
-        assert out.attrs["time_max"] == out.coords["time"].max()
+        assert out.attrs["time_max"] == out.coords.get_array("time").max()
 
     def test_update_delta_dim(self, random_patch):
         """Since decimate changes the spacing of dimension this should be updated."""
@@ -134,7 +134,7 @@ class TestResample:
         new_dt = 2 * step
         new = patch.resample(time=new_dt)
         assert new_dt == new.attrs["time_step"]
-        assert np.all(np.diff(new.coords["time"]) == new_dt)
+        assert np.all(np.diff(new.coords.get_array("time")) == new_dt)
         # ensure only the time dimension has changed.
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
@@ -150,7 +150,7 @@ class TestResample:
         new_dt = current_dt / 2
         new = random_patch.resample(time=new_dt)
         assert new_dt == new.attrs["time_step"]
-        assert np.all(np.diff(new.coords["time"]) == new_dt)
+        assert np.all(np.diff(new.coords.get_array("time")) == new_dt)
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
             if ax == axis:  # Only resampled axis should have changed len
@@ -165,7 +165,7 @@ class TestResample:
         new_dt = current_dt / 2
         new = random_patch.resample(time=new_dt / np.timedelta64(1, "s"))
         assert new_dt == new.attrs["time_step"]
-        assert np.all(np.diff(new.coords["time"]) == new_dt)
+        assert np.all(np.diff(new.coords.get_array("time")) == new_dt)
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
             if ax == axis:  # Only resampled axis should have changed len
@@ -180,7 +180,7 @@ class TestResample:
         new = random_patch.resample(distance=new_dx)
         axis = random_patch.dims.index("distance")
         assert new_dx == new.attrs["distance_step"]
-        assert np.allclose(np.diff(new.coords["distance"]), new_dx)
+        assert np.allclose(np.diff(new.coords.get_array("distance")), new_dx)
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
             if ax == axis:  # Only resampled axis should have changed len
@@ -221,8 +221,8 @@ class TestResample:
 
     def test_huge_resample(self, random_patch):
         """Tests for greatly increasing the sampling_period."""
-        out = random_patch.resample(distance=42)
-        assert len(out.coords["distance"] == 42)
+        out = random_patch.resample(distance=42, samples=True)
+        assert len(out.coords.get_array("distance")) == 42
 
     def test_resample_with_units_hz(self, random_patch):
         """Ensure resample works with units."""
@@ -241,7 +241,7 @@ class TestResample:
     def test_resample_docs(self, random_patch):
         """Ensure docstring examples runs."""
         patch = random_patch
-        time = patch.coords["time"]
+        time = patch.coords.get_array("time")
         ts = patch.attrs.time_step
         new_time = np.arange(time.min(), time.max(), 0.5 * ts)
         uptime = patch.interpolate(time=new_time)
@@ -255,13 +255,13 @@ class TestResample:
         """Tests iresample in time dim."""
         time_samples = 40
         out = random_patch.resample(time=time_samples, samples=True)
-        assert len(out.coords["time"]) == time_samples
+        assert len(out.coords.get_array("time")) == time_samples
 
     def test_iresample_distance(self, random_patch):
         """Test for resampling distance to set len."""
         dist = 42
         out = random_patch.resample(distance=dist, samples=True)
-        assert len(out.coords["distance"]) == dist
+        assert len(out.coords.get_array("distance")) == dist
 
     def test_iresample_deprecated(self, random_patch):
         """Ensure iresample issues deprecation warning."""

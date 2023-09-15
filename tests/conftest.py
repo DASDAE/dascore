@@ -318,7 +318,7 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
     pa3 = pa2.update_attrs(time_min=t3 + time_step)
 
     expectetime_step = pa3.attrs["time_max"] - pa1.attrs["time_min"]
-    actual_time = pa3.coords["time"].max() - pa1.coords["time"].min()
+    actual_time = pa3.coords.max("time") - pa1.coords.min("time")
     assert expectetime_step == actual_time
     return dc.spool([pa2, pa1, pa3])
 

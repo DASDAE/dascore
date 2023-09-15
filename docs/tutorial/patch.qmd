@@ -136,10 +136,10 @@ patch = dc.get_example_patch()
 coords = patch.coords
 
 # get time array
-time = coords['time']
+time = coords.get_array("time")
 
 # get distance array
-distance = coords['distance']
+distance = coords.get_array('distance')
 ```
 
 Coords also have a useful string representation:
@@ -199,7 +199,7 @@ select_tuple = (attrs.time_min + one_sec, attrs.time_max - one_sec)
 new = patch.select(time=select_tuple)
 
 # select only the first half of the distance channels.
-distance_max = np.mean(patch.coords['distance'])
+distance_max = np.mean(patch.coords.get_array('distance'))
 new = patch.select(distance=(..., distance_max))
 ```
 
@@ -321,7 +321,7 @@ pa = dc.get_example_patch()
 
 # one 1 second to all values in the time array.
 one_second = dc.to_timedelta64(1)
-old_time = pa.coords['time']
+old_time = pa.coords.get_array('time')
 new = pa.update_coords(time=old_time + one_second)
 ```
 
@@ -333,7 +333,7 @@ import dascore as dc
 pa = dc.get_example_patch()
 
 # change the starting time of the array
-new_time = pa.coords['time'].min() + one_second
+new_time = pa.coords.get_array('time').min() + one_second
 new = pa.update_coords(time_min=new_time)
 ```
 
@@ -350,8 +350,8 @@ import dascore as dc
 
 pa = dc.get_example_patch()
 coords = pa.coords
-dist = coords['distance']
-time = coords['time']
+dist = coords.get_array('distance')
+time = coords.get_array('time')
 
 # Add a single coordinate associated with distance dimension
 lat = np.arange(0, len(dist)) * .001 -109.857952
@@ -386,7 +386,7 @@ import dascore as dc
 patch = dc.get_example_patch("random_patch_with_lat_lon")
 
 # drop latitude, this wont affect the data or other coordinates
-lat = patch.coords['latitude']
+lat = patch.coords.get_array('latitude')
 patch_detached_lat = patch.update_coords(latitude=(None, lat))
 ```
 

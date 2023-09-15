@@ -168,7 +168,7 @@ class TestChunkMerge:
         for ind in range(1, len(patches)):
             previous = patches[ind - 1]
             current = patches[ind]
-            new_time = previous.coords["time"][40]
+            new_time = previous.coords.get_array("time")[40]
             out.append(current.update_attrs(time_min=new_time))
         return dc.spool(out)
 
@@ -226,10 +226,10 @@ class TestChunkMerge:
         assert len(out_spool) == 1
         out_patch = out_spool[0]
         # make sure coords are consistent with attrs
-        assert out_patch.attrs["time_max"] == out_patch.coords["time"].max()
-        assert out_patch.attrs["time_min"] == out_patch.coords["time"].min()
+        assert out_patch.attrs["time_max"] == out_patch.coords.max("time")
+        assert out_patch.attrs["time_min"] == out_patch.coords.min("time")
         # ensure the spacing is still uniform
-        time = out_patch.coords["time"]
+        time = out_patch.coords.get_array("time")
         spacing = time[1:] - time[:-1]
         unique_spacing = np.unique(spacing)
         assert len(unique_spacing) == 1
@@ -314,7 +314,7 @@ class TestChunkMerge:
         assert len(sp) == 1
         pa = sp[0]
         assert isinstance(pa, dc.Patch)
-        assert not np.any(pd.isnull(pa.coords["distance"]))
+        assert not np.any(pd.isnull(pa.coords.get_array("distance")))
 
     def test_merge_patches_close_dt(self, memory_spool_small_dt_differences):
         """Slightly different dt values should still merge."""

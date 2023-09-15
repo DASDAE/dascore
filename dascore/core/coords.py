@@ -253,6 +253,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __str__(self):
         return str(self.__rich__())
 
+    def __array__(self):
+        """Numpy method for getting array data with `np.array(coord)`."""
+        return self.data
+
     @cached_method
     def min(self):
         """Return min value."""

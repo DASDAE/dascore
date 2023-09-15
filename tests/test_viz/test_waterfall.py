@@ -46,7 +46,7 @@ def patch_random_start(event_patch_1):
 @pytest.fixture(scope="session")
 def patch_two_times(random_patch):
     """Create a patch with two time dims."""
-    dist = random_patch.coords["distance"]
+    dist = random_patch.coords.get_array("distance")
     pa = random_patch.update_coords(distance=dc.to_datetime64(dist))
     return pa
 
@@ -98,7 +98,7 @@ class TestWaterfall:
         sub_ax = getattr(ax, f"{name}axis")
         plt.tight_layout()  # need to call this to get offset to show up.
         offset_str = sub_ax.get_major_formatter().get_offset()
-        min_time = random_patch.coords["time"].min()
+        min_time = random_patch.coords.get_array("time").min()
         assert str(min_time).startswith(offset_str)
 
     def test_no_colorbar(self, random_patch):

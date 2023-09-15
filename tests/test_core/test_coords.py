@@ -305,6 +305,12 @@ class TestBasics:
         with pytest.raises(IndexError, match="exceeds coord length"):
             _ = evenly_sampled_coord[len(evenly_sampled_coord)]
 
+    def test_to_array(self, coord):
+        """Ensure np.array converts coord to an array."""
+        ar = np.array(coord)
+        assert isinstance(ar, np.ndarray)
+        assert len(ar) == len(coord)
+
 
 class TestCoordSummary:
     """tests for converting to and from summary coords."""
@@ -1154,7 +1160,7 @@ class TestIssues:
 
     def test_event_1_gives_coord_range(self, event_patch_1):
         """Ensure patch1 gives the coord range."""
-        time_vals = event_patch_1.coords["time"]
+        time_vals = event_patch_1.coords.get_array("time")
         coord = get_coord(values=time_vals)
         assert coord.evenly_sampled
 

@@ -129,7 +129,8 @@ class TestReadDASDAE:
         # make sure custom tag with dt comes back from read.
         assert patch_2.attrs["custom_dt"] == dt
         # test coords are still dt64
-        assert np.issubdtype(patch_2.coords["time"].dtype, np.datetime64)
+        array = patch_2.coords.get_array("time")
+        assert np.issubdtype(array.dtype, np.datetime64)
         # test attrs
         for name in ("time_min", "time_max"):
             assert isinstance(patch_2.attrs[name], np.datetime64)

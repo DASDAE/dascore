@@ -28,7 +28,7 @@ class TestTerra15:
         """Tests for when GPS time isn't found."""
         patch = dc.read(missing_gps_terra15_hdf5)[0]
         assert isinstance(patch, dc.Patch)
-        assert not np.any(pd.isnull(patch.coords["time"]))
+        assert not np.any(pd.isnull(patch.coords.get_array("time")))
 
     def test_time_slice(self, terra15_v6_path):
         """Ensure time slice within the file works."""
@@ -88,5 +88,5 @@ class TestTerra15Unfinished:
 
     def test_monotonic_time(self, patch_unfinished):
         """Ensure the time is increasing."""
-        time = patch_unfinished.coords["time"]
+        time = patch_unfinished.coords.get_array("time")
         assert np.all(np.diff(time) >= np.timedelta64(0, "s"))

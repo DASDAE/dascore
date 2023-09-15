@@ -24,7 +24,7 @@ def quantx_v2_das_patch(quantx_v2_example_path):
     """Read the QuantXV2 data, return contained DataArray."""
     out = read(quantx_v2_example_path, "prodml")[0]
     attr_time = out.attrs["time_max"]
-    coord_time = out.coords["time"].max()
+    coord_time = out.coords.max("time")
     assert attr_time == coord_time
     return out
 
@@ -80,6 +80,6 @@ class TestReadQuantXV2:
         Ensure the time array is in ns, not native ms, in order to
         be consistent with other patches.
         """
-        time = quantx_v2_das_patch.coords["time"]
+        time = quantx_v2_das_patch.coords.get_array("time")
         dtype = time.dtype
         assert "[ns]" in str(dtype)
