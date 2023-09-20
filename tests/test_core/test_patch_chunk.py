@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ChunkError, CoordMergeError
+from dascore.exceptions import ChunkError, CoordMergeError, ParameterError
 from dascore.utils.misc import get_middle_value
 from dascore.utils.time import to_timedelta64
 
@@ -158,6 +158,12 @@ class TestChunk:
         spool1 = diverse_spool.chunk(time=100000, keep_partial=True)
         spool2 = diverse_spool.chunk(time=...)
         assert spool1 == spool2
+
+    def test_too_big_overlap_raises(self, diverse_spool):
+        """Overlap > chunk an error should raise."""
+        msg = "overlap is greater than chunk size"
+        with pytest.raises(ParameterError, match=msg):
+            diverse_spool.chunk(time=10, overlap=11)
 
 
 class TestChunkMerge:
