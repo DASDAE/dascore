@@ -380,6 +380,15 @@ class TestIndexing:
         # ensure we can still load patches from sliced dirspool
         assert isinstance(out[0], dc.Patch)
 
+    def test_chunked_sliced_spool_index(self, diverse_directory_spool):
+        """Ensure chunked sliced spool can still be indexed and patches loaded."""
+        out = diverse_directory_spool.chunk(time=4)
+        middle_index = len(out) // 2
+        sub = out[middle_index : middle_index + 3]
+        for ind in range(len(sub)):
+            patch = sub[ind]
+            assert isinstance(patch, dc.Patch)
+
 
 class TestFileSpoolIntegrations:
     """Small integration tests for the file spool."""

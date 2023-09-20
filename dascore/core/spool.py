@@ -330,7 +330,15 @@ class DataFrameSpool(BaseSpool):
 
     def __getitem__(self, item) -> PatchType | BaseSpool:
         if isinstance(item, slice):  # a slice was used, return a sub-spool
-            out = self.new_from_df(df=self._df.iloc[item])
+            new_df = self._df.iloc[item]
+            inst, source = self._instruction_df, self._source_df
+            new_inst = inst[inst["current_index"].isin(new_df.index)]
+            new_source = source.loc[new_inst.index]
+            out = self.new_from_df(
+                df=new_df,
+                instruction_df=new_inst,
+                source_df=new_source,
+            )
         else:  # a single index was used, should return a single patch
             out = self._unbox_patch(self._get_patches_from_index(item))
         return out
@@ -388,24 +396,23 @@ class DataFrameSpool(BaseSpool):
             out = _force_patch_merge(out, merge_kwargs=self._merge_kwargs)
         return [x["patch"] for x in out]
 
-    @staticmethod
-    def _get_dummy_dataframes(input_df):
+    def _get_dummy_dataframes(self, current):
         """
         Return dummy current, source, and instruction dataframes.
 
         Dummy because the source and current df are the same, so the
         instruction df is a straight mapping between the two.
         """
-        output = input_df.copy(deep=False)
-        dims = get_dim_names_from_columns(output)
+        source = current.copy(deep=False)  # shallow to not copy patches
+        dims = get_dim_names_from_columns(source)
         cols2keep = get_column_names_from_dim(dims)
         instruction = (
-            input_df.copy()[cols2keep]
-            .assign(source_index=output.index, current_index=output.index)
+            current.copy()[cols2keep]
+            .assign(source_index=source.index, current_index=source.index)
             .set_index("source_index")
             .sort_values("current_index")
         )
-        return input_df, output, instruction
+        return current, source, instruction
 
     def _df_to_dict_list(self, df):
         """
@@ -413,8 +420,7 @@ class DataFrameSpool(BaseSpool):
 
         This is significantly faster than iterating rows.
         """
-        df_dict_list = list(df.T.to_dict().values())
-        return df_dict_list
+        return df.to_dict("records")
 
     @abc.abstractmethod
     def _load_patch(self, kwargs) -> Self:
