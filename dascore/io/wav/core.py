@@ -59,7 +59,7 @@ class WavIO(FiberIO):
             write(filename=str(resource), rate=int(sr), data=data)
         else:  # write data to directory, one file for each distance
             resource.mkdir(exist_ok=True, parents=True)
-            distances = patch.coords["distance"]
+            distances = patch.coords.get_array("distance")
             for ind, dist in enumerate(distances):
                 sub_data = np.take(data, ind, axis=1)
                 sub_path = resource / f"{dist}.wav"

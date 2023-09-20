@@ -40,6 +40,7 @@ print(new_cm)
 """
 from __future__ import annotations
 
+import warnings
 from collections import defaultdict
 from collections.abc import Mapping, Sequence, Sized
 from functools import reduce
@@ -216,13 +217,25 @@ class CoordManager(DascoreBaseModel):
 
     def __getitem__(self, item) -> np.ndarray:
         # in order to not break backward compatibility, we need to return
-        # the array. However, using coords.coord_map[item] gives us the
-        # coordinate.
-        return self.coord_map[item].values
+        # the array. Start the deprecation cycle to be consistent.
+        msg = (
+            "Currently coords[coord_name] returns a numpy array, but in a "
+            "future dascore version it will return a BaseCoord instance. "
+            "Use patch.coords.get_array(coord_name) instead."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+        return self._get_coord(item).values
+
+    def __getattr__(self, item) -> BaseCoord:
+        try:
+            return super().__getattr__(item)
+        except AttributeError:
+            # unlike get item, get attr returns the base coordinate.
+            return self._get_coord(item)
 
     def __iter__(self):
         for key in self.coord_map:
-            yield (key, self[key])
+            yield (key, self.get_array(key))
 
     def __contains__(self, key):
         return key in self.coord_map
@@ -852,6 +865,32 @@ class CoordManager(DascoreBaseModel):
         for name, coord in self.coord_map.items():
             out[name] = coord.to_summary(dims=dim_map[name])
         return out
+
+    def _get_coord(self, coord_name):
+        """Get a coord. Raise an error if the coordinate is not in the coordmanager."""
+        if coord_name not in self.coord_map:
+            msg = (
+                f"No coordinate named {coord_name} in coord manager. "
+                f"Valid coordinates are {list(self.coord_map)}."
+            )
+            raise AttributeError(msg)
+        return self.coord_map[coord_name]
+
+    def min(self, coord_name):
+        """Return the minimum value of a coordinate."""
+        return self._get_coord(coord_name).min()
+
+    def max(self, coord_name):
+        """Return the maximum value of a coordinate."""
+        return self._get_coord(coord_name).max()
+
+    def step(self, coord_name):
+        """Return the coordinate step."""
+        return self._get_coord(coord_name).step
+
+    def get_array(self, coord_name) -> np.ndarray:
+        """Return the coordinate values as a numpy array."""
+        return np.array(self._get_coord(coord_name))
 
 
 def get_coord_manager(

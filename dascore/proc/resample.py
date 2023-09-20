@@ -118,7 +118,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
         samples = coord.snap().values
     # we need to make sure only real numbers are used, interp1d doesn't support
     # datetime64 yet.
-    coord_num = to_int(patch.coords[dim])
+    coord_num = to_int(patch.coords.get_array(dim))
     samples_num = to_int(samples)
     func = compat.interp1d(
         coord_num, patch.data, axis=axis, kind=kind, fill_value="extrapolate"
@@ -164,10 +164,8 @@ def resample(
 
     Notes
     -----
-    Unlike [iresample](`dascore.proc.iresample`) this function requires a
-    sampling_period.
-
-    Often the resulting Patch will be slightly shorter than the input Patch.
+    - Unless `samples` is `True`, this function requires a sampling_period.
+    - The resulting Patch can be slightly shorter than the input Patch.
 
     Examples
     --------

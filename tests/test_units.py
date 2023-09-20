@@ -117,11 +117,11 @@ class TestConvenientImport:
         """Ensure common units are importable."""
         from dascore.units import Hz, ft, km, m, miles
 
-        assert m == get_unit("m")
-        assert ft == get_unit("ft")
-        assert miles == get_unit("miles")
-        assert km == get_unit("km")
-        assert Hz == get_unit("Hz")
+        assert m == get_quantity("m")
+        assert ft == get_quantity("ft")
+        assert miles == get_quantity("miles")
+        assert km == get_quantity("km")
+        assert Hz == get_quantity("Hz")
 
     def test_bad_import_error_msg(self):
         """An import error should be raised if the unit isn't valid."""

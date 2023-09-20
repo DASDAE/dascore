@@ -272,13 +272,13 @@ def get_filter_units(
 
 def __getattr__(name):
     """
-    Allows arbitrary units to be imported from this module.
+    Allows arbitrary units (quantities) to be imported from this module.
 
     For example:
     from dascore.units import m
 
     is the same as
-    from dascore.units import get_unit
-    m = get_unit("m")
+    from dascore.units import get_quantity
+    m = get_quantity("m")
     """
-    return get_unit(name)
+    return get_quantity(name)

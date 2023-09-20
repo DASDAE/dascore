@@ -28,7 +28,7 @@ pa2 = dc.get_example_patch("example_event_1")
 
 Other supported example patches are:
 ```{python}
-#| echo: false
+#| code-fold: true
 from pprint import pprint
 
 import dascore as dc
@@ -80,13 +80,15 @@ attrs = dict(
 )
 
 # Create coordinates, labels for each axis in the array.
-t1 = dc.to_datetime64("2017-09-18")
+time_start = dc.to_datetime64("2017-09-18")
 time_step = to_timedelta64(1 / 250)
+time = time_start + np.arange(array.shape[1]) * time_step
+
+distance_start = 0
 distance_step = 1
-coords = dict(
-    distance=np.arange(array.shape[0]) * distance_step,
-    time=t1 + np.arange(array.shape[1]) * time_step,
-)
+distance = distance_start + np.arange(array.shape[0]) * distance_step
+
+coords = dict(time=time, distance=distance)
 
 # define dimensions (first label corresponds to data axis 0)
 dims = ('distance', 'time')
@@ -126,20 +128,22 @@ array[:10] = 12  # then this works
 
 ## Coords
 
-DASCore implements a special class, called a [CoordinateManager](`dascore.core.coordmanager.CoordManager`), which managers dimension names, coordinate labels, etc. `CoordinateManager` behaves like a dictionary for getting coordinate arrays (labels):
+DASCore implements a special class, called a [CoordManager](`dascore.core.coordmanager.CoordManager`), which managers dimension names, coordinate labels, selecting, sorting, etc. `CoordManager` has several convenience methods for accessing contained information:
 
 ```{python}
 import dascore as dc
 
 patch = dc.get_example_patch()
-
 coords = patch.coords
 
-# get time array
-time = coords['time']
+# Get an array of time values
+time_array = coords.get_array("time")
 
-# get distance array
-distance = coords['distance']
+# Get the maximum distance value
+distance_max = coords.max("distance")
+
+# Get the time step (NaN if time isn't evenly sampled)
+time_step = coords.step("time")
 ```
 
 Coords also have a useful string representation:
@@ -148,29 +152,32 @@ Coords also have a useful string representation:
 print(coords)
 ```
 
-:::{callout.note}
+:::{.callout-note}
 There are two types of entities included in coordinates:
- - Dimension (dims): the name and labels associated with a patch dimension (e.g. time, distance)
- - Coordinate (coords): the name and labels for non-dimension data associated with a dimension (e.g. latitude, longitude)
+
+ - Dimensions (dims): the name and labels associated with a patch dimension (e.g. time, distance)
+
+ - Coordinates (coords): the name and labels for non-dimension data associated with a dimension (e.g. coordinates "latitude" and "longitude" are often associated with dimension "distance")
 
 All dimensions are coordinates but not all coordinates are dimensions.
 :::
 
-The rest of the `CoordManager` features are mostly used internally by DASCore, but you can read more about it [on the `CoordManager` doc page](`dascore.core.coordmanager`).
+The rest of the `CoordManager` features are mostly used internally by DASCore, but you can read more about them [on the `CoordManager` doc page](`dascore.core.coordmanager`).
 
 ## Attrs
 
-The metadata stored in `Patch.attrs` is a [pydnatic model](https://docs.pydantic.dev/usage/models/) which enforces some basic schema validation. You can get a table of the attribute descriptions like this:
+The metadata stored in [`Patch.attrs`](`dascore.core.attrs.PatchAttrs`) is a [pydantic model](https://docs.pydantic.dev/usage/models/) which enforces a schema. `PatchAttrs.get_summary_df` generates a table of the attribute descriptions:
 
 ```{python}
+#| code-fold: true
 import dascore as dc
 
 dc.PatchAttrs.get_summary_df()
 ```
 
-Specific data formats may also add attributes (e.g. "gauge_length").
+Specific data formats may also add attributes (e.g. "gauge_length"), but this depends on the parser.
 
-## String Rep.
+## String Representation
 
 DASCore Patches have as useful string representation:
 
@@ -183,7 +190,7 @@ print(patch)
 
 # Selecting (trimming)
 
-Patches are trimmed using the [`select`](`dascore.Patch.select`) method. Most commonly, `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `None` or `...` indicating an open interval.
+Patches are trimmed using the [`select`](`dascore.Patch.select`) method. Most commonly, `select` takes the coordinate name and a tuple of (lower_limit, upper_limit) as the values. Either limit can be `None` or preferably `...` indicating an open interval.
 
 ```{python}
 import numpy as np
@@ -199,7 +206,7 @@ select_tuple = (attrs.time_min + one_sec, attrs.time_max - one_sec)
 new = patch.select(time=select_tuple)
 
 # select only the first half of the distance channels.
-distance_max = np.mean(patch.coords['distance'])
+distance_max = np.mean(patch.coords.get_array('distance'))
 new = patch.select(distance=(..., distance_max))
 ```
 
@@ -221,7 +228,7 @@ new = patch.select(time=(-2, -1), relative=True)
 new = patch.select(distance=(..., -100 * ft), relative=True)
 ```
 
-The `samples` keyword tells `select` the meaning of the query is in samples. Unlike absolute selections, these are **always** relative to the data contained in the patch (eg 0 refers to the first sample along the dimension).
+The `samples` keyword tells `select` the meaning of the query is in samples rather than the units of the selected dimension. Unlike absolute selections, these are **always** relative to the data contained in the patch (eg 0 refers to the first sample along the dimension).
 
 ```{python}
 import dascore as dc
@@ -321,7 +328,7 @@ pa = dc.get_example_patch()
 
 # one 1 second to all values in the time array.
 one_second = dc.to_timedelta64(1)
-old_time = pa.coords['time']
+old_time = pa.coords.get_array('time')
 new = pa.update_coords(time=old_time + one_second)
 ```
 
@@ -333,14 +340,14 @@ import dascore as dc
 pa = dc.get_example_patch()
 
 # change the starting time of the array
-new_time = pa.coords['time'].min() + one_second
+new_time = pa.coords.min('time') + one_second
 new = pa.update_coords(time_min=new_time)
 ```
 
 
 ### Adding coordinates
 
-It is common to have additional coordinates, such as latitude/longitude attached to a particular dimension (e.g., distance). It is also possible to add coordinates that are not associated with any dimensions.
+It is common to have additional coordinates, such as latitude/longitude attached to a particular dimension (often distance). It is also possible to add coordinates that are not associated with any dimensions.
 
 
 ```{python}
@@ -350,11 +357,12 @@ import dascore as dc
 
 pa = dc.get_example_patch()
 coords = pa.coords
-dist = coords['distance']
-time = coords['time']
+dist = coords.get_array('distance')
+time = coords.get_array('time')
 
 # Add a single coordinate associated with distance dimension
 lat = np.arange(0, len(dist)) * .001 -109.857952
+# note the tuple form: (associated_dimension, value)
 out_1 = pa.update_coords(latitude=('distance', lat))
 
 # Add multiple coordinates associated with distance dimension
@@ -374,7 +382,6 @@ out_3 = pa.update_coords(
 no_dim_coord = pa.update_coords(non_dim=(None, np.arange(10)))
 ```
 
-
 ### Changing coordinate dimensional association
 
 The dimensions each coordinate is associated with can be changed. For example, to remove a coordinate's dimension association:
@@ -385,14 +392,14 @@ import dascore as dc
 # this patch has latitude and longitude coordinates
 patch = dc.get_example_patch("random_patch_with_lat_lon")
 
-# drop latitude, this wont affect the data or other coordinates
-lat = patch.coords['latitude']
+# dissassociate latitude from distance
+lat = patch.coords.get_array('latitude')
 patch_detached_lat = patch.update_coords(latitude=(None, lat))
 ```
 
 ## Dropping Coordinates
 
-Non-dimensional coordinates can be dropped using `Patch.drop_coords`. Dimensional coordinates, however, cannot be dropped as it would values the patch data to become degenerate.
+Non-dimensional coordinates can be dropped using `Patch.drop_coords`. Dimensional coordinates, however, cannot be dropped doing so would force the patch data to become degenerate.
 
 ```{python}
 import dascore as dc
@@ -405,44 +412,7 @@ patch_dropped_lat = patch.drop_coords("latitude")
 print(patch_dropped_lat.coords)
 ```
 
-
-# Method Chaining
-
-In most cases, you should use method chaining as part of a
-[fluent interface](https://en.wikipedia.org/wiki/Fluent_interface) when working with patches.
-
-For example:
-```{.python}
-import dascore as dc
-
-pa = (
-    dc.get_example_patch()  # load the patch
-    .pass_filter(time=(1, 10)  # apply bandpass filter
-    .detrend(dim='time')  # detrend along time dimension
-)
-```
-
-Similar to Pandas, `Patch` has a [pipe method](`dascore.core.patch.Patch.pipe`) so non-patch methods
-can still be used in a method chain.
-
-
-```{.python}
-import dascore as dc
-
-def func(patch, arg1=1):
-    """Example non-patch method"""
-    return patch.update_attrs(arg1=1)
-
-pa = (
-    dc.get_example_patch()
-    .pass_filter(time=(..., 10))
-    .detrend('time', 'linear')
-    .pipe(func, arg1=3)
-)
-```
-
-
-## Coords in Patch Initialization
+### Coords in Patch Initialization
 
 Any number of coordinates can also be assigned when the patch is initiated. For coordinates other than those of the patch dimensions, the associated dimensions must be specified. For example:
 
@@ -477,6 +447,42 @@ coords = dict(
 dims = ("distance", "time")
 out = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
 ```
+
+
+# Method Chaining
+
+In most cases, you should use method chaining as part of a
+[fluent interface](https://en.wikipedia.org/wiki/Fluent_interface) when working with patches.
+
+For example:
+```{.python}
+import dascore as dc
+
+pa = (
+    dc.get_example_patch()  # load the patch
+    .pass_filter(time=(1, 10)  # apply bandpass filter
+    .detrend(dim='time')  # detrend along time dimension
+)
+```
+
+Similar to Pandas, `Patch` has a [pipe method](`dascore.core.patch.Patch.pipe`) so non-patch methods can still be used in a method chain.
+
+
+```{.python}
+import dascore as dc
+
+def func(patch, arg1=1):
+    """Example non-patch method"""
+    return patch.update_attrs(arg1=1)
+
+pa = (
+    dc.get_example_patch()
+    .pass_filter(time=(..., 10))
+    .detrend('time', 'linear')
+    .pipe(func, arg1=3)
+)
+```
+
 
 # Units
 

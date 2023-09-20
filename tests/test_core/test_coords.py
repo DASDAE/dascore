@@ -305,6 +305,12 @@ class TestBasics:
         with pytest.raises(IndexError, match="exceeds coord length"):
             _ = evenly_sampled_coord[len(evenly_sampled_coord)]
 
+    def test_to_array(self, coord):
+        """Ensure np.array converts coord to an array."""
+        ar = np.array(coord)
+        assert isinstance(ar, np.ndarray)
+        assert len(ar) == len(coord)
+
 
 class TestCoordSummary:
     """tests for converting to and from summary coords."""
@@ -1152,9 +1158,28 @@ class TestGetSampleCount:
 class TestIssues:
     """Tests for special issues related to coords."""
 
+    @pytest.fixture(scope="class")
+    def awkward_off_by_one(self):
+        """Awkward array like one found in the wild which causes snap issues."""
+        # Awkward, but this is a simplification of a time array found in the wild.
+        # Unfortunately, these arrays have to be this large to trigger the off
+        # by one error we are testing.
+        dt1 = np.timedelta64(131457, "ns")
+        dt2 = np.timedelta64(131456, "ns")
+
+        t1 = dc.to_datetime64("2023-01-01T00:12:13.232123222")
+        ar1 = t1 + np.arange(26926) * dt1
+
+        t2 = t1.max() + 2.232323 * dt1
+        ar2 = t2 + np.arange(45642 - len(ar1)) * dt2
+
+        array = np.concatenate([ar1, ar2], axis=0)
+        coord = dc.core.get_coord(values=array)
+        return coord
+
     def test_event_1_gives_coord_range(self, event_patch_1):
         """Ensure patch1 gives the coord range."""
-        time_vals = event_patch_1.coords["time"]
+        time_vals = event_patch_1.coords.get_array("time")
         coord = get_coord(values=time_vals)
         assert coord.evenly_sampled
 
@@ -1170,3 +1195,8 @@ class TestIssues:
         out = degenerate_time_coord.update(step=10)
         assert isinstance(out, BaseCoord)
         assert len(out) == 0
+
+    def test_snap_awkward(self, awkward_off_by_one):
+        """Ensure off by one error don't occur with snap."""
+        out = awkward_off_by_one.snap()
+        assert out.shape == awkward_off_by_one.shape

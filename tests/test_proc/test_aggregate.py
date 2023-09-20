@@ -21,7 +21,7 @@ class TestBasicAggregations:
         axis = distance_aggregated_patch.dims.index("distance")
         axis_len = distance_aggregated_patch.data.shape[axis]
         assert axis_len == 1
-        dist = distance_aggregated_patch.coords["distance"]
+        dist = distance_aggregated_patch.coords.get_array("distance")
         assert len(dist) == axis_len
 
     def test_time_aggregate(self, random_patch):

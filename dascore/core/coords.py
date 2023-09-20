@@ -253,6 +253,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __str__(self):
         return str(self.__rich__())
 
+    def __array__(self):
+        """Numpy method for getting array data with `np.array(coord)`."""
+        return self.data
+
     @cached_method
     def min(self):
         """Return min value."""
@@ -839,7 +843,15 @@ class CoordArray(BaseCoord):
             start, stop = max_v, min_v + step
         else:
             start, stop = min_v, max_v + step
-        return CoordRange(start=start, stop=stop, step=step, units=self.units)
+        # get potential output, ensure it is the same length as original
+        out = CoordRange(start=start, stop=stop, step=step, units=self.units)
+        # A hack to deal with those pesky off-by-one errors.
+        if out.shape != self.shape:
+            diff = len(self) - len(out)
+            new_stop = stop + diff * step  # increase or decrease coord length
+            out = out.update(stop=new_stop)
+        assert len(out) == len(self)
+        return out
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:

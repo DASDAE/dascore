@@ -144,7 +144,7 @@ class TestInit:
     def test_seconds_as_coords_time_no_dt(self):
         """Ensure seconds passed as coordinates with no attrs still works."""
         ar = get_simple_patch()
-        assert not np.any(pd.isnull(ar.coords["time"]))
+        assert not np.any(pd.isnull(ar.coords.get_array("time")))
 
     def test_shape(self, random_patch):
         """Ensure shape returns the shape of the data array."""
@@ -156,7 +156,7 @@ class TestInit:
         assert isinstance(patch, Patch)
         assert "latitude" in patch.coords
         assert "quality" in patch.coords
-        assert np.all(patch.coords["quality"] == patch.data)
+        assert np.all(patch.coords.get_array("quality") == patch.data)
 
     def test_incomplete_raises(self):
         """An incomplete patch should raise an error."""
@@ -180,8 +180,8 @@ class TestInit:
         )
         assert patch.shape == patch.coords.shape == patch.data.shape
         time_shape = patch.shape[patch.dims.index("time")]
-        assert time_shape == len(patch.coords["time"])
-        assert time_shape == len(patch.coords["time"])
+        assert time_shape == len(patch.coords.get_array("time"))
+        assert time_shape == len(patch.coords.get_array("time"))
 
     def test_init_no_coords(self, random_patch):
         """Ensure a new patch can be inited from only attrs."""
@@ -225,8 +225,8 @@ class TestNew:
         patch = random_patch
         axis = patch.dims.index("time")
         data = np.std(patch.data, axis=axis, keepdims=True)
-        new_time = patch.coords["time"][0:1]
-        new_dist = patch.coords["distance"]
+        new_time = patch.coords.get_array("time")[0:1]
+        new_dist = patch.coords.get_array("distance")
         coords_1 = {"time": new_time, "distance": new_dist}
         coords_2 = {"distance": new_dist, "time": new_time}
         # the order the coords are defined shouldn't matter
@@ -363,7 +363,7 @@ class TestEquals:
         coords = patch.coords
         coord_array = np.array(coords.coord_map["distance"].values)
         coord_array[20:30] *= 0.9
-        assert not np.allclose(coord_array, coords["distance"])
+        assert not np.allclose(coord_array, coords.get_array("distance"))
         new_patch = patch.update_coords(distance=coord_array)
         new = patch.new(coords=new_patch.coords)
         assert new != patch
@@ -413,7 +413,7 @@ class TestUpdateAttrs:
         t1 = np.datetime64("2000-01-01")
         pa = random_patch.update_attrs(time_min=t1)
         assert pa.attrs["time_min"] == t1
-        assert pa.coords["time"].min() == t1
+        assert pa.coords.min("time") == t1
 
     def test_update_startttime2(self, random_patch):
         """Updating start time should update end time as well."""
@@ -435,11 +435,11 @@ class TestUpdateAttrs:
         # test updating dist max
         pa = wacky_dim_patch.update_attrs(distance_max=10)
         assert pa.attrs.distance_max == 10
-        assert not np.any(pd.isnull(pa.coords["distance"]))
+        assert not np.any(pd.isnull(pa.coords.get_array("distance")))
         # test update dist min
         pa = wacky_dim_patch.update_attrs(distance_min=10)
         assert pa.attrs.distance_min == 10
-        assert not np.any(pd.isnull(pa.coords["distance"]))
+        assert not np.any(pd.isnull(pa.coords.get_array("distance")))
 
     def test_update_units(self, random_patch):
         """Ensure units can be updated in attrs."""
@@ -528,7 +528,7 @@ class TestCoords:
     @pytest.fixture(scope="class")
     def random_patch_with_lat(self, random_patch):
         """Create a random patch with added lat/lon coordinates."""
-        dist = random_patch.coords["distance"]
+        dist = random_patch.coords.get_array("distance")
         lat = np.arange(0, len(dist)) * 0.001 - 109.857952
         # add a single coord
         out = random_patch.update_coords(latitude=("distance", lat))
@@ -542,15 +542,15 @@ class TestCoords:
         """Ensure multiple coords can be added to patch."""
         out2 = random_patch_with_lat_lon
         assert {"latitude", "longitude"}.issubset(set(out2.coords.coord_map))
-        assert out2.coords["longitude"].shape
-        assert out2.coords["latitude"].shape
+        assert out2.coords.get_array("longitude").shape
+        assert out2.coords.get_array("latitude").shape
 
     def test_add_multi_dim_coords(self, multi_dim_coords_patch):
         """Ensure coords with multiple dimensions works."""
         out1 = multi_dim_coords_patch
         assert "quality" in out1.coords
-        assert out1.coords["quality"].shape
-        assert np.all(out1.coords["quality"] == 1)
+        assert out1.coords.get_array("quality").shape
+        assert np.all(out1.coords.get_array("quality") == 1)
 
     def test_coord_time_narrow_select(self, multi_dim_coords_patch):
         """Ensure the coord type doesn't change in narrow slice."""
@@ -648,7 +648,7 @@ class TestDeprecations:
 
     def test_assign_coords_deprecated(self, random_patch):
         """assign_coords should issue dep. warning."""
-        new_coord = random_patch.coords["time"]
+        new_coord = random_patch.coords.get_array("time")
 
         with pytest.warns(DeprecationWarning):
             random_patch.assign_coords(new_time=("time", new_coord))

@@ -149,7 +149,10 @@ class TestBasicCoordManager:
     def test_to_dict(self, coord_manager):
         """CoordManager should be convertible to dict."""
         c_dict = dict(coord_manager)
-        assert c_dict == {x: coord_manager[x] for x in coord_manager.coord_map}
+        expected = {x: coord_manager.get_array(x) for x in coord_manager.coord_map}
+        assert set(expected) == set(c_dict)
+        for key in set(expected):
+            assert np.all(expected[key] == c_dict[key])
 
     def test_membership(self, coord_manager):
         """Coord membership should work for coord names."""
@@ -186,7 +189,7 @@ class TestBasicCoordManager:
             cm["bob"] = 10
         # cant modify existing coord
         with pytest.raises(TypeError, match=expected_str):
-            cm[cm.dims[0]] = cm[cm.dims[0]]
+            cm[cm.dims[0]] = cm.get_array(cm.dims[0])
 
     def test_cant_modify_dim_map(self, basic_coord_manager):
         """Ensure the dim map is immutable."""
@@ -246,6 +249,35 @@ class TestBasicCoordManager:
     def test_size(self, coord_manager):
         """Ensure all coord managers have a size."""
         assert isinstance(coord_manager.size, int | np.int_)
+
+    def test_min(self, basic_coord_manager):
+        """Ensure we can git min value."""
+        expected = np.min(basic_coord_manager.time.data).astype(np.int64)
+        got = basic_coord_manager.min("time").astype(np.int64)
+        assert np.isclose(got, expected)
+
+    def test_max(self, basic_coord_manager):
+        """Ensure we can git max value."""
+        expected = np.max(basic_coord_manager.time.data).astype(np.int64)
+        got = basic_coord_manager.max("time").astype(np.int64)
+        assert np.isclose(got, expected)
+
+    def test_step(self, basic_coord_manager):
+        """Ensure we can git min value."""
+        expected = basic_coord_manager.time.step
+        assert basic_coord_manager.step("time") == expected
+
+    def test_getattr(self, basic_coord_manager):
+        """Ensure getattr returns coordinate."""
+        for dim in basic_coord_manager.dims:
+            coord = getattr(basic_coord_manager, dim)
+            assert coord == basic_coord_manager.coord_map[dim]
+
+    def test_get_item_warning(self, basic_coord_manager):
+        """Ensure get item emits a warning."""
+        msg = "returns a numpy array"
+        with pytest.warns(UserWarning, match=msg):
+            _ = basic_coord_manager["time"]
 
 
 class TestCoordManagerInputs:
@@ -414,14 +446,14 @@ class TestSelect:
         cm, trim = basic_coord_manager.select(distance=(-100, -10), array=data)
         assert trim.shape[cm.dims.index("distance")] == 0
         assert "distance" in cm.dims
-        assert len(cm["distance"]) == 0
+        assert len(cm.get_array("distance")) == 0
         assert len(cm.coord_map["distance"]) == 0
 
     def test_select_trims_associated_coord_1(self, coord_manager_multidim):
         """Ensure trimming a dimension also trims associated coordinate."""
         cm = coord_manager_multidim
         coord_to_trim = "distance"
-        distance = cm[coord_to_trim]
+        distance = cm.get_array(coord_to_trim)
         out, _ = cm.select(distance=(distance[1], distance[-2]))
         # ensure all attrs with "distance" have been trimmed.
         expected_len = len(out.coord_map[coord_to_trim])
@@ -434,7 +466,7 @@ class TestSelect:
         """Same as test #1, but now we check for trimming non-dimension coord."""
         cm = coord_manager_multidim
         coord_to_trim = "latitude"
-        array = cm[coord_to_trim]
+        array = cm.get_array(coord_to_trim)
         out, _ = cm.select(**{coord_to_trim: (array[1], array[-2])})
         dim = cm.dim_map[coord_to_trim][0]
         # ensure all attrs with shared dim have been trimmed.
@@ -486,7 +518,7 @@ class TestSelect:
             # now the array should have a len(1) in the selected dimension.
             assert out1.shape[dim_ind] == new_data.shape[dim_ind] == 1
             new_value = out1.coord_map[dim].values[0]
-            expected_value = cm[dim][index]
+            expected_value = cm.get_array(dim)[index]
             all_close(new_value, expected_value)
 
     def test_trim_related_coords(self, coord_manager_multidim):
@@ -679,28 +711,28 @@ class TestUpdateCoords:
 
     def test_simple(self, basic_coord_manager):
         """Ensure coordinates can be updated (replaced)."""
-        new_time = basic_coord_manager["time"] + np.timedelta64(1, "s")
+        new_time = basic_coord_manager.get_array("time") + np.timedelta64(1, "s")
         out = basic_coord_manager.update_coords(time=new_time)
-        assert np.all(np.equal(out["time"], new_time))
+        assert np.all(np.equal(out.get_array("time"), new_time))
 
     def test_extra_coords_kept(self, coord_manager_multidim):
         """Ensure extra coordinates are kept."""
         cm = coord_manager_multidim
-        new_time = cm["time"] + np.timedelta64(1, "s")
+        new_time = cm.get_array("time") + np.timedelta64(1, "s")
         out = cm.update_coords(time=new_time)
         assert set(out.coord_map) == set(coord_manager_multidim.coord_map)
         assert set(out.coord_map) == set(coord_manager_multidim.coord_map)
 
     def test_size_change(self, basic_coord_manager):
         """Ensure sizes of dimensions can be changed."""
-        new_time = basic_coord_manager["time"][:10]
+        new_time = basic_coord_manager.get_array("time")[:10]
         out = basic_coord_manager.update_coords(time=new_time)
-        assert np.all(np.equal(out["time"], new_time))
+        assert np.all(np.equal(out.get_array("time"), new_time))
 
     def test_size_change_drops_old_coords(self, coord_manager_multidim):
         """When the size changes on multidim, dims should be dropped."""
         cm = coord_manager_multidim
-        new_dist = cm["distance"][:10]
+        new_dist = cm.get_array("distance")[:10]
         dropped_coords = set(cm.coord_map) - set(cm.dims)
         out = cm.update_coords(distance=new_dist)
         assert dropped_coords.isdisjoint(set(out.coord_map))
@@ -780,11 +812,11 @@ class TestNonDimCoords:
 
     def test_update_with_1d_coordinate(self, basic_coord_manager):
         """Ensure we can add coordinates."""
-        lat = np.ones_like(basic_coord_manager["distance"])
+        lat = np.ones_like(basic_coord_manager.get_array("distance"))
         out = basic_coord_manager.update_coords(latitude=("distance", lat))
         assert out is not basic_coord_manager
         assert out.dims == basic_coord_manager.dims, "dims shouldn't change"
-        assert np.all(out["latitude"] == lat)
+        assert np.all(out.get_array("latitude") == lat)
         assert out.dim_map["latitude"] == out.dim_map["distance"]
         # the dim map shouldn't shrink; only things get added.
         assert set(out.dim_map).issuperset(set(basic_coord_manager.dim_map))
@@ -792,19 +824,20 @@ class TestNonDimCoords:
     def test_init_with_1d_coordinate(self, basic_coord_manager):
         """Ensure initing with 1D non-dim coords works."""
         coords = dict(basic_coord_manager)
-        lat = np.ones_like(basic_coord_manager["distance"])
+        lat = np.ones_like(basic_coord_manager.get_array("distance"))
         coords["latitude"] = ("distance", lat)
         out = get_coord_manager(coords, dims=basic_coord_manager.dims)
         assert out is not basic_coord_manager
         assert out.dims == basic_coord_manager.dims, "dims shouldn't change"
-        assert np.all(out["latitude"] == lat)
+        assert np.all(out.get_array("latitude") == lat)
         assert out.dim_map["latitude"] == out.dim_map["distance"]
         # the dim map shouldn't shrink; only things get added.
         assert set(out.dim_map).issuperset(set(basic_coord_manager.dim_map))
 
     def test_update_2d_coord(self, basic_coord_manager):
         """Ensure updating can be done with 2D coordinate."""
-        dist, time = basic_coord_manager["distance"], basic_coord_manager["time"]
+        dist = basic_coord_manager.get_array("distance")
+        time = basic_coord_manager.get_array("time")
         quality = np.ones((len(dist), len(time)))
         dims = ("distance", "time")
         new = basic_coord_manager.update_coords(qual=(dims, quality))
@@ -936,7 +969,7 @@ class TestMergeCoordManagers:
         be dropped.
         """
         cm1 = basic_coord_manager
-        cm2 = cm1.update_coords(time2=("time", cm1["time"]))
+        cm2 = cm1.update_coords(time2=("time", cm1.get_array("time")))
         out_no_range = merge_coord_managers([cm1, cm2], "time")
         assert "time2" not in out_no_range.coord_map
         out_with_range = merge_coord_managers([cm1, cm2], "time")

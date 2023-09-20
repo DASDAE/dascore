@@ -84,7 +84,7 @@ def waterfall(
     dims = patch.dims
     assert len(dims) == 2, "Can only make waterfall plot of 2D Patch"
     dims_r = tuple(reversed(dims))
-    coords = {dim: patch.coords[dim] for dim in dims}
+    coords = {dim: patch.coords.get_array(dim) for dim in dims}
     extents = _get_extents(dims_r, coords)
     im = ax.imshow(data, extent=extents, aspect="auto", cmap=cmap, origin="lower")
     # scale colorbar

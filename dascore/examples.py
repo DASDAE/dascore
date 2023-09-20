@@ -159,7 +159,7 @@ def _sin_wave_patch(
 def _random_patch_lat_lon():
     """Create a patch with latitude/longitude coords on distance dim."""
     random_patch = get_example_patch("random_das")
-    dist = random_patch.coords["distance"]
+    dist = random_patch.coords.get_array("distance")
     lat = np.arange(0, len(dist)) * 0.001 - 109.857952
     lon = np.arange(0, len(dist)) * 0.001 + 41.544654
     # add a single coord
