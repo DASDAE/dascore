@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.constants import attr_conflict_description, numeric_types, timeable_types
-from dascore.exceptions import CoordMergeError, ParameterError
+from dascore.exceptions import ChunkError, CoordMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_middle_value
 from dascore.utils.pd import (
@@ -72,8 +72,13 @@ def get_intervals(
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
     step = length * 0 if not step else step
-    assert overlap < length, "Overlap must be less than step"
-    assert (stop - start) > length, "Range must be greater than step"
+    # Check for errors
+    if overlap > length:
+        msg = "Cant chunk when overlap is greater than chunk size"
+        raise ParameterError(msg)
+    if (stop - start) < length and not keep_partials:
+        msg = "Cant chunk when data interval is less than chunk size. "
+        raise ChunkError(msg)
     # reference with no overlap
     new_step = length - overlap
     reference = np.arange(start, stop + new_step, step=new_step)
@@ -368,6 +373,29 @@ class ChunkManager:
         group = reduce(lambda x, y: x + "_" + y, group_series)
         return group
 
+    def _get_group_dfs(self, group, dur, overlap, group_mins, group_maxs, df, step):
+        """Get the new dataframe for a given group."""
+        out = []
+        for gnum in group.unique():
+            g_start, g_stop = group_mins[gnum], group_maxs[gnum]
+            current_df = df.loc[group[group == gnum].index]
+            # reconstruct DF
+            try:
+                new_start_stop = get_intervals(
+                    g_start,
+                    g_stop,
+                    dur,
+                    overlap=overlap,
+                    step=step.iloc[0],
+                    keep_partials=self._keep_partials,
+                )
+            except ChunkError:  # this chunk is too short, skip.
+                continue
+            # create the newly chunked dataframe
+            sub_new_df = self._create_df(current_df, self._name, new_start_stop, gnum)
+            out.append(sub_new_df)
+        return out
+
     def chunk(
         self,
         df: pd.DataFrame,
@@ -400,24 +428,9 @@ class ChunkManager:
         group_mins = start.groupby(group).min()
         group_maxs = stop.groupby(group).max()
         # split/group dataframe into new chunks by iterating over each group.
-        out = []
-        for gnum in group.unique():
-            g_start, g_stop = group_mins[gnum], group_maxs[gnum]
-            current_df = df.loc[group[group == gnum].index]
-            # reconstruct DF
-            new_start_stop = get_intervals(
-                g_start,
-                g_stop,
-                dur,
-                overlap=overlap,
-                step=step.iloc[0],
-                keep_partials=self._keep_partials,
-            )
-            # create the newly chunked dataframe
-            sub_new_df = self._create_df(current_df, self._name, new_start_stop, gnum)
-            out.append(sub_new_df)
-
+        out = self._get_group_dfs(group, dur, overlap, group_mins, group_maxs, df, step)
+        if not len(out):
+            msg = "Could not chunk. No segments with sufficient length found."
+            raise ChunkError(msg)
         out = pd.concat(out, axis=0).reset_index(drop=True)
         return df.assign(_group=group), out
-
-        pass

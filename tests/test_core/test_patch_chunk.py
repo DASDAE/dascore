@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import CoordMergeError
+from dascore.exceptions import ChunkError, CoordMergeError, ParameterError
 from dascore.utils.misc import get_middle_value
 from dascore.utils.time import to_timedelta64
 
@@ -125,6 +125,45 @@ class TestChunk:
         assert patch.attrs.time_min == spool[0].attrs.time_min
         assert patch.attrs.time_max == spool[-1].attrs.time_max
         assert patch.attrs.time_step == spool[0].attrs.time_step
+
+    def test_small_segments_no_partial(self, diverse_spool):
+        """Test issue #262 with no partials."""
+        spool = diverse_spool.chunk(time=10)
+        contents = spool.get_contents()
+        duration = contents["time_max"] - contents["time_min"]
+        dt = contents["time_step"]
+        assert (((duration + dt) / dc.to_timedelta64(1)) >= 10).all()
+
+    def test_small_segments_with_partial(self, diverse_spool):
+        """Test issue #262 with partials."""
+        diverse_contents = diverse_spool.get_contents()
+        spool = diverse_spool.chunk(time=10, keep_partial=True)
+        contents = spool.get_contents()
+        duration = contents["time_max"] - contents["time_min"]
+        dt = contents["time_step"]
+        dur_dt = duration + dt
+        # First, there should be some times less than 10 seconds
+        assert ((dur_dt / dc.to_timedelta64(1)) < 9).any()
+        # and the far out time should still be there
+        assert contents["time_min"].min() == diverse_contents["time_min"].min()
+
+    def test_raise_increment_too_big(self, diverse_spool):
+        """Ensure code raises an error if the increment is too large."""
+        msg = "No segments with sufficient length"
+        with pytest.raises(ChunkError, match=msg):
+            diverse_spool.chunk(time=10000)
+
+    def test_too_big_partial(self, diverse_spool):
+        """When chunk is too large, all contiguous blocks should merge."""
+        spool1 = diverse_spool.chunk(time=100000, keep_partial=True)
+        spool2 = diverse_spool.chunk(time=...)
+        assert spool1 == spool2
+
+    def test_too_big_overlap_raises(self, diverse_spool):
+        """Overlap > chunk an error should raise."""
+        msg = "overlap is greater than chunk size"
+        with pytest.raises(ParameterError, match=msg):
+            diverse_spool.chunk(time=10, overlap=11)
 
 
 class TestChunkMerge:
