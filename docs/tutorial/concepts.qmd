@@ -20,9 +20,7 @@ You will read more about Patches and Spools later on in the tutorial.
 
 # Time
 
-Any expression of time should use [numpy](https://numpy.org/doc/stable/reference/arrays.datetime.html) time
-constructs, which include [datetime64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.datetime64)
-and [timedelta64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.timedelta64).
+Any expression of time should use [numpy](https://numpy.org/doc/stable/reference/arrays.datetime.html) time constructs, which include [datetime64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.datetime64) and [timedelta64](https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.timedelta64).
 
 For example:
 
@@ -41,9 +39,10 @@ delta_1 = (time_2 - time_1) / np.timedelta64(1, 'h')
 
 DASCore provides two convenience functions for working with times:
 
-[to_datetime64](`dascore.utils.time.to_datetime64`) which tries to convert most types of inputs expressing date times
-to the proper numpy type. [to_timedelta64](`dascore.utils.time.to_datetime64`) performs a similar function for
-timedeltas. For example:
+- [to_datetime64](`dascore.utils.time.to_datetime64`) converts different inputs to numpy datetime64 arrays or instances.
+- [to_timedelta64](`dascore.utils.time.to_datetime64`) converts different inputs to numpy timedelta64 arrays or instances.
+
+For example:
 
 ```{python}
 import dascore as dc
@@ -55,14 +54,10 @@ time_1 = dc.to_datetime64('2022-01-01T12:12:12.1212')
 time_2 = dc.to_datetime64(610243200)
 ```
 
-In general, you should try to be as explicit as possible and use numpy's time constructs directly, but the
-dascore time functions provide a helpful way to sanitize a variety of time inputs.
 
 # Dimension Selection
 
-Most of DASCore's processing methods can be applied along any dimension. For example,
-[pass_filter](`dascore.proc.filter.pass_filter`) can be applied along any dimension by passing a range and
-dimension name:
+Most of DASCore's processing methods can be applied along any dimension. Typically, the dimension is selected with keyword, and the method specific data are passed as values. For example, applying [pass_filter](`dascore.proc.filter.pass_filter`) to a patch with `distance` and `time` dimensions works like this:
 
 ```{python}
 import dascore as dc
@@ -71,26 +66,31 @@ patch = dc.get_example_patch()
 filtered_time = patch.pass_filter(time=(1, 5))
 filtered_distance = patch.pass_filter(distance=(0.1, 0.2))
 ```
-However, the meaning of the values (ie frequency vs period) depends on the function, so be sure to read the docs!
+
+However, the meaning of the values depends on the function, e.g. both frequency and period might make sense in the example above. Being explicit with units helps, but be sure to read the docs!
 
 # Units
 
-DASCore provides first class support for units through the `units` module. Units (or rather quantities) can be created with  [get_quantity](`dascore.units.get_quantity`).
+DASCore provides first class support for units through the `units` module. Units (or rather quantities) can be imported directly from the units module or can be created with the [get_quantity](`dascore.units.get_quantity`) function.
 
 ```{python}
-from dascore.units import get_quantity
+from dascore.units import get_quantity, m, ft
 
 meters = get_quantity("meters")
 
-ten_m = meters * 10
-print(ten_m)
+# now meters should be equal to 1 meter
+assert meters == 1 * m
 
-# Or by direct string parsing, which can handle a lot of complexity
+# convert 10 meters to ft
+ten_m = meters * 10
+print(ten_m.to(ft))
+
+# get_quantity can handle a lot of complexity!
 quantity = get_quantity("10 * (PI / 10^3) (millifurlongs)/(tesla)")
 print(quantity)
 ```
 
-Many of DASCore's processing functions support units/quantities as shown above. See the [units section](patch.qmd#units) in the Patch tutorial for examples.
+Many of DASCore's Patch methods support units/quantities as shown above. See the [units section](patch.qmd#units) in the Patch tutorial for examples.
 
 :::{.callout-note}
 DASCore uses the unit library [Pint](https://github.com/hgrecco/pint) for unit parsing/conversions. See its documentation for more on how units and quantities work.
