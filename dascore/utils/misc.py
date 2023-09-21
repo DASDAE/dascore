@@ -560,8 +560,13 @@ class _MapFuncWrapper:
         self._progress = progress
 
     def __call__(self, spool):
-        desc = f"Applying {self._func.__name__} to spool"
-        iterable = track(spool, desc) if self._progress else spool
+        iterable = spool
+        # in order to handle multiprocessing, we apply a secret tag of "_progress"
+        # to the first spool. This way only the first spool displays the
+        # the progress bar. A huge hack, maybe there is a better way? See #265.
+        if not getattr(spool, "_no_progress", False):
+            desc = f"Applying {self._func.__name__} to spool"
+            iterable = track(spool, desc) if self._progress else spool
         return [self._func(x, **self._kwargs) for x in iterable]
 
 
@@ -591,7 +596,12 @@ def _spool_map(spool, func, size=None, client=None, progress=True, **kwargs):
     # so that patches don't get serialized.
     if size is None:
         size = len(spool) / os.cpu_count()
-    spools = spool.split(size=size)
+    spools = list(spool.split(size=size))
+    # this is a hack to get the progress bar to work. Essentially, we just
+    # add a secret flag to all but one spool so that progress bar is only
+    # displayed in one thread/process.
+    for sub_spool in spools[1:]:
+        sub_spool._no_progress = True
     new_func = _MapFuncWrapper(func, kwargs, progress=progress)
     return [x for y in client.map(new_func, spools) for x in y]
 

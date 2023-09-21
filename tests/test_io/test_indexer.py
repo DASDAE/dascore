@@ -63,7 +63,7 @@ def empty_index(tmp_path_factory):
 class TestFindIndex:
     """Tests for finding the index."""
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture()
     def unwritable_directory(self, tmp_path_factory):
         """Return an un-writable directory."""
         # currently this doesn't work on windows so we need to skip any test
