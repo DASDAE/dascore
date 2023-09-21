@@ -46,6 +46,7 @@ def _get_min_max_query(kwargs, df):
     col_set = set(df.columns)
     to_kill = []
     for key, val in kwargs.items():
+        val = None if val is ... else val  # handle ...
         if key.endswith("_max") and key not in col_set:
             out[key.replace("_max", "")][1] = val
             to_kill.append(key)
@@ -80,7 +81,9 @@ def split_df_query(kwargs, df, ignore_bad_kwargs=False):
         val = kwargs[key]
         subset = {min_key, max_key}.issubset(col_set)
         if subset and val is not None and len(val) == 2:
-            range_query[key] = val
+            # handles ... as None.
+            new_val = [None if x is ... else x for x in val]
+            range_query[key] = tuple(new_val)
             out.pop(key, None)
         else:
             unsupported[key] = val
@@ -206,9 +209,10 @@ def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
         if not isinstance(value, slice | Sequence) or len(value) != 2:
             msg = "slice must be a length 2 tuple, you passed {kwargs}"
             raise ParameterError(msg)
-        if not isinstance(value, slice):
-            value = slice(*value)
-        return value
+        if isinstance(value, slice):
+            value = [value.start, value.stop]
+        new_val = [None if x is ... else x for x in value]
+        return slice(*new_val)
 
     def _maybe_convert_dtype(sli, name, df):
         """Convert dtypes of slice if needed."""

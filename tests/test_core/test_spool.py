@@ -257,6 +257,12 @@ class TestSelect:
             assert patch.attrs["distance_min"] >= distance_min
             assert patch.attrs["distance_max"] <= distance_max
 
+    def test_split_ellipses(self, diverse_spool):
+        """Ensure ... can be used for an open interval."""
+        spool1 = diverse_spool.select(time=(..., "2020-01-01"))
+        spool2 = diverse_spool.select(time=(None, "2020-01-01"))
+        assert spool1 == spool2
+
 
 class TestSort:
     """Tests for sorting spools."""
