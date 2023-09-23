@@ -128,3 +128,8 @@ class TestWaterfall:
         ax = pa.viz.waterfall()
         assert ax.get_xlabel() == dims[1]
         assert ax.get_ylabel() == dims[0]
+
+    def test_show(self, random_patch, monkeypatch):
+        """Ensure show path is callable."""
+        monkeypatch.setattr(plt, "show", lambda: None)
+        random_patch.viz.waterfall(show=True)

@@ -4,9 +4,20 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 
+import dascore as dc
+
 
 class TestWiggle:
     """Tests for wiggle plot."""
+
+    def test_example(self):
+        """Test the example from the docs."""
+        patch = dc.examples._sin_wave_patch(
+            sample_rate=1000,
+            frequency=[200, 10],
+            channel_count=2,
+        )
+        _ = patch.viz.wiggle()
 
     def test_returns_axes(self, random_patch):
         """Call waterfall plot, return."""
@@ -21,13 +32,14 @@ class TestWiggle:
         assert random_patch.dims[1].lower() in ax.get_xlabel().lower()
         assert isinstance(ax, plt.Axes)
 
-    def test_example(self):
-        """Test the example from the docs."""
-        import dascore as dc
+    def test_non_time_axis(self, random_patch):
+        """Ensure another dimension works."""
+        patch = random_patch.select(time=(10, 40), samples=True)
+        ax = patch.viz.wiggle(dim="distance")
+        assert "distance" in str(ax.get_xlabel())
+        assert "time" in str(ax.get_ylabel())
 
-        patch = dc.examples._sin_wave_patch(
-            sample_rate=1000,
-            frequency=[200, 10],
-            channel_count=2,
-        )
-        _ = patch.viz.wiggle()
+    def test_show(self, random_patch, monkeypatch):
+        """Ensure show path is callable."""
+        monkeypatch.setattr(plt, "show", lambda: None)
+        random_patch.viz.wiggle(show=True)
