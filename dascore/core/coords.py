@@ -29,7 +29,12 @@ from dascore.units import (
 )
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import all_diffs_close_enough, cached_method, iterate
+from dascore.utils.misc import (
+    all_diffs_close_enough,
+    cached_method,
+    iterate,
+    sanitize_range_param,
+)
 from dascore.utils.models import (
     ArrayLike,
     DascoreBaseModel,
@@ -420,40 +425,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         select
             An object for determining select range.
         """
+        select_tuple = sanitize_range_param(select)
 
-        def _validate_slice(select):
-            """Validation for slices."""
-            if not isinstance(select, slice):
-                return select
-            if select.step is not None:
-                msg = (
-                    "Step not supported in select/filtering. Use decimate for "
-                    "proper down-sampling."
-                )
-                raise ParameterError(msg)
-            return (select.start, select.stop)
-
-        def _validate_none_or_ellipsis(select):
-            """Ensure None, ... are converted to tuple."""
-            if select is None or select is Ellipsis:
-                select = (None, None)
-            return select
-
-        def _validate_len(select):
-            """Ensure select is a tuple of proper length."""
-            if len(select) != 2:
-                msg = "Slice indices must be length 2 sequence."
-                raise ParameterError(msg)
-            return select
-
-        # apply simple checks; ensure we have a len 2 tuple.
-        for func in [_validate_slice, _validate_none_or_ellipsis, _validate_len]:
-            select = func(select)
-        p1, p2 = (self._get_compatible_value(x, relative=relative) for x in select)
-        # reverse order if needed to ensure p1 < p2
+        p1, p2 = (
+            self._get_compatible_value(x, relative=relative) for x in select_tuple
+        )
+        # reverse order if needed to ensure p1 < p2. This needs to be
+        # after the compatible value conversion in case pre-converted
+        # values are different types.
         if p1 is not None and p2 is not None and p2 < p1:
             p1, p2 = p2, p1
-
         return p1, p2
 
     def _get_relative_values(self, value):

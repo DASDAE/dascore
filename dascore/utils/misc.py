@@ -14,12 +14,11 @@ from functools import cache
 from types import ModuleType
 
 import numpy as np
-import pandas as pd
 from scipy.linalg import solve
 from scipy.special import factorial
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependency
+from dascore.exceptions import MissingOptionalDependency, ParameterError
 from dascore.utils.progress import track
 
 
@@ -100,48 +99,6 @@ class MethodNameSpace(metaclass=_NameSpaceMeta):
         for key, val in vars(cls).items():
             if callable(val):  # passes to _NameSpaceMeta settattr
                 setattr(cls, key, val)
-
-
-def get_slice_from_monotonic(array, cond: tuple | None) -> slice:
-    """
-    Return a slice object which meets conditions in cond on array.
-
-    This is useful for determining how a particular dimension should be
-    trimmed based on a coordinate (array) and an interval (cond).
-
-    Parameters
-    ----------
-    array
-        Any array with sorted values, but the array can have zeros
-        at the end up to the sorted segment. Eg [1,2,3, 0, 0] works.
-    cond
-        An interval for which the array is to be indexed. End points are
-        inclusive.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from dascore.utils.misc import get_slice_from_monotonic
-    >>> ar = np.arange(100)
-    >>> array_slice = get_slice_from_monotonic(ar, cond=(1, 10))
-    """
-    # TODO do we still need this or can we just use coordinates?
-    if cond is None:
-        return slice(None, None)
-    assert len(cond) == 2, "you must pass a length 2 tuple to get_slice."
-    start, stop = None, None
-    if not pd.isnull(cond[0]):
-        start = np.searchsorted(array, cond[0], side="left")
-        start = start if start != 0 else None
-    if not pd.isnull(cond[1]):
-        stop = np.searchsorted(array, cond[1], side="right")
-        stop = stop if stop != len(array) else None
-    # check for and handle zeroed end values
-    if array[-1] <= array[0]:
-        increasing_segment_end = np.argmin(np.diff(array))
-        out = get_slice_from_monotonic(array[:increasing_segment_end], cond)
-        stop = np.min([out.stop or len(array), increasing_segment_end])
-    return slice(start, stop)
 
 
 def broadcast_for_index(
@@ -611,3 +568,26 @@ def _dict_list_diffs(dict_list):
             if first[key] != other[key]:
                 out.add(key)
     return sorted(out)
+
+
+def sanitize_range_param(select) -> tuple:
+    """Given a slice or tuple, check and return slice or tuple."""
+    # handle slices, need to convert to tuple
+    if isinstance(select, slice):
+        if select.step is not None:
+            msg = (
+                "Step not supported in select/filtering. Use decimate for "
+                "proper down-sampling."
+            )
+            raise ParameterError(msg)
+        select = (select.start, select.stop)
+    # convert ellipses or ellipses values
+    if select is None or select is Ellipsis:
+        select = (None, None)
+    # validate length (only length 2 allowed)
+    if len(select) != 2:
+        msg = "Range indices must be a length 2 sequence."
+        raise ParameterError(msg)
+    # swap out ellipses for None so downstream funcs dont have to
+    select = tuple(None if x is ... else x for x in select)
+    return select

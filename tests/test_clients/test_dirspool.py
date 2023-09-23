@@ -272,8 +272,8 @@ class TestSelect:
 
     def test_nice_error_message_bad_select(self, diverse_directory_spool):
         """Ensure a nice error message is raised for bad filter param."""
-        with pytest.raises(ParameterError, match="must be a length 2 tuple"):
-            _ = diverse_directory_spool.select(time=None)[0]
+        with pytest.raises(ParameterError, match="must be a length 2 sequence"):
+            _ = diverse_directory_spool.select(time=(None, None, None))[0]
 
     def test_select_correct_history_str(self, diverse_directory_spool):
         """Ensure no history string is added for selecting. See #142/#147."""

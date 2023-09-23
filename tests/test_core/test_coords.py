@@ -396,7 +396,7 @@ class TestGetSliceTuple:
 
     def test_get_slice_range_bad_values(self, evenly_sampled_coord):
         """Ensure bad values raise helpful error."""
-        with pytest.raises(ParameterError, match="Slice indices must be"):
+        with pytest.raises(ParameterError, match="must be a length 2"):
             evenly_sampled_coord.get_slice_tuple((1, 2, 3))
 
     def test_slice_with_step_raises(self, evenly_sampled_coord):

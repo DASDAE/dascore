@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 import dascore as dc
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -194,36 +195,24 @@ def get_interval_columns(df, name, arrays=False):
         return start.values, stop.values, step.values
 
 
-def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
+def yield_range_tuple_from_kwargs(df, kwargs) -> tuple[str, slice]:
     """
-    For each slice keyword, yield the name and slice.
+    For each slice keyword, yield the name and a tuple of (start, stop).
 
-    Will also convert slice values based on dtypes in dataframe, eg
+    Will also convert values based on dtypes in dataframe, eg
     time=(1, 10) will convert to
     time=(np.timedelta64(1, 's'), np.timedelta64(10, 's')) provided columns
     'time_min' and 'time_max' are datetime columns.
     """
 
-    def _get_slice(value):
-        """Ensure the value can rep. a slice."""
-        if not isinstance(value, slice | Sequence) or len(value) != 2:
-            msg = "slice must be a length 2 tuple, you passed {kwargs}"
-            raise ParameterError(msg)
-        if isinstance(value, slice):
-            value = [value.start, value.stop]
-        new_val = [None if x is ... else x for x in value]
-        return slice(*new_val)
-
-    def _maybe_convert_dtype(sli, name, df):
+    def _maybe_convert_dtype_to_date(range_tuple, name, df):
         """Convert dtypes of slice if needed."""
         datetime_cols = set(df.select_dtypes(include=np.datetime64).columns)
         if {f"{name}_min", f"{name}_max"}.issubset(datetime_cols):
-            sli = slice(
-                to_datetime64(sli.start) if sli.start is not None else None,
-                to_datetime64(sli.stop) if sli.stop is not None else None,
-                to_timedelta64(sli.step) if sli.step is not None else None,
+            range_tuple = tuple(
+                to_datetime64(x) if x is not None else None for x in range_tuple
             )
-        return sli
+        return range_tuple
 
     # find keys which correspond to column ranges
     col_set = set(df.columns)
@@ -234,8 +223,9 @@ def yield_slice_from_kwargs(df, kwargs) -> tuple[str, slice]:
     }
     # ensure exactly one column is found
     for name in valid_minmax_kwargs:
-        out_slice = _maybe_convert_dtype(_get_slice(kwargs[name]), name, df)
-        yield name, out_slice
+        range_tuple = sanitize_range_param(kwargs[name])
+        out = _maybe_convert_dtype_to_date(range_tuple, name, df)
+        yield name, out
 
 
 def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
@@ -254,10 +244,10 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     # apply filtering, this creates a copy so we *should* be ok to update inplace.
     out = df[filter_df(df, ignore_bad_kwargs=ignore_bad_kwargs, **kwargs)]
     # find slice kwargs, get series corresponding to interval columns
-    for name, qs in yield_slice_from_kwargs(out, kwargs):
+    for name, (val_min, val_max) in yield_range_tuple_from_kwargs(out, kwargs):
         start, stop, step = get_interval_columns(out, name)
-        min_val = qs.start if qs.start is not None else start.min()
-        max_val = qs.stop if qs.stop is not None else stop.max()
+        min_val = val_min if val_min is not None else start.min()
+        max_val = val_max if val_max is not None else stop.max()
         too_small = start < min_val
         too_large = stop > max_val
         out.loc[too_large, too_large.name] = max_val
