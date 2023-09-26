@@ -30,6 +30,7 @@ def wiggle(
     dim="time",
     scale=1,
     color="black",
+    shading=False,
     ax: plt.Axes | None = None,
     show=False,
 ) -> plt.Figure:
@@ -66,9 +67,22 @@ def wiggle(
     other_labels = patch.coords.get_array(other_dim)
     offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_labels)
     # now plot, add labels, etc.
-    plt.plot(wiggle_labels, data_scaled, color=color)
+    plt.plot(wiggle_labels, data_scaled, color=color, alpha=0.2)
+    # shade if desired
+    if shading is True:
+        for i in range(len(offsets)):
+            ax.fill_between(
+                wiggle_labels,
+                offsets[i],
+                data_scaled[:, i],
+                where=(data_scaled[:, i] > offsets[i]),
+                color=color,
+                alpha=0.6,
+            )
     # we need to tweak the other labels
     ax.set_yticks(offsets, other_labels)
+    # reduce density of labels to 30 for better clarity
+    plt.locator_params(axis="y", nbins=min(len(other_labels), 30))
     for dim, x in zip(patch.dims, ["x", "y"]):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
         # format all dims which have time types.
