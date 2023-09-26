@@ -3,12 +3,19 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 
 import dascore as dc
 
 
 class TestWiggle:
     """Tests for wiggle plot."""
+
+    @pytest.fixture()
+    def small_patch(self, random_patch):
+        """A small patch to cut back on plot time."""
+        pa = random_patch.select(distance=(10, 15), samples=True)
+        return pa
 
     def test_example(self):
         """Test the example from the docs."""
@@ -21,7 +28,6 @@ class TestWiggle:
 
     def test_returns_axes(self, random_patch):
         """Call waterfall plot, return."""
-        # modify patch to include line at start
         data = np.array(random_patch.data)
         data[:100, :100] = 2.0  # create an origin block for testing axis line up
         data[:100, -100:] = -2.0  #
@@ -32,10 +38,14 @@ class TestWiggle:
         assert random_patch.dims[1].lower() in ax.get_xlabel().lower()
         assert isinstance(ax, plt.Axes)
 
+    def test_shading(self, small_patch):
+        """Ensure shading parameter works."""
+        _ = small_patch.viz.wiggle(shade=True)
+
     def test_non_time_axis(self, random_patch):
         """Ensure another dimension works."""
-        patch = random_patch.select(time=(10, 40), samples=True)
-        ax = patch.viz.wiggle(dim="distance")
+        sub_patch = random_patch.select(time=(10, 20), samples=True)
+        ax = sub_patch.viz.wiggle(dim="distance")
         assert "distance" in str(ax.get_xlabel())
         assert "time" in str(ax.get_ylabel())
 

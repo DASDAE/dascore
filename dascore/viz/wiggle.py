@@ -24,13 +24,26 @@ def _get_offsets_factor(patch, dim, scale, other_labels):
     return offsets, data_scaled
 
 
+def _shade(offsets, ax, data_scaled, color, wiggle_labels):
+    """Shades the part of the waveforms under the offset line."""
+    for i in range(len(offsets)):
+        ax.fill_between(
+            wiggle_labels,
+            offsets[i],
+            data_scaled[:, i],
+            where=(data_scaled[:, i] > offsets[i]),
+            color=color,
+            alpha=0.6,
+        )
+
+
 @patch_function()
 def wiggle(
     patch: PatchType,
     dim="time",
     scale=1,
     color="black",
-    shading=False,
+    shade=False,
     ax: plt.Axes | None = None,
     show=False,
 ) -> plt.Figure:
@@ -46,6 +59,9 @@ def wiggle(
         centroids are separated by the average total waveform excursion.
     color
         Color of wiggles
+    shade
+        If True, shade all values of each trace which are less than the mean
+        trace value.
     ax
         A matplotlib object, if None create one.
     show
@@ -68,17 +84,9 @@ def wiggle(
     offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_labels)
     # now plot, add labels, etc.
     plt.plot(wiggle_labels, data_scaled, color=color, alpha=0.2)
-    # shade if desired
-    if shading is True:
-        for i in range(len(offsets)):
-            ax.fill_between(
-                wiggle_labels,
-                offsets[i],
-                data_scaled[:, i],
-                where=(data_scaled[:, i] > offsets[i]),
-                color=color,
-                alpha=0.6,
-            )
+    # shade negative part of waveforms if desired
+    if shade:
+        _shade(offsets, ax, data_scaled, color, wiggle_labels)
     # we need to tweak the other labels
     ax.set_yticks(offsets, other_labels)
     # reduce density of labels to 30 for better clarity
