@@ -12,13 +12,6 @@ from dascore.core import get_coord_manager
 
 # --- Getting format/version
 
-DATA_ARRAY_NAMES = frozenset(["raw", "data"])
-TIME_ARRAY_NAMES = frozenset(("timestamp", "time", "timestamps"))
-OTHER_COORD_ARRAY_NAMES = frozenset(("channels", "distance"))
-
-FILE_FORMAT_ATTR_NAMES = frozenset(("__format__", "file_format", "format"))
-DEFAULT_ATTRS = frozenset(("CLASS", "PYTABLES_FORMAT_VERSION", "TITLE", "VERSION"))
-
 
 def get_coords(fi):
     """
@@ -52,7 +45,7 @@ def get_coords(fi):
 def get_attrs(fi, coords, path, file_io):
     """Create Patch Attribute from SEGY header contents."""
     attrs = dc.PatchAttrs(
-        file_path=path,
+        path=path,
         file_version=file_io.version,
         file_format=file_io.name,
         coords=coords,
@@ -67,7 +60,6 @@ def get_time_from_header(header):
     hour = header[TraceField.HourOfDay]
     minute = header[TraceField.MinuteOfHour]
     second = header[TraceField.SecondOfMinute]
-
     # make those timedate64
     fmt = "%Y.%j.%H.%M.%S"
     s = f"{year}.{julday}.{hour}.{minute}.{second}"

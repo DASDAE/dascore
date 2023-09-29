@@ -37,7 +37,6 @@ class SegyV2(FiberIO):
         """
         with segyio.open(path, ignore_geometry=True) as fi:
             data = np.stack([x for x in fi.trace], axis=-1)
-            # segy_to_array(fi)
             coords = get_coords(fi)
             attrs = get_attrs(fi, coords, path, self)
 
