@@ -37,17 +37,28 @@ def _shade(offsets, ax, data_scaled, color, wiggle_labels):
         )
 
 
+def _format_y_axis_ticks(ax, offsets, other_axis_ticks, max_ticks=10):
+    """Format the Y axis tick labels."""
+    # set the offset
+    ax.set_yticks(offsets, other_axis_ticks)
+    min_bins = min(len(other_axis_ticks), max_ticks)
+    plt.locator_params(axis="y", nbins=min_bins)
+
+
 @patch_function()
 def wiggle(
     patch: PatchType,
     dim="time",
     scale=1,
+    alpha=0.2,
     color="black",
     shade=False,
     ax: plt.Axes | None = None,
     show=False,
 ) -> plt.Figure:
     """
+    Create a wiggle plot of patch data.
+
     Parameters
     ----------
     patch
@@ -57,13 +68,15 @@ def wiggle(
     scale
         The scale (or gain) of the waveforms. A value of 1 indicates waveform
         centroids are separated by the average total waveform excursion.
+    alpha
+        Opacity of the wiggle lines.
     color
         Color of wiggles
     shade
         If True, shade all values of each trace which are less than the mean
         trace value.
     ax
-        A matplotlib object, if None create one.
+        A matplotlib object, if None ne will be created.
     show
         If True, show the plot, else just return axis.
 
@@ -79,18 +92,17 @@ def wiggle(
     # After transpose selected dim must be axis 0 and other axis 1
     patch = patch.transpose(dim, ...)
     other_dim = next(iter(set(patch.dims) - {dim}))
-    wiggle_labels = patch.coords.get_array(dim)
-    other_labels = patch.coords.get_array(other_dim)
-    offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_labels)
+    # values for axis which is connected
+    connect_axis_ticks = patch.coords.get_array(dim)
+    # values for y axis (not connected)
+    other_axis_ticks = patch.coords.get_array(other_dim)
+    offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_axis_ticks)
     # now plot, add labels, etc.
-    plt.plot(wiggle_labels, data_scaled, color=color, alpha=0.2)
+    plt.plot(connect_axis_ticks, data_scaled, color=color, alpha=alpha)
     # shade negative part of waveforms if desired
     if shade:
-        _shade(offsets, ax, data_scaled, color, wiggle_labels)
-    # we need to tweak the other labels
-    ax.set_yticks(offsets, other_labels)
-    # reduce density of labels to 30 for better clarity
-    plt.locator_params(axis="y", nbins=min(len(other_labels), 30))
+        _shade(offsets, ax, data_scaled, color, connect_axis_ticks)
+    _format_y_axis_ticks(ax, offsets, other_axis_ticks)
     for dim, x in zip(patch.dims, ["x", "y"]):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
         # format all dims which have time types.
