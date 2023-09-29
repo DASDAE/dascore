@@ -1,36 +1,82 @@
 """Module for wiggle plotting."""
 from __future__ import annotations
 
-from datetime import timedelta
-
 import matplotlib.pyplot as plt
 import numpy as np
 
-from dascore.constants import ONE_BILLION, PatchType
+from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
-from dascore.utils.plotting import _format_time_axis, _get_ax
-from dascore.utils.time import to_int
+from dascore.utils.plotting import (
+    _format_time_axis,
+    _get_ax,
+    _get_dim_label,
+)
 
 
-@patch_function(required_dims=("time", "distance"))
+def _get_offsets_factor(patch, dim, scale, other_labels):
+    """Get the offsets and scale the data."""
+    dim_axis = patch.dims.index(dim)
+    # get and apply scale_factor. This controls how far apart the wiggles are.
+    diffs = np.max(patch.data, axis=dim_axis) - np.min(patch.data, axis=dim_axis)
+    offsets = (np.median(diffs) * scale) * np.arange(len(other_labels))
+    # add scale factor to data
+    data_scaled = offsets[None, :] + patch.data
+    return offsets, data_scaled
+
+
+def _shade(offsets, ax, data_scaled, color, wiggle_labels):
+    """Shades the part of the waveforms under the offset line."""
+    for i in range(len(offsets)):
+        ax.fill_between(
+            wiggle_labels,
+            offsets[i],
+            data_scaled[:, i],
+            where=(data_scaled[:, i] > offsets[i]),
+            color=color,
+            alpha=0.6,
+        )
+
+
+def _format_y_axis_ticks(ax, offsets, other_axis_ticks, max_ticks=10):
+    """Format the Y axis tick labels."""
+    # set the offset
+    ax.set_yticks(offsets, other_axis_ticks)
+    min_bins = min(len(other_axis_ticks), max_ticks)
+    plt.locator_params(axis="y", nbins=min_bins)
+
+
+@patch_function()
 def wiggle(
     patch: PatchType,
     dim="time",
+    scale=1,
+    alpha=0.2,
     color="black",
+    shade=False,
     ax: plt.Axes | None = None,
     show=False,
 ) -> plt.Figure:
     """
+    Create a wiggle plot of patch data.
+
     Parameters
     ----------
     patch
         The Patch object.
-    ax
-        A matplotlib object, if None create one.
+    dim
+        The dimension along which samples are connected.
+    scale
+        The scale (or gain) of the waveforms. A value of 1 indicates waveform
+        centroids are separated by the average total waveform excursion.
+    alpha
+        Opacity of the wiggle lines.
     color
         Color of wiggles
-    timefmt
-        The format for the time axis.
+    shade
+        If True, shade all values of each trace which are less than the mean
+        trace value.
+    ax
+        A matplotlib object, if None ne will be created.
     show
         If True, show the plot, else just return axis.
 
@@ -42,58 +88,26 @@ def wiggle(
     >>> _ = patch.viz.wiggle()
     """
     ax = _get_ax(ax)
-    dims = patch.dims
-    assert len(dims) == 2, "Can only make wiggle plot of 2D Patch"
-    patch = patch.transpose(..., dim)
-    data = patch.data
-    dims = patch.dims
-    dims_r = tuple(reversed(dims))
-    coords = {dimen: patch.coords.get_array(dimen) for dimen in dims}
-
-    if dim == "time":
-        max_of_traces = abs(data).max(axis=1)
-        data = data / max_of_traces[:, np.newaxis]
-        axis_across_wiggles = coords["distance"]
-        axis_along_wiggles = to_int(coords["time"]) / ONE_BILLION
-        intervals = coords["distance"][1:] - coords["distance"][:-1]
-    else:
-        max_of_traces = abs(data).max(axis=0)
-        data = data / max_of_traces[np.newaxis, :]
-        axis_across_wiggles = to_int(coords["time"]) / ONE_BILLION
-        axis_along_wiggles = coords["distance"]
-        intervals = (coords["time"][1:] - coords["time"][:-1]) / np.timedelta64(1, "s")
-
-    total_wiggles = len(data)
-    data = -1 * data
-    for a in range(total_wiggles):
-        if dim == "distance":
-            _intervals = intervals[min(a, total_wiggles - 2)]
-            array_inputs = [timedelta(seconds=(_intervals * b)) for b in data[a]]
-            array = np.array(array_inputs, dtype="timedelta64[ns]")
-            wiggle = array + axis_across_wiggles[a]
-        else:
-            wiggle = (
-                intervals[min(a, total_wiggles - 2)] * data[a] + axis_across_wiggles[a]
-            )
-        ax.plot(axis_along_wiggles, wiggle, color, alpha=1, linewidth=1)
-        where = data[a] < 0
-        ax.fill_between(
-            axis_along_wiggles,
-            np.array([axis_across_wiggles[a]] * len(data[a])),
-            wiggle,
-            color=color,
-            where=where,
-            edgecolor=None,
-            interpolate=True,
-        )
-
-    for dim, x in zip(dims_r, ["x", "y"]):
-        getattr(ax, f"set_{x}label")(str(dim).capitalize())
+    assert len(patch.dims) == 2, "Can only make wiggle plot of 2D Patch"
+    # After transpose selected dim must be axis 0 and other axis 1
+    patch = patch.transpose(dim, ...)
+    other_dim = next(iter(set(patch.dims) - {dim}))
+    # values for axis which is connected
+    connect_axis_ticks = patch.coords.get_array(dim)
+    # values for y axis (not connected)
+    other_axis_ticks = patch.coords.get_array(other_dim)
+    offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_axis_ticks)
+    # now plot, add labels, etc.
+    plt.plot(connect_axis_ticks, data_scaled, color=color, alpha=alpha)
+    # shade negative part of waveforms if desired
+    if shade:
+        _shade(offsets, ax, data_scaled, color, connect_axis_ticks)
+    _format_y_axis_ticks(ax, offsets, other_axis_ticks)
+    for dim, x in zip(patch.dims, ["x", "y"]):
+        getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
         # format all dims which have time types.
-        coord = patch.get_coord(dim)
-        if np.issubdtype(coord.dtype, np.datetime64):
+        if np.issubdtype(patch.get_coord(dim).dtype, np.datetime64):
             _format_time_axis(ax, dim, x)
-    ax.invert_yaxis()  # invert y axis so origin is at top
     if show:
         plt.show()
     return ax
