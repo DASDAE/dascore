@@ -52,6 +52,7 @@ dependencies = [
      "tables>=3.7",
      "typing_extensions",
      "pint",
+     "segyio",
 ]
 
 [project.optional-dependencies]
