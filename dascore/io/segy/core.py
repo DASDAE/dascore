@@ -11,7 +11,7 @@ from .utils import get_attrs, get_coords
 
 
 class SegyV2(FiberIO):
-    """An IO class supporting version 1 of the SEGY format."""
+    """An IO class supporting version 2 of the SEGY format."""
 
     name = "segy"
     preferred_extensions = ("segy", "sgy")
