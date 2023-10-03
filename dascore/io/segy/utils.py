@@ -32,7 +32,7 @@ def _get_filtered_data_and_coords(segy_fi, coords, time=None, channel=None):
     # filter channel
     if channel:
         channel_coord = coords.coord_map["channel"]
-        new_coord, channel_inds = channel_coord.select(time)
+        new_coord, channel_inds = channel_coord.select(channel)
         coords = coords.update_coords(channel=new_coord)
         traces_inds_to_read = traces_inds_to_read[channel_inds]
 
