@@ -1,13 +1,12 @@
 """IO module for reading SEGY file format support."""
 from __future__ import annotations
 
-import numpy as np
 import segyio
 
 import dascore as dc
 from dascore.io.core import FiberIO
 
-from .utils import get_attrs, get_coords
+from .utils import _get_attrs, _get_coords, _get_filtered_data_and_coords
 
 
 class SegyV2(FiberIO):
@@ -36,9 +35,11 @@ class SegyV2(FiberIO):
         be implemented as well.
         """
         with segyio.open(path, ignore_geometry=True) as fi:
-            data = np.stack([x for x in fi.trace], axis=-1)
-            coords = get_coords(fi)
-            attrs = get_attrs(fi, coords, path, self)
+            coords = _get_coords(fi)
+            attrs = _get_attrs(fi, coords, path, self)
+            data, coords = _get_filtered_data_and_coords(
+                fi, coords, time=time, channel=channel
+            )
 
         patch = dc.Patch(coords=coords, data=data, attrs=attrs)
         patch_trimmed = patch.select(time=time, channel=channel)
@@ -54,6 +55,6 @@ class SegyV2(FiberIO):
         format-specific subclass.
         """
         with segyio.open(path, ignore_geometry=True) as fi:
-            coords = get_coords(fi)
-            attrs = get_attrs(fi, coords, path, self)
+            coords = _get_coords(fi)
+            attrs = _get_attrs(fi, coords, path, self)
         return [attrs]
