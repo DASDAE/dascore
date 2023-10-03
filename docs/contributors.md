@@ -17,5 +17,7 @@ A Huge thanks to all of our contributors:
 
 [Eileen Martin](https://github.com/eileenrmartin)
 
+[Aaron Girard](https://github.com/aaronjgirard)
+
 You can find more contributor information
 [here](https://github.com/DASDAE/dascore/graphs/contributors)
