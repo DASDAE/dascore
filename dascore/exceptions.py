@@ -100,3 +100,7 @@ class UnitError(ValueError, DASCoreError):
 
 class AttributeMergeError(ValueError, DASCoreError):
     """Raised when something is wrong with combining attributes."""
+
+
+class DispersionParameterError(ValueError, DASCoreError):
+    """Raised when something is wrong with dispersion computation paramters."""

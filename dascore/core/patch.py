@@ -245,6 +245,7 @@ class Patch:
     integrate = transform.integrate
     spectrogram = transform.spectrogram
     velocity_to_strain_rate = transform.velocity_to_strain_rate
+    phase_shift = transform.phase_shift
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
