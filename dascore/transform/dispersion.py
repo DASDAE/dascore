@@ -37,6 +37,10 @@ def phase_shift(
     - Dims/Units of the output are forced to be 'frequency' ('Hz')
       and 'velocity' ('m/s')
 
+    - The patch's distance coordinates are assumed to be ordered by
+    distance from the source, and not "fiber distance". In other
+    words, data are effectively mapped along a 2-D line.
+
     Example
     --------
     import dascore as dc
