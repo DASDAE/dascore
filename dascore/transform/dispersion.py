@@ -7,13 +7,13 @@ import numpy as np
 import numpy.fft as nft
 
 from dascore.constants import PatchType
-from dascore.exceptions import DispersionParameterError
+from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
 
 
-@patch_function
+@patch_function(required_dims=("time", "distance"))
 def phase_shift(
-    patch: PatchType, vels: Sequence[float], direction: str, approxdf: float = 0.0
+    patch: PatchType, vels: Sequence[float], direction: str, approxdf: float = -1.0
 ) -> PatchType:
     """
     Compute dispersion images using the phase-shift method (Park et al., 1999)
@@ -63,19 +63,13 @@ def phase_shift(
     patch_cop = patch.new()
 
     if not np.all(np.diff(np.abs(vels)) > 0):
-        raise DispersionParameterError(
+        raise ParameterError(
             "Velocities for dispersion computation\
          must be monotonically increasing"
         )
 
-    if set(patch_cop.dims) != set(["distance", "time"]):
-        raise DispersionParameterError(
-            "Dispersion can only be computed\
-         for distance-time patches"
-        )
-
     if np.amin(np.abs(vels)) <= 0:
-        raise DispersionParameterError(
+        raise ParameterError(
             "Velocity has to be positive.\
          Control the direction parameter if needed."
         )
@@ -85,7 +79,7 @@ def phase_shift(
     elif direction == "rtl":
         dirflag = -1
     else:
-        raise DispersionParameterError("Direction can only be ltr or rtl")
+        raise ParameterError("Direction can only be ltr or rtl")
 
     if patch.dims[0] == "time":
         patch_cop.transpose("distance", "time")
