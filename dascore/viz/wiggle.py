@@ -98,7 +98,7 @@ def wiggle(
     other_axis_ticks = patch.coords.get_array(other_dim)
     offsets, data_scaled = _get_offsets_factor(patch, dim, scale, other_axis_ticks)
     # now plot, add labels, etc.
-    plt.plot(connect_axis_ticks, data_scaled, color=color, alpha=alpha)
+    ax.plot(connect_axis_ticks, data_scaled, color=color, alpha=alpha)
     # shade negative part of waveforms if desired
     if shade:
         _shade(offsets, ax, data_scaled, color, connect_axis_ticks)
