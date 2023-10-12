@@ -11,4 +11,4 @@ from .fourier import dft, idft
 from .integrate import integrate
 from .spectro import spectrogram
 from .strain import velocity_to_strain_rate
-from .dispersion import phase_shift
+from .dispersion import dispersion_phase_shift
