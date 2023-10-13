@@ -2,6 +2,8 @@
 import numpy as np
 import pytest
 
+import dascore as dc
+from dascore.exceptions import ParameterError
 from dascore.transform import dispersion_phase_shift
 from dascore.utils.misc import suppress_warnings
 
@@ -23,13 +25,45 @@ class TestDispersion:
         assert "velocity" in dispersion_patch.dims
         # assert frequency dimension
         assert "frequency" in dispersion_patch.dims
-
         vels = dispersion_patch.coords.get_array("velocity")
-
         freqs = dispersion_patch.coords.get_array("frequency")
-
         assert np.array_equal(vels, np.linspace(1500, 5000, 351))
         # Check that the velocity output is correct
-
         assert freqs[1] - freqs[0] > 1.9 and freqs[1] - freqs[0] < 2.1
         # check that the approximate frequency resolution is obtained
+
+    def test_dispersion_no_resolution(self, random_patch):
+        """Ensure dispersion calc works when no resolution is provided."""
+        test_vels = np.linspace(1500, 5000, 50)
+        # create a smaller patch so this runs quicker.
+        patch = random_patch.select(
+            time=(0, 50), distance=(0, 10), relative=True, samples=True
+        )
+        dispersive_patch = dispersion_phase_shift(patch, test_vels)
+        assert isinstance(dispersive_patch, dc.Patch)
+        assert "velocity" in dispersive_patch.dims
+        assert "frequency" in dispersive_patch.dims
+
+    def test_non_monotonic_velocities(self, random_patch):
+        """Ensure non-monotonic velocities raise Parameter Error."""
+        msg = "must be monotonically increasing"
+        velocities = np.array([10, -2, 100, 42])
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.dispersion_phase_shift(phase_velocities=velocities)
+
+    def test_velocity_lt_0_raises(self, random_patch):
+        """Ensure velocity values < 0 raise ParameterError."""
+        msg = "Velocities must be positive"
+        velocities = np.array([-1, 0, 1])
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.dispersion_phase_shift(phase_velocities=velocities)
+
+    def test_approx_resolution_gt_0(self, random_patch):
+        """Ensure velocity values < 0 raise ParameterError."""
+        msg = "Frequency resolution has to be positive"
+        test_vels = np.linspace(1500, 5000, 10)
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.dispersion_phase_shift(
+                phase_velocities=test_vels,
+                approx_resolution=-1,
+            )

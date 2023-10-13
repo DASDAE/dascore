@@ -13,7 +13,9 @@ from dascore.utils.patch import patch_function
 
 @patch_function(required_dims=("time", "distance"))
 def dispersion_phase_shift(
-    patch: PatchType, phase_velocities: Sequence[float], approx_resolution: float
+    patch: PatchType,
+    phase_velocities: Sequence[float],
+    approx_resolution: None | float = None,
 ) -> PatchType:
     """
     Compute dispersion images using the phase-shift method.
@@ -21,12 +23,10 @@ def dispersion_phase_shift(
     Parameters
     ----------
     patch
-        Patch to transform. Has to have dimensions of time and distance
+        Patch to transform. Has to have dimensions of time and distance.
     phase_velocities
         NumPY array of positive velocities, monotonically increasing, for
-        which the dispersion will be computed
-    direction
-        Indicating whether the event is down-dip ('ltr') or up-dip ('rtl')
+        which the dispersion will be computed.
     approx_resolution
         Approximated frequency (Hz) resolution for the output. If left empty,
         the frequency resolution is dictated by the number of samples.
@@ -38,7 +38,7 @@ def dispersion_phase_shift(
     - Inspired by https://geophydog.cool/post/masw_phase_shift/.
 
     - Dims/Units of the output are forced to be 'frequency' ('Hz')
-      and 'velocity' ('m/s')
+      and 'velocity' ('m/s').
 
     - The patch's distance coordinates are assumed to be ordered by
     distance from the source, and not "fiber distance". In other
@@ -62,19 +62,18 @@ def dispersion_phase_shift(
     ax.set_xlim(10, 300)
     ax.set_ylim(6000, 1500)
     disp_patch.viz.waterfall(show=True, scale=0.5, ax=ax)
-
     """
     patch_cop = patch.convert_units(distance="m").transpose("distance", "time")
 
-    if not np.all(np.diff(phase_velocities)) > 0:
+    if not np.all(np.diff(phase_velocities) > 0):
         raise ParameterError(
             "Velocities for dispersion must be monotonically increasing"
         )
 
     if np.amin(phase_velocities) <= 0:
-        raise ParameterError("Velocities must to be positive.")
+        raise ParameterError("Velocities must be positive.")
 
-    if approx_resolution <= 0:
+    if approx_resolution is not None and approx_resolution <= 0:
         raise ParameterError("Frequency resolution has to be positive")
 
     dist = patch_cop.coords.get_array("distance")
@@ -86,7 +85,7 @@ def dispersion_phase_shift(
     assert (nchan, nt) == patch_cop.data.shape
 
     fs = 1 / dt
-    if approx_resolution:
+    if approx_resolution is not None:
         approxnf = int(nt * (fs / (nt)) / approx_resolution)
         f = np.arange(approxnf) * fs / (approxnf - 1)
     else:
