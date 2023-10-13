@@ -21,5 +21,7 @@ A Huge thanks to all of our contributors:
 
 [Ariel Lellouch](https://github.com/ariellellouch)
 
+[Manuel M. Mendoza](https:/github.com/SeisMatt)
+
 You can find more contributor information
 [here](https://github.com/DASDAE/dascore/graphs/contributors)
