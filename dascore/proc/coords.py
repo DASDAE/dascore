@@ -194,3 +194,80 @@ def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
         raise ParameterError(msg)
     new_coord, data = self.coords.drop_coords(*coords, array=self.data)
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
+
+
+@patch_function()
+def coords_from_df(
+    self: PatchType, dataframe, units=None, extrapolate=True
+) -> PatchType:
+    """
+    Add coordinates to a patch using a dataframe.
+
+    One of the column names in the dataframe should map to one of the patch.dims
+
+    Will either add new coordinates, or update existing ones.
+
+    Parameters
+    ----------
+    dataframe : pandas dataframe
+        Table with a column matching in title to one of patch.dims along with other
+        coordinates to associate with dimension. Example one column matching distance
+        axis and then latitude and longitude attached to the distances.
+    units : str, optional
+        units of new coordinates in dataframes
+    extrapolate : str, optional
+        Extrapolate outside of provided range in dataframe to
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> import pandas as pd
+    >>> pa = dc.get_example_patch()
+    >>> # Add 1 to all distance coords
+    >>> new_dist = pa.coords['distance'] + 1
+    >>> pa2 = pa.update_coords(distance=new_dist)
+    >>> assert np.all(pa2.coords['distance'] == (pa.coords['distance'] + 1))
+    """
+    import numpy as np
+    import pandas as pd
+    from scipy.interpolate import interp1d
+
+    # match dataframe headings to dims
+    axis_to_update = set(self.dims) & set(dataframe.columns)
+
+    if len(axis_to_update) != 1:
+        raise Exception("Exactly one column has to match with an existing dimension")
+
+    # Get coordinates of axis being updated
+    axis_to_update = next(iter(axis_to_update))
+    coords = self.coords
+    axis_coords = coords.get_array(axis_to_update)
+
+    # make a dictionary from coordinates("(axis, coordinate array)") as input to
+    # update_coords
+    # coordinate array is an interpolation to match existing coords being updated
+    new_coords = {}
+
+    for coord in dataframe.columns:
+        if coord != axis_to_update and extrapolate is True:
+            f = interp1d(
+                pd.to_numeric(dataframe[axis_to_update]),
+                pd.to_numeric(dataframe[coord]),
+                fill_value="extrapolate",
+            )
+            new_coords[coord] = (axis_to_update, f(axis_coords))
+        elif coord != axis_to_update:
+            new_coords[coord] = (
+                axis_to_update,
+                np.interp(
+                    axis_coords,
+                    pd.to_numeric(dataframe[axis_to_update]),
+                    pd.to_numeric(dataframe[coord]),
+                ),
+            )
+            # f = interp1d(pd.to_numeric(dataframe[axis_to_update]),
+            # pd.to_numeric(dataframe[coord]))
+            # new_coords[coord] = (axis_to_update, f(axis_coords))
+
+    return self.update_coords(**new_coords)

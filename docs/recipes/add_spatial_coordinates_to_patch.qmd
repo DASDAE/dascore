@@ -14,9 +14,19 @@ To do this involves three steps:
 
 
 ```{python}
+#| code-fold: true
 import numpy as np
+import pandas as pd
 
 import dascore as dc
+from dascore.utils.downloader import fetch
+
+
+# get path for example coordinates
+path = fetch("brady_hs_DAS_DTS_coords.csv")
+
+# read coordinates data from csv file
+coord_table = pd.read_csv(path)
 
 # Make patch from example
 patch = dc.get_example_patch()
@@ -24,16 +34,14 @@ patch = dc.get_example_patch()
 # get length of distance axis
 dist_len = patch.coord_shapes["distance"][0]
 
-# create range from 0 to dist_len
-channel_number = np.arange(dist_len)
 
-out = (
-    # first add channel number to coords.
-    patch.update_coords(channel_number=("distance", channel_number))
-    # then make channel number a dimensional coordinate
-    .set_dims(distance="channel_number")
-)
+```
 
-# then plot
-out.viz.waterfall();
+
+```{python}
+# add coordinates to patch
+
+# plot coordinates
+
+
 ```
