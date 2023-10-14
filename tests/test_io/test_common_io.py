@@ -22,6 +22,7 @@ import pytest
 import dascore as dc
 from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
+from dascore.io.dashdf5 import DASHDF5V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
@@ -46,6 +47,7 @@ from dascore.utils.misc import all_close, iterate
 # for more details.
 COMMON_IO_READ_TESTS = {
     DASDAEV1(): ("example_dasdae_event_1.h5",),
+    DASHDF5V1(): ("PoroTomo_iDAS_1.h5"),
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
