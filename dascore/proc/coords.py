@@ -213,8 +213,8 @@ def coords_from_df(
         Table with a column matching in title to one of patch.dims along with other
         coordinates to associate with dimension. Example one column matching distance
         axis and then latitude and longitude attached to the distances.
-    units : str, optional
-        units of new coordinates in dataframes
+    units : dict, optional
+        dictionary mapping added coordinates to their units
     extrapolate : str, optional
         Extrapolate outside of provided range in dataframe to
 
@@ -264,10 +264,14 @@ def coords_from_df(
                     axis_coords,
                     pd.to_numeric(dataframe[axis_to_update]),
                     pd.to_numeric(dataframe[coord]),
+                    left=float("nan"),
+                    right=float("nan"),
                 ),
             )
-            # f = interp1d(pd.to_numeric(dataframe[axis_to_update]),
-            # pd.to_numeric(dataframe[coord]))
-            # new_coords[coord] = (axis_to_update, f(axis_coords))
 
-    return self.update_coords(**new_coords)
+    out = self.update_coords(**new_coords)
+
+    if units is not None:
+        out = out.convert_units(**units)
+
+    return out
