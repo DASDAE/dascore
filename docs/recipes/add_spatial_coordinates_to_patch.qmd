@@ -4,13 +4,12 @@ execute:
   warning: false
 ---
 
-Rather than plotting distance or depth, sometimes it is desirable to plot channel number (an index of the non-time dimension).
+Sometimes we have spatial coordinates that we want to attach to channels/distance dimension. This is an example that does exactly that. The functionality is not limited to spatial coordinates; it can be used to add any coordinates to any existing dimension.
 
-To do this involves three steps:
-
-1. Adding a new coordinate called channel number
-2. Setting the channel number as the dimension
-3. Call plot function
+Here, we
+- make a patch and coordinates from example data
+- Call a command that adds the coordinates
+- Plot coordinates for comparison
 
 
 ```{python}
@@ -34,14 +33,25 @@ patch = dc.get_example_patch()
 # get length of distance axis
 dist_len = patch.coord_shapes["distance"][0]
 
+# make a dictionary of units
+units = {}
+for a in coord_table.columns[1:]:
+  units[a] = "m"
+
+# select portion of new coordinates to map to patch
+new_coordinates = coord_table.iloc[1:dist_len+1]
 
 ```
 
 
 ```{python}
 # add coordinates to patch
+patch = dc.coords_from_df(patch, new_coordinates, units=units,extrapolate=True)
 
 # plot coordinates
-
+coords = patch.coords
+X = coords.get_array('X')
+Y = coords.get_array('Y')
+plt.scatter(X[50:],Y[50:])
 
 ```

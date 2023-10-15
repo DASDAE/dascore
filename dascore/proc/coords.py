@@ -223,11 +223,27 @@ def coords_from_df(
     >>> import numpy as np
     >>> import dascore as dc
     >>> import pandas as pd
+    >>> # get example patch and coordinates
     >>> pa = dc.get_example_patch()
-    >>> # Add 1 to all distance coords
-    >>> new_dist = pa.coords['distance'] + 1
-    >>> pa2 = pa.update_coords(distance=new_dist)
-    >>> assert np.all(pa2.coords['distance'] == (pa.coords['distance'] + 1))
+    >>> path = fetch("brady_hs_DAS_DTS_coords.csv")
+    >>> coord_table = pd.read_csv(path)
+    >>> # get distance axis
+    >>> dist = coords.get_array('distance')
+    >>> # interpolate to get corresponding new coordinates for
+    >>> # comparison
+    >>> X_0 = np.interp(
+                    axis_coords,
+                    pd.to_numeric(coord_table["distance"]),
+                    pd.to_numeric(coord_table["X]),
+                    left=float("nan"),
+                    right=float("nan"),
+                )
+    >>> # attach new coordinates to patch
+    >>> patch = patch.coords_from_df(pa, df1, units=units)
+    >>> # retrieve coordinates and compare to expected
+    >>> coords = patch.coords
+    >>> X = coords.get_array('X')
+    >>> assert np.all(X == X_0)
     """
     import numpy as np
     import pandas as pd
