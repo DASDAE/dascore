@@ -296,7 +296,7 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
 def normalize(
     self: PatchType,
     dim: str,
-    norm: Literal["l1", "l2", "max"] = "l2",
+    norm: Literal["l1", "l2", "max", "bit"] = "l2",
 ) -> PatchType:
     """
     Normalize a patch along a specified dimension.
@@ -311,6 +311,7 @@ def normalize(
             l1 - divide each sample by the l1 of the axis.
             l2 - divide each sample by the l2 of the axis.
             max - divide each sample by the maximum of the absolute value of the axis.
+            bit - sample-by-sample normalization (-1/+1)
     """
     axis = self.dims.index(dim)
     data = self.data
@@ -319,13 +320,23 @@ def normalize(
         norm_values = np.linalg.norm(self.data, axis=axis, ord=order)
     elif norm == "max":
         norm_values = np.max(data, axis=axis)
+    elif norm == "bit":
+        pass
     else:
         msg = (
             f"Norm value of {norm} is not supported. "
-            f"Supported values are {('l1', 'l2', 'max')}"
+            f"Supported values are {('l1', 'l2', 'max', 'bit')}"
         )
         raise ValueError(msg)
-    new_data = data / np.expand_dims(norm_values, axis=axis)
+    if norm == "bit":
+        new_data = np.divide(
+            data, np.abs(data), out=np.zeros_like(data), where=np.abs(data) != 0
+        )
+    else:
+        expanded_norm = np.expand_dims(norm_values, axis=axis)
+        new_data = np.divide(
+            data, expanded_norm, out=np.zeros_like(data), where=expanded_norm != 0
+        )
     return self.new(data=new_data)
 
 
