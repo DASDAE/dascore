@@ -33,7 +33,7 @@ def dispersion_phase_shift(
         the frequency resolution is dictated by the number of samples.
     approx_min_freq
         Minimum frequency to compute dispersion for. If left empty, 0 Hz
-     approx_max_freq
+    approx_max_freq
         Maximum frequency to compute dispersion for. If left empty,
         Nyquist frequency will be used.
 

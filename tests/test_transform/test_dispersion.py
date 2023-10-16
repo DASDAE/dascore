@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore import get_example_patch
 from dascore.exceptions import ParameterError
 from dascore.transform import dispersion_phase_shift
 from dascore.utils.misc import suppress_warnings
@@ -13,7 +14,7 @@ class TestDispersion:
 
     @pytest.fixture(scope="class")
     def dispersion_patch(self, random_patch):
-        """Return the random patched transformed along time w/ rrft."""
+        """Return the random patched transformed to frequency-velocity."""
         test_vels = np.linspace(1500, 5000, 351)
         with suppress_warnings(DeprecationWarning):
             out = dispersion_phase_shift(random_patch, test_vels, approx_resolution=2.0)
@@ -68,18 +69,19 @@ class TestDispersion:
                 approx_resolution=-1,
             )
 
-    def test_freq_range_gt_0(self, random_patch):
+    def test_freq_range_gt_0(self):
         """Ensure negative Parameter Error."""
         msg = "Minimal and maximal frequencies have to be positive"
         velocities = np.linspace(1500, 5000, 50)
+        patch = get_example_patch("dispersion_event")
         with pytest.raises(ParameterError, match=msg):
-            random_patch.dispersion_phase_shift(
+            patch.dispersion_phase_shift(
                 phase_velocities=velocities,
                 approx_resolution=1.0,
                 approx_freq=[-10, 50],
             )
         with pytest.raises(ParameterError, match=msg):
-            random_patch.dispersion_phase_shift(
+            patch.dispersion_phase_shift(
                 phase_velocities=velocities,
                 approx_resolution=1.0,
                 approx_freq=[10, -50],
