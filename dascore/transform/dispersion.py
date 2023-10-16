@@ -16,6 +16,7 @@ def dispersion_phase_shift(
     patch: PatchType,
     phase_velocities: Sequence[float],
     approx_resolution: None | float = None,
+    approx_freq: [None, None] | float = None,
 ) -> PatchType:
     """
     Compute dispersion images using the phase-shift method.
@@ -30,6 +31,11 @@ def dispersion_phase_shift(
     approx_resolution
         Approximated frequency (Hz) resolution for the output. If left empty,
         the frequency resolution is dictated by the number of samples.
+    approx_min_freq
+        Minimum frequency to compute dispersion for. If left empty, 0 Hz
+     approx_max_freq
+        Maximum frequency to compute dispersion for. If left empty,
+        Nyquist frequency will be used.
 
     Notes
     -----
@@ -50,20 +56,24 @@ def dispersion_phase_shift(
     import numpy as np
 
     patch = (
-        dc.get_example_patch('example_event_1')
+        dc.get_example_patch('dispersion_event')
         .set_units("mm/(m*s)", distance='m', time='s')
         .taper(time=0.05)
         .pass_filter(time=(None, 300))
     )
 
-    disp_patch = patch.dispersion_phase_shift(np.arange(1500,6001,10),
-                    approx_resolution=5.0)
-    ax = disp_patch.viz.waterfall(show=False, scale=0.5,cmap=None)
-    ax.set_xlim(10, 300)
-    ax.set_ylim(6000, 1500)
-    disp_patch.viz.waterfall(show=True, scale=0.5, ax=ax)
+    disp_patch = patch.dispersion_phase_shift(np.arange(100,1500,1),
+                approx_resolution=0.1,approx_freq=[5,70])
+    ax = disp_patch.viz.waterfall(show=False,cmap=None)
+    ax.set_xlim(5, 70)
+    ax.set_ylim(1500, 100)
+    disp_patch.viz.waterfall(show=True, ax=ax)
     """
     patch_cop = patch.convert_units(distance="m").transpose("distance", "time")
+    dist = patch_cop.coords.get_array("distance")
+    time = patch_cop.coords.get_array("time")
+
+    dt = (time[1] - time[0]) / np.timedelta64(1, "s")
 
     if not np.all(np.diff(phase_velocities) > 0):
         raise ParameterError(
@@ -76,10 +86,24 @@ def dispersion_phase_shift(
     if approx_resolution is not None and approx_resolution <= 0:
         raise ParameterError("Frequency resolution has to be positive")
 
-    dist = patch_cop.coords.get_array("distance")
-    time = patch_cop.coords.get_array("time")
+    if not approx_freq:
+        approx_min_freq = 0
+        approx_max_freq = 0.5 / dt
+    else:
+        approx_min_freq = approx_freq[0]
+        approx_max_freq = approx_freq[1]
+        if approx_min_freq <= 0 or approx_max_freq <= 0:
+            msg = "Minimal and maximal frequencies have to be positive"
+            raise ParameterError(msg)
 
-    dt = (time[1] - time[0]) / np.timedelta64(1, "s")
+        if approx_min_freq >= approx_max_freq:
+            msg = "Maximal frequency needs to be larger than minimal frequency"
+            raise ParameterError(msg)
+
+        if approx_min_freq >= 0.5 / dt or approx_max_freq >= 0.5 / dt:
+            msg = "Frequency range cannot exceed Nyquist"
+            raise ParameterError(msg)
+
     nchan = dist.size
     nt = time.size
     assert (nchan, nt) == patch_cop.data.shape
@@ -105,18 +129,23 @@ def dispersion_phase_shift(
 
     fft_d[np.isnan(fft_d)] = 0
 
-    hnf = int(nf / 2)
-    fc = np.zeros(shape=(nv, hnf))
+    first_live_f = np.argmax(w >= 2 * np.pi * approx_min_freq)
+    last_live_f = np.argmax(w >= 2 * np.pi * approx_max_freq)
+    w = w[first_live_f:last_live_f]
+    fft_d = fft_d[:, first_live_f:last_live_f]
+    nlivef = last_live_f - first_live_f
 
-    # New loop
-    fft_d = fft_d[:, 0:hnf]
-    w = w[0:hnf]
+    if nlivef < 1:
+        msg = "Combination of frequency resolution and range is not an array"
+        raise ParameterError(msg)
+
+    fc = np.zeros(shape=(nv, nlivef))
     preamb = 1j * np.outer(dist, w)
     for ci in range(nv):
         fc[ci, :] = abs(sum(np.exp(preamb / phase_velocities[ci]) * fft_d))
 
     attrs = patch.attrs.update(category="dispersion")
-    coords = dict(velocity=phase_velocities, frequency=f[0:hnf])
+    coords = dict(velocity=phase_velocities, frequency=w / (2 * np.pi))
 
     disp_patch = patch.new(
         data=fc / nchan, coords=coords, attrs=attrs, dims=["velocity", "frequency"]

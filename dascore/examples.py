@@ -247,6 +247,13 @@ def _diverse_spool():
     return dc.spool([y for x in all_spools for y in x])
 
 
+@register_func(EXAMPLE_PATCHES, key="dispersion_event")
+def _dispersion_event():
+    """Returns an example of a synthetic shot record that exhibits dispersion."""
+    path = fetch("dispersion_event.h5")
+    return dc.spool(path)[0]
+
+
 def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5"):
     """
     Write out each patch in a spool to a directory.

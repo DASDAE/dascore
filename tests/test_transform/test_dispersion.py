@@ -33,7 +33,7 @@ class TestDispersion:
         # check that the approximate frequency resolution is obtained
 
     def test_dispersion_no_resolution(self, random_patch):
-        """Ensure dispersion calc works when no resolution is provided."""
+        """Ensure dispersion calc works when no resolution nor limits are provided."""
         test_vels = np.linspace(1500, 5000, 50)
         # create a smaller patch so this runs quicker.
         patch = random_patch.select(
@@ -66,4 +66,52 @@ class TestDispersion:
             random_patch.dispersion_phase_shift(
                 phase_velocities=test_vels,
                 approx_resolution=-1,
+            )
+
+    def test_freq_range_gt_0(self, random_patch):
+        """Ensure negative Parameter Error."""
+        msg = "Minimal and maximal frequencies have to be positive"
+        velocities = np.linspace(1500, 5000, 50)
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.dispersion_phase_shift(
+                phase_velocities=velocities,
+                approx_resolution=1.0,
+                approx_freq=[-10, 50],
+            )
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.dispersion_phase_shift(
+                phase_velocities=velocities,
+                approx_resolution=1.0,
+                approx_freq=[10, -50],
+            )
+
+    def test_freq_range_raises(self, random_patch):
+        """Ensure negative Parameter Error."""
+        msg = "Maximal frequency needs to be larger than minimal frequency"
+        velocities = np.linspace(1500, 5000, 50)
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.dispersion_phase_shift(
+                phase_velocities=velocities, approx_resolution=1.0, approx_freq=[23, 22]
+            )
+
+    def test_freq_range_nyquist(self, random_patch):
+        """Ensure negative Parameter Error."""
+        msg = "Frequency range cannot exceed Nyquist"
+        velocities = np.linspace(1500, 5000, 50)
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.dispersion_phase_shift(
+                phase_velocities=velocities,
+                approx_resolution=1.0,
+                approx_freq=[5000, 8000],
+            )
+
+    def test_freq_range_yields_empty(self, random_patch):
+        """Ensure negative Parameter Error."""
+        msg = "Combination of frequency resolution and range is not an array"
+        velocities = np.linspace(1500, 5000, 50)
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.dispersion_phase_shift(
+                phase_velocities=velocities,
+                approx_resolution=2.0,
+                approx_freq=[22.0, 22.1],
             )
