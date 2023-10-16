@@ -159,6 +159,10 @@ class TestNormalize:
             norm = zeroed_patch.normalize("time", norm=norm_type)
             assert np.all(norm.data[0, :] == 0.0)
             assert np.all(norm.data[:, 0] == 0.0)
+        for norm_type in ["l1", "l2", "max", "bit"]:
+            norm = zeroed_patch.normalize("distance", norm=norm_type)
+            assert np.all(norm.data[0, :] == 0.0)
+            assert np.all(norm.data[:, 0] == 0.0)
 
 
 class TestStandarize:
