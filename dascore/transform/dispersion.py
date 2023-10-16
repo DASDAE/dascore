@@ -57,7 +57,7 @@ def dispersion_phase_shift(
 
     patch = (
         dc.get_example_patch('dispersion_event')
-        .set_units("mm/(m*s)", distance='m', time='s')
+        .set_units(distance='m', time='s')
         .taper(time=0.05)
         .pass_filter(time=(None, 300))
     )
