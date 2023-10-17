@@ -99,8 +99,9 @@ def waterfall(
     # add color bar with title
     if cmap is not None:
         cb = ax.get_figure().colorbar(im)
+        data_type = patch.attrs["data_type"]
         data_units = get_quantity_str(patch.attrs.data_units) or ""
-        cb.ax.set_title(data_units)
+        cb.set_label(data_type + " (" + data_units + ")")
     ax.invert_yaxis()  # invert y axis so origin is at top
     if show:
         plt.show()
