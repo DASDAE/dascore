@@ -9,7 +9,7 @@ The following provides some examples of patch visualization.
 See the [viz module documentation](`dascore.viz`) for a list of visualization functions
 
 ## Waterfall
-The [`waterfall patch function`](`dascore.Patch.waterfall`) creates a waterfall plot of the patch data.
+The [`waterfall patch function`](`dascore.viz.waterfall`) creates a waterfall plot of the patch data.
 
 ```{python}
 import dascore as dc
@@ -24,7 +24,7 @@ patch.viz.waterfall(show=True, scale=(-50,50))
 ```
 
 ## wiggle
-The [`wiggle patch function`](`dascore.Patch.wiggle`) creates a wiggle plot of the patch data.
+The [`wiggle patch function`](`dascore.viz.wiggle`) creates a wiggle plot of the patch data.
 We'll use the same patch as above to model this function.
 
 ```{python}
