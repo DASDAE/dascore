@@ -86,12 +86,12 @@ def whitening(
     if freq_range is None:
         freq_range = [0, 1 / 2 / dt]
     else:
-        if freq_range[0] < 0 or freq_range[1] < 0:
-            msg = "Minimal and maximal frequencies have to be non-negative"
-            raise ParameterError(msg)
-
         if not np.size(freq_range) == 2:
             msg = "Frequency range must include two values"
+            raise ParameterError(msg)
+
+        if freq_range[0] < 0 or freq_range[1] < 0:
+            msg = "Minimal and maximal frequencies have to be non-negative"
             raise ParameterError(msg)
 
         if freq_range[0] >= freq_range[1]:

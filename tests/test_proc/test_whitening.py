@@ -95,6 +95,13 @@ class TestWhitening:
             whitened_patch.coords.get_array("distance"),
         )
 
+    def test_single_freq_range_raises(self, test_patch):
+        """Ensure only one value for frequency range raises ParameterError."""
+        msg = "Frequency range must include two values"
+        freq_range = np.array([10])
+        with pytest.raises(ParameterError, match=msg):
+            test_patch.whitening(freq_range=freq_range, freq_smooth_size=3)
+
     def test_freq_lt_0_raises(self, test_patch):
         """Ensure negative frequency values raise ParameterError."""
         msg = "Minimal and maximal frequencies have to be non-negative"
