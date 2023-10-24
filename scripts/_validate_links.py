@@ -44,7 +44,7 @@ def validate_all_links():
     bad = []
     for path in get_qmd_files():
         file_count += 1
-        text = path.read_text()
+        text = path.read_text(encoding='utf-8')
         for link in yield_links(text):
             if link not in index:
                 bad.append((str(path), link))
