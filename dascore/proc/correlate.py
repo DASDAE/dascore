@@ -6,31 +6,42 @@ import scipy
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.units import Quantity
 from dascore.utils.patch import get_dim_value_from_kwargs, patch_function
 
 @patch_function()
-def correlate(patch: PatchType, source=int, samples=False, **kwargs
+def correlate(patch: PatchType, source : int | float | Quantity, samples=False, **kwargs
 ) -> PatchType:
     """
-    This function does the cross-correlation in freq. domain. it takes advantage of the linear relationship of ifft, so that
-    stacking is performed in spectrum domain first to reduce the total number of ifft.
+    This function does the cross-correlation in frequency domain.
 
     Parameters
     ----------
-
-
-    Return
-    ------
-    patch_corr: 2D matrix of the averaged of cross-correlation functions in time domain
+    patch : PatchType
+        The input data patch to be cross-correlated.
+    source :
+        Virtual source, to which we cross-correlate all other channels/time samples.
+    samples : bool, optional (default = False)
+        {sample_explination}
+    **kwargs
+        Additional arguments to specify both dimension and lag for the cross-correlation.
+        Refer to the examples section for detailed usage.
     
     Examples
     --------
     # Simple example for cross-correlation
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    """
+    >>> cc_patch = patch.correlate(source = 10 * m, time = 2 * s)
 
-    dim, axis, lag = get_dim_value_from_kwargs(patch, kwargs) # Note: Need to use axis instead of 0 or 1
+    Notes
+    -----
+    The cross-correlation is performed in the frequency domain for efficiency reasons.
+    """
+    assert len(patch.dims) == 2, "must be 2D patch"
+    dim, _, lag = get_dim_value_from_kwargs(patch, kwargs) # Note: Need to use axis instead of 0 or 1
+    other_dim = list(set(patch.dims) - {dim})[0]
+    other_axis = patch.dims.index(other_dim)
 
     sampling_interval = patch.attrs['time_step'] / np.timedelta64(1, 's')
 
