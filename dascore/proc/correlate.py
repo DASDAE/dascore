@@ -1,4 +1,4 @@
-"""Module for performing cross-correlation on a Patch."""
+"""Module for calculating cross-correlation over all Patch's channels."""
 from __future__ import annotations
 
 import numpy as np
@@ -13,7 +13,8 @@ from dascore.utils.patch import get_dim_value_from_kwargs, patch_function
 def correlate(patch: PatchType, source : int | float | Quantity, samples=False, **kwargs
 ) -> PatchType:
     """
-    This function does the cross-correlation in frequency domain.
+    This function takes the DAS data in time domain, calculates cross-correlation (cc) 
+    in freq. domain, and returns the results back in time domain. 
 
     Parameters
     ----------
@@ -32,6 +33,8 @@ def correlate(patch: PatchType, source : int | float | Quantity, samples=False, 
     # Simple example for cross-correlation
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
+    >>> # Calculate cc with (-2,2) sec of lag for all channels as receivers and 
+    >>> # the at 10 m as the master channel. 
     >>> cc_patch = patch.correlate(source = 10 * m, time = 2 * s)
 
     Notes
@@ -39,7 +42,7 @@ def correlate(patch: PatchType, source : int | float | Quantity, samples=False, 
     The cross-correlation is performed in the frequency domain for efficiency reasons.
     """
     assert len(patch.dims) == 2, "must be 2D patch"
-    dim, _, lag = get_dim_value_from_kwargs(patch, kwargs) # Note: Need to use axis instead of 0 or 1
+    dim, _, lag = get_dim_value_from_kwargs(patch, kwargs) 
     other_dim = list(set(patch.dims) - {dim})[0]
     other_axis = patch.dims.index(other_dim)
 
@@ -60,7 +63,7 @@ def correlate(patch: PatchType, source : int | float | Quantity, samples=False, 
 
     num_fft = int(scipy.fftpack.next_fast_len(int(num_samples)))
     num_fft_half = num_fft//2
-    fft_rec = scipy.fftpack.fft(patch.data, num_fft, axis=1)[:,:num_fft_half]
+    fft_rec = scipy.fftpack.fft(patch.data, num_fft, axis=other_axis)[:,:num_fft_half]
     fft_src = fft_rec[source] 
 
     # Convert all 2D arrays into 1D to speed up
@@ -87,16 +90,16 @@ def correlate(patch: PatchType, source : int | float | Quantity, samples=False, 
     #     corr_patch[i,:] = np.real(np.fft.ifftshift(scipy.fftpack.ifft(pre_corr, num_fft, axis=0)))
 
     # Remove the mean in freq domain (spike at t=0)
-    corr[:, :num_fft_half] -= np.mean(corr[:, :num_fft_half], axis=1, keepdims=True)
+    corr[:, :num_fft_half] -= np.mean(corr[:, :num_fft_half], axis=other_axis, keepdims=True)
 
     # Process the negative frequencies
-    corr[:, -(num_fft_half)+1:] = np.flip(np.conj(corr[:, :num_fft_half]), axis=1)
+    corr[:, -(num_fft_half)+1:] = np.flip(np.conj(corr[:, :num_fft_half]), axis=other_axis)
 
     # Set the zero-frequency component to zero
     corr[:, 0]=complex(0,0)
 
     # Take the inverse FFT
-    inverse_fft_result = scipy.fftpack.ifft(corr, n=num_fft, axis=1)
+    inverse_fft_result = scipy.fftpack.ifft(corr, n=num_fft, axis=other_axis)
 
     # Shift the zero-frequency component to the center
     shifted_result = np.fft.ifftshift(inverse_fft_result)
