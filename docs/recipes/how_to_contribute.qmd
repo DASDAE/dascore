@@ -39,7 +39,7 @@ pytest
 To create a new branch:
 
 ```bash
-git checkout -b "branch name"
+git checkout -b branch_name
 ```
 
 Now, you can make changes to the codes. To test what you have done, while you are in the dascore repository:
@@ -115,7 +115,7 @@ Then, create a new branch and start making changes to the repository.
 To create a new branch:
 
 ```bash
-git checkout -b "branch name"
+git checkout -b branch_name
 ```
 
 Now, you can make changes to the codes. To test what you have done, while you are in the dascore repository:
@@ -154,4 +154,4 @@ git push origin branch_name
 
 ## Step 5: Create a Pull Request 
 
-Navigate to your project's GitHub repository, for instance, https://github.com/<your_username>/dascore, and click "Contribute" and then "Open a pull request" when prompted that your branch is one commit ahead of `DASDAE:main`. GitHub will display the differences between your fork and the original repository. After reviewing, click "Create pull request" and provide a detailed title and description for your changes, explaining the rationale behind your pull request.
+Navigate to your project's GitHub repository, for instance, https://github.com/<your_username>/dascore, and click "Contribute" and then "Open a pull request". Then, create a pull request and provide a detailed title and description for your changes, explaining the rationale behind your pull request.
