@@ -85,3 +85,82 @@ class TestDropCoords:
         msg = "Cannot drop dimensional coordinates"
         with pytest.raises(ParameterError, match=msg):
             random_patch.drop_coords("time")
+
+
+class TestCoordsFromDf:
+    """Tests for attaching coordinate(s) to a dimension."""
+
+    def test_no_extrapolte(self, random_patch, brady_hs_DAS_DTS_coords):
+        """Ensure when out of range, we can use nans when extrapolate is False."""
+        df_select = brady_hs_DAS_DTS_coords[
+            brady_hs_DAS_DTS_coords["distance"] % 5 == 0
+        ]
+        brady_hs_DAS_DTS_coords = df_select[df_select["distance"] < 250]
+        out = random_patch.coords_from_df(df_select)
+
+        coords = out.coords
+        X = coords.get_array("X")
+        Y = coords.get_array("Y")
+        Z = coords.get_array("Z")
+        dist = coords.get_array("distance")
+
+        assert (
+            max((X[30:-50] - brady_hs_DAS_DTS_coords["X"][: len(dist) - 80]) / X[30])
+            < 0.01
+        )
+        assert (
+            max((Y[30:-50] - brady_hs_DAS_DTS_coords["Y"][: len(dist) - 80]) / Y[30])
+            < 0.01
+        )
+        assert (
+            max((Z[30:-50] - brady_hs_DAS_DTS_coords["Z"][: len(dist) - 80]) / Z[30])
+            < 0.01
+        )
+        assert np.all(np.isnan(X[:30])) and np.all(np.isnan(X[-50:]))
+        assert np.all(np.isnan(Y[:30])) and np.all(np.isnan(Y[-50:]))
+        assert np.all(np.isnan(Z[:30])) and np.all(np.isnan(Z[-50:]))
+
+    def test_extrapolate(self, random_patch, brady_hs_DAS_DTS_coords):
+        """Ensure we can extrapolate outside coordinate range."""
+        df_select = brady_hs_DAS_DTS_coords[
+            brady_hs_DAS_DTS_coords["distance"] % 5 == 0
+        ]
+        brady_hs_DAS_DTS_coords = df_select[df_select["distance"] < 250]
+        out = random_patch.coords_from_df(df_select, extrapolate=True)
+
+        coords = out.coords
+        X = coords.get_array("X")
+        Y = coords.get_array("Y")
+        Z = coords.get_array("Z")
+        dist = coords.get_array("distance")
+
+        assert (
+            max((X[30:] - brady_hs_DAS_DTS_coords["X"][: len(dist) - 30]) / X[30])
+            < 0.01
+        )
+        assert (
+            max((Y[30:] - brady_hs_DAS_DTS_coords["Y"][: len(dist) - 30]) / Y[30])
+            < 0.01
+        )
+        assert (
+            max((Z[30:] - brady_hs_DAS_DTS_coords["Z"][: len(dist) - 30]) / Z[30])
+            < 0.01
+        )
+
+    def test_units(self, random_patch, brady_hs_DAS_DTS_coords):
+        """Ensure we can extrapolate outside coordinate range."""
+        units = {}
+        for a in brady_hs_DAS_DTS_coords.columns[1:]:
+            units[a] = "m"
+
+        df_select = brady_hs_DAS_DTS_coords[
+            brady_hs_DAS_DTS_coords["distance"] % 5 == 0
+        ]
+        brady_hs_DAS_DTS_coords = df_select[df_select["distance"] < 250]
+        out = random_patch.coords_from_df(df_select, units=units, extrapolate=True)
+
+        coords = out.coords
+        coords.get_array("X")
+        coords.get_array("Y")
+        coords.get_array("Z")
+        coords.get_array("distance")

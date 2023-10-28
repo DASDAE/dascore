@@ -38,8 +38,8 @@ units = {}
 for a in coord_table.columns[1:]:
   units[a] = "m"
 
-# select portion of new coordinates to map to patch
-new_coordinates = coord_table.iloc[1:dist_len+1]
+# select portion of new ++++coordinates to map to patch
+new_coordinates = coord_table.iloc[51:]
 
 ```
 
@@ -52,6 +52,6 @@ patch = dc.coords_from_df(patch, new_coordinates, units=units,extrapolate=True)
 coords = patch.coords
 X = coords.get_array('X')
 Y = coords.get_array('Y')
-plt.scatter(X[50:],Y[50:])
+plt.scatter(X,Y)
 
 ```

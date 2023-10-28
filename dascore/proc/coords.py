@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 
+import numpy as np
+import pandas as pd
+from scipy.interpolate import interp1d
 from typing_extensions import Self
 
 from dascore.constants import PatchType
@@ -245,10 +248,6 @@ def coords_from_df(
     >>> X = coords.get_array('X')
     >>> assert np.all(X == X_0)
     """
-    import numpy as np
-    import pandas as pd
-    from scipy.interpolate import interp1d
-
     # match dataframe headings to dims
     axis_to_update = set(self.dims) & set(dataframe.columns)
 
