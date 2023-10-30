@@ -16,7 +16,7 @@ def dispersion_phase_shift(
     patch: PatchType,
     phase_velocities: Sequence[float],
     approx_resolution: None | float = None,
-    approx_freq: [None, None] | float = None,
+    approx_freq: None | tuple[float, float] = None,
 ) -> PatchType:
     """
     Compute dispersion images using the phase-shift method.

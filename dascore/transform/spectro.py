@@ -3,40 +3,30 @@ from __future__ import annotations
 
 from operator import mul
 
+import numpy as np
 from scipy.signal import spectrogram as scipy_spectrogram
 
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import get_coord
+from dascore.core.coords import get_compatible_values, get_coord
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
     patch_function,
 )
-from dascore.utils.time import (
-    is_datetime64,
-    is_timedelta64,
-    to_datetime64,
-    to_timedelta64,
-)
 from dascore.utils.transformatter import FourierTransformatter
 
 
 def _get_new_original_coord(old_coord, array):
     """Get a new coordinate for original axis (eg time)."""
-    conversion_tuples = (
-        (is_datetime64, to_datetime64),
-        (is_timedelta64, to_timedelta64),
-    )
-    # ensure the output is in the right data format.
-    for predicate, func in conversion_tuples:
-        if predicate(old_coord.min()):
-            array = func(array)
-
-    out = get_coord(values=array, units=old_coord.units)
-    return out
+    # determine what dtype the data
+    old_min = get_compatible_values(old_coord.min(), array.dtype)
+    is_dt = np.issubdtype(old_coord.dtype, np.datetime64)
+    val_dtype = np.timedelta64 if is_dt else old_coord.dtype
+    vals = get_compatible_values(array, val_dtype)
+    return get_coord(values=old_min + vals, units=old_coord.units)
 
 
 def _get_transformed_coord(coord, freqs):
@@ -103,7 +93,7 @@ def spectrogram(patch: PatchType, dim: str = "time", **kwargs) -> PatchType:
     # returns frequency, new values for original dimension (eg time) and spectrogram
     freqs, original, spec = scipy_spectrogram(
         patch.data,
-        fs=dxs[0],
+        fs=1 / dxs[0],  # sample *frequency* is requested, not spacing
         axis=axes[0],
         **kwargs,
     )
