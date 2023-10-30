@@ -146,3 +146,16 @@ class TestWhiten:
         msg = "Frequency smoothing size is larger than frequency range"
         with pytest.raises(ParameterError, match=msg):
             test_patch.whiten(freq_range=[10, 40], freq_smooth_size=40)
+
+    def test_taper_param_raises(self, test_patch):
+        """Ensures wrong Tukey alpha parameter raises Paremeter Error."""
+        msg = "Tukey alpha needs to be between 0 and 1"
+        freq_range = np.array([10, 50])
+        with pytest.raises(ParameterError, match=msg):
+            test_patch.whiten(
+                freq_range=freq_range, freq_smooth_size=3, tukey_alpha=-0.1
+            )
+        with pytest.raises(ParameterError, match=msg):
+            test_patch.whiten(
+                freq_range=freq_range, freq_smooth_size=3, tukey_alpha=1.3
+            )
