@@ -34,11 +34,9 @@ patch = dc.get_example_patch()
 dist_len = patch.coord_shapes["distance"][0]
 
 # make a dictionary of units
-units = {}
-for a in coord_table.columns[1:]:
-  units[a] = "m"
+units = {a:"m" for a in coord_table.columns[1:]}
 
-# select portion of new ++++coordinates to map to patch
+# select portion of new coordinates to map to existing coordinate
 new_coordinates = coord_table.iloc[51:]
 
 ```
