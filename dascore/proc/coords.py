@@ -201,10 +201,13 @@ def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
 
 @patch_function()
 def coords_from_df(
-    self: PatchType, dataframe, units=None, extrapolate=True
+    self: PatchType,
+    dataframe: pd.DataFrame,
+    units: dict | None = None,
+    extrapolate: bool = True,
 ) -> PatchType:
     """
-    Add coordinates to a patch using a dataframe.
+    Update non-dimensional coordinate of a patch using a dataframe.
 
     One of the column names in the dataframe should map to one of the patch.dims
 
@@ -249,35 +252,35 @@ def coords_from_df(
     >>> assert np.all(X == X_0)
     """
     # match dataframe headings to dims
-    axis_to_update = set(self.dims) & set(dataframe.columns)
+    anchor_dim = set(self.dims) & set(dataframe.columns)
 
-    if len(axis_to_update) != 1:
-        raise Exception("Exactly one column has to match with an existing dimension")
+    if len(anchor_dim) != 1:
+        raise ValueError("Exactly one column has to match with an existing dimension")
 
     # Get coordinates of axis being updated
-    axis_to_update = next(iter(axis_to_update))
+    anchor_dim = next(iter(anchor_dim))
     coords = self.coords
-    axis_coords = coords.get_array(axis_to_update)
+    axis_coords = coords.get_array(anchor_dim)
 
     # make a dictionary from coordinates("(axis, coordinate array)") as input to
     # update_coords
     # coordinate array is an interpolation to match existing coords being updated
     new_coords = {}
 
-    for coord in dataframe.columns:
-        if coord != axis_to_update and extrapolate is True:
+    for coord in set(dataframe.columns) - {anchor_dim}:
+        if extrapolate:
             f = interp1d(
-                pd.to_numeric(dataframe[axis_to_update]),
+                pd.to_numeric(dataframe[anchor_dim]),
                 pd.to_numeric(dataframe[coord]),
                 fill_value="extrapolate",
             )
-            new_coords[coord] = (axis_to_update, f(axis_coords))
-        elif coord != axis_to_update:
+            new_coords[coord] = (anchor_dim, f(axis_coords))
+        else:
             new_coords[coord] = (
-                axis_to_update,
+                anchor_dim,
                 np.interp(
                     axis_coords,
-                    pd.to_numeric(dataframe[axis_to_update]),
+                    pd.to_numeric(dataframe[anchor_dim]),
                     pd.to_numeric(dataframe[coord]),
                     left=float("nan"),
                     right=float("nan"),
