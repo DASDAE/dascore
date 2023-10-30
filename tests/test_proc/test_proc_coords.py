@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from dascore.exceptions import ParameterError
+from dascore.units import get_quantity
 
 
 class TestSortCoords:
@@ -159,8 +160,6 @@ class TestCoordsFromDf:
         brady_hs_DAS_DTS_coords = df_select[df_select["distance"] < 250]
         out = random_patch.coords_from_df(df_select, units=units, extrapolate=True)
 
-        coords = out.coords
-        coords.get_array("X")
-        coords.get_array("Y")
-        coords.get_array("Z")
-        coords.get_array("distance")
+        assert out.get_coord("X").units == get_quantity("m")
+        assert out.get_coord("Y").units == get_quantity("m")
+        assert out.get_coord("Z").units == get_quantity("m")
