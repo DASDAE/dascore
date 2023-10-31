@@ -63,3 +63,12 @@ class TestSpectroTransform:
         """Ensure distance dimension works."""
         out = random_patch.transpose().spectrogram("distance")
         assert set(out.dims) == (set(random_patch.dims) | {"ft_distance"})
+
+    def test_time_range_unchanged(self, dispersion_patch):
+        """Ensure time axis isn't outside original bounds, see #286."""
+        spectro = dispersion_patch.spectrogram(dim="time")
+        # the new time on the spectrogram should be contained in the original
+        original_time = dispersion_patch.get_coord("time")
+        new_time = spectro.get_coord("time")
+        assert new_time.min() >= original_time.min()
+        assert new_time.max() <= original_time.max()

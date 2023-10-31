@@ -3,8 +3,9 @@ title: "How to Contribute?"
 ---
 
 On this page, we provide a step-by-step procedure on how you can start contributing to the DASCore package.
+# DASDAE developers
 
-# Step 1: Install DASCore in development mode
+## Step 1: Install DASCore in development mode
 
 For the first time using DASCore in development mode, or if a new release is out, you need to install DASCore as it is mentioned [here](https://dascore.org/contributing/dev_install.html).
 Otherwise, you just need to activate the environment:
@@ -33,12 +34,12 @@ pytest
 ```
 
 
-# Step 2: Create a new branch to work on
+## Step 2: Create a new branch to work on
 
 To create a new branch:
 
 ```bash
-git checkout -b "branch name"
+git checkout -b branch_name
 ```
 
 Now, you can make changes to the codes. To test what you have done, while you are in the dascore repository:
@@ -74,3 +75,83 @@ git commit -m "your commit"
 ```bash
 git push origin branch_name
 ```
+
+## Step 3: Create a Pull Request 
+Navigate to the DASCore repository on GitHub, and you should see a notification about your recent push. Click the "Compare & pull request" button to create a new pull request.
+
+
+# DASDAE users
+
+If you'd like to contribute to DASCore as a user, you should first fork the DASCore repository.Forking a repository allows you to freely experiment with changes without affecting the original project. Below is a detailed guide on how to do this. [This GitHub documentation](https://docs.github.com/en/get-started/quickstart/contributing-to-projects) might be beneficial to review as well.
+
+## Step 1: Fork the repositoy
+Go to the [DASCore repository](https://github.com/DASDAE/dascore) an click on "Fork".
+
+## Step 2: Clone your fork
+Once you have forked the repository, you need to clone it to your local machine to start making changes. Then navigate to your local repository:
+```bash
+cd dascore
+```
+
+## Step 3: Set Upstream Repository
+Add the original DASCore repository as an upstream repository, which will be useful for keeping your fork up to date with the original project:
+
+```bash
+git remote add upstream https://github.com/DASDAE/dascore.git
+```
+
+Verify that the new remote URL has been added:
+
+```bash
+git remote -v
+```
+
+You should see the original repository as `upstream` and your fork as `origin`.
+
+Then, create a new branch and start making changes to the repository. 
+
+## Step 4: Create a new branch to work on
+
+To create a new branch:
+
+```bash
+git checkout -b branch_name
+```
+
+Now, you can make changes to the codes. To test what you have done, while you are in the dascore repository:
+
+```bash
+pytest
+```
+
+Or, to be able to interact and debug after testing:
+
+```bash
+pytest --pdb
+```
+
+Finally, to make a commit and push your branch to GitHub, follow below steps:
+
+1- Run the following command twice (the first time will automatically fix some issues):
+
+```bash
+pre-commit run --all
+```
+
+2- Run all the following commands:
+
+```bash
+git add --all
+```
+
+```bash
+git commit -m "your commit"
+```
+
+```bash
+git push origin branch_name
+```
+
+## Step 5: Create a Pull Request 
+
+Navigate to your project's GitHub repository, for instance, https://github.com/<your_username>/dascore, and click "Contribute" and then "Open a pull request". Then, create a pull request and provide a detailed title and description for your changes, explaining the rationale behind your pull request.

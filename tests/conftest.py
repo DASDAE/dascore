@@ -216,6 +216,13 @@ def event_patch_1():
     return dc.get_example_patch("example_event_1")
 
 
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def dispersion_patch():
+    """Fetch dispersion event."""
+    return dc.get_example_patch("dispersion_event")
+
+
 @pytest.fixture(scope="class")
 @register_func(PATCH_FIXTURES)
 def range_patch_3d():
