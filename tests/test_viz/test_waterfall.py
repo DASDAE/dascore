@@ -25,8 +25,9 @@ def check_label_units(patch, ax):
         assert coord_name in label_text
     # check colorbar labels
     cax = ax.images[-1].colorbar
-    title = cax.ax.title.get_text()
-    assert str(patch.attrs.data_units.units) in title
+    yaxis_label = cax.ax.yaxis.label.get_text()
+    assert str(patch.attrs.data_units.units) in yaxis_label
+    assert str(patch.attrs.data_type) in yaxis_label
 
 
 @pytest.fixture(scope="session")
@@ -128,6 +129,15 @@ class TestWaterfall:
         ax = pa.viz.waterfall()
         assert ax.get_xlabel() == dims[1]
         assert ax.get_ylabel() == dims[0]
+
+    def test_patch_with_data_type(self, random_patch):
+        """Ensure a patch with data_type titles the colorbar."""
+        patch = random_patch.update_attrs(
+            data_type="strain rate",
+            data_units="1/s",
+        )
+        ax = patch.viz.waterfall()
+        check_label_units(patch, ax)
 
     def test_show(self, random_patch, monkeypatch):
         """Ensure show path is callable."""
