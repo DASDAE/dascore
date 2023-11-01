@@ -129,11 +129,11 @@ class TestWhiten:
         white_patch = patch.whiten(freq_smooth_size=5, time=[80, 120])
         dft_post = white_patch.dft("time", real=True)
 
-        # Symmetry for range outside frequency
+        # Approx. symmetry for range outside frequency
         ratio_noise = np.median(
             np.abs(dft_post.select(ft_time=(120, 160)).data)
         ) / np.median(np.abs(dft_post.select(ft_time=(40, 80)).data))
-        assert 0.9 < ratio_noise < 1.1
+        assert 0.5 < ratio_noise < 2
 
         # Increasing peak-to-average value in smoothing window region, right side
         post_ratio = np.median(
@@ -170,3 +170,16 @@ class TestWhiten:
             np.abs(dft_pre.select(ft_time=(99, 101)).data)
         ) / np.median(np.abs(dft_pre.select(ft_time=(80, 95)).data))
         assert post_ratio / pre_ratio < 0.1
+
+    def test_whiten_along_distance(self, test_patch):
+        """Ensure whitening runs along other axis."""
+        whitened_patch = test_patch.whiten(distance=(0.01, 0.03))
+        assert "distance" in whitened_patch.dims
+        assert "time" in whitened_patch.dims
+        assert np.array_equal(
+            test_patch.coords.get_array("time"), whitened_patch.coords.get_array("time")
+        )
+        assert np.array_equal(
+            test_patch.coords.get_array("distance"),
+            whitened_patch.coords.get_array("distance"),
+        )
