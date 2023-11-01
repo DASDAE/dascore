@@ -19,7 +19,7 @@ class TestWhiten:
     def test_whiten(self, test_patch):
         """Check consistency of test_dispersion module."""
         # assert velocity dimension
-        whitened_patch = test_patch.whiten([10, 50], 5)
+        whitened_patch = test_patch.whiten(5, time=(10, 50))
         assert "distance" in whitened_patch.dims
         # assert time dimension
         assert "time" in whitened_patch.dims
@@ -47,7 +47,7 @@ class TestWhiten:
 
     def test_default_whiten_no_smoothing_window(self, test_patch):
         """Ensure whiten can run without smoothing window size."""
-        whitened_patch = test_patch.whiten(freq_range=[5, 60])
+        whitened_patch = test_patch.whiten(time=(5, 60))
         assert "distance" in whitened_patch.dims
         assert "time" in whitened_patch.dims
         assert np.array_equal(
@@ -73,7 +73,7 @@ class TestWhiten:
 
     def test_edge_whiten(self, test_patch):
         """Ensure whiten can run with edge cases frequency range."""
-        whitened_patch = test_patch.whiten(freq_range=[0, 50], freq_smooth_size=10)
+        whitened_patch = test_patch.whiten(freq_smooth_size=10, time=(0, 50))
         assert "distance" in whitened_patch.dims
         assert "time" in whitened_patch.dims
         assert np.array_equal(
@@ -84,7 +84,7 @@ class TestWhiten:
             whitened_patch.coords.get_array("distance"),
         )
 
-        whitened_patch = test_patch.whiten(freq_range=[50, 99], freq_smooth_size=10)
+        whitened_patch = test_patch.whiten(freq_smooth_size=10, time=(50, 100))
         assert "distance" in whitened_patch.dims
         assert "time" in whitened_patch.dims
         assert np.array_equal(
@@ -94,50 +94,16 @@ class TestWhiten:
             test_patch.coords.get_array("distance"),
             whitened_patch.coords.get_array("distance"),
         )
-
-    def test_single_freq_range_raises(self, test_patch):
-        """Ensure only one value for frequency range raises ParameterError."""
-        msg = "Frequency range must include two values"
-        freq_range = np.array([10])
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_range=freq_range, freq_smooth_size=3)
-
-    def test_freq_negative_raises(self, test_patch):
-        """Ensure negative frequency values raise ParameterError."""
-        msg = "Minimal and maximal frequencies have to be non-negative"
-        freq_range = np.array([-10, 10])
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_range=freq_range, freq_smooth_size=3)
-        msg = "Frequency smoothing size must be positive"
-        freq_range = np.array([10, 40])
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_range=freq_range, freq_smooth_size=0)
-
-    def test_freq_non_increasing_raises(self, test_patch):
-        """Ensure that frequency range not increasing raises ParameterError."""
-        msg = "Frequency range must be increasing"
-        freq_range = np.array([30, 30])
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_range=freq_range, freq_smooth_size=3)
-
-    def test_freq_above_nyq_raises(self, test_patch):
-        """Ensure frequency value above Nyquist raises ParameterError."""
-        msg = "Frequency range exceeds Nyquist frequency"
-        freq_range = np.array([10, 101])
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_range=freq_range, freq_smooth_size=3)
 
     def test_short_windows_raises(self, test_patch):
         """Ensure too narrow frequency choices raise ParameterError."""
         msg = "Frequency range is too narrow"
-        freq_range = np.array([10.02, 10.03])
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_range=freq_range, freq_smooth_size=3)
+            test_patch.whiten(freq_smooth_size=3, time=(10.02, 10.03))
 
         msg = "Frequency smoothing size is smaller than default frequency resolution"
-        freq_range = np.array([10, 40])
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_range=freq_range, freq_smooth_size=0.001)
+            test_patch.whiten(freq_smooth_size=0.001, time=(10, 40))
 
     def test_longer_smooth_than_range_raises(self, test_patch):
         """Ensure smoothing window larger than
@@ -145,17 +111,62 @@ class TestWhiten:
         """
         msg = "Frequency smoothing size is larger than frequency range"
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_range=[10, 40], freq_smooth_size=40)
+            test_patch.whiten(freq_smooth_size=40, time=(10, 40))
 
     def test_taper_param_raises(self, test_patch):
         """Ensures wrong Tukey alpha parameter raises Paremeter Error."""
         msg = "Tukey alpha needs to be between 0 and 1"
-        freq_range = np.array([10, 50])
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(
-                freq_range=freq_range, freq_smooth_size=3, tukey_alpha=-0.1
-            )
+            test_patch.whiten(freq_smooth_size=3, tukey_alpha=-0.1, time=[10, 50])
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(
-                freq_range=freq_range, freq_smooth_size=3, tukey_alpha=1.3
-            )
+            test_patch.whiten(freq_smooth_size=3, tukey_alpha=1.1, time=[10, 50])
+
+    def test_whiten_monochromatic_input(self):
+        """Ensures correct behavior on monochromatic signal."""
+        patch = get_example_patch("sin_wav", frequency=100, sample_rate=500)
+        dft_pre = patch.dft("time", real=True)
+
+        white_patch = patch.whiten(freq_smooth_size=5, time=[80, 120])
+        dft_post = white_patch.dft("time", real=True)
+
+        # Symmetry for range outside frequency
+        ratio_noise = np.median(
+            np.abs(dft_post.select(ft_time=(120, 160)).data)
+        ) / np.median(np.abs(dft_post.select(ft_time=(40, 80)).data))
+        assert 0.9 < ratio_noise < 1.1
+
+        # Increasing peak-to-average value in smoothing window region, right side
+        post_ratio = np.median(
+            np.abs(dft_post.select(ft_time=(99, 101)).data)
+        ) / np.median(np.abs(dft_post.select(ft_time=(101, 105)).data))
+        pre_ratio = np.median(
+            np.abs(dft_pre.select(ft_time=(99, 101)).data)
+        ) / np.median(np.abs(dft_pre.select(ft_time=(101, 105)).data))
+        assert post_ratio / pre_ratio < 0.5
+
+        # Increasing peak-to-average value in smoothing window region, left side
+        post_ratio = np.median(
+            np.abs(dft_post.select(ft_time=(99, 101)).data)
+        ) / np.median(np.abs(dft_post.select(ft_time=(95, 99)).data))
+        pre_ratio = np.median(
+            np.abs(dft_pre.select(ft_time=(99, 101)).data)
+        ) / np.median(np.abs(dft_pre.select(ft_time=(95, 99)).data))
+        assert post_ratio / pre_ratio < 0.5
+
+        # Increasing peak-to-average value in frequency range, left side
+        post_ratio = np.median(
+            np.abs(dft_post.select(ft_time=(99, 101)).data)
+        ) / np.median(np.abs(dft_post.select(ft_time=(105, 120)).data))
+        pre_ratio = np.median(
+            np.abs(dft_pre.select(ft_time=(99, 101)).data)
+        ) / np.median(np.abs(dft_pre.select(ft_time=(105, 120)).data))
+        assert post_ratio / pre_ratio < 0.1
+
+        # Increasing peak-to-average value in frequency range, right side
+        post_ratio = np.median(
+            np.abs(dft_post.select(ft_time=(99, 101)).data)
+        ) / np.median(np.abs(dft_post.select(ft_time=(80, 95)).data))
+        pre_ratio = np.median(
+            np.abs(dft_pre.select(ft_time=(99, 101)).data)
+        ) / np.median(np.abs(dft_pre.select(ft_time=(80, 95)).data))
+        assert post_ratio / pre_ratio < 0.1

@@ -50,6 +50,7 @@ def dispersion_phase_shift(
 
     Example
     --------
+    ```{python}
     import dascore as dc
     import numpy as np
 
@@ -63,6 +64,7 @@ def dispersion_phase_shift(
     ax.set_xlim(5, 70)
     ax.set_ylim(1500, 100)
     disp_patch.viz.waterfall(show=True, ax=ax)
+    ```
     """
     patch_cop = patch.convert_units(distance="m").transpose("distance", "time")
     dist = patch_cop.coords.get_array("distance")
