@@ -17,7 +17,7 @@ from dascore.utils.patch import get_dim_sampling_rate
 
 def whiten(
     patch: PatchType,
-    freq_smooth_size: float | None = None,
+    smooth_size: float | None = None,
     tukey_alpha: float = 0.1,
     **kwargs,
 ) -> PatchType:
@@ -28,10 +28,7 @@ def whiten(
     ----------
     patch
         Patch to transform. Has to have dimensions of time and distance.
-    freq_range
-        Frequency range for which the whitening is applied, in Hz.
-        If no value is inputted, the entire spectrum is used.
-    freq_smooth_size
+    smooth_size
         Size (in Hz) of moving average window, used to compute the spectrum
         before whitening. If no value is inputted, smoothing is over
         the entire spectrum.
@@ -43,7 +40,8 @@ def whiten(
         /generated/scipy.signal.windows.tukey.html
     **kwargs
         Used to specify the dimension and frequency, wavelength, or equivalent
-        limits.
+        limits. If no input is provided, whitening is also the last axis
+        with frequency band of [0,Nyquist]
 
     Notes
     -----
@@ -88,7 +86,7 @@ def whiten(
     patch = dc.get_example_patch("dispersion_event")
     patch = patch.resample(time=(200 * Hz))
 
-    white_patch = patch.whiten(freq_smooth_size=3, time = (10,50))
+    white_patch = patch.whiten(smooth_size=3, time = (10,50))
 
     fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(10, 7))
     ax1.plot(patch.data[50, :])
@@ -126,13 +124,13 @@ def whiten(
     high = None if pd.isnull(rang_max) else rang_max / nyquist
     check_filter_range(nyquist, low, high, rang_min, rang_max)
 
-    if freq_smooth_size is None:
-        freq_smooth_size = rang_max - rang_min
+    if smooth_size is None:
+        smooth_size = rang_max - rang_min
     else:
-        if freq_smooth_size <= 0:
+        if smooth_size <= 0:
             msg = "Frequency smoothing size must be positive"
             raise ParameterError(msg)
-        if freq_smooth_size >= nyquist:
+        if smooth_size >= nyquist:
             msg = "Frequency smoothing size is larger than Nyquist"
             raise ParameterError(msg)
 
@@ -151,16 +149,17 @@ def whiten(
     # contains 5 discrete frequencies. However, if the input value is smaller
     # than the default resolution, raise a parameter error because the
     # computational cost would go up
-    if freq_smooth_size < default_df:
+    if smooth_size < default_df:
         msg = "Frequency smoothing size is smaller than default frequency resolution"
         raise ParameterError(msg)
 
-    if math.floor(freq_smooth_size / default_df) < 5:
-        comp_nsamp = math.floor(nsamp * 5 / (freq_smooth_size / default_df))
+    if math.floor(smooth_size / default_df) < 5:
+        comp_nsamp = math.floor(nsamp * 5 / (smooth_size / default_df))
     else:
         comp_nsamp = nsamp
 
     freqs = nft.rfftfreq(comp_nsamp, d=dsamp)
+    print(freqs)
     df = freqs[1] - freqs[0]
     nf = np.size(freqs)
     fft_size = np.asarray(np.shape(patch.data))
@@ -173,7 +172,7 @@ def whiten(
     last_freq_ind = np.argmax((np.abs(freqs) - rang_max) >= 0.0)
     freq_win_size = last_freq_ind - first_freq_ind
 
-    mean_window = math.floor(freq_smooth_size / df)
+    mean_window = math.floor(smooth_size / df)
 
     if freq_win_size < 2:
         msg = "Frequency range is too narrow"
