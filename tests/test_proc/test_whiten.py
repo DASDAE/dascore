@@ -62,15 +62,15 @@ class TestWhiten:
         """Ensure incorrect values for smooth window raise ParameterError."""
         msg = "Frequency smoothing size must be positive"
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_smooth_size=-1, time=[30, 60])
+            test_patch.whiten(smooth_size=-1, time=[30, 60])
 
         msg = "Frequency smoothing size is larger than Nyquist"
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_smooth_size=110, time=[30, 60])
+            test_patch.whiten(smooth_size=110, time=[30, 60])
 
     def test_default_whiten_no_freq_range(self, test_patch):
         """Ensure whiten can run without frequency range."""
-        whitened_patch = test_patch.whiten(freq_smooth_size=10)
+        whitened_patch = test_patch.whiten(smooth_size=10)
         assert "distance" in whitened_patch.dims
         assert "time" in whitened_patch.dims
         assert np.array_equal(
@@ -83,7 +83,7 @@ class TestWhiten:
 
     def test_edge_whiten(self, test_patch):
         """Ensure whiten can run with edge cases frequency range."""
-        whitened_patch = test_patch.whiten(freq_smooth_size=10, time=[0, 50])
+        whitened_patch = test_patch.whiten(smooth_size=10, time=[0, 50])
         assert "distance" in whitened_patch.dims
         assert "time" in whitened_patch.dims
         assert np.array_equal(
@@ -94,7 +94,7 @@ class TestWhiten:
             whitened_patch.coords.get_array("distance"),
         )
 
-        whitened_patch = test_patch.whiten(freq_smooth_size=10, time=[50, 100])
+        whitened_patch = test_patch.whiten(smooth_size=10, time=[50, 100])
         assert "distance" in whitened_patch.dims
         assert "time" in whitened_patch.dims
         assert np.array_equal(
@@ -109,11 +109,11 @@ class TestWhiten:
         """Ensure too narrow frequency choices raise ParameterError."""
         msg = "Frequency range is too narrow"
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_smooth_size=3, time=[10.02, 10.03])
+            test_patch.whiten(smooth_size=3, time=[10.02, 10.03])
 
         msg = "Frequency smoothing size is smaller than default frequency resolution"
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_smooth_size=0.001, time=[10, 40])
+            test_patch.whiten(smooth_size=0.001, time=[10, 40])
 
     def test_longer_smooth_than_range_raises(self, test_patch):
         """Ensure smoothing window larger than
@@ -121,22 +121,22 @@ class TestWhiten:
         """
         msg = "Frequency smoothing size is larger than frequency range"
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_smooth_size=40, time=[10, 40])
+            test_patch.whiten(smooth_size=40, time=[10, 40])
 
     def test_taper_param_raises(self, test_patch):
         """Ensures wrong Tukey alpha parameter raises Paremeter Error."""
         msg = "Tukey alpha needs to be between 0 and 1"
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_smooth_size=3, tukey_alpha=-0.1, time=[10, 50])
+            test_patch.whiten(smooth_size=3, tukey_alpha=-0.1, time=[10, 50])
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(freq_smooth_size=3, tukey_alpha=1.1, time=[10, 50])
+            test_patch.whiten(smooth_size=3, tukey_alpha=1.1, time=[10, 50])
 
     def test_whiten_monochromatic_input(self):
         """Ensures correct behavior on monochromatic signal."""
         patch = get_example_patch("sin_wav", frequency=100, sample_rate=500)
         dft_pre = patch.dft("time", real=True)
 
-        white_patch = patch.whiten(freq_smooth_size=5, time=[80, 120])
+        white_patch = patch.whiten(smooth_size=5, time=[80, 120])
         dft_post = white_patch.dft("time", real=True)
 
         # Approx. symmetry for range outside frequency
