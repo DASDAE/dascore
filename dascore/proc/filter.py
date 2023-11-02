@@ -6,8 +6,6 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import pandas as pd
 from scipy import ndimage
 from scipy.ndimage import median_filter as nd_median_filter
@@ -18,33 +16,12 @@ from dascore.constants import PatchType, samples_arg_description
 from dascore.exceptions import FilterValueError
 from dascore.units import get_filter_units
 from dascore.utils.docs import compose_docstring
+from dascore.utils.misc import check_filter_kwargs, check_filter_range
 from dascore.utils.patch import (
     get_dim_sampling_rate,
     get_multiple_dim_value_from_kwargs,
     patch_function,
 )
-
-
-def _check_filter_kwargs(kwargs):
-    """Check filter kwargs and return dim name and filter range."""
-    if len(kwargs) != 1:
-        msg = "pass filter requires you specify one dimension and filter range."
-        raise FilterValueError(msg)
-    dim = next(iter(kwargs.keys()))
-    filt_range = kwargs[dim]
-    # strip out units if used.
-    mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
-    if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
-        msg = f"filter range must be a length two sequence not {filt_range}"
-        raise FilterValueError(msg)
-    if all([pd.isnull(x) for x in mags]):
-        msg = (
-            f"pass filter requires at least one filter limit, "
-            f"you passed {filt_range}"
-        )
-        raise FilterValueError(msg)
-
-    return dim, filt_range
 
 
 def _check_sobel_args(dim, mode, cval):
@@ -75,29 +52,12 @@ def _check_sobel_args(dim, mode, cval):
     return dim, mode, cval
 
 
-def _check_filter_range(nyquist, low, high, filt_min, filt_max):
-    """Simple check on filter parameters."""
-    # ensure filter bounds are within nyquist
-    if low is not None and ((0 > low) or (low > 1)):
-        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_min}"
-        raise FilterValueError(msg)
-    if high is not None and ((0 > high) or (high > 1)):
-        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_max}"
-        raise FilterValueError(msg)
-    if high is not None and low is not None and high <= low:
-        msg = (
-            "Low filter param must be less than high filter param, you passed:"
-            f"filt_min = {filt_min}, filt_max = {filt_max}"
-        )
-        raise FilterValueError(msg)
-
-
 def _get_sos(sr, filt_min, filt_max, corners):
     """Get second order sections from sampling rate and filter bounds."""
     nyquist = 0.5 * sr
     low = None if pd.isnull(filt_min) else filt_min / nyquist
     high = None if pd.isnull(filt_max) else filt_max / nyquist
-    _check_filter_range(nyquist, low, high, filt_min, filt_max)
+    check_filter_range(nyquist, low, high, filt_min, filt_max)
 
     if (low is not None) and (high is not None):  # apply bandpass
         z, p, k = iirfilter(
@@ -127,7 +87,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     zerophase
         If True, apply the filter twice.
     **kwargs
-        Used to specify the dimension and frequency, wavelength, or equivilent
+        Used to specify the dimension and frequency, wavelength, or equivalent
         limits.
 
     Examples
@@ -152,7 +112,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     >>> # filter wavelengths less than 200 ft
     >>> lp_ft = pa.pass_filter(distance=(200 * ft, ...))
     """
-    dim, (arg1, arg2) = _check_filter_kwargs(kwargs)
+    dim, (arg1, arg2) = check_filter_kwargs(kwargs)
     axis = patch.dims.index(dim)
     coord_units = patch.coords.coord_map[dim].units
     filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units, dim=dim)

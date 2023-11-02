@@ -236,6 +236,7 @@ class Patch:
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
     rolling = dascore.proc.rolling
+    whiten = dascore.proc.whiten
 
     # --- transformation functions
     differentiate = transform.differentiate
