@@ -21,6 +21,8 @@ from dascore.constants import (
     numeric_types,
     timeable_types,
 )
+from dascore.core.attrs import check_coords, check_dims
+from dascore.core.patch import Patch
 from dascore.exceptions import InvalidSpoolError, ParameterError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
@@ -293,6 +295,60 @@ class BaseSpool(abc.ABC):
             progress=progress,
             **kwargs,
         )
+
+    def stack(self, dim_vary=None, check_behavior="warn"):
+        """
+        Stack any spool's patches after verifying their dims and coords are ok.
+
+        Parameters
+        ----------
+        *********to add more detail******
+        By default, dim_vary is None but others could be specified and <= 1 can vary.
+        By default, dim_check is 'warn' meaning a warning would be issued and a patch
+        would be skipped in case of issues. 'raise' is other option that will raise
+        an exception.
+
+        Notes
+        -----
+        ******** to add **********
+
+        Examples
+        --------
+        ********* to add ********
+        """
+        # check the dims/coords of first patch (considered standard)
+        init_patch = self.__getitem__(0)
+        stack_arr = np.zeros_like(init_patch)
+        init_patch_dims = init_patch.dims
+        init_patch_coords = init_patch.coords
+
+        for p in self:
+            # check dimensions of patch compared to init_patch
+            dims_ok = check_dims(init_patch_dims, p.dims, check_behavior)
+            coords_ok = check_coords(
+                init_patch_coords, p.coords, check_behavior, dim_vary
+            )
+
+            # actually do the stacking
+            if dims_ok and coords_ok:
+                stack_arr += p.data
+
+        # create coords array for the stack
+        stack_coords = init_patch.coords
+        # need to change so these coords are zeroed
+        # if(dim_vary): # adjust dim_vary to start at 0 for junk value indicator
+        #    #*********use coord manager to modify that coord to 0?****
+        #    coord_to_change = stack_coords.coord_map[dim_vary]
+        #    min_coord = coord_to_change.min()
+
+        # create attributes for the stack with adjusted history
+        stack_attrs = init_patch.attrs
+        new_history = list(init_patch.attrs.history)
+        new_history.append("stack")
+        stack_attrs = stack_attrs.update(history=new_history)
+
+        # create output patch
+        return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
 
 
 class DataFrameSpool(BaseSpool):
