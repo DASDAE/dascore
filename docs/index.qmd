@@ -131,7 +131,7 @@ conda install dascore -c conda-forge
 
 ## Run using Docker
 
-If you have [Docker](https://www.docker.com/) installed, you may also run the stable build of DASCore in a Docker container. 
+If you have [Docker](https://www.docker.com/) installed, you may also run the stable build of DASCore in a Docker container.
 
 First you need to clone the DAScore main repository:
 ```bash

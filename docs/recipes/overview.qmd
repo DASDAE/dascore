@@ -10,6 +10,8 @@ own.
 
 [Plotting channel number](plotting_channel_number.qmd)
 
+[Parallelization using MPI](parallelization_using_mpi.qmd)
+
 # Contributing
 
 [Contributing step by step](how_to_contribute.qmd)
