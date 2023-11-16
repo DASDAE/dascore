@@ -53,9 +53,7 @@ def correlate(
     dim, axis, source = get_dim_value_from_kwargs(patch, kwargs)
     # get the coordinate which contains the source
     coord_source = patch.get_coord(dim)
-
-    coord_source.get_slice_tuple((source, source))
-    index_source = coord_source._get_index(source)
+    index_source = coord_source.get_next_index(source, samples=samples)
 
     sampling_interval = patch.attrs["time_step"] / np.timedelta64(1, "s")
 
