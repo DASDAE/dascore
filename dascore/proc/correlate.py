@@ -28,7 +28,6 @@ def correlate(
     **kwargs
         Additional arguments to specify cc dimension and the master source, to which
         we cross-correlate all other channels/time samples.
-        Refer to the examples section for detailed usage.
 
     Examples
     --------
@@ -47,14 +46,15 @@ def correlate(
 
     Notes
     -----
-    The cross-correlation is performed in the frequency domain for efficiency reasons.
+    The cross-correlation is performed in the frequency domain for efficiency
+    reasons.
     """
     assert len(patch.dims) == 2, "must be a 2D patch"
     dim, axis, source = get_dim_value_from_kwargs(patch, kwargs)
-    # other_dim = next(iter(set(patch.dims) - {dim}))
-    # other_axis = patch.dims.index(other_dim)
-
+    # get the coordinate which contains the source
     coord_source = patch.get_coord(dim)
+
+    coord_source.get_slice_tuple((source, source))
     index_source = coord_source._get_index(source)
 
     sampling_interval = patch.attrs["time_step"] / np.timedelta64(1, "s")
