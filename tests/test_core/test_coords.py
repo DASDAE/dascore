@@ -1168,6 +1168,13 @@ class TestGetNextIndex:
         with pytest.raises(ValueError, match="is out of bounds"):
             coord.get_next_index(coord_len, samples=True)
 
+    def test_samples_time(self, evenly_sampled_date_coord):
+        """Ensure samples argument allows samples to be passed in."""
+        coord = evenly_sampled_date_coord
+        coord.get_next_index(0, samples=True)
+        assert coord.get_next_index(0, samples=True) == 0
+        assert coord.get_next_index(-1.0, samples=True) == len(coord) - 1
+
     def test_out_of_bounds_raises(self, evenly_sampled_coord):
         """Tests for out of bounds values raising exceptions."""
         msg = "is out of bounds"

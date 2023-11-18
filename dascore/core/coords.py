@@ -576,7 +576,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 msg = f"Value: {value} is out of bounds for {self}"
                 raise ValueError(msg)
             return max_val if is_gt else min_val
-        # get forward and backward indices
+        # samples should already have the answer, just return
+        if samples:
+            return value
+        # otherwise get forward and backward inds
         for_index = self._get_index(value, forward=True)
         back_index = self._get_index(value, forward=False)
         ranges = [x for x in [for_index, back_index] if x is not None]
