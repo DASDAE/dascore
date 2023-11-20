@@ -1,0 +1,94 @@
+"""IO module for reading and writing RSF file format support of MADAGASCAR."""
+# from __future__ import annotations
+
+# import segyio
+import datetime as dt
+from pathlib import Path
+
+import numpy as np
+
+import dascore as dc
+from dascore.io.core import FiberIO
+
+RSFKEYS_WRITE = ("in", "esize", "data_format")
+
+
+class RSFV1(FiberIO):
+    """An IO class supporting the RSF format of MADAGASCAR."""
+
+    name = "rsf"
+    preferred_extensions = "rsf"
+    # also specify a version so when version 2 is released you can
+    # just make another class in the same module named rsfV2.
+    version = "1"
+
+    ########################
+    # Add a way to read in rsf files.
+    # May need a way to get absolute time stamp,
+    #   like hide it in header file when writing out an RSF file.
+    ########################
+
+    def write(self, patch, path, data_path=None, **kwargs):
+        """
+        Write a patch to RSF format.
+
+        if no data_path is NOT specified, the header and binary will be
+        packed together
+        data_path needs to be bindata_file.rsf or /location/of/bindata_file.rsf
+        (NO '@')
+
+        path needs to be hdr_file.rsf or /location/of/hdr_file.rsf
+
+        """
+        axis_lengs = patch.shape
+        axis_origs = [patch.get_coord(x).start for x in patch.dims]
+        axis_steps = [patch.get_coord(x).step for x in patch.dims]
+        axis_names = patch.dims
+        axis_units = [patch.get_coord(x).units for x in patch.dims]
+
+        dtype = np.dtype(patch.data.dtype)
+        file_esize = dtype.itemsize
+
+        if np.issubdtype(dtype, np.integer):
+            file_formt = 'data_format="native_int"'
+        elif np.issubdtype(dtype, np.floating):
+            file_formt = 'data_format="native_float"'
+        else:
+            raise ValueError("Data format is not integer or floating.")
+
+        data = patch.data.tobytes()
+
+        hdr_str = f"DASCORE {dc.__version__}   {dt.datetime.now()} \n"
+
+        length = len(axis_lengs)
+        hdr_info = [hdr_str, file_formt, f"esize={file_esize}"]
+        for i in range(length):
+            hdr_info.append(f"n{i}={axis_lengs[i]}")
+            hdr_info.append(f"o{i}={axis_origs[i]}")
+            hdr_info.append(f"d{i}={axis_steps[i]}")
+            hdr_info.append(f'label{i}="{axis_names[i]}"')
+            hdr_info.append(f'unit{i}="{axis_units[i]}"')
+
+        if data_path is not None:
+            # outputs header and binary separately (.rsf and .rsf@)
+            outdatapath = Path(str(data_path) + "@")
+            outdatapath.parent.mkdir(exist_ok=True, parents=True)
+            hdr_info.append(f'in="{data_path}@"')
+            with outdatapath.open("wb") as fi:
+                fi.write(data)
+            out = "\n".join(hdr_info)
+            outpath = Path(str(path))
+            outpath.parent.mkdir(exist_ok=True, parents=True)
+            with outpath.open("w") as fi:
+                fi.write(out)
+        else:
+            # outputs header and binary combined (.rsf with both hdr and bin)
+            hdr_info.append('in="stdin"\n')
+            # hdr_info.append(data)
+            out = "\n".join(hdr_info)
+            outpath = Path(str(path))
+            outpath.parent.mkdir(exist_ok=True, parents=True)
+            with outpath.open("w") as fi:
+                fi.write(out)
+            with outpath.open("ab") as fi:
+                fi.write(data)

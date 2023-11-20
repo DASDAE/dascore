@@ -106,6 +106,7 @@ TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
 TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
 TERRA15__V6 = "dascore.io.terra15.core:Terra15FormatterV6"
 SEGY__V2 = "dascore.io.segy.core:SegyV2"
+RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
 
 
