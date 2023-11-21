@@ -12,6 +12,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 import dascore as dc
+from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
@@ -418,3 +419,38 @@ def _remove_overlaps(df, name):
     # wrap around in roll gives wrong start value, correct it.
     corrected_starts[0] = start[0]
     return df.assign(**{min_name: corrected_starts})
+
+
+def patch_to_df(patch: PatchType) -> pd.DataFrame:
+    """
+    Convert a patch to a dataframe.
+
+    Parameters
+    ----------
+    patch
+        The input patch to convert.
+
+    Notes
+    -----
+    - Patch attributes are attached to the experimental dataframe attribute
+      called "attrs" as a dictionary
+    """
+    dims = patch.dims
+    # ensure a 2D patch is passed
+    assert (
+        len(dims) == 2
+    ), "Patch must have exactly 2 dimensions to convert to dataframe"
+
+    # get arrays with dimensional values
+    index_values = patch.get_coord(dims[0]).values
+    col_values = patch.get_coord(dims[1]).values
+
+    # create dataframe
+    df = pd.DataFrame(patch.data, index=index_values, columns=col_values)
+
+    # assign index names and attrs
+    df.attrs = patch.attrs.model_dump()
+    df.index.name = dims[0]
+    df.columns.name = dims[1]
+
+    return df

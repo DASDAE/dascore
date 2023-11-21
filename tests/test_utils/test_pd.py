@@ -7,7 +7,12 @@ import pydantic
 import pytest
 
 from dascore.exceptions import ParameterError
-from dascore.utils.pd import adjust_segments, fill_defaults_from_pydantic, filter_df
+from dascore.utils.pd import (
+    adjust_segments,
+    fill_defaults_from_pydantic,
+    filter_df,
+    patch_to_df,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -243,3 +248,20 @@ class TestAdjustSegments:
             df = simple_df.drop(columns="float_no_default")
             with pytest.raises(ValueError, match="required value"):
                 fill_defaults_from_pydantic(df, self.Model)
+
+
+class TestPatchToDF:
+    """A description of these tests."""
+
+    def test_simple_to_df(self, random_patch):
+        """Another helpful docstring."""
+        df = patch_to_df(random_patch)
+        # assert the data match original data, the column/index ...
+        # values match coordinate value
+        assert np.all(np.equal(df.values, random_patch.data))
+
+        assert df.index.name == random_patch.dims[0]
+        assert df.columns.name == random_patch.dims[1]
+
+        # also assert attrs match patch attrs after dumping
+        assert df.attrs == random_patch.attrs.model_dump()
