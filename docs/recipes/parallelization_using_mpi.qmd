@@ -7,9 +7,9 @@ execute:
 On this page, we provide a step-by-step recipe on how you can start parallelize your code using the "mpi4py" library from Open MPI program.
 
 
-# Embarrassingly parallelization of Spool's Patches over processors
+## Embarrassingly parallelization of Spool's Patches over processors
 
-## Install DASCore and mpi4py libraries
+### Install DASCore and mpi4py libraries
 
 First, make sure you have installed DASCore on your machine. See [DASCore Installation](https://dascore.org/#:~:text=0.2%29%3B-,Installation). Secondly, you need to properly install the mpi4py library. After installing and loading the [Open MPI](https://docs.open-mpi.org/en/v5.0.x/installing-open-mpi/quickstart.html) module on your machine (e.g., on Linux: ` load module to/mpi/openmpi/gcc/compiler/path`), install [mpi4py](https://pypi.org/project/mpi4py/). It might be easier to install using conda-forge as below:
 
@@ -20,7 +20,7 @@ conda install -c conda-forge mpi4py openmpi
 Please note that this procedure is tested for Python 3.11 and Open MPI GCC 3.1.3
 
 
-## Parallelize using DASCore and mpi4py
+### Parallelize using DASCore and mpi4py
 
 Here is an example for parallelization of Patches over processors:
 
@@ -56,9 +56,9 @@ comm.barrier()
 sys.exit(0)
 ```
 
-## Run the script in parallel mode using Open mpi
+### Run the script in parallel mode using Open MPI
 
-If you like to run the `mpi_spool.py` script using 4 processors (which means each processor will run the script separately), you can use:
+If you like to run the `mpi_spool.py` script using `n = 4` processors (which means each processor will run the script separately), you can use:
 
 ```bash
 mpiexec -n 4 python mpi_spool.py
