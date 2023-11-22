@@ -9,6 +9,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.io.core import FiberIO
+from dascore.utils.time import to_float
 
 RSFKEYS_WRITE = ("in", "esize", "data_format")
 
@@ -28,7 +29,7 @@ class RSFV1(FiberIO):
     #   like hide it in header file when writing out an RSF file.
     ########################
 
-    def write(self, patch, path, data_path=None, **kwargs):
+    def write(self, spool, path, data_path=None, **kwargs):
         """
         Write a patch to RSF format.
 
@@ -39,14 +40,19 @@ class RSFV1(FiberIO):
 
         path needs to be hdr_file.rsf or /location/of/hdr_file.rsf
 
+        spool needs to have a single patch in it
         """
+        assert len(spool) == 1
+        patch = spool[0]
         axis_lengs = patch.shape
-        axis_origs = [patch.get_coord(x).start for x in patch.dims]
-        axis_steps = [patch.get_coord(x).step for x in patch.dims]
+        axis_origs = [to_float(patch.get_coord(x).start) for x in patch.dims]
+        axis_steps = [to_float(patch.get_coord(x).step) for x in patch.dims]
         axis_names = patch.dims
-        axis_units = [patch.get_coord(x).units for x in patch.dims]
+        axis_units = [patch.get_coord(x).units.units for x in patch.dims]
 
-        dtype = np.dtype(patch.data.dtype)
+        ## we are casting to float32 to ensure that esize=4 for m8r
+        data = patch.data.astype(np.float32)
+        dtype = np.dtype(data.dtype)
         file_esize = dtype.itemsize
 
         if np.issubdtype(dtype, np.integer):
@@ -56,18 +62,18 @@ class RSFV1(FiberIO):
         else:
             raise ValueError("Data format is not integer or floating.")
 
-        data = patch.data.tobytes()
+        data_bytes = data.astype(np.float32).tobytes()
 
         hdr_str = f"DASCORE {dc.__version__}   {dt.datetime.now()} \n"
 
         length = len(axis_lengs)
         hdr_info = [hdr_str, file_formt, f"esize={file_esize}"]
         for i in range(length):
-            hdr_info.append(f"n{i}={axis_lengs[i]}")
-            hdr_info.append(f"o{i}={axis_origs[i]}")
-            hdr_info.append(f"d{i}={axis_steps[i]}")
-            hdr_info.append(f'label{i}="{axis_names[i]}"')
-            hdr_info.append(f'unit{i}="{axis_units[i]}"')
+            hdr_info.append(f"n{i+1}={axis_lengs[i]}")
+            hdr_info.append(f"o{i+1}={axis_origs[i]}")
+            hdr_info.append(f"d{i+1}={axis_steps[i]}")
+            hdr_info.append(f'label{i+1}="{axis_names[i]}"')
+            hdr_info.append(f'unit{i+1}="{axis_units[i]}"')
 
         if data_path is not None:
             # outputs header and binary separately (.rsf and .rsf@)
@@ -75,7 +81,7 @@ class RSFV1(FiberIO):
             outdatapath.parent.mkdir(exist_ok=True, parents=True)
             hdr_info.append(f'in="{data_path}@"')
             with outdatapath.open("wb") as fi:
-                fi.write(data)
+                fi.write(data_bytes)
             out = "\n".join(hdr_info)
             outpath = Path(str(path))
             outpath.parent.mkdir(exist_ok=True, parents=True)
@@ -83,7 +89,7 @@ class RSFV1(FiberIO):
                 fi.write(out)
         else:
             # outputs header and binary combined (.rsf with both hdr and bin)
-            hdr_info.append('in="stdin"\n')
+            hdr_info.append('in="stdin"\n\n')
             # hdr_info.append(data)
             out = "\n".join(hdr_info)
             outpath = Path(str(path))
@@ -91,4 +97,4 @@ class RSFV1(FiberIO):
             with outpath.open("w") as fi:
                 fi.write(out)
             with outpath.open("ab") as fi:
-                fi.write(data)
+                fi.write(data_bytes)
