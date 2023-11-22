@@ -3,18 +3,17 @@ RSF format support module.
 
 Notes
 -----
--
+- output has been tested on Madagascar version 3.1-git
 
 
 Examples
 --------
 import dascore as dc
-from dascore.utils.downloader import fetch
 
-# get the path to a segy file.
-path = fetch("conoco_segy_1.sgy")
+# get the path to a random DAS file.
+patch = dc.get_example_patch()
 
-segy_patch = dc.spool(path)[0]
+patch.io.write("test_out.rsf","rsf",data_path="test_out.rsf")
 """
 
 from .core import RSFV1

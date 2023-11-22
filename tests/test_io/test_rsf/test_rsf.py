@@ -13,7 +13,10 @@ class TestRsfWrite:
     """testing the rSF write out function."""
 
     def test_write_nopath(self, random_patch, tmp_path):
-        """Test write function."""
+        """
+        Test write function with no binary path specified.
+        Data and header are combined.
+        """
         spool = dc.spool(random_patch)
         path = tmp_path / "test_hdrdata.rsf"
         RSFV1().write(spool, path)
@@ -26,7 +29,7 @@ class TestRsfWrite:
         assert os.path.getsize(path) >= datasize
 
     def test_write_path(self, random_patch, tmp_path):
-        """Test write function."""
+        """Test write function with different binary data path specified."""
         spool = dc.spool(random_patch)
         path = tmp_path / "test_hdr.rsf"
         datapath = tmp_path / "binary/test_data.rsf"

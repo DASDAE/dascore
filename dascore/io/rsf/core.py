@@ -23,12 +23,6 @@ class RSFV1(FiberIO):
     # just make another class in the same module named rsfV2.
     version = "1"
 
-    ########################
-    # Add a way to read in rsf files.
-    # May need a way to get absolute time stamp,
-    #   like hide it in header file when writing out an RSF file.
-    ########################
-
     def write(self, spool, path, data_path=None, **kwargs):
         """
         Write a patch to RSF format.
@@ -41,6 +35,22 @@ class RSFV1(FiberIO):
         path needs to be hdr_file.rsf or /location/of/hdr_file.rsf
 
         spool needs to have a single patch in it
+
+        Parameters
+        ----------
+        spool
+            The input spool to convert to rsf, must have exactly one patch.
+        path
+            Path to create the rsf file
+        data_path
+            If data and rsf header information are to be separate, the
+            location of the data file. Needs to be bindata_file.rsf or
+            /location/of/bindata_file.rsf (no '@')
+
+        Notes
+        -----
+        - Patch datatype is converted to float32 for compatibility with
+        Madagascar (may be able to keep dytpe in the future)
         """
         assert len(spool) == 1
         patch = spool[0]
@@ -56,7 +66,7 @@ class RSFV1(FiberIO):
         file_esize = dtype.itemsize
 
         if np.issubdtype(dtype, np.integer):
-            file_formt = 'data_format="native_int"'
+            file_formt = 'data_format="native_float"'
         elif np.issubdtype(dtype, np.floating):
             file_formt = 'data_format="native_float"'
         else:
