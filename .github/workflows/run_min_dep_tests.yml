@@ -30,7 +30,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.11']
+        python-version: ['3.12']
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
