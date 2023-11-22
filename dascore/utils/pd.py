@@ -4,7 +4,7 @@ from __future__ import annotations
 import fnmatch
 import os
 from collections import defaultdict
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from functools import cache
 
 import numpy as np
@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
@@ -454,3 +455,52 @@ def patch_to_df(patch: PatchType) -> pd.DataFrame:
     df.columns.name = dims[1]
 
     return df
+
+
+def df_to_patch(
+    df: pd.DataFrame, attrs: PatchAttrs | Mapping | None = None
+) -> PatchType:
+    """
+    Convert a dataframe to a patch.
+
+    Parameters
+    ----------
+    df
+        The input dataframe to convert to a patch
+
+    attrs
+        [PatchAttrs | Mapping] (optoinal).
+
+    Notes
+    -----
+    - if attrs=None:
+        dims[0] = df.index.name
+        dims[1] = df.columns.name
+        coords values for dims[0] = df.index.to_numpy()
+        coords values for dims[1] = df.columns.to_numpy()
+        data = df.to_numpy()
+    - else:
+        data = df.to_numpy()
+        coords and dims are constructed from attrs
+    """
+    # patch
+    patch = None
+
+    # get data
+    data = df.to_numpy()
+
+    if attrs is None:
+        # get dims
+        dims = []
+        dims.append(df.index.name)
+        dims.append(df.columns.name)
+
+        # get coordinate arrays
+        coords = {dims[0]: df.index.to_numpy(), dims[1]: df.columns.to_numpy()}
+
+        patch = dc.Patch(data=data, coords=coords, dims=dims)
+
+    else:
+        patch = dc.Patch(data=data, attrs=attrs)
+
+    return patch

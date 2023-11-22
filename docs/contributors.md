@@ -23,5 +23,7 @@ A Huge thanks to all of our contributors:
 
 [Manuel M. Mendoza](https:/github.com/SeisMatt)
 
+[Thomas Cullison](https:/github.com/code-cullison)
+
 You can find more contributor information
 [here](https://github.com/DASDAE/dascore/graphs/contributors)

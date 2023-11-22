@@ -6,14 +6,22 @@ import pandas as pd
 import pydantic
 import pytest
 
+from dascore import get_example_patch
 from dascore.exceptions import ParameterError
 from dascore.utils.pd import (
     adjust_segments,
+    df_to_patch,
     fill_defaults_from_pydantic,
     filter_df,
     patch_to_df,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
+
+
+@pytest.fixture()
+def random_df():
+    """Create a random df for testing."""
+    return patch_to_df(get_example_patch())
 
 
 @pytest.fixture
@@ -251,7 +259,7 @@ class TestAdjustSegments:
 
 
 class TestPatchToDF:
-    """A description of these tests."""
+    """Test converstion of patch to pandas.DataFrame."""
 
     def test_simple_to_df(self, random_patch):
         """Another helpful docstring."""
@@ -265,3 +273,19 @@ class TestPatchToDF:
 
         # also assert attrs match patch attrs after dumping
         assert df.attrs == random_patch.attrs.model_dump()
+
+
+class TestDFtoPatch:
+    """Test converstion of pandas.DataFrame to patch."""
+
+    def test_simple_to_patch(self, random_df):
+        """Another helpful docstring."""
+        patch = df_to_patch(random_df)
+        # assert the data match original data, the column/index ...
+        # values match coordinate value
+        assert np.all(np.equal(random_df.values, patch.data))
+
+        # may need to discuss what to do about attrs
+        # because below doesn't make sense.
+        # assert random_df.index.name == patch.dims[0]
+        # assert random_df.columns.name == patch.dims[1]
