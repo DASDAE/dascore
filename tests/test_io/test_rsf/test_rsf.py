@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 import dascore as dc
 from dascore.io.rsf import RSFV1
@@ -43,3 +44,14 @@ class TestRsfWrite:
         file_esize = dtype.itemsize
         datasize = test_data.size * file_esize
         assert os.path.getsize(newdatapath) == datasize
+
+    def test_write_cmplx(self, random_patch, tmp_path, **kwargs):
+        """Test write function for non-int and non-float values.
+        if should fail and return:
+        ValueError("Data format is not integer or floating.").
+        """
+        complex_patch = random_patch.dft("time")
+        spool = dc.spool(complex_patch)
+        path = tmp_path / "test_hdrcmplx.rsf"
+        with pytest.raises(ValueError):
+            RSFV1().write(spool, path)

@@ -60,14 +60,20 @@ class RSFV1(FiberIO):
         axis_names = patch.dims
         axis_units = [patch.get_coord(x).units.units for x in patch.dims]
 
-        ## we are casting to float32 to ensure that esize=4 for m8r
-        data = patch.data.astype(np.float32)
+        data = patch.data
         dtype = np.dtype(data.dtype)
-        file_esize = dtype.itemsize
 
         if np.issubdtype(dtype, np.integer):
+            ## we are casting to float32 to ensure that esize=4 for m8r
+            data = patch.data.astype(np.float32)
+            dtype = np.dtype(data.dtype)
+            file_esize = dtype.itemsize
             file_formt = 'data_format="native_float"'
         elif np.issubdtype(dtype, np.floating):
+            ## we are casting to float32 to ensure that esize=4 for m8r
+            data = patch.data.astype(np.float32)
+            dtype = np.dtype(data.dtype)
+            file_esize = dtype.itemsize
             file_formt = 'data_format="native_float"'
         else:
             raise ValueError("Data format is not integer or floating.")
