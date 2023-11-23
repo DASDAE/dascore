@@ -8,9 +8,9 @@ own.
 
 # Basic
 
-[Plotting channel number](plotting_channel_number.qmd)
+[Parallel processing](parallelization.qmd)
 
-[Parallelization using MPI](parallelization_using_mpi.qmd)
+[Plotting channel number](plotting_channel_number.qmd)
 
 # Contributing
 
