@@ -170,6 +170,13 @@ def random_patch() -> Patch:
     return get_example_patch("random_das")
 
 
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def random_dft_patch(random_patch) -> Patch:
+    """Return the random patch with dft applied."""
+    return random_patch.dft("time")
+
+
 @pytest.fixture(scope="class")
 @register_func(PATCH_FIXTURES)
 def random_patch_with_lat_lon(random_patch):
