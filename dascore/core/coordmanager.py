@@ -131,7 +131,7 @@ def _get_indexers_and_new_coords_dict(cm, kwargs, samples=False, relative=False)
     new_coords = dict(cm._get_dim_array_dict(keep_coord=True))
     for coord_name, limits in kwargs.items():
         # this is not a selectable coord, just skip.
-        if coord_name not in cm.coord_map:
+        if coord_name not in cm.coord_map or not len(cm.dim_map[coord_name]):
             continue
         coord = cm.coord_map[coord_name]
         _validate_select_coords(coord, coord_name)
