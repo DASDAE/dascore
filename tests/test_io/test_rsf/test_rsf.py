@@ -55,3 +55,23 @@ class TestRsfWrite:
         path = tmp_path / "test_hdrcmplx.rsf"
         with pytest.raises(ValueError):
             RSFV1().write(spool, path)
+
+    def test_write_int(self, random_patch, tmp_path, **kwargs):
+        """Test write function for int values.
+        if should return float values of the integer numbers.
+        """
+        data = np.ones_like(random_patch.data, dtype=np.int32)
+        int_patch = random_patch.new(data=data)
+        spool = dc.spool(int_patch)
+        path = tmp_path / "test_hdrint.rsf"
+        datapath = tmp_path / "binary/test_int.rsf"
+        RSFV1().write(spool, path, data_path=datapath)
+
+        assert path.exists()
+        newdatapath = Path(str(datapath) + "@")
+        assert newdatapath.exists()
+        test_data = data.astype(np.float32)
+        dtype = np.dtype(test_data.dtype)
+        file_esize = dtype.itemsize
+        datasize = test_data.size * file_esize
+        assert os.path.getsize(newdatapath) == datasize

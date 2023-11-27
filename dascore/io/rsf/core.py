@@ -63,20 +63,13 @@ class RSFV1(FiberIO):
         data = patch.data
         dtype = np.dtype(data.dtype)
 
-        if np.issubdtype(dtype, np.integer):
-            ## we are casting to float32 to ensure that esize=4 for m8r
-            data = patch.data.astype(np.float32)
-            dtype = np.dtype(data.dtype)
-            file_esize = dtype.itemsize
-            file_formt = 'data_format="native_float"'
-        elif np.issubdtype(dtype, np.floating):
-            ## we are casting to float32 to ensure that esize=4 for m8r
-            data = patch.data.astype(np.float32)
-            dtype = np.dtype(data.dtype)
-            file_esize = dtype.itemsize
-            file_formt = 'data_format="native_float"'
-        else:
+        if not (np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating)):
             raise ValueError("Data format is not integer or floating.")
+        ## we are casting to float32 to ensure that esize=4 for m8r
+        data = patch.data.astype(np.float32)
+        dtype = np.dtype(data.dtype)
+        file_esize = dtype.itemsize
+        file_formt = 'data_format="native_float"'
 
         data_bytes = data.astype(np.float32).tobytes()
 
