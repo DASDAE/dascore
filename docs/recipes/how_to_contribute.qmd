@@ -3,6 +3,7 @@ title: "How to Contribute?"
 ---
 
 On this page, we provide a step-by-step procedure on how you can start contributing to the DASCore package.
+
 # DASDAE developers
 
 ## Step 1: Install DASCore in development mode
