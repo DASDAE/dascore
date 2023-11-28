@@ -12,8 +12,8 @@ import dascore as dc
 
 # get the path to a random DAS file.
 patch = dc.get_example_patch()
-
-patch.io.write("test_out.rsf","rsf",data_path="test_out.rsf")
+spool = dc.spool(patch)
+spool.io.write("test_out.rsf","rsf",data_path="test_out.rsf")
 """
 
 from .core import RSFV1
