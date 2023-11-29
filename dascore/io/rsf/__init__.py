@@ -14,6 +14,7 @@ import dascore as dc
 patch = dc.get_example_patch()
 spool = dc.spool(patch)
 spool.io.write("test_out.rsf","rsf",data_path="test_out.rsf")
+
 """
 
 from .core import RSFV1
