@@ -16,7 +16,7 @@ jobs:
         uses: conda-incubator/setup-miniconda@v2
         with:
           miniconda-version: 'latest'
-          python-version: "3.10"
+          python-version: "3.11"
           activate-environment: dascore
           environment-file: environment.yml
           condarc-file: .github/test_condarc.yml

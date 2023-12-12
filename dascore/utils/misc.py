@@ -14,11 +14,16 @@ from functools import cache
 from types import ModuleType
 
 import numpy as np
+import pandas as pd
 from scipy.linalg import solve
 from scipy.special import factorial
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependency, ParameterError
+from dascore.exceptions import (
+    FilterValueError,
+    MissingOptionalDependency,
+    ParameterError,
+)
 from dascore.utils.progress import track
 
 
@@ -601,3 +606,42 @@ def sanitize_range_param(select) -> tuple:
     # swap out ellipses for None so downstream funcs dont have to
     select = tuple(None if x is ... else x for x in select)
     return select
+
+
+def check_filter_kwargs(kwargs):
+    """Check filter kwargs and return dim name and filter range."""
+    if len(kwargs) != 1:
+        msg = "pass filter requires you specify one dimension and filter range."
+        raise FilterValueError(msg)
+    dim = next(iter(kwargs.keys()))
+    filt_range = kwargs[dim]
+    # strip out units if used.
+    mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
+    if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
+        msg = f"filter range must be a length two sequence not {filt_range}"
+        raise FilterValueError(msg)
+    if all([pd.isnull(x) for x in mags]):
+        msg = (
+            f"pass filter requires at least one filter limit, "
+            f"you passed {filt_range}"
+        )
+        raise FilterValueError(msg)
+
+    return dim, filt_range
+
+
+def check_filter_range(nyquist, low, high, filt_min, filt_max):
+    """Simple check on filter parameters."""
+    # ensure filter bounds are within nyquist
+    if low is not None and ((0 > low) or (low > 1)):
+        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_min}"
+        raise FilterValueError(msg)
+    if high is not None and ((0 > high) or (high > 1)):
+        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_max}"
+        raise FilterValueError(msg)
+    if high is not None and low is not None and high <= low:
+        msg = (
+            "Low filter param must be less than high filter param, you passed:"
+            f"filt_min = {filt_min}, filt_max = {filt_max}"
+        )
+        raise FilterValueError(msg)

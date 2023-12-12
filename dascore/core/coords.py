@@ -170,8 +170,20 @@ def _get_nullish_for_type(dtype):
     return np.NaN
 
 
-def _get_compatible_values(val, dtype):
-    """Get values compatible with dtype."""
+def get_compatible_values(val, dtype):
+    """
+    Get values compatible with dtype.
+
+    This will essentially perform any type conversions needed to go from
+    one dtype to another. It is useful for handling datetime conversions.
+
+    Parameters
+    ----------
+    val
+        The values to convert.
+    dtype
+        A numpy compatible datatype or string.
+    """
     validators = _get_coord_filter_validators(dtype)
     for func in validators:
         if val is not None:
@@ -396,7 +408,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 value = dc.to_timedelta64(value)
             value = self._get_relative_values(value)
         # apply validators. These can, eg, coerce to correct dtype.
-        out = _get_compatible_values(value, self.dtype)
+        out = get_compatible_values(value, self.dtype)
         return out
 
     def _slice_degenerate(self, sliz):
@@ -730,16 +742,16 @@ class CoordRange(BaseCoord):
         # after ensuring that the types are compatible.
         out = self
         if step is not None:
-            step = _get_compatible_values(step, type(self.step))
+            step = get_compatible_values(step, type(self.step))
             new_stop = out.start + step * len(out)
             out = out.new(stop=new_stop, step=step)
         if min is not None:
-            min = _get_compatible_values(min, self.dtype)
+            min = get_compatible_values(min, self.dtype)
             diff = min - out.start
             new_stop = out.stop + diff
             out = out.new(start=min, stop=new_stop)
         if max is not None:
-            max = _get_compatible_values(max, self.dtype)
+            max = get_compatible_values(max, self.dtype)
             translation = (max + out.step) - out.stop
             new_start = self.start + translation
             # we add step so the new range is inclusive of stop.

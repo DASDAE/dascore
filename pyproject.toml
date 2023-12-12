@@ -2,7 +2,7 @@
 # --- Build system configuration
 
 [build-system]
-requires = [ "setuptools>=41", "setuptools-scm", ]
+requires = [ "setuptools>=41", "setuptools-scm", "scikit-build"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools-git-versioning]
@@ -31,8 +31,6 @@ requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering",
 ]
 
@@ -106,6 +104,7 @@ TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
 TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
 TERRA15__V6 = "dascore.io.terra15.core:Terra15FormatterV6"
 SEGY__V2 = "dascore.io.segy.core:SegyV2"
+RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
 
 

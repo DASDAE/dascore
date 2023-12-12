@@ -19,7 +19,11 @@ A Huge thanks to all of our contributors:
 
 [Aaron Girard](https://github.com/aaronjgirard)
 
+[Ariel Lellouch](https://github.com/ariellellouch)
+
 [Manuel M. Mendoza](https:/github.com/SeisMatt)
+
+[Thomas Cullison](https:/github.com/code-cullison)
 
 You can find more contributor information
 [here](https://github.com/DASDAE/dascore/graphs/contributors)

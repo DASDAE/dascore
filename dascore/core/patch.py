@@ -237,6 +237,7 @@ class Patch:
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
     rolling = dascore.proc.rolling
+    whiten = dascore.proc.whiten
 
     # --- transformation functions
     differentiate = transform.differentiate
@@ -246,6 +247,7 @@ class Patch:
     integrate = transform.integrate
     spectrogram = transform.spectrogram
     velocity_to_strain_rate = transform.velocity_to_strain_rate
+    dispersion_phase_shift = transform.dispersion_phase_shift
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references

@@ -13,3 +13,4 @@ from .rolling import rolling
 from .select import select
 from .taper import taper
 from .units import convert_units, set_units, simplify_units
+from .whiten import whiten
