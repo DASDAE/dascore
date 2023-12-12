@@ -113,7 +113,10 @@ website:
       contents:
         - recipes/overview.qmd
 
-        - text: Plotting channel number 
+        - text: Parallelization
+          href: recipes/parallelization.qmd
+
+        - text: Plotting channel number
           href: recipes/plotting_channel_number.qmd
 
         - text: How to Contribute?

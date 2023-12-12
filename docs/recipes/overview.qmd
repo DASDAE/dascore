@@ -8,6 +8,8 @@ own.
 
 # Basic
 
+[Parallel processing](parallelization.qmd)
+
 [Plotting channel number](plotting_channel_number.qmd)
 
 # Contributing
