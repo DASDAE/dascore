@@ -9,4 +9,3 @@ RUN apt autoremove && apt autoclean
 RUN rm Miniconda3-latest-Linux-x86_64.sh
 ENV PATH="/opt/miniconda3/bin:$PATH"
 RUN conda install dascore -c conda-forge
-

@@ -441,19 +441,15 @@ def patch_to_df(patch: PatchType) -> pd.DataFrame:
     assert (
         len(dims) == 2
     ), "Patch must have exactly 2 dimensions to convert to dataframe"
-
     # get arrays with dimensional values
     index_values = patch.get_coord(dims[0]).values
     col_values = patch.get_coord(dims[1]).values
-
     # create dataframe
     df = pd.DataFrame(patch.data, index=index_values, columns=col_values)
-
     # assign index names and attrs
     df.attrs = patch.attrs.model_dump()
     df.index.name = dims[0]
     df.columns.name = dims[1]
-
     return df
 
 
@@ -463,44 +459,33 @@ def df_to_patch(
     """
     Convert a dataframe to a patch.
 
+    Dimension names are either taken as the names of the index and columns or
+    they must be provided in the attrs argument.
+
     Parameters
     ----------
     df
         The input dataframe to convert to a patch
-
     attrs
-        [PatchAttrs | Mapping] (optoinal).
-
-    Notes
-    -----
-    - if attrs=None:
-        dims[0] = df.index.name
-        dims[1] = df.columns.name
-        coords values for dims[0] = df.index.to_numpy()
-        coords values for dims[1] = df.columns.to_numpy()
-        data = df.to_numpy()
-    - else:
-        data = df.to_numpy()
-        coords and dims are constructed from attrs
+        Extra attributes to attach to the patch.
     """
-    # patch
-    patch = None
+
+    def _get_column_names(df, attrs):
+        """Get columns names from dataframe or index."""
+        dims = (df.index.name, df.columns.name)
+        invalid_df_dims = any(x is None or x == "" for x in dims)
+        if attrs is not None and invalid_df_dims:
+            dims = attrs.get("dims", (None, None))
+        if any(x is None or x == "" for x in dims):
+            msg = (
+                "Dimension names not found. Both columns and index must have "
+                "a name or attrs must specify dimensions."
+            )
+            raise ValueError(msg)
+        return dims
 
     # get data
     data = df.to_numpy()
-
-    if attrs is None:
-        # get dims
-        dims = []
-        dims.append(df.index.name)
-        dims.append(df.columns.name)
-
-        # get coordinate arrays
-        coords = {dims[0]: df.index.to_numpy(), dims[1]: df.columns.to_numpy()}
-
-        patch = dc.Patch(data=data, coords=coords, dims=dims)
-
-    else:
-        patch = dc.Patch(data=data, attrs=attrs)
-
-    return patch
+    dims = _get_column_names(df, attrs)
+    coords = {dims[0]: df.index.to_numpy(), dims[1]: df.columns.to_numpy()}
+    return dc.Patch(data=data, dims=dims, coords=coords, attrs=attrs)
