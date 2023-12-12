@@ -159,7 +159,6 @@ def whiten(
         comp_nsamp = nsamp
 
     freqs = nft.rfftfreq(comp_nsamp, d=dsamp)
-    print(freqs)
     df = freqs[1] - freqs[0]
     nf = np.size(freqs)
     fft_size = np.asarray(np.shape(patch.data))
