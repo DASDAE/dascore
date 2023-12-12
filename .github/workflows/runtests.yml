@@ -41,7 +41,7 @@ jobs:
                || startsWith(matrix.os, 'macos') && '/Users/runner/miniconda3/envs/dascore'
                || startsWith(matrix.os, 'windows') && 'C:\Miniconda3\envs\dascore' }}
       # set individual cache key (only the start of it)
-      cache_key: ${{ matrix.os }}-${{ runner.arch }}-py${{ matrix.python-version }}
+      cache_key: ${{ matrix.os }}-py${{ matrix.python-version }}
       # set conda environment file with dependencies
       env_file: "environment.yml"
 
@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ${{ env.prefix }}
-          key: ${{ env.cache_key }}-hash${{ hashFiles(env.env_file) }}-${{ steps.date.outputs.date }}-${{ env.CACHE_NUMBER }}
+          key: ${{ env.cache_key }}-${{ runner.arch }}-hash${{ hashFiles(env.env_file) }}-${{ steps.date.outputs.date }}-${{ env.CACHE_NUMBER }}
         id: cache
 
       - name: Update environment
