@@ -2,13 +2,30 @@
 from __future__ import annotations
 
 import numpy as np
-import scipy
 from scipy.fftpack import next_fast_len
 
+import dascore as dc
 from dascore.constants import PatchType
 from dascore.units import Quantity
 from dascore.utils.misc import broadcast_for_index
-from dascore.utils.patch import get_dim_value_from_kwargs, patch_function
+from dascore.utils.patch import (
+    _get_dx_or_spacing_and_axes,
+    get_dim_value_from_kwargs,
+    patch_function,
+)
+
+
+def _get_correlated_coord(old_coord, data_shape):
+    """Get the new coordinate which corresponds to correlated values."""
+    step = old_coord.step
+    one_sided_len = data_shape // 2
+    new = dc.core.get_coord(
+        start=-one_sided_len * step,
+        stop=(one_sided_len + 1) * step,
+        step=step,
+    )
+    assert len(new) == data_shape, "failed to create correlated coord"
+    return new
 
 
 @patch_function()
@@ -16,29 +33,36 @@ def correlate(
     patch: PatchType, lag: int | float | Quantity | None = None, samples=False, **kwargs
 ) -> PatchType:
     """
-    A function which takes the DAS data in time domain, calculates cross-correlation
-    (cc) in frequency domain, and returns the results back in time domain.
+    Correlate a single row/column in a 2D patch with every other row/column.
+
+    The This may be useful for interferometry workflows.
 
     Parameters
     ----------
     patch : PatchType
-        The input data patch to be cross-correlated.
+        The input data patch to be cross-correlated. Must be 2-dimensional.
     lag :
-        An optional argument to save trimmed cc results instead of full output.
+        An optional argument to save only certain lag times instead of full
+        output.
     samples : bool, optional (default = False)
-        {sample_explination}
+        If True, the argument specified in kwargs refers to the *sample* not
+        value along that axis. See examples for details.
     **kwargs
-        Additional arguments to specify cc dimension and the master source, to which
+        Additional arguments to specify cross correlation dimension and the
+        master source, to which
         we cross-correlate all other channels/time samples.
 
     Examples
     --------
     >>> import dascore as dc
+    >>> from dascore.units import m, s
+
     >>> patch = dc.get_example_patch()
 
     >>> # Example 1
     >>> # Calculate cc for all channels as receivers and
-    >>> # the 10 m channel as the master channel.
+    >>> # the 10 m channel as the master channel. The new patch has dimensions
+    >>> # (lag_time, distance)
     >>> cc_patch = patch.correlate(distance = 10 * m)
 
     >>> # Example 2
@@ -46,14 +70,26 @@ def correlate(
     >>> # the 10 m channel as the master channel.
     >>> cc_patch = patch.correlate(distance = 10 * m, lag = 2 * s)
 
+    >>> # Example 3
+    >>> # Use 2nd channel (python is 0 indexed) along distance as master channel
+    >>> cc_patch = patch.correlate(distance=1, samples=True)
+
     Notes
     -----
     The cross-correlation is performed in the frequency domain for efficiency
     reasons.
+
+    The output dimension is opposite of the one specified in kwargs, has
+    the units of float, and the string "lag_" prepended. For example, "lag_time".
     """
     assert len(patch.dims) == 2, "must be a 2D patch"
     dim, source_axis, source = get_dim_value_from_kwargs(patch, kwargs)
+    # get the axis and coord over which fft should be calculated.
     fft_axis = next(iter(set(range(len(patch.dims))) - {source_axis}))
+    fft_dim = patch.dims[fft_axis]
+    # ensure coordinate is evenly spaced
+    _get_dx_or_spacing_and_axes(patch, fft_dim, require_evenly_spaced=True)
+    fft_coord = patch.get_coord(fft_dim)
     # get the coordinate which contains the source
     coord_source = patch.get_coord(dim)
     index_source = coord_source.get_next_index(source, samples=samples)
@@ -71,71 +107,16 @@ def correlate(
     source_fft = fft[inds]
     # perform correlation in freq domain and transform back to time domain
     fft_prod = fft * np.conj(source_fft)
-    cor_array = ifft_func(fft_prod, axis=fft_axis, n=cx_len)
-    out = np.fft.fftshift(cor_array, axes=fft_axis)
+    # the n parameter needs to be odd so we have a 0 lag time. Hopefully this
+    # is right...
+    cor_array = ifft_func(fft_prod, axis=fft_axis, n=fast_len - 1)
+    corr_data = np.fft.fftshift(cor_array, axes=fft_axis)
     # get new coordinate along correlation dimension
-    # new = patch.new(data=out)
-
-    sampling_interval = patch.attrs["time_step"] / np.timedelta64(1, "s")
-
-    num_ch = len(patch.coords.get_array("distance"))
-    num_samples = len(patch.coords.get_array("time"))
-
-    # Make Patch to be in ("distance", "time")
-    patch_dist_time = patch.convert_units(distance="m").transpose("distance", "time")
-
-    # Do fft transfrom
-    # NEED TO MODIFY THE CODE TO WORK IN DISTANCE AXIS AS WELL
-    # MAYBE RFFT INSTEAD?
-    num_fft = int(scipy.fftpack.next_fast_len(int(num_samples)))
-    num_fft_half = num_fft // 2
-    fft_rec = scipy.fftpack.fft(patch_dist_time.data, num_fft, axis=source_axis)[
-        :, :num_fft_half
-    ]
-    fft_src = fft_rec[index_source]
-
-    # Convert all 2D arrays into 1D to speed up
-    corr = np.zeros(num_ch * num_fft, dtype=np.complex64)
-
-    # Reshape fft_src to be a 2D array with shape (1, -1)
-    fft_src_2d = fft_src[np.newaxis, :]
-
-    # Use broadcasting to multiply fft_src_2d with fft_rec
-    corr = fft_src_2d * fft_rec
-
-    # Remove the mean in freq domain (spike at t=0)
-    corr[:, :num_fft_half] -= np.mean(
-        corr[:, :num_fft_half], axis=source_axis, keepdims=True
+    new_coord = _get_correlated_coord(fft_coord, corr_data.shape[fft_axis])
+    coords = patch.coords.update_coords(**{fft_dim: new_coord}).rename_coord(
+        **{fft_dim: f"lag_{fft_dim}"}
     )
-
-    # Process the negative frequencies
-    corr[:, -(num_fft_half) + 1 :] = np.flip(
-        np.conj(corr[:, :num_fft_half]), axis=source_axis
-    )
-
-    # Set the zero-frequency component to zero
-    corr[:, 0] = complex(0, 0)
-
-    # Take the inverse FFT
-    inverse_fft_result = scipy.fftpack.ifft(corr, n=num_fft, axis=source_axis)
-
-    # Shift the zero-frequency component to the center
-    shifted_result = np.fft.ifftshift(inverse_fft_result)
-
-    # Extract the real part
-    corr_time_real = np.real(shifted_result)
-
-    # Pick data in the defined lag range
-    t = np.arange(-num_fft, num_fft) * sampling_interval
-    ind = np.where(np.abs(t) <= lag)[0]
-    corr_time_real = corr_time_real[:, ind]
-
-    # NEED TO DOUBLE-CHECK NEW_COORDS
-    if patch.dims == ("distance", "time"):
-        new_coords = patch_dist_time.coords.correlate(**{dim: int(lag)})
-        out = patch_dist_time.new(data=corr_time_real, coords=new_coords)
-    else:
-        new_coords = patch.coords.correlate(**{dim: int(lag)})
-        out = patch.new(data=corr_time_real.T, coords=new_coords)
-
+    out = dc.Patch(coords=coords, data=corr_data, attrs=patch.attrs)
+    if lag is not None:
+        out = out.select(**{f"lag_{fft_dim}": (-lag, +lag)})
     return out
