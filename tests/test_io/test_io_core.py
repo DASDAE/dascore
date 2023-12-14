@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import io
 from pathlib import Path
 from typing import TypeVar
 
@@ -61,11 +62,11 @@ class _FiberCaster(FiberIO):
 
     def read(self, resource: BinaryReader, **kwargs) -> SpoolType:
         """Just ensure read was cast to correct type."""
-        assert isinstance(resource, BinaryReader)
+        assert isinstance(resource, io.BufferedReader)
 
     def write(self, spool: SpoolType, resource: BinaryWriter):
         """Ditto for write."""
-        assert isinstance(resource, BinaryWriter)
+        assert isinstance(resource, io.BufferedWriter)
 
     def get_format(self, resource: Path) -> tuple[str, str] | bool:
         """And get format."""
@@ -74,7 +75,7 @@ class _FiberCaster(FiberIO):
 
     def scan(self, not_path: BinaryReader):
         """Ensure an off-name still works for type casting."""
-        assert isinstance(not_path, BinaryWriter)
+        assert isinstance(not_path, io.BufferedReader)
 
 
 class _FiberUnsupportedTypeHints(FiberIO):

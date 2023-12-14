@@ -11,6 +11,7 @@ import warnings
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from functools import cache
+from pathlib import Path
 from types import ModuleType
 
 import numpy as np
@@ -322,6 +323,15 @@ def _get_stencil_weights(array, ref_point, order):
     return weights.flatten()
 
 
+def _maybe_make_parent_directory(path):
+    """Maybe make parent directories."""
+    path = Path(path)
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return
+
+
 def get_stencil_coefs(order, derivative=2):
     """Get centered coefficients for a derivative of specified order and derivative."""
     dx = np.arange(-order, order + 1)
@@ -350,6 +360,16 @@ def maybe_get_attrs(obj, attr_map: Mapping):
         if hasattr(obj, old_name):
             value = getattr(obj, old_name)
             out[new_name] = unbyte(value)
+    return out
+
+
+def maybe_get_items(obj, attr_map: Mapping):
+    """Maybe get items from a mapping (if they exist)."""
+    out = {}
+    for old_name, new_name in attr_map.items():
+        if not (value := obj.get(old_name, None)):
+            continue
+        out[new_name] = unbyte(value)
     return out
 
 

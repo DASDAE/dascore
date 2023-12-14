@@ -16,16 +16,22 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 import tables
+from h5py import File as H5pyFile
 from packaging.version import parse as get_version
 from pandas.io.common import stringify_path
 from tables import ClosedNodeError
+from tables import File as PyTablesFile
 
 import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, max_lens
 from dascore.exceptions import InvalidFileHandler, InvalidIndexVersionError
 from dascore.io.core import PatchFileSummary
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import cached_method, suppress_warnings
+from dascore.utils.misc import (
+    _maybe_make_parent_directory,
+    cached_method,
+    suppress_warnings,
+)
 from dascore.utils.pd import (
     _remove_base_path,
     fill_defaults_from_pydantic,
@@ -404,3 +410,47 @@ class HDFPatchIndexManager:
         except (OSError, IndexError, ValueError, KeyError, AttributeError):
             out = None
         return out
+
+
+class PyTablesReader(PyTablesFile):
+    """A thin wrapper around pytables File object for reading."""
+
+    mode = "r"
+    constructor = PyTablesFile
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get the File object from various sources."""
+        if isinstance(resource, cls | PyTablesFile):
+            return resource
+        try:
+            _maybe_make_parent_directory(resource)
+            return cls.constructor(resource, mode=cls.mode)
+        except TypeError:
+            msg = f"Couldn't get handle from {resource} using {cls}"
+            raise NotImplementedError(msg)
+
+
+class PyTablesWriter(PyTablesReader):
+    """A thin wrapper around pytables File object for writing."""
+
+    mode = "a"
+
+
+class H5Reader(PyTablesReader):
+    """A thin wrapper around h5py for reading files."""
+
+    mode = "r"
+    constructor = H5pyFile
+
+
+class H5Writer(H5Reader):
+    """A thin wrapper around h5py for writing files."""
+
+    mode = "a"
+
+
+# These are left here for backward compatibility, but should not be
+# used in new code.
+HDF5Writer = PyTablesWriter
+HDF5Reader = PyTablesReader

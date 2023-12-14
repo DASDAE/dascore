@@ -105,22 +105,26 @@ It is very important that the `scan` method returns *exactly* the same patch inf
 
 ## Support for Streams/Buffers
 
-Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of a `pytables.File` object. There are a few reasons for this:
+Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of a `pytables.File` or `h5py.File` object. There are a few reasons for this:
 
 * More types of inputs can be supported, including steaming file contents from the web or in-memory streams like [`BytesIO`](https://docs.python.org/3/library/io.html#io.BytesIO).
-* It is usually more efficient since open-file handles can be automatically reused by DASCore.
+* It is usually more efficient since open-file handles can be automatically reused.
 
-To make this easy, DASCore will automatically manage and serve the right input to `FiberIO` methods based on type hints. Here are the ones currently supported, all of which are imported from [dascore.io](`dascore.io`) :
+To make this easy, DASCore will automatically manage and serve the right input to `FiberIO` methods based on type hints. Here are the ones currently supported, all of which are imported from [dascore.io](`dascore.io`):
 
 1. [BinaryReader](`dascore.io.BinaryReader`) - A stream-like object which must have a `read` and `seek` method.
 
 2. [BinaryWriter](`dascore.io.BinaryWriter`) - A stream-like object which must have a `write` method.
 
-3. [HDF5Reader](`dascore.io.HDF5Reader`) - An instance of pytables.File which is open in read mode.
+3. [H5Reader](`dascore.io.H5Reader`) - An instance of `h5py.File` which is open in read mode.
 
-4. [HDF5Writer](`dascore.io.HDF5Writer`) - An instance of pytables.File which is open in write or append (append is default) mode.
+4. [H5Writer](`dascore.io.H5Writer`) - An instance of `h5py.File` which is open in append mode.
 
-Deciding which to use depends on whether the file is an HDF5-based or binary format.
+5. [PyTablesReader](`dascore.io.PyTablesReader`) - An instance of `pytables.File` which is open in read mode.
+
+6. [PyTablesWriter](`dascore.io.PyTablesWriter`) - An instance of `pytables.File` which is open in append mode.
+
+Deciding which to use depends on whether the file is an HDF5-based or binary format, and which hdf5 library you want to use.
 
 :::{.callout-note}
 If a type hint other than the ones listed above is given to the relevant parameter (path, or resource in these examples) it will have no effect.

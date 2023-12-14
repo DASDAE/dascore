@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
-from dascore.io import FiberIO, HDF5Reader
+from dascore.io import FiberIO
+from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
     _get_terra15_version_str,
@@ -20,7 +21,7 @@ class Terra15FormatterV4(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "4"
 
-    def get_format(self, resource: HDF5Reader) -> tuple[str, str] | bool:
+    def get_format(self, resource: H5Reader) -> tuple[str, str] | bool:
         """
         Return True if file contains terra15 version 2 data else False.
 
@@ -33,9 +34,9 @@ class Terra15FormatterV4(FiberIO):
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: HDF5Reader) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader) -> list[dc.PatchAttrs]:
         """Scan a terra15 v2 file, return summary information."""
-        version, data_node = _get_version_data_node(resource.root)
+        version, data_node = _get_version_data_node(resource)
         extras = {
             "path": resource.filename,
             "file_format": self.name,
@@ -45,7 +46,7 @@ class Terra15FormatterV4(FiberIO):
 
     def read(
         self,
-        resource: HDF5Reader,
+        resource: H5Reader,
         time: tuple[timeable_types, timeable_types] | None = None,
         distance: tuple[float, float] | None = None,
         snap_dims: bool = True,
@@ -67,7 +68,7 @@ class Terra15FormatterV4(FiberIO):
             This will cause some loss in precision but it is usually
             negligible.
         """
-        patch = _read_terra15(resource.root, time, distance, snap_dims=snap_dims)
+        patch = _read_terra15(resource, time, distance, snap_dims=snap_dims)
         return dc.spool(patch)
 
 
