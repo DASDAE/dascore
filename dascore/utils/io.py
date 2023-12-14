@@ -23,11 +23,14 @@ class BinaryReader(io.BytesIO):
     """Base file for binary things."""
 
     mode = "rb"
+    reset_offset = True
 
     @classmethod
     def get_handle(cls, resource):
         """Get the handle object from various sources."""
-        if isinstance(resource, cls | io.BufferedWriter):
+        if isinstance(resource, cls | io.BufferedIOBase):
+            if cls.reset_offset:
+                resource.seek(0)  # reset byte offset
             return resource
         try:
             _maybe_make_parent_directory(resource)
@@ -41,6 +44,7 @@ class BinaryWriter(BinaryReader):
     """Dummy class for streams which write binary."""
 
     mode = "ab"
+    reset_offset = False
 
 
 @cache
