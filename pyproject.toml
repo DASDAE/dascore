@@ -39,6 +39,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
+     "h5py",
      "matplotlib>=3.5",
      "numpy>=1.24",
      "packaging",
