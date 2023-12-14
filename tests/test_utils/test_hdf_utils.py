@@ -9,7 +9,7 @@ import tables
 
 import dascore as dc
 from dascore.exceptions import InvalidFileHandler
-from dascore.utils.hdf5 import HDFPatchIndexManager, open_hdf5_file
+from dascore.utils.hdf5 import HDFPatchIndexManager, PyTablesReader, open_hdf5_file
 
 
 class TestGetHDF5Handlder:
@@ -106,3 +106,15 @@ class TestHDFPatchIndexManager:
         df.to_hdf(str(path), "df")
         # assert it doesn't have an index
         assert not HDFPatchIndexManager(path).has_index
+
+
+class TestHDFReaders:
+    """Tests for HDF5 readers."""
+
+    def test_get_handle(self, tmp_path_factory):
+        """Ensure we can get a handle with the class."""
+        path = tmp_path_factory.mktemp("hdf_handle_test")
+        handle = PyTablesReader.get_handle(path)
+        assert isinstance(handle, tables.File)
+        handle_2 = PyTablesReader.get_handle(handle)
+        assert isinstance(handle_2, tables.File)
