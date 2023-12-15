@@ -137,6 +137,8 @@ Assuming Jingle is a binary file format, here is an implementation which support
 """
 Core module for jingle file format support.
 """
+import io
+
 import dascore.exceptions
 from dascore.io import FiberIO, BinaryReader, BinaryWriter
 
@@ -154,7 +156,7 @@ class JingleV1(FiberIO):
         get_format now accepts a stream, which DASCore will ensure is provided.
         """
         # raise an error if we get the wrong type
-        assert isinstance(resource, BinaryReader)
+        assert isinstance(resource, io.BufferedReader)
         # read first 50 bytes (maybe they have header info)
         first_50_bytes = resource.read(50)
         # seek back to byte 20

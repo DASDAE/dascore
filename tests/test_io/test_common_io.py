@@ -111,8 +111,8 @@ def data_file_path(request):
     """A fixture of all data files. Will download if needed."""
     # TODO remove this segy skip once we support it.
     param = request.param
-    if param.endswith("sgy"):
-        pytest.skip("No segy support yet.")
+    if param.endswith("csv"):
+        pytest.skip("Not a DAS file.")
     return fetch(request.param)
 
 

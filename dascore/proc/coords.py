@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 
+import numpy as np
+import pandas as pd
+from scipy.interpolate import interp1d
 from typing_extensions import Self
 
 from dascore.constants import PatchType
@@ -194,3 +197,92 @@ def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
         raise ParameterError(msg)
     new_coord, data = self.coords.drop_coords(*coords, array=self.data)
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
+
+
+@patch_function(history="method_name")
+def coords_from_df(
+    self: PatchType,
+    dataframe: pd.DataFrame,
+    units: dict[str, str] | None = None,
+    extrapolate: bool = False,
+) -> PatchType:
+    """
+    Update non-dimensional coordinate of a patch using a dataframe.
+
+    Parameters
+    ----------
+    dataframe
+        Table with a column matching in title to one of patch.dims along with other
+        coordinates to associate with dimension. Example one column matching distance
+        axis and then latitude and longitude attached to the distances.
+    units
+        Dictionary mapping column name in dataframe to its units.
+    extrapolate
+        If True, extrapolate outside provided range in dataframe.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> import pandas as pd
+    >>> # get example patch and create example dataframe
+    >>> pa = dc.get_example_patch()
+    >>> distance = pa.coords.get_array("distance")[::10]
+    >>> df = pd.DataFrame(distance, columns=['distance'])
+    >>> df['x'] = df['distance'] * 3 + 10
+    >>> df['y'] = df['distance'] * 2.5 - 10
+    >>> # attach dataframe to patch, interpolating when needed. This
+    >>> # adds coordinates x and y which are associated with dimension distance.
+    >>> patch_with_coords = pa.coords_from_df(df)
+
+    Notes
+    -----
+    * Exactly one of the column names in the dataframe must map to one of
+      the patch.dims. This will either add new coordinates, or update existing
+      ones if they already exist.
+
+    * This function uess linear extrapolation between the nearest two points
+      to get values in patch coords that aren't in the dataframe.
+
+    """
+    # match dataframe headings to dims
+    anchor_dim = set(self.dims) & set(dataframe.columns)
+    if len(anchor_dim) != 1:
+        msg = "Exactly one column has to match with an existing dimension"
+        raise ParameterError(msg)
+
+    # Get coordinates of axis being updated
+    anchor_dim = next(iter(anchor_dim))
+    coords = self.coords
+    axis_coords = coords.get_array(anchor_dim)
+
+    # make a dictionary from coordinates("(axis, coordinate array)") as input to
+    # update_coords
+    # coordinate array is an interpolation to match existing coords being updated
+    new_coords = {}
+
+    for coord in set(dataframe.columns) - {anchor_dim}:
+        if extrapolate:
+            f = interp1d(
+                pd.to_numeric(dataframe[anchor_dim]),
+                pd.to_numeric(dataframe[coord]),
+                fill_value="extrapolate",
+            )
+            new_coords[coord] = (anchor_dim, f(axis_coords))
+        else:
+            new_coords[coord] = (
+                anchor_dim,
+                np.interp(
+                    axis_coords,
+                    pd.to_numeric(dataframe[anchor_dim]),
+                    pd.to_numeric(dataframe[coord]),
+                    left=float("nan"),
+                    right=float("nan"),
+                ),
+            )
+
+    out = self.update_coords.func(self, **new_coords)
+
+    if units is not None:
+        out = out.convert_units.func(out, **units)
+
+    return out
