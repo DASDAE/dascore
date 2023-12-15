@@ -10,10 +10,10 @@ import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.utils.pd import (
     adjust_segments,
-    df_to_patch,
+    dataframe_to_patch,
     fill_defaults_from_pydantic,
     filter_df,
-    patch_to_df,
+    patch_to_dataframe,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -21,7 +21,7 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 @pytest.fixture()
 def random_df_from_patch(random_patch):
     """A dataframe created from random patch."""
-    return patch_to_df(random_patch)
+    return patch_to_dataframe(random_patch)
 
 
 @pytest.fixture
@@ -263,7 +263,7 @@ class TestPatchToDF:
 
     def test_simple_to_df(self, random_patch):
         """Another helpful docstring."""
-        df = patch_to_df(random_patch)
+        df = patch_to_dataframe(random_patch)
         # assert the data match original data, the column/index ...
         # values match coordinate value
         assert np.all(np.equal(df.values, random_patch.data))
@@ -288,7 +288,7 @@ class TestDFtoPatch:
     def test_simple_to_patch(self, random_df_from_patch):
         """Test conversion from pandas.DataFrame to patch, simplest case."""
         df = random_df_from_patch
-        patch = df_to_patch(df)
+        patch = dataframe_to_patch(df)
         # first check dimensions came through
         dims = (df.index.name, df.columns.name)
         assert patch.dims == dims
@@ -301,22 +301,22 @@ class TestDFtoPatch:
     def test_attrs_as_dict(self, random_df_from_patch):
         """Test passing attributes as a dictionary get included in Patch attrs."""
         attrs = {"station": "Filler"}
-        patch = df_to_patch(random_df_from_patch, attrs=attrs)
+        patch = dataframe_to_patch(random_df_from_patch, attrs=attrs)
         assert patch.attrs.station == attrs["station"]
 
     def test_attrs_as_model(self, random_df_from_patch):
         """Ensure passing attributes as a model get included in Patch."""
         attrs = dc.PatchAttrs(**{"station": "Filler"})
-        patch = df_to_patch(random_df_from_patch, attrs=attrs)
+        patch = dataframe_to_patch(random_df_from_patch, attrs=attrs)
         assert patch.attrs.station == attrs.station
 
     def test_no_dims_on_df_raise(self, random_df_no_dims):
         """Ensure when no dims exist an Error is raised."""
         with pytest.raises(ValueError, match="Dimension names not found"):
-            df_to_patch(random_df_no_dims)
+            dataframe_to_patch(random_df_no_dims)
 
     def test_dims_on_attrs(self, random_df_no_dims):
         """Ensure dims can be passed on attrs."""
         attrs = {"dims": ("time", "distance")}
-        patch = df_to_patch(random_df_no_dims, attrs=attrs)
+        patch = dataframe_to_patch(random_df_no_dims, attrs=attrs)
         assert patch.dims == ("time", "distance")

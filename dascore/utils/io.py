@@ -8,7 +8,15 @@ from inspect import isfunction, ismethod
 from pathlib import Path
 from typing import Any, get_type_hints
 
-from dascore.utils.misc import _maybe_make_parent_directory, cached_method
+import numpy as np
+
+import dascore as dc
+from dascore.constants import PatchType
+from dascore.utils.misc import (
+    _maybe_make_parent_directory,
+    cached_method,
+    optional_import,
+)
 
 HANDLE_FUNCTIONS = {
     str: lambda x: str(x),
@@ -124,3 +132,113 @@ class IOResourceManager:
 
     def __del__(self):
         self.close_all()
+
+
+def patch_to_xarray(patch: PatchType):
+    """Return a data array with patch contents."""
+    xr = optional_import("xarray")
+    attrs = dict(patch.attrs)
+    dims = patch.dims
+    coords = patch.coords._get_dim_array_dict()
+    return xr.DataArray(patch.data, attrs=attrs, dims=dims, coords=coords)
+
+
+def xarray_to_patch(data_array) -> PatchType:
+    """Convert an xarray dataarray to a patch."""
+    # this cant work if xarray isn't installed. This ensures it is.
+    _ = optional_import("xarray")
+
+    params = dict(
+        coords={i: (x.dims, x.values) for i, x in data_array.coords.items()},
+        attrs=dict(data_array.attrs.items()),
+        dims=data_array.dims,
+        data=data_array.data,
+    )
+    return dc.Patch(**params)
+
+
+def patch_to_obspy(patch: PatchType):
+    """
+    Convert a patch to an ObsPy Stream.
+
+    The patch must have a dimension named time.
+
+    Parameters
+    ----------
+    patch
+        The input patch object.
+    """
+    obspy = optional_import("obspy")
+
+    def _check_patch(patch):
+        """Ensure the patch can be converted to a stream else raise."""
+        is_2d = len(patch.dims) == 2
+        has_time = "time" in patch.dims
+        if not has_time and is_2d:
+            msg = "Can only convert 2d patches with a time dimension to stream."
+            raise ValueError(msg)
+
+    def _get_time_stats(patch):
+        """Get stats dict with time values."""
+        coord = patch.get_coord("time")
+        time_stats = {
+            "starttime": obspy.UTCDateTime(str(coord.min())),
+            "endtime": obspy.UTCDateTime(str(coord.max())),
+            "sampling_rate": np.timedelta64(1, "s") / coord.step,
+        }
+        return time_stats
+
+    _check_patch(patch)
+    # ensure time is last axis
+    patch = patch.transpose(..., "time")
+    other_dim = next(iter(set(patch.dims) - {"time"}))
+    other_vals = patch.coords.get_array(other_dim)
+    base_stats = _get_time_stats(patch)
+
+    traces = []
+    for data, other_val in zip(patch.data, other_vals):
+        stats = patch.attrs.model_dump()
+        stats.pop("coords")
+        stats.update(base_stats)
+        stats[other_dim] = other_val
+        trace = obspy.Trace(data=data, header=stats)
+        traces.append(trace)
+    return obspy.Stream(traces)
+
+
+def obspy_to_patch(stream, dim="distance") -> PatchType:
+    """
+    Convert an obspy stream to a patch.
+
+    Each trace must have some common value in its stats dict which can be used
+    to create a new dimension.
+    """
+
+    def _get_attrs(tr):
+        """Get stats from one of the traces."""
+        # these are mainly obspy-specific things.
+        to_remove = {"starttime", "endtime", "sampling_rate", "delta", "npts", "calib"}
+        attrs = {i: v for i, v in tr.stats.items() if i not in to_remove}
+        return attrs
+
+    if not len(stream):
+        return dc.Patch()
+    data = []
+    new_dim = []
+    for tr in stream:
+        data.append(tr.data)
+        new_dim.append(tr.stats[dim])
+
+    dims = (dim, "time")
+    coords = {
+        dim: ((dim,), np.array(new_dim)),
+        "time": (("time",), dc.to_datetime64(tr.times("timestamp"))),
+    }
+    attrs = _get_attrs(tr)
+    patch = dc.Patch(
+        data=np.stack(data),
+        dims=dims,
+        attrs=attrs,
+        coords=coords,
+    )
+    return patch

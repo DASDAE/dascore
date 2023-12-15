@@ -422,7 +422,7 @@ def _remove_overlaps(df, name):
     return df.assign(**{min_name: corrected_starts})
 
 
-def patch_to_df(patch: PatchType) -> pd.DataFrame:
+def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
     """
     Convert a patch to a dataframe.
 
@@ -453,7 +453,7 @@ def patch_to_df(patch: PatchType) -> pd.DataFrame:
     return df
 
 
-def df_to_patch(
+def dataframe_to_patch(
     df: pd.DataFrame, attrs: PatchAttrs | Mapping | None = None
 ) -> PatchType:
     """
