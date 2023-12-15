@@ -561,11 +561,12 @@ class MemorySpool(DataFrameSpool):
     def __rich__(self):
         base = super().__rich__()
         df = self._df
-        t1, t2 = df["time_min"].min(), df["time_max"].max()
-        tmin = get_nice_text(t1)
-        tmax = get_nice_text(t2)
-        duration = get_nice_text(t2 - t1)
-        base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
+        if len(df):
+            t1, t2 = df["time_min"].min(), df["time_max"].max()
+            tmin = get_nice_text(t1)
+            tmax = get_nice_text(t2)
+            duration = get_nice_text(t2 - t1)
+            base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
         return base
 
     def _load_patch(self, kwargs) -> Self:

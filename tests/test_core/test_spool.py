@@ -52,6 +52,12 @@ class TestSpoolBasics:
         """Ensure updating the spool doesnt change equality."""
         assert random_spool == random_spool.update()
 
+    def test_empty_spool_str(self):
+        """Ensure and empty spool has a string rep. See #295."""
+        spool = dc.spool([])
+        spool_str = str(spool)
+        assert "Spool" in spool_str
+
 
 class TestSpoolEquals:
     """Tests for spool equality."""
