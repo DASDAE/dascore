@@ -22,12 +22,12 @@ class ProdMLPatchAttrs(dc.PatchAttrs):
     schema_version: UTF8Str = ""
 
 
-class CF1_7(FiberIO):
-    """IO Support for CF version 1.7."""
+class DASHDF5(FiberIO):
+    """IO Support for DASHDF5 which uses CF version 1.7."""
 
-    name = "CF"
+    name = "DASHDF5"
     preferred_extensions = ("hdf5", "h5")
-    version = "1.7"
+    version = "1.0"
 
     def get_format(self, resource: H5Reader) -> tuple[str, str] | bool:
         """

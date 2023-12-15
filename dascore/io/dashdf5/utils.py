@@ -17,13 +17,15 @@ _CRS_MAPPING = {"epsg_code": "epsg_code"}
 
 
 def _get_cf_version_str(hdf_fi) -> str | bool:
-    """Return the version string for cf files."""
+    """Return the version string for dashdf5 files."""
     conventions = hdf_fi.attrs.get("Conventions", [])
     cf_str = [x for x in conventions if x.startswith("CF-")]
+    das_hdf_str = [x for x in conventions if x.startswith("DAS-HDF5")]
+    has_req_groups = _REQUIRED_GROUPS.issubset(set(hdf_fi))
     # if CF convention not found or not all
-    if len(cf_str) == 0 or not _REQUIRED_GROUPS.issubset(set(hdf_fi)):
+    if len(cf_str) == 0 or len(das_hdf_str) == 0 or not has_req_groups:
         return False
-    return cf_str[0].replace("CF-", "")
+    return das_hdf_str[0].replace("DAS-HDF5-", "")
 
 
 def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
