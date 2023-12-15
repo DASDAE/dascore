@@ -34,6 +34,31 @@ def _get_ax(ax):
 
 def _get_extents(dims_r, coords):
     """Get the extents used for each dimension."""
+
+    def _convert_datetimes(coords, lims):
+        """Convert numpy datetimes to matplotlib style datettimes."""
+        time_dims = [
+            i for i, v in coords.items() if np.issubdtype(v.dtype, np.datetime64)
+        ]
+        for name in time_dims:
+            # We can get a warning about loss of precision in ns, doesn't matter.
+            with suppress_warnings(UserWarning):
+                time_min = pd.to_datetime(lims[name][0]).to_pydatetime()
+                time_max = pd.to_datetime(lims[name][1]).to_pydatetime()
+            # convert to julian date to appease matplotlib
+            lims[name] = [mdates.date2num(time_min), mdates.date2num(time_max)]
+
+    def _convert_timedeltas(coords, lims):
+        timedelta_dims = [
+            i for i, v in coords.items() if np.issubdtype(v.dtype, np.timedelta64)
+        ]
+        for name in timedelta_dims:
+            # We can get a warning about loss of precision in ns, doesn't matter.\
+            low, high = lims[name]
+            onesec = np.timedelta64(1, "s")
+            # convert to julian date to appease matplotlib
+            lims[name] = [low / onesec, high / onesec]
+
     # need to reverse dims since extent is [left, right, bottom, top]
     # and we want first dim to go from top to bottom
     lims = {x: [] for x in dims_r}
@@ -41,14 +66,8 @@ def _get_extents(dims_r, coords):
         array = coords[dim]
         lims[dim] += [array.min(), array.max()]
     # find datetime coords and convert to numpy mtimes
-    time_dims = [i for i, v in coords.items() if np.issubdtype(v.dtype, np.datetime64)]
-    for name in time_dims:
-        # We can get a warning about loss of precision in ns, doesn't matter.
-        with suppress_warnings(UserWarning):
-            time_min = pd.to_datetime(lims[name][0]).to_pydatetime()
-            time_max = pd.to_datetime(lims[name][1]).to_pydatetime()
-        # convert to julian date to appease matplotlib
-        lims[name] = [mdates.date2num(time_min), mdates.date2num(time_max)]
+    _convert_datetimes(coords, lims)
+    _convert_timedeltas(coords, lims)
     out = [x for dim in dims_r for x in lims[dim]]
     return out
 

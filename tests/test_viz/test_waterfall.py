@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.utils.time import is_datetime64
+from dascore.utils.time import is_datetime64, to_timedelta64
 
 
 def check_label_units(patch, ax):
@@ -54,6 +54,13 @@ def patch_two_times(random_patch):
 
 class TestWaterfall:
     """Tests for waterfall plot."""
+
+    @pytest.fixture()
+    def timedelta_patch(self, random_patch):
+        """Make a patch with one dimension dtype of timedelta64."""
+        old_coord = random_patch.get_coord("time")
+        new_time = to_timedelta64(np.arange(len(old_coord)))
+        return random_patch.update_coords(time=new_time)
 
     def test_returns_axes(self, random_patch):
         """Call waterfall plot, return."""
@@ -138,6 +145,12 @@ class TestWaterfall:
         )
         ax = patch.viz.waterfall()
         check_label_units(patch, ax)
+
+    def test_timedelta_axis(self, timedelta_patch):
+        """Ensure plot works when one axis has timedleta dtype. See #309."""
+        # if this doesnt raise it probably works ;)
+        ax = timedelta_patch.viz.waterfall()
+        assert ax is not None
 
     def test_show(self, random_patch, monkeypatch):
         """Ensure show path is callable."""
