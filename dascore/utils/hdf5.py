@@ -184,6 +184,8 @@ class HDFPatchIndexManager:
     # The minimum version of dascore required to read this index. If an older
     # version is used an error will be raised.
     _min_version = "0.0.13"
+    # max number of retries for closed node files
+    _max_retries = 10
 
     def __init__(self, path, namespace=""):
         super().__init__()
@@ -258,7 +260,7 @@ class HDFPatchIndexManager:
                 # Sometimes in concurrent updates the nodes need time to open/close
                 # so we implement a simply "wait and retry" strategy.
                 # This is a bit wonky but we have found it to work well in practice.
-                if fail_counts > 10:
+                if fail_counts > self._max_retries:
                     raise e
                 time.sleep(0.1)
                 return _get_index(where, fail_counts=fail_counts + 1, **kwargs)
