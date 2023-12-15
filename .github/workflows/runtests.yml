@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ${{ env.prefix }}
-          key: ${{ env.cache_key }}-hash${{ hashFiles(env.env_file) }}-${{ steps.date.outputs.date }}-${{ env.CACHE_NUMBER }}
+          key: ${{ env.cache_key }}-${{ runner.arch }}-hash${{ hashFiles(env.env_file) }}-${{ steps.date.outputs.date }}-${{ env.CACHE_NUMBER }}
         id: cache
 
       - name: Update environment
@@ -94,6 +94,13 @@ jobs:
         run: |
           conda info -a
           conda list
+
+      # Re-install pytables to avoid issues mentioned in #312
+      - name: re-install pytables
+        shell: bash -l {0}
+        if: matrix.os == 'macos-latest'
+        run: |
+          python -m pip install --upgrade --no-deps --force-reinstall tables
 
       # Runs test suite and calculates coverage
       - name: run test suite
