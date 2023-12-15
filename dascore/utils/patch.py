@@ -367,12 +367,13 @@ def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[dc.PatchAttrs
 
 
 def get_start_stop_step(patch: PatchType, dim):
-    """Convenience method for getting start, stop, step for a given dimension."""
+    """Convenience method for getting start, stop, step for a given coord."""
     assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"
-    start = patch.attrs[f"{dim}_min"]
-    end = patch.attrs[f"{dim}_max"]
-    step = patch.attrs[f"{dim}_step"]
-    return start, end, step
+    coord = patch.get_coord(dim)
+    start = coord.min()
+    stop = coord.max()
+    step = coord.step
+    return start, stop, step
 
 
 def get_default_patch_name(patch):
