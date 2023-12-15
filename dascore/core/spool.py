@@ -13,7 +13,6 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-import dascore.io
 from dascore.constants import (
     ExecutorType,
     PatchType,
@@ -602,7 +601,7 @@ def _spool_from_str(path, **kwargs):
     # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
-        formatter = dascore.io.FiberIO.manager.get_fiberio(_format, _version)
+        formatter = dc.io.FiberIO.manager.get_fiberio(_format, _version)
         if formatter.implements_scan:
             from dascore.clients.filespool import FileSpool
 

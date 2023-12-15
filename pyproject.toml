@@ -39,6 +39,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
+     "h5py",
      "matplotlib>=3.5",
      "numpy>=1.24",
      "packaging",
@@ -95,7 +96,8 @@ dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore[extras]"]
 
 [project.entry-points."dascore.fiber_io"]
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
-H5SIMPLE__V1 = "dascore.io.h5simple.core:H5Simple"
+DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
+H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
 PICKLE = "dascore.io.pickle.core:PickleIO"
 PRODML__V2_0 = "dascore.io.prodml.core:ProdMLV2_0"
 PRODML__V2_1 = "dascore.io.prodml.core:ProdMLV2_1"

@@ -15,7 +15,6 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
-from dascore.io import PatchIO
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
@@ -268,6 +267,6 @@ class Patch:
         return self
 
     @property
-    def io(self) -> PatchIO:
+    def io(self) -> dc.io.PatchIO:
         """Return a patch IO object for saving patches to various formats."""
-        return PatchIO(self)
+        return dc.io.PatchIO(self)

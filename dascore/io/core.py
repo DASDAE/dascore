@@ -611,7 +611,7 @@ def scan(
                 file_format_, file_version_ = file_format, file_version
             formatter = FiberIO.manager.get_fiberio(file_format_, file_version_)
             req_type = getattr(formatter.scan, "_required_type", None)
-            # this will get an open file handle to past to get_resource
+            # this will get an open file handle to pass to get_resource
             patch_thing = man.get_resource(req_type)
             for attr in formatter.scan(patch_thing, _pre_cast=True):
                 out.append(dc.PatchAttrs.from_dict(attr))
