@@ -187,6 +187,7 @@ class Patch:
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
     drop_coords = dascore.proc.drop_coords
+    coords_from_df = dascore.proc.coords_from_df
 
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords."""

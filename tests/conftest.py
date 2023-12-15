@@ -8,6 +8,7 @@ from pathlib import Path
 
 import matplotlib
 import numpy as np
+import pandas as pd
 import pytest
 import tables as tb
 import tables.parameters
@@ -129,6 +130,14 @@ def prodml_v2_1_example_path():
 def idas_h5_example_path():
     """Return the path to the example terra15 file."""
     out = fetch("iDAS005_hdf5_example.626.h5")
+    assert out.exists()
+    return out
+
+
+@pytest.fixture(scope="session")
+def brady_hs_DAS_DTS_coords_path():
+    """Return the path to the brady Hotspot DAS/DTS coords file."""
+    out = fetch("brady_hs_DAS_DTS_coords.csv")
     assert out.exists()
     return out
 
@@ -453,3 +462,13 @@ def dummy_text_file(tmp_path_factory):
     path = parent / "hello.txt"
     path.write_text("Clearly not a hdf5 file. Or is it?")
     return path
+
+
+@pytest.fixture(scope="session")
+def brady_hs_DAS_DTS_coords():
+    """Return a pandas dataframe with X,Y,Z coordinates."""
+    path = fetch("brady_hs_DAS_DTS_coords.csv")
+    coord_table = pd.read_csv(path)
+    coord_table = coord_table.iloc[51:]
+    coord_table = coord_table.astype(float)
+    return coord_table
