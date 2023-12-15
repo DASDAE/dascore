@@ -100,7 +100,7 @@ jobs:
         shell: bash -l {0}
         if: matrix.os == 'macos-latest'
         run: |
-          python -m pip install --upgrade --no-deps --force-reinstall tables
+          python -m pip install --upgrade --force-reinstall tables
 
       # Runs test suite and calculates coverage
       - name: run test suite
