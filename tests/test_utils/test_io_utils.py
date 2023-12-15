@@ -7,11 +7,10 @@ from pathlib import Path
 import pytest
 from tables import File
 
+from dascore.utils.hdf5 import HDF5Reader, HDF5Writer
 from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
-    HDF5Reader,
-    HDF5Writer,
     IOResourceManager,
     get_handle_from_resource,
 )

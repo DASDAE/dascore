@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.io import FiberIO, HDF5Reader
+from dascore.io import FiberIO
+from dascore.utils.hdf5 import PyTablesReader
 
 from .utils import _get_attrs_coords_and_data, _is_h5simple, _maybe_trim_data
 
@@ -15,13 +16,13 @@ class H5Simple(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(self, resource: HDF5Reader) -> tuple[str, str] | bool:
+    def get_format(self, resource: PyTablesReader) -> tuple[str, str] | bool:
         """Determine if is simple h5 format."""
         if _is_h5simple(resource):
             return self.name, self.version
         return False
 
-    def read(self, resource: HDF5Reader, snap=True, **kwargs) -> SpoolType:
+    def read(self, resource: PyTablesReader, snap=True, **kwargs) -> SpoolType:
         """
         Read a simple h5 file.
 
@@ -39,7 +40,7 @@ class H5Simple(FiberIO):
         patch = dc.Patch(coords=new_cm, data=new_data[:], attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, resource: HDF5Reader, snap=True) -> list[dc.PatchAttrs]:
+    def scan(self, resource: PyTablesReader, snap=True) -> list[dc.PatchAttrs]:
         """Get the attributes of a h5simple file."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
         attrs["coords"] = cm.to_summary_dict()

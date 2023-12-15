@@ -1,6 +1,7 @@
 """Tests for reading/writing pickles."""
 from __future__ import annotations
 
+import pickle
 from io import BytesIO
 
 import pytest
@@ -60,6 +61,17 @@ class TestGetFormat:
         fio = PickleIO()
         bio.seek(0)
         assert not fio.get_format(bio)
+
+    def test_bytes_io_valid_pickle(self, random_patch):
+        """Test a valid pickle in bytes io."""
+        fio = PickleIO()
+        bio = BytesIO()
+        pickle.dump(random_patch, bio)
+        bio.seek(0)
+        fmt = fio.get_format(bio)
+        assert "PICKLE" in fmt
+        spool = fio.read(bio)
+        assert spool[0] == random_patch
 
 
 class TestScan:

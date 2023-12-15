@@ -4,7 +4,7 @@ from __future__ import annotations
 import fnmatch
 import os
 from collections import defaultdict
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from functools import cache
 
 import numpy as np
@@ -12,6 +12,8 @@ import pandas as pd
 from pydantic import BaseModel
 
 import dascore as dc
+from dascore.constants import PatchType
+from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
@@ -418,3 +420,72 @@ def _remove_overlaps(df, name):
     # wrap around in roll gives wrong start value, correct it.
     corrected_starts[0] = start[0]
     return df.assign(**{min_name: corrected_starts})
+
+
+def patch_to_df(patch: PatchType) -> pd.DataFrame:
+    """
+    Convert a patch to a dataframe.
+
+    Parameters
+    ----------
+    patch
+        The input patch to convert.
+
+    Notes
+    -----
+    - Patch attributes are attached to the experimental dataframe attribute
+      called "attrs" as a dictionary
+    """
+    dims = patch.dims
+    # ensure a 2D patch is passed
+    assert (
+        len(dims) == 2
+    ), "Patch must have exactly 2 dimensions to convert to dataframe"
+    # get arrays with dimensional values
+    index_values = patch.get_coord(dims[0]).values
+    col_values = patch.get_coord(dims[1]).values
+    # create dataframe
+    df = pd.DataFrame(patch.data, index=index_values, columns=col_values)
+    # assign index names and attrs
+    df.attrs = patch.attrs.model_dump()
+    df.index.name = dims[0]
+    df.columns.name = dims[1]
+    return df
+
+
+def df_to_patch(
+    df: pd.DataFrame, attrs: PatchAttrs | Mapping | None = None
+) -> PatchType:
+    """
+    Convert a dataframe to a patch.
+
+    Dimension names are either taken as the names of the index and columns or
+    they must be provided in the attrs argument.
+
+    Parameters
+    ----------
+    df
+        The input dataframe to convert to a patch
+    attrs
+        Extra attributes to attach to the patch.
+    """
+
+    def _get_column_names(df, attrs):
+        """Get columns names from dataframe or index."""
+        dims = (df.index.name, df.columns.name)
+        invalid_df_dims = any(x is None or x == "" for x in dims)
+        if attrs is not None and invalid_df_dims:
+            dims = attrs.get("dims", (None, None))
+        if any(x is None or x == "" for x in dims):
+            msg = (
+                "Dimension names not found. Both columns and index must have "
+                "a name or attrs must specify dimensions."
+            )
+            raise ValueError(msg)
+        return dims
+
+    # get data
+    data = df.to_numpy()
+    dims = _get_column_names(df, attrs)
+    coords = {dims[0]: df.index.to_numpy(), dims[1]: df.columns.to_numpy()}
+    return dc.Patch(data=data, dims=dims, coords=coords, attrs=attrs)

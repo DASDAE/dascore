@@ -13,7 +13,6 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-import dascore.io
 from dascore.constants import (
     ExecutorType,
     PatchType,
@@ -561,11 +560,12 @@ class MemorySpool(DataFrameSpool):
     def __rich__(self):
         base = super().__rich__()
         df = self._df
-        t1, t2 = df["time_min"].min(), df["time_max"].max()
-        tmin = get_nice_text(t1)
-        tmax = get_nice_text(t2)
-        duration = get_nice_text(t2 - t1)
-        base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
+        if len(df):
+            t1, t2 = df["time_min"].min(), df["time_max"].max()
+            tmin = get_nice_text(t1)
+            tmax = get_nice_text(t2)
+            duration = get_nice_text(t2 - t1)
+            base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
         return base
 
     def _load_patch(self, kwargs) -> Self:
@@ -601,7 +601,7 @@ def _spool_from_str(path, **kwargs):
     # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
-        formatter = dascore.io.FiberIO.manager.get_fiberio(_format, _version)
+        formatter = dc.io.FiberIO.manager.get_fiberio(_format, _version)
         if formatter.implements_scan:
             from dascore.clients.filespool import FileSpool
 

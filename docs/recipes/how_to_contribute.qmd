@@ -3,6 +3,7 @@ title: "How to Contribute?"
 ---
 
 On this page, we provide a step-by-step procedure on how you can start contributing to the DASCore package.
+
 # DASDAE developers
 
 ## Step 1: Install DASCore in development mode
@@ -76,7 +77,7 @@ git commit -m "your commit"
 git push origin branch_name
 ```
 
-## Step 3: Create a Pull Request 
+## Step 3: Create a Pull Request
 Navigate to the DASCore repository on GitHub, and you should see a notification about your recent push. Click the "Compare & pull request" button to create a new pull request.
 
 
@@ -108,7 +109,7 @@ git remote -v
 
 You should see the original repository as `upstream` and your fork as `origin`.
 
-Then, create a new branch and start making changes to the repository. 
+Then, create a new branch and start making changes to the repository.
 
 ## Step 4: Create a new branch to work on
 
@@ -152,6 +153,6 @@ git commit -m "your commit"
 git push origin branch_name
 ```
 
-## Step 5: Create a Pull Request 
+## Step 5: Create a Pull Request
 
 Navigate to your project's GitHub repository, for instance, https://github.com/<your_username>/dascore, and click "Contribute" and then "Open a pull request". Then, create a pull request and provide a detailed title and description for your changes, explaining the rationale behind your pull request.

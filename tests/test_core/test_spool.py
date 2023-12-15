@@ -52,6 +52,12 @@ class TestSpoolBasics:
         """Ensure updating the spool doesnt change equality."""
         assert random_spool == random_spool.update()
 
+    def test_empty_spool_str(self):
+        """Ensure and empty spool has a string rep. See #295."""
+        spool = dc.spool([])
+        spool_str = str(spool)
+        assert "Spool" in spool_str
+
 
 class TestSpoolEquals:
     """Tests for spool equality."""
@@ -491,3 +497,9 @@ class TestMisc:
         """Ensure a nice message is raised for nonexistent paths. See #126."""
         with pytest.raises(InvalidSpoolError, match="may not exist"):
             dc.spool("Bad/file/path.h5")
+
+    def test_dft_patch_access(self, random_dft_patch):
+        """Ensure a dft patch can be retrieved from as spool. See #303."""
+        spool = dc.spool(random_dft_patch)
+        patch = spool[0]
+        assert isinstance(patch, dc.Patch)

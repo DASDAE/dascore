@@ -268,6 +268,16 @@ class TestMisc:
         with pytest.warns(DeprecationWarning):
             from dascore.core.schema import PatchAttrs  # noqa
 
+    def test_get_attrs_non_dim_coordinates(self, random_patch_with_lat_lon):
+        """
+        Ensure only dims show up in dims even when coord manager has many
+        coordinates.
+        """
+        patch = random_patch_with_lat_lon
+        cm = patch.coords
+        attrs = dc.PatchAttrs(coords=cm)
+        assert attrs.dim_tuple == cm.dims
+
 
 class TestUpdateAttrs:
     """Tests for updating attributes."""

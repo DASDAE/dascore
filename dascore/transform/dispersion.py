@@ -32,8 +32,8 @@ def dispersion_phase_shift(
         Approximated frequency (Hz) resolution for the output. If left empty,
         the frequency resolution is dictated by the number of samples.
     approx_freq
-        Either None, in which case 0 and the nyquest frequency are used, or a
-        custom range (freq_min, freq_max) in Hz.
+        Minimum and maximum frequency to compute dispersion for, in Hz
+        If left empty, minimum is 0 Hz, and maximum is Nyquist
 
     Notes
     -----
@@ -50,6 +50,7 @@ def dispersion_phase_shift(
 
     Example
     --------
+    ```{python}
     import dascore as dc
     import numpy as np
 
@@ -63,6 +64,7 @@ def dispersion_phase_shift(
     ax.set_xlim(5, 70)
     ax.set_ylim(1500, 100)
     disp_patch.viz.waterfall(show=True, ax=ax)
+    ```
     """
     patch_cop = patch.convert_units(distance="m").transpose("distance", "time")
     dist = patch_cop.coords.get_array("distance")

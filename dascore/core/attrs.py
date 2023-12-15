@@ -69,6 +69,9 @@ def _get_coords_dict(data_dict, fields):
     coord_info, new_attrs = separate_coord_info(
         data_dict, dims, required=("min", "max")
     )
+    if "dims" not in new_attrs and dims is not None:
+        new_attrs["dims"] = dims
+
     new_attrs["coords"] = {i: dc.core.CoordSummary(**v) for i, v in coord_info.items()}
     return new_attrs
 
