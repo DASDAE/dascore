@@ -89,77 +89,90 @@ class TestDropCoords:
 
 
 class TestCoordsFromDf:
-    """Tests for attaching coordinate(s) to a dimension."""
+    """Tests for attaching coordinate(s) to a patch."""
 
-    def test_no_extrapolte(self, random_patch, brady_hs_DAS_DTS_coords):
-        """Ensure when out of range, we can use nans when extrapolate is False."""
-        df_select = brady_hs_DAS_DTS_coords[
-            brady_hs_DAS_DTS_coords["distance"] % 5 == 0
-        ]
-        brady_hs_DAS_DTS_coords = df_select[df_select["distance"] < 250]
-        out = random_patch.coords_from_df(df_select)
+    def get_line_func(self, df, x_col, y_col):
+        """Get a function which predicts value of y based on x."""
+        assert len(df) == 2
+        x1, x2 = df[x_col].min(), df[x_col].max()
+        y1, y2 = df[y_col].min(), df[y_col].max()
+        slope = (y2 - y1) / (x2 - x1)
+        intercept = y1 - x1 * slope
 
+        def _func(x):
+            return x * slope + intercept
+
+        return _func
+
+    @pytest.fixture()
+    def coord_df(self, brady_hs_DAS_DTS_coords, random_patch):
+        """Get a coordinate dataframe that is compatible with random_patch."""
+        dist_max = random_patch.coords.max("distance")
+        df = (
+            brady_hs_DAS_DTS_coords.rename(columns={"Channel": "distance"})
+            .sample(frac=1 / 5)
+            .loc[lambda x: x["distance"] <= dist_max]
+            .sort_values("distance")
+            .reset_index(drop=True)
+        )
+        return df
+
+    def test_interpolation_no_extrapolate(self, random_patch, coord_df):
+        """Ensure interpolated values follow expected line without extrapolation."""
+        # get a dataframe with only two points and interpolate.
+        sub_df = coord_df.iloc[[0, -1]]
+        out = random_patch.coords_from_df(sub_df, extrapolate=False)
+        dist = out.coords.get_array("distance")
+        for col in set(sub_df.columns[1:]) - set(out.dims):
+            vals = out.coords.get_array(col)
+            expected = self.get_line_func(sub_df, "distance", col)(dist)
+            close = np.isclose(vals, expected)
+            nan = np.isnan(vals)
+            assert np.all(close | nan)
+
+    def test_interpolation_with_extrapolate(self, random_patch, coord_df):
+        """Ensure interpolated values follow expected line with extrapolation."""
+        # get a dataframe with only two points and interpolate.
+        sub_df = coord_df.iloc[[0, -1]]
+        out = random_patch.coords_from_df(sub_df, extrapolate=True)
+        dist = out.coords.get_array("distance")
+        for col in set(sub_df.columns[1:]) - set(out.dims):
+            vals = out.coords.get_array(col)
+            expected = self.get_line_func(sub_df, "distance", col)(dist)
+            assert np.allclose(vals, expected)
+
+    def test_no_extrapolate(self, random_patch, coord_df):
+        """Ensure when out of range, we use nans when extrapolate is False."""
+        out = random_patch.coords_from_df(coord_df, extrapolate=False)
         coords = out.coords
-        X = coords.get_array("X")
-        Y = coords.get_array("Y")
-        Z = coords.get_array("Z")
         dist = coords.get_array("distance")
+        df_dist = coord_df["distance"]
+        # iterate each new coord and ensure out of bound values are NaN
+        # but in bound are not.
+        in_dist = (dist <= df_dist.max()) & (dist >= df_dist.min())
+        for name in set(coord_df.columns) - set(random_patch.dims):
+            vals = out.coords.get_array(name)
+            assert np.all(np.isnan(vals[~in_dist]))
+            assert np.all(~np.isnan(vals[in_dist]))
 
-        assert (
-            max((X[30:-50] - brady_hs_DAS_DTS_coords["X"][: len(dist) - 80]) / X[30])
-            < 0.01
-        )
-        assert (
-            max((Y[30:-50] - brady_hs_DAS_DTS_coords["Y"][: len(dist) - 80]) / Y[30])
-            < 0.01
-        )
-        assert (
-            max((Z[30:-50] - brady_hs_DAS_DTS_coords["Z"][: len(dist) - 80]) / Z[30])
-            < 0.01
-        )
-        assert np.all(np.isnan(X[:30])) and np.all(np.isnan(X[-50:]))
-        assert np.all(np.isnan(Y[:30])) and np.all(np.isnan(Y[-50:]))
-        assert np.all(np.isnan(Z[:30])) and np.all(np.isnan(Z[-50:]))
-
-    def test_extrapolate(self, random_patch, brady_hs_DAS_DTS_coords):
+    def test_extrapolate(self, random_patch, coord_df):
         """Ensure we can extrapolate outside coordinate range."""
-        df_select = brady_hs_DAS_DTS_coords[
-            brady_hs_DAS_DTS_coords["distance"] % 5 == 0
-        ]
-        brady_hs_DAS_DTS_coords = df_select[df_select["distance"] < 250]
-        out = random_patch.coords_from_df(df_select, extrapolate=True)
+        out = random_patch.coords_from_df(coord_df, extrapolate=True)
+        # All values should be filled in when extrapolating.
+        for name in set(coord_df.columns) - set(random_patch.dims):
+            vals = out.coords.get_array(name)
+            assert np.all(~np.isnan(vals))
 
-        coords = out.coords
-        X = coords.get_array("X")
-        Y = coords.get_array("Y")
-        Z = coords.get_array("Z")
-        dist = coords.get_array("distance")
+    def test_units(self, random_patch, coord_df):
+        """Test passing in unit dictionary."""
+        units = {x: "m" for x in coord_df.columns[1:]}
+        out = random_patch.coords_from_df(coord_df, units=units, extrapolate=True)
+        for char in "XYZ":
+            coord = out.get_coord(char)
+            assert coord.units == get_quantity("m")
 
-        assert (
-            max((X[30:] - brady_hs_DAS_DTS_coords["X"][: len(dist) - 30]) / X[30])
-            < 0.01
-        )
-        assert (
-            max((Y[30:] - brady_hs_DAS_DTS_coords["Y"][: len(dist) - 30]) / Y[30])
-            < 0.01
-        )
-        assert (
-            max((Z[30:] - brady_hs_DAS_DTS_coords["Z"][: len(dist) - 30]) / Z[30])
-            < 0.01
-        )
-
-    def test_units(self, random_patch, brady_hs_DAS_DTS_coords):
-        """Ensure we can extrapolate outside coordinate range."""
-        units = {}
-        for a in brady_hs_DAS_DTS_coords.columns[1:]:
-            units[a] = "m"
-
-        df_select = brady_hs_DAS_DTS_coords[
-            brady_hs_DAS_DTS_coords["distance"] % 5 == 0
-        ]
-        brady_hs_DAS_DTS_coords = df_select[df_select["distance"] < 250]
-        out = random_patch.coords_from_df(df_select, units=units, extrapolate=True)
-
-        assert out.get_coord("X").units == get_quantity("m")
-        assert out.get_coord("Y").units == get_quantity("m")
-        assert out.get_coord("Z").units == get_quantity("m")
+    def test_no_dim_column_raises(self, random_patch, coord_df):
+        """Ensure when no columns overlap with coords an error is raised."""
+        bad_df = coord_df.drop(columns="distance")
+        with pytest.raises(ParameterError, match="Exactly one column"):
+            random_patch.coords_from_df(bad_df)

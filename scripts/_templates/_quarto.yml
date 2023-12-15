@@ -125,6 +125,9 @@ website:
         - text: Contributing to Documentation
           href: recipes/contributing_to_documentation.qmd
 
+        - text: Adding coordinates from a dataframe
+          href: recipes/add_spatial_coordinates_to_patch.qmd
+
     - id: contributing
       title: "Contributing"
       contents:
