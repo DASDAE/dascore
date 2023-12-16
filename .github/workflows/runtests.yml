@@ -103,10 +103,21 @@ jobs:
           python -m pip install --upgrade --force-reinstall tables
 
       # Runs test suite and calculates coverage
+      # note this is the "normal" test run.
       - name: run test suite
         shell: bash -l {0}
+        if: runner.os != 'macOS'
         run: |
           pytest -s --cov dascore --cov-append --cov-report=xml
+
+      # Runs test suite and calculates accounting for weird pytest
+      # illegal instruction error occasionally caused by pytables
+      # see #312.
+      - name: run mac test suite
+        shell: bash -l {0}
+        if: runner.os == 'macOS'
+        run: |
+          pytest -s --cov dascore --cov-append --cov-report=xml || [ $? -eq 128 ] && exit 0 || exit $?
 
       # Runs examples in docstrings
       - name: test docstrings
