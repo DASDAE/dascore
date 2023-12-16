@@ -8,6 +8,7 @@ import pytest
 from tables import File
 
 import dascore as dc
+from dascore.exceptions import PatchConversionError
 from dascore.utils.hdf5 import HDF5Reader, HDF5Writer
 from dascore.utils.io import (
     BinaryReader,
@@ -191,3 +192,19 @@ class TestObsPy:
         """Ensure we can convert back to patch from stream."""
         out = dc.io.obspy_to_patch(stream_from_patch)
         assert isinstance(out, dc.Patch)
+
+    def test_patch_no_time_raises(self, random_patch):
+        """Ensure a patch without time dimension raises."""
+        pytest.importorskip("obspy")
+        patch = random_patch.rename_coords(time="not_time")
+        with pytest.raises(PatchConversionError):
+            patch.io.to_obspy()
+
+    def test_bad_stream_raises(self):
+        """Ensure a stream without even length or require param raises."""
+        obspy = pytest.importorskip("obspy")
+        st = obspy.read()
+        # since st doesn't have a value of "distance" in each of its traces
+        # attrs dict this should raise.
+        with pytest.raises(PatchConversionError):
+            dc.io.obspy_to_patch(st)

@@ -12,6 +12,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     cached_method,
@@ -176,7 +177,7 @@ def patch_to_obspy(patch: PatchType):
         has_time = "time" in patch.dims
         if not has_time and is_2d:
             msg = "Can only convert 2d patches with a time dimension to stream."
-            raise ValueError(msg)
+            raise PatchConversionError(msg)
 
     def _get_time_stats(patch):
         """Get stats dict with time values."""
@@ -211,8 +212,26 @@ def obspy_to_patch(stream, dim="distance") -> PatchType:
     Convert an obspy stream to a patch.
 
     Each trace must have some common value in its stats dict which can be used
-    to create a new dimension.
+    to create a new dimension. Also, each trace must have the same data length.
+
+    Parameters
+    ----------
+    stream
+        The input ObsPy Stream object.
+    dim
+        The new dimension whose data is contained in the stats dict.
     """
+
+    def _check_stream(stream):
+        """Run simple checks on stream."""
+        equal_len_data = len({len(x.data) for x in stream}) == 1
+        has_dim = all([dim in x.stats for x in stream])
+        if not (equal_len_data and has_dim):
+            msg = (
+                "Cannot convert stream without specified value in all stats "
+                f"dicts {dim} or with traces of different lengths to a Patch"
+            )
+            raise PatchConversionError(msg)
 
     def _get_attrs(tr):
         """Get stats from one of the traces."""
@@ -223,6 +242,8 @@ def obspy_to_patch(stream, dim="distance") -> PatchType:
 
     if not len(stream):
         return dc.Patch()
+
+    _check_stream(stream)
     data = []
     new_dim = []
     for tr in stream:
