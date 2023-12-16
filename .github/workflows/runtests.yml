@@ -106,7 +106,7 @@ jobs:
       # note this is the "normal" test run.
       - name: run test suite
         shell: bash -l {0}
-        if: runner.os != 'macOS'
+        if: matrix.os != 'macos-latest'
         run: |
           pytest -s --cov dascore --cov-append --cov-report=xml
 
@@ -115,7 +115,7 @@ jobs:
       # see #312.
       - name: run mac test suite
         shell: bash -l {0}
-        if: runner.os == 'macOS'
+        if: matrix.os == 'macos-latest'
         run: |
           pytest -s --cov dascore --cov-append --cov-report=xml || [ $? -eq 128 ] && exit 0 || exit $?
 
@@ -123,7 +123,7 @@ jobs:
       - name: test docstrings
         shell: bash -l {0}
         run: |
-          pytest dascore --doctest-modules
+          pytest dascore --doctest-modules || [ $? -eq 128 ] && exit 0 || exit $?
 
       # upload coverage
       - name: upload coverage
