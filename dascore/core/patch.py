@@ -10,6 +10,7 @@ from typing_extensions import Self
 
 import dascore as dc
 import dascore.proc.coords
+import dascore.utils.io
 from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
@@ -177,7 +178,6 @@ class Patch:
     update_attrs = dascore.proc.update_attrs
     assert_has_coords = dascore.proc.assert_has_coords
     get_coord = dascore.proc.get_coord
-    to_xarray = dascore.proc.to_xarray
     pipe = dascore.proc.pipe
     set_dims = dascore.proc.set_dims
     squeeze = dascore.proc.squeeze

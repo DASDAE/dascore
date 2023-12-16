@@ -1,0 +1,54 @@
+---
+title: Patch Conversions
+execute:
+  warning: false
+---
+
+Although DASCore provides a lot of the functionality needed for DFOS processing, is not intended to do absolutely everything, and some other libraries might be better suited for a particular task. In addition to making it simple to access the underlying data as shown in the [patch tutorial](../tutorial/patch.qmd), DASCore provides convenience functions to convert data to formats used by other libraries. Here are a few examples:
+
+
+## [Pandas](https://pandas.pydata.org/)
+
+```python
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# convert to a dataframe
+df = patch.io.to_dataframe()
+
+# convert a dataframe to a patch
+patch_from_df = dc.io.dataframe_to_patch(df)
+```
+
+## [Xarray](https://docs.xarray.dev/)
+
+```python
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# convert to xarray's DataArray
+dar = patch.io.to_xarray()
+
+# convert a DataArray to a patch
+patch_from_dar = dc.io.xarray_to_patch(dar)
+```
+
+## [ObsPy](https://docs.obspy.org/)
+
+```python
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# convert the patch to an ObsPy Stream
+stream = patch.io.to_obspy()
+
+# convert an ObsPy Stream to a patch
+patch_from_dar = dc.io.obspy_to_patch(stream)
+```
+
+:::{.callout-note}
+As explained in the [`obspy_to_patch` docs](`dascore.utils.io.obspy_to_patch`), there must be a value in the stats dict which indicates values for a non-time dimension. For example, each trace might have a 'distance' key in its stats dict which DASCore uses to construct the distance dimensional coordinate.
+:::

@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from tables import File
 
+import dascore as dc
+from dascore.exceptions import PatchConversionError
 from dascore.utils.hdf5 import HDF5Reader, HDF5Writer
 from dascore.utils.io import (
     BinaryReader,
@@ -137,3 +139,79 @@ class TestIOResourceManager:
                 raise ValueError("Waaagh!")
         except ValueError:
             assert fi.closed
+
+
+class TestXarray:
+    """Tests for xarray conversions."""
+
+    @pytest.fixture
+    def data_array_from_patch(self, random_patch):
+        """Get a data array from a patch."""
+        pytest.importorskip("xarray")
+        return random_patch.io.to_xarray()
+
+    def test_convert_to_xarray(self, data_array_from_patch):
+        """Tests for converting to xarray object."""
+        import xarray as xr
+
+        assert isinstance(data_array_from_patch, xr.DataArray)
+
+    def test_convert_from_xarray(self, data_array_from_patch):
+        """Ensure xarray data arrays can be converted back."""
+        out = dc.utils.io.xarray_to_patch(data_array_from_patch)
+        assert isinstance(out, dc.Patch)
+
+    def test_round_trip(self, random_patch, data_array_from_patch):
+        """Converting to xarray should be lossless."""
+        out = dc.utils.io.xarray_to_patch(data_array_from_patch)
+        assert out == random_patch
+
+
+class TestObsPy:
+    """Tests for converting patches to/from ObsPy streams."""
+
+    @pytest.fixture
+    def short_patch(self, random_patch):
+        """Just shorten the patch distance dim to speed up these tests."""
+        return random_patch.select(distance=(0, 10), samples=True)
+
+    @pytest.fixture
+    def stream_from_patch(self, short_patch):
+        """Get a stream from a patch."""
+        pytest.importorskip("obspy")
+        st = short_patch.io.to_obspy()
+        return st
+
+    def test_convert_to_obspy(self, stream_from_patch):
+        """Ensure a patch can be converted to a stream."""
+        import obspy
+
+        assert isinstance(stream_from_patch, obspy.Stream)
+
+    def test_obspy_to_patch(self, stream_from_patch):
+        """Ensure we can convert back to patch from stream."""
+        out = dc.io.obspy_to_patch(stream_from_patch)
+        assert isinstance(out, dc.Patch)
+
+    def test_patch_no_time_raises(self, random_patch):
+        """Ensure a patch without time dimension raises."""
+        pytest.importorskip("obspy")
+        patch = random_patch.rename_coords(time="not_time")
+        with pytest.raises(PatchConversionError):
+            patch.io.to_obspy()
+
+    def test_bad_stream_raises(self):
+        """Ensure a stream without even length or require param raises."""
+        obspy = pytest.importorskip("obspy")
+        st = obspy.read()
+        # since st doesn't have a value of "distance" in each of its traces
+        # attrs dict this should raise.
+        with pytest.raises(PatchConversionError):
+            dc.io.obspy_to_patch(st)
+
+    def test_empty_stream(self):
+        """An empty Stream should return an empty Patch."""
+        obspy = pytest.importorskip("obspy")
+        st = obspy.Stream([])
+        patch = dc.io.obspy_to_patch(st)
+        assert not patch.dims

@@ -6,7 +6,7 @@ execute:
 
 This recipe shows a few strategies to parallelize "embarrassingly parallel" spool processing workflows.
 
-# Processes and threads
+# Processes and Threads
 [dascore.Spool.map](`dascore.BaseSpool.map`) is the easiest way to process patches in a spool in parallel. Here is an example using the Python standard library module [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html):
 
 ```{python}

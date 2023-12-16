@@ -488,18 +488,6 @@ class TestReleaseMemory:
         assert wr() is None
 
 
-class TestXarray:
-    """Tests for xarray conversions."""
-
-    def test_convert_to_xarray(self, random_patch):
-        """Tests for converting to xarray object."""
-        pytest.importorskip("xarray")
-        import xarray as xr
-
-        da = random_patch.to_xarray()
-        assert isinstance(da, xr.DataArray)
-
-
 class TestPipe:
     """Tests for piping Patch to other functions."""
 

@@ -59,6 +59,7 @@ dependencies = [
 extras = [
     "xarray",
     "findiff",
+    "obspy",
 ]
 
 docs = [

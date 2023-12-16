@@ -62,6 +62,10 @@ class PatchAttributeError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's attributes."""
 
 
+class PatchConversionError(ValueError, PatchError):
+    """Raised when a patch conversion to a different format fails."""
+
+
 class TimeError(ValueError, DASCoreError):
     """Raised when something is wrong with a time value."""
 
