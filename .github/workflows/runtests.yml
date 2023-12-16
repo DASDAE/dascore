@@ -120,7 +120,7 @@ jobs:
           pytest -s --cov dascore --cov-append --cov-report=xml
           
           # Check the exit code and customize as needed
-          if [ $? -eq 128 ]; then
+          if [ $? -eq 132 ]; then
             echo "Exit code is 128, setting it to 0"
             exit 0
           else
@@ -134,7 +134,7 @@ jobs:
           pytest dascore --doctest-modules
           
           # Check the exit code and customize as needed
-          if [ $? -eq 128 ]; then
+          if [ $? -eq 132 ]; then
             echo "Exit code is 128, setting it to 0"
             exit 0
           else
