@@ -12,9 +12,13 @@ on:
       - '**.py'
       - '.github/workflows/runtests.yml'
 
+permissions:
+  actions: 'write'
+
 env:
   # used to manually trigger cache reset. Just increment if needed.
   CACHE_NUMBER: 1
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 # Cancel previous runs when this one starts.
 concurrency:
@@ -78,7 +82,8 @@ jobs:
           python -m pytest -s --cov dascore --cov-append --cov-report=xml
           # Check the exit code is related to sporadic failures on mac, see #312
           if [ $? -eq 132 ]; then
-            echo "0" >> "$GITHUB_OUTPUT"
+            gh run cancel ${{ github.run_id }}
+            gh run watch ${{ github.run_id }}
           fi
 
       # Runs examples in docstrings
@@ -89,5 +94,5 @@ jobs:
           python -m pytest dascore --doctest-modules
           # Check the exit code is related to sporadic failures on mac, see #312
           if [ $? -eq 132 ]; then
-            echo "0" >> "$GITHUB_OUTPUT"
+            echo 0 >> "$GITHUB_OUTPUT"
           fi
