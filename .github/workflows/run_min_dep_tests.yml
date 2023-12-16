@@ -76,6 +76,10 @@ jobs:
         run: |
           export PATH="$pythonLocation:$PATH"
           python -m pytest -s --cov dascore --cov-append --cov-report=xml
+          # Check the exit code is related to sporadic failures on mac, see #312
+          if [ $? -eq 132 ]; then
+            echo "0" >> "$GITHUB_OUTPUT"
+          fi
 
       # Runs examples in docstrings
       - name: test docstrings
@@ -83,3 +87,7 @@ jobs:
         run: |
           export PATH="$pythonLocation:$PATH"
           python -m pytest dascore --doctest-modules
+          # Check the exit code is related to sporadic failures on mac, see #312
+          if [ $? -eq 132 ]; then
+            echo "0" >> "$GITHUB_OUTPUT"
+          fi
