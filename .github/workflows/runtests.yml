@@ -33,8 +33,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-latest] #  [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.10']  # , '3.11', "3.12"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.10', '3.11', "3.12"]
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
@@ -99,18 +99,17 @@ jobs:
           conda info -a
           conda list
 
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-
       # Runs test suite and calculates coverage
       - name: run test suite
         shell: bash -l {0}
         run: |
-          pytest -s --cov dascore --cov-append --cov-report=xml
+          pytest -s --cov dascore --cov-append --cov-report=xml || EXIT_CODE=$?
           # Check the exit code is related to sporadic failures on mac, see #312
-          if [ $? -eq 132 ]; then
+          if [ $EXIT_CODE -eq 132 ]; then
             gh run cancel ${{ github.run_id }}
             gh run watch ${{ github.run_id }}
+          elif [ $EXIT_CODE -ne 0 ]; then
+            exit $EXIT_CODE
           fi
 
       # Runs examples in docstrings

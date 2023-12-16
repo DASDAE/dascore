@@ -81,9 +81,11 @@ jobs:
           export PATH="$pythonLocation:$PATH"
           python -m pytest -s --cov dascore --cov-append --cov-report=xml
           # Check the exit code is related to sporadic failures on mac, see #312
-          if [ $? -eq 132 ]; then
+          if [ $EXIT_CODE -eq 132 ]; then
             gh run cancel ${{ github.run_id }}
             gh run watch ${{ github.run_id }}
+          elif [ $EXIT_CODE -ne 0 ]; then
+            exit $EXIT_CODE
           fi
 
       # Runs examples in docstrings
