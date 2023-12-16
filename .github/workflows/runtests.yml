@@ -117,13 +117,29 @@ jobs:
         shell: bash -l {0}
         if: matrix.os == 'macos-latest'
         run: |
-          pytest -s --cov dascore --cov-append --cov-report=xml || [ $? -eq 128 ] && exit 0 || exit $?
+          pytest -s --cov dascore --cov-append --cov-report=xml
+          
+          # Check the exit code and customize as needed
+          if [ $? -eq 128 ]; then
+            echo "Exit code is 128, setting it to 0"
+            exit 0
+          else
+            exit $?
+          fi
 
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
         run: |
-          pytest dascore --doctest-modules || [ $? -eq 128 ] && exit 0 || exit $?
+          pytest dascore --doctest-modules
+          
+          # Check the exit code and customize as needed
+          if [ $? -eq 128 ]; then
+            echo "Exit code is 128, setting it to 0"
+            exit 0
+          else
+            exit $?
+          fi
 
       # upload coverage
       - name: upload coverage
