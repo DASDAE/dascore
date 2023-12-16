@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pickle
+from functools import partial
 from io import BytesIO
 from typing import ClassVar
 
@@ -1153,6 +1154,79 @@ class TestGetSampleCount:
             evenly_sampled_coord.get_sample_count(1.2, samples=True)
         with pytest.raises(ParameterError, match=match):
             evenly_sampled_coord.get_sample_count("bob", samples=True)
+
+
+class TestGetNextIndex:
+    """Tests for finding the next index after a value."""
+
+    def test_samples(self, evenly_sampled_coord):
+        """Ensure samples argument allows samples to be passed in."""
+        coord = evenly_sampled_coord
+        assert coord.get_next_index(0, samples=True) == 0
+        assert coord.get_next_index(-1.0, samples=True) == len(coord) - 1
+        coord_len = len(coord)
+        with pytest.raises(ValueError, match="is out of bounds"):
+            coord.get_next_index(coord_len, samples=True)
+
+    def test_samples_time(self, evenly_sampled_date_coord):
+        """Ensure samples argument allows samples to be passed in."""
+        coord = evenly_sampled_date_coord
+        coord.get_next_index(0, samples=True)
+        assert coord.get_next_index(0, samples=True) == 0
+        assert coord.get_next_index(-1.0, samples=True) == len(coord) - 1
+
+    def test_out_of_bounds_raises(self, evenly_sampled_coord):
+        """Tests for out of bounds values raising exceptions."""
+        msg = "is out of bounds"
+        coord = evenly_sampled_coord
+        step = coord.step
+        max_value = coord.max()
+        min_value = coord.min()
+        # ensure out of bounds samples raises
+        with pytest.raises(ValueError, match=msg):
+            coord.get_next_index(len(coord) + 10, samples=True)
+        with pytest.raises(ValueError, match=msg):
+            coord.get_next_index(-len(coord) - 10, samples=True)
+        # ensure out of bounds values raises
+        with pytest.raises(ValueError, match=msg):
+            coord.get_next_index(min_value - step)
+        with pytest.raises(ValueError, match=msg):
+            coord.get_next_index(max_value + step)
+
+    def test_out_of_bounds_suppressed(self, evenly_sampled_coord):
+        """Tests for out of bounds values returning when specified."""
+        coord = evenly_sampled_coord
+        step = coord.step
+        max_value = coord.max()
+        min_value = coord.min()
+        func = partial(coord.get_next_index, allow_out_of_bounds=True)
+        assert func(len(coord) + 10, samples=True) == len(coord) - 1
+        assert func(-len(coord) - 10, samples=True) == 0
+        assert func(min_value - step) == min_value
+        assert func(max_value + step) == max_value
+
+    def test_exact_values(self, evenly_sampled_coord):
+        """Ensure using exact values contained in coord return index."""
+        coord = evenly_sampled_coord
+        for ind in [10, 1, 5]:
+            assert coord.get_next_index(ind) == ind
+
+    def test_between_values(self, evenly_sampled_coord):
+        """Ensure values between coordinate values also work."""
+        coord = evenly_sampled_coord
+        val1, step = coord[1], coord.step
+        ind1 = evenly_sampled_coord.get_next_index(val1 + step / 4)
+        ind2 = evenly_sampled_coord.get_next_index(val1 + step * 3 / 4)
+        assert ind1 == ind2 == 2
+
+    def test_units(self, evenly_sampled_float_coord_with_units):
+        """Ensure values with units work."""
+        coord = evenly_sampled_float_coord_with_units
+        val1 = 10 * get_quantity("m")
+        val2 = val1.to(get_quantity("ft"))
+        ind1 = coord.get_next_index(val1)
+        ind2 = coord.get_next_index(val2)
+        assert ind1 == ind2
 
 
 class TestIssues:

@@ -180,6 +180,69 @@ def _example_event_1():
     return dc.spool(path)[0]
 
 
+@register_func(EXAMPLE_PATCHES, key="ricker_moveout")
+def _ricker_moveout(
+    frequency=15,
+    peak_time=0.25,
+    duration=1.5,
+    time_step=0.002,
+    distance_step=10,
+    channel_count=10,
+    source_channel=0,
+    velocity=100,
+):
+    """
+    Return a patch which has a ricker wavelet. with moveout.
+
+    Parameters
+    ----------
+    frequency
+        The center frequency of the wavelet in Hz.
+    peak_time
+        The peak time of the first ricker wavelet in seconds.
+    duration
+        The total duration of the time coordinate in seconds.
+    time_step
+        The time dimension time step.
+    distance_step
+        The distance dimension sampling interval.
+    channel_count
+        The total number of channels (number of distance).
+    source_channel
+        The index of the source.
+    velocity
+        The aparent velocity in m/s.
+
+    Notes
+    -----
+    Based on https://github.com/lijunzh/ricker/
+    """
+
+    def _ricker(time, delay):
+        # shift time vector to account for different peak times.
+        new_time = time - delay
+        f = frequency
+        # get amplitude and exp term of ricker
+        const = 1 - 2 * np.pi**2 * f**2 * new_time**2
+        exp = np.exp(-np.pi**2 * f**2 * new_time**2)
+        return const * exp
+
+    time = np.arange(0, duration + time_step, time_step)
+    distance = np.arange(channel_count) * distance_step
+    assert source_channel < len(distance)
+    source_distance = distance[source_channel]
+    data = np.zeros((len(time), len(distance)))
+    # iterate each distance channel and update data
+    for ind, dist in enumerate(distance):
+        dist_to_source = np.abs(dist - source_distance)
+        time_delay = peak_time + (dist_to_source / velocity)
+        data[:, ind] = _ricker(time, time_delay)
+
+    coords = {"time": to_timedelta64(time), "distance": distance}
+    dims = ("time", "distance")
+    return dc.Patch(data=data, coords=coords, dims=dims)
+
+
 @register_func(EXAMPLE_SPOOLS, key="random_das")
 def _random_spool(
     time_gap=0, length=3, starttime=np.datetime64("2020-01-03"), **kwargs

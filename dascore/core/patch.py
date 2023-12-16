@@ -209,6 +209,7 @@ class Patch:
         warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.select(*args, samples=True, **kwargs)
 
+    correlate = dascore.proc.correlate
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna

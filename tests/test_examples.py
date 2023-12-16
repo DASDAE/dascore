@@ -1,10 +1,12 @@
 """Tests for example fetching."""
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.exceptions import UnknownExample
+from dascore.utils.time import to_float
 
 
 class TestGetExamplePatch:
@@ -43,3 +45,18 @@ class TestGetExampleSpool:
         """Ensure a bad key raises expected error."""
         with pytest.raises(UnknownExample, match="No example spool"):
             dc.get_example_spool("NotAnExampleRight????")
+
+
+class TestRickerMoveout:
+    """Tests for Ricker moveout patch."""
+
+    def test_moveout(self):
+        """Ensure peaks of ricker wavelet line up with expected moveout."""
+        velocity = 100
+        patch = dc.get_example_patch("ricker_moveout", velocity=velocity)
+        argmaxes = np.argmax(patch.data, axis=0)
+        peak_times = patch.get_coord("time").values[argmaxes]
+        moveout = to_float(peak_times - np.min(peak_times))
+        distances = patch.get_coord("distance").values
+        expected_moveout = distances / velocity
+        assert np.allclose(moveout, expected_moveout)

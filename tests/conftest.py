@@ -230,6 +230,17 @@ def dispersion_patch():
     return dc.get_example_patch("dispersion_event")
 
 
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def correlation_patch(random_patch):
+    """
+    Get a patch which is the result of correlation.
+
+    This is useful because the lag_time dimension is a timedelta64.
+    """
+    return random_patch.correlate(distance=0, samples=True)
+
+
 @pytest.fixture(scope="class")
 @register_func(PATCH_FIXTURES)
 def range_patch_3d():

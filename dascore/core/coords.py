@@ -558,6 +558,46 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             raise ParameterError(msg)
         return min(samples, len(self))
 
+    def get_next_index(self, value, samples=False, allow_out_of_bounds=False):
+        """
+        Get the index a value would have in a coordinate.
+
+        Parameters
+        ----------
+        value
+            The value which could be contained by the coordinate.
+        samples
+            If True, value refers to samples (ie an index) of coord.
+        allow_out_of_bounds
+            If True, allow the value to be out of bounds of the coordinate
+            and just return an index referring to the end
+            (len(coords) - 1) or beginning (0).
+        """
+        # handle samples
+        if samples:
+            min_val, max_val = 0, len(self) - 1
+            value = int(np.round(value))
+            # account for negative indexing
+            value = value if value >= 0 else value + max_val + 1
+        else:
+            value = self._get_compatible_value(value)
+            min_val, max_val = self.min(), self.max()
+        # handle out of bounds cases
+        if (is_gt := value > max_val) or (value < min_val):
+            if not allow_out_of_bounds:
+                msg = f"Value: {value} is out of bounds for {self}"
+                raise ValueError(msg)
+            return max_val if is_gt else min_val
+        # samples should already have the answer, just return
+        if samples:
+            return value
+        # otherwise get forward and backward inds
+        for_index = self._get_index(value, forward=True)
+        back_index = self._get_index(value, forward=False)
+        ranges = [x for x in [for_index, back_index] if x is not None]
+        assert len(ranges)
+        return ranges[0]
+
 
 class CoordRange(BaseCoord):
     """
