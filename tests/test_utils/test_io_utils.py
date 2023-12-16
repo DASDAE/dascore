@@ -208,3 +208,10 @@ class TestObsPy:
         # attrs dict this should raise.
         with pytest.raises(PatchConversionError):
             dc.io.obspy_to_patch(st)
+
+    def test_empty_stream(self):
+        """An empty Stream should return an empty Patch."""
+        obspy = pytest.importorskip("obspy")
+        st = obspy.Stream([])
+        patch = dc.io.obspy_to_patch(st)
+        assert not patch.dims

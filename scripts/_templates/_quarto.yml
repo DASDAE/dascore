@@ -128,6 +128,9 @@ website:
         - text: Adding coordinates from a dataframe
           href: recipes/add_spatial_coordinates_to_patch.qmd
 
+        - text: Converting Patches to External Formats
+          href: recipes/external_conversion.qmd
+
     - id: contributing
       title: "Contributing"
       contents:
