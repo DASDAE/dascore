@@ -103,11 +103,13 @@ jobs:
       - name: run test suite
         shell: bash -l {0}
         run: |
+          EXIT_CODE=0
           pytest -s --cov dascore --cov-append --cov-report=xml || EXIT_CODE=$?
           # Check the exit code is related to sporadic failures on mac, see #312
           if [ $EXIT_CODE -eq 132 ]; then
             gh run cancel ${{ github.run_id }}
             gh run watch ${{ github.run_id }}
+          # also make sure proper exit code is returned if not 132 or 0
           elif [ $EXIT_CODE -ne 0 ]; then
             exit $EXIT_CODE
           fi
