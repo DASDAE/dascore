@@ -73,13 +73,9 @@ jobs:
 
       - name: run test suite
         shell: bash -l {0}
-        run: |
-          export PATH="$pythonLocation:$PATH"
-          python -m pytest -s --cov dascore --cov-append --cov-report=xml
+        run: ./.github/test_code.sh
 
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
-        run: |
-          export PATH="$pythonLocation:$PATH"
-          python -m pytest dascore --doctest-modules
+        run: ./.github/test_code.sh doctest
