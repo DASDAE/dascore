@@ -12,13 +12,9 @@ on:
       - '**.py'
       - '.github/workflows/runtests.yml'
 
-permissions:
-  actions: 'write'
-
 env:
   # used to manually trigger cache reset. Just increment if needed.
   CACHE_NUMBER: 1
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 # Cancel previous runs when this one starts.
 concurrency:
