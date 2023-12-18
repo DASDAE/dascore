@@ -77,9 +77,9 @@ jobs:
 
       - name: run test suite
         shell: bash -l {0}
-        run: ./githubactions/test_code.sh
+        run: ./github/test_code.sh
 
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
-        run: ./githubactions/test_code.sh doctest
+        run: ./github/test_code.sh doctest
