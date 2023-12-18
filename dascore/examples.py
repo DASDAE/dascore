@@ -180,6 +180,27 @@ def _example_event_1():
     return dc.spool(path)[0]
 
 
+@register_func(EXAMPLE_PATCHES, key="example_event_2")
+def _example_event_2():
+    """
+    The same as example event 1, but units are set and filtered.
+
+    This event is from @stanvek2022fracture.
+    """
+    path = fetch("example_dasdae_event_1.h5")
+    patch = dc.spool(path)[0].update_attrs(data_type="strain_rate")
+    # We convert time to relative time in seconds to match the figure in
+    # the publication.
+    delta_time = patch.coords.get_array("time") - patch.coords.min("time")
+    out = (
+        patch.update_coords(time=delta_time / np.timedelta64(1, "s"))
+        .set_units("1/s", distance="m", time="s")
+        .taper(time=0.05)
+        .pass_filter(time=(..., 300))
+    )
+    return out
+
+
 @register_func(EXAMPLE_PATCHES, key="ricker_moveout")
 def _ricker_moveout(
     frequency=15,
@@ -393,3 +414,7 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
         )
         raise UnknownExample(msg)
     return EXAMPLE_SPOOLS[example_name](**kwargs)
+
+
+if __name__ == "__main__":
+    patch = _example_event_2()

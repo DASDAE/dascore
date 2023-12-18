@@ -110,4 +110,5 @@ def wiggle(
             _format_time_axis(ax, dim, x)
     if show:
         plt.show()
+    ax.invert_yaxis()  # invert y so its consistent with waterfall
     return ax
