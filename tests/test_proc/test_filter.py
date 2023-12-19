@@ -10,6 +10,7 @@ from dascore.exceptions import (
     CoordDataError,
     FilterValueError,
     ParameterError,
+    PatchDimError,
     UnitError,
 )
 
@@ -218,3 +219,38 @@ class TestMedianFilter:
         """Apply default values."""
         out = random_patch.median_filter(time=1, distance=1, samples=True)
         assert out == random_patch
+
+
+class TestSavgolFilter:
+    """Simple tests on Savgol filter."""
+
+    def test_savgol_no_kwargs_raises(self, random_patch):
+        """Apply default values."""
+        msg = "You must use exactly one dimension name in kwargs."
+        with pytest.raises(PatchDimError, match=msg):
+            random_patch.savgol_filter(polyorder=2)
+
+    def test_savgol_filter_time(self, random_patch):
+        """Test savgol filter in time dimension."""
+        out = random_patch.savgol_filter(polyorder=2, time=5)
+        assert isinstance(out, dc.Patch)
+        assert not np.any(pd.isnull(out.data))
+
+    def test_savgol_filter_ones(self, random_patch):
+        """Apply default values."""
+        out = random_patch.savgol_filter(polyorder=2, distance=5, samples=True)
+        assert out != random_patch
+
+    def test_savgol_smoothing(self, random_patch):
+        """Test smoothing in one dimension."""
+        new_array = np.array(random_patch.data)
+        midpoint = new_array.shape[0] // 2
+        new_array[:midpoint] = 1
+        new_array[midpoint:] = 0
+        new_patch = random_patch.new(data=new_array)
+        dim = new_patch.dims[0]
+        out = new_patch.savgol_filter(polyorder=2, samples=True, **{dim: 5})
+        # breakpoint()
+        assert np.allclose(out.data[:5], 1)
+        assert np.allclose(out.data[-5:], 0)
+        assert np.any(out.data[midpoint - 10 : midpoint + 10] < 1)
