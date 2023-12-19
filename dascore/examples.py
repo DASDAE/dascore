@@ -414,7 +414,3 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
         )
         raise UnknownExample(msg)
     return EXAMPLE_SPOOLS[example_name](**kwargs)
-
-
-if __name__ == "__main__":
-    patch = _example_event_2()
