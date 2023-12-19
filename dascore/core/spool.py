@@ -576,12 +576,31 @@ class MemorySpool(DataFrameSpool):
 @singledispatch
 def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSpool:
     """
-    Load a spool from some data source.
+    Create a spool from some data source.
+
+    This function is used to load data from many different sources.
 
     Parameters
     ----------
     obj
         An object from which a spool can be derived.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> # Get a spool from a single file
+    >>> single_file_path = fetch("example_dasdae_event_1.h5")
+    >>> file_spool = dc.spool(single_file_path)
+    >>>
+    >>> # get a spool from a directory of files
+    >>> directory_path = fetch("example_dasdae_event_1.h5").parent
+    >>> directory_spool = dc.spool(directory_path)
+    >>>
+    >>> # get a spool from a single patch
+    >>> patch = dc.get_example_patch()
+    >>> spool = dc.spool(patch)
     """
     msg = f"Could not get spool from: {obj}"
     raise ValueError(msg)
