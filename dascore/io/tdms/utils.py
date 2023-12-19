@@ -91,9 +91,9 @@ def parse_time_stamp(fractions, seconds):
     @rtype : datetime.datetime.
     """
     if fractions is not None and seconds is not None and fractions + seconds > 0:
-        return datetime.timedelta(
-            0, fractions * 2**-64 + seconds
-        ) + datetime.datetime(1904, 1, 1)
+        return datetime.timedelta(0, fractions * 2**-64 + seconds) + datetime.datetime(
+            1904, 1, 1
+        )
     else:
         return None
 

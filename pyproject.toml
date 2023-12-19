@@ -115,8 +115,10 @@ WAV = "dascore.io.wav.core:WavIO"
 
 [tool.ruff]
 
+line-length = 88
+
 # enable certain types of linting
-select = ["E", "F", "UP", "RUF", "I001", "D", "FA"]
+select = ["E", "F", "UP", "RUF", "I001", "D", "FA", "T"]
 
 # Exclude a variety of commonly ignored directories.
 exclude = [
@@ -165,3 +167,7 @@ filterwarnings = [
     # Ignore hdf5 warnings from pytables, See pytables #1035
     'ignore::Warning:tables:'
 ]
+
+[tool.ruff.format]
+# Use `\n` line endings for all files
+line-ending = "lf"

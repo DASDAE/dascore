@@ -224,7 +224,7 @@ def _ricker_moveout(
         f = frequency
         # get amplitude and exp term of ricker
         const = 1 - 2 * np.pi**2 * f**2 * new_time**2
-        exp = np.exp(-np.pi**2 * f**2 * new_time**2)
+        exp = np.exp(-(np.pi**2) * f**2 * new_time**2)
         return const * exp
 
     time = np.arange(0, duration + time_step, time_step)

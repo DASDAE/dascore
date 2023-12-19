@@ -316,7 +316,7 @@ class TestBasics:
 class TestCoordSummary:
     """tests for converting to and from summary coords."""
 
-    cast_data_list: ClassVar = [  # noqa
+    cast_data_list: ClassVar = [
         {"min": 400.0, "step": 1.0, "units": "", "max": 1000.0},
         {"min": 0, "max": 10},
         {"min": dc.to_datetime64(10), "max": dc.to_datetime64(100)},
