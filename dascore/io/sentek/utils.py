@@ -1,0 +1,85 @@
+"""Utilities for Sentek data format."""
+
+from __future__ import annotations
+
+import numpy as np
+
+import dascore as dc
+from dascore.core import get_coord, get_coord_manager
+
+
+def _get_version(fid):
+    """Determine if Sentek file."""
+    name = fid.name
+    sw_data = name.endswith(".das")
+    if sw_data:
+        return ("sentek", "5")
+    return False
+
+
+def _get_time_from_file_name(name) -> np.datetime64:
+    """Extract time contained in the file name.
+
+    example file name: DASDMSShot00_20230328155652124.das
+    """
+    time_str = name.split("_")[1].split(".")[0]
+    year = time_str[:4]
+    month = time_str[4:6]
+    day = time_str[6:8]
+    hour = time_str[8:10]
+    minute = time_str[10:12]
+    second = float(time_str[12:]) / 1_000
+    iso = f"{year}-{month}-{day}T{hour}:{minute}:{second:02f}"
+    return np.datetime64(iso)
+
+
+def _get_patch_attrs(fid, extras=None):
+    """Extracts patch metadata.
+
+    This function reads the log file (.das files) of DASnova system
+    Output:
+        Result: a dictionary containing the following fields:
+            SensorNumber: number of channels in the sensing fiber
+            MeaNumber: number of measurements in ONE single file
+            SampInt: sampling interval in nanosecond (delta t)
+            StrainRate: flag that is set when the loaded data represents strain rate
+            TrigPos: index position where the trigger occurs
+            DecFact: decimation factor (integer)
+            Position: sensor positions, in meter
+            Time: time of the measurements
+            Strain: signal in micro strain, SensorNumber x Meanumber matrix
+
+
+    """
+    fid.seek(0)
+    sensor_num = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    measurement_count = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    _ = np.fromfile(fid, dtype=np.float32, count=1)[0]  # sampling_interval
+    strain_rate = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    _ = np.fromfile(fid, dtype=np.float32, count=1)[0]  # trigger_position
+    _ = np.fromfile(fid, dtype=np.float32, count=1)[0]  # decimation_factor
+    # create distance coordinate
+    distance_start = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    fid.seek(int(sensor_num - 1) * 4)
+    distance_stop = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    distance_step = (distance_stop - distance_start) / sensor_num
+    dist = get_coord(start=distance_start, stop=distance_stop, step=distance_step)
+    # create time coord
+    file_time = _get_time_from_file_name(fid.name)
+    offset_start = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    fid.seek(int(measurement_count - 1) * 4)
+    offset_stop = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    time_start = file_time + dc.to_timedelta64(offset_start)
+    time_stop = file_time + dc.to_timedelta64(offset_stop)
+    time_step = (time_stop - time_start) / measurement_count
+    time = get_coord(start=time_start, stop=time_stop, step=time_step)
+
+    data_type = "strain_rate" if strain_rate else "strain"
+    coord_manager = get_coord_manager(
+        {"time": time, "distance": dist}, dims=("distance", "time")
+    )
+    attrs = dc.PatchAttrs(
+        coords=coord_manager, data_type=data_type, **({} if extras is None else extras)
+    )
+    offsets = fid.tell(), int(measurement_count), int(sensor_num)
+    return attrs, coord_manager, offsets
