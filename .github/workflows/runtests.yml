@@ -14,7 +14,7 @@ on:
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
-  CACHE_NUMBER: 2
+  CACHE_NUMBER: 1
 
 # Cancel previous runs when this one starts.
 concurrency:
@@ -30,7 +30,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.10', '3.11']
+        python-version: ['3.10', '3.11', "3.12"]
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ${{ env.prefix }}
-          key: ${{ env.cache_key }}-hash${{ hashFiles(env.env_file) }}-${{ steps.date.outputs.date }}-${{ env.CACHE_NUMBER }}
+          key: ${{ env.cache_key }}-${{ runner.arch }}-hash${{ hashFiles(env.env_file) }}-${{ steps.date.outputs.date }}-${{ env.CACHE_NUMBER }}
         id: cache
 
       - name: Update environment
@@ -98,14 +98,12 @@ jobs:
       # Runs test suite and calculates coverage
       - name: run test suite
         shell: bash -l {0}
-        run: |
-          pytest -s --cov dascore --cov-append --cov-report=xml
+        run: ./.github/test_code.sh
 
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
-        run: |
-          pytest dascore --doctest-modules
+        run: ./.github/test_code.sh doctest
 
       # upload coverage
       - name: upload coverage

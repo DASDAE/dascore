@@ -22,6 +22,7 @@ import pytest
 import dascore as dc
 from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
+from dascore.io.dashdf5 import DASHDF5
 from dascore.io.h5simple import H5Simple
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
@@ -60,6 +61,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     SegyV2(): ("conoco_segy_1.sgy",),
+    DASHDF5(): ("PoroTomo_iDAS_1.h5",),
 }
 
 # This tuple is for fiber io which support a write method and can write
@@ -109,8 +111,8 @@ def data_file_path(request):
     """A fixture of all data files. Will download if needed."""
     # TODO remove this segy skip once we support it.
     param = request.param
-    if param.endswith("sgy"):
-        pytest.skip("No segy support yet.")
+    if param.endswith("csv"):
+        pytest.skip("Not a DAS file.")
     return fetch(request.param)
 
 

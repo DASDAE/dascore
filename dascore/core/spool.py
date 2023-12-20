@@ -13,7 +13,6 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-import dascore.io
 from dascore.constants import (
     ExecutorType,
     PatchType,
@@ -561,11 +560,12 @@ class MemorySpool(DataFrameSpool):
     def __rich__(self):
         base = super().__rich__()
         df = self._df
-        t1, t2 = df["time_min"].min(), df["time_max"].max()
-        tmin = get_nice_text(t1)
-        tmax = get_nice_text(t2)
-        duration = get_nice_text(t2 - t1)
-        base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
+        if len(df):
+            t1, t2 = df["time_min"].min(), df["time_max"].max()
+            tmin = get_nice_text(t1)
+            tmax = get_nice_text(t2)
+            duration = get_nice_text(t2 - t1)
+            base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
         return base
 
     def _load_patch(self, kwargs) -> Self:
@@ -576,12 +576,31 @@ class MemorySpool(DataFrameSpool):
 @singledispatch
 def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSpool:
     """
-    Load a spool from some data source.
+    Create a spool from some data source.
+
+    This function is used to load data from many different sources.
 
     Parameters
     ----------
     obj
         An object from which a spool can be derived.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> # Get a spool from a single file
+    >>> single_file_path = fetch("example_dasdae_event_1.h5")
+    >>> file_spool = dc.spool(single_file_path)
+    >>>
+    >>> # get a spool from a directory of files
+    >>> directory_path = fetch("example_dasdae_event_1.h5").parent
+    >>> directory_spool = dc.spool(directory_path)
+    >>>
+    >>> # get a spool from a single patch
+    >>> patch = dc.get_example_patch()
+    >>> spool = dc.spool(patch)
     """
     msg = f"Could not get spool from: {obj}"
     raise ValueError(msg)
@@ -601,7 +620,7 @@ def _spool_from_str(path, **kwargs):
     # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
-        formatter = dascore.io.FiberIO.manager.get_fiberio(_format, _version)
+        formatter = dc.io.FiberIO.manager.get_fiberio(_format, _version)
         if formatter.implements_scan:
             from dascore.clients.filespool import FileSpool
 

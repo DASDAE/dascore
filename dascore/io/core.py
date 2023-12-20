@@ -30,7 +30,7 @@ from dascore.core.attrs import str_validator
 from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import cached_method, iterate, suppress_warnings
+from dascore.utils.misc import cached_method, iterate
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,
@@ -105,13 +105,11 @@ class _FiberIOManager:
     @cached_property
     def _eps(self):
         """
-        Get the unlaoded entry points registered to this domain into a dict of
+        Get the unloaded entry points registered to this domain into a dict of
         {name: ep}.
         """
-        # TODO remove warning suppression and switch to select when 3.9 is dropped
-        # see https://docs.python.org/3/library/importlib.metadata.html#entry-points
-        with suppress_warnings(DeprecationWarning):
-            out = {ep.name: ep.load for ep in entry_points()[self._entry_point]}
+        fiber_io_eps = entry_points(group="dascore.fiber_io")
+        out = {x.name: x.load for x in fiber_io_eps}
         return pd.Series(out)
 
     @cached_property
@@ -613,7 +611,7 @@ def scan(
                 file_format_, file_version_ = file_format, file_version
             formatter = FiberIO.manager.get_fiberio(file_format_, file_version_)
             req_type = getattr(formatter.scan, "_required_type", None)
-            # this will get an open file handle to past to get_resource
+            # this will get an open file handle to pass to get_resource
             patch_thing = man.get_resource(req_type)
             for attr in formatter.scan(patch_thing, _pre_cast=True):
                 out.append(dc.PatchAttrs.from_dict(attr))

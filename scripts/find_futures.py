@@ -36,4 +36,4 @@ if __name__ == "__main__":
         if not has_search_str(path, search_str):
             rewrite_file(path, search_str)
     for path in missing:
-        print(path)
+        print(path)  # noqa

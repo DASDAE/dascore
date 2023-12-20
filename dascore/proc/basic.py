@@ -13,7 +13,6 @@ from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
-from dascore.utils.misc import optional_import
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import patch_function
 
@@ -68,15 +67,6 @@ def pipe(
         Keyword arguments passed to func.
     """
     return func(self, *args, **kwargs)
-
-
-def to_xarray(self: PatchType):
-    """Return a data array with patch contents."""
-    xr = optional_import("xarray")
-    attrs = dict(self.attrs)
-    dims = self.dims
-    coords = self.coords._get_dim_array_dict()
-    return xr.DataArray(self.data, attrs=attrs, dims=dims, coords=coords)
 
 
 def update_attrs(self: PatchType, **attrs) -> PatchType:

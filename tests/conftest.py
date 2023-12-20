@@ -8,6 +8,7 @@ from pathlib import Path
 
 import matplotlib
 import numpy as np
+import pandas as pd
 import pytest
 import tables as tb
 import tables.parameters
@@ -133,6 +134,14 @@ def idas_h5_example_path():
     return out
 
 
+@pytest.fixture(scope="session")
+def brady_hs_DAS_DTS_coords_path():
+    """Return the path to the brady Hotspot DAS/DTS coords file."""
+    out = fetch("brady_hs_DAS_DTS_coords.csv")
+    assert out.exists()
+    return out
+
+
 # --- Patch fixtures
 
 
@@ -168,6 +177,13 @@ def prodml_v2_1_patch(prodml_v2_1_example_path) -> Patch:
 def random_patch() -> Patch:
     """Init a random array."""
     return get_example_patch("random_das")
+
+
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def random_dft_patch(random_patch) -> Patch:
+    """Return the random patch with dft applied."""
+    return random_patch.dft("time")
 
 
 @pytest.fixture(scope="class")
@@ -212,6 +228,17 @@ def event_patch_1():
 def dispersion_patch():
     """Fetch dispersion event."""
     return dc.get_example_patch("dispersion_event")
+
+
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def correlation_patch(random_patch):
+    """
+    Get a patch which is the result of correlation.
+
+    This is useful because the lag_time dimension is a timedelta64.
+    """
+    return random_patch.correlate(distance=0, samples=True)
 
 
 @pytest.fixture(scope="class")
@@ -446,3 +473,13 @@ def dummy_text_file(tmp_path_factory):
     path = parent / "hello.txt"
     path.write_text("Clearly not a hdf5 file. Or is it?")
     return path
+
+
+@pytest.fixture(scope="session")
+def brady_hs_DAS_DTS_coords():
+    """Return a pandas dataframe with X,Y,Z coordinates."""
+    path = fetch("brady_hs_DAS_DTS_coords.csv")
+    coord_table = pd.read_csv(path)
+    coord_table = coord_table.iloc[51:]
+    coord_table = coord_table.astype(float)
+    return coord_table

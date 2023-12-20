@@ -14,7 +14,7 @@ on:
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
-  CACHE_NUMBER: 2
+  CACHE_NUMBER: 1
 
 # Cancel previous runs when this one starts.
 concurrency:
@@ -30,7 +30,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.11']
+        python-version: ['3.12']
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
@@ -73,13 +73,9 @@ jobs:
 
       - name: run test suite
         shell: bash -l {0}
-        run: |
-          export PATH="$pythonLocation:$PATH"
-          python -m pytest -s --cov dascore --cov-append --cov-report=xml
+        run: ./.github/test_code.sh
 
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
-        run: |
-          export PATH="$pythonLocation:$PATH"
-          python -m pytest dascore --doctest-modules
+        run: ./.github/test_code.sh doctest

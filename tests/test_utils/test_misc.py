@@ -15,6 +15,7 @@ from dascore.utils.misc import (
     get_stencil_coefs,
     iter_files,
     iterate,
+    maybe_get_items,
     optional_import,
     separate_coord_info,
 )
@@ -261,3 +262,15 @@ class TestSeparateCoordInfo:
         input_dict = {"coords": {"time": {"min": 10}}}
         coords, attrs = separate_coord_info(input_dict)
         assert coords == input_dict["coords"]
+
+
+class TestMaybeGetItems:
+    """Tests for maybe_get_attrs."""
+
+    def test_missed_itme(self):
+        """Ensure it still works when a key is missing."""
+        data = {"bob": 1, "bill": 2}
+        expected = {"bob": "sue", "lary": "who"}
+        out = maybe_get_items(data, attr_map=expected)
+        assert "sue" in out
+        assert "who" not in out

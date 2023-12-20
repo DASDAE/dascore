@@ -10,12 +10,12 @@ from typing_extensions import Self
 
 import dascore as dc
 import dascore.proc.coords
+import dascore.utils.io
 from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
-from dascore.io import PatchIO
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
@@ -178,7 +178,6 @@ class Patch:
     update_attrs = dascore.proc.update_attrs
     assert_has_coords = dascore.proc.assert_has_coords
     get_coord = dascore.proc.get_coord
-    to_xarray = dascore.proc.to_xarray
     pipe = dascore.proc.pipe
     set_dims = dascore.proc.set_dims
     squeeze = dascore.proc.squeeze
@@ -188,6 +187,7 @@ class Patch:
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
     drop_coords = dascore.proc.drop_coords
+    coords_from_df = dascore.proc.coords_from_df
 
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords."""
@@ -209,6 +209,7 @@ class Patch:
         warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.select(*args, samples=True, **kwargs)
 
+    correlate = dascore.proc.correlate
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
@@ -268,6 +269,6 @@ class Patch:
         return self
 
     @property
-    def io(self) -> PatchIO:
+    def io(self) -> dc.io.PatchIO:
         """Return a patch IO object for saving patches to various formats."""
-        return PatchIO(self)
+        return dc.io.PatchIO(self)

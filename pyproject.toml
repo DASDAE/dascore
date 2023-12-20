@@ -2,7 +2,7 @@
 # --- Build system configuration
 
 [build-system]
-requires = [ "setuptools>=41", "setuptools-scm", ]
+requires = [ "setuptools>=41", "setuptools-scm", "scikit-build"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools-git-versioning]
@@ -31,8 +31,6 @@ requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering",
 ]
 
@@ -41,6 +39,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
+     "h5py",
      "matplotlib>=3.5",
      "numpy>=1.24",
      "packaging",
@@ -60,6 +59,7 @@ dependencies = [
 extras = [
     "xarray",
     "findiff",
+    "obspy",
 ]
 
 docs = [
@@ -97,7 +97,8 @@ dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore[extras]"]
 
 [project.entry-points."dascore.fiber_io"]
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
-H5SIMPLE__V1 = "dascore.io.h5simple.core:H5Simple"
+DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
+H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
 PICKLE = "dascore.io.pickle.core:PickleIO"
 PRODML__V2_0 = "dascore.io.prodml.core:ProdMLV2_0"
 PRODML__V2_1 = "dascore.io.prodml.core:ProdMLV2_1"
@@ -106,6 +107,7 @@ TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
 TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
 TERRA15__V6 = "dascore.io.terra15.core:Terra15FormatterV6"
 SEGY__V2 = "dascore.io.segy.core:SegyV2"
+RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
 
 
@@ -113,8 +115,10 @@ WAV = "dascore.io.wav.core:WavIO"
 
 [tool.ruff]
 
+line-length = 88
+
 # enable certain types of linting
-select = ["E", "F", "UP", "RUF", "I001", "D", "FA"]
+select = ["E", "F", "UP", "RUF", "I001", "D", "FA", "T"]
 
 # Exclude a variety of commonly ignored directories.
 exclude = [
@@ -163,3 +167,7 @@ filterwarnings = [
     # Ignore hdf5 warnings from pytables, See pytables #1035
     'ignore::Warning:tables:'
 ]
+
+[tool.ruff.format]
+# Use `\n` line endings for all files
+line-ending = "lf"
