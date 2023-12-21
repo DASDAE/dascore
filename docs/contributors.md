@@ -27,5 +27,7 @@ A Huge thanks to all of our contributors:
 
 [Shihao Yuan](https://github.com/Shihao-Yuan)
 
+[Tomas Snyder](https:/github.com/quasiStellar45)
+
 You can find more contributor information
 [here](https://github.com/DASDAE/dascore/graphs/contributors)
