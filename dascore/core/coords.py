@@ -564,6 +564,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
         Parameters
         ----------
+        ----------from dascore.core import get_coord
+
+        # no problems here
+        coord = get_coord(start=1, stop=5, step=-1)
+
+        # len still works
+        len(coord)
+
+        # but accessing any of the values fails
+        coord[0]  # raises IndexError
         value
             The value which could be contained by the coordinate.
         samples
@@ -629,6 +639,11 @@ class CoordRange(BaseCoord):
         """If any info is neglected the coord is invalid."""
         for name in ["start", "stop", "step"]:
             assert values[name] is not None
+        # step should have the same sign as stop-start, see #321.
+        diff = values["stop"] - values["start"]
+        if not np.sign(values["step"]) == np.sign(diff):
+            msg = "Sign of step must match sign of stop - start"
+            raise CoordError(msg)
         return values
 
     @model_validator(mode="before")
