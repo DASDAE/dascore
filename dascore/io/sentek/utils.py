@@ -36,20 +36,14 @@ def _get_time_from_file_name(name) -> np.datetime64:
 def _get_patch_attrs(fid, extras=None):
     """Extracts patch metadata.
 
-    This function reads the log file (.das files) of DASnova system
-    Output:
-        Result: a dictionary containing the following fields:
-            SensorNumber: number of channels in the sensing fiber
-            MeaNumber: number of measurements in ONE single file
-            SampInt: sampling interval in nanosecond (delta t)
-            StrainRate: flag that is set when the loaded data represents strain rate
-            TrigPos: index position where the trigger occurs
-            DecFact: decimation factor (integer)
-            Position: sensor positions, in meter
-            Time: time of the measurements
-            Strain: signal in micro strain, SensorNumber x Meanumber matrix
+    A few important fields in the header and their meaning:
 
-
+    sensor_num: number of channels in the sensing fiber
+    measurement_count: number of measurements in ONE single file
+    sampling_interval: sampling interval in nanosecond (delta t)
+    strain_rate: flag that is set when the loaded data represents strain rate
+    trigger_position: index position where the trigger occurs
+    decimation_factor: decimation factor (integer)
     """
     fid.seek(0)
     sensor_num = np.fromfile(fid, dtype=np.float32, count=1)[0]
