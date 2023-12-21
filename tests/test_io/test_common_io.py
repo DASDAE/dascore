@@ -27,6 +27,7 @@ from dascore.io.h5simple import H5Simple
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.segy import SegyV2
+from dascore.io.sentek import SentekV5
 from dascore.io.tdms import TDMSFormatterV4713
 from dascore.io.terra15 import (
     Terra15FormatterV4,
@@ -62,6 +63,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     SegyV2(): ("conoco_segy_1.sgy",),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
+    SentekV5(): ("DASDMSShot00_20230328155653619.das",),
 }
 
 # This tuple is for fiber io which support a write method and can write

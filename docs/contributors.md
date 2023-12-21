@@ -25,6 +25,8 @@ A Huge thanks to all of our contributors:
 
 [Thomas Cullison](https:/github.com/code-cullison)
 
+[Shihao Yuan](https://github.com/Shihao-Yuan)
+
 [Tomas Snyder](https:/github.com/quasiStellar45)
 
 You can find more contributor information
