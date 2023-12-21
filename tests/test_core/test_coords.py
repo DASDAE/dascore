@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import rich.text
+from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
@@ -311,6 +312,14 @@ class TestBasics:
         ar = np.array(coord)
         assert isinstance(ar, np.ndarray)
         assert len(ar) == len(coord)
+
+    def test_bad_range_step(self):
+        """Ensure start, stop, step are consistent. See #321."""
+        msg = "Sign of step must match"
+        with pytest.raises(ValidationError, match=msg):
+            get_coord(start=1, stop=5, step=-1)
+        with pytest.raises(ValidationError, match=msg):
+            get_coord(start=1, stop=-5, step=1)
 
 
 class TestCoordSummary:
