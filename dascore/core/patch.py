@@ -216,6 +216,7 @@ class Patch:
     pass_filter = dascore.proc.pass_filter
     sobel_filter = dascore.proc.sobel_filter
     median_filter = dascore.proc.median_filter
+    savgol_filter = dascore.proc.savgol_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
     real = dascore.proc.real

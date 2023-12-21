@@ -10,6 +10,7 @@ import pandas as pd
 from scipy import ndimage
 from scipy.ndimage import median_filter as nd_median_filter
 from scipy.signal import iirfilter, sosfilt, sosfiltfilt, zpk2sos
+from scipy.signal import savgol_filter as np_savgol_filter
 
 import dascore
 from dascore.constants import PatchType, samples_arg_description
@@ -19,6 +20,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import check_filter_kwargs, check_filter_range
 from dascore.utils.patch import (
     get_dim_sampling_rate,
+    get_dim_value_from_kwargs,
     get_multiple_dim_value_from_kwargs,
     patch_function,
 )
@@ -228,7 +230,7 @@ def median_filter(
     >>> from dascore.units import m, s
     >>> pa = dascore.get_example_patch()
 
-    >>>  # 1. Apply median filter only over time distance with 0.10 sec window
+    >>>  # 1. Apply median filter only over time dimension with 0.10 sec window
     >>> filtered_pa_1 = pa.median_filter(time=0.1)
 
     >>>  # 2. Apply median filter over both time and distance
@@ -250,4 +252,63 @@ def median_filter(
     """
     size, _ = _create_size_and_axes(patch, kwargs, samples)
     new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)
+    return patch.new(data=new_data)
+
+
+@patch_function()
+@compose_docstring(sample_explination=samples_arg_description)
+def savgol_filter(
+    patch: PatchType, polyorder, samples=False, mode="interp", cval=0.0, **kwargs
+) -> PatchType:
+    """
+    Applies Savgol filter along one dimension.
+
+    Parameters
+    ----------
+    patch
+        The patch to filter
+    polyorder
+        Order of polynomial
+    samples
+        If True samples are specified
+        If False coordinate of dimension
+    mode
+        The mode for handling edges.
+    cval
+        The constant value for when mode == constant.
+    **kwargs
+        Used to specify the shape of the median filter in each dimension.
+        See examples for more info.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> from dascore.units import m, s
+    >>> pa = dascore.get_example_patch()
+
+    >>>  # 1. Apply second order polynomial Savgol filter
+    >>>  # only over time dimension with 0.10 sec window
+    >>> filtered_pa_1 = pa.savgol_filter(polyorder=2, time=0.1)
+
+    >>>  # 2. Apply Savgol filter over distance dimension
+    >>>  # using a 5 sample distance window
+    >>> filtered_pa_2 = pa.median_filter(samples=True, polyorder=2, distance=5)
+
+    Notes
+    -----
+    See scipy.signal.savgol_filter for more info on implementation
+    and arguments.
+
+    """
+    dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
+    coord = patch.get_coord(dim)
+    window = coord.get_sample_count(value, samples=samples)
+    new_data = np_savgol_filter(
+        x=patch.data,
+        window_length=window,
+        polyorder=polyorder,
+        mode=mode,
+        cval=cval,
+        axis=axis,
+    )
     return patch.new(data=new_data)
