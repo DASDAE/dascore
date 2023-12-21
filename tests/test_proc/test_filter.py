@@ -250,7 +250,7 @@ class TestSavgolFilter:
         new_patch = random_patch.new(data=new_array)
         dim = new_patch.dims[0]
         out = new_patch.savgol_filter(polyorder=2, samples=True, **{dim: 5})
-        # breakpoint()
         assert np.allclose(out.data[:5], 1)
         assert np.allclose(out.data[-5:], 0)
-        assert np.any(out.data[midpoint - 10 : midpoint + 10] < 1)
+        middle = out.data[midpoint - 10 : midpoint + 10]
+        assert np.any((middle < 1) & (middle > 0))

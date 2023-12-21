@@ -25,5 +25,7 @@ A Huge thanks to all of our contributors:
 
 [Thomas Cullison](https:/github.com/code-cullison)
 
+[Tomas Snyder](https:/github.com/quasiStellar45)
+
 You can find more contributor information
 [here](https://github.com/DASDAE/dascore/graphs/contributors)
