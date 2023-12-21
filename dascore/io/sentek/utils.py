@@ -11,8 +11,26 @@ from dascore.core import get_coord, get_coord_manager
 def _get_version(fid):
     """Determine if Sentek file."""
     name = fid.name
+    # Sentek files cannot change the extension, or file name.
     sw_data = name.endswith(".das")
-    if sw_data:
+    fid.seek(0)
+    # There isn't anything in the header particularly useful for determining
+    # if it is a Sentek file, so we do what we can here.
+    # First check if sensor_num and measurement_count are positive and nearly
+    # ints.
+    sensor_num = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    measurement_count = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    _ = np.fromfile(fid, dtype=np.float32, count=1)[0]  # sampling_interval
+    is_positive = (sensor_num > 1) and (measurement_count > 1)
+    sens_nearly_int = np.round(sensor_num, 5) == np.round(sensor_num)
+    meas_nearly_int = np.round(measurement_count, 5) == np.round(measurement_count)
+    nearly_ints = sens_nearly_int and meas_nearly_int
+    # Then check if strain_rate value is valid.
+    strain_rate = int(np.fromfile(fid, dtype=np.float32, count=1)[0])
+    proper_strain_rate = strain_rate in {0, 1}
+    # Note: We will need to modify this later for different versions of the
+    # sentek data, but for now we only support 5.
+    if sw_data and is_positive and proper_strain_rate and nearly_ints:
         return ("sentek", "5")
     return False
 

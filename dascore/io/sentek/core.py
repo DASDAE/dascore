@@ -30,6 +30,9 @@ class SentekV5(FiberIO):
         array = np.fromfile(resource, dtype=np.float32, count=offsets[1] * offsets[2])
         array = np.reshape(array, (offsets[1], offsets[2])).T
         patch = dc.Patch(data=array, attrs=attrs, coords=coords, dims=coords.dims)
+        # Note: we are being a bit sloppy here in that selecting on time/distance
+        # doesn't actually affect how much data is read from the binary file. This
+        # is probably ok though since Sentek files tend to be quite small.
         return dc.spool(patch).select(time=time, distance=distance)
 
     def get_format(self, resource: BinaryReader) -> tuple[str, str] | bool:
