@@ -302,44 +302,31 @@ class BaseSpool(abc.ABC):
 
         Parameters
         ----------
-        *********to add more detail******
         By default, dim_vary is None but others could be specified and <= 1 can vary.
         By default, dim_check is 'warn' meaning a warning would be issued and a patch
         would be skipped in case of issues. 'raise' is other option that will raise
         an exception.
+        Note that the stack's coordinates will be set to zero.
 
         Notes
         -----
-        ******** to add **********
+        ******** to add examples **********
 
         Examples
         --------
-        ********* to add ********
+        ********* to add exampless ********
         """
-        # check the dims/coords of first patch (considered standard)
+        # check the dims/coords of first patch (considered to be standard for rest)
         init_patch = self.__getitem__(0)
-        stack_arr = np.zeros_like(init_patch)
-        init_patch_dims = init_patch.dims
-        init_patch_coords = init_patch.coords
+        stack_arr = np.zeros_like(init_patch.data)
 
         for p in self:
             # check dimensions of patch compared to init_patch
-            dims_ok = check_dims(init_patch_dims, p.dims, check_behavior)
-            coords_ok = check_coords(
-                init_patch_coords, p.coords, check_behavior, dim_vary
-            )
+            check_dims(init_patch, p, check_behavior)
+            check_coords(init_patch, p, check_behavior, dim_vary)
 
-            # actually do the stacking
-            if dims_ok and coords_ok:
-                stack_arr += p.data
-
-        # create coords array for the stack
-        stack_coords = init_patch.coords
-        # need to change so these coords are zeroed
-        # if(dim_vary): # adjust dim_vary to start at 0 for junk value indicator
-        #    #*********use coord manager to modify that coord to 0?****
-        #    coord_to_change = stack_coords.coord_map[dim_vary]
-        #    min_coord = coord_to_change.min()
+            # actually do the stacking of data
+            stack_arr = stack_arr + p.data
 
         # create attributes for the stack with adjusted history
         stack_attrs = init_patch.attrs
@@ -347,7 +334,18 @@ class BaseSpool(abc.ABC):
         new_history.append("stack")
         stack_attrs = stack_attrs.update(history=new_history)
 
-        # create output patch
+        # create coords array for the stack
+        stack_coords = init_patch.coords
+        # if(dim_vary): # adjust dim_vary to start at 0 for junk dimension indicator
+        #    coord_to_change = stack_coords.coord_map[dim_vary]
+        #    new_dim = coord_to_change.update_limits(min=0)
+        #    new_stack_coords =
+        # ****need help to piece together all dims of stack_coords except with new_dim
+        #    # create output patch with 0 as start of stacked patch
+        #    return Patch(stack_arr, new_stack_coords, init_patch.dims, stack_attrs)
+        # else: # create output patch
+        #    return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
+
         return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
 
 
