@@ -491,3 +491,38 @@ class TestMisc:
         """Ensure a nice message is raised for nonexistent paths. See #126."""
         with pytest.raises(InvalidSpoolError, match="may not exist"):
             dc.spool("Bad/file/path.h5")
+
+    def test_stack_data(self):
+        """
+        Try the stack method on an example spool that has repeated
+        copies of the same patch with different times. Check data.
+        """
+        # Grab the example spool which has repeats of the same patch
+        # but with different time dimensions. Stack the patches.
+        spool = dc.get_example_spool()
+        stackPatch = spool.stack(dim_vary="time")
+        # We expect the sum/stack to be same as a multiple of
+        # the first patch's data.
+        baseline = float(len(spool)) * spool[0].data
+        assert np.allclose(baseline, stackPatch.data)
+
+    def test_stack_coords(self):
+        """
+        Try the stack method on an example spool that has repeated
+        copies of the same patch with different times. Check coords.
+        """
+        # Grab the example spool which has repeats of the same patch
+        # but with different time dimensions. Stack the patches.
+        spool = dc.get_example_spool()
+        stackPatch = spool.stack(dim_vary="time")
+        # check that 'time' coordinates has same step as original patch
+        timeCoords = stackPatch.coords.coord_map["time"]
+        origTimeCoords = spool[0].coords.coord_map["time"]
+        assert timeCoords.step == origTimeCoords.step
+        # check that distance coordinates are the same
+        distCoords = stackPatch.coords.coord_map["distance"]
+        origDistCoords = spool[0].coords.coord_map["distance"]
+        assert distCoords.start == origDistCoords.start
+        assert distCoords.stop == origDistCoords.stop
+        assert distCoords.step == origDistCoords.step
+        # assert distCoords.units == origDistCoords.units # issue

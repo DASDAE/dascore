@@ -306,15 +306,17 @@ class BaseSpool(abc.ABC):
         By default, dim_check is 'warn' meaning a warning would be issued and a patch
         would be skipped in case of issues. 'raise' is other option that will raise
         an exception.
-        Note that the stack's coordinates will be set to zero.
+        Note that the stack's coordinates will be set to start at 0 along dim_vary.
 
         Notes
         -----
-        ******** to add examples **********
+        One potential issue remains: units of dimensions other than dim_vary appear
+        to get dropped. Need to investigate further.
 
         Examples
         --------
-        ********* to add exampless ********
+        spool = dc.get_example_spool()
+        stackPatch = spool.stack(dim_vary='time')
         """
         # check the dims/coords of first patch (considered to be standard for rest)
         init_patch = self.__getitem__(0)
@@ -336,17 +338,13 @@ class BaseSpool(abc.ABC):
 
         # create coords array for the stack
         stack_coords = init_patch.coords
-        # if(dim_vary): # adjust dim_vary to start at 0 for junk dimension indicator
-        #    coord_to_change = stack_coords.coord_map[dim_vary]
-        #    new_dim = coord_to_change.update_limits(min=0)
-        #    new_stack_coords =
-        # ****need help to piece together all dims of stack_coords except with new_dim
-        #    # create output patch with 0 as start of stacked patch
-        #    return Patch(stack_arr, new_stack_coords, init_patch.dims, stack_attrs)
-        # else: # create output patch
-        #    return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
-
-        return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
+        if dim_vary:  # adjust dim_vary to start at 0 for junk dimension indicator
+            coord_to_change = stack_coords.coord_map[dim_vary]
+            new_dim = coord_to_change.update_limits(min=0)
+            new_stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
+            return Patch(stack_arr, new_stack_coords, init_patch.dims, stack_attrs)
+        else:  # create output patch
+            return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
 
 
 class DataFrameSpool(BaseSpool):
