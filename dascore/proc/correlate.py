@@ -15,7 +15,7 @@ from dascore.utils.patch import (
 )
 
 
-def _get_correlated_coord(old_coord, data_shape):
+def _get_correlated_coord(old_coord, data_shape, real=True):
     """Get the new coordinate which corresponds to correlated values."""
     step = old_coord.step
     one_sided_len = data_shape // 2
@@ -26,6 +26,23 @@ def _get_correlated_coord(old_coord, data_shape):
     )
     assert len(new) == data_shape, "failed to create correlated coord"
     return new
+
+
+def _shift(data, cx_len, axis):
+    """
+    Re-assemble fft data so zero lag is in center.
+
+    Also accounts for padding for fast fft.
+    """
+    ndims = len(data.shape)
+    start_slice = slice(-np.floor(cx_len / 2).astype(int), None)
+    start_ind = broadcast_for_index(ndims, axis, start_slice)
+    stop_slice = slice(None, np.ceil(cx_len / 2).astype(int))
+    stop_ind = broadcast_for_index(ndims, axis, stop_slice)
+    data1 = data[start_ind]
+    data2 = data[stop_ind]
+    data = np.concatenate([data1, data2], axis=axis)
+    return data
 
 
 @patch_function()
@@ -74,6 +91,10 @@ def correlate(
     >>> # Use 2nd channel (python is 0 indexed) along distance as master channel
     >>> cc_patch = patch.correlate(distance=1, samples=True)
 
+    >>> # Example 4
+    >>> # Correlate along distance dimension
+    >>> cc_patch = patch.correlate(time=100, samples=True)
+
     Notes
     -----
     The cross-correlation is performed in the frequency domain for efficiency
@@ -93,6 +114,8 @@ def correlate(
     # get the coordinate which contains the source
     coord_source = patch.get_coord(dim)
     index_source = coord_source.get_next_index(source, samples=samples)
+    # get the closest fast length. Some padding is applied in the fft to avoid
+    # inefficient lengths. Note: This is not always a power of 2.
     cx_len = patch.shape[fft_axis] * 2 - 1
     fast_len = next_fast_len(cx_len)
     # determine proper fft, ifft functions based on data being real or complex
@@ -107,10 +130,11 @@ def correlate(
     source_fft = fft[inds]
     # perform correlation in freq domain and transform back to time domain
     fft_prod = fft * np.conj(source_fft)
-    # the n parameter needs to be odd so we have a 0 lag time. Hopefully this
-    # is right...
-    cor_array = ifft_func(fft_prod, axis=fft_axis, n=fast_len - 1)
-    corr_data = np.fft.fftshift(cor_array, axes=fft_axis)
+    # the n parameter needs to be odd so we have a 0 lag time. This only
+    # applies to real fft
+    n_out = fast_len if (not is_real or fast_len % 2 != 0) else fast_len - 1
+    cor_array = ifft_func(fft_prod, axis=fft_axis, n=n_out)
+    corr_data = _shift(cor_array, cx_len, axis=fft_axis)
     # get new coordinate along correlation dimension
     new_coord = _get_correlated_coord(fft_coord, corr_data.shape[fft_axis])
     coords = patch.coords.update_coords(**{fft_dim: new_coord}).rename_coord(
