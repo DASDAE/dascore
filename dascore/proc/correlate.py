@@ -52,8 +52,6 @@ def correlate(
     """
     Correlate a single row/column in a 2D patch with every other row/column.
 
-    The This may be useful for interferometry workflows.
-
     Parameters
     ----------
     patch : PatchType
