@@ -127,7 +127,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     cm = patch.coords
     associated_dims = cm.dim_map[dim]
     coord_new = dc.core.get_coord(values=samples)
-    cm_new = cm.update_coords(**{dim: (associated_dims, coord_new)})
+    cm_new = cm.update(**{dim: (associated_dims, coord_new)})
     return patch.new(data=out, coords=cm_new)
 
 
@@ -211,7 +211,7 @@ def resample(
     data, new_coord = compat.resample(
         patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
     )
-    cm = patch.coords.update_coords(**{dim: new_coord})
+    cm = patch.coords.update(**{dim: new_coord})
     out = patch.new(data=data, coords=cm)
     # Interpolate if new sampling rate is not very close to desired sampling rate.
     if not samples and not np.isclose(new_len, np.round(new_len)):

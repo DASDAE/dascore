@@ -165,10 +165,10 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa = dc.get_example_patch()
     >>> # Add 1 to all distance coords
     >>> new_dist = pa.coords['distance'] + 1
-    >>> pa2 = pa.update_coords(distance=new_dist)
+    >>> pa2 = pa.update(distance=new_dist)
     >>> assert np.all(pa2.coords['distance'] == (pa.coords['distance'] + 1))
     """
-    new_coord = self.coords.update_coords(**kwargs)
+    new_coord = self.coords.update(**kwargs)
     return self.new(coords=new_coord, dims=new_coord.dims)
 
 

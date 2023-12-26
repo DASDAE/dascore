@@ -8,7 +8,7 @@ filtering the managed arrays based on coordinates.
 # Initializing CoordinateManagers
 
 Coordinate managers are initialized using the
-[get_coords](`dascore.core.coordmanager.get_coord_manager`) function. They take
+[get_coord_manager](`dascore.core.coordmanager.get_coord_manager`) function. They take
 a combination of coordinate dictionaries, dimensions, and attributes. They can
 also be extracted from example patches.
 
@@ -240,7 +240,7 @@ class CoordManager(DascoreBaseModel):
     def __contains__(self, key):
         return key in self.coord_map
 
-    def update_coords(self, **kwargs) -> Self:
+    def update(self, **kwargs) -> Self:
         """
         Update the coordinates, return a new Coordinate Manager.
 
@@ -297,6 +297,9 @@ class CoordManager(DascoreBaseModel):
             out[coord_name] = tuple(new)
         dims = tuple(x for x in self.dims if x not in coord_to_drop)
         return get_coord_manager(out, dims=dims)
+
+    # we need this here to maintain backwards compatibility
+    update_coords = update
 
     def update_from_attrs(
         self, attrs: Mapping | dc.PatchAttrs
@@ -509,7 +512,7 @@ class CoordManager(DascoreBaseModel):
             The coordinate name(s) to disassociated from their dimensions.
         """
         new = {x: (None, self.coord_map[x]) for x in coord}
-        return self.drop_coords(*coord)[0].update_coords(**new)
+        return self.drop_coords(*coord)[0].update(**new)
 
     def drop_disassociated_coords(self) -> Self:
         """Drop all coordinates not associated with a dimension."""
@@ -576,7 +579,7 @@ class CoordManager(DascoreBaseModel):
         new_coords, indexers = _get_indexers_and_new_coords_dict(
             self, kwargs, samples=samples, relative=relative
         )
-        new_cm = self.update_coords(**new_coords)
+        new_cm = self.update(**new_coords)
         return new_cm, self._get_new_data(indexers, array)
 
     def _get_new_data(self, indexer, array: MaybeArray) -> MaybeArray:
@@ -807,7 +810,7 @@ class CoordManager(DascoreBaseModel):
         assert dim in self.dims
         dim_slice = slice(None, None, int(value))
         new_array = self.coord_map[dim][dim_slice]
-        new = self.update_coords(**{dim: new_array})
+        new = self.update(**{dim: new_array})
         slices = tuple(
             slice(None, None) if d != dim else slice(None, None, value)
             for d in new.dims

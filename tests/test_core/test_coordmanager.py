@@ -60,7 +60,7 @@ def basic_degenerate_coord_manager(basic_coord_manager):
     """A degenerate coord manager on time axis."""
     time_coord = basic_coord_manager.coord_map["time"]
     degenerate = time_coord.empty()
-    return basic_coord_manager.update_coords(time=degenerate)
+    return basic_coord_manager.update(time=degenerate)
 
 
 @pytest.fixture(scope="class")
@@ -83,7 +83,7 @@ def coord_manager_multidim() -> CoordManager:
 def coord_manager_degenerate_time(coord_manager_multidim) -> CoordManager:
     """A coordinate manager with degenerate (length 1) time array."""
     new_time = to_datetime64(["2017-09-18T01:00:01"])
-    out = coord_manager_multidim.update_coords(time=new_time)
+    out = coord_manager_multidim.update(time=new_time)
     return out
 
 
@@ -109,7 +109,7 @@ def coord_dt_small_diff(memory_spool_small_dt_differences):
 @register_func(COORD_MANAGERS)
 def coord_non_associated_coord(basic_coord_manager):
     """A cm with coordinates that are not associated with a dimension."""
-    new = basic_coord_manager.update_coords(
+    new = basic_coord_manager.update(
         bob=(None, np.arange(10)),
         bill=((), np.arange(100)),
     )
@@ -551,7 +551,7 @@ class TestEquals:
         coord = coord_manager_multidim.coord_map["latitude"]
         new = get_coord(values=coord.values + 10)
         args = dict(latitude=("distance", new))
-        new_coord = coord_manager_multidim.update_coords(**args)
+        new_coord = coord_manager_multidim.update(**args)
         assert new_coord != coord_manager_multidim
 
     def test_unequal_wrong_type(self, basic_coord_manager):
@@ -712,21 +712,21 @@ class TestUpdateCoords:
     def test_simple(self, basic_coord_manager):
         """Ensure coordinates can be updated (replaced)."""
         new_time = basic_coord_manager.get_array("time") + np.timedelta64(1, "s")
-        out = basic_coord_manager.update_coords(time=new_time)
+        out = basic_coord_manager.update(time=new_time)
         assert np.all(np.equal(out.get_array("time"), new_time))
 
     def test_extra_coords_kept(self, coord_manager_multidim):
         """Ensure extra coordinates are kept."""
         cm = coord_manager_multidim
         new_time = cm.get_array("time") + np.timedelta64(1, "s")
-        out = cm.update_coords(time=new_time)
+        out = cm.update(time=new_time)
         assert set(out.coord_map) == set(coord_manager_multidim.coord_map)
         assert set(out.coord_map) == set(coord_manager_multidim.coord_map)
 
     def test_size_change(self, basic_coord_manager):
         """Ensure sizes of dimensions can be changed."""
         new_time = basic_coord_manager.get_array("time")[:10]
-        out = basic_coord_manager.update_coords(time=new_time)
+        out = basic_coord_manager.update(time=new_time)
         assert np.all(np.equal(out.get_array("time"), new_time))
 
     def test_size_change_drops_old_coords(self, coord_manager_multidim):
@@ -734,13 +734,13 @@ class TestUpdateCoords:
         cm = coord_manager_multidim
         new_dist = cm.get_array("distance")[:10]
         dropped_coords = set(cm.coord_map) - set(cm.dims)
-        out = cm.update_coords(distance=new_dist)
+        out = cm.update(distance=new_dist)
         assert dropped_coords.isdisjoint(set(out.coord_map))
 
     def test_update_degenerate(self, coord_manager):
         """Tests for updating coord with degenerate coordinates."""
         cm = coord_manager
-        out = cm.update_coords(time=cm.coord_map["time"].empty())
+        out = cm.update(time=cm.coord_map["time"].empty())
         assert out.shape[out.dims.index("time")] == 0
         assert len(out.coord_map["time"]) == 0
 
@@ -751,7 +751,7 @@ class TestUpdateCoords:
         """
         cm = coord_manager_multidim
         degen_time = cm.coord_map["time"].empty()
-        new = cm.update_coords(time=degen_time)
+        new = cm.update(time=degen_time)
         assert new != cm
         # any coords with time as a dim (but not time itself) should be gone.
         has_time = [i for i, v in cm.dim_map.items() if ("time" in v and i != "time")]
@@ -759,7 +759,7 @@ class TestUpdateCoords:
 
     def test_update_none_drops(self, basic_coord_manager):
         """Ensure when passing coord=None the coord is dropped."""
-        cm1 = basic_coord_manager.update_coords(time=None)
+        cm1 = basic_coord_manager.update(time=None)
         cm2, _ = basic_coord_manager.drop_coords("time")
         assert cm1 == cm2
 
@@ -767,7 +767,7 @@ class TestUpdateCoords:
         """Ensure start_coord can be used to update."""
         time1 = basic_coord_manager.coord_map["time"]
         new_start = time1.max()
-        cm = basic_coord_manager.update_coords(time_min=new_start)
+        cm = basic_coord_manager.update(time_min=new_start)
         time2 = cm.coord_map["time"]
         assert time2.min() == new_start
 
@@ -775,9 +775,9 @@ class TestUpdateCoords:
         """Ensure coordinates can be dissociated with update_coords."""
         time = basic_coord_manager.coord_map["time"]
         new_time = time.values + dc.to_timedelta64(1)
-        new = basic_coord_manager.update_coords(new_time=("time", new_time))
+        new = basic_coord_manager.update(new_time=("time", new_time))
         assert "new_time" in new.dim_map and "new_time" in new.coord_map
-        dissociated = new.update_coords(new_time=(None, new_time))
+        dissociated = new.update(new_time=(None, new_time))
         assert dissociated.dim_map["new_time"] == ()
 
 
@@ -813,7 +813,7 @@ class TestNonDimCoords:
     def test_update_with_1d_coordinate(self, basic_coord_manager):
         """Ensure we can add coordinates."""
         lat = np.ones_like(basic_coord_manager.get_array("distance"))
-        out = basic_coord_manager.update_coords(latitude=("distance", lat))
+        out = basic_coord_manager.update(latitude=("distance", lat))
         assert out is not basic_coord_manager
         assert out.dims == basic_coord_manager.dims, "dims shouldn't change"
         assert np.all(out.get_array("latitude") == lat)
@@ -840,7 +840,7 @@ class TestNonDimCoords:
         time = basic_coord_manager.get_array("time")
         quality = np.ones((len(dist), len(time)))
         dims = ("distance", "time")
-        new = basic_coord_manager.update_coords(qual=(dims, quality))
+        new = basic_coord_manager.update(qual=(dims, quality))
         assert new.dims == basic_coord_manager.dims
         assert new.dim_map["qual"] == dims
         assert "qual" in new
@@ -959,7 +959,7 @@ class TestMergeCoordManagers:
         cm1 = basic_coord_manager
         dist = cm1.coord_map["distance"]
         new_dist = dist.update_limits(min=dist.max())
-        cm2 = cm1.update_coords(distance=new_dist)
+        cm2 = cm1.update(distance=new_dist)
         with pytest.raises(CoordMergeError, match="Non merging coordinates"):
             merge_coord_managers([cm1, cm2], "time")
 
@@ -969,7 +969,7 @@ class TestMergeCoordManagers:
         be dropped.
         """
         cm1 = basic_coord_manager
-        cm2 = cm1.update_coords(time2=("time", cm1.get_array("time")))
+        cm2 = cm1.update(time2=("time", cm1.get_array("time")))
         out_no_range = merge_coord_managers([cm1, cm2], "time")
         assert "time2" not in out_no_range.coord_map
         out_with_range = merge_coord_managers([cm1, cm2], "time")

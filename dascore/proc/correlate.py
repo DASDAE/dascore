@@ -113,7 +113,7 @@ def correlate(
     corr_data = np.fft.fftshift(cor_array, axes=fft_axis)
     # get new coordinate along correlation dimension
     new_coord = _get_correlated_coord(fft_coord, corr_data.shape[fft_axis])
-    coords = patch.coords.update_coords(**{fft_dim: new_coord}).rename_coord(
+    coords = patch.coords.update(**{fft_dim: new_coord}).rename_coord(
         **{fft_dim: f"lag_{fft_dim}"}
     )
     out = dc.Patch(coords=coords, data=corr_data, attrs=patch.attrs)

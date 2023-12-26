@@ -1,8 +1,8 @@
-
-  warning: false
 ---
-
-# DASCore
+title: DASCore
+execute:
+    warning: false
+---
 
 A python library for distributed fiber optic sensing.
 

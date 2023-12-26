@@ -477,6 +477,6 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
     slices[axis] = to_keep
     new_data = patch.data[tuple(slices)]
     coord = patch.get_coord(dim)
-    cm = patch.coords.update_coords(**{dim: coord[to_keep]})
+    cm = patch.coords.update(**{dim: coord[to_keep]})
     attrs = patch.attrs.update(coords={})
     return patch.new(data=new_data, coords=cm, attrs=attrs)

@@ -1,0 +1,285 @@
+---
+title: Coordinates and Coordinate Managers
+execute:
+  warning: false
+---
+
+:::{.callout-note}
+This page covers advanced DASCore features. Most users will be fine with only the coordinate material presented in the [patch tutorial](patch.qmd#coords).  
+:::
+
+In order to manage coordinate labels and array manipulations, DASCore implements two classes, [Coordinate](`dascore.core.coords.BaseCoord`), which has several associated subclasses corresponding to different types of coordinates, and [CoordManager](`dascore.core.coordmanager.CoordManager`) which managers a group of coordinates.
+
+# Coordinates
+
+Coordinates usually keep track of labels along an associated dimension of an array, but they can also be independent of array data. They provide methods for slicing, re-ordering, filtering etc. and are used by DASCore for such operations.
+
+Much like DASCore's [`Spool`](`dascore.core.spool.BaseSpool`), Coordinates are a collection of classes which implement a common interface. 
+
+
+:::{.callout-note}
+Coordinates are very similar (in concept) to Pandas' indices, with some significant differences in implementation.
+:::
+
+## Coordinate Creation
+
+[`get_coord`](`dascore.core.coords.get_coord`) creates new `Coordinate` instances from a variety of inputs. Based on the type and characteristics of the inputs, it creates and returns the correct subclass of [`BaseCoord`](`dascore.core.coords.BaseCoord`). Here are a few examples:
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+
+# monotonic, evenly sampled coords from start, stop, step
+range_coord = get_coord(start=0, stop=10, step=1)
+
+# same as above but using an evenly sampled sorted array
+array = np.arange(0, 10, step=1)
+array_coord = get_coord(values=array)
+
+# the type and values of the resulting coordinates should be the same.
+assert range_coord == array_coord
+
+# arrays don't have to be evenly sampled, or sorted
+sorted_array = np.sort(np.random.rand(10))
+sorted_coord = get_coord(values=sorted_array)
+
+random_array = np.random.rand(10) 
+random_coord = get_coord(values=random_array)
+```
+
+
+## Coordinate Attributes
+
+The following coordinate attributes provide insight into a coordinate's properties:
+
+| Attribute        | Description                                             |
+|------------------|---------------------------------------------------------|
+| `sorted`         | `True` if the coordinate is sorted in ascending order.  |
+| `reverse_sorted` | `True` if the coordinate is sorted in descending order. |
+| `evenly_sampled` | `True` if the coordinate has uniform step sizes.        |
+| `dtype`          | The numpy data type of the coodascore.core.coord.BaseCoord.get_next_indexrdinate.                  | 
+| `data`           | Return an array of coordinate values                    | 
+| `units`          | Coordinate units.                                       |
+| `degenerate`     | `True` if the coordinate has a zero length dimension.   |
+| `min()`          | Return the minimum value in the coordinate.             |
+| `max()`          | Return the maximum value in the coordinate.             |
+
+: Coordinate attributes {.striped .hover}
+
+## Coordinate Methods
+This section highlights some of the common coordinate methods. The methods which would cause changes to a data array return a new coordinate and an object that can be used for indexing an array. This can either be a `slice` instance or another array which uses numpy's advanced indexing features for sorting or selection.
+
+For the following examples, let's assume the created coordinates are associated with the following array:
+
+
+### Sort
+[`sort`](`dascore.core.coords.BaseCoord.sort`) sorts the values in an array. 
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+
+# since this array is length 10 it is associated with the 0th axis of data
+random_array = np.random.rand(10) 
+random_coord = get_coord(values=random_array)
+
+sorted_coord, indexer = random_coord.sort()
+
+# the array would then be updated like so:
+data = np.random.rand(10, 20)
+sorted_data = data[indexer, :] 
+```
+
+### Snap
+['snap'](`dascore.core.coords.BaseCoord.snap`) is used to calculate an average spacing between samples and "snap" all values to that spacing. If the coordinate is not sorted, it will be sorted in the process. This method should be used with care since it causes some loss in precision and can introduce inaccuracies in down-stream calculations. The min and max of the coordinate remain unchanged. 
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+
+# since this array is length 10 it is associated with the 0th axis of data
+random_array = np.random.rand(10) 
+random_coord = get_coord(values=random_array)
+
+sorted_coord, indexer = random_coord.sort()
+
+# the array would then be updated like so:
+data = np.random.rand(10, 20)
+sorted_data = data[indexer, :] 
+```
+
+
+### Select
+[`select`](`dascore.core.coords.BaseCoord.select`) is used for slicing/sub-selecting.
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+
+coord = get_coord(start=0, stop=21, step=1)
+
+new_coord, indexer = coord.select((3, 14))
+
+data = np.random.rand(10, 20)
+selected_data = data[:, indexer] 
+```
+
+Coordinates also support units.
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+from dascore.units import ft
+
+coord = get_coord(start=0, stop=21, step=1, units='m')
+
+new_coord, indexer = coord.select((14*ft, 50 * ft))
+print(new_coord) 
+```
+
+### Units
+
+[`convert_units`](`dascore.core.coords.BaseCoord.convert_units`) and ['set_units'](`dascore.core.coords.BaseCoord.set_units`) are used to control the units associated with a coordinate.
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+from dascore.units import ft
+
+coord = get_coord(start=0, stop=21, step=1, units='m')
+
+# convert coords to ft
+coord_ft_converted = coord.convert_units("ft")
+
+# simply change unit label (values remain the same)
+coord_ft_set = coord.set_units("ft")
+
+# Create coord with silly units
+silly_units = "10*PI*m/ft * furlongs * fortnight"
+coord_silly_units = get_coord(start=10, stop=21, step=1, units=silly_units)
+
+# Simplify the coordinates and modify coordinte values accordiningly.
+simple_coord = coord_silly_units.simplify_units()
+print(f"Simplified units are: {simple_coord.units}")
+print(f"New coord lims are: {simple_coord.limits}") 
+```
+
+
+### Update Limits
+['update_limits`](`dascore.core.coords.BaseCoord.update_limits`) is used to change some aspect of the coordinate range. Note, since this method doesn't change the shape of the coordinate, no indexer is returned.
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+
+start, stop = np.datetime64("2023-01-01"), np.datetime64("2023-01-01T01")
+step = np.timedelta64(60, 's')
+coord = get_coord(start=start, stop=stop, step=step)
+
+# update step, keeping length and start but shorting end time
+coord_new_step = coord.update_limits(step=np.timedelta64(1800, 's'))
+
+# change maximum value, keeping length the same and changing step
+coord_new_max = coord.update_limits(max=stop + 10 * step)
+```
+
+### Get Next Index
+[`get_next_index`](`dascore.core.coords.BaseCoord.get_next_index`) returns the index value (an integer) for where a value would be inserted into the coordinate.
+
+```{python}
+from dascore.core import get_coord
+coord = get_coord(start=0, stop=10, step=1)
+# Find the index for a value contained by the coordinate.
+assert coord.get_next_index(1) == 1
+# The next (not closest) index is return for value not in coord.
+assert coord.get_next_index(2.000001) == 3
+```
+
+# CoordManager
+
+The [`CoordManager`](`dascore.core.coordmanager.CoordManager`) handles a group of coordinates and provides methods for updating managed data arrays. 
+
+
+## Coordinate Manager Creation
+`CoordManager` instances are usually created from a dictionary of coordinates via the [`get_coord_manager`](`dascore.core.coordmanager.get_coord_manager`) function.
+
+```{python}
+from dascore.core import get_coord, get_coord_manager
+
+coord_dict = {
+    "dim1": get_coord(start=1, stop=10, step=1),
+    "dim2": get_coord(start=0.001, stop=1, step=.1),
+}
+
+cm = get_coord_manager(coords=coord_dict, dims=("dim1", "dim2"))
+
+# dims are the dimension names (in order)
+print(f"dimensions are {cm.dims}")
+
+# coord_map is a mapping of {coord_name: coordinate}
+print(dict(cm.coord_map))
+
+# and dim_map is a mapping of {coord_name: (associated_dimensions...)}
+print(dict(cm.dim_map))
+```
+
+`CoordManager`s can have non-dimensional coordinates which may or may not be associated with a coordinate dimension.
+
+```{python}
+from dascore.core import get_coord, get_coord_manager
+
+coord_dict = {
+    "dim1": get_coord(start=0, stop=10, step=1),
+    "dim2": get_coord(start=0.001, stop=1, step=.1),
+    # "dim_coord" is a non-dimensional coordinate asscoiated with
+    # dim1, so it must have the same shape. Notice how the associated
+    # dimension and coordiante values can be specified in a tuple. 
+    "dim_coord": ("dim1", get_coord(start=10, stop=20, step=1)),
+    # non-dimensional coordinates are not associated with a dimension
+    # must use None
+    "non_dim_coord": (None, get_coord(start=1, stop=100, step=1)),
+}
+
+cm_many_coords = get_coord_manager(coords=coord_dict, dims=("dim1", "dim2"))
+print(cm)
+```
+
+## Coordinate Manager Methods
+Much like the coordinates, the `CoordinateManager` class implements a variety of methods for filtering, sorting, modifying units, etc. However, unlike coordinates, the `CoordManager` accepts an array of the appropriate shape and returns a new array and takes keyword arguments for getting dimensional information.
+
+
+### Select
+
+[select]('dacore.core.coordmanager.CoordManager.select`) filters the coordinate manager and, optionally, trims an associated array.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+coords, data = patch.coords, patch.data
+
+new_coord, new_data = coords.select(data=data, distance=(..., 100))
+```
+
+
+### Sort
+
+[sort]('dacore.core.coordmanager.CoordManager.sort`) sorts along one or more axes. 
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+coords, data = patch.coords, patch.data
+
+new_coord, new_data = coords.sort("time", "distanece", reverse=True)
+```
+
+### 

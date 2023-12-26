@@ -41,7 +41,7 @@ class _PatchRollerInfo(DascoreBaseModel):
         coord = self.patch.get_coord(self.dim)
         if self.step > 1:
             coord = coord[:: self.step]
-        return self.patch.coords.update_coords(**{self.dim: coord})
+        return self.patch.coords.update(**{self.dim: coord})
 
     def _get_attrs_with_apply_history(self, func_or_str):
         """Get new attrs that has history from apply attached."""

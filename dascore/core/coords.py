@@ -41,7 +41,7 @@ from dascore.utils.models import (
     DTypeLike,
     UnitQuantity,
 )
-from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64
+from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
 # Valid values for min/max
 min_max_type = TypeVar("min_max_type")
@@ -197,6 +197,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     Coordinates are used to manage labels and indexing along a single
     data dimension.
+
+    Coordinates should usually be created with
+    [get_coords](`dascore.core.coords.get_coord`) rather than using the class
+    directly.
     """
 
     units: UnitQuantity = None
@@ -380,8 +384,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
         Notes
         -----
-        max is considered inclusive, meaning for CoordRange stop will be
-        max + step.
+        For CoordRange stop will be max + step.
         """
 
     @property
@@ -558,22 +561,15 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             raise ParameterError(msg)
         return min(samples, len(self))
 
-    def get_next_index(self, value, samples=False, allow_out_of_bounds=False):
+    def get_next_index(self, value, samples=False, allow_out_of_bounds=False) -> int:
         """
         Get the index a value would have in a coordinate.
 
+        This returns the "next" rather than the closest, index if the exact
+        value is not contained by the index.
+
         Parameters
         ----------
-        ----------from dascore.core import get_coord
-
-        # no problems here
-        coord = get_coord(start=1, stop=5, step=-1)
-
-        # len still works
-        len(coord)
-
-        # but accessing any of the values fails
-        coord[0]  # raises IndexError
         value
             The value which could be contained by the coordinate.
         samples
@@ -582,6 +578,15 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             If True, allow the value to be out of bounds of the coordinate
             and just return an index referring to the end
             (len(coords) - 1) or beginning (0).
+
+        Examples
+        --------
+        >>> from dascore.core import get_coord
+        >>> coord = get_coord(start=0, stop=10, step=1)
+        >>> # Find the index for a value contained by the coordinate.
+        >>> assert coord.get_next_index(1) == 1
+        >>> # The next (not closest) index is return for value not in coord.
+        >>> assert coord.get_next_index(2.000001) == 3
         """
         # handle samples
         if samples:
@@ -641,7 +646,10 @@ class CoordRange(BaseCoord):
             assert values[name] is not None
         # step should have the same sign as stop-start, see #321.
         diff = values["stop"] - values["start"]
-        if not np.sign(values["step"]) == np.sign(diff):
+        # note: we need to the to_float since np.sign(datetime64) returns a
+        # datetime64 which includes precision, so even if the sign is the same
+        # if the precision is different this validation fails.
+        if not np.sign(to_float(values["step"])) == np.sign(to_float(diff)):
             msg = "Sign of step must match sign of stop - start"
             raise CoordError(msg)
         return values
@@ -867,7 +875,8 @@ class CoordArray(BaseCoord):
         Snap the coordinates to evenly sampled grid points.
 
         This will cause some loss of precision but often makes the coordinate
-        much easier to work with.
+        much easier to work with. The min/max of the coordinate will remain
+        unchanged.
         """
         values = self.values
         min_v, max_v = np.min(values), np.max(values)
@@ -1064,6 +1073,9 @@ def get_coord(
     """
     Given multiple types of input, return a coordinate.
 
+    This function automatically figures out which kind of Coordinate
+    should be returned for a given type of input.
+
     Parameters
     ----------
     values
@@ -1088,6 +1100,27 @@ def get_coord(
         (start, stop, step)
         (values)
         (values, step) - useful for length 1 arrays.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core import get_coord
+    >>>
+    >>> # Create a coordinate from a start, stop, and range value.
+    >>> range_coord = get_coord(start=1, stop=12, step=1)
+    >>>
+    >>> # Create an identical coordinate from an array.
+    >>> array_coord = get_coord(values=np.arange(1, 12, 1))
+    >>> # This array coord should return an identical coordinate
+    >>> assert range_coord == array_coord
+    >>>
+    >>> # Coordinate from an array that is sorted, but not evenly sampled
+    >>> array = np.sort(np.random.rand(20))
+    >>> array_coord2 = get_coord(values=array)
+    >>>
+    >>> # Coordinate from random array
+    >>> array = np.random.rand(20)
+    >>> array_coord3 = get_coord(values=array)
     """
 
     def _check_inputs(data, start, stop, step):

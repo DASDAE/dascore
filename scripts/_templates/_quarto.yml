@@ -108,6 +108,9 @@ website:
         - text: File IO
           href: tutorial/file_io.qmd
 
+        - text: Coordinates
+          href: tutorial/coords.qmd
+
     - id: Recipes
       title: 'Recipes'
       contents:

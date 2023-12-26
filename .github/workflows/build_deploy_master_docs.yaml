@@ -54,7 +54,7 @@ jobs:
       - name: Install quarto
         uses: quarto-dev/quarto-actions/setup@v2
         with:
-          version: 1.3.433
+          version: 1.3.450
           tinytex: true
 
       - name: print quarto version

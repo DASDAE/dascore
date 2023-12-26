@@ -780,6 +780,15 @@ class TestCoordRange:
         coords = evenly_sampled_coord
         assert coords == coords.update_limits()
 
+    def test_update_limits_timedelta64_different_precision(self):
+        """Update limits with datetime64 that have different precisions."""
+        start, stop = np.datetime64("2023-01-01"), np.datetime64("2023-01-01T01")
+        step = np.timedelta64(60, "s")
+        coord = get_coord(start=start, stop=stop, step=step)
+        # change maximum value, keeping length the same and chaning step
+        coord_new = coord.update_limits(max=stop + 10 * step)
+        assert coord_new.max() == stop + 10 * step
+
     def test_test_select_end_floats(self, evenly_sampled_float_coord_with_units):
         """Ensure we can select right up to the end of the array."""
         coord = evenly_sampled_float_coord_with_units
