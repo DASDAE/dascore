@@ -314,7 +314,9 @@ class DirectoryIndexer(AbstractIndexer):
         self._enforce_min_version()  # delete index if schema has changed
         update_time = time.time()
         new_files = list(self._get_file_iterator(paths=paths, only_new=True))
-        smooth_iterator = track(new_files, f"Indexing {self.path.name}")
+        smooth_iterator = track(
+            new_files, f"Indexing {self.path.name}", progress=progress
+        )
         data_list = [y.flat_dump() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
         if not df.empty:
