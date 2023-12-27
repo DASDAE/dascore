@@ -8,7 +8,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import SpoolType
+from dascore.constants import PROGRESS_LEVELS, SpoolType
 from dascore.core.spool import BaseSpool, DataFrameSpool
 from dascore.io.core import FiberIO
 from dascore.utils.docs import compose_docstring
@@ -67,7 +67,7 @@ class FileSpool(DataFrameSpool):
         return dc.read(**kwargs)[0]
 
     @compose_docstring(doc=BaseSpool.update.__doc__)
-    def update(self: SpoolType) -> Self:
+    def update(self: SpoolType, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
         {doc}.
 
