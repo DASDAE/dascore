@@ -91,7 +91,7 @@ class TestPatchAttrs:
 
     def test_coords_with_coord_keys(self):
         """Ensure coords with base keys work."""
-        coords = {"distance": get_coord(values=np.arange(100))}
+        coords = {"distance": get_coord(data=np.arange(100))}
         out = PatchAttrs(**{"coords": coords})
         assert out.coords
         assert "distance" in out.coords

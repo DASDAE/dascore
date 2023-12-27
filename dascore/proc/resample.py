@@ -126,7 +126,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     out = func(samples_num)
     cm = patch.coords
     associated_dims = cm.dim_map[dim]
-    coord_new = dc.core.get_coord(values=samples)
+    coord_new = dc.core.get_coord(data=samples)
     cm_new = cm.update(**{dim: (associated_dims, coord_new)})
     return patch.new(data=out, coords=cm_new)
 

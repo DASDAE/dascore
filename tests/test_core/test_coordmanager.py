@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from rich.text import Text
 
 import dascore as dc
-import dascore.proc.coords
 from dascore import to_datetime64
 from dascore.core.coordmanager import (
     CoordManager,
@@ -29,13 +28,18 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.units import get_quantity
-from dascore.utils.misc import all_close, get_middle_value, register_func
+from dascore.utils.misc import (
+    all_close,
+    get_middle_value,
+    register_func,
+    suppress_warnings,
+)
 
 COORD_MANAGERS = []
 
 COORDS = {
     "time": to_datetime64(np.arange(10, 100, 10)),
-    "distance": get_coord(values=np.arange(0, 1_000, 10)),
+    "distance": get_coord(data=np.arange(0, 1_000, 10)),
 }
 DIMS = ("time", "distance")
 
@@ -69,7 +73,7 @@ def coord_manager_multidim() -> CoordManager:
     """The simplest coord manager with several coords added."""
     COORDS = {
         "time": to_datetime64(np.arange(10, 110, 10)),
-        "distance": get_coord(values=np.arange(0, 1000, 10)),
+        "distance": get_coord(data=np.arange(0, 1000, 10)),
         "quality": (("time", "distance"), np.ones((10, 100))),
         "latitude": ("distance", np.random.rand(100)),
     }
@@ -148,11 +152,12 @@ class TestBasicCoordManager:
 
     def test_to_dict(self, coord_manager):
         """CoordManager should be convertible to dict."""
-        c_dict = dict(coord_manager)
+        with suppress_warnings():
+            c_dict = dict(coord_manager)
         expected = {x: coord_manager.get_array(x) for x in coord_manager.coord_map}
         assert set(expected) == set(c_dict)
         for key in set(expected):
-            assert np.all(expected[key] == c_dict[key])
+            assert np.all(expected[key] == np.array(c_dict[key]))
 
     def test_membership(self, coord_manager):
         """Coord membership should work for coord names."""
@@ -278,6 +283,13 @@ class TestBasicCoordManager:
         msg = "returns a numpy array"
         with pytest.warns(UserWarning, match=msg):
             _ = basic_coord_manager["time"]
+
+    def test_has_attr(self, basic_coord_manager):
+        """Ensure hasattr returns correct result."""
+        dims = basic_coord_manager.dims
+        for dim in dims:
+            assert hasattr(basic_coord_manager, dim)
+        assert not hasattr(basic_coord_manager, "_NOT_A_DIM")
 
 
 class TestCoordManagerInputs:
@@ -549,7 +561,7 @@ class TestEquals:
     def test_unequal_float_coords(self, coord_manager_multidim):
         """Ensure if coordinates are not equal false is returned."""
         coord = coord_manager_multidim.coord_map["latitude"]
-        new = get_coord(values=coord.values + 10)
+        new = get_coord(data=coord.values + 10)
         args = dict(latitude=("distance", new))
         new_coord = coord_manager_multidim.update(**args)
         assert new_coord != coord_manager_multidim
@@ -706,7 +718,7 @@ class TestUpdateFromAttrs:
         assert new_coords == coords
 
 
-class TestUpdateCoords:
+class TestUpdate:
     """Tests for updating coordinates."""
 
     def test_simple(self, basic_coord_manager):
@@ -823,7 +835,8 @@ class TestNonDimCoords:
 
     def test_init_with_1d_coordinate(self, basic_coord_manager):
         """Ensure initing with 1D non-dim coords works."""
-        coords = dict(basic_coord_manager)
+        with suppress_warnings():
+            coords = dict(basic_coord_manager)
         lat = np.ones_like(basic_coord_manager.get_array("distance"))
         coords["latitude"] = ("distance", lat)
         out = get_coord_manager(coords, dims=basic_coord_manager.dims)

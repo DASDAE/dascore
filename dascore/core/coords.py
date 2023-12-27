@@ -30,6 +30,7 @@ from dascore.units import (
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
+    all_close,
     all_diffs_close_enough,
     cached_method,
     iterate,
@@ -387,6 +388,28 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         For CoordRange stop will be max + step.
         """
 
+    def update_data(
+        self,
+        data: ArrayLike | np.ndarray | None = None,
+        values: ArrayLike | np.ndarray | None = None,
+        **kwargs,
+    ) -> Self:
+        """
+        Update the data of the coordinate.
+
+        Parameters
+        ----------
+        data
+            A new array to use.
+        values
+            Same as data, but deprecated. Here for compatibility reasons.
+        """
+        if data is None and values is None:
+            return self
+        data = values if data is None else data
+        units = kwargs.get("units")
+        return get_coord(data=data, units=units)
+
     @property
     def data(self):
         """Return the internal data. Same as values attribute."""
@@ -474,7 +497,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             for ind in iterate(axes):
                 new_shape[ind] = 0
         data = np.empty(tuple(new_shape), dtype=self.dtype)
-        return get_coord(values=data)
+        return get_coord(data=data)
 
     def index(self, indexer, axis: int | None = None) -> Self:
         """
@@ -495,7 +518,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 slice(None, None) if i != axis else indexer for i in range(ndims)
             )
         array = self.data[indexer]
-        return get_coord(values=array, units=self.units)
+        return get_coord(data=array, units=self.units)
 
     def get_attrs_dict(self, name):
         """Get attrs dict."""
@@ -519,10 +542,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def update(self, **kwargs):
         """Update parts of the coordinate."""
         info = self.model_dump()
-        update_fields = {i: v for i, v in kwargs.items() if v != info.get(i)}
+        update_fields = {
+            i: v for i, v in kwargs.items() if not all_close(v, info.get(i))
+        }
         units = update_fields.pop("units", None)
         _ = update_fields.pop("dtype", None)
-        out = self.update_limits(**update_fields)
+        out = self.update_limits(**update_fields).update_data(**update_fields)
         if units is not None:
             out = out.convert_units(units)
         return out
@@ -680,7 +705,7 @@ class CoordRange(BaseCoord):
             # Todo we can probably add more intelligent logic for slices.
             item = slice(start, end, item.step)
         out = self.values[item]
-        return get_coord(values=out, units=self.units)
+        return get_coord(data=out, units=self.units)
 
     @cached_method
     def __len__(self):
@@ -922,11 +947,11 @@ class CoordArray(BaseCoord):
         elif min is not None:
             diff = min - self.min()
             vals = self.values + diff
-            out = get_coord(values=vals, units=self.units)
+            out = get_coord(data=vals, units=self.units)
         elif max is not None:
             diff = max - self.max()
             vals = self.values + diff
-            out = get_coord(values=vals, units=self.units)
+            out = get_coord(data=vals, units=self.units)
         return out.new(**kwargs)
 
     def __getitem__(self, item) -> Self:
@@ -1061,6 +1086,7 @@ class CoordDegenerate(CoordArray):
 
 def get_coord(
     *,
+    data: ArrayLike | None | np.ndarray = None,
     values: ArrayLike | None | np.ndarray = None,
     start=None,
     min=None,
@@ -1078,8 +1104,10 @@ def get_coord(
 
     Parameters
     ----------
+    data
+        An array indicating the values.
     values
-        An array of values.
+        Deprecated, use data instead.
     start
         The start value of the array, inclusive.
     min
@@ -1092,7 +1120,8 @@ def get_coord(
         Indication of units.
     dtype
         Only used for compatibility with kwargs produced by other
-        functions. Doesn't do anything.
+        functions. Doesn't do anything as dtype is inferred from other
+        arguments.
 
     Notes
     -----
@@ -1110,20 +1139,20 @@ def get_coord(
     >>> range_coord = get_coord(start=1, stop=12, step=1)
     >>>
     >>> # Create an identical coordinate from an array.
-    >>> array_coord = get_coord(values=np.arange(1, 12, 1))
+    >>> array_coord = get_coord(data=np.arange(1, 12, 1))
     >>> # This array coord should return an identical coordinate
     >>> assert range_coord == array_coord
     >>>
     >>> # Coordinate from an array that is sorted, but not evenly sampled
     >>> array = np.sort(np.random.rand(20))
-    >>> array_coord2 = get_coord(values=array)
+    >>> array_coord2 = get_coord(data=array)
     >>>
     >>> # Coordinate from random array
     >>> array = np.random.rand(20)
-    >>> array_coord3 = get_coord(values=array)
+    >>> array_coord3 = get_coord(data=array)
     """
 
-    def _check_inputs(data, start, stop, step):
+    def _check_data_compatibility(data, start, stop, step):
         """Ensure input combinations are valid."""
         if data is None:
             if any([start is None, stop is None, step is None]):
@@ -1160,34 +1189,40 @@ def get_coord(
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 
+    # ensure data and values are not used
+    if data is not None and values is not None:
+        msg = "Cannot specify both data and values. Use only data."
+        raise CoordError(msg)
+    elif values is not None:
+        data = values
     # maybe convert min/max to start stop.
     if start is None and min is not None:
         start = min
     if stop is None and max is not None:
         stop = max
-    _check_inputs(values, start, stop, step)
+    _check_data_compatibility(data, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
-    if values is not None:
-        if not isinstance(values, np.ndarray | BaseCoord):
-            values = np.array(values)
+    if data is not None:
+        if not isinstance(data, np.ndarray | BaseCoord):
+            data = np.array(data)
         # values = np.array(values)  # ensure we have a numpy array
-        if isinstance(values, BaseCoord):  # just return coordinate
-            return values
-        if np.size(values) == 0:
-            return CoordDegenerate(values=values, units=units, step=step)
+        if isinstance(data, BaseCoord):  # just return coordinate
+            return data
+        if np.size(data) == 0:
+            return CoordDegenerate(values=data, units=units, step=step)
         # special case of len 1 array either get range, if step specified
         # or sorted monotonic array if not.
-        elif len(values) == 1:
+        elif len(data) == 1:
             if not pd.isnull(step):
-                val = values[0]
+                val = data[0]
                 return CoordRange(start=val, stop=val + step, step=step, units=units)
-            return CoordMonotonicArray(values=values, units=units)
-        start, stop, step, monotonic = _maybe_get_start_stop_step(values)
+            return CoordMonotonicArray(values=data, units=units)
+        start, stop, step, monotonic = _maybe_get_start_stop_step(data)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)
             return out
         elif monotonic:
-            return CoordMonotonicArray(values=values, units=units)
-        return CoordArray(values=values, units=units)
+            return CoordMonotonicArray(values=data, units=units)
+        return CoordArray(values=data, units=units)
     else:
         return CoordRange(start=start, stop=stop, step=step, units=units)

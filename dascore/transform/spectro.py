@@ -26,13 +26,13 @@ def _get_new_original_coord(old_coord, array):
     is_dt = np.issubdtype(old_coord.dtype, np.datetime64)
     val_dtype = np.timedelta64 if is_dt else old_coord.dtype
     vals = get_compatible_values(array, val_dtype)
-    return get_coord(values=old_min + vals, units=old_coord.units)
+    return get_coord(data=old_min + vals, units=old_coord.units)
 
 
 def _get_transformed_coord(coord, freqs):
     """Get the transformed coordinates."""
     units = 1 / coord.units if coord.units is not None else None
-    return get_coord(values=freqs, units=units)
+    return get_coord(data=freqs, units=units)
 
 
 def _get_new_attrs(patch, cm, dim):
