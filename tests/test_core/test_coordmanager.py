@@ -291,6 +291,12 @@ class TestBasicCoordManager:
             assert hasattr(basic_coord_manager, dim)
         assert not hasattr(basic_coord_manager, "_NOT_A_DIM")
 
+    def test_iterate(self, basic_coord_manager):
+        """Ensure coordinates yield name an coordinate when iterated."""
+        for dim, coord in iter(basic_coord_manager):
+            expected = basic_coord_manager.get_coord(dim)
+            assert all_close(coord, expected)
+
 
 class TestCoordManagerInputs:
     """Tests for coordinates management."""

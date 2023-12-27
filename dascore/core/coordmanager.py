@@ -237,8 +237,7 @@ class CoordManager(DascoreBaseModel):
                 raise AttributeError(e.args[0])
 
     def __iter__(self):
-        for key in self.coord_map:
-            yield (key, self.get_array(key))
+        yield from self.coord_map.items()
 
     def __contains__(self, key):
         return key in self.coord_map
