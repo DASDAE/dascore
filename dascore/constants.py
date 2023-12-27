@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import Literal, Protocol, TypeVar, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -93,6 +93,9 @@ LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
 
 # Required shared attributes to merge patches together
 PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "data_category")
+
+# Level of progress bar
+PROGRESS_LEVELS = Literal["standard", "basic", None]
 
 # A map from the unit name to the code used in numpy.timedelta64
 NUMPY_TIME_UNIT_MAPPING = {

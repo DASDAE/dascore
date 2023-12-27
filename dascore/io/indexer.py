@@ -15,7 +15,7 @@ import pooch
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import ONE_SECOND_IN_NS, path_types
+from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS, path_types
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import iter_files, iterate
@@ -296,16 +296,27 @@ class DirectoryIndexer(AbstractIndexer):
         }
         return out
 
-    def update(self, paths=None) -> Self:
+    def update(self, paths=None, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
         Updates the contents of the Indexer.
 
-        Resets any previous selection.
+        Also resets any previous selection.
+
+        Parameters
+        ----------
+        paths
+            A sequence of paths to limit the updates, if None, index all
+            the contents of directory.
+        progress
+            The type of progress bar to use. None disables progress bar and
+            "basic" is best for low latency scenarios.
         """
         self._enforce_min_version()  # delete index if schema has changed
         update_time = time.time()
         new_files = list(self._get_file_iterator(paths=paths, only_new=True))
-        smooth_iterator = track(new_files, f"Indexing {self.path.name}")
+        smooth_iterator = track(
+            new_files, f"Indexing {self.path.name}", progress=progress
+        )
         data_list = [y.flat_dump() for x in smooth_iterator for y in dc.scan(x)]
         df = pd.DataFrame(data_list)
         if not df.empty:

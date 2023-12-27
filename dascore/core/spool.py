@@ -14,6 +14,7 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import (
+    PROGRESS_LEVELS,
     ExecutorType,
     PatchType,
     attr_conflict_description,
@@ -231,8 +232,18 @@ class BaseSpool(abc.ABC):
         msg = f"spool of type {self.__class__} has no split implementation"
         raise NotImplementedError(msg)
 
-    def update(self) -> Self:
-        """Updates the contents of the spool and returns a spool."""
+    def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
+        """
+        Updates the contents of the spool, return the updated spool.
+
+        Parameters
+        ----------
+        progress
+            Controls the progress bar. "standard" produces the standard
+            progress bar. "basic" is a simplified version with lower refresh
+            rates, best for high-latency environments, and None disables
+            the progress bar.
+        """
         return self
 
     def map(
