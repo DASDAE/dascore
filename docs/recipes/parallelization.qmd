@@ -90,7 +90,7 @@ If you like to run the `mpi_spool.py` script using `n = 4` processors (which mea
 mpiexec -n 4 python mpi_spool.py
 ```
 
-or,
+or
 
 ```bash
 mpirun -n 4 python mpi_spool.py

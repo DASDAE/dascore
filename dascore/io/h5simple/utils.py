@@ -45,7 +45,7 @@ def _get_coord(v, snap, name):
         assert len(coord) == len(v)
     else:
         values = v[:] if name != "time" else dc.to_datetime64(v[:])
-        coord = get_coord(values=values)
+        coord = get_coord(data=values)
     return coord
 
 

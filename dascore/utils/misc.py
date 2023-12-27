@@ -139,12 +139,10 @@ def all_close(ar1, ar2):
     strict equality is used.
     """
     ar1, ar2 = np.array(ar1), np.array(ar2)
-    is_date = np.issubdtype(ar1.dtype, np.datetime64)
-    is_timedelta = np.issubdtype(ar1.dtype, np.timedelta64)
-    if is_date or is_timedelta:
-        return np.all(ar1 == ar2)
-    else:
+    try:
         return np.allclose(ar1, ar2)
+    except TypeError:
+        return np.all(ar1 == ar2)
 
 
 def iter_files(

@@ -8,7 +8,7 @@ filtering the managed arrays based on coordinates.
 # Initializing CoordinateManagers
 
 Coordinate managers are initialized using the
-[get_coords](`dascore.core.coordmanager.get_coord_manager`) function. They take
+[get_coord_manager](`dascore.core.coordmanager.get_coord_manager`) function. They take
 a combination of coordinate dictionaries, dimensions, and attributes. They can
 also be extracted from example patches.
 
@@ -224,23 +224,25 @@ class CoordManager(DascoreBaseModel):
             "Use patch.coords.get_array(coord_name) instead."
         )
         warnings.warn(msg, UserWarning, stacklevel=2)
-        return self._get_coord(item).values
+        return self.get_coord(item).values
 
     def __getattr__(self, item) -> BaseCoord:
         try:
             return super().__getattr__(item)
         except AttributeError:
             # unlike get item, get attr returns the base coordinate.
-            return self._get_coord(item)
+            try:
+                return self.get_coord(item)
+            except CoordError as e:
+                raise AttributeError(e.args[0])
 
     def __iter__(self):
-        for key in self.coord_map:
-            yield (key, self.get_array(key))
+        yield from self.coord_map.items()
 
     def __contains__(self, key):
         return key in self.coord_map
 
-    def update_coords(self, **kwargs) -> Self:
+    def update(self, **kwargs) -> Self:
         """
         Update the coordinates, return a new Coordinate Manager.
 
@@ -292,11 +294,14 @@ class CoordManager(DascoreBaseModel):
         for item, value in coord_updates.items():
             coord_name, attr = item.split("_")
             new = list(out[coord_name])
-            coord = get_coord(values=new[1])
+            coord = get_coord(data=new[1])
             new[1] = coord.update(**{attr: value})
             out[coord_name] = tuple(new)
         dims = tuple(x for x in self.dims if x not in coord_to_drop)
         return get_coord_manager(out, dims=dims)
+
+    # we need this here to maintain backwards compatibility
+    update_coords = update
 
     def update_from_attrs(
         self, attrs: Mapping | dc.PatchAttrs
@@ -509,7 +514,7 @@ class CoordManager(DascoreBaseModel):
             The coordinate name(s) to disassociated from their dimensions.
         """
         new = {x: (None, self.coord_map[x]) for x in coord}
-        return self.drop_coords(*coord)[0].update_coords(**new)
+        return self.drop_coords(*coord)[0].update(**new)
 
     def drop_disassociated_coords(self) -> Self:
         """Drop all coordinates not associated with a dimension."""
@@ -576,7 +581,7 @@ class CoordManager(DascoreBaseModel):
         new_coords, indexers = _get_indexers_and_new_coords_dict(
             self, kwargs, samples=samples, relative=relative
         )
-        new_cm = self.update_coords(**new_coords)
+        new_cm = self.update(**new_coords)
         return new_cm, self._get_new_data(indexers, array)
 
     def _get_new_data(self, indexer, array: MaybeArray) -> MaybeArray:
@@ -807,7 +812,7 @@ class CoordManager(DascoreBaseModel):
         assert dim in self.dims
         dim_slice = slice(None, None, int(value))
         new_array = self.coord_map[dim][dim_slice]
-        new = self.update_coords(**{dim: new_array})
+        new = self.update(**{dim: new_array})
         slices = tuple(
             slice(None, None) if d != dim else slice(None, None, value)
             for d in new.dims
@@ -858,6 +863,10 @@ class CoordManager(DascoreBaseModel):
         out[ind] = value
         return tuple(out)
 
+    def keys(self):
+        """Return the keys (coordinates) in the coord manager."""
+        return self.coord_map.keys()
+
     def to_summary_dict(self) -> dict[str, CoordSummary]:
         """Convert the contents of the coordinate manager to a summary dict."""
         dim_map = self.dim_map
@@ -866,31 +875,42 @@ class CoordManager(DascoreBaseModel):
             out[name] = coord.to_summary(dims=dim_map[name])
         return out
 
-    def _get_coord(self, coord_name):
-        """Get a coord. Raise an error if the coordinate is not in the coordmanager."""
+    def get_coord(self, coord_name: str) -> BaseCoord:
+        """
+        Retrieve a single coordinate from the coordinate manager.
+
+        Parameters
+        ----------
+        coord_name
+            The name of the coordinate.
+
+        Raises
+        ------
+        CoordError if the coordinate is not found in the coordinate manager.
+        """
         if coord_name not in self.coord_map:
             msg = (
                 f"No coordinate named {coord_name} in coord manager. "
                 f"Valid coordinates are {list(self.coord_map)}."
             )
-            raise AttributeError(msg)
+            raise CoordError(msg)
         return self.coord_map[coord_name]
 
     def min(self, coord_name):
         """Return the minimum value of a coordinate."""
-        return self._get_coord(coord_name).min()
+        return self.get_coord(coord_name).min()
 
     def max(self, coord_name):
         """Return the maximum value of a coordinate."""
-        return self._get_coord(coord_name).max()
+        return self.get_coord(coord_name).max()
 
     def step(self, coord_name):
         """Return the coordinate step."""
-        return self._get_coord(coord_name).step
+        return self.get_coord(coord_name).step
 
     def get_array(self, coord_name) -> np.ndarray:
         """Return the coordinate values as a numpy array."""
-        return np.array(self._get_coord(coord_name))
+        return np.array(self.get_coord(coord_name))
 
 
 def get_coord_manager(
@@ -985,7 +1005,7 @@ def _get_coord_dim_map(coords, dims):
         if isinstance(coord, Mapping):  # input is a dict
             out = get_coord(**coord)
         else:
-            out = get_coord(values=coord)
+            out = get_coord(data=coord)
         return out
 
     def _coord_from_simple(name, coord):

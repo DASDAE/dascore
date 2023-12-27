@@ -27,13 +27,13 @@ def _get_filtered_data_and_coords(segy_fi, coords, time=None, channel=None):
     if time is not None:
         time_coord = coords.coord_map["time"]
         new_coord, time_slice = time_coord.select(time)
-        coords = coords.update_coords(time=new_coord)
+        coords = coords.update(time=new_coord)
 
     # filter channel
     if channel:
         channel_coord = coords.coord_map["channel"]
         new_coord, channel_inds = channel_coord.select(channel)
-        coords = coords.update_coords(channel=new_coord)
+        coords = coords.update(channel=new_coord)
         traces_inds_to_read = traces_inds_to_read[channel_inds]
 
     # filter channels

@@ -126,7 +126,7 @@ def _get_coords(patch_group, dims, attrs2):
         name = coord.name.replace("_coord_", "")
         array = _read_array(coord)
         coord = get_coord(
-            values=array,
+            data=array,
             units=getattr(attrs2, f"{name}_units", None),
             step=getattr(attrs2, f"{name}_step", None),
         )

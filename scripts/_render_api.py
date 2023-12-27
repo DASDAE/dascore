@@ -285,11 +285,12 @@ class NumpyDocStrParser:
                 out.append(f"\n{self.heading_char} {name}\n{content}")
         return "\n".join(out)
 
-    # stylers is used to decide which style function to apply for various
+    # stylers are used to decide which style function to apply for various
     # sections.
     stylers = {  # noqa
         "parameter": style_parameters,
         "parameters": style_parameters,
+        "attributes": style_parameters,
         "examples": style_examples,
         "example": style_examples,
         "notes": style_notes,

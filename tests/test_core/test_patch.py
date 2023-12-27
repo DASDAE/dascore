@@ -14,6 +14,7 @@ from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.exceptions import CoordError
 from dascore.proc.basic import apply_operator
+from dascore.utils.misc import suppress_warnings
 
 
 def get_simple_patch() -> Patch:
@@ -295,7 +296,8 @@ class TestEquals:
     def test_coords_named_differently(self, random_patch):
         """Ensure if the coords are named differently patches are not equal."""
         dims = random_patch.dims
-        new_coords = dict(random_patch.coords)
+        with suppress_warnings():
+            new_coords = dict(random_patch.coords)
         new_coords["bob"] = new_coords.pop(dims[-1])
         new_dims = tuple(list(dims)[:-1] + ["bob"])
         patch_2 = random_patch.new(coords=new_coords, dims=new_dims)
@@ -303,7 +305,8 @@ class TestEquals:
 
     def test_coords_not_equal(self, random_patch):
         """Ensure if the coords are not equal neither are the arrays."""
-        new_coords = dict(random_patch.coords)
+        with suppress_warnings():
+            new_coords = dict(random_patch.coords)
         new_coords["distance"] = new_coords["distance"] + 10
         patch_2 = random_patch.new(coords=new_coords)
         assert not patch_2.equals(random_patch)

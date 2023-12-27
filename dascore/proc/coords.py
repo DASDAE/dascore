@@ -168,7 +168,7 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa2 = pa.update_coords(distance=new_dist)
     >>> assert np.all(pa2.coords['distance'] == (pa.coords['distance'] + 1))
     """
-    new_coord = self.coords.update_coords(**kwargs)
+    new_coord = self.coords.update(**kwargs)
     return self.new(coords=new_coord, dims=new_coord.dims)
 
 

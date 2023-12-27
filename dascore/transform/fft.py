@@ -43,7 +43,7 @@ def rfft(patch: PatchType, dim="time") -> PatchType:
     dims = [x if i != axis else new_dims[0] for i, x in enumerate(patch.dims)]
     # get new coord
     units = get_quantity(patch.coords.coord_map[dim].units)
-    coord = get_coord(values=freqs, units=None if units is None else 1 / units)
+    coord = get_coord(data=freqs, units=None if units is None else 1 / units)
     new_coords = {new_dims[0]: coord}
     new_coords.update({x: patch.coords.get_array(x) for x in patch.dims if x != dim})
     return patch.__class__(data=new_data, coords=new_coords, dims=dims, attrs=attrs)

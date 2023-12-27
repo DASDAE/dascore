@@ -61,7 +61,7 @@ def _random_patch(
             attrs.pop("time_step")
     else:
         time_array = dascore.core.get_coord(
-            values=t1 + np.arange(array.shape[1]) * attrs["time_step"],
+            data=t1 + np.arange(array.shape[1]) * attrs["time_step"],
             step=attrs["time_step"],
             units=attrs["time_units"],
         )
@@ -69,7 +69,7 @@ def _random_patch(
         attrs.pop("distance_step")
     else:
         dist_array = dascore.core.get_coord(
-            values=d1 + np.arange(array.shape[0]) * attrs["distance_step"],
+            data=d1 + np.arange(array.shape[0]) * attrs["distance_step"],
             step=attrs["distance_step"],
             units=attrs["distance_units"],
         )

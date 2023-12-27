@@ -155,14 +155,14 @@ print(coords)
 :::{.callout-note}
 There are two types of entities included in coordinates:
 
- - Dimensions (dims): the name and labels associated with a patch dimension (e.g. time, distance)
+ - Dimensions (dims): the name and labels associated with a patch dimension, which is an axis of the data array (e.g. time, distance)
 
- - Coordinates (coords): the name and labels for non-dimension data associated with a dimension (e.g. coordinates "latitude" and "longitude" are often associated with dimension "distance")
+ - Coordinates (coords): the name and labels for non-dimension data which can be associated with a dimension (e.g. coordinates "latitude" and "longitude" are often associated with dimension "distance")
 
 All dimensions are coordinates but not all coordinates are dimensions.
 :::
 
-The rest of the `CoordManager` features are mostly used internally by DASCore, but you can read more about them [on the `CoordManager` doc page](`dascore.core.coordmanager`).
+The rest of the `CoordManager` features are mostly used internally by DASCore, but you can read more about them in the [Coordinate Tutorial](coords.qmd).
 
 ## Attrs
 
@@ -455,12 +455,12 @@ In most cases, you should use method chaining as part of a
 [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface) when working with patches.
 
 For example:
-```{.python}
+```{python}
 import dascore as dc
 
 pa = (
     dc.get_example_patch()  # load the patch
-    .pass_filter(time=(1, 10)  # apply bandpass filter
+    .pass_filter(time=(1, 10))  # apply bandpass filter
     .detrend(dim='time')  # detrend along time dimension
 )
 ```
@@ -468,7 +468,7 @@ pa = (
 Similar to Pandas, `Patch` has a [pipe method](`dascore.core.patch.Patch.pipe`) so non-patch methods can still be used in a method chain.
 
 
-```{.python}
+```{python}
 import dascore as dc
 
 def func(patch, arg1=1):
