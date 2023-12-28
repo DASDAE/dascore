@@ -4,17 +4,17 @@ execute:
   warning: false
 ---
 
-A [`Patch`](`dascore.core.patch.Patch`) manages data and its associated coordinates and metadata.
+A [`Patch`](`dascore.core.patch.Patch`) manages an array and its associated coordinate labels and metadata.
 
 :::{.callout-note}
-The `Patch` design was inspired by [Xarray's `DataArray` object](https://docs.xarray.dev/en/stable/generated/xarray.DataArray.html)
+The `Patch` design was inspired by [Xarray's `DataArray`](https://docs.xarray.dev/en/stable/generated/xarray.DataArray.html)
 :::
 
-# Creating Patches
+# Patch creation
 
-Patches can be created in a few ways.
+Patches can be created in several different ways.
 
-## Load an Example Patch
+## Load an example patch
 
 DASCore includes several example datasets. They are mostly used for simple demonstrations and testing.
 
@@ -36,7 +36,7 @@ import dascore as dc
 pprint(sorted(dc.examples.EXAMPLE_PATCHES))
 ```
 
-## Load a File
+## Load a file
 
 A single file can be loaded like this:
 
@@ -55,7 +55,7 @@ pa = dc.spool(path)[0]
 Spools are covered in more detail in the [next section](spool.qmd).
 
 
-## Manually creating a Patch
+## Manually create a patch
 
 Patches can be created from:
 
@@ -96,7 +96,7 @@ dims = ('distance', 'time')
 pa = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
 ```
 
-# Patch Anatomy
+# Patch anatomy
 
 ## Data
 
@@ -177,7 +177,7 @@ dc.PatchAttrs.get_summary_df()
 
 Specific data formats may also add attributes (e.g. "gauge_length"), but this depends on the parser.
 
-## String Representation
+## String representation
 
 DASCore Patches have as useful string representation:
 
@@ -225,7 +225,7 @@ new = patch.select(time=(1, -1), relative=True)
 new = patch.select(time=(-2, -1), relative=True)
 
 # select last 100 ft of distance channels
-new = patch.select(distance=(..., -100 * ft), relative=True)
+new = patch.select(distance=(-100 * ft, ...), relative=True)
 ```
 
 The `samples` keyword tells `select` the meaning of the query is in samples rather than the units of the selected dimension. Unlike absolute selections, these are **always** relative to the data contained in the patch (eg 0 refers to the first sample along the dimension).
@@ -274,7 +274,7 @@ patch = (
 patch.viz.waterfall(show=True, scale=0.2);
 ```
 
-# Modifying Patches
+# Modifying patches
 
 Because patches should be treated as immutable objects, they can't be modified with normal item assignment. There are a few methods that return new patches with modifications, however, that are functionally the same.
 
@@ -290,7 +290,7 @@ pa = dc.get_example_patch()
 new = pa.new(data=pa.data * 10)
 ```
 
-## Update Attrs
+## Update attrs
 
 [`Patch.update_attrs`](`dascore.core.patch.Patch.update_attrs`) is for making small changes to the patch attrs (metadata) while keeping the unaffected metadata (`Patch.new` would require you replace the entirety of attrs).
 
@@ -309,7 +309,7 @@ assert pa1.attrs.new_attr == 42
 ```
 
 
-## Update Coords
+## Update coords
 
 [`Patch.update_coords`](`dascore.core.patch.Patch.update_coords`) returns a new patch with the coordinates changed in some way. These changes can include:
  - Modifying (updating) existing coordinates
@@ -397,7 +397,7 @@ lat = patch.coords.get_array('latitude')
 patch_detached_lat = patch.update_coords(latitude=(None, lat))
 ```
 
-## Dropping Coordinates
+## Dropping coordinates
 
 Non-dimensional coordinates can be dropped using `Patch.drop_coords`. Dimensional coordinates, however, cannot be dropped doing so would force the patch data to become degenerate.
 
@@ -412,7 +412,7 @@ patch_dropped_lat = patch.drop_coords("latitude")
 print(patch_dropped_lat.coords)
 ```
 
-### Coords in Patch Initialization
+### Coords in patch initialization
 
 Any number of coordinates can also be assigned when the patch is initiated. For coordinates other than those of the patch dimensions, the associated dimensions must be specified. For example:
 
@@ -449,7 +449,7 @@ out = dc.Patch(data=array, coords=coords, attrs=attrs, dims=dims)
 ```
 
 
-# Method Chaining
+# Method chaining
 
 In most cases, you should use method chaining as part of a
 [fluent interface](https://en.wikipedia.org/wiki/Fluent_interface) when working with patches.
@@ -538,7 +538,7 @@ dist_filtered = pa.pass_filter(distance=(10*m, 100*m))
 
 See the documentation on [`Patch.select`](`dascore.Patch.select`) and [`Patch.pass_filter`](`dascore.Patch.pass_filter`) for more details.
 
-# Patch Operations
+# Patch operations
 
 Patches implement common operators which means that many [ufunc](https://numpy.org/doc/stable/reference/ufuncs.html) type operations can be applied directly on a patch with built-in python operators.
 

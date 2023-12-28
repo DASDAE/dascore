@@ -8,7 +8,7 @@ Spools are containers/managers of [patches](patch.qmd). Spools come in a few var
 
 # Data Sources
 
-The simplest way to get the appropriate spool for a specified input is to use the [`spool`](`dascore.spool`) function, which knows about many different input types and returns an appropriate `Patch`.
+The simplest way to get the appropriate spool for a specified input is to use the [`spool`](`dascore.spool`) function, which knows about many different input types and returns an appropriate [`BaseSpool`](`dascore.core.spool.BaseSpool`) subclass instance.
 
 ## Patches (in-memory)
 

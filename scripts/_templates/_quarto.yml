@@ -16,10 +16,10 @@ format:
     toc: true
     theme:
       light: yeti
+      dark: darkly
     code-copy: true
     code-overflow: wrap
     css: styles.css
-
 
 website:
   title: {{ dascore_version_str }}
@@ -76,13 +76,13 @@ website:
           href: index.qmd
 
         - text: Changelog
-          href: changelog.md
+          href: changelog.qmd
 
         - text: Contributors
-          href: contributors.md
+          href: contributors.qmd
 
         - text: Acknowledgements
-          href: acknowledgements.md
+          href: acknowledgements.qmd
 
     - id: tutorial
       title: "Tutorial"
@@ -146,6 +146,12 @@ website:
 
           - text: Patch to external format
             href: recipes/external_conversion.qmd
+
+        - section: "Misc"
+          contents:
+
+            - text: DASCore and Docker
+              href: recipes/docker_basic.qmd
 
 
     - id: contributing
