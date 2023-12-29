@@ -1,5 +1,5 @@
 ---
-title: "Contributing to Documentation?"
+title: Contributing to Documentation
 ---
 
 Here, we elaborate on how you can build new documentation or make changes to existing DASCore documentation.

@@ -120,39 +120,31 @@ website:
         - section: "Contributing"
           contents:
 
-          - text: How to contribute?
-            href: recipes/how_to_contribute.qmd
-
-          - text: Contributing to documentation
-            href: recipes/contributing_to_documentation.qmd
+            - recipes/how_to_contribute.qmd
+            - recipes/contributing_to_documentation.qmd
 
         - section: "Coordinates"
           contents:
 
-            - text: Coordinates from a dataframe
-              href: recipes/add_spatial_coordinates_to_patch.qmd
-
-            - text: Plotting channel number
-              href: recipes/plotting_channel_number.qmd
+            - recipes/add_spatial_coordinates_to_patch.qmd
+            - recipes/plotting_channel_number.qmd
 
         - section: "Processing"
           contents:
 
-          - text: Parallelization
-            href: recipes/parallelization.qmd
+            - recipes/parallelization.qmd
+            - recipes/edge_effects.qmd
+            - recipes/fk.qmd
 
         - section: "IO"
           contents:
 
-          - text: Patch to external format
-            href: recipes/external_conversion.qmd
+            - recipes/external_conversion.qmd
 
         - section: "Misc"
           contents:
 
-            - text: DASCore and Docker
-              href: recipes/docker_basic.qmd
-
+            - recipes/docker_basic.qmd
 
     - id: contributing
       title: "Contributing"

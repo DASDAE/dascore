@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-Spools are containers/managers of [patches](patch.qmd). Spools come in a few varieties which can manage a group of patches loaded into memory, archives of local files, and (in the future) a variety of clients for accessing remote resources.
+Spools are containers/managers of [patches](patch.qmd). The spool interface is designed to manage a variety of data sources, including a group of patches loaded into memory, archives of local files, and a variety of remote resources.
 
 # Data Sources
 
@@ -20,7 +20,7 @@ patch_list = [dc.get_example_patch()]
 spool1 = dc.spool(patch_list)
 ```
 
-## A Single File
+## A Single file
 
 ```{python}
 import dascore as dc
@@ -31,18 +31,18 @@ path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
 spool2 = dc.spool(path_to_das_file)
 ```
 
-## A Directory of DAS Files
+## A directory of DAS files
 
 ```{python}
 import dascore as dc
 from dascore.utils.downloader import fetch
 
-# we use the fetch to make sure the file is downloaded. You would
+# We use fetch to make sure the file is downloaded. You would
 # just need to replace directory_path with your data directory path.
 path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
 directory_path = path_to_das_file.parent
 
-# update will create an index of the contents for fast querying/access
+# Update will create an index of the contents for fast querying/access
 spool3 = dc.spool(directory_path).update()
 ```
 
@@ -56,11 +56,11 @@ from pathlib import Path
 
 index_path = Path(tempfile.mkdtemp()) / "index.h5"
 
-# update will create an index of the contents for fast querying/access
+# Update will create an index of the contents for fast querying/access.
 spool = dc.spool(directory_path, index_path=index_path).update()
 ```
 
-New spools created on the same directory will know where to find the index file, **unless** there is a valid index file already in the directory.
+New spools created using the same directory will know where to find the index file, **unless** there is a valid index file already in the directory.
 
 :::{.callout-warning}
 If you remove files from a directory that has already been indexed, you should delete the index file and then call `update` again on the spool like this:
@@ -70,7 +70,7 @@ spool.indexer.index_path.unlink()
 spool.update()
 ```
 
-It is best not to delete files once added to a directory managed by a spool.
+It is best not to delete files once added to a directory managed by DASCore.
 :::
 
 Despite some implementation differences, all spools have common behavior/methods.
@@ -85,13 +85,14 @@ import dascore as dc
 
 spool = dc.get_example_spool()
 
-patch = spool[0]  # extract first patch
+# Extract first patch in the spool.
+patch = spool[0]
 
-# iterate patchs
+# Iterate patches in spool.
 for patch in spool:
     ...
 
-# slice spool to create new spool which excludes first patch.
+# Slice spool to create new spool which excludes first patch.
 new_spool = spool[1:]
 ```
 
@@ -124,22 +125,22 @@ The [select](`dascore.core.spool.BaseSpool.select`) method selects a subset of a
 import dascore as dc
 spool = dc.get_example_spool()
 
-# select a spool with
+# Select a spool with data after Jan 3rd, 2020.
 subspool = spool.select(time=('2020-01-03T00:00:09', None))
 ```
 
-In addition to trimming the data along a specified dimension (as shown above), select can be used to filter patches that meet a specified criteria.
+In addition to trimming the data along a specified dimension (as shown above), `select` can be used to filter patches that meet a specified criteria.
 
 
 ```{python}
 import dascore as dc
-# load a spool which has many diverse patches
+# Load a spool which has many diverse patches.
 spool = dc.get_example_spool('diverse_das')
 
-# Only include patches which are in network 'das2' or 'das3'
+# Only include patches which are in network 'das2' or 'das3'.
 subspool = spool.select(network={'das2', 'das3'})
 
-# only include spools which match some unix-style query on their tags.
+# Only include spools which match some unix-style query on their tags.
 subspool = spool.select(tag='some*')
 ```
 
@@ -151,11 +152,11 @@ The [`chunk`](`dascore.core.spool.BaseSpool.chunk`) method controls how data are
 import dascore as dc
 spool = dc.get_example_spool()
 
-# chunk spool for 3 second increments with 1 second overlaps
-# and keep any segements at the end that don't have the full 3 seconds
+# Chunk spool for 3 second increments with 1 second overlaps
+# and keep any segements at the end that don't have the full 3 seconds.
 subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
 
-# merge all contiguous segments along time dimension
+# Merge all contiguous segments along time dimension.
 merged_spool = spool.chunk(time=None)
 ```
 
@@ -163,7 +164,7 @@ merged_spool = spool.chunk(time=None)
 
 The [`map`](`dascore.core.spool.BaseSpool.map`) method applies a function to all patches in the spool. It provides an efficient way to process large datasets, especially when combined with clients (aka executors).
 
-For example, imagine we want to calculate the maximum value for each channel (distance) for 4 second increments with 1 second overlap.
+For example, calculating the maximum value for each channel (distance) for 4 second increments with 1 second overlap can be done like so:
 
 ```{python}
 import dascore as dc
@@ -182,3 +183,5 @@ agg_patch = dc.spool(map_out).chunk(time=None)[0]
 
 print(agg_patch)
 ```
+
+See the [parallel processing recipe](../recipes/parallelization.qmd) for more examples with `map`.

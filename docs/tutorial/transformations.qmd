@@ -8,21 +8,21 @@ In DASCore, transformations are operations which change the units of a patch. Tr
 
 # Discrete Fourier Transforms
 
- The [Discrete Fourier Transform](https://en.wikipedia.org/wiki/Discrete_Fourier_transform) (dft) is commonly used in many signal processing workflows. DASCore implements this as the [dft](`dascore.transform.fourier.dft`) patch method.
+The [Discrete Fourier Transform](https://en.wikipedia.org/wiki/Discrete_Fourier_transform) (dft) is commonly used in many signal processing workflows. DASCore implements this as the [dft](`dascore.transform.fourier.dft`) patch method.
 
 ```{python}
 import numpy as np
 import dascore as dc
 
-# get example, set unit to velocity (just for demonstration)
+# Get example patch, set unit to velocity (for demonstration)
 patch = dc.get_example_patch().set_units("m/s")
 
 transformed = patch.dft(dim="time")
 
-# note how the dimension name has changed
+# Note how the dimension name has changed
 print(f"old_dims: {patch.dims} new dims: {transformed.dims}")
 
-# as have the units
+# As have the units
 old_units = patch.attrs.data_units
 new_units = transformed.attrs.data_units
 print(f"old units: {old_units}, new units: {new_units}")
@@ -43,40 +43,7 @@ print(real_transform.get_coord("ft_distance"))
 The Inverse Discrete Fourier Transform [idft](`dascore.transform.fourier.idft`) undoes the transformation.
 
 ```{python}
-# transform back to time domain, take only real component.
+# Transform back to time domain, take only real component.
 patch_2 = transformed.idft().real()
 assert np.allclose(patch_2.data, patch.data)
-```
-
-## F-k Transforms
-
-[F-k transforms](https://wiki.seg.org/wiki/F-k_filtering) are common in geophysics for various types of filtering.
-
-Going back to our example event:
-
-```{python}
-import dascore as dc
-
-patch = (
-    dc.get_example_patch('example_event_1')
-    .set_units("mm/(m*s)", distance='m', time='s')
-    .taper(time=0.05)
-    .pass_filter(time=(None, 300))
-)
-
-patch.viz.waterfall(show=True, scale=0.2);
-```
-
-We can transform and visualize it in the F-k domain using the dft.
-
-```{python}
-# Apply transform on all dimensions
-fk_patch = patch.dft(patch.dims)
-
-# We can't plot complex arrays so only plot amplitude
-ax = fk_patch.abs().viz.waterfall()
-
-# zoom in around interesting frequencies
-ax.set_xlim(-500, 500);
-ax.set_ylim(-.2, .2);
 ```

@@ -1,0 +1,34 @@
+---
+title: F-K Transform
+execute:
+    warning: False
+---
+
+[F-k transforms](https://wiki.seg.org/wiki/F-k_filtering) are common in geophysical applications for various types of filtering.
+
+```{python}
+import dascore as dc
+
+patch = (
+    dc.get_example_patch('example_event_1')
+    .set_units("mm/(m*s)", distance='m', time='s')
+    .taper(time=0.05)
+    .pass_filter(time=(None, 300))
+)
+
+patch.viz.waterfall(show=True, scale=0.2);
+```
+
+We can transform and visualize the patch in the F-K domain using the dft.
+
+```{python}
+# Apply transform on all dimensions
+fk_patch = patch.dft(patch.dims)
+
+# We can't plot complex arrays so only plot amplitude
+ax = fk_patch.abs().viz.waterfall()
+
+# Zoom in around interesting frequencies
+ax.set_xlim(-500, 500);
+ax.set_ylim(-.2, .2);
+```

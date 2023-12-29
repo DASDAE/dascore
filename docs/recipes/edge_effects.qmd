@@ -1,0 +1,34 @@
+---
+title: Taper Edge Effects
+execute:
+    warning: false
+---
+
+[`taper'](`dascore.proc.taper`) is used to manage "edge effects" associated with several other types of processing such as filtering. For example:
+
+### Bandpass filtering without tapering
+
+```{python}
+import dascore as dc
+
+patch = (
+    dc.get_example_patch('example_event_1')
+    .pass_filter(time=(None, 300))
+)
+
+patch.viz.waterfall(show=True, scale=0.04);
+```
+
+### Bandpass filtering with tapering
+
+```{python}
+import dascore as dc
+
+patch = (
+    dc.get_example_patch('example_event_1')
+    .taper(time=0.05)
+    .pass_filter(time=(None, 300))
+)
+
+patch.viz.waterfall(show=True, scale=0.15);
+```
