@@ -6,19 +6,19 @@ class DASCoreError(Exception):
     """Base class for dascore errors."""
 
 
-class InvalidFiberIO(ValueError, DASCoreError):
+class InvalidFiberIOError(ValueError, DASCoreError):
     """Raised when an invalid Fiber IO is defined or used."""
 
 
-class InvalidFiberFile(IOError, DASCoreError):
+class InvalidFiberFileError(IOError, DASCoreError):
     """Raised when a fiber operation is called on an invalid file."""
 
 
-class UnknownFiberFormat(IOError, DASCoreError):
+class UnknownFiberFormatError(IOError, DASCoreError):
     """Raised when the format of an alleged fiber file is not recognized."""
 
 
-class UnknownExample(DASCoreError):
+class UnknownExampleError(DASCoreError):
     """Raised when an unregistered example is requested."""
 
 
@@ -70,7 +70,7 @@ class TimeError(ValueError, DASCoreError):
     """Raised when something is wrong with a time value."""
 
 
-class InvalidTimeRange(TimeError):
+class InvalidTimeRangeError(TimeError):
     """Raised when an invalid time range is encountered."""
 
 
@@ -78,11 +78,11 @@ class FilterValueError(ValueError, DASCoreError):
     """Raise when something goes wrong with filtering or filter inputs."""
 
 
-class UnsupportedKeyword(TypeError, DASCoreError):
+class UnsupportedKeywordError(TypeError, DASCoreError):
     """Raised when dascore encounters an unexpected keyword."""
 
 
-class InvalidFileHandler(TypeError, DASCoreError):
+class InvalidFileHandlerError(TypeError, DASCoreError):
     """Raised when a writable file handler is requested from a read handle."""
 
 
@@ -90,7 +90,7 @@ class InvalidIndexVersionError(ValueError, DASCoreError):
     """Raised when a version mismatch occurs in index."""
 
 
-class MissingOptionalDependency(ImportError, DASCoreError):
+class MissingOptionalDependencyError(ImportError, DASCoreError):
     """Raised when an optional package needed for some functionality is missing."""
 
 

@@ -27,7 +27,7 @@ from dascore.constants import (
     timeable_types,
 )
 from dascore.core.attrs import str_validator
-from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
+from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import cached_method, iterate
@@ -225,7 +225,7 @@ class _FiberIOManager:
         # TODO replace this with concise pattern matching once 3.9 is dropped
         if version and not format:
             msg = "Providing only a version is not sufficient to determine format"
-            raise UnknownFiberFormat(msg)
+            raise UnknownFiberFormatError(msg)
         if format is not None:
             self.load_plugins(format)
             yield from self._yield_format_version(format, version)
@@ -244,7 +244,7 @@ class _FiberIOManager:
             if not formatters:
                 format_list = list(self.known_formats)
                 msg = f"Unknown format {format}, " f"known formats are {format_list}"
-                raise UnknownFiberFormat(msg)
+                raise UnknownFiberFormatError(msg)
             # a version is specified
             if version:
                 formatter = formatters.get(version, None)
@@ -253,7 +253,7 @@ class _FiberIOManager:
                         f"Format {format} has no version: [{version}] "
                         f"known versions of this format are: {list(formatters)}"
                     )
-                    raise UnknownFiberFormat(msg)
+                    raise UnknownFiberFormatError(msg)
                 yield formatter
                 return
             # reverse sort formatters and yield latest version first.
@@ -452,7 +452,7 @@ class FiberIO:
         # check that the subclass is valid
         if not cls.name:
             msg = "You must specify the file format with the name field."
-            raise InvalidFiberIO(msg)
+            raise InvalidFiberIOError(msg)
         # register formatter
         manager: _FiberIOManager = cls.__mro__[1].manager
         manager.register_fiberio(cls())
@@ -603,7 +603,7 @@ def scan(
                         file_format=file_format,
                         file_version=file_version,
                     )
-                except UnknownFiberFormat:  # skip bad entities
+                except UnknownFiberFormatError:  # skip bad entities
                     continue
             else:
                 # we need separate loop variables so this doesn't get assumed
@@ -676,7 +676,7 @@ def get_format(
                 return format_version
         else:
             msg = f"Could not determine file format of {man.source}"
-            raise UnknownFiberFormat(msg)
+            raise UnknownFiberFormatError(msg)
 
 
 def write(

@@ -22,7 +22,7 @@ class ProdMLPatchAttrs(dc.PatchAttrs):
     schema_version: UTF8Str = ""
 
 
-class ProdMLV2_0(FiberIO):
+class ProdMLV2_0(FiberIO):  # noqa
     """Support for ProdML V 2.0."""
 
     name = "PRODML"
@@ -67,7 +67,7 @@ class ProdMLV2_0(FiberIO):
         return dc.spool(patches)
 
 
-class ProdMLV2_1(ProdMLV2_0):
+class ProdMLV2_1(ProdMLV2_0):  # noqa
     """Support for ProdML V 2.1."""
 
     version = "2.1"

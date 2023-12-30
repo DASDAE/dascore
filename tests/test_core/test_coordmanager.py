@@ -71,15 +71,15 @@ def basic_degenerate_coord_manager(basic_coord_manager):
 @register_func(COORD_MANAGERS)
 def coord_manager_multidim() -> CoordManager:
     """The simplest coord manager with several coords added."""
-    COORDS = {
+    coords = {
         "time": to_datetime64(np.arange(10, 110, 10)),
         "distance": get_coord(data=np.arange(0, 1000, 10)),
         "quality": (("time", "distance"), np.ones((10, 100))),
         "latitude": ("distance", np.random.rand(100)),
     }
-    DIMS = ("time", "distance")
+    dims = ("time", "distance")
 
-    return get_coord_manager(COORDS, DIMS)
+    return get_coord_manager(coords, dims)
 
 
 @pytest.fixture(scope="class")

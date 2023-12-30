@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from dascore.exceptions import MissingOptionalDependency
+from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
     MethodNameSpace,
     cached_method,
@@ -187,7 +187,7 @@ class TestOptionalImport:
 
     def test_missing_module_raises(self):
         """Ensure a module which is missing raises the appropriate Error."""
-        with pytest.raises(MissingOptionalDependency, match="boblib4"):
+        with pytest.raises(MissingOptionalDependencyError, match="boblib4"):
             optional_import("boblib4")
 
 

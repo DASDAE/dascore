@@ -98,9 +98,9 @@ def parse_time_stamp(fractions, seconds):
         return None
 
 
-def _get_version_str(tdms_file, LEAD_IN_LENGTH=28) -> str:
+def _get_version_str(tdms_file, lead_in_length=28) -> str:
     """Return True if we have the right file type."""
-    lead_in = tdms_file.read(LEAD_IN_LENGTH)
+    lead_in = tdms_file.read(lead_in_length)
     # lead_in is 28 bytes:
     # [string of length 4][int32][int32][int64][int64]
     fields = struct.unpack("<4siiQQ", lead_in)
@@ -168,24 +168,24 @@ def _get_distance_coord(attr):
     return d_coord
 
 
-def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
+def _get_all_attrs(tdms_file, lead_in_length=28):
     """Return all the attributes which can be fetched from attributes."""
     # read leadin infomation into fileinfo
-    lead_in = tdms_file.read(LEAD_IN_LENGTH)
+    lead_in = tdms_file.read(lead_in_length)
     # lead_in is 28 bytes:
     fields = struct.unpack("<4siiQQ", lead_in)
     # Keep track of information about file in fileinfo
     fileinfo = dict(zip(FILEINFO_NAMES, fields))
     fileinfo["decimated"] = not bool(fileinfo["toc"] & DECIMATE_MASK)
     # Make offsets relative to beginning of file:
-    fileinfo["next_segment_offset"] += LEAD_IN_LENGTH
-    fileinfo["raw_data_offset"] += LEAD_IN_LENGTH
+    fileinfo["next_segment_offset"] += lead_in_length
+    fileinfo["raw_data_offset"] += lead_in_length
     fileinfo["file_size"] = os.path.getsize(tdms_file.name)
     # Make sure next segment does not go beyond file capacity
     if fileinfo["next_segment_offset"] > fileinfo["file_size"]:
         fileinfo["next_segment_offset"] = fileinfo["file_size"]
     # navigate pointer to immediately after lead in data
-    tdms_file.seek(LEAD_IN_LENGTH, 0)
+    tdms_file.seek(lead_in_length, 0)
     # Read number of channels
     n_channels = struct.unpack("i", tdms_file.read(4))[0] - 2
     fileinfo["n_channels"] = n_channels
@@ -232,7 +232,7 @@ def _get_all_attrs(tdms_file, LEAD_IN_LENGTH=28):
     return out, fileinfo
 
 
-def _get_fileinfo(tdms_file, LEAD_IN_LENGTH=28):
+def _get_fileinfo(tdms_file, lead_in_length=28):
     """Get info about file not included in the attributes."""
     attrs, fileinfo = _get_all_attrs(tdms_file)
     # Read Dimension of the raw data array (has to be 1):
@@ -241,7 +241,7 @@ def _get_fileinfo(tdms_file, LEAD_IN_LENGTH=28):
     return fileinfo, attrs
 
 
-def _get_data(tdms_file, LEAD_IN_LENGTH=28):
+def _get_data(tdms_file, lead_in_length=28):
     """Get all the data saved in the current file."""
 
     def get_segment_data(fileinfo, nch, dmap, nso, rdo):
@@ -313,8 +313,8 @@ def _get_data(tdms_file, LEAD_IN_LENGTH=28):
         else:
             tdms_file.seek(nso + 12, 0)
             (next_seg_nso, next_seg_rdo) = struct.unpack("<qq", tdms_file.read(2 * 8))
-            rdo = min(fileinfo["file_size"], nso + LEAD_IN_LENGTH + next_seg_rdo)
-            nso = min(fileinfo["file_size"], nso + LEAD_IN_LENGTH + next_seg_nso)
+            rdo = min(fileinfo["file_size"], nso + lead_in_length + next_seg_rdo)
+            nso = min(fileinfo["file_size"], nso + lead_in_length + next_seg_nso)
         try:
             data_node = np.append(data_node, cdata_node, axis=1)
             channel_length += cchannel_length

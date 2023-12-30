@@ -122,7 +122,7 @@ WAV = "dascore.io.wav.core:WavIO"
 line-length = 88
 
 # enable certain types of linting
-select = ["E", "F", "UP", "RUF", "I001", "D", "FA", "T"]
+select = ["E", "F", "UP", "RUF", "I001", "D", "FA", "T", "N"]
 
 # Exclude a variety of commonly ignored directories.
 exclude = [

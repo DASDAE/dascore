@@ -135,7 +135,7 @@ def idas_h5_example_path():
 
 
 @pytest.fixture(scope="session")
-def brady_hs_DAS_DTS_coords_path():
+def brady_hs_das_dts_coords_path():
     """Return the path to the brady Hotspot DAS/DTS coords file."""
     out = fetch("brady_hs_DAS_DTS_coords.csv")
     assert out.exists()
@@ -476,7 +476,7 @@ def dummy_text_file(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def brady_hs_DAS_DTS_coords():
+def brady_hs_das_dts_coords():
     """Return a pandas dataframe with X,Y,Z coordinates."""
     path = fetch("brady_hs_DAS_DTS_coords.csv")
     coord_table = pd.read_csv(path)
