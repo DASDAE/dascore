@@ -104,7 +104,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> # up-sample time coordinate
-    >>> time = patch.coords['time']
+    >>> time = patch.coords.get_array('time')
     >>> new_time = np.arange(time.min(), time.max(), 0.5*patch.attrs.time_step)
     >>> patch_uptime = patch.interpolate(time=new_time)
     >>> # interpolate unevenly sampled dim to evenly sampled

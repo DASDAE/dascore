@@ -85,3 +85,16 @@ class TestCorrelateInternal:
         """Ensure units can be passed as kwarg and lag params."""
         c_patch = random_patch.correlate(distance=10 * m, lag=2 * s)
         assert isinstance(c_patch, dc.Patch)
+
+    def test_complex_patch(self, ricker_moveout_patch):
+        """Ensure correlate works with a patch that has complex data."""
+        data = ricker_moveout_patch.data
+        rm_patch = ricker_moveout_patch.new(data=data + data * 1j)
+        corr = rm_patch.correlate(distance=0)
+        # get predicted lat times
+        argmax = np.argmax(corr.data, axis=0)
+        distances = corr.get_coord("distance").values
+        lag_times = to_float(corr.get_coord("lag_time").values[argmax])
+        # get calculated times, they should be close to lag times
+        expected_times = distances / self.moveout_velocity
+        assert np.allclose(lag_times, expected_times)
