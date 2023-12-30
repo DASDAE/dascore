@@ -61,14 +61,15 @@ jobs:
         run: |
           quarto --version
 
-      - name: Render Quarto Project
+      - name: render API docs
         shell: bash -l {0}
         run: |
           python scripts/build_api_docs.py
 
-      - name: Render and Publish
-        uses: quarto-dev/quarto-actions/publish@v2
-        with:
-          target: netlify
-          path: docs
+      - name: publish docs to netlify
+        shell: bash -l {0}
+        env:
+          QUARTO_PRINT_STACK: true
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+        run: |
+            quarto publish docs --no-prompt --no-browser
