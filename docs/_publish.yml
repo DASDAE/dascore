@@ -1,4 +1,4 @@
 - source: project
-  quarto-pub:
-    - id: 8eac2ae5-137b-4292-8938-d747e3babd25
-      url: 'https://quartopub.com/sites/dascore/dascore'
+  netlify:
+    - id: da79b12f-cb25-4fcc-aeb6-f19705848130
+      url: 'https://dascore.netlify.app'
