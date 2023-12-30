@@ -3,7 +3,8 @@ title: Concepts
 execute:
   warning: false
 ---
-This page highlights a few core DASCore concepts.
+
+This page highlights some concepts helpful for working with DASCore.
 
 # Data structures
 
@@ -11,7 +12,7 @@ For most uses of DASCore, only two data structures are directly involved.
 These are the [Patch](patch.qmd) and the [Spool](spool.qmd).
 
 The `Patch` contains a contiguous block of N dimensional data and metadata.
-The `Spool` manages a group of `Patch`s. These can be in memory, on
+The `Spool` manages a group of `Patch`es. These can be in memory, on
 disk, or a remote resource.
 
 ![Patch (blue) and Spool (red)](../_static/patch_n_spool.png){#fig-patch_n_spool}
@@ -27,13 +28,13 @@ For example:
 ```{python}
 import numpy as np
 
-# create a datetime64 with a very precise time string
+# Create a datetime64 with an iso8601 time string.
 time_1 = np.datetime64('2022-01-01T15:12:11.172455')
 
-# create a new time by adding some time to time_1
+# Create a new time by adding some time to time_1.
 time_2 = time_1 + np.timedelta64(60, 's')
 
-# get the number of hour separating them:
+# Get the number of hour separating them:
 delta_1 = (time_2 - time_1) / np.timedelta64(1, 'h')
 ```
 
@@ -47,10 +48,10 @@ For example:
 ```{python}
 import dascore as dc
 
-# convert a time string to a datetime64 object.
+# Convert a time string to a datetime64 object.
 time_1 = dc.to_datetime64('2022-01-01T12:12:12.1212')
 
-# convert a timestamp (seconds from 1970-01-01) to a datetime object
+# Convert a timestamp (seconds from 1970-01-01) to a datetime object
 time_2 = dc.to_datetime64(610243200)
 ```
 
@@ -71,17 +72,17 @@ However, the meaning of the values depends on the function, e.g. both frequency 
 
 # Units
 
-DASCore provides first class support for units through the `units` module. Units (or rather quantities) can be imported directly from the units module or can be created with the [get_quantity](`dascore.units.get_quantity`) function.
+DASCore provides first class support for units through the [`units`](`dascore.units`) module. Units (or rather quantities) can be imported directly or can be created with the [get_quantity](`dascore.units.get_quantity`) function.
 
 ```{python}
 from dascore.units import get_quantity, m, ft
 
 meters = get_quantity("meters")
 
-# now meters should be equal to 1 meter
+# Now meters should be equal to 1 meter.
 assert meters == 1 * m
 
-# convert 10 meters to ft
+# Convert 10 meters to ft.
 ten_m = meters * 10
 print(ten_m.to(ft))
 
@@ -93,5 +94,5 @@ print(quantity)
 Many of DASCore's Patch methods support units/quantities as shown above. See the [units section](patch.qmd#units) in the Patch tutorial for examples.
 
 :::{.callout-note}
-DASCore uses the unit library [Pint](https://github.com/hgrecco/pint) for unit parsing/conversions. See its documentation for more on how units and quantities work.
+DASCore uses the unit library [Pint](https://github.com/hgrecco/pint) for unit parsing/conversions. See its documentation for more info on units and quantities.
 :::
