@@ -380,7 +380,7 @@ def combine_patch_attrs(
                 mod["coords"][coord_name] = new_coord
         return model_dicts
 
-    def _replace_null_with_None(mod_dict_list):
+    def _replace_null_with_none(mod_dict_list):
         """Because NaN != NaN we need to replace those values so == works."""
         out = []
         for mod in mod_dict_list:
@@ -405,7 +405,7 @@ def combine_patch_attrs(
         """Check the other attributes and handle based on conflicts param."""
         if conflicts == "keep_first":
             return [dict(ChainMap(*mod_dict_list))]
-        no_null_ = _replace_null_with_None(mod_dict_list)
+        no_null_ = _replace_null_with_none(mod_dict_list)
         all_eq = all(no_null_[0] == x for x in no_null_[1:])
         if all_eq:
             return mod_dict_list

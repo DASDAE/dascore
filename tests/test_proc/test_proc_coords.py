@@ -105,11 +105,11 @@ class TestCoordsFromDf:
         return _func
 
     @pytest.fixture()
-    def coord_df(self, brady_hs_DAS_DTS_coords, random_patch):
+    def coord_df(self, brady_hs_das_dts_coords, random_patch):
         """Get a coordinate dataframe that is compatible with random_patch."""
         dist_max = random_patch.coords.max("distance")
         df = (
-            brady_hs_DAS_DTS_coords.rename(columns={"Channel": "distance"})
+            brady_hs_das_dts_coords.rename(columns={"Channel": "distance"})
             .sample(frac=1 / 5)
             .loc[lambda x: x["distance"] <= dist_max]
             .sort_values("distance")

@@ -73,8 +73,8 @@ class TestPassFilterChecks:
     def test_high_time_raises(self, random_patch):
         """Ensure too high freq band in time axis raises."""
         nyquest = 0.5 / (random_patch.attrs.time_step / dc.to_timedelta64(1))
-        Hz = dc.get_quantity("Hz")
-        filt = (1 * Hz, nyquest * 1.1 * Hz)
+        hz = dc.get_quantity("Hz")
+        filt = (1 * hz, nyquest * 1.1 * hz)
         match = "possible filter bounds are"
         with pytest.raises(FilterValueError, match=match):
             random_patch.pass_filter(time=filt)
@@ -115,8 +115,8 @@ class TestPassFilter:
 
     def test_specify_units_simple(self, random_patch):
         """Ensure units can be specified in patch arguments."""
-        Hz = dc.units.get_quantity("Hz")
-        out1 = random_patch.pass_filter(time=(1 * Hz, 10 * Hz))
+        hz = dc.units.get_quantity("Hz")
+        out1 = random_patch.pass_filter(time=(1 * hz, 10 * hz))
         out2 = random_patch.pass_filter(time=(1, 10))
         assert out1.equals(out2)
 
@@ -131,9 +131,9 @@ class TestPassFilter:
         """Catchall for other unit tests."""
         patch = random_patch
         m, ft = dc.units.get_unit("m"), dc.units.get_unit("ft")
-        Hz = dc.units.get_unit("Hz")
+        hz = dc.units.get_unit("Hz")
         # Filter from 1 Hz to 10 Hz in time dimension
-        patch.pass_filter(time=(1 * Hz, 10 * Hz))
+        patch.pass_filter(time=(1 * hz, 10 * hz))
         # Filter wavelengths 50m to 100m
         patch.pass_filter(distance=(50 * m, 100 * m))
         # filter wavelengths less than 200 ft

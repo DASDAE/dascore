@@ -15,7 +15,7 @@ class TDMSFormatterV4713(FiberIO):
     name = "TDMS"
     version = "4713"
     preferred_extensions = ("tdms",)
-    LEAD_IN_LENGTH = 28
+    lead_in_length = 28
 
     def get_format(self, stream: BinaryReader) -> tuple[str, str] | bool:
         """
@@ -52,7 +52,7 @@ class TDMSFormatterV4713(FiberIO):
     ) -> dc.BaseSpool:
         """Read a silixa tdms file, return a DataArray."""
         # get all data, total amount of samples and associated attributes
-        data, channel_length, attrs_full = _get_data(resource, LEAD_IN_LENGTH=28)
+        data, channel_length, attrs_full = _get_data(resource, lead_in_length=28)
         attrs = _get_default_attrs(resource, attrs_full)
         coords = dc.core.get_coord_manager(attrs.pop("coords"))
         # trim data if required

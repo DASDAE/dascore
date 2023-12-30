@@ -10,7 +10,7 @@ import pandas as pd
 
 import dascore as dc
 import dascore.core
-from dascore.exceptions import UnknownExample
+from dascore.exceptions import UnknownExampleError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
@@ -384,7 +384,7 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
             f"No example patch registered with name {example_name} "
             f"Registered example patches are {list(EXAMPLE_PATCHES)}"
         )
-        raise UnknownExample(msg)
+        raise UnknownExampleError(msg)
     return EXAMPLE_PATCHES[example_name](**kwargs)
 
 
@@ -412,5 +412,5 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
             f"No example spool registered with name {example_name} "
             f"Registered example spools are {list(EXAMPLE_SPOOLS)}"
         )
-        raise UnknownExample(msg)
+        raise UnknownExampleError(msg)
     return EXAMPLE_SPOOLS[example_name](**kwargs)

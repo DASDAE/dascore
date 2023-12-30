@@ -22,7 +22,7 @@ from scipy.special import factorial
 import dascore as dc
 from dascore.exceptions import (
     FilterValueError,
-    MissingOptionalDependency,
+    MissingOptionalDependencyError,
     ParameterError,
 )
 from dascore.utils.progress import track
@@ -72,7 +72,7 @@ def _pass_through_method(func):
 class _NameSpaceMeta(type):
     """Metaclass for namespace class."""
 
-    def __setattr__(self, key, value):
+    def __setattr__(cls, key, value):
         if callable(value):
             value = _pass_through_method(value)
         super().__setattr__(key, value)
@@ -248,12 +248,12 @@ def optional_import(package_name: str) -> ModuleType:
     Examples
     --------
     >>> from dascore.utils.misc import optional_import
-    >>> from dascore.exceptions import MissingOptionalDependency
+    >>> from dascore.exceptions import MissingOptionalDependencyError
     >>> # import a module (this is the same as import dascore as dc)
     >>> dc = optional_import('dascore')
     >>> try:
     ...     optional_import('boblib5')  # doesn't exist so this raises
-    ... except MissingOptionalDependency:
+    ... except MissingOptionalDependencyError:
     ...     pass
     """
     try:
@@ -263,7 +263,7 @@ def optional_import(package_name: str) -> ModuleType:
             f"{package_name} is not installed but is required for the "
             f"requested functionality"
         )
-        raise MissingOptionalDependency(msg)
+        raise MissingOptionalDependencyError(msg)
     return mod
 
 
@@ -316,8 +316,8 @@ def _get_stencil_weights(array, ref_point, order):
     """
     ell = np.arange(len(array))
     assert order in ell, "Order must be in domain"
-    A = (((array - ref_point)[:, np.newaxis] ** ell) / factorial(ell)).T
-    weights = solve(A, ell == order)
+    mat = (((array - ref_point)[:, np.newaxis] ** ell) / factorial(ell)).T
+    weights = solve(mat, ell == order)
     return weights.flatten()
 
 

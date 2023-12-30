@@ -24,7 +24,7 @@ from tables import File as PyTablesFile
 
 import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, max_lens
-from dascore.exceptions import InvalidFileHandler, InvalidIndexVersionError
+from dascore.exceptions import InvalidFileHandlerError, InvalidIndexVersionError
 from dascore.io.core import PatchFileSummary
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -111,7 +111,7 @@ def open_hdf5_file(
                 f"A HDF5 file handler with mode 'r' was provided but "
                 f"mode: {desired_mode} was requested."
             )
-            raise InvalidFileHandler(msg)
+            raise InvalidFileHandlerError(msg)
 
     if isinstance(path_or_handler, str | Path):
         # Note: We suppress DataTypeWarnings because pytables fails to read
