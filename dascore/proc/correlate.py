@@ -90,7 +90,7 @@ def correlate(
     >>> cc_patch = patch.correlate(distance=1, samples=True)
 
     >>> # Example 4
-    >>> # Correlate along distance dimension
+    >>> # Correlate along time dimension
     >>> cc_patch = patch.correlate(time=100, samples=True)
 
     Notes
@@ -131,8 +131,8 @@ def correlate(
     # the n parameter needs to be odd so we have a 0 lag time. This only
     # applies to real fft
     n_out = fast_len if (not is_real or fast_len % 2 != 0) else fast_len - 1
-    cor_array = ifft_func(fft_prod, axis=fft_axis, n=n_out)
-    corr_data = _shift(cor_array, cx_len, axis=fft_axis)
+    corr_array = ifft_func(fft_prod, axis=fft_axis, n=n_out)
+    corr_data = _shift(corr_array, cx_len, axis=fft_axis)
     # get new coordinate along correlation dimension
     new_coord = _get_correlated_coord(fft_coord, corr_data.shape[fft_axis])
     coords = patch.coords.update_coords(**{fft_dim: new_coord}).rename_coord(
