@@ -32,7 +32,7 @@ print(f"old units: {old_units}, new units: {new_units}")
 The transformed dimension names change; "time" becomes "ft_time" indicating the domain of the dimension has changed. The units are also updated. See the [note on Fourier transforms in DASCore](../notes/dft_notes.qmd) for more details.
 :::
 
-In many cases, it is advantages to only calculate the fourier transform corresponding to the positive frequencies (since the Fourier transform of a real signal is symmetric).
+In many cases, it is advantageous to only calculate the fourier transform corresponding to the positive frequencies (since the Fourier transform of a real signal is symmetric).
 
 ```{python}
 # Transform distance axis to Fourier domain using real fourier transform

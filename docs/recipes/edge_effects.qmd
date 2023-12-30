@@ -4,7 +4,7 @@ execute:
     warning: false
 ---
 
-[`taper'](`dascore.proc.taper`) is used to manage "edge effects" associated with several other types of processing such as filtering. For example:
+[`taper`](`dascore.proc.taper.taper`) is often used to manage "edge effects" associated with several other types of processing such as filtering. For example:
 
 ### Bandpass filtering without tapering
 

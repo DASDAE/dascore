@@ -17,7 +17,6 @@ cd dascore
 docker build -t dascore .
 ```
 
-
 To run a Python script with the DAScore, mount the directory containing your scripts to the `/app` directory to the image using `-v` flag:
 
 ```bash
