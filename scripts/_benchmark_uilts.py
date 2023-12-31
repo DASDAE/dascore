@@ -46,7 +46,6 @@ def run_asv(name):
     # run benchmarks
     hash = git_hash()
     cmd = f"asv run -E existing --set-commit-hash {hash}"
-    print(cmd)  # noqa
     run(cmd, check=True, shell=True)
     assert expected_output_file.exists()
     return

@@ -25,8 +25,8 @@ class ProcessingSuite:
 
     def time_median_filter(self):
         """Time the median filter."""
-        self.patch.median_filter(kernel_size=(5, 3))
-        self.patch.median_filter(kernel_size=5)
+        self.patch.median_filter(distance=5, time=5, samples=True)
+        self.patch.median_filter(time=5, samples=True)
 
     def time_resample(self):
         """Time resample operations."""
