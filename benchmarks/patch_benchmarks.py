@@ -65,23 +65,23 @@ class TransformSuite:
 
     def time_indefinite_integrate(self):
         """Integrate along time axis."""
-        self.patch.tran.integrate(dim="time", defininte=False)
+        self.patch.integrate(dim="time", definite=False)
 
     def time_definite_integrate(self):
         """Integrate along time axis."""
-        self.patch.tran.integrate(dim="time", defininte=True)
+        self.patch.integrate(dim="time", definite=True)
 
     def time_differentiate(self):
         """Differentiate along time axis."""
-        self.patch.tran.differentiate(dim="time")
+        self.patch.differentiate(dim="time")
 
     def time_dft(self):
         """The discrete fourier transform."""
-        self.patch.tran.dft(dim="time")
+        self.patch.dft(dim="time")
 
     def time_idft(self):
         """The inverse of the fourier transform."""
-        self.dft_patch.tran.idft()
+        self.dft_patch.idft()
 
 
 class VizSuite:
