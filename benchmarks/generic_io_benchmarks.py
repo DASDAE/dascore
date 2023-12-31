@@ -10,7 +10,7 @@ from dascore.utils.downloader import fetch, get_registry_df
 @cache
 def test_file_paths():
     """Get a dict of name: path for all files in data registry."""
-    df = get_registry_df()
+    df = get_registry_df().loc[lambda x: ~x["name"].str.endswith(".csv")]
     out = {row["name"]: fetch(row["name"]) for _, row in df.iterrows()}
     return out
 

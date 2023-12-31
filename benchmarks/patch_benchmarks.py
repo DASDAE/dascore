@@ -25,8 +25,8 @@ class ProcessingSuite:
 
     def time_median_filter(self):
         """Time the median filter."""
-        self.patch.median_filter(kernel_size=(5, 3))
-        self.patch.median_filter(kernel_size=5)
+        self.patch.median_filter(distance=5, time=5, samples=True)
+        self.patch.median_filter(time=5, samples=True)
 
     def time_resample(self):
         """Time resample operations."""
@@ -65,23 +65,23 @@ class TransformSuite:
 
     def time_indefinite_integrate(self):
         """Integrate along time axis."""
-        self.patch.tran.integrate(dim="time", defininte=False)
+        self.patch.integrate(dim="time", definite=False)
 
     def time_definite_integrate(self):
         """Integrate along time axis."""
-        self.patch.tran.integrate(dim="time", defininte=True)
+        self.patch.integrate(dim="time", definite=True)
 
     def time_differentiate(self):
         """Differentiate along time axis."""
-        self.patch.tran.differentiate(dim="time")
+        self.patch.differentiate(dim="time")
 
     def time_dft(self):
         """The discrete fourier transform."""
-        self.patch.tran.dft(dim="time")
+        self.patch.dft(dim="time")
 
     def time_idft(self):
         """The inverse of the fourier transform."""
-        self.dft_patch.tran.idft()
+        self.dft_patch.idft()
 
 
 class VizSuite:
