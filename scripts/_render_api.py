@@ -55,14 +55,20 @@ def sha_256(path_or_str: Path | str) -> str:
     return hashlib.sha256(str(path_or_str).encode("utf-8")).hexdigest()
 
 
-def build_table(df: pd.DataFrame, caption=None):
+def build_table(df: pd.DataFrame, caption=None, attrs=".striped .float"):
     """An opinionated function to make a dataframe into html table."""
     df = df.drop_duplicates()
-    template = get_template("table.html")
-    columns = [x.capitalize() for x in df.columns]
-    rows = df.to_records(index=False).tolist()
-    out = template.render(columns=columns, rows=rows, caption=caption)
-    return out
+    df.columns = [x.capitalize() for x in df.columns]
+    out_str = df.to_markdown(tablefmt="github", index=False)
+    # add metadata, such as label or styling.
+    if caption is not None or attrs is not None:
+        meta = "\n: "
+        if caption:
+            meta += str(caption)
+        if attrs:
+            meta += "{" + attrs + "}"
+        out_str += meta
+    return out_str
 
 
 def is_it_subclass(obj, cls):
@@ -246,7 +252,7 @@ class NumpyDocStrParser:
         for ind_num, ind in enumerate(param_start[:-1]):
             key = lines[ind].strip()
             vals = [x.strip() for x in lines[ind + 1 : param_start[ind_num + 1]]]
-            param_desc.append((key, "\n".join(vals)))
+            param_desc.append((key, " ".join(vals)))
         table = pd.DataFrame(param_desc, columns=["Parameter", "Description"])
         return build_table(table)
 

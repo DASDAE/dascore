@@ -99,6 +99,3 @@ def main(raw_data=None):
 
 if __name__ == "__main__":
     main()  # uncomment before running quarto so IO works.
-
-
-# this is helpful for debugging while quarto is running.

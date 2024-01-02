@@ -697,11 +697,12 @@ def write(
         The string indicating the format to write.
     file_version
         Optionally specify the version of the file, else use the latest
-        version.
+        version for the format.
 
     Raises
     ------
-    dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
+    [`UnkownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
+        - Could not determine the fiber format.
     """
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
     if not isinstance(patch_or_spool, dc.BaseSpool):

@@ -26,7 +26,7 @@ td, th {
 }
 
 th {
-    background-color: rgb(235, 235, 235);
+    /*background-color: rgb(235, 235, 235);*/
     text-align: center;
 }
 
@@ -39,9 +39,9 @@ caption {
     padding: 10px;
 }
 
-tbody tr:nth-child(even) {
-    background-color: rgba(210, 209, 209, 0.4);
-}
+/*tbody tr:nth-child(even) {*/
+/*    background-color: rgba(210, 209, 209, 0.4);*/
+/*}*/
 
 
 /* Custom classes */
@@ -61,13 +61,13 @@ tbody tr:nth-child(even) {
     padding-top: 2px;
 }
 
-.origin_table {
-    border: 0em;
-    width: 100%;
-    margin: 0;
-    font-size: 1em;
-    border-style: hidden !important;
-    font-family: 'Bree Serif', serif;
-    display: block;
-    margin-bottom: 10px;
-}
+/*.origin_table {*/
+/*    border: 0em;*/
+/*    width: 100%;*/
+/*    margin: 0;*/
+/*    font-size: 1em;*/
+/*    border-style: hidden !important;*/
+/*    font-family: 'Bree Serif', serif;*/
+/*    display: block;*/
+/*    margin-bottom: 10px;*/
+/*}*/
