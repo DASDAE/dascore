@@ -196,6 +196,7 @@ class _FiberIOManager:
         format: str | None = None,
         version: str | None = None,
         extension: str | None = None,
+        formatter_hint: FiberIO | None = None,
     ) -> Self:
         """
         Yields fiber IO object based on input priorities.
@@ -216,13 +217,20 @@ class _FiberIOManager:
         Parameters
         ----------
         format
-            The format string indicating the format name
+            The format string indicating the format name.
         version
             The version string of the format
         extension
             The extension of the file.
+        formatter_hint
+            If not None, a suspected formatter to use first. This is an
+            optimization for file archives which tend to have many files of
+            the same format.
+
         """
         # TODO replace this with concise pattern matching once 3.9 is dropped
+        if formatter_hint is not None:
+            yield formatter_hint
         if version and not format:
             msg = "Providing only a version is not sufficient to determine format"
             raise UnknownFiberFormatError(msg)
@@ -589,6 +597,7 @@ def scan(
     which may have extra fields.
     """
     out = []
+    formatter = None
     for patch_source in _iterate_scan_inputs(path):
         # just pull attrs from patch
         if isinstance(patch_source, dc.Patch):
@@ -602,6 +611,7 @@ def scan(
                         man,
                         file_format=file_format,
                         file_version=file_version,
+                        formatter_hint=formatter,
                     )
                 except UnknownFiberFormatError:  # skip bad entities
                     continue
@@ -622,6 +632,7 @@ def get_format(
     path: str | Path | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
+    formatter_hint: FiberIO | None = None,
     **kwargs,
 ) -> tuple[str, str]:
     """
@@ -635,6 +646,9 @@ def get_format(
         The known file format.
     file_version
         The known file version.
+    formatter_hint
+        A suspected formatter to try first. This is primarily an optimization
+        for reading file archives where the formats usually are the same.
 
     Returns
     -------
@@ -653,7 +667,10 @@ def get_format(
         suffix = Path(path).suffix
         ext = suffix[1:] if suffix else None
         iterator = FiberIO.manager.yield_fiberio(
-            file_format, file_version, extension=ext
+            file_format,
+            file_version,
+            extension=ext,
+            formatter_hint=formatter_hint,
         )
         for formatter in iterator:
             # we need to wrap this in try except to make it robust to what
