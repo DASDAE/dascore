@@ -174,7 +174,7 @@ class TestInit:
     def test_sin_wave_patch(self):
         """Ensure the sin wave patch is consistent with its coord dims."""
         # For some reason this combination can make coords with wrong shape.
-        patch = dc.examples._sin_wave_patch(
+        patch = dc.examples.sin_wave_patch(
             sample_rate=1000,
             frequency=[200, 10],
             channel_count=2,

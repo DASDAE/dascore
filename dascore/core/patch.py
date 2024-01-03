@@ -25,6 +25,8 @@ class Patch:
     """
     A Class for managing data and metadata.
 
+    See the [patch tutorial](/tutorial/patch.qmd) for examples.
+
     Parameters
     ----------
     data

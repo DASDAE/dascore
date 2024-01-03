@@ -477,6 +477,9 @@ def read(
     """
     Read a fiber file.
 
+    For most cases, [`dascore.spool`](`dascore.spool`) is preferable to
+    this function.
+
     Parameters
     ----------
     path
@@ -492,6 +495,20 @@ def read(
         An optional tuple of distances.
     *kwargs
         All kwargs are passed to the format-specific read functions.
+
+    Notes
+    -----
+    Unlike [`spool`](`dascore.spool`) this function reads the entire file
+    into memory.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> file_path = fetch("prodml_2.1.h5")
+    >>>
+    >>> patch = dc.read(file_path)
     """
     with IOResourceManager(path) as man:
         if not file_format or not file_version:
@@ -539,6 +556,14 @@ def scan_to_df(
     exclude
         A sequence of strings to exclude from the analysis.
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> file_path = fetch("prodml_2.1.h5")
+    >>>
+    >>> df = dc.scan_to_df(file_path)
     """
     info = scan(
         path=path,
@@ -587,6 +612,15 @@ def scan(
     -------
     A list of [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) or subclasses
     which may have extra fields.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> file_path = fetch("prodml_2.1.h5")
+    >>>
+    >>> attr_list = dc.scan(file_path)
     """
     out = []
     for patch_source in _iterate_scan_inputs(path):
@@ -644,6 +678,14 @@ def get_format(
     ------
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> file_path = fetch("prodml_2.1.h5")
+    >>>
+    >>> file_format, file_version = dc.get_format(file_path)
     """
     with IOResourceManager(path) as man:
         path = man.source
@@ -703,6 +745,17 @@ def write(
     ------
     [`UnkownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
         - Could not determine the fiber format.
+
+    Examples
+    --------
+    >>> from pathlib import Path
+    >>> import dascore as dc
+    >>>
+    >>> patch = dc.get_example_patch()
+    >>> path = Path("output.h5")
+    >>> dc.write(patch, path, "dasdae")
+    >>>
+    >>> path.unlink()
     """
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
     if not isinstance(patch_or_spool, dc.BaseSpool):

@@ -55,20 +55,14 @@ def sha_256(path_or_str: Path | str) -> str:
     return hashlib.sha256(str(path_or_str).encode("utf-8")).hexdigest()
 
 
-def build_table(df: pd.DataFrame, caption=None, attrs=".striped .float"):
+def build_table(df: pd.DataFrame, caption=None):
     """An opinionated function to make a dataframe into html table."""
     df = df.drop_duplicates()
-    df.columns = [x.capitalize() for x in df.columns]
-    out_str = df.to_markdown(tablefmt="github", index=False)
-    # add metadata, such as label or styling.
-    if caption is not None or attrs is not None:
-        meta = "\n: "
-        if caption:
-            meta += str(caption)
-        if attrs:
-            meta += "{" + attrs + "}"
-        out_str += meta
-    return out_str
+    template = get_template("table.html")
+    columns = [x.capitalize() for x in df.columns]
+    rows = df.to_records(index=False).tolist()
+    out = template.render(columns=columns, rows=rows, caption=caption)
+    return out
 
 
 def is_it_subclass(obj, cls):
@@ -242,7 +236,9 @@ class NumpyDocStrParser:
         return out
 
     def style_parameters(self, param_str):
-        """Style the parameters block."""
+        """
+        Style the parameters block.
+        """
         lines = param_str.split("\n")
         # parameters dont have spaces at the start
         param_start = [num for num, x in enumerate(lines) if not x.startswith(" ")]
@@ -251,8 +247,16 @@ class NumpyDocStrParser:
         param_desc = []
         for ind_num, ind in enumerate(param_start[:-1]):
             key = lines[ind].strip()
-            vals = [x.strip() for x in lines[ind + 1 : param_start[ind_num + 1]]]
-            param_desc.append((key, " ".join(vals)))
+            # get the number of indents (usually 4)
+            in_char = (len(lines[1]) - len(lines[1].lstrip())) * " "
+            desc_lines = lines[ind + 1 : param_start[ind_num + 1]]
+            vals = [
+                # strip out the first indentation line
+                (x[len(in_char) :] if x.startswith(in_char) and in_char else x)
+                for x in desc_lines
+            ]
+            # breakpoint()
+            param_desc.append((key, "<br>".join(vals)))
         table = pd.DataFrame(param_desc, columns=["Parameter", "Description"])
         return build_table(table)
 

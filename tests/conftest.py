@@ -368,7 +368,7 @@ def one_file_directory_spool(one_file_dir):
 @register_func(SPOOL_FIXTURES)
 def diverse_spool():
     """Create a spool with a diverse set of patches for testing."""
-    return ex._diverse_spool()
+    return ex.diverse_spool()
 
 
 @pytest.fixture(scope="class")

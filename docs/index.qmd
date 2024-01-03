@@ -27,7 +27,7 @@ DASCore is a foundational package of the [DAS Data Analysis Ecosystem (DASDAE)](
 #| output: asis
 import pandas as pd
 from dascore.io.core import FiberIO
-out_str = FiberIO.get_supported_io_table().replace(True, value='✅').replace(False, value='❌').to_markdown(index=False, stralign=True)
+out_str = FiberIO.get_supported_io_table().replace(True, value='✅').replace(False, value='❌').to_markdown(index=False, stralign="center")
 
 out_str += '\n: {.striped}'
 print(out_str)

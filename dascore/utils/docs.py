@@ -1,9 +1,15 @@
 """Utilities for documentation."""
 from __future__ import annotations
 
+import inspect
 import textwrap
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
+
+import pandas as pd
+
+import dascore as dc
 
 
 def format_dtypes(dtype_dict: dict[str, Any]) -> str:
@@ -87,3 +93,22 @@ def compose_docstring(**kwargs: str | Sequence[str]):
         return func
 
     return _wrap
+
+
+def objs_to_doc_df(doc_dict, cross_reference=True):
+    """
+    Convert a dictionary of documentable entities to a pandas dataframe.
+    """
+    out = {}
+    base = Path(dc.__file__).parent.parent
+    for key, obj in doc_dict.items():
+        if cross_reference:
+            path = Path(inspect.getfile(obj)).relative_to(base)
+            name = obj.__name__
+            address = str(path).replace(".py", "").replace("/", ".")
+            key = f"[`{key}`](`{address + '.' + name}`)"
+        doc = str(getattr(obj, "__func__", obj).__doc__).strip()
+        out[key] = doc.splitlines()[0]
+    df = pd.Series(out).to_frame().reset_index()
+    df.columns = ["Name", "Description"]
+    return df
