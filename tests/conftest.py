@@ -406,7 +406,7 @@ def memory_spool_dim_1_patches():
         time_step=0.999767552,
         shape=(100, 1),
         length=10,
-        starttime="2023-06-13T15:38:00.49953408",
+        time_min="2023-06-13T15:38:00.49953408",
     )
     return spool
 
