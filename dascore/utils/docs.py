@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import textwrap
 from collections.abc import Sequence
 from pathlib import Path
@@ -105,7 +106,7 @@ def objs_to_doc_df(doc_dict, cross_reference=True):
         if cross_reference:
             path = Path(inspect.getfile(obj)).relative_to(base)
             name = obj.__name__
-            address = str(path).replace(".py", "").replace("/", ".")
+            address = str(path).replace(".py", "").replace(os.sep, ".")
             key = f"[`{key}`](`{address + '.' + name}`)"
         doc = str(getattr(obj, "__func__", obj).__doc__).strip()
         out[key] = doc.splitlines()[0]
