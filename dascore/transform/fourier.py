@@ -1,7 +1,7 @@
 """
 Module for Fourier transforms.
 
-See the [FFT note](dascore.org/notes/fft_notes.html) for discussion on the
+See the [FFT note](/notes/dft_notes.qmd) for discussion on the
 implementation.
 """
 from __future__ import annotations

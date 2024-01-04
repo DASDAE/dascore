@@ -368,7 +368,7 @@ def one_file_directory_spool(one_file_dir):
 @register_func(SPOOL_FIXTURES)
 def diverse_spool():
     """Create a spool with a diverse set of patches for testing."""
-    return ex._diverse_spool()
+    return ex.diverse_spool()
 
 
 @pytest.fixture(scope="class")
@@ -406,7 +406,7 @@ def memory_spool_dim_1_patches():
         time_step=0.999767552,
         shape=(100, 1),
         length=10,
-        starttime="2023-06-13T15:38:00.49953408",
+        time_min="2023-06-13T15:38:00.49953408",
     )
     return spool
 

@@ -2,8 +2,8 @@
 
 A python library for distributed fiber optic sensing.
 
-[![PyPI Version](https://img.shields.io/pypi/v/dascore.svg)](https://pypi.python.org/pypi/dascore)
 [![coverage](https://codecov.io/gh/dasdae/dascore/branch/master/graph/badge.svg)](https://codecov.io/gh/dasdae/dascore)
+[![PyPI Version](https://img.shields.io/pypi/v/dascore.svg)](https://pypi.python.org/pypi/dascore)
 [![supported versions](https://img.shields.io/pypi/pyversions/dascore.svg?label=python_versions)](https://pypi.python.org/pypi/dascore)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/dascore.svg?label=pypi)](https://pypi.org/project/dascore/)
 [![Conda Downloads](https://img.shields.io/conda/dn/conda-forge/dascore.svg?label=conda)](https://github.com/conda-forge/dascore-feedstock)

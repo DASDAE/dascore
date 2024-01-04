@@ -19,7 +19,7 @@ class TestWiggle:
 
     def test_example(self):
         """Test the example from the docs."""
-        patch = dc.examples._sin_wave_patch(
+        patch = dc.examples.sin_wave_patch(
             sample_rate=1000,
             frequency=[200, 10],
             channel_count=2,

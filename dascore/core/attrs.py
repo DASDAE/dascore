@@ -77,7 +77,24 @@ def _get_coords_dict(data_dict, fields):
 
 
 class PatchAttrs(DascoreBaseModel):
-    """The expected attributes for a Patch."""
+    """
+    The expected attributes for a Patch.
+
+    The default attributes are:
+    ```{python}
+    #| echo: false
+
+    import dascore as dc
+    from IPython.display import Markdown
+
+    df_str = (
+        dc.PatchAttrs.get_summary_df()
+        .reset_index()
+        .to_markdown(index=False, stralign="center")
+    )
+    Markdown(df_str)
+    ```
+    """
 
     model_config = ConfigDict(
         title="Patch Summary",

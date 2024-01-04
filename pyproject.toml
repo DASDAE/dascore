@@ -68,6 +68,7 @@ extras = [
 docs = [
     "jinja2",
     "ipywidgets",
+    "tabulate",
 ]
 
 test = [

@@ -587,9 +587,9 @@ class MemorySpool(DataFrameSpool):
 @singledispatch
 def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSpool:
     """
-    Create a spool from some data source.
+    Create a spool from a data source.
 
-    This function is used to load data from many different sources.
+    This is the main function for loading in DASCore.
 
     Parameters
     ----------

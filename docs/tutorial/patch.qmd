@@ -26,15 +26,7 @@ pa1 = dc.get_example_patch("random_das")
 pa2 = dc.get_example_patch("example_event_1")
 ```
 
-Other supported example patches are:
-```{python}
-#| code-fold: true
-from pprint import pprint
-
-import dascore as dc
-
-pprint(sorted(dc.examples.EXAMPLE_PATCHES))
-```
+See [`get_example_patch`](`dascore.examples.get_example_patch`) for supported patches.
 
 ## Load a file
 
@@ -166,14 +158,23 @@ Most of the other `CoordManager` features are primarily used internally by DASCo
 
 ## Attrs
 
-The metadata stored in [`Patch.attrs`](`dascore.core.attrs.PatchAttrs`) is a [pydantic model](https://docs.pydantic.dev/usage/models/) which enforces a schema and provides validation. `PatchAttrs.get_summary_df` generates a table of the attribute descriptions:
+The metadata stored in [`Patch.attrs`](`dascore.core.attrs.PatchAttrs`) is a [pydantic model](https://docs.pydantic.dev/usage/models/) which enforces a schema and provides validation. [`PatchAttrs.get_summary_df`](`dascore.utils.models.DascoreBaseModel.get_summary_df`) generates a table of the attribute descriptions:
+
 
 ```{python}
-#| code-fold: true
-import dascore as dc
+#| echo: false
 
-dc.PatchAttrs.get_summary_df()
+import dascore as dc
+from IPython.display import Markdown
+
+df_str = (
+    dc.PatchAttrs.get_summary_df()
+    .reset_index()
+    .to_markdown(index=False, stralign="center")
+)
+Markdown(df_str)
 ```
+
 
 Specific data formats may also add attributes (e.g. "gauge_length", "pulse_width"), but this depends on the parser.
 

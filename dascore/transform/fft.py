@@ -1,7 +1,6 @@
 """
-Module for Fourier transforms.
-
-See the [FFT note](dascore.org/notes/fft_notes.html) details.
+Deprecated module for Fourier transforms. Use
+[fourier](`dascore.transform.fourier`) instead.
 """
 from __future__ import annotations
 

@@ -236,7 +236,9 @@ class NumpyDocStrParser:
         return out
 
     def style_parameters(self, param_str):
-        """Style the parameters block."""
+        """
+        Style the parameters block.
+        """
         lines = param_str.split("\n")
         # parameters dont have spaces at the start
         param_start = [num for num, x in enumerate(lines) if not x.startswith(" ")]
@@ -245,8 +247,16 @@ class NumpyDocStrParser:
         param_desc = []
         for ind_num, ind in enumerate(param_start[:-1]):
             key = lines[ind].strip()
-            vals = [x.strip() for x in lines[ind + 1 : param_start[ind_num + 1]]]
-            param_desc.append((key, "\n".join(vals)))
+            # get the number of indents (usually 4)
+            in_char = (len(lines[1]) - len(lines[1].lstrip())) * " "
+            desc_lines = lines[ind + 1 : param_start[ind_num + 1]]
+            vals = [
+                # strip out the first indentation line
+                (x[len(in_char) :] if x.startswith(in_char) and in_char else x)
+                for x in desc_lines
+            ]
+            # breakpoint()
+            param_desc.append((key, "<br>".join(vals)))
         table = pd.DataFrame(param_desc, columns=["Parameter", "Description"])
         return build_table(table)
 
