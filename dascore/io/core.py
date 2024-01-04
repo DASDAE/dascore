@@ -753,8 +753,9 @@ def write(
     >>>
     >>> patch = dc.get_example_patch()
     >>> path = Path("output.h5")
-    >>> dc.write(patch, path, "dasdae")
+    >>> _ = dc.write(patch, path, "dasdae")
     >>>
+    >>> assert path.exists()
     >>> path.unlink()
     """
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
