@@ -139,7 +139,7 @@ def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
     return np.equal(self.data, other.data).all()
 
 
-def new(
+def update(
     self: PatchType,
     data: ArrayLike | np.ndarray | None = None,
     coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,

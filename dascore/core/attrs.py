@@ -456,10 +456,12 @@ def merge_compatible_coords_attrs(
     Merge the coordinates and attributes of patches or raise if incompatible.
 
     The rules for compatibility are:
-        - All attrs must be equal other than history.
-        - Patches must share the same dimensions, in the same order
-        - All dimensional coordinates must be strictly equal
-        - If patches share a non-dimensional coordinate they must be equal.
+
+    - All attrs must be equal other than history.
+    - Patches must share the same dimensions, in the same order
+    - All dimensional coordinates must be strictly equal
+    - If patches share a non-dimensional coordinate they must be equal.
+
     Any coordinates or attributes contained by a single patch will be included
     in the output.
 

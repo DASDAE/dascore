@@ -40,7 +40,7 @@ def patch_random_start(event_patch_1):
     coords["time"] = time + random_starttime
     attrs["time_min"] = coords["time"].min()
     attrs["time_max"] = coords["time"].max()
-    patch = event_patch_1.new(attrs=attrs, coords=coords)
+    patch = event_patch_1.update(attrs=attrs, coords=coords)
     return patch
 
 

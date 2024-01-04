@@ -218,7 +218,7 @@ class TestNew:
         assert patch.attrs.history
         new_attrs = dict(patch.attrs)
         new_attrs["history"] = []
-        new_patch = patch.new(attrs=new_attrs)
+        new_patch = patch.update(attrs=new_attrs)
         assert not new_patch.attrs.history
 
     def test_new_coord_dict_order(self, random_patch):
@@ -238,7 +238,7 @@ class TestNew:
     def test_attrs_preserved_when_not_specified(self, random_patch):
         """If attrs is not passed to new, old attrs should remain."""
         pa = random_patch.update_attrs(network="bob", tag="2", station="10")
-        new_1 = pa.new(data=pa.data * 10)
+        new_1 = pa.update(data=pa.data * 10)
         assert new_1.attrs == pa.attrs
 
     def test_new_dims_renames_dims(self, random_patch):
@@ -368,7 +368,7 @@ class TestEquals:
         coord_array[20:30] *= 0.9
         assert not np.allclose(coord_array, coords.get_array("distance"))
         new_patch = patch.update_coords(distance=coord_array)
-        new = patch.new(coords=new_patch.coords)
+        new = patch.update(coords=new_patch.coords)
         assert new != patch
 
     def test_other_types(self, random_patch):

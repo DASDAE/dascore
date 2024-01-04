@@ -175,7 +175,9 @@ class Patch:
 
     # --- basic patch functionality.
 
-    new = dascore.proc.new
+    update = dascore.proc.update
+    # Before 0.1.0 update was called new, this is for backwards compatibility.
+    new = dascore.proc.update
     equals = dascore.proc.equals
     update_attrs = dascore.proc.update_attrs
     assert_has_coords = dascore.proc.assert_has_coords

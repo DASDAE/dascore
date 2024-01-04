@@ -39,4 +39,4 @@ def velocity_to_strain_rate(
     new_attrs = patch.attrs.update(
         data_type="strain_rate", gauge_length=step * gauge_multiple
     )
-    return patch.new(attrs=new_attrs)
+    return patch.update(attrs=new_attrs)

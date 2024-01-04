@@ -42,7 +42,7 @@ class TestSortCoords:
         for dim, array, ind in zip(dims, array_list, (1, 0)):
             coord = patch.coords.coord_map[dim]
             arg_sort = np.argsort(coord.values)
-            new = patch.new(data=array).sort_coords(dim)
+            new = patch.update(data=array).sort_coords(dim)
             data_along_slice = np.take(new.data, 0, ind)
             assert np.all(np.equal(arg_sort, data_along_slice))
 

@@ -331,7 +331,7 @@ class TestDropNa:
         nans = [(1, 1, 1), (0, 9, 9)]
         for nan_ind in nans:
             data[nan_ind] = np.NaN
-        patch = range_patch_3d.new(data=data)
+        patch = range_patch_3d.update(data=data)
         return patch
 
     def test_drop_time_any(self, patch_with_null):

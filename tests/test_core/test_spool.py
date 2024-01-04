@@ -484,7 +484,7 @@ class TestMisc:
         # create new patch with cleared history
         new_attrs = dict(patch.attrs)
         new_attrs["history"] = []
-        new_patch = patch.new(attrs=new_attrs)
+        new_patch = patch.update(attrs=new_attrs)
         assert not new_patch.attrs.history
         # add new patch (w/ no history) to spool, get first patch out.
         spool = dc.spool([new_patch])
