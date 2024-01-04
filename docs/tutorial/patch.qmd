@@ -282,24 +282,24 @@ patch.viz.waterfall(show=True, scale=0.2);
 
 Because patches should be treated as immutable objects, they can't be modified with normal attribute assignment. However, DASCore provides several methods that return new patches with modifications. 
 
-## New
+## Update
 
-[`Patch.new`](`dascore.core.patch.Patch.new`) uses the Patch as a template and returns a new Patch with one or more aspects modified.
+[`Patch.update`](`dascore.core.patch.Patch.update`) uses the `Patch` instances as a template and returns a new `Patch` instances with one or more aspects modified.
 
 ```{python}
 import dascore as dc
 pa = dc.get_example_patch()
 
 # Create a copy of patch with new data but coords and attrs stay the same.
-new_data_patch = pa.new(data=pa.data * 10)
+new_data_patch = pa.update(data=pa.data * 10)
 
 # Completely replace the attributes.
-new_data_patch = pa.new(attrs=dict(station="TMU"))
+new_data_patch = pa.update(attrs=dict(station="TMU"))
 ```
 
 ## Update attrs
 
-[`Patch.update_attrs`](`dascore.core.patch.Patch.update_attrs`) is for making changes to the attrs (metadata) while keeping the unaffected metadata (`Patch.new` completely replaces the old attrs).
+[`Patch.update_attrs`](`dascore.core.patch.Patch.update_attrs`) is for making changes to the attrs (metadata) while keeping the unaffected metadata (`Patch.update` would completely replace the old attrs).
 
 ```{python}
 import dascore as dc
@@ -350,7 +350,6 @@ pa = dc.get_example_patch()
 new_time = pa.coords.min('time') + one_second
 new = pa.update_coords(time_min=new_time)
 ```
-
 
 ### Adding coordinates
 
@@ -406,7 +405,7 @@ patch_detached_lat = patch.update_coords(latitude=(None, lat))
 
 ## Dropping coordinates
 
-Non-dimensional coordinates can be dropped using `Patch.drop_coords`. Dimensional coordinates, however, cannot be dropped doing so would force the patch data to become degenerate.
+Non-dimensional coordinates can be dropped using [`Patch.drop_coords`](`dascore.proc.coords.drop_coords`). Dimensional coordinates, however, cannot be dropped doing so would force the patch data to become degenerate.
 
 ```{python}
 import dascore as dc

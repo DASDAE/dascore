@@ -74,7 +74,7 @@ class TestDifferentiateOrder2:
 
     def test_uneven_spacing(self, wacky_dim_patch):
         """Ensure we can diff over uneven dimensions."""
-        patch = wacky_dim_patch.new(data=np.ones_like(wacky_dim_patch.data))
+        patch = wacky_dim_patch.update(data=np.ones_like(wacky_dim_patch.data))
         out = differentiate(patch, "time")
         # very occasionally, numpy outputs a few nan values from grad when
         # coordinate spacing is provided. I am still trying to figure out

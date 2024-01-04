@@ -27,7 +27,7 @@ class TestCorrelateInternal:
         time_axis = patch.dims.index("time")
         data = patch.data
         norm = np.linalg.norm(data, axis=time_axis, keepdims=True)
-        return patch.new(data=data / norm)
+        return patch.update(data=data / norm)
 
     @pytest.fixture(scope="session")
     def ricker_moveout_patch(self):

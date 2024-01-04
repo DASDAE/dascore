@@ -44,11 +44,8 @@ th {
 
 
 /*This makes every other row striped. */
-
-
-
 tbody tr:nth-child(odd) {
-    background-color: rgba(210, 209, 209, 0.2);
+    background-color: rgba(210, 209, 209, 0.35);
 }
 
 

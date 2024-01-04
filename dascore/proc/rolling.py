@@ -112,7 +112,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         out = self._pad_roll_array(raw)
         new_coords = self.get_coords()
         attrs = self._get_attrs_with_apply_history(function)
-        return self.patch.new(data=out, coords=new_coords, attrs=attrs)
+        return self.patch.update(data=out, coords=new_coords, attrs=attrs)
 
     def mean(self):
         """Apply mean to moving window."""
@@ -168,7 +168,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
         if len(data.shape) != len(self.patch.data.shape):
             data = np.squeeze(data)
         coords = self.get_coords()
-        return self.patch.new(data=data, coords=coords, attrs=attrs)
+        return self.patch.update(data=data, coords=coords, attrs=attrs)
 
     def _call_rolling_func(self, name, *args, **kwargs):
         """Helper function for calling a rolling function."""
