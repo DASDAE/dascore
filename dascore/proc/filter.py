@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pandas as pd
 from scipy import ndimage
+from scipy.ndimage import gaussian_filter as np_gauss
 from scipy.ndimage import median_filter as nd_median_filter
 from scipy.signal import iirfilter, sosfilt, sosfiltfilt, zpk2sos
 from scipy.signal import savgol_filter as np_savgol_filter
@@ -20,7 +21,6 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import check_filter_kwargs, check_filter_range
 from dascore.utils.patch import (
     get_dim_sampling_rate,
-    get_dim_value_from_kwargs,
     get_multiple_dim_value_from_kwargs,
     patch_function,
 )
@@ -190,7 +190,12 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 
 
 def _create_size_and_axes(patch, kwargs, samples):
-    """Return"""
+    """
+    Return a tuple of (size) and (axes).
+
+    Note: size will always have the same size as the patch, but
+    1s will be used if axis is not used.
+    """
     dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
     axes = [x["axis"] for x in dimfo.values()]
     size = [1] * len(patch.dims)
@@ -252,7 +257,7 @@ def median_filter(
     """
     size, _ = _create_size_and_axes(patch, kwargs, samples)
     new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)
-    return patch.new(data=new_data)
+    return patch.update(data=new_data)
 
 
 @patch_function()
@@ -261,7 +266,9 @@ def savgol_filter(
     patch: PatchType, polyorder, samples=False, mode="interp", cval=0.0, **kwargs
 ) -> PatchType:
     """
-    Applies Savgol filter along one dimension.
+    Applies Savgol filter along spenfied dimensions.
+
+    The filter will be applied over each selected dimension sequentially.
 
     Parameters
     ----------
@@ -277,38 +284,98 @@ def savgol_filter(
     cval
         The constant value for when mode == constant.
     **kwargs
-        Used to specify the shape of the median filter in each dimension.
-        See examples for more info.
-
-    Examples
-    --------
-    >>> import dascore
-    >>> from dascore.units import m, s
-    >>> pa = dascore.get_example_patch()
-
-    >>>  # 1. Apply second order polynomial Savgol filter
-    >>>  # only over time dimension with 0.10 sec window
-    >>> filtered_pa_1 = pa.savgol_filter(polyorder=2, time=0.1)
-
-    >>>  # 2. Apply Savgol filter over distance dimension
-    >>>  # using a 5 sample distance window
-    >>> filtered_pa_2 = pa.median_filter(samples=True, polyorder=2, distance=5)
+        Used to specify the shape of the savgol filter in each dimension.
 
     Notes
     -----
     See scipy.signal.savgol_filter for more info on implementation
     and arguments.
 
+    Examples
+    --------
+    >>> import dascore
+    >>> from dascore.units import m, s
+    >>> pa = dascore.get_example_patch()
+    >>>
+    >>> # Apply second order polynomial Savgol filter
+    >>> # over time dimension with 0.10 sec window.
+    >>> filtered_pa_1 = pa.savgol_filter(polyorder=2, time=0.1)
+    >>>
+    >>> # Apply Savgol filter over distance dimension using a 5 sample
+    >>> # distance window.
+    >>> filtered_pa_2 = pa.median_filter(distance=5, samples=True, polyorder=2)
+    >>>
+    >>> # Combine distance and time filter
+    >>> filtered_pa_3 = pa.savgol_filter(distance=10, time=0.1, polyorder=4)
     """
-    dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
-    coord = patch.get_coord(dim)
-    window = coord.get_sample_count(value, samples=samples)
-    new_data = np_savgol_filter(
-        x=patch.data,
-        window_length=window,
-        polyorder=polyorder,
+    data = patch.data
+    size, axes = _create_size_and_axes(patch, kwargs, samples)
+    for ax in axes:
+        data = np_savgol_filter(
+            x=patch.data,
+            window_length=size[ax],
+            polyorder=polyorder,
+            mode=mode,
+            cval=cval,
+            axis=ax,
+        )
+    return patch.update(data=data)
+
+
+@patch_function()
+@compose_docstring(sample_explination=samples_arg_description)
+def gaussian_filter(
+    patch: PatchType, samples=False, mode="reflect", cval=0.0, truncate=4.0, **kwargs
+) -> PatchType:
+    """
+    Applies a Gaussian filter along specified dimensions.
+
+    Parameters
+    ----------
+    patch
+        The patch to filter
+    samples
+        If True samples are specified
+        If False coordinate of dimension
+    mode
+        The mode for handling edges.
+    cval
+        The constant value for when mode == constant.
+    truncate
+        Truncate the filter kernel length to this many standard deviations.
+    **kwargs
+        Used to specify the sigma value (standard deviation) for desired
+        dimensions.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> from dascore.units import m, s
+    >>> pa = dascore.get_example_patch()
+    >>>
+    >>> # Apply Gaussian smoothing along time axis.
+    >>> pa_1 = pa.gaussian_filter(time=0.1)
+    >>>
+    >>> # Apply Gaussian filter over distance dimension
+    >>> # using a 3 sample standard deviation.
+    >>> pa_2 = pa.gaussian_filter(samples=True, distance=3)
+    >>>
+    >>> # Apply filter to time and distance axis.
+    >>> pa_3 = pa.gaussian_filter(time=0.1, distance=3)
+
+    Notes
+    -----
+    See scipy.ndimage.gaussian_filter for more info on implementation
+    and arguments.
+    """
+    size, axes = _create_size_and_axes(patch, kwargs, samples)
+    used_size = tuple(size[x] for x in axes)
+    data = np_gauss(
+        input=patch.data,
+        sigma=used_size,
+        axes=axes,
         mode=mode,
         cval=cval,
-        axis=axis,
+        truncate=truncate,
     )
-    return patch.new(data=new_data)
+    return patch.update(data=data)

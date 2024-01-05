@@ -135,6 +135,7 @@ website:
             - recipes/parallelization.qmd
             - recipes/edge_effects.qmd
             - recipes/fk.qmd
+            - recipes/smoothing.qmd
 
         - section: "IO"
           contents:

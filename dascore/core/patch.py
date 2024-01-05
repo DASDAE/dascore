@@ -221,6 +221,7 @@ class Patch:
     sobel_filter = dascore.proc.sobel_filter
     median_filter = dascore.proc.median_filter
     savgol_filter = dascore.proc.savgol_filter
+    gaussian_filter = dascore.proc.gaussian_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
     real = dascore.proc.real
