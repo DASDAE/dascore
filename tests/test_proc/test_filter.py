@@ -9,7 +9,6 @@ import dascore as dc
 from dascore.exceptions import (
     CoordDataError,
     FilterValueError,
-    ParameterError,
     PatchDimError,
     UnitError,
 )
@@ -200,7 +199,7 @@ class TestMedianFilter:
     def test_median_no_kwargs_raises(self, random_patch):
         """Apply default values."""
         msg = "You must specify one or more dimension in keyword args."
-        with pytest.raises(ParameterError, match=msg):
+        with pytest.raises(PatchDimError, match=msg):
             random_patch.median_filter()
 
     def test_median_filter_time(self, random_patch):
@@ -226,7 +225,7 @@ class TestSavgolFilter:
 
     def test_savgol_no_kwargs_raises(self, random_patch):
         """Apply default values."""
-        msg = "You must use exactly one dimension name in kwargs."
+        msg = "You must specify one or more"
         with pytest.raises(PatchDimError, match=msg):
             random_patch.savgol_filter(polyorder=2)
 
@@ -254,3 +253,31 @@ class TestSavgolFilter:
         assert np.allclose(out.data[-5:], 0)
         middle = out.data[midpoint - 10 : midpoint + 10]
         assert np.any((middle < 1) & (middle > 0))
+
+    def test_savgol_filter_multiple_dims(self, event_patch_2):
+        """Ensure multiple dimensions can be filtered."""
+        out = event_patch_2.savgol_filter(distance=10, time=0.001, polyorder=4)
+        assert out.shape == event_patch_2.shape
+        assert not np.allclose(out.data, event_patch_2.data)
+
+
+class TestGaussianFilter:
+    """Test the Guassian Filter."""
+
+    def test_filter_time(self, event_patch_2):
+        """Test for simple filter along time axis."""
+        out = event_patch_2.gaussian_filter(time=0.001)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == event_patch_2.shape
+
+    def test_filter_distance(self, event_patch_2):
+        """Ensure filter can be applied along distance axis with samples."""
+        out = event_patch_2.gaussian_filter(distance=5, samples=True)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == event_patch_2.shape
+
+    def test_filter_time_distance(self, event_patch_2):
+        """Ensure both time and distance can be filtered."""
+        out = event_patch_2.gaussian_filter(time=5, distance=5, samples=True)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == event_patch_2.shape

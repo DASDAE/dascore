@@ -1,0 +1,125 @@
+---
+title: " Patch Smoothing"
+execute:
+  warn: false
+---
+
+This recipe compares various smoothing strategies.
+
+A few methods useful for smoothing are: 
+
+- [`Patch.rolling`](`dascore.Patch.rolling`)
+- [`Patch.savgol_filter`](`dascore.Patch.savgol_filter`)
+- [`Patch.gaussian_filter`](`dascore.Patch.gaussian_filter`)
+
+
+:::{.callout-note}
+[`Patch.rolling`](`dascore.Patch.rolling`) is quite powerful and can be used for filtering in a variety of ways. However, as mentioned in the [rolling section of the tutorial](/tutorial/processing.qmd#rolling), [`Patch.rolling`](`dascore.Patch.rolling`) includes `NaN` entries in the output due to edge effects. This can require some additional thought to properly deal with.
+
+The other methods mentioned above generally deal with edge effects differently (governed by the `mode` parameter) and so don't have the same issue.
+:::
+
+## Example Data
+
+We will use [example_event_2](`dascore.examples.example_event_2`) to demonstrate the effects of the smoothing methods.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+
+patch = dc.get_example_patch("example_event_2")
+ax = patch.viz.waterfall()
+ax.set_title("un-smoothed patch");
+```
+
+## Rolling
+
+[`Patch.rolling`](`dascore.Patch.rolling`) can be used for applying several different aggregation functions to rolling windows along one dimension of the `Patch` instance. For instance, to apply a rolling mean to the time axis:
+
+```{python}
+smoothed_patch = (
+    patch.rolling(time=0.005).mean()
+)
+ax = smoothed_patch.viz.waterfall()
+ax.set_title("rolling time mean");
+```
+
+or a median filter to the distance axis:
+
+```{python}
+smoothed_patch = (
+    patch.rolling(distance=20, samples=True).median()
+)
+ax = smoothed_patch.viz.waterfall()
+ax.set_title("rolling distance median");
+```
+
+Or both:
+```{python}
+smoothed_patch = (
+    patch.rolling(distance=20, samples=True).median()
+    .rolling(time=0.005).mean()
+)
+ax = smoothed_patch.viz.waterfall()
+ax.set_title("rolling time mean distance median");
+```
+
+Again though, the output array has `NaN` entries along some of the edges:
+
+```{python}
+nan_data = np.isnan(smoothed_patch.data)
+print(f"Number of NaN = {nan_data.sum()}")
+
+# Create and plot a patch to highlight NaN values.
+nan_patch = (
+    smoothed_patch.update(data=nan_data.astype(np.int32))
+    .update_attrs(data_type='', data_units=None)
+)
+ax = nan_patch.viz.waterfall()
+ax.set_title("NaNs in Patch");
+```
+
+## Savgol filter
+
+[`Patch.savgol_filter`](`dascore.Patch.savgol_filter`) uses [SciPy's savgol_filter](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.savgol_filter.html), which is an implementation of the [Savitzky-Golay Filter](https://en.wikipedia.org/wiki/Savitzky%E2%80%93Golay_filter) to apply smoothing along a single dimension. 
+
+```{python}
+smoothed_patch = (
+    patch.savgol_filter(time=0.01, polyorder=3)
+)
+ax = smoothed_patch.viz.waterfall()
+ax.set_title("savgol time");
+```
+
+Multidimensional smoothing is achieved by applying the 1D filter sequentially along each desired dimension. 
+
+```{python}
+smoothed_patch = (
+    patch.savgol_filter(
+        time=25, 
+        distance=25, 
+        samples=True,
+        polyorder=2,
+    )
+)
+ax = smoothed_patch.viz.waterfall()
+ax.set_title("savgol time and distance");
+```
+
+## Gaussian filter
+
+[`Patch.gaussian_filter`](`dascore.Patch.gaussian_filter`) uses [SciPy's gaussian_filter](https://docs.scipy.org/doc/scipy/reference/generated/scipy.ndimage.gaussian_filter.html) to apply a gaussian smoothing kernel to a patch. Note that the keyword arguments here specify standard deviation, and the `
+
+
+```{python}
+smoothed_patch = (
+    patch.gaussian_filter(
+        time=6, 
+        distance=6, 
+        samples=True,
+    )
+)
+ax = smoothed_patch.viz.waterfall()
+ax.set_title("gaussian time and distance");
+```

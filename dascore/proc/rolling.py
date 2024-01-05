@@ -215,9 +215,13 @@ def rolling(
     engine: Literal["numpy", "pandas", None] = None,
     samples=False,
     **kwargs,
-) -> _NumpyPatchRoller:
+) -> _NumpyPatchRoller | _PandasPatchRoller:
     """
     Apply a rolling function along a specified dimension.
+
+    See also the
+    [rolling section of the processing tutorial](/tutorial/processing.qmd#rolling)
+    and the [smoothing recipe](/recipes/smoothing.qmd).
 
     Parameters
     ----------
@@ -242,16 +246,6 @@ def rolling(
         Used to pass dimension and window size.
         For example `time=10` represents window size of
         10*(default unit) along the time axis.
-
-    Examples
-    --------
-    >>> # Simple example for rolling mean function
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> # apply rolling over 1 second with 0.5 step
-    >>> mean_patch = patch.rolling(time=1, step=0.5).mean()
-    >>> # drop nan at the start of the time axis.
-    >>> out = mean_patch.dropna("time")
 
     Notes
     -----
@@ -280,6 +274,19 @@ def rolling(
         [NaN, 1.0, 3.0]
     if time = 3 * dt and step = 3 * dt
         [NaN, 2.0]
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>>
+    >>> # Simple example for rolling mean function
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # apply rolling over 1 second with 0.5 step
+    >>> mean_patch = patch.rolling(time=1, step=0.5).mean()
+    >>>
+    >>> # drop nan at the start of the time axis.
+    >>> out = mean_patch.dropna("time")
     """
 
     def _get_engine(step, engine, patch):
