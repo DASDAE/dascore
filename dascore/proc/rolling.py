@@ -249,16 +249,16 @@ def rolling(
 
     Notes
     -----
-    This class behaves like pandas.rolling
-    (https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html)
-    which has some important implications.
+    Rolling is designed to behaves like Pandas [DataFrame.rolling](
+    https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html)
+    which has some important implications:
 
-    First, when step is not defined or set to 1, the output patch will have the
+    - First, when step is not defined or set to 1, the output patch will have the
     same shape as the input patch. The consequence of this is that NaN values
     will appear at the start of the dimension. You can use
     [`patch.dropna`](`dascore.Patch.dropna`) to remove the NaN values.
 
-    Second, the step parameter is equivalent applying to the output along the
+    - Second, the step parameter is equivalent applying to the output along the
     specified dimension. For example, if step=2 the output of the chosen
     dimension will be 1/2 of the input length.
 
@@ -266,13 +266,17 @@ def rolling(
 
     Consider a patch with a simple 1D array in the dimension "time":
         [0, 1, 2, 3, 4, 5]
-    If time = 2 * dt the output is
+
+    - If time = 2 * dt the output is
         [NaN, 0.5, 1.5, 2.5, 3.5, 4.5]
-    If time = 3 * dt the output is
+
+    - If time = 3 * dt the output is
         [NaN, NaN, 1.0, 2.0, 3.0, 4.0]
-    if time = 3 * dt and step = 2 * dt
+
+    - if time = 3 * dt and step = 2 * dt
         [NaN, 1.0, 3.0]
-    if time = 3 * dt and step = 3 * dt
+
+    - if time = 3 * dt and step = 3 * dt
         [NaN, 2.0]
 
     Examples
