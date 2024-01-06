@@ -4,7 +4,7 @@ execute:
   warn: false
 ---
 
-This recipe compares various smoothing strategies.
+This recipe compares several smoothing strategies.
 
 A few patch methods useful for smoothing are: 
 
@@ -16,12 +16,12 @@ A few patch methods useful for smoothing are:
 :::{.callout-note}
 [`Patch.rolling`](`dascore.Patch.rolling`) is quite flexible and can be used for many different processing tasks. However, as mentioned in the [rolling section of the tutorial](/tutorial/processing.qmd#rolling), [`Patch.rolling`](`dascore.Patch.rolling`) includes `NaN` entries in the output due to edge effects. This can require some additional thought to properly deal with.
 
-The other methods mentioned above generally deal with edge effects differently (governed by the `mode` parameter) and so don't have the same issue.
+The other methods mentioned above deal with edge effects differently (governed by the `mode` parameter) and so don't have the same issue.
 :::
 
 ## Example Data
 
-We will use [example_event_2](`dascore.examples.example_event_2`) to demonstrate the effects of the smoothing methods.
+We will use [example_event_2](`dascore.examples.example_event_2`) to demonstrate how to use each smoothing methods.
 
 ```{python}
 import numpy as np
@@ -35,7 +35,7 @@ ax.set_title("un-smoothed patch");
 
 ## Rolling
 
-[`Patch.rolling`](`dascore.Patch.rolling`) can be used for applying several different aggregation functions to rolling windows along one dimension of the `Patch` instance. For instance, to apply a rolling mean to the time axis:
+[`Patch.rolling`](`dascore.Patch.rolling`) can be used for applying aggregation functions to rolling windows along one dimension of the `Patch` instance. For instance, to apply a rolling mean to the time axis:
 
 ```{python}
 smoothed_patch = (
@@ -80,6 +80,10 @@ ax = nan_patch.viz.waterfall()
 ax.set_title("NaNs in Patch");
 ```
 
+Which can be conveniently dropped with [Patch.dropna](`dascore.Patch.dropna`). 
+
+['Patch.fill_nan`]
+
 ## Savgol filter
 
 [`Patch.savgol_filter`](`dascore.Patch.savgol_filter`) uses [SciPy's savgol_filter](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.savgol_filter.html), which is an implementation of the [Savitzky-Golay Filter](https://en.wikipedia.org/wiki/Savitzky%E2%80%93Golay_filter) to apply smoothing along a single dimension. 
@@ -109,19 +113,19 @@ ax.set_title("savgol time and distance");
 
 ## Gaussian filter
 
-[`Patch.gaussian_filter`](`dascore.Patch.gaussian_filter`) uses [SciPy's gaussian_filter](https://docs.scipy.org/doc/scipy/reference/generated/scipy.ndimage.gaussian_filter.html) to apply a gaussian smoothing kernel to a patch. Note that the keyword arguments here specify standard deviation, and the `truncate` keyword determines how many standard deviations are included in the smoothing kernel.
+[`Patch.gaussian_filter`](`dascore.Patch.gaussian_filter`) uses [SciPy's gaussian_filter](https://docs.scipy.org/doc/scipy/reference/generated/scipy.ndimage.gaussian_filter.html) to apply a gaussian smoothing operator to the patch. Note that the keyword arguments here specify standard deviation, and the `truncate` keyword determines how many standard deviations are included in the smoothing kernel.
 
 ```{python}
 smoothed_patch = patch.gaussian_filter(
-    time=6, 
-    distance=6, 
+    time=5, 
+    distance=5, 
     samples=True,
 )
 ax = smoothed_patch.viz.waterfall()
 ax.set_title("gaussian time and distance");
 ```
 
-To visualize the smoothing kernel we can apply the operator to a patch which has all 0 values except a 1 in the center.
+To visualize the smoothing kernel we can apply the operator to a patch whose data is all 0s except for a single 1 in the center.
 
 ```{python}
 data = np.zeros_like(smoothed_patch.data)
