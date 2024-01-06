@@ -16,12 +16,12 @@ A few patch methods useful for smoothing are:
 :::{.callout-note}
 [`Patch.rolling`](`dascore.Patch.rolling`) is quite flexible and can be used for many different processing tasks. However, as mentioned in the [rolling section of the tutorial](/tutorial/processing.qmd#rolling), [`Patch.rolling`](`dascore.Patch.rolling`) includes `NaN` entries in the output due to edge effects. This can require some additional thought to properly deal with.
 
-The other methods mentioned above deal with edge effects differently (governed by the `mode` parameter) and so don't have the same issue.
+The other methods mentioned above deal with edge effects differently (governed by the `mode` parameter) and by default don't include `NaN` entries.
 :::
 
 ## Example Data
 
-We will use [example_event_2](`dascore.examples.example_event_2`) to demonstrate how to use each smoothing methods.
+We will use [example_event_2](`dascore.examples.example_event_2`) to demonstrate how to use each smoothing method.
 
 ```{python}
 import numpy as np
@@ -80,7 +80,7 @@ ax = nan_patch.viz.waterfall()
 ax.set_title("NaNs in Patch");
 ```
 
-Which can be conveniently dropped with [Patch.dropna](`dascore.Patch.dropna`). 
+Which can be dropped with [Patch.dropna](`dascore.Patch.dropna`). 
 
 ['Patch.fill_nan`]
 
@@ -125,7 +125,7 @@ ax = smoothed_patch.viz.waterfall()
 ax.set_title("gaussian time and distance");
 ```
 
-To visualize the smoothing kernel we can apply the operator to a patch whose data is all 0s except for a single 1 in the center.
+To visualize the smoothing kernel we can apply the operator to a patch whose data are all 0s except for a single 1 in the center.
 
 ```{python}
 data = np.zeros_like(smoothed_patch.data)
