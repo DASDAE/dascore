@@ -132,10 +132,11 @@ website:
         - section: "Processing"
           contents:
 
-            - recipes/parallelization.qmd
+            - recipes/correlate.qmd
             - recipes/edge_effects.qmd
             - recipes/fk.qmd
             - recipes/smoothing.qmd
+            - recipes/parallelization.qmd
 
         - section: "IO"
           contents:
