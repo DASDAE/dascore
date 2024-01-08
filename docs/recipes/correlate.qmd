@@ -20,7 +20,7 @@ patch = dc.get_example_patch(
     duration=2,
 )
 
-patch.viz.waterfall()
+patch.viz.waterfall();
 ```
 
 ## Compute Ricker wavelet's cross-correlation
@@ -38,5 +38,5 @@ patch = dc.get_example_patch(
 
 corr = patch.correlate(distance=3, samples=True)
 
-corr.viz.waterfall()
+corr.viz.waterfall();
 ```
