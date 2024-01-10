@@ -5,7 +5,7 @@ execute:
 ---
 
 
-This recipe serves as an example to showcase the real-time processing capability of DASCore. Here, we demonstrate how to use DASCore to perform rolling mean processing on a spool in real-time.
+This recipe serves as an example to showcase the real-time processing capability of DASCore. Here, we demonstrate how to use DASCore to perform rolling mean processing on a spool in real time for edge computing purposes.
 
 
 ## Load libraries and get a spool
