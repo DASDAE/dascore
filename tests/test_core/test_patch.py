@@ -14,6 +14,7 @@ from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.exceptions import CoordError
 from dascore.proc.basic import apply_operator
+from dascore.utils.misc import suppress_warnings
 
 
 def get_simple_patch() -> Patch:
@@ -173,7 +174,7 @@ class TestInit:
     def test_sin_wave_patch(self):
         """Ensure the sin wave patch is consistent with its coord dims."""
         # For some reason this combination can make coords with wrong shape.
-        patch = dc.examples._sin_wave_patch(
+        patch = dc.examples.sin_wave_patch(
             sample_rate=1000,
             frequency=[200, 10],
             channel_count=2,
@@ -217,7 +218,7 @@ class TestNew:
         assert patch.attrs.history
         new_attrs = dict(patch.attrs)
         new_attrs["history"] = []
-        new_patch = patch.new(attrs=new_attrs)
+        new_patch = patch.update(attrs=new_attrs)
         assert not new_patch.attrs.history
 
     def test_new_coord_dict_order(self, random_patch):
@@ -237,7 +238,7 @@ class TestNew:
     def test_attrs_preserved_when_not_specified(self, random_patch):
         """If attrs is not passed to new, old attrs should remain."""
         pa = random_patch.update_attrs(network="bob", tag="2", station="10")
-        new_1 = pa.new(data=pa.data * 10)
+        new_1 = pa.update(data=pa.data * 10)
         assert new_1.attrs == pa.attrs
 
     def test_new_dims_renames_dims(self, random_patch):
@@ -295,7 +296,8 @@ class TestEquals:
     def test_coords_named_differently(self, random_patch):
         """Ensure if the coords are named differently patches are not equal."""
         dims = random_patch.dims
-        new_coords = dict(random_patch.coords)
+        with suppress_warnings():
+            new_coords = dict(random_patch.coords)
         new_coords["bob"] = new_coords.pop(dims[-1])
         new_dims = tuple(list(dims)[:-1] + ["bob"])
         patch_2 = random_patch.new(coords=new_coords, dims=new_dims)
@@ -303,7 +305,8 @@ class TestEquals:
 
     def test_coords_not_equal(self, random_patch):
         """Ensure if the coords are not equal neither are the arrays."""
-        new_coords = dict(random_patch.coords)
+        with suppress_warnings():
+            new_coords = dict(random_patch.coords)
         new_coords["distance"] = new_coords["distance"] + 10
         patch_2 = random_patch.new(coords=new_coords)
         assert not patch_2.equals(random_patch)
@@ -365,7 +368,7 @@ class TestEquals:
         coord_array[20:30] *= 0.9
         assert not np.allclose(coord_array, coords.get_array("distance"))
         new_patch = patch.update_coords(distance=coord_array)
-        new = patch.new(coords=new_patch.coords)
+        new = patch.update(coords=new_patch.coords)
         assert new != patch
 
     def test_other_types(self, random_patch):
@@ -486,18 +489,6 @@ class TestReleaseMemory:
         del patch
         assert isinstance(new, Patch)
         assert wr() is None
-
-
-class TestXarray:
-    """Tests for xarray conversions."""
-
-    def test_convert_to_xarray(self, random_patch):
-        """Tests for converting to xarray object."""
-        pytest.importorskip("xarray")
-        import xarray as xr
-
-        da = random_patch.to_xarray()
-        assert isinstance(da, xr.DataArray)
 
 
 class TestPipe:

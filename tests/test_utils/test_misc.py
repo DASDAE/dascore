@@ -8,13 +8,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from dascore.exceptions import MissingOptionalDependency
+from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
     MethodNameSpace,
     cached_method,
     get_stencil_coefs,
     iter_files,
     iterate,
+    maybe_get_items,
     optional_import,
     separate_coord_info,
 )
@@ -186,7 +187,7 @@ class TestOptionalImport:
 
     def test_missing_module_raises(self):
         """Ensure a module which is missing raises the appropriate Error."""
-        with pytest.raises(MissingOptionalDependency, match="boblib4"):
+        with pytest.raises(MissingOptionalDependencyError, match="boblib4"):
             optional_import("boblib4")
 
 
@@ -261,3 +262,15 @@ class TestSeparateCoordInfo:
         input_dict = {"coords": {"time": {"min": 10}}}
         coords, attrs = separate_coord_info(input_dict)
         assert coords == input_dict["coords"]
+
+
+class TestMaybeGetItems:
+    """Tests for maybe_get_attrs."""
+
+    def test_missed_itme(self):
+        """Ensure it still works when a key is missing."""
+        data = {"bob": 1, "bill": 2}
+        expected = {"bob": "sue", "lary": "who"}
+        out = maybe_get_items(data, attr_map=expected)
+        assert "sue" in out
+        assert "who" not in out

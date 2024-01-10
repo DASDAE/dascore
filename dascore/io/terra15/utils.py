@@ -1,14 +1,12 @@
 """Utilities for terra15."""
 from __future__ import annotations
 
-from tables.exceptions import NoSuchNodeError
-
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import maybe_get_attrs
+from dascore.utils.misc import maybe_get_items
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- Getting format/version
@@ -17,17 +15,16 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 def _get_terra15_version_str(hdf_fi) -> str:
     """Return the version string for terra15 file."""
     # define a few root attrs that act as a "fingerprint" for terra15 files
-    expected_attrs = [
+    expected_attrs = {
         "acoustic_bandwidth_end",
         "amplifier_incoming_current",
         "file_start_computer_time",
         "file_version",
-    ]
-    root_attrs = hdf_fi.root._v_attrs
-    is_terra15 = all([hasattr(root_attrs, x) for x in expected_attrs])
-    if not is_terra15:
+    }
+    root_attrs = hdf_fi.attrs
+    if not set(root_attrs).issuperset(expected_attrs):
         return ""
-    return str(root_attrs.file_version)
+    return str(root_attrs["file_version"])
 
 
 # --- Getting File summaries
@@ -41,7 +38,7 @@ def _get_time_node(data_node):
     """
     try:
         time = data_node["gps_time"]
-    except (NoSuchNodeError, IndexError):
+    except (IndexError, KeyError):
         time = data_node["posix_time"]
     return time
 
@@ -70,9 +67,9 @@ def _get_scanned_time_info(data_node):
 
 def _get_version_data_node(root):
     """Get the version, time, and data node from terra15 file."""
-    version = str(root._v_attrs.file_version)
+    version = str(root.attrs["file_version"])
     if version == "4":
-        data_type = root._v_attrs.data_product
+        data_type = root.attrs["data_product"]
         data_node = root[data_type]
     elif version in {"5", "6"}:
         data_node = root["data_product"]
@@ -84,10 +81,10 @@ def _get_version_data_node(root):
 def _scan_terra15(h5_fi, data_node, extras=None):
     """Scan a terra15 file, return metadata."""
     out = extras
-    out.update(_get_default_attrs(h5_fi.root._v_attrs))
+    out.update(_get_default_attrs(h5_fi.attrs))
     coords = {
         "time": _get_time_coord(data_node, snap_dims=True),
-        "distance": _get_distance_coord(h5_fi.root),
+        "distance": _get_distance_coord(h5_fi),
     }
     out["coords"] = coords
     return [dc.PatchAttrs(**out)]
@@ -99,11 +96,11 @@ def _scan_terra15(h5_fi, data_node, extras=None):
 def _get_raw_time_coord(data_node):
     """Read the time from the data node and return it."""
     time = _get_time_node(data_node)[:]
-    return get_coord(values=to_datetime64(time))
+    return get_coord(data=to_datetime64(time))
 
 
 def _read_terra15(
-    root,
+    pyfi,
     time: tuple[timeable_types, timeable_types] | None = None,
     distance: tuple[float, float] | None = None,
     snap_dims: bool = True,
@@ -121,27 +118,27 @@ def _read_terra15(
     So now, we use the first GPS sample, the last sample, and length
     to determine the dt (new in dascore>0.0.11).
     """
-    _, data_node = _get_version_data_node(root)
+    _, data_node = _get_version_data_node(pyfi)
     time_coord_ = _get_time_coord(data_node, snap_dims)
     time_coord, time_slice = time_coord_.select(time)
     time_len = len(time_coord)
     # get data and sliced distance coord
-    dist_coord = _get_distance_coord(root)
+    dist_coord = _get_distance_coord(pyfi)
     dist_coord, dist_slice = dist_coord.select(distance)
-    _data = data_node.data
+    _data = data_node["data"]
     # checks for incomplete data blocks
     if _data.shape[0] > time_len:
         new_start = time_slice.start or 0
         t_stop = time_slice.stop
         new_stop = new_start + time_len if t_stop is None else t_stop
         time_slice = slice(new_start, new_stop)
-    data = data_node.data[time_slice, dist_slice]
+    data = data_node["data"][time_slice, dist_slice]
     coords = get_coord_manager(
         {"time": time_coord, "distance": dist_coord},
         dims=("time", "distance"),
     )
     dims = ("time", "distance")
-    attrs = _get_default_attrs(root._v_attrs)
+    attrs = _get_default_attrs(pyfi.attrs)
     attrs["coords"] = coords
     return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
 
@@ -162,7 +159,7 @@ def _get_default_attrs(root_node_attrs):
         "pulse_length": "pulse_length",
         "gauge_length": "gauge_length",
     }
-    out.update(maybe_get_attrs(root_node_attrs, _root_attrs))
+    out.update(maybe_get_items(root_node_attrs, _root_attrs))
     return out
 
 
@@ -182,7 +179,7 @@ def _get_distance_coord(root):
     # TODO: At least for the v4 test file, sensing_range_start, sensing_range_stop,
     # nx, and dx are not consistent, meaning d_min + dx * nx != d_max
     # so I just used this method. We need to look more into this.
-    attrs = getattr(root, "_v_attrs", root)
-    start, step = attrs.sensing_range_start, attrs.dx
-    stop = attrs.sensing_range_start + (attrs.nx - 1) * attrs.dx
+    attrs = getattr(root, "attrs", root)
+    start, step = attrs["sensing_range_start"], attrs["dx"]
+    stop = attrs["sensing_range_start"] + (attrs["nx"] - 1) * attrs["dx"]
     return get_coord(start=start, stop=stop + step, step=step, units="m")

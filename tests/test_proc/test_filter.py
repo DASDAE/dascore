@@ -9,7 +9,7 @@ import dascore as dc
 from dascore.exceptions import (
     CoordDataError,
     FilterValueError,
-    ParameterError,
+    PatchDimError,
     UnitError,
 )
 
@@ -72,8 +72,8 @@ class TestPassFilterChecks:
     def test_high_time_raises(self, random_patch):
         """Ensure too high freq band in time axis raises."""
         nyquest = 0.5 / (random_patch.attrs.time_step / dc.to_timedelta64(1))
-        Hz = dc.get_quantity("Hz")
-        filt = (1 * Hz, nyquest * 1.1 * Hz)
+        hz = dc.get_quantity("Hz")
+        filt = (1 * hz, nyquest * 1.1 * hz)
         match = "possible filter bounds are"
         with pytest.raises(FilterValueError, match=match):
             random_patch.pass_filter(time=filt)
@@ -114,8 +114,8 @@ class TestPassFilter:
 
     def test_specify_units_simple(self, random_patch):
         """Ensure units can be specified in patch arguments."""
-        Hz = dc.units.get_quantity("Hz")
-        out1 = random_patch.pass_filter(time=(1 * Hz, 10 * Hz))
+        hz = dc.units.get_quantity("Hz")
+        out1 = random_patch.pass_filter(time=(1 * hz, 10 * hz))
         out2 = random_patch.pass_filter(time=(1, 10))
         assert out1.equals(out2)
 
@@ -130,9 +130,9 @@ class TestPassFilter:
         """Catchall for other unit tests."""
         patch = random_patch
         m, ft = dc.units.get_unit("m"), dc.units.get_unit("ft")
-        Hz = dc.units.get_unit("Hz")
+        hz = dc.units.get_unit("Hz")
         # Filter from 1 Hz to 10 Hz in time dimension
-        patch.pass_filter(time=(1 * Hz, 10 * Hz))
+        patch.pass_filter(time=(1 * hz, 10 * hz))
         # Filter wavelengths 50m to 100m
         patch.pass_filter(distance=(50 * m, 100 * m))
         # filter wavelengths less than 200 ft
@@ -199,7 +199,7 @@ class TestMedianFilter:
     def test_median_no_kwargs_raises(self, random_patch):
         """Apply default values."""
         msg = "You must specify one or more dimension in keyword args."
-        with pytest.raises(ParameterError, match=msg):
+        with pytest.raises(PatchDimError, match=msg):
             random_patch.median_filter()
 
     def test_median_filter_time(self, random_patch):
@@ -218,3 +218,66 @@ class TestMedianFilter:
         """Apply default values."""
         out = random_patch.median_filter(time=1, distance=1, samples=True)
         assert out == random_patch
+
+
+class TestSavgolFilter:
+    """Simple tests on Savgol filter."""
+
+    def test_savgol_no_kwargs_raises(self, random_patch):
+        """Apply default values."""
+        msg = "You must specify one or more"
+        with pytest.raises(PatchDimError, match=msg):
+            random_patch.savgol_filter(polyorder=2)
+
+    def test_savgol_filter_time(self, random_patch):
+        """Test savgol filter in time dimension."""
+        out = random_patch.savgol_filter(polyorder=2, time=5)
+        assert isinstance(out, dc.Patch)
+        assert not np.any(pd.isnull(out.data))
+
+    def test_savgol_filter_ones(self, random_patch):
+        """Apply default values."""
+        out = random_patch.savgol_filter(polyorder=2, distance=5, samples=True)
+        assert out != random_patch
+
+    def test_savgol_smoothing(self, random_patch):
+        """Test smoothing in one dimension."""
+        new_array = np.array(random_patch.data)
+        midpoint = new_array.shape[0] // 2
+        new_array[:midpoint] = 1
+        new_array[midpoint:] = 0
+        new_patch = random_patch.new(data=new_array)
+        dim = new_patch.dims[0]
+        out = new_patch.savgol_filter(polyorder=2, samples=True, **{dim: 5})
+        assert np.allclose(out.data[:5], 1)
+        assert np.allclose(out.data[-5:], 0)
+        middle = out.data[midpoint - 10 : midpoint + 10]
+        assert np.any((middle < 1) & (middle > 0))
+
+    def test_savgol_filter_multiple_dims(self, event_patch_2):
+        """Ensure multiple dimensions can be filtered."""
+        out = event_patch_2.savgol_filter(distance=10, time=0.001, polyorder=4)
+        assert out.shape == event_patch_2.shape
+        assert not np.allclose(out.data, event_patch_2.data)
+
+
+class TestGaussianFilter:
+    """Test the Guassian Filter."""
+
+    def test_filter_time(self, event_patch_2):
+        """Test for simple filter along time axis."""
+        out = event_patch_2.gaussian_filter(time=0.001)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == event_patch_2.shape
+
+    def test_filter_distance(self, event_patch_2):
+        """Ensure filter can be applied along distance axis with samples."""
+        out = event_patch_2.gaussian_filter(distance=5, samples=True)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == event_patch_2.shape
+
+    def test_filter_time_distance(self, event_patch_2):
+        """Ensure both time and distance can be filtered."""
+        out = event_patch_2.gaussian_filter(time=5, distance=5, samples=True)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == event_patch_2.shape

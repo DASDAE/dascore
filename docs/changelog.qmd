@@ -1,3 +1,5 @@
+# Changelog
+
 <!-- Mark major changes under appropriate header and link PR/issue numbers -->
 
 Since DASCore is being rapidly developed, we will start keeping

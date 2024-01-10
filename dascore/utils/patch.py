@@ -17,7 +17,6 @@ from dascore.core.attrs import combine_patch_attrs
 from dascore.core.coordmanager import merge_coord_managers
 from dascore.exceptions import (
     CoordDataError,
-    ParameterError,
     PatchAttributeError,
     PatchDimError,
 )
@@ -367,12 +366,13 @@ def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[dc.PatchAttrs
 
 
 def get_start_stop_step(patch: PatchType, dim):
-    """Convenience method for getting start, stop, step for a given dimension."""
+    """Convenience method for getting start, stop, step for a given coord."""
     assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"
-    start = patch.attrs[f"{dim}_min"]
-    end = patch.attrs[f"{dim}_max"]
-    step = patch.attrs[f"{dim}_step"]
-    return start, end, step
+    coord = patch.get_coord(dim)
+    start = coord.min()
+    stop = coord.max()
+    step = coord.step
+    return start, stop, step
 
 
 def get_default_patch_name(patch):
@@ -421,7 +421,7 @@ def get_multiple_dim_value_from_kwargs(patch, kwargs):
     overlap = set(dims) & set(kwargs)
     if not overlap:
         msg = "You must specify one or more dimension in keyword args."
-        raise ParameterError(msg)
+        raise PatchDimError(msg)
     out = {}
     for dim in overlap:
         axis = patch.dims.index(dim)

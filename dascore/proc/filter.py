@@ -6,45 +6,24 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import pandas as pd
 from scipy import ndimage
+from scipy.ndimage import gaussian_filter as np_gauss
 from scipy.ndimage import median_filter as nd_median_filter
 from scipy.signal import iirfilter, sosfilt, sosfiltfilt, zpk2sos
+from scipy.signal import savgol_filter as np_savgol_filter
 
 import dascore
 from dascore.constants import PatchType, samples_arg_description
 from dascore.exceptions import FilterValueError
 from dascore.units import get_filter_units
 from dascore.utils.docs import compose_docstring
+from dascore.utils.misc import check_filter_kwargs, check_filter_range
 from dascore.utils.patch import (
     get_dim_sampling_rate,
     get_multiple_dim_value_from_kwargs,
     patch_function,
 )
-
-
-def _check_filter_kwargs(kwargs):
-    """Check filter kwargs and return dim name and filter range."""
-    if len(kwargs) != 1:
-        msg = "pass filter requires you specify one dimension and filter range."
-        raise FilterValueError(msg)
-    dim = next(iter(kwargs.keys()))
-    filt_range = kwargs[dim]
-    # strip out units if used.
-    mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
-    if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
-        msg = f"filter range must be a length two sequence not {filt_range}"
-        raise FilterValueError(msg)
-    if all([pd.isnull(x) for x in mags]):
-        msg = (
-            f"pass filter requires at least one filter limit, "
-            f"you passed {filt_range}"
-        )
-        raise FilterValueError(msg)
-
-    return dim, filt_range
 
 
 def _check_sobel_args(dim, mode, cval):
@@ -75,29 +54,12 @@ def _check_sobel_args(dim, mode, cval):
     return dim, mode, cval
 
 
-def _check_filter_range(nyquist, low, high, filt_min, filt_max):
-    """Simple check on filter parameters."""
-    # ensure filter bounds are within nyquist
-    if low is not None and ((0 > low) or (low > 1)):
-        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_min}"
-        raise FilterValueError(msg)
-    if high is not None and ((0 > high) or (high > 1)):
-        msg = f"possible filter bounds are [0, {nyquist}] you passed {filt_max}"
-        raise FilterValueError(msg)
-    if high is not None and low is not None and high <= low:
-        msg = (
-            "Low filter param must be less than high filter param, you passed:"
-            f"filt_min = {filt_min}, filt_max = {filt_max}"
-        )
-        raise FilterValueError(msg)
-
-
 def _get_sos(sr, filt_min, filt_max, corners):
     """Get second order sections from sampling rate and filter bounds."""
     nyquist = 0.5 * sr
     low = None if pd.isnull(filt_min) else filt_min / nyquist
     high = None if pd.isnull(filt_max) else filt_max / nyquist
-    _check_filter_range(nyquist, low, high, filt_min, filt_max)
+    check_filter_range(nyquist, low, high, filt_min, filt_max)
 
     if (low is not None) and (high is not None):  # apply bandpass
         z, p, k = iirfilter(
@@ -127,7 +89,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     zerophase
         If True, apply the filter twice.
     **kwargs
-        Used to specify the dimension and frequency, wavelength, or equivilent
+        Used to specify the dimension and frequency, wavelength, or equivalent
         limits.
 
     Examples
@@ -152,7 +114,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     >>> # filter wavelengths less than 200 ft
     >>> lp_ft = pa.pass_filter(distance=(200 * ft, ...))
     """
-    dim, (arg1, arg2) = _check_filter_kwargs(kwargs)
+    dim, (arg1, arg2) = check_filter_kwargs(kwargs)
     axis = patch.dims.index(dim)
     coord_units = patch.coords.coord_map[dim].units
     filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units, dim=dim)
@@ -228,7 +190,12 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
 
 
 def _create_size_and_axes(patch, kwargs, samples):
-    """Return"""
+    """
+    Return a tuple of (size) and (axes).
+
+    Note: size will always have the same size as the patch, but
+    1s will be used if axis is not used.
+    """
     dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
     axes = [x["axis"] for x in dimfo.values()]
     size = [1] * len(patch.dims)
@@ -268,7 +235,7 @@ def median_filter(
     >>> from dascore.units import m, s
     >>> pa = dascore.get_example_patch()
 
-    >>>  # 1. Apply median filter only over time distance with 0.10 sec window
+    >>>  # 1. Apply median filter only over time dimension with 0.10 sec window
     >>> filtered_pa_1 = pa.median_filter(time=0.1)
 
     >>>  # 2. Apply median filter over both time and distance
@@ -290,4 +257,125 @@ def median_filter(
     """
     size, _ = _create_size_and_axes(patch, kwargs, samples)
     new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)
-    return patch.new(data=new_data)
+    return patch.update(data=new_data)
+
+
+@patch_function()
+@compose_docstring(sample_explination=samples_arg_description)
+def savgol_filter(
+    patch: PatchType, polyorder, samples=False, mode="interp", cval=0.0, **kwargs
+) -> PatchType:
+    """
+    Applies Savgol filter along spenfied dimensions.
+
+    The filter will be applied over each selected dimension sequentially.
+
+    Parameters
+    ----------
+    patch
+        The patch to filter
+    polyorder
+        Order of polynomial
+    samples
+        If True samples are specified
+        If False coordinate of dimension
+    mode
+        The mode for handling edges.
+    cval
+        The constant value for when mode == constant.
+    **kwargs
+        Used to specify the shape of the savgol filter in each dimension.
+
+    Notes
+    -----
+    See scipy.signal.savgol_filter for more info on implementation
+    and arguments.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> from dascore.units import m, s
+    >>> pa = dascore.get_example_patch()
+    >>>
+    >>> # Apply second order polynomial Savgol filter
+    >>> # over time dimension with 0.10 sec window.
+    >>> filtered_pa_1 = pa.savgol_filter(polyorder=2, time=0.1)
+    >>>
+    >>> # Apply Savgol filter over distance dimension using a 5 sample
+    >>> # distance window.
+    >>> filtered_pa_2 = pa.median_filter(distance=5, samples=True, polyorder=2)
+    >>>
+    >>> # Combine distance and time filter
+    >>> filtered_pa_3 = pa.savgol_filter(distance=10, time=0.1, polyorder=4)
+    """
+    data = patch.data
+    size, axes = _create_size_and_axes(patch, kwargs, samples)
+    for ax in axes:
+        data = np_savgol_filter(
+            x=patch.data,
+            window_length=size[ax],
+            polyorder=polyorder,
+            mode=mode,
+            cval=cval,
+            axis=ax,
+        )
+    return patch.update(data=data)
+
+
+@patch_function()
+@compose_docstring(sample_explination=samples_arg_description)
+def gaussian_filter(
+    patch: PatchType, samples=False, mode="reflect", cval=0.0, truncate=4.0, **kwargs
+) -> PatchType:
+    """
+    Applies a Gaussian filter along specified dimensions.
+
+    Parameters
+    ----------
+    patch
+        The patch to filter
+    samples
+        If True samples are specified
+        If False coordinate of dimension
+    mode
+        The mode for handling edges.
+    cval
+        The constant value for when mode == constant.
+    truncate
+        Truncate the filter kernel length to this many standard deviations.
+    **kwargs
+        Used to specify the sigma value (standard deviation) for desired
+        dimensions.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> from dascore.units import m, s
+    >>> pa = dascore.get_example_patch()
+    >>>
+    >>> # Apply Gaussian smoothing along time axis.
+    >>> pa_1 = pa.gaussian_filter(time=0.1)
+    >>>
+    >>> # Apply Gaussian filter over distance dimension
+    >>> # using a 3 sample standard deviation.
+    >>> pa_2 = pa.gaussian_filter(samples=True, distance=3)
+    >>>
+    >>> # Apply filter to time and distance axis.
+    >>> pa_3 = pa.gaussian_filter(time=0.1, distance=3)
+
+    Notes
+    -----
+    See scipy.ndimage.gaussian_filter for more info on implementation
+    and arguments.
+    """
+    size, axes = _create_size_and_axes(patch, kwargs, samples)
+    used_size = tuple(size[x] for x in axes)
+    data = np_gauss(
+        input=patch.data,
+        sigma=used_size,
+        axes=axes,
+        mode=mode,
+        cval=cval,
+        truncate=truncate,
+    )
+    return patch.update(data=data)

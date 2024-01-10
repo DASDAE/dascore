@@ -7,8 +7,13 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.io import FiberIO, HDF5Reader, HDF5Writer
-from dascore.utils.hdf5 import HDFPatchIndexManager, NodeError
+from dascore.io import FiberIO
+from dascore.utils.hdf5 import (
+    HDFPatchIndexManager,
+    NodeError,
+    PyTablesReader,
+    PyTablesWriter,
+)
 from dascore.utils.patch import get_default_patch_name
 
 from .utils import (
@@ -44,7 +49,7 @@ class DASDAEV1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
 
-    def write(self, spool: SpoolType, resource: HDF5Writer, index=False, **kwargs):
+    def write(self, spool: SpoolType, resource: PyTablesWriter, index=False, **kwargs):
         """
         Write a collection of patches to a DASDAE file.
 
@@ -90,7 +95,7 @@ class DASDAEV1(FiberIO):
         )
         return df
 
-    def get_format(self, resource: HDF5Reader) -> tuple[str, str] | bool:
+    def get_format(self, resource: PyTablesReader) -> tuple[str, str] | bool:
         """Return the format from a dasdae file."""
         is_dasdae, version = False, ""  # NOQA
         with contextlib.suppress(KeyError):
@@ -100,7 +105,7 @@ class DASDAEV1(FiberIO):
             return (self.name, dasdae_file_version)
         return False
 
-    def read(self, resource: HDF5Reader, **kwargs) -> SpoolType:
+    def read(self, resource: PyTablesReader, **kwargs) -> SpoolType:
         """Read a dascore file."""
         patches = []
         try:
@@ -111,7 +116,7 @@ class DASDAEV1(FiberIO):
             patches.append(_read_patch(patch_group, **kwargs))
         return dc.spool(patches)
 
-    def scan(self, resource: HDF5Reader):
+    def scan(self, resource: PyTablesReader):
         """
         Get the patch info from the file.
 
@@ -121,7 +126,7 @@ class DASDAEV1(FiberIO):
 
         Parameters
         ----------
-        Path
+        resource
             A path to the file.
         """
         indexer = HDFPatchIndexManager(resource.filename)

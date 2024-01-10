@@ -22,7 +22,7 @@ def patch_ones(random_patch):
 def time_tapered_patch(request, patch_ones):
     """Return a tapered trace."""
     # first get a patch with all ones for easy testing
-    patch = patch_ones.new(data=np.ones_like(patch_ones.data))
+    patch = patch_ones.update(data=np.ones_like(patch_ones.data))
     out = taper(patch, time=0.05, window_type=request.param)
     return out
 

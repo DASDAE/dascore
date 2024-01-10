@@ -9,15 +9,15 @@ from _validate_links import validate_all_links
 import dascore as dc
 
 if __name__ == "__main__":
-    print("Building documentation")
-    print(f"Parsing project {dc.__name__}")
+    print("Building documentation")  # noqa
+    print(f"Parsing project {dc.__name__}")  # noqa
     data_dict = parse_project(dc)
     obj_dict = get_alias_mapping(dc)
-    print("Generating qmd files")
+    print("Generating qmd files")  # noqa
     render_project(data_dict, obj_dict, debug=False)
     # create the quarto info file (needs templating)
-    print("creating quarto config")
+    print("creating quarto config")  # noqa
     create_quarto_qmd()
     # validate links
-    print("Validating links")
+    print("Validating links")  # noqa
     validate_all_links()

@@ -69,12 +69,32 @@ def _get_coords_dict(data_dict, fields):
     coord_info, new_attrs = separate_coord_info(
         data_dict, dims, required=("min", "max")
     )
+    if "dims" not in new_attrs and dims is not None:
+        new_attrs["dims"] = dims
+
     new_attrs["coords"] = {i: dc.core.CoordSummary(**v) for i, v in coord_info.items()}
     return new_attrs
 
 
 class PatchAttrs(DascoreBaseModel):
-    """The expected attributes for a Patch."""
+    """
+    The expected attributes for a Patch.
+
+    The default attributes are:
+    ```{python}
+    #| echo: false
+
+    import dascore as dc
+    from IPython.display import Markdown
+
+    df_str = (
+        dc.PatchAttrs.get_summary_df()
+        .reset_index()
+        .to_markdown(index=False, stralign="center")
+    )
+    Markdown(df_str)
+    ```
+    """
 
     model_config = ConfigDict(
         title="Patch Summary",
@@ -377,7 +397,7 @@ def combine_patch_attrs(
                 mod["coords"][coord_name] = new_coord
         return model_dicts
 
-    def _replace_null_with_None(mod_dict_list):
+    def _replace_null_with_none(mod_dict_list):
         """Because NaN != NaN we need to replace those values so == works."""
         out = []
         for mod in mod_dict_list:
@@ -402,7 +422,7 @@ def combine_patch_attrs(
         """Check the other attributes and handle based on conflicts param."""
         if conflicts == "keep_first":
             return [dict(ChainMap(*mod_dict_list))]
-        no_null_ = _replace_null_with_None(mod_dict_list)
+        no_null_ = _replace_null_with_none(mod_dict_list)
         all_eq = all(no_null_[0] == x for x in no_null_[1:])
         if all_eq:
             return mod_dict_list
@@ -454,7 +474,7 @@ def check_dims(patch1, patch2, check_behavior="raise"):
     if check_behavior == "raise":
         raise IncompatiblePatchError(msg)
     else:  # warn user of possible issue
-        print(msg)
+        warnings.warn(msg)
 
 
 def check_coords(patch1, patch2, check_behavior="raise", dim_to_ignore=None):
@@ -503,7 +523,7 @@ def check_coords(patch1, patch2, check_behavior="raise", dim_to_ignore=None):
         if check_behavior == "raise":
             raise IncompatiblePatchError(msg)
         else:
-            print(msg)
+            warnings.warn(msg)
 
 
 def merge_compatible_coords_attrs(
@@ -513,10 +533,12 @@ def merge_compatible_coords_attrs(
     Merge the coordinates and attributes of patches or raise if incompatible.
 
     The rules for compatibility are:
-        - All attrs must be equal other than history.
-        - Patches must share the same dimensions, in the same order
-        - All dimensional coordinates must be strictly equal
-        - If patches share a non-dimensional coordinate they must be equal.
+
+    - All attrs must be equal other than history.
+    - Patches must share the same dimensions, in the same order
+    - All dimensional coordinates must be strictly equal
+    - If patches share a non-dimensional coordinate they must be equal.
+
     Any coordinates or attributes contained by a single patch will be included
     in the output.
 

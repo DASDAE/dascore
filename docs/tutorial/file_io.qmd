@@ -4,14 +4,32 @@ execute:
   warning: false
 ---
 
-DASCore contains two data structures which are useful for working with directories of
-fiber data.
+The following highlights some DASCore features for working with IO.
 
-## FileSpool
 
-The file spool is used to retrieve data from a directory of dascore-readable files.
-It has the same interface as other spools and is created with the
-[`dascore.spool`](`dascore.spool`) function.
+## Writing Patches to Disk
+
+Patches can be written to disk using the `io` namespace. The following shows how to write a Patch to disk in the [DASDAE format](`dascore.io.dasdae`)
+
+```{python}
+from pathlib import Path
+import dascore as dc
+
+write_path = Path("output_file.h5")
+patch = dc.get_example_patch()
+
+patch.io.write(write_path, "dasdae")
+```
+
+```{python}
+#| echo: false
+if write_path.exists():
+    write_path.unlink()
+```
+
+## DirectorySpool
+
+The [DirectorySpool](`dascore.clients.dirspool.DirectorySpool`) is used to retrieve data from a directory of dascore-readable files. It has the same interface as other spools and is created with the [`dascore.spool`](`dascore.spool`) function.
 
 For example:
 
@@ -37,6 +55,11 @@ spool = (
 for patch in spool:
   ...
 ```
+
+## Converting Patches to Other Library Formats
+
+The `Patch.io` namespace also includes functionality for converting `Patch` instances to datastructures used by other libraries including Pandas, Xarray, and ObsPy. See the [external conversion recipe](../recipes/external_conversion.qmd) for examples.
+
 
 ## Directory Indexer
 The 'DirectoryIndexer' is used to track the contents of a directory which
@@ -68,6 +91,7 @@ df = indexer.get_contents()
 
 ```{python}
 #| echo: false
+
 from IPython.display import display
 
 display(df.head())

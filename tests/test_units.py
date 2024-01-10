@@ -140,11 +140,11 @@ class TestGetFilterUnits:
 
     def test_filter_units(self):
         """Tests for when filter units are already those selected."""
-        Hz = get_unit("Hz")
+        hz = get_unit("Hz")
         s = get_unit("s")
-        assert get_filter_units(1.0 * Hz, 10.0 * Hz, s) == (1.0, 10.0)
-        assert get_filter_units(None, 10.0 * Hz, s) == (None, 10.0)
-        assert get_filter_units(1.0 * Hz, 10.0 * Hz, s) == (1.0, 10.0)
+        assert get_filter_units(1.0 * hz, 10.0 * hz, s) == (1.0, 10.0)
+        assert get_filter_units(None, 10.0 * hz, s) == (None, 10.0)
+        assert get_filter_units(1.0 * hz, 10.0 * hz, s) == (1.0, 10.0)
 
     def test_same_units(self):
         """Tests for when filter units are already those selected."""
@@ -155,13 +155,13 @@ class TestGetFilterUnits:
 
     def test_different_units_raises(self):
         """The units must be the same or it should raise."""
-        s, Hz = get_unit("s"), get_unit("Hz")
+        s, hz = get_unit("s"), get_unit("Hz")
 
         with pytest.raises(UnitError):
             get_filter_units(1.0, 10.0 * s, s)
 
         with pytest.raises(UnitError):
-            get_filter_units(1.0 * s, 10.0 * Hz, s)
+            get_filter_units(1.0 * s, 10.0 * hz, s)
 
     def test_incompatible_units_raise(self):
         """The units must be the same or it should raise."""

@@ -104,7 +104,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> # up-sample time coordinate
-    >>> time = patch.coords['time']
+    >>> time = patch.coords.get_array('time')
     >>> new_time = np.arange(time.min(), time.max(), 0.5*patch.attrs.time_step)
     >>> patch_uptime = patch.interpolate(time=new_time)
     >>> # interpolate unevenly sampled dim to evenly sampled
@@ -124,9 +124,11 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
         coord_num, patch.data, axis=axis, kind=kind, fill_value="extrapolate"
     )
     out = func(samples_num)
-    new_coords = dict(patch.coords.coord_map)
-    new_coords[dim] = samples
-    return patch.new(data=out, coords=new_coords)
+    cm = patch.coords
+    associated_dims = cm.dim_map[dim]
+    coord_new = dc.core.get_coord(data=samples)
+    cm_new = cm.update(**{dim: (associated_dims, coord_new)})
+    return patch.new(data=out, coords=cm_new)
 
 
 @patch_function()
@@ -209,7 +211,7 @@ def resample(
     data, new_coord = compat.resample(
         patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
     )
-    cm = patch.coords.update_coords(**{dim: new_coord})
+    cm = patch.coords.update(**{dim: new_coord})
     out = patch.new(data=data, coords=cm)
     # Interpolate if new sampling rate is not very close to desired sampling rate.
     if not samples and not np.isclose(new_len, np.round(new_len)):

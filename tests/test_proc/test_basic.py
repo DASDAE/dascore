@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore import get_example_patch
 from dascore.exceptions import IncompatiblePatchError, UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
@@ -141,6 +142,27 @@ class TestNormalize:
         axis = dims.index("time")
         norm = np.abs(np.sum(time_norm.data, axis=axis))
         assert np.allclose(norm, 1)
+
+    def test_bit(self):
+        """Ensure after operation each sample is -1, 1, or 0."""
+        patch = get_example_patch("dispersion_event")
+        bit_norm = patch.normalize("time", norm="bit")
+        assert np.all(np.unique(bit_norm.data) == np.array([-1.0, 0, 1.0]))
+
+    def test_zero_channels(self, random_patch):
+        """Ensure after operation each zero row or vector remains so."""
+        zeroed_data = np.copy(random_patch.data)
+        zeroed_data[0, :] = 0.0
+        zeroed_data[:, 0] = 0.0
+        zeroed_patch = random_patch.new(data=zeroed_data)
+        for norm_type in ["l1", "l2", "max", "bit"]:
+            norm = zeroed_patch.normalize("time", norm=norm_type)
+            assert np.all(norm.data[0, :] == 0.0)
+            assert np.all(norm.data[:, 0] == 0.0)
+        for norm_type in ["l1", "l2", "max", "bit"]:
+            norm = zeroed_patch.normalize("distance", norm=norm_type)
+            assert np.all(norm.data[0, :] == 0.0)
+            assert np.all(norm.data[:, 0] == 0.0)
 
 
 class TestStandarize:
@@ -309,7 +331,7 @@ class TestDropNa:
         nans = [(1, 1, 1), (0, 9, 9)]
         for nan_ind in nans:
             data[nan_ind] = np.NaN
-        patch = range_patch_3d.new(data=data)
+        patch = range_patch_3d.update(data=data)
         return patch
 
     def test_drop_time_any(self, patch_with_null):

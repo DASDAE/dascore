@@ -214,7 +214,7 @@ class TestRoundTrips:
             "random_das",
             time_step=0.999767552,
             shape=(100, 1),
-            starttime="2023-06-13T15:38:00.49953408",
+            time_min="2023-06-13T15:38:00.49953408",
         )
         patch.io.write(path, "dasdae")
         formatter = DASDAEV1()

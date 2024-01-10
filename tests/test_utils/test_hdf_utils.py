@@ -6,10 +6,15 @@ from pathlib import Path
 import pandas as pd
 import pytest
 import tables
+from tables.exceptions import ClosedNodeError
 
 import dascore as dc
-from dascore.exceptions import InvalidFileHandler
-from dascore.utils.hdf5 import HDFPatchIndexManager, open_hdf5_file
+from dascore.exceptions import InvalidFileHandlerError
+from dascore.utils.hdf5 import (
+    HDFPatchIndexManager,
+    PyTablesWriter,
+    open_hdf5_file,
+)
 
 
 class TestGetHDF5Handlder:
@@ -48,7 +53,7 @@ class TestGetHDF5Handlder:
 
     def test_read_only_filehandle_raises(self, simple_hdf_file_handler_read):
         """If write is requested but read handler is provided an error should raise."""
-        with pytest.raises(InvalidFileHandler, match="but mode"):
+        with pytest.raises(InvalidFileHandlerError, match="but mode"):
             with open_hdf5_file(simple_hdf_file_handler_read, mode="w"):
                 pass
 
@@ -106,3 +111,52 @@ class TestHDFPatchIndexManager:
         df.to_hdf(str(path), "df")
         # assert it doesn't have an index
         assert not HDFPatchIndexManager(path).has_index
+
+    def test_closed_node_error(self, index_manager_with_content, monkeypatch):
+        """
+        Test for when the file fails to open. This is a bit contrived but the
+        closed node issues does happen sometimes in multiple thread environments.
+        """
+        failed_count = 0
+        old_func = pd.read_hdf
+
+        def _new_read(*args, **kwargs):
+            nonlocal failed_count
+            if failed_count < 1:
+                failed_count += 1
+                raise ClosedNodeError("Simulated failed node opening")
+            else:
+                return old_func(*args, **kwargs)
+
+        monkeypatch.setattr(pd, "read_hdf", _new_read)
+
+        df = index_manager_with_content.get_index()
+        assert len(df)
+
+        # now insure the exception propagates
+        failed_count = 0
+        monkeypatch.setattr(index_manager_with_content, "_max_retries", -1)
+
+        with pytest.raises(ClosedNodeError):
+            index_manager_with_content.get_index()
+
+    def test_metadata_created(self, tmp_path_factory):
+        """Tests for getting info from a index that doesnt yet exist."""
+        path = tmp_path_factory.mktemp("non_existent_index") / "index.hdf5"
+        with tables.open_file(path, "w"):
+            pass
+        index = HDFPatchIndexManager(path)
+        meta = index._read_metadata()
+        assert meta is not None
+
+
+class TestHDFReaders:
+    """Tests for HDF5 readers."""
+
+    def test_get_handle(self, tmp_path_factory):
+        """Ensure we can get a handle with the class."""
+        path = tmp_path_factory.mktemp("hdf_handle_test") / "test_file.h5"
+        handle = PyTablesWriter.get_handle(path)
+        assert isinstance(handle, tables.File)
+        handle_2 = PyTablesWriter.get_handle(handle)
+        assert isinstance(handle_2, tables.File)

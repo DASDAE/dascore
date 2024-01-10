@@ -30,6 +30,7 @@ from dascore.units import (
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
+    all_close,
     all_diffs_close_enough,
     cached_method,
     iterate,
@@ -41,7 +42,7 @@ from dascore.utils.models import (
     DTypeLike,
     UnitQuantity,
 )
-from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64
+from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
 # Valid values for min/max
 min_max_type = TypeVar("min_max_type")
@@ -170,8 +171,20 @@ def _get_nullish_for_type(dtype):
     return np.NaN
 
 
-def _get_compatible_values(val, dtype):
-    """Get values compatible with dtype."""
+def get_compatible_values(val, dtype):
+    """
+    Get values compatible with dtype.
+
+    This will essentially perform any type conversions needed to go from
+    one dtype to another. It is useful for handling datetime conversions.
+
+    Parameters
+    ----------
+    val
+        The values to convert.
+    dtype
+        A numpy compatible datatype or string.
+    """
     validators = _get_coord_filter_validators(dtype)
     for func in validators:
         if val is not None:
@@ -185,6 +198,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     Coordinates are used to manage labels and indexing along a single
     data dimension.
+
+    Coordinates should usually be created with
+    [get_coords](`dascore.core.coords.get_coord`) rather than using the class
+    directly.
     """
 
     units: UnitQuantity = None
@@ -368,9 +385,30 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
         Notes
         -----
-        max is considered inclusive, meaning for CoordRange stop will be
-        max + step.
+        For CoordRange stop will be max + step.
         """
+
+    def update_data(
+        self,
+        data: ArrayLike | np.ndarray | None = None,
+        values: ArrayLike | np.ndarray | None = None,
+        **kwargs,
+    ) -> Self:
+        """
+        Update the data of the coordinate.
+
+        Parameters
+        ----------
+        data
+            A new array to use.
+        values
+            Same as data, but deprecated. Here for compatibility reasons.
+        """
+        if data is None and values is None:
+            return self
+        data = values if data is None else data
+        units = kwargs.get("units")
+        return get_coord(data=data, units=units)
 
     @property
     def data(self):
@@ -396,7 +434,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 value = dc.to_timedelta64(value)
             value = self._get_relative_values(value)
         # apply validators. These can, eg, coerce to correct dtype.
-        out = _get_compatible_values(value, self.dtype)
+        out = get_compatible_values(value, self.dtype)
         return out
 
     def _slice_degenerate(self, sliz):
@@ -459,7 +497,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             for ind in iterate(axes):
                 new_shape[ind] = 0
         data = np.empty(tuple(new_shape), dtype=self.dtype)
-        return get_coord(values=data)
+        return get_coord(data=data)
 
     def index(self, indexer, axis: int | None = None) -> Self:
         """
@@ -480,7 +518,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 slice(None, None) if i != axis else indexer for i in range(ndims)
             )
         array = self.data[indexer]
-        return get_coord(values=array, units=self.units)
+        return get_coord(data=array, units=self.units)
 
     def get_attrs_dict(self, name):
         """Get attrs dict."""
@@ -504,10 +542,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def update(self, **kwargs):
         """Update parts of the coordinate."""
         info = self.model_dump()
-        update_fields = {i: v for i, v in kwargs.items() if v != info.get(i)}
+        update_fields = {
+            i: v for i, v in kwargs.items() if not all_close(v, info.get(i))
+        }
         units = update_fields.pop("units", None)
         _ = update_fields.pop("dtype", None)
-        out = self.update_limits(**update_fields)
+        out = self.update_limits(**update_fields).update_data(**update_fields)
         if units is not None:
             out = out.convert_units(units)
         return out
@@ -546,6 +586,58 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             raise ParameterError(msg)
         return min(samples, len(self))
 
+    def get_next_index(self, value, samples=False, allow_out_of_bounds=False) -> int:
+        """
+        Get the index a value would have in a coordinate.
+
+        This returns the "next" rather than the closest, index if the exact
+        value is not contained by the index.
+
+        Parameters
+        ----------
+        value
+            The value which could be contained by the coordinate.
+        samples
+            If True, value refers to samples (ie an index) of coord.
+        allow_out_of_bounds
+            If True, allow the value to be out of bounds of the coordinate
+            and just return an index referring to the end
+            (len(coords) - 1) or beginning (0).
+
+        Examples
+        --------
+        >>> from dascore.core import get_coord
+        >>> coord = get_coord(start=0, stop=10, step=1)
+        >>> # Find the index for a value contained by the coordinate.
+        >>> assert coord.get_next_index(1) == 1
+        >>> # The next (not closest) index is return for value not in coord.
+        >>> assert coord.get_next_index(2.000001) == 3
+        """
+        # handle samples
+        if samples:
+            min_val, max_val = 0, len(self) - 1
+            value = int(np.round(value))
+            # account for negative indexing
+            value = value if value >= 0 else value + max_val + 1
+        else:
+            value = self._get_compatible_value(value)
+            min_val, max_val = self.min(), self.max()
+        # handle out of bounds cases
+        if (is_gt := value > max_val) or (value < min_val):
+            if not allow_out_of_bounds:
+                msg = f"Value: {value} is out of bounds for {self}"
+                raise ValueError(msg)
+            return max_val if is_gt else min_val
+        # samples should already have the answer, just return
+        if samples:
+            return value
+        # otherwise get forward and backward inds
+        for_index = self._get_index(value, forward=True)
+        back_index = self._get_index(value, forward=False)
+        ranges = [x for x in [for_index, back_index] if x is not None]
+        assert len(ranges)
+        return ranges[0]
+
 
 class CoordRange(BaseCoord):
     """
@@ -577,6 +669,14 @@ class CoordRange(BaseCoord):
         """If any info is neglected the coord is invalid."""
         for name in ["start", "stop", "step"]:
             assert values[name] is not None
+        # step should have the same sign as stop-start, see #321.
+        diff = values["stop"] - values["start"]
+        # note: we need to the to_float since np.sign(datetime64) returns a
+        # datetime64 which includes precision, so even if the sign is the same
+        # if the precision is different this validation fails.
+        if not np.sign(to_float(values["step"])) == np.sign(to_float(diff)):
+            msg = "Sign of step must match sign of stop - start"
+            raise CoordError(msg)
         return values
 
     @model_validator(mode="before")
@@ -605,7 +705,7 @@ class CoordRange(BaseCoord):
             # Todo we can probably add more intelligent logic for slices.
             item = slice(start, end, item.step)
         out = self.values[item]
-        return get_coord(values=out, units=self.units)
+        return get_coord(data=out, units=self.units)
 
     @cached_method
     def __len__(self):
@@ -690,16 +790,16 @@ class CoordRange(BaseCoord):
         # after ensuring that the types are compatible.
         out = self
         if step is not None:
-            step = _get_compatible_values(step, type(self.step))
+            step = get_compatible_values(step, type(self.step))
             new_stop = out.start + step * len(out)
             out = out.new(stop=new_stop, step=step)
         if min is not None:
-            min = _get_compatible_values(min, self.dtype)
+            min = get_compatible_values(min, self.dtype)
             diff = min - out.start
             new_stop = out.stop + diff
             out = out.new(start=min, stop=new_stop)
         if max is not None:
-            max = _get_compatible_values(max, self.dtype)
+            max = get_compatible_values(max, self.dtype)
             translation = (max + out.step) - out.stop
             new_start = self.start + translation
             # we add step so the new range is inclusive of stop.
@@ -800,7 +900,8 @@ class CoordArray(BaseCoord):
         Snap the coordinates to evenly sampled grid points.
 
         This will cause some loss of precision but often makes the coordinate
-        much easier to work with.
+        much easier to work with. The min/max of the coordinate will remain
+        unchanged.
         """
         values = self.values
         min_v, max_v = np.min(values), np.max(values)
@@ -846,11 +947,11 @@ class CoordArray(BaseCoord):
         elif min is not None:
             diff = min - self.min()
             vals = self.values + diff
-            out = get_coord(values=vals, units=self.units)
+            out = get_coord(data=vals, units=self.units)
         elif max is not None:
             diff = max - self.max()
             vals = self.values + diff
-            out = get_coord(values=vals, units=self.units)
+            out = get_coord(data=vals, units=self.units)
         return out.new(**kwargs)
 
     def __getitem__(self, item) -> Self:
@@ -985,6 +1086,7 @@ class CoordDegenerate(CoordArray):
 
 def get_coord(
     *,
+    data: ArrayLike | None | np.ndarray = None,
     values: ArrayLike | None | np.ndarray = None,
     start=None,
     min=None,
@@ -997,10 +1099,15 @@ def get_coord(
     """
     Given multiple types of input, return a coordinate.
 
+    This function automatically figures out which kind of Coordinate
+    should be returned for a given type of input.
+
     Parameters
     ----------
+    data
+        An array indicating the values.
     values
-        An array of values.
+        Deprecated, use data instead.
     start
         The start value of the array, inclusive.
     min
@@ -1013,7 +1120,8 @@ def get_coord(
         Indication of units.
     dtype
         Only used for compatibility with kwargs produced by other
-        functions. Doesn't do anything.
+        functions. Doesn't do anything as dtype is inferred from other
+        arguments.
 
     Notes
     -----
@@ -1021,9 +1129,30 @@ def get_coord(
         (start, stop, step)
         (values)
         (values, step) - useful for length 1 arrays.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core import get_coord
+    >>>
+    >>> # Create a coordinate from a start, stop, and range value.
+    >>> range_coord = get_coord(start=1, stop=12, step=1)
+    >>>
+    >>> # Create an identical coordinate from an array.
+    >>> array_coord = get_coord(data=np.arange(1, 12, 1))
+    >>> # This array coord should return an identical coordinate
+    >>> assert range_coord == array_coord
+    >>>
+    >>> # Coordinate from an array that is sorted, but not evenly sampled
+    >>> array = np.sort(np.random.rand(20))
+    >>> array_coord2 = get_coord(data=array)
+    >>>
+    >>> # Coordinate from random array
+    >>> array = np.random.rand(20)
+    >>> array_coord3 = get_coord(data=array)
     """
 
-    def _check_inputs(data, start, stop, step):
+    def _check_data_compatibility(data, start, stop, step):
         """Ensure input combinations are valid."""
         if data is None:
             if any([start is None, stop is None, step is None]):
@@ -1060,34 +1189,40 @@ def get_coord(
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 
+    # ensure data and values are not used
+    if data is not None and values is not None:
+        msg = "Cannot specify both data and values. Use only data."
+        raise CoordError(msg)
+    elif values is not None:
+        data = values
     # maybe convert min/max to start stop.
     if start is None and min is not None:
         start = min
     if stop is None and max is not None:
         stop = max
-    _check_inputs(values, start, stop, step)
+    _check_data_compatibility(data, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
-    if values is not None:
-        if not isinstance(values, np.ndarray | BaseCoord):
-            values = np.array(values)
+    if data is not None:
+        if not isinstance(data, np.ndarray | BaseCoord):
+            data = np.array(data)
         # values = np.array(values)  # ensure we have a numpy array
-        if isinstance(values, BaseCoord):  # just return coordinate
-            return values
-        if np.size(values) == 0:
-            return CoordDegenerate(values=values, units=units, step=step)
+        if isinstance(data, BaseCoord):  # just return coordinate
+            return data
+        if np.size(data) == 0:
+            return CoordDegenerate(values=data, units=units, step=step)
         # special case of len 1 array either get range, if step specified
         # or sorted monotonic array if not.
-        elif len(values) == 1:
+        elif len(data) == 1:
             if not pd.isnull(step):
-                val = values[0]
+                val = data[0]
                 return CoordRange(start=val, stop=val + step, step=step, units=units)
-            return CoordMonotonicArray(values=values, units=units)
-        start, stop, step, monotonic = _maybe_get_start_stop_step(values)
+            return CoordMonotonicArray(values=data, units=units)
+        start, stop, step, monotonic = _maybe_get_start_stop_step(data)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)
             return out
         elif monotonic:
-            return CoordMonotonicArray(values=values, units=units)
-        return CoordArray(values=values, units=units)
+            return CoordMonotonicArray(values=data, units=units)
+        return CoordArray(values=data, units=units)
     else:
         return CoordRange(start=start, stop=stop, step=step, units=units)

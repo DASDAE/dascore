@@ -13,7 +13,6 @@ from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
-from dascore.utils.misc import optional_import
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import patch_function
 
@@ -68,15 +67,6 @@ def pipe(
         Keyword arguments passed to func.
     """
     return func(self, *args, **kwargs)
-
-
-def to_xarray(self: PatchType):
-    """Return a data array with patch contents."""
-    xr = optional_import("xarray")
-    attrs = dict(self.attrs)
-    dims = self.dims
-    coords = self.coords._get_dim_array_dict()
-    return xr.DataArray(self.data, attrs=attrs, dims=dims, coords=coords)
 
 
 def update_attrs(self: PatchType, **attrs) -> PatchType:
@@ -149,7 +139,7 @@ def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
     return np.equal(self.data, other.data).all()
 
 
-def new(
+def update(
     self: PatchType,
     data: ArrayLike | np.ndarray | None = None,
     coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,
@@ -296,7 +286,7 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
 def normalize(
     self: PatchType,
     dim: str,
-    norm: Literal["l1", "l2", "max"] = "l2",
+    norm: Literal["l1", "l2", "max", "bit"] = "l2",
 ) -> PatchType:
     """
     Normalize a patch along a specified dimension.
@@ -311,6 +301,7 @@ def normalize(
             l1 - divide each sample by the l1 of the axis.
             l2 - divide each sample by the l2 of the axis.
             max - divide each sample by the maximum of the absolute value of the axis.
+            bit - sample-by-sample normalization (-1/+1)
     """
     axis = self.dims.index(dim)
     data = self.data
@@ -319,13 +310,23 @@ def normalize(
         norm_values = np.linalg.norm(self.data, axis=axis, ord=order)
     elif norm == "max":
         norm_values = np.max(data, axis=axis)
+    elif norm == "bit":
+        pass
     else:
         msg = (
             f"Norm value of {norm} is not supported. "
-            f"Supported values are {('l1', 'l2', 'max')}"
+            f"Supported values are {('l1', 'l2', 'max', 'bit')}"
         )
         raise ValueError(msg)
-    new_data = data / np.expand_dims(norm_values, axis=axis)
+    if norm == "bit":
+        new_data = np.divide(
+            data, np.abs(data), out=np.zeros_like(data), where=np.abs(data) != 0
+        )
+    else:
+        expanded_norm = np.expand_dims(norm_values, axis=axis)
+        new_data = np.divide(
+            data, expanded_norm, out=np.zeros_like(data), where=expanded_norm != 0
+        )
     return self.new(data=new_data)
 
 
@@ -476,6 +477,6 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
     slices[axis] = to_keep
     new_data = patch.data[tuple(slices)]
     coord = patch.get_coord(dim)
-    cm = patch.coords.update_coords(**{dim: coord[to_keep]})
+    cm = patch.coords.update(**{dim: coord[to_keep]})
     attrs = patch.attrs.update(coords={})
     return patch.new(data=new_data, coords=cm, attrs=attrs)

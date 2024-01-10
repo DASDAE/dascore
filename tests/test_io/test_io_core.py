@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import io
 from pathlib import Path
 from typing import TypeVar
 
@@ -11,7 +12,7 @@ import pytest
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
+from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
 from dascore.io.core import FiberIO, PatchFileSummary
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.io import BinaryReader, BinaryWriter
@@ -61,11 +62,11 @@ class _FiberCaster(FiberIO):
 
     def read(self, resource: BinaryReader, **kwargs) -> SpoolType:
         """Just ensure read was cast to correct type."""
-        assert isinstance(resource, BinaryReader)
+        assert isinstance(resource, io.BufferedReader)
 
     def write(self, spool: SpoolType, resource: BinaryWriter):
         """Ditto for write."""
-        assert isinstance(resource, BinaryWriter)
+        assert isinstance(resource, io.BufferedWriter)
 
     def get_format(self, resource: Path) -> tuple[str, str] | bool:
         """And get format."""
@@ -74,7 +75,7 @@ class _FiberCaster(FiberIO):
 
     def scan(self, not_path: BinaryReader):
         """Ensure an off-name still works for type casting."""
-        assert isinstance(not_path, BinaryWriter)
+        assert isinstance(not_path, io.BufferedReader)
 
 
 class _FiberUnsupportedTypeHints(FiberIO):
@@ -147,23 +148,23 @@ class TestFormatManager:
 
     def test_format_raises_unknown_format(self, format_manager):
         """Ensure we raise for unknown formats."""
-        with pytest.raises(UnknownFiberFormat, match="format"):
+        with pytest.raises(UnknownFiberFormatError, match="format"):
             list(format_manager.yield_fiberio(format="bob_2"))
 
     def test_format_raises_just_version(self, format_manager):
         """Providing only a version should also raise."""
-        with pytest.raises(UnknownFiberFormat, match="version"):
+        with pytest.raises(UnknownFiberFormatError, match="version"):
             list(format_manager.yield_fiberio(version="1"))
 
     def test_format_bad_version(self, format_manager):
         """Ensure providing a bad version but valid format raises."""
-        with pytest.raises(UnknownFiberFormat, match="known versions"):
+        with pytest.raises(UnknownFiberFormatError, match="known versions"):
             iterator = format_manager.yield_fiberio(format="DASDAE", version="-1")
             list(iterator)
 
     def test_format_format_no_version(self, format_manager):
         """Ensure providing a bad version but valid format raises."""
-        with pytest.raises(UnknownFiberFormat, match="known versions"):
+        with pytest.raises(UnknownFiberFormatError, match="known versions"):
             iterator = format_manager.yield_fiberio(format="DASDAE", version="-1")
             list(iterator)
 
@@ -186,9 +187,9 @@ class TestFormatter:
 
     def test_empty_formatter_raises(self):
         """An empty formatter can't exist; it at least needs a name."""
-        with pytest.raises(InvalidFiberIO):
+        with pytest.raises(InvalidFiberIOError):
 
-            class empty_formatter(FiberIO):
+            class EmptyFormatter(FiberIO):
                 """formatter with no name."""
 
     def test_empty_formatter_undefined_methods(self, random_patch):
@@ -230,7 +231,7 @@ class TestGetFormat:
 
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
-        with pytest.raises(UnknownFiberFormat):
+        with pytest.raises(UnknownFiberFormatError):
             dc.get_format(dummy_text_file)
 
     def test_missing_file(self):

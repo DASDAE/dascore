@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.utils.time import is_datetime64
+from dascore.utils.time import is_datetime64, to_timedelta64
 
 
 def check_label_units(patch, ax):
@@ -25,8 +25,9 @@ def check_label_units(patch, ax):
         assert coord_name in label_text
     # check colorbar labels
     cax = ax.images[-1].colorbar
-    title = cax.ax.title.get_text()
-    assert str(patch.attrs.data_units.units) in title
+    yaxis_label = cax.ax.yaxis.label.get_text()
+    assert str(patch.attrs.data_units.units) in yaxis_label
+    assert str(patch.attrs.data_type) in yaxis_label
 
 
 @pytest.fixture(scope="session")
@@ -39,7 +40,7 @@ def patch_random_start(event_patch_1):
     coords["time"] = time + random_starttime
     attrs["time_min"] = coords["time"].min()
     attrs["time_max"] = coords["time"].max()
-    patch = event_patch_1.new(attrs=attrs, coords=coords)
+    patch = event_patch_1.update(attrs=attrs, coords=coords)
     return patch
 
 
@@ -53,6 +54,13 @@ def patch_two_times(random_patch):
 
 class TestWaterfall:
     """Tests for waterfall plot."""
+
+    @pytest.fixture()
+    def timedelta_patch(self, random_patch):
+        """Make a patch with one dimension dtype of timedelta64."""
+        old_coord = random_patch.get_coord("time")
+        new_time = to_timedelta64(np.arange(len(old_coord)))
+        return random_patch.update_coords(time=new_time)
 
     def test_returns_axes(self, random_patch):
         """Call waterfall plot, return."""
@@ -128,6 +136,21 @@ class TestWaterfall:
         ax = pa.viz.waterfall()
         assert ax.get_xlabel() == dims[1]
         assert ax.get_ylabel() == dims[0]
+
+    def test_patch_with_data_type(self, random_patch):
+        """Ensure a patch with data_type titles the colorbar."""
+        patch = random_patch.update_attrs(
+            data_type="strain rate",
+            data_units="1/s",
+        )
+        ax = patch.viz.waterfall()
+        check_label_units(patch, ax)
+
+    def test_timedelta_axis(self, timedelta_patch):
+        """Ensure plot works when one axis has timedleta dtype. See #309."""
+        # if this doesnt raise it probably works ;)
+        ax = timedelta_patch.viz.waterfall()
+        assert ax is not None
 
     def test_show(self, random_patch, monkeypatch):
         """Ensure show path is callable."""

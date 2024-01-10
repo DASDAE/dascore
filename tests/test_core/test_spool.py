@@ -52,6 +52,12 @@ class TestSpoolBasics:
         """Ensure updating the spool doesnt change equality."""
         assert random_spool == random_spool.update()
 
+    def test_empty_spool_str(self):
+        """Ensure and empty spool has a string rep. See #295."""
+        spool = dc.spool([])
+        spool_str = str(spool)
+        assert "Spool" in spool_str
+
 
 class TestSpoolEquals:
     """Tests for spool equality."""
@@ -478,7 +484,7 @@ class TestMisc:
         # create new patch with cleared history
         new_attrs = dict(patch.attrs)
         new_attrs["history"] = []
-        new_patch = patch.new(attrs=new_attrs)
+        new_patch = patch.update(attrs=new_attrs)
         assert not new_patch.attrs.history
         # add new patch (w/ no history) to spool, get first patch out.
         spool = dc.spool([new_patch])
@@ -492,6 +498,16 @@ class TestMisc:
         with pytest.raises(InvalidSpoolError, match="may not exist"):
             dc.spool("Bad/file/path.h5")
 
+    def test_dft_patch_access(self, random_dft_patch):
+        """Ensure a dft patch can be retrieved from as spool. See #303."""
+        spool = dc.spool(random_dft_patch)
+        patch = spool[0]
+        assert isinstance(patch, dc.Patch)
+
+
+class TestSpoolStack:
+    """Tests for stacking (adding) spool content."""
+
     def test_stack_data(self):
         """
         Try the stack method on an example spool that has repeated
@@ -500,11 +516,11 @@ class TestMisc:
         # Grab the example spool which has repeats of the same patch
         # but with different time dimensions. Stack the patches.
         spool = dc.get_example_spool()
-        stackPatch = spool.stack(dim_vary="time")
+        stack_patch = spool.stack(dim_vary="time")
         # We expect the sum/stack to be same as a multiple of
         # the first patch's data.
         baseline = float(len(spool)) * spool[0].data
-        assert np.allclose(baseline, stackPatch.data)
+        assert np.allclose(baseline, stack_patch.data)
 
     def test_stack_coords(self):
         """
@@ -514,15 +530,15 @@ class TestMisc:
         # Grab the example spool which has repeats of the same patch
         # but with different time dimensions. Stack the patches.
         spool = dc.get_example_spool()
-        stackPatch = spool.stack(dim_vary="time")
+        stack_patch = spool.stack(dim_vary="time")
         # check that 'time' coordinates has same step as original patch
-        timeCoords = stackPatch.coords.coord_map["time"]
-        origTimeCoords = spool[0].coords.coord_map["time"]
-        assert timeCoords.step == origTimeCoords.step
+        time_coords = stack_patch.coords.coord_map["time"]
+        orig_time_coords = spool[0].coords.coord_map["time"]
+        assert time_coords.step == orig_time_coords.step
         # check that distance coordinates are the same
-        distCoords = stackPatch.coords.coord_map["distance"]
-        origDistCoords = spool[0].coords.coord_map["distance"]
-        assert distCoords.start == origDistCoords.start
-        assert distCoords.stop == origDistCoords.stop
-        assert distCoords.step == origDistCoords.step
+        dist_coords = stack_patch.coords.coord_map["distance"]
+        orig_dist_coords = spool[0].coords.coord_map["distance"]
+        assert dist_coords.start == orig_dist_coords.start
+        assert dist_coords.stop == orig_dist_coords.stop
+        assert dist_coords.step == orig_dist_coords.step
         # assert distCoords.units == origDistCoords.units # issue

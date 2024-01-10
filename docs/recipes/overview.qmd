@@ -2,16 +2,4 @@
 title: "Overview"
 ---
 
-Welcome to DASCore's cookbook! This is a collection of examples (recipes) for performing common processing tasks.
-Please look around and consider [contributing](../contributing/contributing.qmd) some examples of your
-own.
-
-# Basic
-
-[Plotting channel number](plotting_channel_number.qmd)
-
-# Contributing
-
-[Contributing step by step](how_to_contribute.qmd)
-
-[Contributing to documentation](contributing_to_documentation.qmd)
+Welcome to DASCore's cookbook! This is a collection of examples (recipes) to demonstrate how to perform various tasks with DASCore. Use the collapsable menu on the left to browse the recipes and consider [contributing](../contributing/contributing.qmd) some examples of your own.

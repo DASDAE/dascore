@@ -91,7 +91,7 @@ class TestPatchAttrs:
 
     def test_coords_with_coord_keys(self):
         """Ensure coords with base keys work."""
-        coords = {"distance": get_coord(values=np.arange(100))}
+        coords = {"distance": get_coord(data=np.arange(100))}
         out = PatchAttrs(**{"coords": coords})
         assert out.coords
         assert "distance" in out.coords
@@ -267,6 +267,16 @@ class TestMisc:
         """Ensure schema module emits deprecation warning."""
         with pytest.warns(DeprecationWarning):
             from dascore.core.schema import PatchAttrs  # noqa
+
+    def test_get_attrs_non_dim_coordinates(self, random_patch_with_lat_lon):
+        """
+        Ensure only dims show up in dims even when coord manager has many
+        coordinates.
+        """
+        patch = random_patch_with_lat_lon
+        cm = patch.coords
+        attrs = dc.PatchAttrs(coords=cm)
+        assert attrs.dim_tuple == cm.dims
 
 
 class TestUpdateAttrs:

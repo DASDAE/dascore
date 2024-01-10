@@ -27,10 +27,10 @@ from dascore.constants import (
     timeable_types,
 )
 from dascore.core.attrs import str_validator
-from dascore.exceptions import InvalidFiberIO, UnknownFiberFormat
+from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import cached_method, iterate, suppress_warnings
+from dascore.utils.misc import cached_method, iterate
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,
@@ -105,13 +105,11 @@ class _FiberIOManager:
     @cached_property
     def _eps(self):
         """
-        Get the unlaoded entry points registered to this domain into a dict of
+        Get the unloaded entry points registered to this domain into a dict of
         {name: ep}.
         """
-        # TODO remove warning suppression and switch to select when 3.9 is dropped
-        # see https://docs.python.org/3/library/importlib.metadata.html#entry-points
-        with suppress_warnings(DeprecationWarning):
-            out = {ep.name: ep.load for ep in entry_points()[self._entry_point]}
+        fiber_io_eps = entry_points(group="dascore.fiber_io")
+        out = {x.name: x.load for x in fiber_io_eps}
         return pd.Series(out)
 
     @cached_property
@@ -198,6 +196,7 @@ class _FiberIOManager:
         format: str | None = None,
         version: str | None = None,
         extension: str | None = None,
+        formatter_hint: FiberIO | None = None,
     ) -> Self:
         """
         Yields fiber IO object based on input priorities.
@@ -218,16 +217,23 @@ class _FiberIOManager:
         Parameters
         ----------
         format
-            The format string indicating the format name
+            The format string indicating the format name.
         version
             The version string of the format
         extension
             The extension of the file.
+        formatter_hint
+            If not None, a suspected formatter to use first. This is an
+            optimization for file archives which tend to have many files of
+            the same format.
+
         """
         # TODO replace this with concise pattern matching once 3.9 is dropped
+        if formatter_hint is not None:
+            yield formatter_hint
         if version and not format:
             msg = "Providing only a version is not sufficient to determine format"
-            raise UnknownFiberFormat(msg)
+            raise UnknownFiberFormatError(msg)
         if format is not None:
             self.load_plugins(format)
             yield from self._yield_format_version(format, version)
@@ -246,7 +252,7 @@ class _FiberIOManager:
             if not formatters:
                 format_list = list(self.known_formats)
                 msg = f"Unknown format {format}, " f"known formats are {format_list}"
-                raise UnknownFiberFormat(msg)
+                raise UnknownFiberFormatError(msg)
             # a version is specified
             if version:
                 formatter = formatters.get(version, None)
@@ -255,7 +261,7 @@ class _FiberIOManager:
                         f"Format {format} has no version: [{version}] "
                         f"known versions of this format are: {list(formatters)}"
                     )
-                    raise UnknownFiberFormat(msg)
+                    raise UnknownFiberFormatError(msg)
                 yield formatter
                 return
             # reverse sort formatters and yield latest version first.
@@ -454,7 +460,7 @@ class FiberIO:
         # check that the subclass is valid
         if not cls.name:
             msg = "You must specify the file format with the name field."
-            raise InvalidFiberIO(msg)
+            raise InvalidFiberIOError(msg)
         # register formatter
         manager: _FiberIOManager = cls.__mro__[1].manager
         manager.register_fiberio(cls())
@@ -479,6 +485,9 @@ def read(
     """
     Read a fiber file.
 
+    For most cases, [`dascore.spool`](`dascore.spool`) is preferable to
+    this function.
+
     Parameters
     ----------
     path
@@ -494,6 +503,20 @@ def read(
         An optional tuple of distances.
     *kwargs
         All kwargs are passed to the format-specific read functions.
+
+    Notes
+    -----
+    Unlike [`spool`](`dascore.spool`) this function reads the entire file
+    into memory.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> file_path = fetch("prodml_2.1.h5")
+    >>>
+    >>> patch = dc.read(file_path)
     """
     with IOResourceManager(path) as man:
         if not file_format or not file_version:
@@ -541,6 +564,14 @@ def scan_to_df(
     exclude
         A sequence of strings to exclude from the analysis.
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> file_path = fetch("prodml_2.1.h5")
+    >>>
+    >>> df = dc.scan_to_df(file_path)
     """
     info = scan(
         path=path,
@@ -589,8 +620,18 @@ def scan(
     -------
     A list of [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) or subclasses
     which may have extra fields.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> file_path = fetch("prodml_2.1.h5")
+    >>>
+    >>> attr_list = dc.scan(file_path)
     """
     out = []
+    formatter = None
     for patch_source in _iterate_scan_inputs(path):
         # just pull attrs from patch
         if isinstance(patch_source, dc.Patch):
@@ -604,8 +645,9 @@ def scan(
                         man,
                         file_format=file_format,
                         file_version=file_version,
+                        formatter_hint=formatter,
                     )
-                except UnknownFiberFormat:  # skip bad entities
+                except UnknownFiberFormatError:  # skip bad entities
                     continue
             else:
                 # we need separate loop variables so this doesn't get assumed
@@ -613,7 +655,7 @@ def scan(
                 file_format_, file_version_ = file_format, file_version
             formatter = FiberIO.manager.get_fiberio(file_format_, file_version_)
             req_type = getattr(formatter.scan, "_required_type", None)
-            # this will get an open file handle to past to get_resource
+            # this will get an open file handle to pass to get_resource
             patch_thing = man.get_resource(req_type)
             for attr in formatter.scan(patch_thing, _pre_cast=True):
                 out.append(dc.PatchAttrs.from_dict(attr))
@@ -624,6 +666,7 @@ def get_format(
     path: str | Path | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
+    formatter_hint: FiberIO | None = None,
     **kwargs,
 ) -> tuple[str, str]:
     """
@@ -637,6 +680,9 @@ def get_format(
         The known file format.
     file_version
         The known file version.
+    formatter_hint
+        A suspected formatter to try first. This is primarily an optimization
+        for reading file archives where the formats usually are the same.
 
     Returns
     -------
@@ -646,6 +692,14 @@ def get_format(
     ------
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.downloader import fetch
+    >>>
+    >>> file_path = fetch("prodml_2.1.h5")
+    >>>
+    >>> file_format, file_version = dc.get_format(file_path)
     """
     with IOResourceManager(path) as man:
         path = man.source
@@ -655,7 +709,10 @@ def get_format(
         suffix = Path(path).suffix
         ext = suffix[1:] if suffix else None
         iterator = FiberIO.manager.yield_fiberio(
-            file_format, file_version, extension=ext
+            file_format,
+            file_version,
+            extension=ext,
+            formatter_hint=formatter_hint,
         )
         for formatter in iterator:
             # we need to wrap this in try except to make it robust to what
@@ -678,7 +735,7 @@ def get_format(
                 return format_version
         else:
             msg = f"Could not determine file format of {man.source}"
-            raise UnknownFiberFormat(msg)
+            raise UnknownFiberFormatError(msg)
 
 
 def write(
@@ -699,11 +756,24 @@ def write(
         The string indicating the format to write.
     file_version
         Optionally specify the version of the file, else use the latest
-        version.
+        version for the format.
 
     Raises
     ------
-    dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
+    [`UnkownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
+        - Could not determine the fiber format.
+
+    Examples
+    --------
+    >>> from pathlib import Path
+    >>> import dascore as dc
+    >>>
+    >>> patch = dc.get_example_patch()
+    >>> path = Path("output.h5")
+    >>> _ = dc.write(patch, path, "dasdae")
+    >>>
+    >>> assert path.exists()
+    >>> path.unlink()
     """
     formatter = FiberIO.manager.get_fiberio(file_format, file_version)
     if not isinstance(patch_or_spool, dc.BaseSpool):

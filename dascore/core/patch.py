@@ -10,12 +10,12 @@ from typing_extensions import Self
 
 import dascore as dc
 import dascore.proc.coords
+import dascore.utils.io
 from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
-from dascore.io import PatchIO
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
 from dascore.viz import VizPatchNameSpace
@@ -24,6 +24,8 @@ from dascore.viz import VizPatchNameSpace
 class Patch:
     """
     A Class for managing data and metadata.
+
+    See the [patch tutorial](/tutorial/patch.qmd) for examples.
 
     Parameters
     ----------
@@ -173,12 +175,13 @@ class Patch:
 
     # --- basic patch functionality.
 
-    new = dascore.proc.new
+    update = dascore.proc.update
+    # Before 0.1.0 update was called new, this is for backwards compatibility.
+    new = dascore.proc.update
     equals = dascore.proc.equals
     update_attrs = dascore.proc.update_attrs
     assert_has_coords = dascore.proc.assert_has_coords
     get_coord = dascore.proc.get_coord
-    to_xarray = dascore.proc.to_xarray
     pipe = dascore.proc.pipe
     set_dims = dascore.proc.set_dims
     squeeze = dascore.proc.squeeze
@@ -188,6 +191,7 @@ class Patch:
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
     drop_coords = dascore.proc.drop_coords
+    coords_from_df = dascore.proc.coords_from_df
 
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords."""
@@ -209,12 +213,15 @@ class Patch:
         warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.select(*args, samples=True, **kwargs)
 
+    correlate = dascore.proc.correlate
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
     pass_filter = dascore.proc.pass_filter
     sobel_filter = dascore.proc.sobel_filter
     median_filter = dascore.proc.median_filter
+    savgol_filter = dascore.proc.savgol_filter
+    gaussian_filter = dascore.proc.gaussian_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
     real = dascore.proc.real
@@ -236,6 +243,7 @@ class Patch:
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
     rolling = dascore.proc.rolling
+    whiten = dascore.proc.whiten
 
     # --- transformation functions
     differentiate = transform.differentiate
@@ -245,6 +253,7 @@ class Patch:
     integrate = transform.integrate
     spectrogram = transform.spectrogram
     velocity_to_strain_rate = transform.velocity_to_strain_rate
+    dispersion_phase_shift = transform.dispersion_phase_shift
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references
@@ -266,6 +275,6 @@ class Patch:
         return self
 
     @property
-    def io(self) -> PatchIO:
+    def io(self) -> dc.io.PatchIO:
         """Return a patch IO object for saving patches to various formats."""
-        return PatchIO(self)
+        return dc.io.PatchIO(self)

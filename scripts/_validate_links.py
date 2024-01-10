@@ -51,7 +51,7 @@ def validate_all_links():
                 bad_links += 1
             else:
                 good_links += 1
-    print(
+    print(  # noqa
         f"Validated links in documentation. Scanned {file_count} files, "
         f"found {good_links} good links and {bad_links} bad links"
     )
