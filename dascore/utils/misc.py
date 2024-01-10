@@ -20,6 +20,7 @@ from scipy.linalg import solve
 from scipy.special import factorial
 
 import dascore as dc
+from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
     FilterValueError,
     MissingOptionalDependencyError,
@@ -92,6 +93,26 @@ def suppress_warnings(category=Warning):
         warnings.simplefilter("ignore", category=category)
         yield
     return None
+
+
+def warn_or_raise(msg: str, exception: type[Exception], behavior: WARN_LEVELS):
+    """
+    A helper function to issues a warning, raise an exception or do nothing.
+
+    Parameters
+    ----------
+    msg
+        The message to attach to warning or exception.
+    exception
+        The exception class to raise.
+    behavior
+        If None, do nothing. If
+    """
+    if not behavior:
+        return
+    if behavior == "raise":
+        raise exception(msg)
+    warnings.warn(msg)
 
 
 class MethodNameSpace(metaclass=_NameSpaceMeta):

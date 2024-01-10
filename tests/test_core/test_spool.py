@@ -541,4 +541,4 @@ class TestSpoolStack:
         assert dist_coords.start == orig_dist_coords.start
         assert dist_coords.stop == orig_dist_coords.stop
         assert dist_coords.step == orig_dist_coords.step
-        # assert distCoords.units == origDistCoords.units # issue
+        # assert dist_coords.units == orig_dist_coords.units

@@ -308,25 +308,35 @@ class BaseSpool(abc.ABC):
 
     def stack(self, dim_vary=None, check_behavior="warn"):
         """
-        Stack any spool's patches after verifying their dims and coords are ok.
+        Stack (add) compatible patches in a spool together.
 
         Parameters
         ----------
+        dim_vary
+            The name of the dimension which can be different and patches
+            still added together.
+        check_behavior
+            Indicates how to handle incompatible patches in spool.
+
+
+
+        Notes
+        -----
         By default, dim_vary is None but others could be specified and <= 1 can vary.
         By default, dim_check is 'warn' meaning a warning would be issued and a patch
         would be skipped in case of issues. 'raise' is other option that will raise
         an exception.
         Note that the stack's coordinates will be set to start at 0 along dim_vary.
 
-        Notes
-        -----
         One potential issue remains: units of dimensions other than dim_vary appear
         to get dropped. Need to investigate further.
 
         Examples
         --------
-        spool = dc.get_example_spool()
-        stackPatch = spool.stack(dim_vary='time')
+        >>> import dascore as dc
+        >>> # add a spool with equal sized patches but progressing time dim
+        >>> spool = dc.get_example_spool()
+        >>> stacked_patch = spool.stack(dim_vary='time')
         """
         # check the dims/coords of first patch (considered to be standard for rest)
         init_patch = self.__getitem__(0)

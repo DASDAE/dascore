@@ -16,6 +16,7 @@ import dascore as dc
 from dascore.constants import (
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
+    WARN_LEVELS,
     PatchType,
     attr_conflict_description,
     max_lens,
@@ -32,6 +33,7 @@ from dascore.utils.misc import (
     iterate,
     separate_coord_info,
     to_str,
+    warn_or_raise,
 )
 from dascore.utils.models import (
     CommaSeparatedStr,
@@ -449,7 +451,7 @@ def combine_patch_attrs(
     return cls(**mod_dict_list[0])
 
 
-def check_dims(patch1, patch2, check_behavior="raise"):
+def check_dims(patch1, patch2, check_behavior: WARN_LEVELS = "raise"):
     """
     Check whether the dimensions of two patches dimensions are equal.
 
@@ -471,13 +473,12 @@ def check_dims(patch1, patch2, check_behavior="raise"):
         "Patches are not compatible because their dimensions are not equal."
         f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
     )
-    if check_behavior == "raise":
-        raise IncompatiblePatchError(msg)
-    else:  # warn user of possible issue
-        warnings.warn(msg)
+    warn_or_raise(msg, IncompatiblePatchError, check_behavior)
 
 
-def check_coords(patch1, patch2, check_behavior="raise", dim_to_ignore=None):
+def check_coords(
+    patch1, patch2, check_behavior: WARN_LEVELS = "raise", dim_to_ignore=None
+):
     """
     Check whether the coordinates of two patches are equal.
     Ignore values of specified dimension's coords (but size must be same).
@@ -515,15 +516,12 @@ def check_coords(patch1, patch2, check_behavior="raise", dim_to_ignore=None):
                 not_equal_coords.append(coord)
         else:
             not_equal_coords.append(coord)
-    if not_equal_coords:
+    if not_equal_coords and len(shared):
         msg = (
             f"Patches are not compatible. The following shared coordinates "
             f"are not equal {coord}"
         )
-        if check_behavior == "raise":
-            raise IncompatiblePatchError(msg)
-        else:
-            warnings.warn(msg)
+        warn_or_raise(msg, IncompatiblePatchError, check_behavior)
 
 
 def merge_compatible_coords_attrs(
@@ -590,10 +588,10 @@ def merge_compatible_coords_attrs(
             raise IncompatiblePatchError(msg)
         return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
 
-    check_dims(patch1.dims, patch2.dims)
+    check_dims(patch1, patch2)
+    check_coords(patch1, patch2)
     coord1, coord2 = patch1.coords, patch2.coords
     attrs1, attrs2 = patch1.attrs, patch2.attrs
-    check_coords(coord1, coord2)
     coord_out = _merge_coords(coord1, coord2)
     attrs = _merge_models(attrs1, attrs2, coord_out)
     return coord_out, attrs
