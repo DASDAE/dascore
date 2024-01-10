@@ -135,6 +135,7 @@ website:
             - recipes/correlate.qmd
             - recipes/edge_effects.qmd
             - recipes/fk.qmd
+            - recipes/real_time_proc.qmd
             - recipes/smoothing.qmd
             - recipes/parallelization.qmd
 
