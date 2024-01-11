@@ -139,19 +139,19 @@ for each attribute.
 dascore_styles = dict(
     np_array_threshold=100,  # max number of elements to show in array
     patch_history_array_threshold=10,  # max elements of array in hist str.
-    dc_blue="#002868",
-    dc_red="#cf0029",
-    dc_yellow="#ffc934",
-    default_coord="bold white",
+    dc_blue="blue",
+    dc_red="red",
+    dc_yellow="yellow",
+    default_coord="bold",
     coord_range="bold green",
-    coord_array="bold #cd0000",
-    coord_monotonic="bold #d64806",
-    coord_degenerate="bold #d40000",
-    units="#cca3e1",
-    dtypes="#a2bf48",
-    keys="#a2bf48",
-    # these are for formatting datetimes
-    ymd="#e96baa",
-    hms="#e96baa",
-    dec="#e96baa",
+    coord_monotonic="bold grey",
+    coord_array="bold orange",
+    coord_degenerate="bold red",
+    units="bright blue",
+    dtypes="bright black",
+    keys="grey50",
+    # these are for formatting date times
+    ymd="blue",
+    hms="green",
+    dec="green",
 )

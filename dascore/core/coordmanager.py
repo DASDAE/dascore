@@ -611,7 +611,7 @@ class CoordManager(DascoreBaseModel):
             coord = self.coord_map[name]
             coord_dims = self.dim_map[name]
             if name in self.dims:
-                base = Text.assemble("\n    * ", Text(name, style="bold"), ": ")
+                base = Text.assemble("\n    *", Text(name, style="bold"), ": ")
             else:
                 base = Text(f"\n    {name} {coord_dims}: ")
             text = Text.assemble(base, coord.__rich__())
