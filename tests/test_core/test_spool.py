@@ -11,7 +11,12 @@ import pytest
 import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
-from dascore.exceptions import IncompatiblePatchError, InvalidSpoolError, ParameterError
+from dascore.exceptions import (
+    IncompatiblePatchError,
+    InvalidSpoolError,
+    ParameterError,
+    PatchDimError,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -536,6 +541,19 @@ class TestSpoolStack:
         # Or a warning issued.
         with pytest.warns(UserWarning, match=msg):
             spool.stack(dim_vary="time", check_behavior="warn")
+
+    def test_different_dimensions(self, random_spool):
+        """Tests for when the spool has patches with different dimensions."""
+        new_patch = random_spool[0].rename_coords(time="money")
+        spool = dc.spool([random_spool[1], new_patch])
+        msg = "because their dimensions are not equal"
+        with pytest.warns(UserWarning, match=msg):
+            spool.stack(dim_vary="time", check_behavior="warn")
+
+    def test_bad_dim_vary(self, random_spool):
+        """Ensure when dim_vary is not in patch an error is raised."""
+        with pytest.raises(PatchDimError):
+            random_spool.stack(dim_vary="money")
 
     def test_stack_coords(self):
         """

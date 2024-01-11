@@ -24,7 +24,7 @@ from dascore.constants import (
 )
 from dascore.core.attrs import check_coords, check_dims
 from dascore.core.patch import Patch
-from dascore.exceptions import InvalidSpoolError, ParameterError
+from dascore.exceptions import InvalidSpoolError, ParameterError, PatchDimError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
@@ -334,6 +334,11 @@ class BaseSpool(abc.ABC):
         # check the dims/coords of first patch (considered to be standard for rest)
         init_patch = self[0]
         stack_arr = np.zeros_like(init_patch.data)
+
+        # ensure dim_vary is in dims
+        if dim_vary is not None and dim_vary not in init_patch.dims:
+            msg = f"Dimension {dim_vary} is not in first patch."
+            raise PatchDimError(msg)
 
         for p in self:
             # check dimensions of patch compared to init_patch
