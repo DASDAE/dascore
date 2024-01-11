@@ -95,7 +95,12 @@ def suppress_warnings(category=Warning):
     return None
 
 
-def warn_or_raise(msg: str, exception: type[Exception], behavior: WARN_LEVELS):
+def warn_or_raise(
+    msg: str,
+    exception: type[Exception] = Exception,
+    warning: type[Warning] = UserWarning,
+    behavior: WARN_LEVELS = "warn",
+):
     """
     A helper function to issues a warning, raise an exception or do nothing.
 
@@ -105,6 +110,8 @@ def warn_or_raise(msg: str, exception: type[Exception], behavior: WARN_LEVELS):
         The message to attach to warning or exception.
     exception
         The exception class to raise.
+    warning
+        The type of warning to use. Must be a subclass of Warning.
     behavior
         If None, do nothing. If
     """
@@ -112,7 +119,7 @@ def warn_or_raise(msg: str, exception: type[Exception], behavior: WARN_LEVELS):
         return
     if behavior == "raise":
         raise exception(msg)
-    warnings.warn(msg)
+    warnings.warn(msg, warning)
 
 
 class MethodNameSpace(metaclass=_NameSpaceMeta):
