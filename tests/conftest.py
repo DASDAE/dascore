@@ -333,7 +333,7 @@ def terra15_das_unfinished_path() -> Path:
     return out
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
 def random_spool() -> SpoolType:
     """Init a random array."""

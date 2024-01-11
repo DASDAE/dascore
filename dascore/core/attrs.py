@@ -451,9 +451,9 @@ def combine_patch_attrs(
     return cls(**mod_dict_list[0])
 
 
-def check_dims(patch1, patch2, check_behavior: WARN_LEVELS = "raise"):
+def check_dims(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> bool:
     """
-    Check whether the dimensions of two patches dimensions are equal.
+    Return True if dimensions of two patches are equal.
 
     Parameters
     ----------
@@ -463,25 +463,25 @@ def check_dims(patch1, patch2, check_behavior: WARN_LEVELS = "raise"):
         second patch
     check_behavior
         String with 'raise' will raise an error if incompatible,
-        'warn' will provide a warning
+        'warn' will provide a warning, None will do nothing.
     """
     dims1 = patch1.dims
     dims2 = patch2.dims
     if dims1 == dims2:
-        return
+        return True
     msg = (
         "Patches are not compatible because their dimensions are not equal."
         f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
     )
-    warn_or_raise(msg, IncompatiblePatchError, check_behavior)
+    warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
+    return False
 
 
 def check_coords(
     patch1, patch2, check_behavior: WARN_LEVELS = "raise", dim_to_ignore=None
-):
+) -> bool:
     """
-    Check whether the coordinates of two patches are equal.
-    Ignore values of specified dimension's coords (but size must be same).
+    Return True if the coordinates of two patches are compatible, else False.
 
     Parameters
     ----------
@@ -494,7 +494,8 @@ def check_coords(
         'warn' will provide a warning.
     dim_to_ignore
         None by default (all coordinates must be identical).
-        String specifying a dimension that differences are allowed.
+        String specifying a dimension that differences in values,
+        but not shape, are allowed.
     """
     cm1 = patch1.coords
     cm2 = patch2.coords
@@ -521,7 +522,9 @@ def check_coords(
             f"Patches are not compatible. The following shared coordinates "
             f"are not equal {coord}"
         )
-        warn_or_raise(msg, IncompatiblePatchError, check_behavior)
+        warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
+        return False
+    return True
 
 
 def merge_compatible_coords_attrs(

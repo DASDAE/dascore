@@ -15,6 +15,7 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.constants import (
     PROGRESS_LEVELS,
+    WARN_LEVELS,
     ExecutorType,
     PatchType,
     attr_conflict_description,
@@ -306,30 +307,22 @@ class BaseSpool(abc.ABC):
             **kwargs,
         )
 
-    def stack(self, dim_vary=None, check_behavior="warn"):
+    def stack(self, dim_vary=None, check_behavior: WARN_LEVELS = "warn") -> PatchType:
         """
-        Stack (add) compatible patches in a spool together.
+        Stack (add) all patches compatible with first patch together.
 
         Parameters
         ----------
         dim_vary
-            The name of the dimension which can be different and patches
-            still added together.
+            The name of the dimension which can be different in values
+            (but not shape) and patches still added together.
         check_behavior
-            Indicates how to handle incompatible patches in spool.
-
-
-
-        Notes
-        -----
-        By default, dim_vary is None but others could be specified and <= 1 can vary.
-        By default, dim_check is 'warn' meaning a warning would be issued and a patch
-        would be skipped in case of issues. 'raise' is other option that will raise
-        an exception.
-        Note that the stack's coordinates will be set to start at 0 along dim_vary.
-
-        One potential issue remains: units of dimensions other than dim_vary appear
-        to get dropped. Need to investigate further.
+            Indicates what to do when an incompatible patch is found in the
+            spool. `None` will silently skip any incompatible patches,
+            'warn' will issue a warning and then skip incompatible patches,
+            'raise' will raise an
+            [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`)
+            if any incompatible patches are found.
 
         Examples
         --------
@@ -339,16 +332,16 @@ class BaseSpool(abc.ABC):
         >>> stacked_patch = spool.stack(dim_vary='time')
         """
         # check the dims/coords of first patch (considered to be standard for rest)
-        init_patch = self.__getitem__(0)
+        init_patch = self[0]
         stack_arr = np.zeros_like(init_patch.data)
 
         for p in self:
             # check dimensions of patch compared to init_patch
-            check_dims(init_patch, p, check_behavior)
-            check_coords(init_patch, p, check_behavior, dim_vary)
-
+            dims_ok = check_dims(init_patch, p, check_behavior)
+            coords_ok = check_coords(init_patch, p, check_behavior, dim_vary)
             # actually do the stacking of data
-            stack_arr = stack_arr + p.data
+            if dims_ok and coords_ok:
+                stack_arr = stack_arr + p.data
 
         # create attributes for the stack with adjusted history
         stack_attrs = init_patch.attrs
@@ -361,10 +354,8 @@ class BaseSpool(abc.ABC):
         if dim_vary:  # adjust dim_vary to start at 0 for junk dimension indicator
             coord_to_change = stack_coords.coord_map[dim_vary]
             new_dim = coord_to_change.update_limits(min=0)
-            new_stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
-            return Patch(stack_arr, new_stack_coords, init_patch.dims, stack_attrs)
-        else:  # create output patch
-            return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
+            stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
+        return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
 
 
 class DataFrameSpool(BaseSpool):

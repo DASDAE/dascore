@@ -11,7 +11,7 @@ import pytest
 import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
-from dascore.exceptions import InvalidSpoolError, ParameterError
+from dascore.exceptions import IncompatiblePatchError, InvalidSpoolError, ParameterError
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -521,6 +521,21 @@ class TestSpoolStack:
         # the first patch's data.
         baseline = float(len(spool)) * spool[0].data
         assert np.allclose(baseline, stack_patch.data)
+
+    def test_same_dim_different_shape(self, random_spool):
+        """Ensure when stack dimensions have different shape an error is raised."""
+        # Create a spool with two patches, each with time dim but with different
+        # lengths.
+        patch1, patch2 = random_spool[:2]
+        patch2 = patch2.select(time=(1, 30), samples=True)
+        spool = dc.spool([patch1, patch2])
+        # Check that warnings/exceptions are raised.
+        msg = "Patches are not compatible"
+        with pytest.raises(IncompatiblePatchError, match=msg):
+            spool.stack(dim_vary="time", check_behavior="raise")
+        # Or a warning issued.
+        with pytest.warns(UserWarning, match=msg):
+            spool.stack(dim_vary="time", check_behavior="warn")
 
     def test_stack_coords(self):
         """
