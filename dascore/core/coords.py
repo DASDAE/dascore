@@ -249,7 +249,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def __rich__(self):
         key_style = dascore_styles["keys"]
-        base = Text("", "default")
+        base = Text("")
         base += Text(self.__class__.__name__, style=self._rich_style)
         base += Text("(")
         if not pd.isnull(self.min()):

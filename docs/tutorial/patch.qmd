@@ -140,6 +140,7 @@ time_step = coords.step("time")
 
 Coords also have a useful string representation:
 
+
 ```{python}
 print(coords)
 ```
