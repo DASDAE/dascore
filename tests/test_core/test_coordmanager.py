@@ -798,6 +798,13 @@ class TestUpdate:
         dissociated = new.update(new_time=(None, new_time))
         assert dissociated.dim_map["new_time"] == ()
 
+    def test_unchanged_coords(self, coord_manager_with_units):
+        """Ensure coordinates not updated are left unchanged."""
+        cm = coord_manager_with_units
+        new_time = cm.coord_map["time"].update(min=0)
+        new = cm.update(time=new_time)
+        assert new.coord_map["distance"] == cm.coord_map["distance"]
+
 
 class TestSqueeze:
     """Tests for squeezing degenerate dimensions."""

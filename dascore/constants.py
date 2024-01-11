@@ -97,6 +97,9 @@ PATCH_MERGE_ATTRS = ("network", "station", "dims", "data_type", "data_category")
 # Level of progress bar
 PROGRESS_LEVELS = Literal["standard", "basic", None]
 
+# Options for handling specific warnings
+WARN_LEVELS = Literal["warn", "raise", None]
+
 # A map from the unit name to the code used in numpy.timedelta64
 NUMPY_TIME_UNIT_MAPPING = {
     "hour": "h",

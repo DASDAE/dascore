@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,7 @@ from dascore.utils.misc import (
     maybe_get_items,
     optional_import,
     separate_coord_info,
+    warn_or_raise,
 )
 
 
@@ -274,3 +276,27 @@ class TestMaybeGetItems:
         out = maybe_get_items(data, attr_map=expected)
         assert "sue" in out
         assert "who" not in out
+
+
+class TestWarnOrRaise:
+    """Ensure warn or raise works."""
+
+    def test_warn(self):
+        """Ensure a warning is emitted."""
+        msg = "Warning: this is a warning"
+        with pytest.warns(UserWarning, match=msg):
+            warn_or_raise(msg, warning=UserWarning, behavior="warn")
+
+    def test_raise(self):
+        """Ensure an exception can be raised."""
+        msg = "Something went wrong."
+        with pytest.raises(ValueError, match=msg):
+            warn_or_raise(msg, exception=ValueError, behavior="raise")
+
+    def test_nothing(self):
+        """Ensure when  None does nothing."""
+        msg = "Big nothing burger"
+        # Now exceptions or warnings will crash the program.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            warn_or_raise(msg, behavior=None)

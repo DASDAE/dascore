@@ -288,16 +288,16 @@ class CoordManager(DascoreBaseModel):
         indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
         coords, _ = self.drop_coords(*(coord_to_drop + indirect_coord_drops))
-        out = coords._get_dim_array_dict()
+        out = coords._get_dim_array_dict(keep_coord=True)
         out.update({i: v for i, v in kwargs.items() if i not in coord_to_drop})
         # update based on keywords
         for item, value in coord_updates.items():
             coord_name, attr = item.split("_")
             new = list(out[coord_name])
-            coord = get_coord(data=new[1])
-            new[1] = coord.update(**{attr: value})
+            new[1] = new[1].update(**{attr: value})
             out[coord_name] = tuple(new)
         dims = tuple(x for x in self.dims if x not in coord_to_drop)
+
         return get_coord_manager(out, dims=dims)
 
     # we need this here to maintain backwards compatibility
@@ -660,7 +660,9 @@ class CoordManager(DascoreBaseModel):
             raise CoordDataError(msg)
         return data
 
-    def _get_dim_array_dict(self, keep_coord=False):
+    def _get_dim_array_dict(
+        self, keep_coord=False
+    ) -> dict[tuple[str], ArrayLike | BaseCoord]:
         """
         Get the coord map in the form:
         {coord_name = ((dims,), array)}.
