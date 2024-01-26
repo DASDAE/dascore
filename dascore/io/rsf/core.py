@@ -71,7 +71,7 @@ class RSFV1(FiberIO):
         file_esize = dtype.itemsize
         file_formt = 'data_format="native_float"'
 
-        data_bytes = data.astype(np.float32).tobytes()
+        data_bytes = data.astype(np.float32).tobytes("F")
 
         hdr_str = f"DASCORE {dc.__version__}   {dt.datetime.now()} \n"
 
