@@ -82,7 +82,7 @@ class RSFV1(FiberIO):
         hdr_info = [hdr_str, file_formt, f"esize={file_esize}"]
         for i in range(length):
             hdr_info.append(f"n{i+1}={axis_lengs[i]}")
-            if i == 0:
+            if axis_names[i] == "time":
                 hdr_info.append(f"o{i+1}=0.0")
                 hdr_info.append(f"starttime={axis_origs[i]}")
             else:
