@@ -456,3 +456,15 @@ class H5Writer(H5Reader):
 # used in new code.
 HDF5Writer = PyTablesWriter
 HDF5Reader = PyTablesReader
+
+
+def unpack_scalar_h5_dataset(dataset):
+    """
+    Unpack a scalar H5Py dataset.
+    """
+    assert dataset.size == 1
+    # This gets weird because datasets can be of shape () or (1,).
+    value = dataset[()]
+    if isinstance(value, np.ndarray):
+        value = value[0]
+    return value
