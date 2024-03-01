@@ -64,6 +64,20 @@ class TestSetUnits:
         assert get_quantity(out.attrs.data_units) == get_quantity("m/s")
         assert get_quantity(out.attrs.distance_units) == get_quantity("ft")
 
+    def test_remove_units(self, random_patch):
+        """Ensure set coords can remove units."""
+        patch = random_patch.set_units("m", distance="m")
+        # ensure data units can be removed
+        new_none = patch.set_units(None)
+        assert new_none.attrs.data_units is None
+        new_empty_str = patch.set_units("")
+        assert new_empty_str.attrs.data_units is None
+        # ensure coord units can be removed
+        new_dist_none = random_patch.set_units(distance=None)
+        assert new_dist_none.get_coord("distance").units is None
+        new_dist_empty = random_patch.set_units(distance="")
+        assert new_dist_empty.get_coord("distance").units is None
+
 
 class TestConvertUnits:
     """Tests for converting from one unit to another."""
