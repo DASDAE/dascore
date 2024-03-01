@@ -45,8 +45,8 @@ def set_units(
     >>> patch_with_units = patch.set_units("km/ms")
     >>> # set the units of the distance coordinate
     >>> patch_feet = patch.set_units(distance='feet')
-    >>> # remove units.
-    >>> patch_removed_units = patch_with_units(None)
+    >>> # remove data units
+    >>> patch_removed_units = patch_with_units.set_units(None)
     """
     new_coords = patch.coords.set_units(**kwargs)
     new_attrs = _update_attrs_coord_units(patch, data_units, new_coords)
