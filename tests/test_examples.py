@@ -37,6 +37,11 @@ class TestGetExamplePatch:
         out = dc.get_example_patch("sin_wav")
         assert isinstance(out, dc.Patch)
 
+    def test_data_file_name(self):
+        """Ensure get_example_spool works on a datafile."""
+        spool = dc.get_example_spool("dispersion_event.h5")
+        assert isinstance(spool, dc.BaseSpool)
+
 
 class TestGetExampleSpool:
     """Test suite for `get_example_spool`."""
@@ -50,6 +55,11 @@ class TestGetExampleSpool:
         """Ensure a bad key raises expected error."""
         with pytest.raises(UnknownExampleError, match="No example spool"):
             dc.get_example_spool("NotAnExampleRight????")
+
+    def test_data_file_name(self):
+        """Ensure get_example_spool works on a datafile."""
+        spool = dc.get_example_spool("dispersion_event.h5")
+        assert isinstance(spool, dc.BaseSpool)
 
 
 class TestRickerMoveout:

@@ -71,6 +71,9 @@ COMMON_IO_READ_TESTS = {
 # only flat patches can be written to WAV, don't put it here.
 COMMON_IO_WRITE_TESTS = (PickleIO(), DASDAEV1())
 
+# Specifies data registry entries which should not be tested.
+SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv"}
+
 
 @cache
 def _cached_read(path, io=None):
@@ -111,10 +114,10 @@ def io_path_tuple(request):
 @pytest.fixture(scope="session", params=get_registry_df()["name"])
 def data_file_path(request):
     """A fixture of all data files. Will download if needed."""
-    # TODO remove this segy skip once we support it.
     param = request.param
-    if param.endswith("csv"):
-        pytest.skip("Not a DAS file.")
+    # Some files should be skipped if not DAS or too big.
+    if str(param) in SKIP_DATA_FILES:
+        pytest.skip(f"Skipping {param}")
     return fetch(request.param)
 
 

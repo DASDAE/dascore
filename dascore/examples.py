@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
 
 import numpy as np
@@ -413,10 +414,20 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     print(df.to_markdown(index=False, stralign="center"))
     ```
 
+    Using an entry from the data_registry file is also supported.
+    If multiple patches are contained in the specified file, only the
+    first is returned. Data registry files are:
+    ```{python}
+    #| echo: false
+    #| output: asis
+    from dascore.utils.downloader import get_registry_df
+    print(get_registry_df()[['name']].to_markdown(index=False, stralign="center"))
+    ```
+
     Parameters
     ----------
     example_name
-        The name of the example to load. Options are:
+        The name of the example to load. Options are listed above.
     **kwargs
         Passed to the corresponding functions to generate data.
 
@@ -426,6 +437,9 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
         unregistered patch is requested.
     """
     if example_name not in EXAMPLE_PATCHES:
+        # Allow the example name to be a data registry entry.
+        with suppress(ValueError):
+            return dc.spool(fetch(example_name))[0]
         msg = (
             f"No example patch registered with name {example_name} "
             f"Registered example patches are {list(EXAMPLE_PATCHES)}"
@@ -451,6 +465,15 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
     print(df.to_markdown(index=False, stralign="center"))
     ```
 
+    Using an entry from the data_registry file is also supported.
+    These include:
+    ```{python}
+    #| echo: false
+    #| output: asis
+    from dascore.utils.downloader import get_registry_df
+    print(get_registry_df()[['name']].to_markdown(index=False, stralign="center"))
+    ```
+
     Parameters
     ----------
     example_name
@@ -460,9 +483,13 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
 
     Raises
     ------
-        UnknownExample if unregistered patch is requested.
+    (`UnknownExampleError`)['dascore.examples.UnknownExampleError`] if
+        unregistered patch is requested.
     """
     if example_name not in EXAMPLE_SPOOLS:
+        # Allow the example spool to be a data registry file.
+        with suppress(ValueError):
+            return dc.spool(fetch(example_name))
         msg = (
             f"No example spool registered with name {example_name} "
             f"Registered example spools are {list(EXAMPLE_SPOOLS)}"
