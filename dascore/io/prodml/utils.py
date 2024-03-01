@@ -115,7 +115,7 @@ def _get_prodml_attrs(fi, extras=None) -> list[dict]:
         t_coord = _get_time_coord(node)
         info.update(t_coord.get_attrs_dict("time"))
         info.update(_get_data_unit_and_type(node))
-        info["dims"] = ["time", "distance"]
+        info["dims"] = _get_dims(node)
         if extras is not None:
             info.update(extras)
         info["coords"] = {"time": t_coord, "distance": d_coord}
