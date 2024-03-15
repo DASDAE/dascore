@@ -1,4 +1,4 @@
-"""Utilities for terra15."""
+"""Utilities for prodML."""
 from __future__ import annotations
 
 import dascore as dc
@@ -12,7 +12,7 @@ from dascore.utils.misc import iterate, maybe_get_attrs, unbyte
 
 def _get_prodml_version_str(hdf_fi) -> str:
     """Return the version string for prodml file."""
-    # define a few root attrs that act as a "fingerprint" for terra15 files
+    # define a few root attrs that act as a "fingerprint" for prodML files
 
     acquisition = getattr(hdf_fi.root, "Acquisition", None)
     if acquisition is None:
