@@ -75,7 +75,7 @@ def _get_attr_dict(header):
         "instrument": "intrument_id",
         "experiment": "acquisition_id",
     }
-    out = {}
+    out = {"data_category": "DAS"}
     for head_name, attr_name in attr_map.items():
         value = header[head_name]
         if hasattr(value, "shape"):
