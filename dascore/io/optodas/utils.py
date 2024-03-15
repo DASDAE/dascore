@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import dascore as dc
 import dascore.core
-from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
 from dascore.utils.hdf5 import unpack_scalar_h5_dataset
-from dascore.utils.misc import maybe_get_attrs, unbyte
+from dascore.utils.misc import unbyte
 
 # --- Getting format/version
 
@@ -51,20 +50,6 @@ def _get_coord_manager(header):
 
         coords[dim] = get_coord(min=start, max=stop, step=step, units=unit)
     return dascore.core.get_coord_manager(coords=coords, dims=dims)
-
-
-def _get_data_unit_and_type(node):
-    """Get the data type and units."""
-    attrs = node._v_attrs
-    attr_map = {
-        "RawDescription": "data_type",
-        "RawDataUnit": "data_units",
-    }
-    out = maybe_get_attrs(attrs, attr_map)
-    if (data_type := out.get("data_type")) is not None:
-        clean = data_type.lower().replace(" ", "_")
-        out["data_type"] = clean if clean in VALID_DATA_TYPES else ""
-    return out
 
 
 def _get_attr_dict(header):
