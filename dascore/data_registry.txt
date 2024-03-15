@@ -18,3 +18,4 @@ dispersion_event.h5 598c8baa2a5610c930e1c003f2ba02da13f8d8686e3ccf2a034e94bfc5e1
 PoroTomo_iDAS_1.h5 967a2885e79937ac0426b2022a9c03d5f24790ecf3abbaa9a16eb28055566fc6 https://github.com/dasdae/test_data/raw/master/das/PoroTomo_iDAS_1.h5
 DASDMSShot00_20230328155653619.das 12ac53f78b32d8b0e32cc674c43ff5b4c79a6c8b19de2ad577fd481679b2b7b3 https://github.com/dasdae/test_data/raw/master/das/DASDMSShot00_20230328155653619.das
 whale_1.hdf5 a09922969e740307bf26dc6ffa7fb9fbb834dc7cd7d4ced02c66b159fb1ce0cd http://piweb.ooirsn.uw.edu/das/data/Optasense/NorthCable/TransmitFiber/North-C1-LR-P1kHz-GL50m-Sp2m-FS200Hz_2021-11-03T15_06_51-0700/North-C1-LR-P1kHz-GL50m-Sp2m-FS200Hz_2021-11-04T020002Z.h5
+febus_1.h5 73eba2b6e183b3bca51f8a1448c3b423c979d05ce6c18bfd7fb76b4f9bda5c0b https://github.com/dasdae/test_data/raw/master/das/febus_1.h5
