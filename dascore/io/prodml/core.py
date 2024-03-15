@@ -31,12 +31,12 @@ class ProdMLV2_0(FiberIO):  # noqa
 
     def get_format(self, resource: PyTablesReader) -> tuple[str, str] | bool:
         """
-        Return True if file contains terra15 version 2 data else False.
+        Return True if file contains prodML version 2 data else False.
 
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            A path to the file which may contain prodML data.
         """
         version_str = _get_prodml_version_str(resource)
         if version_str:

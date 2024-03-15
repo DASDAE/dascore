@@ -24,6 +24,7 @@ from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.h5simple import H5Simple
+from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.segy import SegyV2
@@ -47,6 +48,7 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    OptoDASV8(): ("opto_das_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
@@ -268,7 +270,7 @@ class TestRead:
             stop = getattr(attrs_init, f"{dim}_max")
             duration = stop - start
             # first test double ended query
-            trim_tuple = (start + duration / 10, start + 2 * duration // 10)
+            trim_tuple = (start + duration / 10, start + 2 * duration / 10)
             spool = io.read(path, **{dim: trim_tuple})
             assert len(spool) == 1
             patch = spool[0]
