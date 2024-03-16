@@ -1,4 +1,4 @@
-"""Utilities for OptoDAS."""
+"""Utilities for Febus."""
 from __future__ import annotations
 
 import dascore as dc
@@ -10,20 +10,36 @@ from dascore.utils.misc import unbyte
 # --- Getting format/version
 
 
-def _get_opto_das_version_str(hdf_fi) -> str:
-    """Return the version string for OptoDAS file."""
+def _get_febus_version_str(hdf_fi) -> str:
+    """Return the version string for febus file."""
     # define a few root attrs that act as a "fingerprint"
-    expected_attrs = (
-        "acqSpec",
-        "header",
-        "cableSpec",
-        "data",
-        "fileVersion",
-    )
-    if not all([x in hdf_fi for x in expected_attrs]):
-        return ""
-    version_str = str(unbyte(hdf_fi["fileVersion"][()]))
-    return version_str
+    # all Febus DAS files have folders that start with fa
+    inst_keys = sorted(hdf_fi.keys())
+    expected_source_attrs = {
+        "AmpliPower",
+        "Hostname",
+        "WholeExtent",
+        "SamplingRate",
+    }
+    # iterate instrument keys
+    is_febus = all([x.startswith("fa") for x in inst_keys])
+    # Version 1, or what I think is version one (eg Valencia PubDAS data)
+    # did not include a Version attr in Source dataset, so we use that as
+    # the default.
+    version = "1"
+    for inst_key in inst_keys:
+        inst = hdf_fi[inst_key]
+        source_keys = set(inst.keys())
+        is_febus = is_febus and all(x.startswith("Source") for x in source_keys)
+        for source_key in source_keys:
+            source = inst[source_key]
+            # If the version is set in a Source use that version.
+            # Hopefully this is the file version...
+            version = source.attrs.get("Version", version)
+            is_febus = is_febus and expected_source_attrs.issubset(set(source.attrs))
+    if is_febus:
+        return version
+    return ""
 
 
 def _get_coord_manager(header):
@@ -69,8 +85,8 @@ def _get_attr_dict(header):
     return out
 
 
-def _get_opto_das_attrs(fi) -> dict:
-    """Scan a OptoDAS file, return metadata."""
+def _get_febus_attrs(fi) -> dict:
+    """Scan a febus file, return metadata."""
     header = fi["header"]
     cm = _get_coord_manager(header)
     attrs = _get_attr_dict(header)
@@ -78,9 +94,9 @@ def _get_opto_das_attrs(fi) -> dict:
     return attrs
 
 
-def _read_opto_das(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
-    """Read the OptoDAS values into a patch."""
-    attrs = _get_opto_das_attrs(fi)
+def _read_febus(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
+    """Read the febus values into a patch."""
+    attrs = _get_febus_attrs(fi)
     data_node = fi["data"]
     coords = attrs.pop("coords")
     cm, data = coords.select(array=data_node, distance=distance, time=time)
