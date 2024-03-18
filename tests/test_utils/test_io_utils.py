@@ -215,3 +215,12 @@ class TestObsPy:
         st = obspy.Stream([])
         patch = dc.io.obspy_to_patch(st)
         assert not patch.dims
+
+    def test_example_event(self, event_patch_2):
+        """Ensure example event can be converted to stream."""
+        obspy = pytest.importorskip("obspy")
+        # make patch smaller to make test faster
+        patch = event_patch_2.select(distance=(500, 550))
+        st = patch.io.to_obspy()
+        assert isinstance(st, obspy.Stream)
+        assert len(st) == len(patch.get_coord("distance"))
