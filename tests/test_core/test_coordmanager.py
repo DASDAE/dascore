@@ -556,6 +556,26 @@ class TestSelect:
         new, _ = coord_manager.select(time=..., samples=True)
         assert new == coord_manager
 
+    def test_select_shared_dims(self, coord_manager):
+        """Ensure selections work when queries share a dimension."""
+        dist = coord_manager.get_coord("distance")
+        new_coord = np.arange(len(dist))
+        cm = coord_manager.update_coords(
+            d1=("distance", new_coord),
+            d2=("distance", new_coord),
+        )
+        # Relative values should raise when the same dim is targeted by
+        # multiple coords.
+        with pytest.raises(CoordError):
+            cm.select(d1=(3, None), d2=(None, 6), relative=True)
+        # Same for samples.
+        with pytest.raises(CoordError):
+            cm.select(d1=(3, None), d2=(None, 6), samples=True)
+        # But normal values should work and produce a shape of 4 for this case.
+        out, _ = cm.select(d1=(3, None), d2=(None, 6))
+        distance_dim = out.dims.index("distance")
+        assert out.shape[distance_dim] == 4
+
 
 class TestEquals:
     """Tests for coord manager equality."""

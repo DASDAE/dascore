@@ -885,6 +885,12 @@ class CoordArray(BaseCoord):
             out = out & (values <= val2)
         if not np.any(out):
             return self.empty(), out
+        if np.all(out):
+            return self, slice(None, None)
+        # Convert boolean to int indexes because these are supported for
+        # indexing pytables arrays but booleans are not.
+        if len(self.shape) == 1:
+            out = np.arange(len(out))[out]
         return self.new(values=values[out]), out
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
