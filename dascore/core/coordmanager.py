@@ -44,6 +44,7 @@ import warnings
 from collections import defaultdict
 from collections.abc import Mapping, Sequence, Sized
 from functools import reduce
+from itertools import zip_longest
 from operator import and_, or_
 from typing import Annotated, Any, TypeVar
 
@@ -560,6 +561,23 @@ class CoordManager(DascoreBaseModel):
             dim_map[coord_name] = tuple(old_to_new[x] for x in coord_dims)
         return self.__class__(dims=dims, coord_map=coord_map, dim_map=dim_map)
 
+    def _get_single_dim_kwarg_list(self, kwargs):
+        """Get a list of dicts where each dict uses a dimension at most once."""
+        used_coords = sorted(set(self.coord_map) & set(kwargs))
+        dims = [self.dim_map[x] for x in used_coords]
+        # No duplicate usage, just return.
+        if len(set(dims)) == len(dims):
+            return [{i: kwargs[i] for i in used_coords}]
+        # We need to split kwargs up so each dimension is used no more
+        # than once in each dict (element of the list).
+        dim_dicts = defaultdict(list)
+        for coord, dim in zip(used_coords, dims):
+            dim_dicts[dim].append(coord)
+        out = []
+        for args in zip_longest(*dim_dicts.values()):
+            out.append({x: kwargs[x] for x in args if x is not None})
+        return out
+
     def select(
         self, array: MaybeArray = None, relative=False, samples=False, **kwargs
     ) -> tuple[Self, MaybeArray]:
@@ -578,11 +596,24 @@ class CoordManager(DascoreBaseModel):
             Used to specify select arguments. Can be of the form
             {coord_name: (lower_limit, upper_limit)}.
         """
-        new_coords, indexers = _get_indexers_and_new_coords_dict(
-            self, kwargs, samples=samples, relative=relative
-        )
-        new_cm = self.update(**new_coords)
-        return new_cm, self._get_new_data(indexers, array)
+        # Relative or sample queries cannot be performed multiple times on
+        # the same dimension (since multiple coords can reference the same dim)
+        if relative or samples:
+            used_dims = [self.dim_map[x] for x in kwargs if x in self.coord_map]
+            if len(set(used_dims)) < len(used_dims):
+                msg = (
+                    f"Cannot use {kwargs} for query; some coords " f"share a dimension."
+                )
+                raise CoordError(msg)
+        # Otherwise, we need to sort through kwargs and call in a loop.
+        kwarg_list = self._get_single_dim_kwarg_list(kwargs)
+        for kwargs in kwarg_list:
+            new_coords, indexers = _get_indexers_and_new_coords_dict(
+                self, kwargs, samples=samples, relative=relative
+            )
+            self = self.update(**new_coords)
+            array = self._get_new_data(indexers, array)
+        return self, array
 
     def _get_new_data(self, indexer, array: MaybeArray) -> MaybeArray:
         """Get new data array after applying some trimming."""

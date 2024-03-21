@@ -171,6 +171,8 @@ class TestScanDASDAE:
 class TestRoundTrips:
     """Tests for round-tripping various patches/spools."""
 
+    formatter = DASDAEV1()
+
     def test_write_patch_with_lat_lon(
         self, random_patch_with_lat_lon, tmp_path_factory
     ):
@@ -202,8 +204,7 @@ class TestRoundTrips:
         time_max = time.max() + 3 * time.step
         empty_patch = patch.select(time=(time_max, ...))
         empty_patch.io.write(path, "dasdae")
-        formatter = DASDAEV1()
-        spool = formatter.read(path)
+        spool = self.formatter.read(path)
         new_patch = spool[0]
         assert empty_patch.equals(new_patch)
 
@@ -217,7 +218,31 @@ class TestRoundTrips:
             time_min="2023-06-13T15:38:00.49953408",
         )
         patch.io.write(path, "dasdae")
-        formatter = DASDAEV1()
-        spool = formatter.read(path)
+
+        spool = self.formatter.read(path)
         new_patch = spool[0]
         assert patch.equals(new_patch)
+
+    def test_roundtrip_datetime_coord(self, tmp_path_factory, random_patch):
+        """Ensure a patch with an attached datetime coord works."""
+        path = tmp_path_factory.mktemp("roundtrip_datetme_coord") / "out.h5"
+        dist = random_patch.get_coord("distance")
+        dt = dc.to_datetime64(np.zeros_like(dist))
+        dt[0] = dc.to_datetime64("2017-09-17")
+        new = random_patch.update_coords(dt=("distance", dt))
+        new.io.write(path, "dasdae")
+        patch = dc.spool(path, file_format="DASDAE")[0]
+        assert isinstance(patch, dc.Patch)
+
+    def test_roundtrip_nullish_datetime_coord(self, tmp_path_factory, random_patch):
+        """Ensure a patch with an attached datetime coord with nulls works."""
+        path = tmp_path_factory.mktemp("roundtrip_datetme_coord") / "out.h5"
+        dist = random_patch.get_coord("distance")
+        dt = dc.to_datetime64(np.zeros_like(dist))
+        dt[~dt.astype(bool)] = np.datetime64("nat")
+        dt[0] = dc.to_datetime64("2017-09-17")
+        dt[-4] = dc.to_datetime64("2020-01-03")
+        new = random_patch.update_coords(dt=("distance", dt))
+        new.io.write(path, "dasdae")
+        patch = dc.spool(path, file_format="DASDAE")[0]
+        assert isinstance(patch, dc.Patch)

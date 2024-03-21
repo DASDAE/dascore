@@ -1027,10 +1027,9 @@ class TestNonOrderedArrayCoords:
         min_v, max_v = np.min(random_coord.values), np.max(random_coord.values)
         dist = max_v - min_v
         val1, val2 = min_v + 0.2 * dist, max_v - 0.2 * dist
-        new, bool_array = random_coord.select((val1, val2))
+        new, ind_array = random_coord.select((val1, val2))
         assert np.all(new.values >= val1)
         assert np.all(new.values <= val2)
-        assert bool_array.sum() == len(new)
 
     def test_sort(self, random_coord):
         """Ensure the coord can be ordered."""
