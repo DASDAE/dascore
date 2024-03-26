@@ -2,7 +2,8 @@
 Module containing patch processing routines.
 """
 from __future__ import annotations
-from .aggregate import aggregate
+
+import dascore.proc.aggregate as agg
 from .basic import *  # noqa
 from .coords import *  # noqa
 from .correlate import correlate
