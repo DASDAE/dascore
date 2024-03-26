@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore.proc.aggregate import _AGG_FUNCS, aggregate
 
 
@@ -14,7 +15,7 @@ class TestBasicAggregations:
     def distance_aggregated_patch(self, request, random_patch):
         """Apply all supported aggregations along distance axis."""
         agg = request.param
-        return aggregate(random_patch, dim="distance", method=agg)
+        return aggregate(random_patch, dim="distance", method=agg, keep_dims=True)
 
     def test_dimension_collapsed(self, distance_aggregated_patch):
         """Ensure the aggregate dimension was collapsed to len 1."""
@@ -43,3 +44,27 @@ class TestBasicAggregations:
         axis = random_patch.dims.index("distance")
         assert out.data.shape[axis] == 1
         assert np.allclose(random_patch.data[-1, :], out.data[0, :])
+
+    def test_no_dim(self, random_patch):
+        """Ensure no dimension argument behaves like numpy."""
+        out = random_patch.aggregate(method="mean", keep_dims=True)
+        assert np.all(np.mean(random_patch.data) == out.data)
+        # now test without keeping dims
+        out = random_patch.aggregate(method="mean", keep_dims=False)
+        assert out == np.mean(random_patch.data)
+
+    @pytest.mark.parametrize("method", list(_AGG_FUNCS))
+    def test_named_aggregations(self, random_patch, method):
+        """Simply run the named aggregations."""
+        patch1 = getattr(random_patch, method)(dim="time", keep_dims=True)
+        patch2 = getattr(random_patch, method)(dim="distance", keep_dims=False)
+        assert isinstance(patch1, dc.Patch)
+        assert isinstance(patch2, dc.Patch)
+
+
+class TestApplyOperators:
+    """Ensure aggregated patches can be used as operators for arithmetic."""
+
+    def test_complete_reduction(self, random_patch):
+        """Ensure a patch with complete reduction works."""
+        assert False

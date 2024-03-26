@@ -234,12 +234,21 @@ class Patch:
     median_filter = dascore.proc.median_filter
     savgol_filter = dascore.proc.savgol_filter
     gaussian_filter = dascore.proc.gaussian_filter
-    aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
     real = dascore.proc.real
     imag = dascore.proc.imag
     angle = dascore.proc.angle
     resample = dascore.proc.resample
+    # Add aggregations
+    aggregate = dascore.proc.agg.aggregate
+    min = dascore.proc.agg.min
+    max = dascore.proc.agg.max
+    mean = dascore.proc.agg.mean
+    median = dascore.proc.agg.median
+    std = dascore.proc.agg.std
+    first = dascore.proc.agg.first
+    last = dascore.proc.agg.last
+    sum = dascore.proc.agg.sum
 
     def iresample(self, *args, **kwargs):
         """Deprecated method."""
