@@ -552,6 +552,22 @@ class TestCoords:
         new_coords = new.coords.coord_map
         assert isinstance(new_coords["time"], CoordRange)
 
+    def test_seconds(self, random_patch_with_lat):
+        """Ensure we can get number of seconds in the patch."""
+        sampling_interval = random_patch_with_lat.attrs["time_step"] / np.timedelta64(
+            1, "s"
+        )
+        expected = (
+            random_patch_with_lat.attrs["time_max"]
+            - random_patch_with_lat.attrs["time_min"]
+        ) / np.timedelta64(1, "s") + sampling_interval
+        assert random_patch_with_lat.seconds == expected
+
+    def test_channel_count(self, random_patch_with_lat):
+        """Ensure we can get number of channels in the patch."""
+        expected = len(random_patch_with_lat.coords["distance"])
+        assert random_patch_with_lat.channel_count == expected
+
 
 class TestApplyOperator:
     """Tests for applying various ufunc-type operators."""

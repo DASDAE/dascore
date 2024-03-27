@@ -80,7 +80,7 @@ def evenly_sampled_time_delta_coord():
 @pytest.fixture(scope="session")
 @register_func(COORDS)
 def monotonic_float_coord():
-    """Create coordinates which are evenly sampled."""
+    """Create coordinates which are not evenly sampled."""
     ar = np.cumsum(np.abs(np.random.rand(100)))
     return get_coord(data=ar)
 
@@ -242,6 +242,7 @@ class TestBasics:
         out = coord.snap()
         assert isinstance(out, BaseCoord)
         assert out.shape == coord.shape
+        assert out.size == coord.size
         # sort order should stay the same
         if coord.reverse_sorted:
             assert out.reverse_sorted
@@ -327,6 +328,12 @@ class TestBasics:
         msg = "Cannot specify both data and values"
         with pytest.raises(CoordError, match=msg):
             get_coord(data=data, values=data)
+
+    def test_coord_range(self, monotonic_float_coord):
+        """Ensure that coord_range raises an error for not evenly sampled patches."""
+        msg = "has to be called on an evenly sampled"
+        with pytest.raises(CoordError, match=msg):
+            monotonic_float_coord.coord_range()
 
 
 class TestCoordSummary:
@@ -859,6 +866,7 @@ class TestCoordRange:
         ar = np.arange(start, stop, step)
         coord = get_coord(start=start, stop=stop, step=step)
         assert coord.shape == ar.shape
+        assert coord.size == ar.size
 
     def test_unchanged_len(self):
         """Ensure an array converted to Coord range has same len. See #229."""

@@ -354,6 +354,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         _, unit = get_factor_and_unit(self.units, simplify=True)
         return self.convert_units(unit)
 
+    def coord_range(self):
+        """Return a scaler value for the coordinate (e.g., number of seconds)."""
+        if not self.evenly_sampled:
+            raise CoordError("coord_range has to be called on an evenly sampled data.")
+        return self.max() - self.min() + self.step
+
     @abc.abstractmethod
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the contents of the coord. Return new coord and slice for sorting."""

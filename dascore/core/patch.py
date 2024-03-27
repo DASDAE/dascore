@@ -161,7 +161,7 @@ class Patch:
 
     @property
     def data(self) -> ArrayLike:
-        """Return the dimensions contained in patch."""
+        """Return the data contained in patch."""
         return self._data
 
     @property
@@ -171,7 +171,7 @@ class Patch:
 
     @property
     def size(self) -> tuple[int, ...]:
-        """Return the shape of the data array."""
+        """Return the size of the data array."""
         return self.coords.size
 
     @property

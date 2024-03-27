@@ -950,9 +950,8 @@ class CoordManager(DascoreBaseModel):
         return self.get_coord(coord_name).size
 
     def coord_range(self, coord_name: str):
-        """Return the coordinate scaler value (e.g., number of seconds)."""
-        coord = self.get_coord(coord_name)
-        return coord.max() - coord.min() + coord.step
+        """Return a scaler value for the coordinate (e.g., number of seconds)."""
+        return self.get_coord(coord_name).coord_range()
 
 
 def get_coord_manager(
