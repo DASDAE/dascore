@@ -324,6 +324,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return self.data.shape
 
     @property
+    def size(self) -> int:
+        """Return the size of the coordinate data."""
+        return np.prod(self.shape)
+
+    @property
     def evenly_sampled(self) -> tuple[int, ...]:
         """Returns True if the coord is evenly sampled."""
         return self._evenly_sampled
@@ -348,6 +353,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Simplify the coordinate units."""
         _, unit = get_factor_and_unit(self.units, simplify=True)
         return self.convert_units(unit)
+
+    def coord_range(self):
+        """Return a scaler value for the coordinate (e.g., number of seconds)."""
+        if not self.evenly_sampled:
+            raise CoordError("coord_range has to be called on an evenly sampled data.")
+        return self.max() - self.min() + self.step
 
     @abc.abstractmethod
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:

@@ -256,19 +256,19 @@ class TestBasicCoordManager:
         assert isinstance(coord_manager.size, int | np.int_)
 
     def test_min(self, basic_coord_manager):
-        """Ensure we can git min value."""
+        """Ensure we can get min value."""
         expected = np.min(basic_coord_manager.time.data).astype(np.int64)
         got = basic_coord_manager.min("time").astype(np.int64)
         assert np.isclose(got, expected)
 
     def test_max(self, basic_coord_manager):
-        """Ensure we can git max value."""
+        """Ensure we can get max value."""
         expected = np.max(basic_coord_manager.time.data).astype(np.int64)
         got = basic_coord_manager.max("time").astype(np.int64)
         assert np.isclose(got, expected)
 
     def test_step(self, basic_coord_manager):
-        """Ensure we can git min value."""
+        """Ensure we can get min value."""
         expected = basic_coord_manager.time.step
         assert basic_coord_manager.step("time") == expected
 
@@ -296,6 +296,19 @@ class TestBasicCoordManager:
         for dim, coord in iter(basic_coord_manager):
             expected = basic_coord_manager.get_coord(dim)
             assert all_close(coord, expected)
+
+    def test_coord_size(self, random_patch):
+        """Ensure we can get size of the coordinate."""
+        expected = len(random_patch.coords["time"])
+        assert random_patch.coords.coord_size("time") == expected
+
+    def test_coord_range(self, random_patch):
+        """Ensure we can get a scaler value for the coordinate."""
+        coord_array = random_patch.coords["time"]
+        expected = (
+            np.max(coord_array) - np.min(coord_array) + random_patch.attrs["time_step"]
+        )
+        assert random_patch.coords.coord_range("time") == expected
 
 
 class TestCoordManagerInputs:

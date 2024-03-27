@@ -82,7 +82,7 @@ from dascore.utils.models import (
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
 
 
-def _validate_select_coords(coord, coord_name):
+def _validate_select_coords(coord, coord_name: str):
     """Ensure multi-dims are not used."""
     if not len(coord.shape) == 1:
         msg = (
@@ -92,7 +92,7 @@ def _validate_select_coords(coord, coord_name):
         raise CoordError(msg)
 
 
-def _indirect_coord_updates(cm, dim_name, coord_name, reduction, new_coords):
+def _indirect_coord_updates(cm, dim_name, coord_name: str, reduction, new_coords):
     """
     Applies trim to coordinates.
 
@@ -677,7 +677,7 @@ class CoordManager(DascoreBaseModel):
 
     @property
     def size(self):
-        """Return the shape of the dimensions."""
+        """Return the size of the patch data matrix."""
         return np.prod(self.shape)
 
     def validate_data(self, data):
@@ -929,21 +929,29 @@ class CoordManager(DascoreBaseModel):
             raise CoordError(msg)
         return self.coord_map[coord_name]
 
-    def min(self, coord_name):
+    def min(self, coord_name: str):
         """Return the minimum value of a coordinate."""
         return self.get_coord(coord_name).min()
 
-    def max(self, coord_name):
+    def max(self, coord_name: str):
         """Return the maximum value of a coordinate."""
         return self.get_coord(coord_name).max()
 
-    def step(self, coord_name):
+    def step(self, coord_name: str):
         """Return the coordinate step."""
         return self.get_coord(coord_name).step
 
-    def get_array(self, coord_name) -> np.ndarray:
+    def get_array(self, coord_name: str) -> np.ndarray:
         """Return the coordinate values as a numpy array."""
         return np.array(self.get_coord(coord_name))
+
+    def coord_size(self, coord_name: str) -> int:
+        """Return the coordinate size."""
+        return self.get_coord(coord_name).size
+
+    def coord_range(self, coord_name: str):
+        """Return a scaler value for the coordinate (e.g., number of seconds)."""
+        return self.get_coord(coord_name).coord_range()
 
 
 def get_coord_manager(
