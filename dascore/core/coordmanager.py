@@ -82,7 +82,7 @@ from dascore.utils.models import (
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
 
 
-def _validate_select_coords(coord, coord_name):
+def _validate_select_coords(coord, coord_name: str):
     """Ensure multi-dims are not used."""
     if not len(coord.shape) == 1:
         msg = (
@@ -92,7 +92,7 @@ def _validate_select_coords(coord, coord_name):
         raise CoordError(msg)
 
 
-def _indirect_coord_updates(cm, dim_name, coord_name, reduction, new_coords):
+def _indirect_coord_updates(cm, dim_name, coord_name: str, reduction, new_coords):
     """
     Applies trim to coordinates.
 
@@ -929,39 +929,30 @@ class CoordManager(DascoreBaseModel):
             raise CoordError(msg)
         return self.coord_map[coord_name]
 
-    def min(self, coord_name):
+    def min(self, coord_name: str):
         """Return the minimum value of a coordinate."""
         return self.get_coord(coord_name).min()
 
-    def max(self, coord_name):
+    def max(self, coord_name: str):
         """Return the maximum value of a coordinate."""
         return self.get_coord(coord_name).max()
 
-    def step(self, coord_name):
+    def step(self, coord_name: str):
         """Return the coordinate step."""
         return self.get_coord(coord_name).step
 
-    def get_array(self, coord_name) -> np.ndarray:
+    def get_array(self, coord_name: str) -> np.ndarray:
         """Return the coordinate values as a numpy array."""
         return np.array(self.get_coord(coord_name))
 
-    def coords_size(self, coord_name):
+    def coord_size(self, coord_name: str) -> int:
         """Return the coordinate size."""
-        # a better name for this function? (size is already taken)
-        # returning self.shape[self.coord_name] would be more efficient since
-        # we have already defined shape as a property?
-        return len(self.get_coord(coord_name))
+        return self.get_coord(coord_name).size
 
-    def range(self, coord_name):
+    def coord_range(self, coord_name: str):
         """Return the coordinate scaler value (e.g., number of seconds)."""
-        # not sure if we want to go with the "range" name.
-        if coord_name == "time":
-            sampling_interval = self.attrs["time_step"] / np.timedelta64(1, "s")
-            sec_max = self.attrs["time_max"] / np.timedelta64(1, "s")
-            sec_min = self.attrs["time_min"] / np.timedelta64(1, "s")
-            return sec_max - sec_min + sampling_interval
-        else:
-            return self.coords_size(coord_name)
+        coord = self.get_coord(coord_name)
+        return coord.max() - coord.min() + coord.step
 
 
 def get_coord_manager(

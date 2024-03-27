@@ -324,6 +324,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return self.data.shape
 
     @property
+    def size(self) -> int:
+        """Return the size of the coordinate data."""
+        return np.prod(self.shape)
+
+    @property
     def evenly_sampled(self) -> tuple[int, ...]:
         """Returns True if the coord is evenly sampled."""
         return self._evenly_sampled

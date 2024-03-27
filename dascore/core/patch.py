@@ -18,6 +18,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
+from dascore.utils.time import to_float
 from dascore.viz import VizPatchNameSpace
 
 
@@ -172,6 +173,16 @@ class Patch:
     def size(self) -> tuple[int, ...]:
         """Return the shape of the data array."""
         return self.coords.size
+
+    @property
+    def seconds(self) -> float:
+        """Return number of seconds in the time coordinate."""
+        return to_float(self.coords.coord_range("time"))
+
+    @property
+    def channel_count(self) -> int:
+        """Return number of channels in the distance coordinate."""
+        return self.coords.coord_size("distance")
 
     # --- basic patch functionality.
 
