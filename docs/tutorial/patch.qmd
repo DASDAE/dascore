@@ -36,8 +36,8 @@ A single file can be loaded like this:
 import dascore as dc
 from dascore.utils.downloader import fetch
 
-# first we download an example data file. You can replace
-# this with the path to your file.
+# here we download an example data file. You can replace
+# the next line with the path to your file.
 path = fetch("terra15_das_1_trimmed.hdf5")
 
 # then we get the first patch in the spool

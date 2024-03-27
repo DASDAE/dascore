@@ -677,7 +677,7 @@ class CoordManager(DascoreBaseModel):
 
     @property
     def size(self):
-        """Return the shape of the dimensions."""
+        """Return the size of the patch data matrix."""
         return np.prod(self.shape)
 
     def validate_data(self, data):
@@ -944,6 +944,24 @@ class CoordManager(DascoreBaseModel):
     def get_array(self, coord_name) -> np.ndarray:
         """Return the coordinate values as a numpy array."""
         return np.array(self.get_coord(coord_name))
+
+    def coords_size(self, coord_name):
+        """Return the coordinate size."""
+        # a better name for this function? (size is already taken)
+        # returning self.shape[self.coord_name] would be more efficient since
+        # we have already defined shape as a property?
+        return len(self.get_coord(coord_name))
+
+    def range(self, coord_name):
+        """Return the coordinate scaler value (e.g., number of seconds)."""
+        # not sure if we want to go with the "range" name.
+        if coord_name == "time":
+            sampling_interval = self.attrs["time_step"] / np.timedelta64(1, "s")
+            sec_max = self.attrs["time_max"] / np.timedelta64(1, "s")
+            sec_min = self.attrs["time_min"] / np.timedelta64(1, "s")
+            return sec_max - sec_min + sampling_interval
+        else:
+            return self.coords_size(coord_name)
 
 
 def get_coord_manager(
