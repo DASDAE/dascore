@@ -76,13 +76,13 @@ def correlate(
 
     >>> # Example 1
     >>> # Calculate cc for all channels as receivers and
-    >>> # the 10 m channel as the master channel. The new patch has dimensions
-    >>> # (lag_time, distance)
+    >>> # the 10 m channel as the master channel.
     >>> cc_patch = patch.correlate(distance = 10 * m)
 
     >>> # Example 2
     >>> # Calculate cc within (-2,2) sec of lag for all channels as receivers and
-    >>> # the 10 m channel as the master channel.
+    >>> # the 10 m channel as the master channel. The new patch has dimensions
+    >>> # (lag_time, distance)
     >>> cc_patch = patch.correlate(distance = 10 * m, lag = 2 * s)
 
     >>> # Example 3
