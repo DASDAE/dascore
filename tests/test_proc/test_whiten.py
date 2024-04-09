@@ -194,7 +194,7 @@ class TestWhiten:
             whitened_patch.coords.get_array("distance"),
         )
 
-    def test_whiten_ifft_true(self, test_patch):
+    def test_whiten_ifft_false(self, test_patch):
         """
         Ensure whiten function can return the result in the frequency domain
         when the ifft flag is set to True.
