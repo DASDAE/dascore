@@ -110,7 +110,7 @@ The data arrays should be read-only. This means you can't modify them, but must 
 ```python
 import numpy as np
 
-patch.data[:10] = 12  # wont work
+patch.data[:10] = 12  # won't work
 
 array = np.array(patch.data)  # this makes a copy
 array[:10] = 12  # then this works
