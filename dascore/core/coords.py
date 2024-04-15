@@ -844,6 +844,26 @@ class CoordRange(BaseCoord):
         # the min/max are needed for reverse sorted coord.
         return np.max([self.stop - self.step, self.start])
 
+    def change_length(self, length: int) -> Self:
+        """
+        Adjust the length of the coordinate by changing the end value.
+
+        This is useful for floating point coordinates who frequently suffer
+        from off by one errors.
+
+        Parameters
+        ----------
+        length
+            The output length.
+        """
+        if (current := len(self)) == length:
+            return self
+        diff = length - current
+        stop, step = self.stop, self.step
+        out = self.update(stop=stop + step * diff)
+        assert len(out) == length
+        return out
+
     @property
     def sorted(self) -> bool:
         """Returns true if sorted in ascending order."""
@@ -1237,7 +1257,8 @@ def get_coord(
         start, stop, step, monotonic = _maybe_get_start_stop_step(data)
         if start is not None:
             out = CoordRange(start=start, stop=stop, step=step, units=units)
-            return out
+            # The change_length call helps with float off by one issues.
+            return out.change_length(len(data))
         elif monotonic:
             return CoordMonotonicArray(values=data, units=units)
         return CoordArray(values=data, units=units)
