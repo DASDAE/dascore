@@ -878,6 +878,25 @@ class TestCoordRange:
         time_coord = get_coord(data=time)
         assert len(time) == len(time_coord)
 
+    def test_change_length_no_change(self, evenly_sampled_coord):
+        """Ensure change_length works when no length change is needed."""
+        new = evenly_sampled_coord.change_length(len(evenly_sampled_coord))
+        assert new == evenly_sampled_coord
+
+    def test_change_length_lengthen(self, evenly_sampled_float_coord_with_units):
+        """Ensure the length can increase."""
+        coord = evenly_sampled_float_coord_with_units
+        current = len(coord)
+        new = coord.change_length(current + 1)
+        assert len(new) == current + 1
+
+    def test_change_length_shorten(self, evenly_sampled_float_coord_with_units):
+        """Ensure the length can increase."""
+        coord = evenly_sampled_float_coord_with_units
+        current = len(coord)
+        new = coord.change_length(current - 1)
+        assert len(new) == current - 1
+
 
 class TestMonotonicCoord:
     """Tests for monotonic array coords."""
