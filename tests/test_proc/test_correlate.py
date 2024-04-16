@@ -98,3 +98,58 @@ class TestCorrelateInternal:
         # get calculated times, they should be close to lag times
         expected_times = distances / self.moveout_velocity
         assert np.allclose(lag_times, expected_times)
+
+    def test_correlation_freq_domain_patch(self, corr_patch):
+        """
+        Test correlation when the input patch is already in the frequency domain.
+        """
+        # perform FFT on the original patch to simulate frequency domain data
+        fft_patch = corr_patch.dft("time")
+        out = fft_patch.correlate(distance=0, samples=True)
+        # check if the data is real, as a simple proxy for being in the time domain
+        assert np.isrealobj(
+            out.data
+        ), "Expected the output data to be real, indicating time domain."
+        # check if the shape of the output is the same as the original patch
+        # (since no "lag" argument is used)
+        assert (
+            out.seconds == corr_patch.seconds
+        ), "Expected size of the output time coordinate to match the original patch"
+        assert (
+            out.channel_count == corr_patch.channel_count
+        ), "Expected size of the output distance coordinate to match the original patch"
+
+    def test_correlation_ifft_false(self, corr_patch):
+        """
+        Ensure correlate function can return the result in the frequency domain
+        when the ifft flag is set to Flase.
+        """
+        # return correlation in frequency domain
+        correlated_patch_freq_domain = corr_patch.correlate(
+            distance=2, samples=True, ifft=False
+        )
+
+        # check if the returned data is in the frequency domain
+        assert np.iscomplexobj(
+            correlated_patch_freq_domain.data
+        ), "Expected the output to be complex, indicating freq. domain representation."
+        # need to add asserts to test coords and attrs
+
+    def test_correlation_with_step(self, corr_patch):
+        """
+        Ensure the correlation function properly skips rows/columns according to
+        the step argument.
+        """
+        step_size = 2
+        out = corr_patch.correlate(distance=0, samples=True, step_size=step_size)
+        # Verify that only the correct indices have been considered in the output.
+        # Since `samples=True` and `distance=0`, we expect the first row/column to
+        # be used as the master channel.
+        input_shape = corr_patch.data.shape
+        dist_axis = corr_patch.dims.index("distance")
+        expected_indices = range(0, input_shape[dist_axis], step_size)
+        # check if the output data shape matches the expected number of correlations
+        expected_shape = len(expected_indices)
+        assert (
+            out.data.shape[dist_axis] == expected_shape
+        ), f"Expected shape {expected_shape}, but got {out.data.shape[dist_axis]}"

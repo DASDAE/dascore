@@ -197,7 +197,7 @@ class TestWhiten:
     def test_whiten_ifft_false(self, test_patch):
         """
         Ensure whiten function can return the result in the frequency domain
-        when the ifft flag is set to True.
+        when the ifft flag is set to Flase.
         """
         # whiten the patch and return in frequency domain
         whitened_patch_freq_domain = test_patch.whiten(smooth_size=5, ifft=False)
@@ -205,4 +205,4 @@ class TestWhiten:
         # check if the returned data is in the frequency domain
         assert np.iscomplexobj(
             whitened_patch_freq_domain.data
-        ), "Expected the data to be complex, indicating freq. domain representation."
+        ), "Expected the output to be complex, indicating freq. domain representation."
