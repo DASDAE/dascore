@@ -75,7 +75,9 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
 
 @patch_function()
 def integrate(
-    patch: PatchType, dim: Sequence[str] | str | None, definite: bool = False
+    patch: PatchType,
+    dim: Sequence[str] | str | None,
+    definite: bool = False,
 ) -> PatchType:
     """
     Integrate along a specified dimension using composite trapezoidal rule.
@@ -96,8 +98,8 @@ def integrate(
     Notes
     -----
     The number of dimensions will always remain the same regardless of `definite`
-    value. To remove dimensions with length 1, see
-    [squeeze](`dascore.proc.basic.squeeze`)
+    value. To remove dimensions with length 1,
+    see [squeeze](`dascore.proc.basic.squeeze`).
 
     Examples
     --------
