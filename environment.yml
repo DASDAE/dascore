@@ -11,6 +11,7 @@ dependencies:
   - xarray
   - pre-commit
   - pytables
+  - h5py
   - matplotlib
   - scipy>=1.10.0
   - findiff
