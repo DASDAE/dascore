@@ -197,6 +197,11 @@ class TestPatchAttrs:
         out = dict(attrs.items())
         assert out == attrs.model_dump()
 
+    def test_dims_match_attrs(self, random_patch):
+        """Ensure the dims from patch attrs matches patch dims."""
+        pat = random_patch.rename_coords(distance="channel")
+        assert pat.dims == pat.attrs.dim_tuple
+
 
 class TestSummaryAttrs:
     """Tests for summarizing a schema."""
@@ -287,6 +292,13 @@ class TestUpdateAttrs:
         attrs = random_attrs.update(distance_units="miles")
         expected = dc.get_quantity("miles")
         assert dc.get_quantity(attrs.coords["distance"].units) == expected
+
+    def test_update_from_coords(self, random_patch):
+        """Ensure attrs.update updates dims from coords."""
+        attrs = random_patch.attrs
+        new_patch = random_patch.rename_coords(distance="channel")
+        new = attrs.update(coords=new_patch.coords)
+        assert new.dim_tuple == new_patch.dims
 
 
 class TestMergeAttrs:

@@ -207,6 +207,13 @@ class TestInit:
         """Ensure patches have same size as data."""
         assert random_patch.size == random_patch.data.size
 
+    def test_new_patch_non_standard_dims(self):
+        """Ensure a non-standard dimension has matching dims in attrs and coords."""
+        data = np.random.rand(10, 5)
+        coords = {"time": np.arange(10), "can": np.arange(5)}
+        patch = dc.Patch(data=data, coords=coords, dims=("time", "can"))
+        assert patch.dims == patch.attrs.dim_tuple
+
 
 class TestNew:
     """Tests for `Patch.new` method."""
