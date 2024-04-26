@@ -93,6 +93,7 @@ class Patch:
         else:
             # ensure attrs conforms to coords
             attrs = dc.PatchAttrs.from_dict(attrs).update(coords=coords)
+        assert coords.dims == attrs.dim_tuple, "dim mismatch on coords and attrs"
         self._coords = coords
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))

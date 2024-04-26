@@ -228,6 +228,9 @@ class PatchAttrs(DascoreBaseModel):
     @property
     def dim_tuple(self):
         """Return a tuple of dimensions. The dims attr is a string."""
+        dim_str = self.dims
+        if not dim_str:
+            return tuple()
         return tuple(self.dims.split(","))
 
     def rename_dimension(self, **kwargs):
