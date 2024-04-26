@@ -46,15 +46,23 @@ jobs:
       env_file: "environment.yml"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - name: "get tags"
+        run: |
+          git fetch --tags --force # Retrieve annotated tags.
 
       - name: Get year week
         id: date
         run: echo "date=$(date +'%Y:%U')" >> $GITHUB_STATE
 
       - name: setup conda env
-        uses: conda-incubator/setup-miniconda@v2.2.0
+        uses: conda-incubator/setup-miniconda@v3
         with:
+          mamba-version: "*"
+          channels: conda-forge,defaults
+          environment-file: environment.yml
+          channel-priority: true
           miniforge-variant: Mambaforge
           miniforge-version: latest
           activate-environment: dascore

@@ -30,18 +30,24 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: "get tags"
+        run: |
+          git fetch --tags --force # Retrieve annotated tags.
 
       - name: Get tags
         run: git fetch --tags origin
 
       - name: Setup conda
-        uses: conda-incubator/setup-miniconda@v2
+        uses: conda-incubator/setup-miniconda@v3
         with:
-          miniconda-version: 'latest'
           python-version: "3.11"
+          mamba-version: "*"
+          channels: conda-forge,defaults
+          channel-priority: true
           activate-environment: dascore
           environment-file: environment.yml
           condarc-file: .github/test_condarc.yml

@@ -10,12 +10,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
+
+      - name: "get tags"
+        run: |
+          git fetch --tags --force # Retrieve annotated tags.
 
       - name: Setup conda
-        uses: conda-incubator/setup-miniconda@v2
+        uses: conda-incubator/setup-miniconda@v3
         with:
-          miniconda-version: 'latest'
+          mamba-version: "*"
+          channels: conda-forge,defaults
+          channel-priority: true
           python-version: "3.11"
           activate-environment: dascore
           environment-file: environment.yml
