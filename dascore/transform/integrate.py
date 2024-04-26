@@ -67,9 +67,10 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
         # get diffs along dimension
         stop_indexer = broadcast_for_index(ndim, ax, slice(1, None), fill=slice(None))
         start_indexer = broadcast_for_index(ndim, ax, slice(None, -1), fill=slice(None))
+        first_indexer = broadcast_for_index(ndim, ax, slice(0, 1), fill=slice(None))
         # get average values of trapezoid between points
-        avs = (array[stop_indexer] + array[start_indexer]) / (2 * dx_or_val)
-        array[stop_indexer] = np.cumsum(avs, axis=ax)
+        avs = (array[stop_indexer] + array[start_indexer]) * (dx_or_val / 2)
+        array[stop_indexer] = np.cumsum(avs, axis=ax) + array[first_indexer]
     return array, patch.coords  # coords shouldn't change
 
 
