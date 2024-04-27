@@ -12,7 +12,10 @@ def _update_attrs_coord_units(patch: dc.Patch, data_units, coords):
     """Update attributes with new units."""
     attrs = patch.attrs
     # set data units
-    attrs = attrs.update(data_units=data_units, coords=coords.to_summary_dict())
+    attrs = attrs.update(
+        data_units=data_units,
+        coords=coords.to_summary_dict(),
+    )
     return attrs
 
 

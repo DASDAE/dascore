@@ -900,7 +900,7 @@ class CoordManager(DascoreBaseModel):
         """Return the keys (coordinates) in the coord manager."""
         return self.coord_map.keys()
 
-    def to_summary_dict(self) -> dict[str, CoordSummary]:
+    def to_summary_dict(self) -> dict[str, CoordSummary | tuple[str, ...]]:
         """Convert the contents of the coordinate manager to a summary dict."""
         dim_map = self.dim_map
         out = {}
