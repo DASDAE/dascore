@@ -12,8 +12,8 @@ from dascore.utils.misc import unbyte
 
 def _get_febus_version_str(hdf_fi) -> str:
     """Return the version string for febus file."""
-    # define a few root attrs that act as a "fingerprint"
-    # all Febus DAS files have folders that start with fa
+    # Define a few root attrs that act as a "fingerprint"
+    # all Febus DAS files have folders that start with fa (I hope).
     inst_keys = sorted(hdf_fi.keys())
     expected_source_attrs = {
         "AmpliPower",
