@@ -92,3 +92,12 @@ class Febus2(FiberIO):
             resource, time=time, distance=distance, attr_cls=FebusPatchAttrs
         )
         return dc.spool(patches)
+
+
+class Febus1(Febus2):
+    """Support for Febus V 1.
+
+    This is here to support legacy febus (eg pubdas Valencia)
+    """
+
+    version = "1"

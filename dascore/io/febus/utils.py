@@ -18,7 +18,8 @@ from dascore.utils.misc import (
 # --- Getting format/version
 
 FebusSlice = namedtuple(
-    "FebusSlice", ["group", "group_name", "source", "source_name", "zone", "zone_name"]
+    "FebusSlice",
+    ["group", "group_name", "source", "source_name", "zone", "zone_name", "data_name"],
 )
 
 
@@ -35,8 +36,12 @@ def _flatten_febus_info(fi) -> tuple[FebusSlice, ...]:
                 # Skip time dataset (we only want zone groups).
                 if zone_name == "time":
                     continue
+                # get dataset name (not always StrainRate for older data)
+                possible_ds_names = list(zone.keys())
+                assert len(possible_ds_names) == 1
+                data_name = possible_ds_names[0]
                 zlice = FebusSlice(
-                    group, group_name, source, source_name, zone, zone_name
+                    group, group_name, source, source_name, zone, zone_name, data_name
                 )
                 out.append(zlice)
     return tuple(out)
@@ -94,8 +99,11 @@ def _get_febus_attrs(feb: FebusSlice) -> dict:
 def _get_time_coord(feb):
     """Get the time coordinate contained in the febus slice."""
     time = feb.source["time"]
+    # In older version time shape is different, always grap first eleemnt.
+    first_slice = tuple(0 for _ in time.shape)
+    t_0 = time[first_slice]
     # Data dimensions are block_index, time, distance
-    data_shape = feb.zone["StrainRate"].shape
+    data_shape = feb.zone[feb.data_name].shape
     n_blocks = data_shape[0]
     # Since the data have overlaps in each block's time dimension, we need to
     # trim the overlap off the time dimension to avoid having to merge blocks later.
@@ -114,8 +122,8 @@ def _get_time_coord(feb):
     total_start = time_origin - rows_to_remove * time_step + time_ids[0] * time_step
     total_end = total_start + total_time_rows * time_step
     time_coord = get_coord(
-        start=dc.to_datetime64(time[0] + total_start),
-        stop=dc.to_datetime64(time[0] + total_end),
+        start=dc.to_datetime64(t_0 + total_start),
+        stop=dc.to_datetime64(t_0 + total_end),
         step=dc.to_timedelta64(time_step),
     )
     return time_coord.change_length(total_time_rows)
@@ -123,7 +131,7 @@ def _get_time_coord(feb):
 
 def _get_distance_coord(feb):
     """Get the distance coordinate associated with febus slice."""
-    data_shape = feb.zone["StrainRate"].shape
+    data_shape = feb.zone[feb.data_name].shape
     total_distance_inds = data_shape[2]
     # Get spacing between channels (in m)
     distance_step = feb.zone.attrs["Spacing"][0]
@@ -210,11 +218,13 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
         return data_2d[time_slice], new_coord
 
     dist_coord, time_coord = cm.coord_map["distance"], cm.coord_map["time"]
-    data = febus.zone["StrainRate"]
+    data = febus.zone[febus.data_name]
     data_shape = data.shape
     overlap_percentage = _maybe_unpack(febus.zone.attrs.get("BlockOverlap", 0))
     skip_rows = int(np.round(overlap_percentage / 100 * data_shape[1]))
-    total_slice = list(broadcast_for_index(3, 1, slice(skip_rows, -skip_rows)))
+    # Need to handle case where skip_rows == 0
+    data_slice = slice(skip_rows, -skip_rows if skip_rows else None)
+    total_slice = list(broadcast_for_index(3, 1, data_slice))
     total_time_rows = data_shape[1] - 2 * skip_rows
     if distance:
         dist_coord, total_slice[2] = dist_coord.select(distance)
