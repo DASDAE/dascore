@@ -10,7 +10,7 @@ on:
     paths:
       - 'pyproject.toml'
       - '**.py'
-      - '.github/workflows/runtests.yml'
+      - '.github/workflows/*.yml'
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
@@ -113,14 +113,13 @@ jobs:
         shell: bash -l {0}
         run: ./.github/test_code.sh doctest
 
-      # upload coverage
-      - name: upload coverage
-        uses: codecov/codecov-action@v3
+      - uses: codecov/codecov-action@v4
         with:
-          file: ./coverage.xml
-          flags: unittests
-          name: PR_tests
           fail_ci_if_error: false
+          files: ./coverage.xml
+          flags: unittests # optional
+          name: PR_tests # optional
+          token: ${{ secrets.CODECOV_TOKEN }} # required
 
 # This is a very useful step for debugging, it allows you to ssh into the CI
 # machine (https://github.com/marketplace/actions/debugging-with-tmate).

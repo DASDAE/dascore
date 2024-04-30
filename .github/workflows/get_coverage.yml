@@ -37,11 +37,10 @@ jobs:
         run: |
           pytest -s --cov dascore --cov-report=xml
 
-      - name: upload coverage
-        uses: codecov/codecov-action@v2
+      - uses: codecov/codecov-action@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          file: ./coverage.xml
-          flags: unittests
-          name: master_tests
           fail_ci_if_error: true
+          files: ./coverage.xml
+          flags: unittests # optional
+          name: master_tests # optional
+          token: ${{ secrets.CODECOV_TOKEN }} # required
