@@ -572,7 +572,7 @@ class TestCoords:
 
     def test_channel_count(self, random_patch_with_lat):
         """Ensure we can get number of channels in the patch."""
-        expected = len(random_patch_with_lat.coords["distance"])
+        expected = len(random_patch_with_lat.get_coord("distance"))
         assert random_patch_with_lat.channel_count == expected
 
 

@@ -299,12 +299,12 @@ class TestBasicCoordManager:
 
     def test_coord_size(self, random_patch):
         """Ensure we can get size of the coordinate."""
-        expected = len(random_patch.coords["time"])
+        expected = len(random_patch.get_coord("time"))
         assert random_patch.coords.coord_size("time") == expected
 
     def test_coord_range(self, random_patch):
         """Ensure we can get a scaler value for the coordinate."""
-        coord_array = random_patch.coords["time"]
+        coord_array = random_patch.get_coord("time").data
         expected = (
             np.max(coord_array) - np.min(coord_array) + random_patch.attrs["time_step"]
         )
