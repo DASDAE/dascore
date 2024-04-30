@@ -10,7 +10,7 @@ on:
     paths:
       - 'pyproject.toml'
       - '**.py'
-      - '.github/workflows/runtests.yml'
+      - '.github/workflows/*.yml'
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
