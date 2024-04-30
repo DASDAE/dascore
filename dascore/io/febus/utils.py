@@ -6,7 +6,6 @@ from collections import namedtuple
 import numpy as np
 
 import dascore as dc
-import dascore.core
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
 from dascore.utils.misc import (

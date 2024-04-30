@@ -1,7 +1,5 @@
 """
 IO module for reading Febus data.
-
-
 """
 from __future__ import annotations
 
