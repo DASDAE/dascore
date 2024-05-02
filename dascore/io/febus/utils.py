@@ -17,13 +17,13 @@ from dascore.utils.misc import (
 
 # --- Getting format/version
 
-FebusSlice = namedtuple(
+_FebusSlice = namedtuple(
     "FebusSlice",
     ["group", "group_name", "source", "source_name", "zone", "zone_name", "data_name"],
 )
 
 
-def _flatten_febus_info(fi) -> tuple[FebusSlice, ...]:
+def _flatten_febus_info(fi) -> tuple[_FebusSlice, ...]:
     """
     Given a febus file, return a tuple of named tuples with key info.
 
@@ -40,7 +40,7 @@ def _flatten_febus_info(fi) -> tuple[FebusSlice, ...]:
                 possible_ds_names = list(zone.keys())
                 assert len(possible_ds_names) == 1
                 data_name = possible_ds_names[0]
-                zlice = FebusSlice(
+                zlice = _FebusSlice(
                     group, group_name, source, source_name, zone, zone_name, data_name
                 )
                 out.append(zlice)
@@ -79,7 +79,7 @@ def _get_febus_version_str(hdf_fi) -> str:
     return ""
 
 
-def _get_febus_attrs(feb: FebusSlice) -> dict:
+def _get_febus_attrs(feb: _FebusSlice) -> dict:
     """Get non-coordinate attrs from febus slice."""
     zone_attrs = feb.zone.attrs
     attr_mapping = {
@@ -153,7 +153,7 @@ def _get_distance_coord(feb):
     return dist_coord.change_length(total_distance_inds)
 
 
-def _get_febus_coord_manager(feb: FebusSlice) -> CoordManager:
+def _get_febus_coord_manager(feb: _FebusSlice) -> CoordManager:
     """Get a coordinate manager for febus slice."""
     coords = dict(
         time=_get_time_coord(feb),
