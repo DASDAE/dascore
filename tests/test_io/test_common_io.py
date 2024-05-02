@@ -23,6 +23,7 @@ import dascore as dc
 from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
+from dascore.io.febus import Febus2
 from dascore.io.h5simple import H5Simple
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
@@ -48,6 +49,7 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    Febus2(): ("febus_1.h5",),
     OptoDASV8(): ("opto_das_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),

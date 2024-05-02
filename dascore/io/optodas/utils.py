@@ -1,4 +1,4 @@
-"""Utilities for terra15."""
+"""Utilities for OptoDAS."""
 from __future__ import annotations
 
 import dascore as dc

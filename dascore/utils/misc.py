@@ -389,14 +389,37 @@ def maybe_get_attrs(obj, attr_map: Mapping):
     return out
 
 
-def maybe_get_items(obj, attr_map: Mapping):
-    """Maybe get items from a mapping (if they exist)."""
+def maybe_get_items(
+    obj, attr_map: Mapping[str, str], unpack_names: None | set[str] = None
+):
+    """
+    Maybe get items from a mapping (if they exist).
+
+    Parameters
+    ----------
+    obj
+        Any map like object.
+    attr_map
+        A mapping of {current_name: output_name}
+    unpack_names
+        A set of names which should be unpacked (ie collapse 0d arrays).
+    """
+    unpack_names = set() if unpack_names is None else unpack_names
     out = {}
     for old_name, new_name in attr_map.items():
         if not (value := obj.get(old_name, None)):
             continue
-        out[new_name] = unbyte(value)
+        val = unbyte(value)
+        out[new_name] = _maybe_unpack(val) if old_name in unpack_names else val
     return out
+
+
+def _maybe_unpack(maybe_array):
+    """Unpack an array like object if it is size one, else return input."""
+    size = getattr(maybe_array, "size", 0)
+    if size == 1:
+        maybe_array = maybe_array[0]
+    return maybe_array
 
 
 @cache
