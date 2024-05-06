@@ -454,7 +454,12 @@ def combine_patch_attrs(
     return cls(**mod_dict_list[0])
 
 
-def check_dims(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> bool:
+def check_dims(
+    patch1,
+    patch2,
+    check_behavior: WARN_LEVELS = "raise",
+    allow_sub_coords: bool = False,
+) -> bool:
     """
     Return True if dimensions of two patches are equal.
 
@@ -467,17 +472,22 @@ def check_dims(patch1, patch2, check_behavior: WARN_LEVELS = "raise") -> bool:
     check_behavior
         String with 'raise' will raise an error if incompatible,
         'warn' will provide a warning, None will do nothing.
+    allow_sub_coords
+        If True, allow subcoords to be considered equal.
     """
-    dims1 = patch1.dims
-    dims2 = patch2.dims
-    if dims1 == dims2:
+    dims1, dims2 = patch1.dims, patch2.dims
+    dims_ok = True
+    if not allow_sub_coords and patch1.dims == patch2.dims:
+        return True
+    dset1, dset2 = set(dims1), set(dims2)
+    if allow_sub_coords and (dset1.issubset(dset2) or dset2.issubset(dset1)):
         return True
     msg = (
-        "Patches are not compatible because their dimensions are not equal."
-        f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
+        "Patch dimensions are not compatible for merging."
+        " Patch1 dims: {dims1}, Patch2 dims: {dims2}"
     )
     warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
-    return False
+    return dims_ok
 
 
 def check_coords(
@@ -531,16 +541,19 @@ def check_coords(
 
 
 def merge_compatible_coords_attrs(
-    patch1: PatchType, patch2: PatchType, attrs_to_ignore=("history",)
+    patch1: PatchType,
+    patch2: PatchType,
+    attrs_to_ignore=("history", "dims"),
+    allow_subcoords: bool = False,
 ) -> tuple[CoordManager, PatchAttrs]:
     """
     Merge the coordinates and attributes of patches or raise if incompatible.
 
     The rules for compatibility are:
 
-    - All attrs must be equal other than history.
-    - Patches must share the same dimensions, in the same order
-    - All dimensional coordinates must be strictly equal
+    - All attrs must be equal other than those spsecified in attrs_to_ignore.
+    - Patches must share the same dimensions unless allow_subcoords == True.
+    - All shared dimensional coordinates must be strictly equal
     - If patches share a non-dimensional coordinate they must be equal.
 
     Any coordinates or attributes contained by a single patch will be included
@@ -559,16 +572,22 @@ def merge_compatible_coords_attrs(
 
     def _merge_coords(coords1, coords2):
         out = {}
-        coord_names = set(coords1.coord_map) & set(coords2.coord_map)
-        # fast patch to update identical coordinates
-        if len(coord_names) == len(coords1.coord_map):
+        cmap1, cmap2 = coords1.coord_map, coords1.coord_map
+        coord_names = set(cmap1) | set(cmap2)
+        # fast path to update identical coordinates
+        if len(coord_names) == len(cmap1):
             return coords1
+        if len(coord_names) == len(cmap2):
+            return coords2
         # otherwise just squish coords from both managers together.
         for name in coord_names:
             coord = coords1 if name in coords1.coord_map else coords2
             dims = coord.dim_map[name]
             out[name] = (dims, coord.coord_map[name])
-        return dc.core.coordmanager.get_coord_manager(out, dims=coords1.dims)
+        # Need to get coordinate that are in output, but preserve order.
+        dim1, dim2 = coords1.dims, coords2.dims
+        dims = dim1 if len(dim2) < len(dim1) else dim2
+        return dc.core.coordmanager.get_coord_manager(out, dims=dims)
 
     def _merge_models(attrs1, attrs2, coord):
         """Ensure models are equal in the right ways."""
@@ -594,7 +613,7 @@ def merge_compatible_coords_attrs(
             raise IncompatiblePatchError(msg)
         return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
 
-    check_dims(patch1, patch2)
+    check_dims(patch1, patch2, allow_sub_coords=allow_subcoords)
     check_coords(patch1, patch2)
     coord1, coord2 = patch1.coords, patch2.coords
     attrs1, attrs2 = patch1.attrs, patch2.attrs

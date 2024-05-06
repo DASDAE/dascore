@@ -394,7 +394,7 @@ class TestMergeCompatibleCoordsAttrs:
     def test_incompatible_dims(self, random_patch):
         """Ensure incompatible dims raises."""
         new = random_patch.rename_coords(time="money")
-        match = "their dimensions are not equal"
+        match = "not compatible for merging"
         with pytest.raises(IncompatiblePatchError, match=match):
             merge_compatible_coords_attrs(random_patch, new)
 
@@ -417,7 +417,7 @@ class TestMergeCompatibleCoordsAttrs:
         """Extra coords on both patch should end up in the merged."""
         new_coord = np.ones(random_patch.coord_shapes["time"])
         pa1 = random_patch.update_coords(new_time=("time", new_coord))
-        pa2 = random_patch_with_lat_lon
+        pa2 = random_patch_with_lat_lon.update_coords(new_time=("time", new_coord))
         expected = set(pa1.coords.coord_map) & set(pa2.coords.coord_map)
         coords, attrs = merge_compatible_coords_attrs(pa1, pa2)
         assert set(coords.coord_map) == expected

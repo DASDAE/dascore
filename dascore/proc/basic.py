@@ -407,9 +407,16 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
     >>> new = apply_operator(patch, patch, np.subtract)
     >>> assert np.allclose(new.data, 0)
     """
+    # Handle creating merged coords and patch stuff.
     if isinstance(other, dc.Patch):
-        coords, attrs = merge_compatible_coords_attrs(patch, other)
-        other = other.data
+        if len(other.dims) > len(patch.dims):
+            patch, other = other, patch
+        coords, attrs = merge_compatible_coords_attrs(
+            patch,
+            other,
+            allow_subcoords=True,
+        )
+        other = _maybe_broadcast_data(patch, other)
         if other_units := get_quantity(attrs.data_units):
             other = other * other_units
     else:
@@ -430,8 +437,24 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
         new_data = new_data_w_units.magnitude
     else:  # simpler case; no units.
         new_data = operator(patch.data, other)
+
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
+
+
+def _maybe_broadcast_data(patch, other):
+    """Maybe broadcast data in two compatible patches."""
+    # If the shapes already match no broadcast needed.
+    if patch.shape == other.shape:
+        return other.data
+    assert set(other.dims).issubset(patch.dims)
+    # Ensure the other patch has dims ordered correctly
+    dims1, dims2 = patch.dims, other.dims
+    other_dims_order = tuple(x for x in dims1 if x in dims2)
+    other = other.transpose(*other_dims_order)
+    size_map = {d: other.shape[i] for i, d in enumerate(other.dims)}
+    other_shape = tuple(size_map.get(x, 1) for x in patch.dims)
+    return other.data.reshape(other_shape)
 
 
 @patch_function()

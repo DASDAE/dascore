@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import IncompatiblePatchError, UnitError
+from dascore.exceptions import CoordError, IncompatiblePatchError, UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
 
@@ -299,21 +299,53 @@ class TestApplyOperator:
         with pytest.raises(UnitError):
             apply_operator(pa1, other, np.add)
 
+    def test_broadcast_sub_patch(self, random_patch):
+        """Ensure a patch with a subset of dimensions broadcasts."""
+        sub_patch = random_patch.min("time")
+        out = random_patch - sub_patch
+        assert isinstance(out, dc.Patch)
+        axis = random_patch.dims.index("time")
+        to_sub = np.min(random_patch.data, axis=axis, keepdims=True)
+        # Ensure the time aggregation worked.
+        assert np.allclose(sub_patch.data, to_sub.flatten())
+        # Then test that the resulting data is as expected.
+        expected = random_patch.data - to_sub
+        assert np.allclose(expected, out.data)
+        # The reverse should also be true.
+        out2 = sub_patch - random_patch
+        assert out == out2
+
 
 class TestSqueeze:
     """Tests for squeeze."""
 
-    def test_remove_dimension(self, random_patch):
-        """Tests for removing random dimensions."""
-        out = random_patch.aggregate("time").squeeze("time")
-        assert "time" not in out.dims
+    @pytest.fixture(scope="class")
+    def flat_patch(self):
+        """Create a patch with a degenerate dimension."""
+        data = np.atleast_2d(np.arange(10))
+        coords = {"time": np.arange(10), "distance": np.array([1])}
+        dims = ("distance", "time")
+        out = dc.Patch(data=data, dims=dims, coords=coords)
+        assert 1 in out.shape
+        return out
+
+    def test_remove_dimension(self, flat_patch):
+        """Tests for removing degenerate dimensions."""
+        out = flat_patch.squeeze("distance")
+        assert "distance" not in out.dims
         assert len(out.data.shape) == 1, "data should be 1d"
 
     def test_tutorial_example(self, random_patch):
         """Ensure the tutorial snippet works."""
-        flat_patch = random_patch.select(distance=0, samples=True)
-        squeezed = flat_patch.squeeze()
-        assert len(squeezed.dims) < len(flat_patch.dims)
+        patch = random_patch.select(distance=0, samples=True)
+        squeezed = patch.squeeze()
+        assert len(squeezed.dims) < len(patch.dims)
+
+    def test_non_zero_length_raises(self, flat_patch):
+        """Ensure squeezing a non-flat dim raises helpful error."""
+        msg = "because it has non-zero length"
+        with pytest.raises(CoordError, match=msg):
+            flat_patch.squeeze(dim="time")
 
 
 class TestDropNa:
