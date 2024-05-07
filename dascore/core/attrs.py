@@ -28,6 +28,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _dict_list_diffs,
+    _merge_tuples,
     all_diffs_close_enough,
     get_middle_value,
     iterate,
@@ -458,7 +459,7 @@ def check_dims(
     patch1,
     patch2,
     check_behavior: WARN_LEVELS = "raise",
-    allow_sub_coords: bool = False,
+    intersection: bool = False,
 ) -> bool:
     """
     Return True if dimensions of two patches are equal.
@@ -472,19 +473,21 @@ def check_dims(
     check_behavior
         String with 'raise' will raise an error if incompatible,
         'warn' will provide a warning, None will do nothing.
-    allow_sub_coords
-        If True, allow subcoords to be considered equal.
+    intersection
+        If True, allow any intersection of dimensions to pass. This is useful
+        when only broad-castablity needs to be checked. If false require dims
+        to be equal.
     """
     dims1, dims2 = patch1.dims, patch2.dims
     dims_ok = True
-    if not allow_sub_coords and patch1.dims == patch2.dims:
+    if not intersection and patch1.dims == patch2.dims:
         return True
     dset1, dset2 = set(dims1), set(dims2)
-    if allow_sub_coords and (dset1.issubset(dset2) or dset2.issubset(dset1)):
+    if intersection and (dset1 | dset2):
         return True
     msg = (
         "Patch dimensions are not compatible for merging."
-        " Patch1 dims: {dims1}, Patch2 dims: {dims2}"
+        f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
     )
     warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
     return dims_ok
@@ -533,7 +536,7 @@ def check_coords(
     if not_equal_coords and len(shared):
         msg = (
             f"Patches are not compatible. The following shared coordinates "
-            f"are not equal {coord}"
+            f"are not equal: {coord}"
         )
         warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
         return False
@@ -544,7 +547,7 @@ def merge_compatible_coords_attrs(
     patch1: PatchType,
     patch2: PatchType,
     attrs_to_ignore=("history", "dims"),
-    allow_subcoords: bool = False,
+    dim_intersection: bool = False,
 ) -> tuple[CoordManager, PatchAttrs]:
     """
     Merge the coordinates and attributes of patches or raise if incompatible.
@@ -565,19 +568,22 @@ def merge_compatible_coords_attrs(
         The first patch
     patch2
         The second patch
-    attr_ignore
+    attrs_to_ignore
         A sequence of attributes to not consider in equality. Only these
         attributes from the first patch are kept in outputs.
+    dim_intersection
+        If True, merge if any dimensions overlap, else raise if all do not
+        overlap.
     """
 
     def _merge_coords(coords1, coords2):
         out = {}
-        cmap1, cmap2 = coords1.coord_map, coords1.coord_map
+        cmap1, cmap2 = coords1.coord_map, coords2.coord_map
         coord_names = set(cmap1) | set(cmap2)
         # fast path to update identical coordinates
-        if len(coord_names) == len(cmap1):
+        if coord_names == set(cmap1):
             return coords1
-        if len(coord_names) == len(cmap2):
+        if coord_names == set(cmap2):
             return coords2
         # otherwise just squish coords from both managers together.
         for name in coord_names:
@@ -585,8 +591,7 @@ def merge_compatible_coords_attrs(
             dims = coord.dim_map[name]
             out[name] = (dims, coord.coord_map[name])
         # Need to get coordinate that are in output, but preserve order.
-        dim1, dim2 = coords1.dims, coords2.dims
-        dims = dim1 if len(dim2) < len(dim1) else dim2
+        dims = _merge_tuples(coords1.dims, coords2.dims)
         return dc.core.coordmanager.get_coord_manager(out, dims=dims)
 
     def _merge_models(attrs1, attrs2, coord):
@@ -613,7 +618,7 @@ def merge_compatible_coords_attrs(
             raise IncompatiblePatchError(msg)
         return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
 
-    check_dims(patch1, patch2, allow_sub_coords=allow_subcoords)
+    check_dims(patch1, patch2, intersection=dim_intersection)
     check_coords(patch1, patch2)
     coord1, coord2 = patch1.coords, patch2.coords
     attrs1, attrs2 = patch1.attrs, patch2.attrs

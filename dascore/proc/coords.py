@@ -155,8 +155,8 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
 
     Parameters
     ----------
-    **kwargs
-        The mapping from old names to new names
+    dims
+        If not None, the new dimensions of the coordinate manager.
 
     Examples
     --------

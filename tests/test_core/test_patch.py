@@ -384,6 +384,11 @@ class TestEquals:
         assert not random_patch.equals(1)
         assert not random_patch.equals(random_patch.data)
 
+    def test_negative_equals(self, random_patch):
+        """Ensure negative of random patch is equal to negative of same patch."""
+        assert -random_patch == -random_patch
+        assert (-random_patch).abs() == random_patch
+
 
 class TestTranspose:
     """Tests for switching dimensions."""

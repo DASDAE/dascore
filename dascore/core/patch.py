@@ -120,6 +120,9 @@ class Patch:
     def __pow__(self, other):
         return dascore.proc.apply_operator(self, other, np.power)
 
+    def __neg__(self):
+        return self.update(data=-self.data)
+
     def __rich__(self):
         dascore_text = get_dascore_text()
         patch_text = Text("Patch ⚡", style="bold")
@@ -146,8 +149,13 @@ class Patch:
         return self.coords.dims
 
     @property
+    def ndim(self) -> int:
+        """Return the number of dimensions contained in patch."""
+        return len(self.coords.dims)
+
+    @property
     def coord_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Return a dict of coordinate: (shape, ...)."""
+        """Return a dict of {coordinate: (shape, ...)}."""
         return self.coords.coord_shapes
 
     @property
@@ -197,6 +205,7 @@ class Patch:
     pipe = dascore.proc.pipe
     set_dims = dascore.proc.set_dims
     squeeze = dascore.proc.squeeze
+    append_dims = dascore.proc.append_dims
     transpose = dascore.proc.transpose
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_coords

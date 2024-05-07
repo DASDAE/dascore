@@ -838,6 +838,16 @@ class TestUpdate:
         new = cm.update(time=new_time)
         assert new.coord_map["distance"] == cm.coord_map["distance"]
 
+    def test_coord_with_new_dim(self, coord_manager):
+        """Ensure a new dimension can be added."""
+        # should work for single name input as well as tuple.
+        cm1 = coord_manager.update(bob=("bob", np.atleast_1d(1)))
+        cm2 = coord_manager.update(bob=(("bob",), np.atleast_1d(1)))
+        assert cm1 == cm2
+        for cm in [cm1, cm2]:
+            assert cm.ndim == (coord_manager.ndim + 1)
+            assert cm.dims[-1] == "bob"
+
 
 class TestSqueeze:
     """Tests for squeezing degenerate dimensions."""

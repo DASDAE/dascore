@@ -14,7 +14,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.models import ArrayLike
-from dascore.utils.patch import patch_function
+from dascore.utils.patch import _make_dims_alike, _select_compatible, patch_function
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
@@ -264,6 +264,55 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     return self.new(data=new_data, coords=new_coord)
 
 
+@patch_function(history=None)
+def append_dims(patch: PatchType, **dim_kwargs) -> PatchType:
+    """
+    Insert dimensions at the end of the patch.
+
+    This can be used to add dummy dimensions to the patch.
+
+    Parameters
+    ----------
+    dim_kwargs
+        Used to pass keys (new dim names) and values (coordinate values).
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+
+    >>> # Add a dummy dimension called "face" to end of patch
+    >>> # which has a coordinate value of [1].
+    >>> new = patch.append_dims(face=1)
+
+    >>> # Same thing as above, but with a larger coords which broadcasts
+    >>> # the data to shape appropriate to mach coordinates.
+    >>> new = patch.append_dims(face=[1, 2])
+
+    Notes
+    -----
+    - This tries to be more simple than numpy and xarray's expand_dims.
+    - Use [`Patch.transpose`](`dascore.patch.transpose`) to re-arrange dimensions.
+    - If dimension already exists nothing will happen.
+    """
+    # Ensure the input values are all arrays so they can be coords.
+    kwargs = {
+        i: (i, np.atleast_1d(v)) for i, v in dim_kwargs.items() if i not in patch.dims
+    }
+    if not kwargs:
+        return patch
+    ndim = patch.ndim
+    # First get data with empty dimensions
+    insert_inds = [x + ndim for x in range(len(kwargs))]
+    data = np.expand_dims(patch.data, insert_inds)
+    shapes = list(data.shape)
+    for ind, (_, coord_data) in zip(insert_inds, kwargs.values()):
+        shapes[ind] = len(coord_data)
+    data = np.broadcast_to(data, shapes)
+    coords = patch.coords.update(**kwargs)
+    return patch.update(data=data, coords=coords)
+
+
 @patch_function()
 def squeeze(self: PatchType, dim=None) -> PatchType:
     """
@@ -376,7 +425,7 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
     """
     Apply a ufunc-type operator to a patch.
 
-    This is used to implement a patch's operator overload.
+    This is used to implement a patch's operator overloading.
 
     Parameters
     ----------
@@ -406,18 +455,26 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
     >>> # subtract one patch from another. Coords and attrs must be compatible
     >>> new = apply_operator(patch, patch, np.subtract)
     >>> assert np.allclose(new.data, 0)
+
+    Notes
+    -----
+    See [numpy's ufunc docs](https://numpy.org/doc/stable/reference/ufuncs.html)
     """
     # Handle creating merged coords and patch stuff.
     if isinstance(other, dc.Patch):
-        if len(other.dims) > len(patch.dims):
-            patch, other = other, patch
+        other_patch = other
+        # Trim patches so their shared dims overlap exactly.
+        patch, other_patch = _select_compatible(patch, other_patch)
+        # get metadata. This is done before making the patch coords compatible.
         coords, attrs = merge_compatible_coords_attrs(
             patch,
-            other,
-            allow_subcoords=True,
+            other_patch,
+            dim_intersection=True,
         )
-        other = _maybe_broadcast_data(patch, other)
-        if other_units := get_quantity(attrs.data_units):
+        # Make sure dims are the same for each patch.
+        patch, other_patch = _make_dims_alike(patch, other_patch)
+        other = other_patch.data
+        if other_units := get_quantity(other_patch.attrs.data_units):
             other = other * other_units
     else:
         coords, attrs = patch.coords, patch.attrs
@@ -440,21 +497,6 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
 
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
-
-
-def _maybe_broadcast_data(patch, other):
-    """Maybe broadcast data in two compatible patches."""
-    # If the shapes already match no broadcast needed.
-    if patch.shape == other.shape:
-        return other.data
-    assert set(other.dims).issubset(patch.dims)
-    # Ensure the other patch has dims ordered correctly
-    dims1, dims2 = patch.dims, other.dims
-    other_dims_order = tuple(x for x in dims1 if x in dims2)
-    other = other.transpose(*other_dims_order)
-    size_map = {d: other.shape[i] for i, d in enumerate(other.dims)}
-    other_shape = tuple(size_map.get(x, 1) for x in patch.dims)
-    return other.data.reshape(other_shape)
 
 
 @patch_function()

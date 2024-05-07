@@ -284,7 +284,7 @@ class CoordManager(DascoreBaseModel):
 
         coord_updates, coord_to_drop, coord_to_add = _divide_kwargs(kwargs)
         # get coords to drop from selecting None
-        coord_map, dim_map = _get_coord_dim_map(coord_to_add, self.dims)
+        coord_map, dim_map, dims = _get_coord_dim_map(coord_to_add, self.dims)
         # find coords to drop because their dimension changed.
         indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
@@ -297,8 +297,8 @@ class CoordManager(DascoreBaseModel):
             new = list(out[coord_name])
             new[1] = new[1].update(**{attr: value})
             out[coord_name] = tuple(new)
-        dims = tuple(x for x in self.dims if x not in coord_to_drop)
 
+        dims = tuple(x for x in dims if x not in coord_to_drop)
         return get_coord_manager(out, dims=dims)
 
     # we need this here to maintain backwards compatibility
@@ -680,6 +680,11 @@ class CoordManager(DascoreBaseModel):
         """Return the size of the patch data matrix."""
         return np.prod(self.shape)
 
+    @property
+    def ndim(self):
+        """Return the number of dimensions in the coordinage manager."""
+        return len(self.dims)
+
     def validate_data(self, data):
         """Ensure data conforms to coordinates."""
         data = np.array([]) if data is None else data
@@ -1025,7 +1030,7 @@ def get_coord_manager(
         else:
             dims = ()
     coords = {} if coords is None else coords
-    coord_map, dim_map = _get_coord_dim_map(coords, dims)
+    coord_map, dim_map, dims = _get_coord_dim_map(coords, dims)
     if attrs:
         coord_updates, _ = separate_coord_info(attrs, dims)
         updateable_coords = set(coord_updates) - set(coord_map)
@@ -1037,7 +1042,7 @@ def get_coord_manager(
 
 
 def _get_coord_dim_map(coords, dims):
-    """Get coord_map and dim_map from coord input."""
+    """Get coord_map, dim_map, and new dims from coord input."""
 
     def _get_coord(coord):
         """Get a coordinate from various inputs."""
@@ -1061,7 +1066,7 @@ def _get_coord_dim_map(coords, dims):
         out = _get_coord(coord)
         return out, (name,)
 
-    def _maybe_coord_from_nested(coord):
+    def _maybe_coord_from_nested(name, coord, new_dims):
         """
         Get coordinates from {coord_name: (dim_name, coord)} or
         {coord_name: ((dim_names...,), coord)}.
@@ -1073,9 +1078,10 @@ def _get_coord_dim_map(coords, dims):
             )
             raise CoordError(msg)
         dim_names = iterate(coord[0])
-        # all dims must be in the input dims.
-        if not (d1 := set(dim_names)).issubset(d2 := set(dims)):
-            bad_dims = d2 - d1
+        # # all dims must be in the input dims or a new coord.
+        d1, d2 = set(dim_names), set(dims)
+        if (not d1.issubset(d2)) and d1 != {name}:
+            bad_dims = d1 - d2
             msg = (
                 f"Coordinate specified invalid dimension(s) {bad_dims}."
                 f" Valid dimensions are {dims}"
@@ -1083,6 +1089,10 @@ def _get_coord_dim_map(coords, dims):
             raise CoordError(msg)
         # pull out any relevant info from attrs.
         coord_out = _get_coord(coord[1])
+        # check if this is added a new dimension.
+        if len(dim_names) == 1 and (newdname := dim_names[0]) == name:
+            if newdname not in dims:
+                new_dims.append(newdname)
         assert coord_out.shape == np.shape(coord[1])
         return coord_out, dim_names
 
@@ -1092,14 +1102,16 @@ def _get_coord_dim_map(coords, dims):
     #     coords_dump = coords.model_dump()
     #     return dict(coords_dump["coord_map"]), dict(coords_dump["dim_map"])
 
-    c_map, d_map = {}, {}
+    c_map, d_map, new_dims = {}, {}, []
     # iterate coords, get coordinate output.
     for name, coord in coords.items():
         if not isinstance(coord, tuple):
             c_map[name], d_map[name] = _coord_from_simple(name, coord)
         else:
-            c_map[name], d_map[name] = _maybe_coord_from_nested(coord)
-    return c_map, d_map
+            c_map[name], d_map[name] = _maybe_coord_from_nested(name, coord, new_dims)
+    if new_dims:
+        dims = tuple(list(dims) + new_dims)
+    return c_map, d_map, dims
 
 
 def merge_coord_managers(

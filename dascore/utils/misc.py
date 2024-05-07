@@ -735,3 +735,11 @@ def check_filter_range(nyquist, low, high, filt_min, filt_max):
             f"filt_min = {filt_min}, filt_max = {filt_max}"
         )
         raise FilterValueError(msg)
+
+
+def _merge_tuples(dims1, dims2):
+    """Merge tuples together, preserving order where possible."""
+    dims = dict.fromkeys(dims1)
+    dims.update(dict.fromkeys(dims2))
+    out = tuple(dims.keys())
+    return out

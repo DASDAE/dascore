@@ -21,7 +21,12 @@ from dascore.exceptions import (
     PatchDimError,
 )
 from dascore.units import get_quantity
-from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
+from dascore.utils.misc import (
+    _merge_tuples,
+    all_diffs_close_enough,
+    get_middle_value,
+    iterate,
+)
 from dascore.utils.time import to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
@@ -513,3 +518,32 @@ def _get_dx_or_spacing_and_axes(
         axes.append(patch.dims.index(dim_))
 
     return tuple(out), tuple(axes)
+
+
+def _select_compatible(
+    patch1: PatchType, patch2: PatchType
+) -> tuple[PatchType, PatchType]:
+    """
+    Select common coords for each patch and return.
+
+    Parameters
+    ----------
+    patch1
+        The First patch to make compatible with second.
+    patch2
+        The second patch to make compatible with the first.
+    """
+    return patch1, patch2
+
+
+def _make_dims_alike(
+    patch1: PatchType, patch2: PatchType
+) -> tuple[PatchType, PatchType]:
+    """
+    Make the dims identical for each patch, adding dummy dims when needed.
+    """
+    target = _merge_tuples(patch1.dims, patch2.dims)
+    target_dict = {x: 1 for x in target}
+    out1 = patch1.append_dims(**target_dict).transpose(*target)
+    out2 = patch2.append_dims(**target_dict).transpose(*target)
+    return out1, out2

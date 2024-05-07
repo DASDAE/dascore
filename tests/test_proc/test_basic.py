@@ -299,6 +299,10 @@ class TestApplyOperator:
         with pytest.raises(UnitError):
             apply_operator(pa1, other, np.add)
 
+
+class TestPatchBroadcasting:
+    """Tests for patches broadcasting to allow operations on each other."""
+
     def test_broadcast_sub_patch(self, random_patch):
         """Ensure a patch with a subset of dimensions broadcasts."""
         sub_patch = random_patch.min("time")
@@ -311,9 +315,62 @@ class TestApplyOperator:
         # Then test that the resulting data is as expected.
         expected = random_patch.data - to_sub
         assert np.allclose(expected, out.data)
-        # The reverse should also be true.
+        # The reverse should also be true (after accounting for negative sign)
         out2 = sub_patch - random_patch
-        assert out == out2
+        assert out == -out2
+
+    def test_broadcast_single_shared_dim(self, random_patch):
+        """Ensure two 2d patches can get broad-casted when one dim is the same."""
+        # get two smallish patches to test multidimensional broadcasting.
+        patch1 = random_patch.transpose("time", "distance").select(
+            time=(1, 10), distance=(1, 10), samples=True
+        )
+        patch2 = patch1.transpose("distance", "time").rename_coords(distance="length")
+
+        out = patch1 * patch2
+        assert out.dims == ("time", "distance", "length")
+        assert out.shape == (9, 9, 9)
+
+
+class TestAppendDims:
+    """Tests for appending dummy dimensions to data array."""
+
+    def test_no_dims_unchanged_patch(self, random_patch):
+        """Ensure no kwargs yields equal patches."""
+        out = random_patch.append_dims()
+        assert out == random_patch
+
+    def test_flat_dimension(self, random_patch):
+        """Ensure a flat dimension only expands dimensionality."""
+        out = random_patch.append_dims(new=1)
+        assert len(out.shape) == (len(random_patch.shape) + 1)
+        # New dim should show up at the end.
+        assert out.dims[-1] == "new"
+        coord = out.coords.get_array("new")
+        assert np.all(coord == np.array([1]))
+        # The flatten data should remain the same.
+        assert np.allclose(out.data.flatten(), random_patch.data.flatten())
+
+    def test_expand_dims(self, random_patch):
+        """Ensure dimensions can be expanded."""
+        out = random_patch.append_dims(new=[1, 2])
+        assert len(out.shape) == (len(random_patch.shape) + 1)
+        # New dim should show up at the end.
+        assert out.dims[-1] == "new"
+        coord = out.coords.get_array("new")
+        assert np.all(coord == np.array([1, 2]))
+
+    def test_expand_multiple_dims(self, random_patch):
+        """Ensure several dimensions can be expanded."""
+        small_patch = random_patch.select(
+            time=(1, 4),
+            distance=(1, 6),
+            samples=True,
+        )
+        out = small_patch.append_dims(new=[1, 2], old=[1, 2])
+        assert len(out.shape) == (len(random_patch.shape) + 2)
+        # New dim should show up at the end, in order.
+        assert out.dims[-2:] == ("new", "old")
 
 
 class TestSqueeze:
