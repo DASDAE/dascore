@@ -19,6 +19,7 @@ from dascore.core.coords import (
     CoordMonotonicArray,
     CoordRange,
     CoordSummary,
+    NonCoord,
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
@@ -1205,6 +1206,63 @@ class TestDegenerateCoords:
         assert not coord.sorted
         assert not coord.reverse_sorted
         assert coord.degenerate
+
+
+class TestNonCoord:
+    """Tests for the non-coordinate."""
+    @pytest.fixture(scope='class')
+    def basic_non_coord(self):
+        """Create a simple non coord."""
+        out = get_coord(data=10)
+        return out
+
+    def test_init_non_coord(self, basic_non_coord):
+        """Ensure a non-coord can be created."""
+        assert isinstance(basic_non_coord, NonCoord)
+
+    def test_str_repr(self, basic_non_coord):
+        """Ensure NonCoord has a string repr."""
+        out = str(basic_non_coord)
+        assert isinstance(out, str)
+
+    def test_update(self, basic_non_coord):
+        """Ensure update returns a new non coord."""
+        out = basic_non_coord.update(length=2)
+        assert len(out) == 2
+        assert isinstance(out, NonCoord)
+        assert basic_non_coord.update() == basic_non_coord
+
+    def test_bad_select_raises(self, basic_non_coord):
+        """If relative or not samples NonCoord raises."""
+        match = "does not support relative and samples must"
+        with pytest.raises(CoordError, match=match):
+            basic_non_coord.select((1, 2), relative=True)
+        with pytest.raises(CoordError, match=match):
+            basic_non_coord.select((1, 2), samples=False)
+
+    def test_select_samples_tuple_and_slice(self, basic_non_coord):
+        """Ensure selecting with samples using tuple or slice works."""
+        out1, inds1 = basic_non_coord.select((1, 5), samples=True)
+        out2, inds2 = basic_non_coord.select(slice(1, 5), samples=True)
+        assert inds1 == inds2
+        assert out1 == out2
+        assert len(out1) == 4
+
+    def test_unsupported_methods_raise(self, basic_non_coord):
+        """Ensure unsupported methods raise."""
+        methods = ("max", "min", "update_limits", "sort")
+        match = "NonCoord does not support"
+        for name in methods:
+            method = getattr(basic_non_coord, name)
+            with pytest.raises(CoordError, match=match):
+                method()
+        with pytest.raises(CoordError, match=match):
+            basic_non_coord.convert_units("ft")
+
+    def test_values_raises(self, basic_non_coord):
+        """Ensure values property raises."""
+        with pytest.raises(CoordError, match="NonCoord has no values"):
+            _ = basic_non_coord.values
 
 
 class TestCoercion:

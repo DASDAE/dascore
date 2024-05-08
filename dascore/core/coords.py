@@ -276,7 +276,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     @abc.abstractmethod
     def select(
-        self, arg, relative=False, samples=False
+            self, arg, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
         """
         Returns an entity that can be used in a list for numpy indexing
@@ -447,10 +447,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
 
     def update_data(
-        self,
-        data: ArrayLike | np.ndarray | None = None,
-        values: ArrayLike | np.ndarray | None = None,
-        **kwargs,
+            self,
+            data: ArrayLike | np.ndarray | None = None,
+            values: ArrayLike | np.ndarray | None = None,
+            **kwargs,
     ) -> Self:
         """
         Update the data of the coordinate.
@@ -509,9 +509,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return between or bad_start or bad_stop
 
     def get_slice_tuple(
-        self,
-        select: slice | None | type(Ellipsis) | tuple[Any, Any],
-        relative=False,
+            self,
+            select: slice | None | type(Ellipsis) | tuple[Any, Any],
+            relative=False,
     ) -> tuple[Any, Any]:
         """
         Get a tuple with (start, stop) and perform basic checks.
@@ -697,6 +697,92 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return ranges[0]
 
 
+class NonCoord(BaseCoord):
+    """
+    A Coordinate representing not a coordinate.
+    """
+    length: int
+    _rich_style = dascore_styles["coord_non"]
+
+    def _raise_non_coord_error(self, name):
+        """Raises a coord error for things NonCoord doesn't support."""
+        msg = f"NonCoord does not support {name}"
+        raise CoordError(msg)
+
+    def __getitem__(self, item):
+        # We init a temporary array just to get numpy to do the
+        # indexing. There is probably a faster way but this is robust.
+        dummy = np.empty(self.length)[item]
+        return self.__class__(length=len(dummy))
+
+    def _max(self):
+        self._raise_non_coord_error("max")
+
+    def _min(self):
+        self._raise_non_coord_error("max")
+
+    def convert_units(self, unit) -> Self:
+        self._raise_non_coord_error("convert_units")
+
+    def update_limits(self, min=None, max=None, step=None, **kwargs):
+        self._raise_non_coord_error("update_limits")
+
+    def sort(self, reverse=False):
+        return self._raise_non_coord_error("sort")
+
+    def __rich__(self):
+        key_style = dascore_styles["keys"]
+        base = Text("")
+        base += Text(self.__class__.__name__, style=self._rich_style)
+        base += Text("(")
+        base += Text(" shape: ", key_style)
+        base += get_nice_text(self.shape)
+        base += Text(" )")
+        return base
+
+    @property
+    @cached_method
+    def dtype(self):
+        """Returns datatype."""
+        return None
+
+    @property
+    @cached_method
+    def shape(self):
+        """Returns datatype."""
+        return (self.length,)
+
+    def __len__(self):
+        return self.length
+
+    @property
+    def values(self):
+        """Return the internal data. Same as values attribute."""
+        raise CoordError(f"NonCoord has no values")
+
+    def select(
+            self, args, relative=False, samples=False
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
+        """
+        Select new values inside coord.
+
+        For NonCoord, samples =  True or raise.
+        """
+        if relative or not samples:
+            msg = (
+                "UnCoord does not support relative and samples must be True."
+            )
+            raise CoordError(msg)
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        return self._select_by_samples(args)
+
+    def update(self, length=None, **kwargs):
+        """Update coordinate."""
+        length = self.length if length is None else length
+        return self.__class__(length=length)
+
+
 class CoordRange(BaseCoord):
     """
     A coordinate represent a range of evenly sampled data.
@@ -787,7 +873,7 @@ class CoordRange(BaseCoord):
         return self.__class__(**out)
 
     def select(
-        self, args, relative=False, samples=False
+            self, args, relative=False, samples=False
     ) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Apply select, return selected coords and index to apply to array.
@@ -798,7 +884,6 @@ class CoordRange(BaseCoord):
             return self._select_by_array(args, relative=relative, samples=samples)
         elif samples:
             return self._select_by_samples(args)
-
         args = self.get_slice_tuple(args, relative=relative)
         start = self._get_index(args[0], forward=self.sorted)
         stop = self._get_index(args[1], forward=self.reverse_sorted)
@@ -958,7 +1043,7 @@ class CoordArray(BaseCoord):
         return self.new(units=units, values=values)
 
     def select(
-        self, args, relative=False, samples=False
+            self, args, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
         if is_array(args):
@@ -1098,7 +1183,7 @@ class CoordMonotonicArray(CoordArray):
     _sorted = True
 
     def select(
-        self, args, relative=False, samples=False
+            self, args, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
         if is_array(args):
@@ -1172,7 +1257,7 @@ class CoordDegenerate(CoordArray):
     _rich_style = dascore_styles["coord_degenerate"]
 
     def select(
-        self, args, relative=False, samples=False
+            self, args, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
         """Select for Degenerate coords does nothing."""
         return self, slice(None, None)
@@ -1192,16 +1277,16 @@ class CoordDegenerate(CoordArray):
 
 
 def get_coord(
-    *,
-    data: ArrayLike | None | np.ndarray = None,
-    values: ArrayLike | None | np.ndarray = None,
-    start=None,
-    min=None,
-    stop=None,
-    max=None,
-    step=None,
-    units: None | Unit | Quantity | str = None,
-    dtype: str | np.dtype = None,
+        *,
+        data: ArrayLike | None | np.ndarray = None,
+        values: ArrayLike | None | np.ndarray = None,
+        start=None,
+        min=None,
+        stop=None,
+        max=None,
+        step=None,
+        units: None | Unit | Quantity | str = None,
+        dtype: str | np.dtype = None,  # noqa
 ) -> BaseCoord:
     """
     Given multiple types of input, return a coordinate.
@@ -1212,7 +1297,8 @@ def get_coord(
     Parameters
     ----------
     data
-        An array indicating the values.
+        An array indicating the values or an integer to specify the length
+        of a NonCoord.
     values
         Deprecated, use data instead.
     start
@@ -1310,8 +1396,10 @@ def get_coord(
     _check_data_compatibility(data, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
     if data is not None:
+        if isinstance(data, (int, np.integer)):
+            return NonCoord(length=data)
         if not isinstance(data, np.ndarray | BaseCoord):
-            data = np.array(data)
+            data = array(data)
         # values = np.array(values)  # ensure we have a numpy array
         if isinstance(data, BaseCoord):  # just return coordinate
             return data

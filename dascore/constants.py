@@ -158,6 +158,7 @@ dascore_styles = dict(
     coord_monotonic="bold grey",
     coord_array="bold orange",
     coord_degenerate="bold red",
+    coord_non="bold red",
     units="bright blue",
     dtypes="bright black",
     keys="grey50",

@@ -25,8 +25,11 @@ with suppress(ImportError):
 
 def array(array):
     """Wrapper function for creating 'immutable' arrays."""
-    array.setflags(write=False)
-    return array
+    out = np.asarray(array)
+    # Setting the write flag to false makes the array immutable unless
+    # the flag is switched back.
+    out.setflags(write=False)
+    return out
 
 
 def is_array(maybe_array):
