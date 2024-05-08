@@ -6,6 +6,7 @@ from functools import partial
 
 import numpy as np
 
+from dascore.compat import is_array
 from dascore.constants import PatchType
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate
@@ -64,7 +65,7 @@ def aggregate(
         axis = patch.dims.index(current_dim)
         data = func(patch.data, axis=axis)
         # In this case we have reduced all the dimensions. Just return scalar.
-        if not isinstance(data, np.ndarray):
+        if not is_array(data):
             return data
         coords = patch.coords.update(**{current_dim: None})
         patch = patch.new(data=data, coords=coords)

@@ -9,7 +9,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
 from typing_extensions import Self
 
-from dascore.compat import array
+from dascore.compat import array, is_array
 from dascore.units import Quantity, get_quantity, get_quantity_str
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -80,7 +80,7 @@ def sensible_model_equals(self, other):
         if name.startswith("_"):
             continue
         val2 = d2[name]
-        if isinstance(val1, np.ndarray):
+        if is_array(val1):
             if not all_close(val1, val2):
                 return False
         else:

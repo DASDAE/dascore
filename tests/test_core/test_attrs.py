@@ -414,11 +414,11 @@ class TestMergeCompatibleCoordsAttrs:
             merge_compatible_coords_attrs(new, random_patch)
 
     def test_extra_coord(self, random_patch, random_patch_with_lat_lon):
-        """Extra coords on both patch should end up in the merged."""
+        """Extra coords on both patch should end up in the merged patch."""
         new_coord = np.ones(random_patch.coord_shapes["time"])
         pa1 = random_patch.update_coords(new_time=("time", new_coord))
         pa2 = random_patch_with_lat_lon.update_coords(new_time=("time", new_coord))
-        expected = set(pa1.coords.coord_map) & set(pa2.coords.coord_map)
+        expected = set(pa1.coords.coord_map) | set(pa2.coords.coord_map)
         coords, attrs = merge_compatible_coords_attrs(pa1, pa2)
         assert set(coords.coord_map) == expected
         assert set(attrs.coords) == expected

@@ -9,7 +9,7 @@ import os
 import re
 import warnings
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence, Sized
 from functools import cache
 from pathlib import Path
 from types import ModuleType
@@ -743,3 +743,21 @@ def _merge_tuples(dims1, dims2):
     dims.update(dict.fromkeys(dims2))
     out = tuple(dims.keys())
     return out
+
+
+def _to_slice(limits):
+    """Convert slice or two len tuple to slice."""
+    if isinstance(limits, slice):
+        return limits
+    # ints should be interpreted as Slice(int, int+1) to not collapse dim.
+    if isinstance(limits, int):
+        if limits == -1:  # -1 case needs open interval to work
+            return slice(-1, None)
+        return slice(limits, limits + 1)
+    if limits is ... or limits is None:
+        return slice(None, None)
+    assert isinstance(limits, Sized) and len(limits) == 2
+    val1, val2 = limits
+    start = None if val1 is ... or val1 is None else val1
+    stop = None if val2 is ... or val2 is None else val2
+    return slice(start, stop)

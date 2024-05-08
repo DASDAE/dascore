@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import CoordError, IncompatiblePatchError, UnitError
+from dascore.exceptions import CoordError, UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
 
@@ -226,9 +226,11 @@ class TestApplyOperator:
 
     def test_incompatible_coords(self, random_patch):
         """Ensure incompatible dimensions raises."""
-        new = random_patch.update_attrs(time_min=random_patch.attrs.time_max)
-        with pytest.raises(IncompatiblePatchError):
-            apply_operator(new, random_patch, np.multiply)
+        time = random_patch.get_coord("time")
+        new_time = time.max() + time.step
+        new = random_patch.update_attrs(time_min=new_time)
+        out = apply_operator(new, random_patch, np.multiply)
+        assert False
 
     def test_quantity_scalar(self, random_patch):
         """Ensure operators work with quantities."""
@@ -326,10 +328,16 @@ class TestPatchBroadcasting:
             time=(1, 10), distance=(1, 10), samples=True
         )
         patch2 = patch1.transpose("distance", "time").rename_coords(distance="length")
-
         out = patch1 * patch2
         assert out.dims == ("time", "distance", "length")
         assert out.shape == (9, 9, 9)
+
+    def test_patches_different_coords_same_shape(self, random_patch):
+        """Ensure the intersection of coordinates in output when coords differ."""
+        distance = random_patch.get_coord("distance").values
+        shifted_patch = random_patch.update_coords(distance_min=distance.mean())
+        assert False
+        out = random_patch + shifted_patch
 
 
 class TestAppendDims:

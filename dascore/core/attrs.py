@@ -548,14 +548,15 @@ def merge_compatible_coords_attrs(
     patch2: PatchType,
     attrs_to_ignore=("history", "dims"),
     dim_intersection: bool = False,
+    validate_coords: bool = True,
 ) -> tuple[CoordManager, PatchAttrs]:
     """
     Merge the coordinates and attributes of patches or raise if incompatible.
 
     The rules for compatibility are:
 
-    - All attrs must be equal other than those spsecified in attrs_to_ignore.
-    - Patches must share the same dimensions unless allow_subcoords == True.
+    - All attrs must be equal other than those specified in attrs_to_ignore.
+    - Patches must share the same dimensions unless dim_intersection == True.
     - All shared dimensional coordinates must be strictly equal
     - If patches share a non-dimensional coordinate they must be equal.
 
@@ -574,6 +575,9 @@ def merge_compatible_coords_attrs(
     dim_intersection
         If True, merge if any dimensions overlap, else raise if all do not
         overlap.
+    validate_coords
+        If True, ensure the coords are equal, else the responsibility for this
+        was handled upstream.
     """
 
     def _merge_coords(coords1, coords2):
@@ -619,7 +623,8 @@ def merge_compatible_coords_attrs(
         return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
 
     check_dims(patch1, patch2, intersection=dim_intersection)
-    check_coords(patch1, patch2)
+    if validate_coords:
+        check_coords(patch1, patch2)
     coord1, coord2 = patch1.coords, patch2.coords
     attrs1, attrs2 = patch1.attrs, patch2.attrs
     coord_out = _merge_coords(coord1, coord2)

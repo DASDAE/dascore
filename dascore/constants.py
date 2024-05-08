@@ -135,6 +135,17 @@ for each attribute.
 """
 
 
+select_values_description = """
+Any dimension name can be passed as key, and the values can be:
+    - a Slice or a tuple of (min, max) for that dimension. 
+      `None` and ... both indicate open intervals.
+    - an array of values to select, which must be a subset of the 
+      coordinate array.
+    - an array of booleans of the same length as the coordinate where
+      `True` indicates values to keep. 
+"""
+
+
 # Rich styles for various object displays.
 dascore_styles = dict(
     np_array_threshold=100,  # max number of elements to show in array

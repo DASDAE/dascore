@@ -16,7 +16,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.compat import array
+from dascore.compat import array, is_array
 from dascore.constants import dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import (
@@ -30,6 +30,7 @@ from dascore.units import (
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
+    _to_slice,
     all_close,
     all_diffs_close_enough,
     cached_method,
@@ -231,8 +232,52 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def convert_units(self, unit) -> Self:
         """Convert from one unit to another. Set units if None are set."""
 
+    def _select_by_value_array(self, arg):
+        """Select values based on an array of values."""
+        values = self.values
+        # First simply filter arg values to only include those in the index
+        valid_values = arg[np.isin(arg, values)]
+        # Handle fast cases for sorted and reverse sorted coords.
+        if self.sorted:
+            inds = np.searchsorted(values, valid_values)
+            return self[inds], inds
+        if self.reverse_sorted:
+            inds = np.searchsorted(-values, -valid_values)
+            return self[inds], inds
+        # Sort the array, then find insertion points, and map
+        # back to pre-sorted indices.
+        argsort = np.argsort(values)
+        sorted_values = values[argsort]
+        sorted_inds = np.searchsorted(sorted_values, valid_values)
+        inds = argsort[sorted_inds]
+        return self[inds], inds
+
+    def _select_by_sample_array(self, arg):
+        """Select based on index values."""
+        if not np.issubdtype(arg.dtype, np.integer):
+            msg = "Using an array input for select with samples requires integer dtype."
+            raise CoordError(msg)
+        # Filter out bad indices
+        arg = arg[np.abs(arg) < len(self)]
+        return self[arg], arg
+
+    def _select_by_array(self, arg, samples=False, relative=False):
+        """Select based on arg being an array."""
+        if samples:
+            return self._select_by_sample_array(arg)
+        arg = self._get_compatible_value(arg, relative=relative)
+        return self._select_by_value_array(arg)
+
+    def _select_by_samples(self, arg):
+        """Select using samples."""
+        reductions = _to_slice(arg)
+        new = self[reductions]
+        return new, reductions
+
     @abc.abstractmethod
-    def select(self, arg, relative=False) -> tuple[Self, slice | ArrayLike]:
+    def select(
+        self, arg, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
         """
         Returns an entity that can be used in a list for numpy indexing
         and selected coord.
@@ -274,6 +319,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def __str__(self):
         return str(self.__rich__())
+
+    __repr__ = __str__
 
     def __array__(self):
         """Numpy method for getting array data with `np.array(coord)`."""
@@ -437,7 +484,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if hasattr(value, "units"):
             value = convert_units(value.magnitude, self.units, value.units)
         # if null or ... just return None
-        if pd.isnull(value) or value is Ellipsis:
+        if not is_array(value) and (pd.isnull(value) or value is Ellipsis):
             return None
         # special case for datetime and relative
         if relative:
@@ -739,12 +786,19 @@ class CoordRange(BaseCoord):
         out["start"], out["stop"], out["step"] = start, stop, step
         return self.__class__(**out)
 
-    def select(self, args, relative=False) -> tuple[BaseCoord, slice | ArrayLike]:
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Apply select, return selected coords and index to apply to array.
 
         Can return a CoordDegenerate if selection is outside of range.
         """
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        elif samples:
+            return self._select_by_samples(args)
+
         args = self.get_slice_tuple(args, relative=relative)
         start = self._get_index(args[0], forward=self.sorted)
         stop = self._get_index(args[1], forward=self.reverse_sorted)
@@ -903,8 +957,15 @@ class CoordArray(BaseCoord):
         values = convert_units(self.values, units, self.units)
         return self.new(units=units, values=values)
 
-    def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        elif samples:
+            return self._select_by_samples(args)
+
         args = self.get_slice_tuple(args, relative=relative)
         values = self.values
         out = np.ones_like(values, dtype=np.bool_)
@@ -1036,8 +1097,15 @@ class CoordMonotonicArray(CoordArray):
     _rich_style = dascore_styles["coord_monotonic"]
     _sorted = True
 
-    def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        elif samples:
+            return self._select_by_samples(args)
+
         v1, v2 = self.get_slice_tuple(args, relative=relative)
         # reverse order if reverse monotonic. This is done so when we mult
         # by -1 in _get_index the inverted range is used.
@@ -1103,7 +1171,9 @@ class CoordDegenerate(CoordArray):
     step: Any = None
     _rich_style = dascore_styles["coord_degenerate"]
 
-    def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
         """Select for Degenerate coords does nothing."""
         return self, slice(None, None)
 

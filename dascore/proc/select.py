@@ -1,20 +1,20 @@
 """Function for querying Patchs."""
 from __future__ import annotations
 
-from dascore.constants import PatchType
+from dascore.constants import PatchType, select_values_description
+from dascore.utils.docs import compose_docstring
 from dascore.utils.patch import patch_function
 
 
 @patch_function(history=None)
+@compose_docstring(select_params=select_values_description)
 def select(
     patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
 ) -> PatchType:
     """
     Return a subset of the patch.
 
-    Any dimension of the data can be passed as key, and the values
-    should either be a Slice or a tuple of (min, max) for that
-    dimension. None and ... both indicate open intervals.
+    {select_params}
 
     Parameters
     ----------
@@ -29,7 +29,7 @@ def select(
     samples
         If True, the query meaning is in samples.
     **kwargs
-        Used to specify the dimension and slices to select on.
+        Used to specify the dimension select data.
 
     Examples
     --------

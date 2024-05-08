@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import warnings
 from collections import defaultdict
-from collections.abc import Mapping, Sequence, Sized
+from collections.abc import Mapping, Sequence
 from functools import reduce
 from itertools import zip_longest
 from operator import and_, or_
@@ -54,7 +54,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import dascore_styles
+from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import BaseCoord, CoordSummary, get_coord
 from dascore.exceptions import (
     CoordDataError,
@@ -64,6 +64,7 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.utils.display import get_nice_text
+from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _matches_prefix_suffix,
@@ -82,7 +83,7 @@ from dascore.utils.models import (
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
 
 
-def _validate_select_coords(coord, coord_name: str):
+def _ensure_1d_coord(coord, coord_name: str):
     """Ensure multi-dims are not used."""
     if not len(coord.shape) == 1:
         msg = (
@@ -107,26 +108,8 @@ def _indirect_coord_updates(cm, dim_name, coord_name: str, reduction, new_coords
         new_coords[icoord] = (dims, new)
 
 
-def _to_slice(limits):
-    """Convert slice or two len tuple to slice."""
-    if isinstance(limits, slice):
-        return limits
-    # ints should be interpreted as Slice(int, int+1) to not collapse dim.
-    if isinstance(limits, int):
-        if limits == -1:  # -1 case needs open interval to work
-            return slice(-1, None)
-        return slice(limits, limits + 1)
-    if limits is ... or limits is None:
-        return slice(None, None)
-    assert isinstance(limits, Sized) and len(limits) == 2
-    val1, val2 = limits
-    start = None if val1 is ... or val1 is None else val1
-    stop = None if val2 is ... or val2 is None else val2
-    return slice(start, stop)
-
-
 def _get_indexers_and_new_coords_dict(cm, kwargs, samples=False, relative=False):
-    """Function to get reductions for each dimension."""
+    """Get reductions for each dimension."""
     dim_reductions = {x: slice(None, None) for x in cm.dims}
     dimap = cm.dim_map
     new_coords = dict(cm._get_dim_array_dict(keep_coord=True))
@@ -135,14 +118,10 @@ def _get_indexers_and_new_coords_dict(cm, kwargs, samples=False, relative=False)
         if coord_name not in cm.coord_map or not len(cm.dim_map[coord_name]):
             continue
         coord = cm.coord_map[coord_name]
-        _validate_select_coords(coord, coord_name)
+        _ensure_1d_coord(coord, coord_name)
         dim_name = dimap[coord_name][0]
         # different logic if we are using indices or values
-        if not samples:
-            new_coord, reductions = coord.select(limits, relative=relative)
-        else:
-            reductions = _to_slice(limits)
-            new_coord = coord[reductions]
+        new_coord, reductions = coord.select(limits, relative=relative, samples=samples)
         # this handles the case of out-of-bound selections.
         # These should be converted to degenerate coords.
         dim_reductions[dim_name] = reductions
@@ -578,23 +557,26 @@ class CoordManager(DascoreBaseModel):
             out.append({x: kwargs[x] for x in args if x is not None})
         return out
 
+    @compose_docstring(select_desc=select_values_description)
     def select(
         self, array: MaybeArray = None, relative=False, samples=False, **kwargs
     ) -> tuple[Self, MaybeArray]:
         """
         Perform value-based selection on coordinates.
 
+        {select_desc}
+
         Parameters
         ----------
         array
             An array to which the selection will be applied.
         relative
-            If True, coordinate updates are relative.
+            If True, coordinate updates are relative. Does nothing if values
+            passed are numpy arrays.
         samples
             If True, the query meaning is in samples.
         **kwargs
-            Used to specify select arguments. Can be of the form
-            {coord_name: (lower_limit, upper_limit)}.
+            Used to specify dimension and select arguments.
         """
         # Relative or sample queries cannot be performed multiple times on
         # the same dimension (since multiple coords can reference the same dim)
@@ -651,6 +633,8 @@ class CoordManager(DascoreBaseModel):
 
     def __str__(self):
         return str(self.__rich__())
+
+    __repr__ = __str__
 
     def equals(self, other) -> bool:
         """Return True if other coordinates are approx equal."""

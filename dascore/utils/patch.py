@@ -533,6 +533,18 @@ def _select_compatible(
     patch2
         The second patch to make compatible with the first.
     """
+    dim_intersection = _merge_tuples(patch1.dims, patch2.dims)
+    dim_union = set(patch1.dims) & set(patch2.dims)
+    common_dims = tuple(x for x in dim_intersection if x in dim_union)
+    # ensure the patches have the same dimension order and are sorted along common dims.
+    patch1_sorted = patch1.sort_coords(*common_dims)
+    patch2_sorted = patch2.sort_coords(*common_dims)
+    for dim in common_dims:
+        ar1 = patch1_sorted.get_coord(dim)
+        ar2 = patch2_sorted.get_coord(dim)
+        if ar1 != ar2:
+            intersection = np.intersect1d(ar1.values, ar2.values, assume_unique=True)
+            breakpoint()
     return patch1, patch2
 
 

@@ -590,6 +590,32 @@ class TestSelect:
         assert out.shape[distance_dim] == 4
 
 
+class TestArraySelect:
+    """Tests for using select with array values."""
+
+    def test_array_subset(self, coord_manager):
+        """Ensure a subset of values works with select."""
+        if "time" not in coord_manager.dims:
+            return
+        dim_name = coord_manager.dims[0]
+        coord = coord_manager.get_coord(dim_name)
+        sub = coord[1:-1].values
+        out, _ = coord_manager.select(**{dim_name: sub})
+        assert out.shape[out.dims.index(dim_name)] == len(sub)
+
+    def test_array_indices(self, coord_manager):
+        """Ensure array indices work in select."""
+        dims = coord_manager.dims
+        dim_name = dims[1] if coord_manager.ndim > 1 else dims[0]
+        coord = coord_manager.get_coord(dim_name)
+        if len(coord) < 5:
+            return
+        inds = np.array([1, 2, 3])
+        out, _ = coord_manager.select(**{dim_name: inds}, samples=True)
+        coord_out = out.get_coord(dim_name)
+        assert len(inds) == len(coord_out)
+
+
 class TestEquals:
     """Tests for coord manager equality."""
 

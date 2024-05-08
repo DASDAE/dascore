@@ -6,6 +6,7 @@ from operator import mul
 
 import numpy as np
 
+from dascore.compat import is_array
 from dascore.constants import PatchType
 from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
@@ -43,7 +44,7 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
     ndims = len(patch.shape)
     for dxs_or_val, ax in zip(dxs_or_vals, axes):
         indexer = broadcast_for_index(ndims, ax, None, fill=slice(None))
-        if isinstance(dxs_or_val, np.ndarray):
+        if is_array(dxs_or_val):
             array = np.trapz(array, x=dxs_or_val, axis=ax)[indexer]
         else:
             array = np.trapz(array, dx=dxs_or_val, axis=ax)[indexer]
@@ -62,7 +63,7 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
     array = patch.data
     for dx_or_val, ax in zip(dxs_or_vals, axes):
         # if coordinate values are provided need to get diffs.
-        if isinstance(dx_or_val, np.ndarray):
+        if is_array(dx_or_val):
             dx_or_val = dx_or_val[1:] - dx_or_val[:-1]
         ndim = len(out.shape)
         # get diffs along dimension
