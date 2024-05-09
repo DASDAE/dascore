@@ -53,7 +53,7 @@ def correlate(
     lag: int | float | Quantity | None = None,
     step_size: int = 1,
     samples=False,
-    ifft=True,
+    idft=True,
     **kwargs,
 ) -> PatchType:
     """
@@ -67,7 +67,7 @@ def correlate(
         The patch can be in time or frequency domains.
     lag :
         An optional argument to save only certain lags instead of full
-        output. It can't be used if ifft = False.
+        output. It can't be used if idft = False.
     step_size : int, optional (default = None)
         An optional argument to skip rows/columns for the virtual receiver.
         A step_size = 2 means performing cross correlation (cc)
@@ -76,8 +76,8 @@ def correlate(
     samples : bool, optional (default = False)
         If True, the argument specified in kwargs refers to the *sample* not
         value along that axis. See examples for details.
-    ifft : bool, optional (default = Ture)
-        If True, it applies ifft and return results in time domain.
+    idft : bool, optional (default = Ture)
+        If True, it applies idft and return results in time domain.
     **kwargs
         Additional arguments to specify cc dimension and the
         master source(s), to which we want to cross-correlate all other
@@ -116,13 +116,13 @@ def correlate(
     >>> # Calculate cc of a patch for all channels as receivers and
     >>> # the 10 m channel as the master channel and result data in frequency domain.
     >>> # The new patch has dimensions (ft_time, distance).
-    >>> cc_patch = patch.correlate(distance = 10 * m, ifft = False)
+    >>> cc_patch = patch.correlate(distance = 10 * m, idft = False)
 
-    >>> # Example 6
-    >>> # Calculate cc of channel numbers [1,3,7,8,20] as master channels
-    >>> # and every fourth channel as receivers.
-    >>> # The new patch has dimensions (lag_time, distance, source_distance).
-    >>> cc_patch = patch.correlate(distance = [1,3,7,8,20], step_size = 4)
+    # Example 6
+    # Calculate cc of channel numbers [1,3,7,8,20] as master channels
+    # and every fourth channel as receivers.
+    # The new patch has dimensions (lag_time, distance, source_distance).
+    cc_patch = patch.correlate(distance = [1,3,7,8,20], step_size = 4)
 
     Notes
     -----
@@ -138,8 +138,8 @@ def correlate(
     use the correlate function, which automatically handles the zero padding.
     """
     assert len(patch.dims) == 2, "must be a 2D patch."
-    if not ifft and lag is not None:
-        msg = "lag argument can't be used when ifft is set to False."
+    if not idft and lag is not None:
+        msg = "lag argument can't be used when idft is set to False."
         raise ValueError(msg)
     dim, source_axis, source = get_dim_value_from_kwargs(patch, kwargs)
     # get the axis and coord over which fft should be calculated.
@@ -163,7 +163,8 @@ def correlate(
         )
         patch = patch.update(data=patch_new_data, coords=coords, attrs=attrs)
 
-    # determine proper fft, ifft functions based on data being real or complex
+    # determine whether fft is needed
+    # determine proper fft, idft functions based on data being real or complex
     if (dim == "distance" and fft_dim != "ft_time") or (
         dim == "time" and fft_dim != "ft_distance"
     ):
@@ -171,17 +172,15 @@ def correlate(
         is_real = not np.issubdtype(patch.data.dtype, np.complexfloating)
         # perform FFT (since the input is not already in the frequency domain)
         fft_func = np.fft.rfft if is_real else np.fft.fft
-        # perform ffts and get source array (a sub-slice of larger fft)
-        fft = fft_func(
-            patch.data, axis=fft_axis, n=next_fast_len(patch.shape[fft_axis] * 2 - 1)
-        )
-        # ensure coordinate is evenly spaced
-        fft_coord = patch.get_coord(fft_dim)
-
         # get the closest fast length. Some padding is applied in the fft to avoid
         # inefficient lengths. Note: This is not always a power of 2.
         cx_len = patch.shape[fft_axis] * 2 - 1
         fast_len = next_fast_len(cx_len)
+        # perform ffts and get source array (a sub-slice of larger fft)
+        fft = fft_func(patch.data, axis=fft_axis, n=fast_len)
+        # ensure coordinate is evenly spaced
+        fft_coord = patch.get_coord(fft_dim)
+
     else:
         needed_fft = False
         is_real = not np.min(patch.coords.get_array(fft_dim)) < 0
@@ -202,7 +201,7 @@ def correlate(
     # applies to real fft
     n_out = fast_len if (not is_real or fast_len % 2 != 0) else fast_len - 1
 
-    if ifft:
+    if idft:
         ifft_func = np.fft.irfft if is_real else np.fft.ifft
         if needed_fft:
             corr_array = ifft_func(fft_prod, axis=fft_axis, n=n_out)
