@@ -119,14 +119,14 @@ class TestCorrelateInternal:
             out.channel_count == corr_patch.channel_count
         ), "Expected size of the output distance coordinate to match the original patch"
 
-    def test_correlation_ifft_false(self, corr_patch):
+    def test_correlation_idft_false(self, corr_patch):
         """
         Ensure correlate function can return the result in the frequency domain
-        when the ifft flag is set to Flase.
+        when the idft flag is set to Flase.
         """
         # return correlation in frequency domain
         correlated_patch_freq_domain = corr_patch.correlate(
-            distance=2, samples=True, ifft=False
+            distance=2, samples=True, idft=False
         )
 
         # check if the returned data is in the frequency domain
