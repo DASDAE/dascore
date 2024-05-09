@@ -232,17 +232,18 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def convert_units(self, unit) -> Self:
         """Convert from one unit to another. Set units if None are set."""
 
-    def _select_by_value_array(self, arg):
+    def _order_by_value_array(self, array):
         """Select values based on an array of values."""
         values = self.values
         # First simply filter arg values to only include those in the index
-        valid_values = arg[np.isin(arg, values)]
+        valid_values = array[np.isin(array, values)]
         # Handle fast cases for sorted and reverse sorted coords.
         if self.sorted:
             inds = np.searchsorted(values, valid_values)
             return self[inds], inds
         if self.reverse_sorted:
-            inds = np.searchsorted(-values, -valid_values)
+            ## need to_float here because datetime can't be negated.
+            inds = np.searchsorted(-to_float(values), -to_float(valid_values))
             return self[inds], inds
         # Sort the array, then find insertion points, and map
         # back to pre-sorted indices.
@@ -252,19 +253,39 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         inds = argsort[sorted_inds]
         return self[inds], inds
 
-    def _select_by_sample_array(self, arg):
+    def _order_by_sample_array(self, array):
         """Select based on index values."""
-        if not np.issubdtype(arg.dtype, np.integer):
+        if not np.issubdtype(array.dtype, np.integer):
             msg = "Using an array input for select with samples requires integer dtype."
             raise CoordError(msg)
         # Filter out bad indices
-        arg = arg[np.abs(arg) < len(self)]
-        return self[arg], arg
+        array = array[np.abs(array) < len(self)]
+        return self[array], array
+
+    def _select_by_value_array(self, array):
+        """Select values based on an array of values."""
+        values = self.values
+        # First simply filter arg values to only include those in the index
+        valid_values = np.isin(values, array)
+        return self[valid_values], valid_values
+
+    def _select_by_sample_array(self, array):
+        """Select based on index values."""
+        if not np.issubdtype(array.dtype, np.integer):
+            msg = "Using an array input for select with samples requires integer dtype."
+            raise CoordError(msg)
+        # Filter out bad indices
+        assert self.ndim <= 1, "Select only works on 1D coords."
+        inds = np.arange(len(self))
+        valid_values = np.isin(inds, array)
+        return self[valid_values], valid_values
 
     def _select_by_array(self, arg, samples=False, relative=False):
         """Select based on arg being an array."""
         if samples:
             return self._select_by_sample_array(arg)
+        if np.issubdtype(getattr(arg, "dtype", None), np.bool_):
+            return self[arg], arg
         arg = self._get_compatible_value(arg, relative=relative)
         return self._select_by_value_array(arg)
 
@@ -276,12 +297,34 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     @abc.abstractmethod
     def select(
-            self, arg, relative=False, samples=False
+        self, arg, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
         """
         Returns an entity that can be used in a list for numpy indexing
         and selected coord.
         """
+
+    def order(
+        self, array, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
+        """
+        Order coordinate according to array values or samples.
+
+        Parameters
+        ----------
+        array
+            A numpy array of values in coordinate or (if samples)
+            indices.
+        relative
+            If True, the values are relative to the start or end of coordinate.
+        samples
+            If True, the array is of dtype in and refers to samples in the
+            coordinate.
+        """
+        if samples:
+            return self._order_by_sample_array(array)
+        array_compat = self._get_compatible_value(array, relative=relative)
+        return self._order_by_value_array(array_compat)
 
     @abc.abstractmethod
     def __getitem__(self, item) -> Self:
@@ -366,9 +409,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Returns a numpy datatype."""
 
     @property
+    @cached_method
     def shape(self) -> tuple[int, ...]:
         """Return the shape of the coordinate data."""
         return self.data.shape
+
+    @property
+    @cached_method
+    def ndim(self) -> int:
+        """Return the number of dimensions in patch."""
+        return len(self.shape)
 
     @property
     def size(self) -> int:
@@ -447,10 +497,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
 
     def update_data(
-            self,
-            data: ArrayLike | np.ndarray | None = None,
-            values: ArrayLike | np.ndarray | None = None,
-            **kwargs,
+        self,
+        data: ArrayLike | np.ndarray | None = None,
+        values: ArrayLike | np.ndarray | None = None,
+        **kwargs,
     ) -> Self:
         """
         Update the data of the coordinate.
@@ -509,9 +559,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return between or bad_start or bad_stop
 
     def get_slice_tuple(
-            self,
-            select: slice | None | type(Ellipsis) | tuple[Any, Any],
-            relative=False,
+        self,
+        select: slice | None | type(Ellipsis) | tuple[Any, Any],
+        relative=False,
     ) -> tuple[Any, Any]:
         """
         Get a tuple with (start, stop) and perform basic checks.
@@ -701,6 +751,7 @@ class NonCoord(BaseCoord):
     """
     A Coordinate representing not a coordinate.
     """
+
     length: int
     _rich_style = dascore_styles["coord_non"]
 
@@ -758,10 +809,10 @@ class NonCoord(BaseCoord):
     @property
     def values(self):
         """Return the internal data. Same as values attribute."""
-        raise CoordError(f"NonCoord has no values")
+        raise CoordError("NonCoord has no values")
 
     def select(
-            self, args, relative=False, samples=False
+        self, args, relative=False, samples=False
     ) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Select new values inside coord.
@@ -769,13 +820,19 @@ class NonCoord(BaseCoord):
         For NonCoord, samples =  True or raise.
         """
         if relative or not samples:
-            msg = (
-                "UnCoord does not support relative and samples must be True."
-            )
+            msg = "UnCoord does not support relative and samples must be True."
             raise CoordError(msg)
         if is_array(args):
             return self._select_by_array(args, relative=relative, samples=samples)
         return self._select_by_samples(args)
+
+    @compose_docstring(doc=BaseCoord.order.__doc__)
+    def order(
+        self, array, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
+        """
+        {doc}
+        """
 
     def update(self, length=None, **kwargs):
         """Update coordinate."""
@@ -873,7 +930,7 @@ class CoordRange(BaseCoord):
         return self.__class__(**out)
 
     def select(
-            self, args, relative=False, samples=False
+        self, args, relative=False, samples=False
     ) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Apply select, return selected coords and index to apply to array.
@@ -1043,7 +1100,7 @@ class CoordArray(BaseCoord):
         return self.new(units=units, values=values)
 
     def select(
-            self, args, relative=False, samples=False
+        self, args, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
         if is_array(args):
@@ -1183,7 +1240,7 @@ class CoordMonotonicArray(CoordArray):
     _sorted = True
 
     def select(
-            self, args, relative=False, samples=False
+        self, args, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
         if is_array(args):
@@ -1218,8 +1275,8 @@ class CoordMonotonicArray(CoordArray):
         # since search sorted only works on ascending monotonic arrays we
         # negative descending arrays to get the same effect.
         if self.reverse_sorted:
-            values = values * -1
-            value = value * -1
+            values = to_float(values) * -1
+            value = to_float(value) * -1
         ind = np.searchsorted(values, value, side=side_dict[left])
         return ind
 
@@ -1257,7 +1314,7 @@ class CoordDegenerate(CoordArray):
     _rich_style = dascore_styles["coord_degenerate"]
 
     def select(
-            self, args, relative=False, samples=False
+        self, args, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
         """Select for Degenerate coords does nothing."""
         return self, slice(None, None)
@@ -1277,16 +1334,16 @@ class CoordDegenerate(CoordArray):
 
 
 def get_coord(
-        *,
-        data: ArrayLike | None | np.ndarray = None,
-        values: ArrayLike | None | np.ndarray = None,
-        start=None,
-        min=None,
-        stop=None,
-        max=None,
-        step=None,
-        units: None | Unit | Quantity | str = None,
-        dtype: str | np.dtype = None,  # noqa
+    *,
+    data: ArrayLike | None | np.ndarray = None,
+    values: ArrayLike | None | np.ndarray = None,
+    start=None,
+    min=None,
+    stop=None,
+    max=None,
+    step=None,
+    units: None | Unit | Quantity | str = None,
+    dtype: str | np.dtype = None,
 ) -> BaseCoord:
     """
     Given multiple types of input, return a coordinate.

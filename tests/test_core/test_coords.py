@@ -104,6 +104,14 @@ def monotonic_datetime_coord():
 
 @pytest.fixture(scope="session")
 @register_func(COORDS)
+def reverse_monotonic_datetime_coord():
+    """Create coordinates which are evenly sampled."""
+    ar = -np.cumsum(np.abs(np.random.rand(100) * 1_000))
+    return get_coord(data=dc.to_datetime64(ar))
+
+
+@pytest.fixture(scope="session")
+@register_func(COORDS)
 def random_coord():
     """Create coordinates which are evenly sampled."""
     ar = np.random.rand(100) * 1_000
@@ -634,6 +642,95 @@ class TestSelect:
         values = long_coord.values
         sub = values[1:-1]
         out, reduction = long_coord.select(sub)
+        assert reduction.sum() == len(sub)
+
+    def test_overlapping_array(self, long_coord):
+        """Ensure an overlapping array works as well."""
+        # Create an array which likely has values not contained in the original.
+        values1 = long_coord.values[: len(long_coord) // 2]
+        values2 = long_coord._get_compatible_value(-to_float(values1))
+        values = np.concatenate([values1, values2])
+        # Ensure this still gets some output.
+        in_coord = np.isin(long_coord.values, values)
+        out, reduction = long_coord.select(values)
+        assert in_coord.sum() == len(out) == reduction.sum()
+
+    def test_duplicate_array_samples(self, long_coord):
+        """Ensure duplicate do nothing."""
+        inds = np.array([0, 0, 0])
+        coord, reduction = long_coord.select(inds, samples=True)
+        assert len(coord) == len(np.unique(inds))
+        assert np.all(coord.values == coord.values[0])
+
+    def test_non_integer_array_with_samples_raises(self, evenly_sampled_coord):
+        """Samples argument should require integer arrays."""
+        vals = np.array([1.01, 2.0, 3.0])
+        msg = "requires integer dtype"
+        with pytest.raises(CoordError, match=msg):
+            evenly_sampled_coord.select(vals, samples=True)
+
+    def test_duplicate_array_values(self, long_coord):
+        """Ensure duplicate values don't cause duplicates in array."""
+        second_value = long_coord.values[1]
+        array = np.array([second_value, second_value])
+        coord, reduction = long_coord.select(array)
+        assert len(coord) == len(np.unique(array))
+        assert np.all(array == second_value)
+
+    def test_values_not_in_coord(self, long_coord):
+        """Ensure using values not in coord results in an empty coordinate."""
+        values1 = long_coord.values[: len(long_coord) // 2]
+        rand = np.random.rand(len(values1))
+        # try to make values that won't be in the coordinate.
+        values2 = long_coord._get_compatible_value(-to_float(values1) + rand)
+        # if by some chance there are any overlaps just bail out.
+        if np.any(np.isin(values2, long_coord.data)):
+            return
+        out, red = long_coord.select(values2)
+        assert out.shape == red.sum()
+        assert len(out) == 0
+
+    def test_index_not_in_coord(self, long_coord):
+        """
+        Ensure using samples array with values not in coord results in
+        an empty coordinate.
+        """
+        bad_indices = np.arange(len(long_coord)) + len(long_coord)
+        out, red = long_coord.select(bad_indices, samples=True)
+        assert out.shape == red.sum()
+        assert len(out) == 0
+
+    def test_array_boolean_all_true(self, long_coord):
+        """Ensure a boolean array works to filter values."""
+        bools = np.ones(len(long_coord), dtype=np.bool_)
+        out, red = long_coord.select(bools)
+        assert len(out) == bools.sum()
+        assert np.all(red == bools)
+
+    def test_array_boolean_all_false(self, long_coord):
+        """Ensure an array of all false values works to filter coord."""
+        bools = np.zeros(len(long_coord), dtype=np.bool_)
+        out, red = long_coord.select(bools)
+        assert len(out) == bools.sum()
+        assert np.all(red == bools)
+
+    def test_mix_bools(self, long_coord):
+        """Ensure mixed booleans also work."""
+        bools = np.zeros(len(long_coord), dtype=np.bool_)
+        bools[::2] = True
+        out, red = long_coord.select(bools)
+        assert len(out) == bools.sum()
+        assert np.all(red == bools)
+
+
+class TestOrder:
+    """Tests for ordering coordinates."""
+
+    def test_select_sub_array(self, long_coord):
+        """A sub-array should allow indexing."""
+        values = long_coord.values
+        sub = values[1:-1]
+        out, reduction = long_coord.order(sub)
         assert np.issubdtype(reduction.dtype, np.integer)
         assert len(reduction) == len(sub)
 
@@ -645,13 +742,13 @@ class TestSelect:
         values = np.concatenate([values1, values2])
         # Ensure this still gets some output.
         in_coord = np.isin(values, long_coord.values)
-        out, reduction = long_coord.select(values)
+        out, reduction = long_coord.order(values)
         assert in_coord.sum() == len(out) == len(reduction)
 
     def test_duplicate_array_samples(self, long_coord):
         """Ensure duplicate indices cause duplicates in array."""
         inds = np.array([0, 0, 0])
-        coord, reduction = long_coord.select(inds, samples=True)
+        coord, reduction = long_coord.order(inds, samples=True)
         assert len(coord) == len(inds)
         assert np.all(coord.values == coord.values[0])
 
@@ -666,14 +763,14 @@ class TestSelect:
         """Ensure duplicate values cause duplicates in array."""
         second_value = long_coord.values[1]
         array = np.array([second_value, second_value])
-        coord, reduction = long_coord.select(array)
+        coord, reduction = long_coord.order(array)
         assert len(coord) == len(array)
         assert np.all(array == second_value)
 
     def test_sorted_by_values(self, long_coord):
         """Ensure the output is sorted by values given to select."""
         vals = long_coord.values[np.array([4, 2, 1, 3])]
-        coord, reduction = long_coord.select(vals)
+        coord, reduction = long_coord.order(vals)
         assert vals.shape == coord.shape
         assert np.all(vals == coord.values)
 
@@ -686,7 +783,7 @@ class TestSelect:
         # if by some chance there are any overlaps just bail out.
         if np.any(np.isin(values2, long_coord.data)):
             return
-        out, red = long_coord.select(values2)
+        out, red = long_coord.order(values2)
         assert out.shape == red.shape
         assert len(out) == 0
 
@@ -696,7 +793,7 @@ class TestSelect:
         an empty coordinate.
         """
         bad_indices = np.arange(len(long_coord)) + len(long_coord)
-        out, red = long_coord.select(bad_indices, samples=True)
+        out, red = long_coord.order(bad_indices, samples=True)
         assert out.shape == red.shape
         assert len(out) == 0
 
@@ -1210,7 +1307,8 @@ class TestDegenerateCoords:
 
 class TestNonCoord:
     """Tests for the non-coordinate."""
-    @pytest.fixture(scope='class')
+
+    @pytest.fixture(scope="class")
     def basic_non_coord(self):
         """Create a simple non coord."""
         out = get_coord(data=10)

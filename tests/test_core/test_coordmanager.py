@@ -604,6 +604,31 @@ class TestSelect:
         distance_dim = out.dims.index("distance")
         assert out.shape[distance_dim] == 4
 
+    def test_array_by_values(self, coord_manager):
+        """Ensure using an input array works for select."""
+        name = coord_manager.dims[0]
+        coord = coord_manager.get_coord(coord_manager.dims[0])
+        values = coord.values[: int(np.ceil(len(coord) / 2))]
+        out, _ = coord_manager.select(**{name: values})
+        assert set(out.get_array(name)) == set(values)
+
+    def test_array_by_ints(self, coord_manager):
+        """Ensure int array also works"""
+        name = coord_manager.dims[0]
+        coord = coord_manager.get_coord(coord_manager.dims[0])
+        if len(coord) <= 1:
+            pytest.skip("Need non-one length coordinate")
+        values = np.arange(len(coord))[:: len(coord) // 2]
+        out, _ = coord_manager.select(**{name: values}, samples=True)
+        assert len(out.get_coord(name)) == len(values)
+
+
+class TestOrder:
+    """Tests for ordering coordinate managers."""
+
+    def test_order(self):
+        pass
+
 
 class TestArraySelect:
     """Tests for using select with array values."""

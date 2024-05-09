@@ -108,12 +108,18 @@ def _indirect_coord_updates(cm, dim_name, coord_name: str, reduction, new_coords
         new_coords[icoord] = (dims, new)
 
 
-def _get_indexers_and_new_coords_dict(cm, kwargs, samples=False, relative=False):
+def _get_indexers_and_new_coords_dict(
+    cm,
+    kwargs,
+    samples=False,
+    relative=False,
+    operation="select",
+):
     """Get reductions for each dimension."""
     dim_reductions = {x: slice(None, None) for x in cm.dims}
     dimap = cm.dim_map
     new_coords = dict(cm._get_dim_array_dict(keep_coord=True))
-    for coord_name, limits in kwargs.items():
+    for coord_name, vals in kwargs.items():
         # this is not a selectable coord, just skip.
         if coord_name not in cm.coord_map or not len(cm.dim_map[coord_name]):
             continue
@@ -121,7 +127,8 @@ def _get_indexers_and_new_coords_dict(cm, kwargs, samples=False, relative=False)
         _ensure_1d_coord(coord, coord_name)
         dim_name = dimap[coord_name][0]
         # different logic if we are using indices or values
-        new_coord, reductions = coord.select(limits, relative=relative, samples=samples)
+        method = getattr(coord, operation)
+        new_coord, reductions = method(vals, relative=relative, samples=samples)
         # this handles the case of out-of-bound selections.
         # These should be converted to degenerate coords.
         dim_reductions[dim_name] = reductions
@@ -562,7 +569,7 @@ class CoordManager(DascoreBaseModel):
         self, array: MaybeArray = None, relative=False, samples=False, **kwargs
     ) -> tuple[Self, MaybeArray]:
         """
-        Perform value-based selection on coordinates.
+        Perform selection on coordinates.
 
         {select_desc}
 
@@ -577,25 +584,67 @@ class CoordManager(DascoreBaseModel):
             If True, the query meaning is in samples.
         **kwargs
             Used to specify dimension and select arguments.
+
+        See also [`CoordManager.order`](`dascore.core.CoordManager.order`).
         """
-        # Relative or sample queries cannot be performed multiple times on
-        # the same dimension (since multiple coords can reference the same dim)
         if relative or samples:
-            used_dims = [self.dim_map[x] for x in kwargs if x in self.coord_map]
-            if len(set(used_dims)) < len(used_dims):
-                msg = (
-                    f"Cannot use {kwargs} for query; some coords " f"share a dimension."
-                )
-                raise CoordError(msg)
+            self._check_multiple_relative(kwargs)
         # Otherwise, we need to sort through kwargs and call in a loop.
         kwarg_list = self._get_single_dim_kwarg_list(kwargs)
         for kwargs in kwarg_list:
             new_coords, indexers = _get_indexers_and_new_coords_dict(
-                self, kwargs, samples=samples, relative=relative
+                self, kwargs, samples=samples, relative=relative, operation="select"
             )
             self = self.update(**new_coords)
             array = self._get_new_data(indexers, array)
         return self, array
+
+    @compose_docstring(select_desc=select_values_description)
+    def order(
+        self, array: MaybeArray = None, relative=False, samples=False, **kwargs
+    ) -> tuple[Self, MaybeArray]:
+        """
+        Perform value-based ordering on coordinates.
+
+        Parameters
+        ----------
+        array
+            An array to which the selection will be applied.
+        relative
+            If True, coordinate updates are relative. Does nothing if values
+            passed are numpy arrays.
+        samples
+            If True, the query meaning is in samples.
+        **kwargs
+            Used to specify dimension and select arguments.
+
+        See also [`CoordManager.select`](`dascore.core.CoordManager.select`).
+        """
+        if relative or samples:
+            self._check_multiple_relative(kwargs)
+        # Otherwise, we need to sort through kwargs and call in a loop.
+        kwarg_list = self._get_single_dim_kwarg_list(kwargs)
+        for kwargs in kwarg_list:
+            new_coords, indexers = _get_indexers_and_new_coords_dict(
+                self,
+                kwargs,
+                samples=samples,
+                relative=relative,
+                operation="order",
+            )
+            self = self.update(**new_coords)
+            array = self._get_new_data(indexers, array)
+        return self, array
+
+    def _check_multiple_relative(self, kwargs):
+        """
+        Relative or sample queries cannot be performed multiple times on
+        the same dimension (since multiple coords can reference the same dim).
+        """
+        used_dims = [self.dim_map[x] for x in kwargs if x in self.coord_map]
+        if len(set(used_dims)) < len(used_dims):
+            msg = f"Cannot use {kwargs} for query; some coords " f"share a dimension."
+            raise CoordError(msg)
 
     def _get_new_data(self, indexer, array: MaybeArray) -> MaybeArray:
         """Get new data array after applying some trimming."""
