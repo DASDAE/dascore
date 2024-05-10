@@ -1,7 +1,7 @@
 """Module for applying aggregations along a specified axis."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 
 import numpy as np
@@ -29,6 +29,8 @@ patch
     The input Patch.
 dim
     The dimension along which aggregations are to be performed.
+    If None, apply aggregation to all dimensions sequentially.
+    If a sequence, apply sequentially in order provided.
 """
 
 
@@ -36,7 +38,7 @@ dim
 @compose_docstring(params=AGG_DOC_STR, options=list(_AGG_FUNCS))
 def aggregate(
     patch: PatchType,
-    dim: str | None = None,
+    dim: str | Sequence[str] | None = None,
     method: str | Callable = "mean",
 ) -> PatchType:
     """
@@ -48,6 +50,11 @@ def aggregate(
     method
         The aggregation to apply along dimension. Options are:
             {options}
+
+    Notes
+    -----
+    - The old dimension is kept but its coordiante values are removed.
+      use [`Patch.squeeze`](`dascore.Patch.squeeze`) to remove them.
 
     Examples
     --------
@@ -61,15 +68,14 @@ def aggregate(
     >>> patch_dist = patch.median("distance", method=np.nanmedian)
     """
     func = _AGG_FUNCS.get(method, method)
+    data = patch.data
+    # iterate all
     for current_dim in iterate(patch.dims if dim is None else dim):
         axis = patch.dims.index(current_dim)
-        data = func(patch.data, axis=axis)
-        # In this case we have reduced all the dimensions. Just return scalar.
-        if not is_array(data):
-            return data
-        coords = patch.coords.update(**{current_dim: None})
+        # Use expand dims
+        data = np.expand_dims(func(data, axis=axis), axis)
+        coords = patch.coords.update(**{current_dim: 1})
         patch = patch.new(data=data, coords=coords)
-
     return patch
 
 

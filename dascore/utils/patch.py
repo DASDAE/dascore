@@ -337,7 +337,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
         return [patch_dict_list[0]]
     dims = df["dims"].iloc[0].split(",")
     # get patches, ensure they are oriented the same.
-    patches = [x.transpose(*dims) for x in df["patch"]]
+    patches = [dc.proc.coords.transpose(*dims) for x in df["patch"]]
     axis = patches[0].dims.index(merge_dim)
     # get data, coords, attrs for merging patch together.
     datas = [x.data for x in patches]
@@ -543,7 +543,7 @@ def _select_compatible(
         ar1 = patch1_sorted.get_coord(dim)
         ar2 = patch2_sorted.get_coord(dim)
         if ar1 != ar2:
-            intersection = np.intersect1d(ar1.values, ar2.values, assume_unique=True)
+            intersection = np.intersect1d(ar1.values, ar2.values)
             breakpoint()
     return patch1, patch2
 
@@ -556,6 +556,6 @@ def _make_dims_alike(
     """
     target = _merge_tuples(patch1.dims, patch2.dims)
     target_dict = {x: 1 for x in target}
-    out1 = patch1.append_dims(**target_dict).transpose(*target)
-    out2 = patch2.append_dims(**target_dict).transpose(*target)
+    out1 = dc.proc.coords.transpose(*target)
+    out2 = dc.proc.coords.transpose(*target)
     return out1, out2

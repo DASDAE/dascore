@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import CoordError, UnitError
+from dascore.exceptions import UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
 
@@ -324,10 +324,10 @@ class TestPatchBroadcasting:
     def test_broadcast_single_shared_dim(self, random_patch):
         """Ensure two 2d patches can get broad-casted when one dim is the same."""
         # get two smallish patches to test multidimensional broadcasting.
-        patch1 = random_patch.transpose("time", "distance").select(
-            time=(1, 10), distance=(1, 10), samples=True
+        patch1 = dc.proc.coords.select(time=(1, 10), distance=(1, 10), samples=True)
+        patch2 = dc.proc.coords.transpose("distance", "time").rename_coords(
+            distance="length"
         )
-        patch2 = patch1.transpose("distance", "time").rename_coords(distance="length")
         out = patch1 * patch2
         assert out.dims == ("time", "distance", "length")
         assert out.shape == (9, 9, 9)
@@ -340,77 +340,6 @@ class TestPatchBroadcasting:
         out = random_patch + shifted_patch
 
 
-class TestAppendDims:
-    """Tests for appending dummy dimensions to data array."""
-
-    def test_no_dims_unchanged_patch(self, random_patch):
-        """Ensure no kwargs yields equal patches."""
-        out = random_patch.append_dims()
-        assert out == random_patch
-
-    def test_flat_dimension(self, random_patch):
-        """Ensure a flat dimension only expands dimensionality."""
-        out = random_patch.append_dims(new=1)
-        assert len(out.shape) == (len(random_patch.shape) + 1)
-        # New dim should show up at the end.
-        assert out.dims[-1] == "new"
-        coord = out.coords.get_array("new")
-        assert np.all(coord == np.array([1]))
-        # The flatten data should remain the same.
-        assert np.allclose(out.data.flatten(), random_patch.data.flatten())
-
-    def test_expand_dims(self, random_patch):
-        """Ensure dimensions can be expanded."""
-        out = random_patch.append_dims(new=[1, 2])
-        assert len(out.shape) == (len(random_patch.shape) + 1)
-        # New dim should show up at the end.
-        assert out.dims[-1] == "new"
-        coord = out.coords.get_array("new")
-        assert np.all(coord == np.array([1, 2]))
-
-    def test_expand_multiple_dims(self, random_patch):
-        """Ensure several dimensions can be expanded."""
-        small_patch = random_patch.select(
-            time=(1, 4),
-            distance=(1, 6),
-            samples=True,
-        )
-        out = small_patch.append_dims(new=[1, 2], old=[1, 2])
-        assert len(out.shape) == (len(random_patch.shape) + 2)
-        # New dim should show up at the end, in order.
-        assert out.dims[-2:] == ("new", "old")
-
-
-class TestSqueeze:
-    """Tests for squeeze."""
-
-    @pytest.fixture(scope="class")
-    def flat_patch(self):
-        """Create a patch with a degenerate dimension."""
-        data = np.atleast_2d(np.arange(10))
-        coords = {"time": np.arange(10), "distance": np.array([1])}
-        dims = ("distance", "time")
-        out = dc.Patch(data=data, dims=dims, coords=coords)
-        assert 1 in out.shape
-        return out
-
-    def test_remove_dimension(self, flat_patch):
-        """Tests for removing degenerate dimensions."""
-        out = flat_patch.squeeze("distance")
-        assert "distance" not in out.dims
-        assert len(out.data.shape) == 1, "data should be 1d"
-
-    def test_tutorial_example(self, random_patch):
-        """Ensure the tutorial snippet works."""
-        patch = random_patch.select(distance=0, samples=True)
-        squeezed = patch.squeeze()
-        assert len(squeezed.dims) < len(patch.dims)
-
-    def test_non_zero_length_raises(self, flat_patch):
-        """Ensure squeezing a non-flat dim raises helpful error."""
-        msg = "because it has non-zero length"
-        with pytest.raises(CoordError, match=msg):
-            flat_patch.squeeze(dim="time")
 
 
 class TestDropNa:

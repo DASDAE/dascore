@@ -677,6 +677,10 @@ def _dict_list_diffs(dict_list):
 
 def sanitize_range_param(select) -> tuple:
     """Given a slice or tuple, check and return slice or tuple."""
+    # we allow a len(2) list here to not break old codes, but encourage a tuple.
+    if not isinstance(select, (tuple, slice, list)) and not select is ...:
+        msg = "Range values must be a tuple or slice."
+        raise ParameterError(msg)
     # handle slices, need to convert to tuple
     if isinstance(select, slice):
         if select.step is not None:
@@ -761,3 +765,21 @@ def _to_slice(limits):
     start = None if val1 is ... or val1 is None else val1
     stop = None if val2 is ... or val2 is None else val2
     return slice(start, stop)
+
+
+def _maybe_array_to_slice(int_array, data_len):
+    """
+    Maybe convert an array of ints (indices) to a slice if it is sorted.
+    """
+    if len(int_array) < 2:
+        return int_array
+    diff = int_array[-1] - int_array[0]
+    int_array_len = len(int_array)
+    if diff == len(int_array) - 1:
+        if np.all(int_array[1:] > int_array[:-1]):
+            # this spans the whole array, use empty slice.
+            if int_array_len == data_len:
+                return slice(None)
+            # otherwise return sub-slice.
+            return slice(int_array[0], int_array[-1] + 1)
+    return int_array

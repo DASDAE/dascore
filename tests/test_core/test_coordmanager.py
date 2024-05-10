@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from rich.text import Text
 
 import dascore as dc
+import dascore.proc.coords
 from dascore import to_datetime64
 from dascore.core.coordmanager import (
     CoordManager,
@@ -540,7 +541,8 @@ class TestSelect:
             val2 = coord[ind_2 - 1] if isinstance(ind_2, int) else ind_2
             value_tuple = (val1, val2)
             # first, just check coords are equal
-            out1 = coord.select(value_tuple)[0]
+            new_cm, _ = cm_basic.select(**{name: value_tuple})
+            out1 = new_cm.get_coord(name)
             out2 = coord[slice(*ind_tuple)]
             if not out1 == out2:
                 assert all_close(out1.values, out2.values)
@@ -622,17 +624,6 @@ class TestSelect:
         out, _ = coord_manager.select(**{name: values}, samples=True)
         assert len(out.get_coord(name)) == len(values)
 
-
-class TestOrder:
-    """Tests for ordering coordinate managers."""
-
-    def test_order(self):
-        pass
-
-
-class TestArraySelect:
-    """Tests for using select with array values."""
-
     def test_array_subset(self, coord_manager):
         """Ensure a subset of values works with select."""
         if "time" not in coord_manager.dims:
@@ -654,6 +645,96 @@ class TestArraySelect:
         out, _ = coord_manager.select(**{dim_name: inds}, samples=True)
         coord_out = out.get_coord(dim_name)
         assert len(inds) == len(coord_out)
+
+    def test_multiple_dims_array_select(self, cm_basic):
+        """Ensure multiple arrays can be used for selection"""
+        time = cm_basic.get_array("time")
+        dist = cm_basic.get_array("distance")
+        time_inds = np.array([1, 4, 0])
+        dist_inds = np.array([10, 1, 2])
+        new_time, new_dist = time[time_inds], dist[dist_inds]
+
+        data = np.arange(cm_basic.size).reshape(cm_basic.shape)
+
+        # select doesn't re-order so we need to sort inds
+        ti, di = np.sort(time_inds), np.sort(dist_inds)
+        expected_data = np.stack([data[x, di] for x in ti])
+        cm1, new_data1 = cm_basic.select(
+            time=new_time,
+            distance=new_dist,
+            array=data,
+        )
+        cm2, new_data2 = cm_basic.select(
+            time=time_inds, distance=dist_inds, array=data, samples=True
+        )
+        assert cm1 == cm2
+        assert np.all(new_data1 == new_data2)
+
+        for cm, new_data in zip([cm1, cm2], [new_data1, new_data2]):
+            assert cm.shape == (len(time_inds), len(dist_inds))
+            # Ensure all the coordinates are correct.
+            assert np.all(np.isin(cm.get_array("time"), new_time))
+            assert np.all(np.isin(cm.get_array("distance"), new_dist))
+            # Check that the data were re-arranged correctly
+            assert np.all(expected_data == new_data)
+
+
+class TestOrder:
+    """Tests for ordering coordinate managers."""
+
+    def test_order_by_values(self, cm_basic):
+        """Ensure we can re-order the coord manager basic on coord values."""
+        time = cm_basic.get_array("time")
+        new_inds = [2, 1, 0, 3, 6]
+        new_times = time[new_inds]
+        data = np.arange(cm_basic.size).reshape(cm_basic.shape)
+        cm, new_data = cm_basic.order(time=new_times, array=data)
+        assert cm.shape == new_data.shape
+        assert np.all(cm.get_array("time") == new_times)
+        # Ensure the data were also arranged correctly.
+        assert np.all(data[new_inds] == new_data)
+
+    def test_order_by_samples(self, cm_basic):
+        """Ensure we can re-order the coord manager based on coord samples."""
+        time = cm_basic.get_array("time")
+        new_inds = [2, 1, 0, 3, 6]
+        new_times = time[new_inds]
+        data = np.arange(cm_basic.size).reshape(cm_basic.shape)
+        cm, new_data = cm_basic.order(time=new_inds, array=data, samples=True)
+        assert cm.shape == new_data.shape
+        assert np.all(cm.get_array("time") == new_times)
+        # Ensure the data were also arranged correctly.
+        assert np.all(data[new_inds] == new_data)
+
+    def test_multiple_dim_order(self, cm_basic):
+        """Ensure multiple dims can be used for re-ordering."""
+        time = cm_basic.get_array("time")
+        dist = cm_basic.get_array("distance")
+        time_inds = [1, 4, 0]
+        dist_inds = [10, 1, 2]
+        new_time, new_dist = time[time_inds], dist[dist_inds]
+
+        data = np.arange(cm_basic.size).reshape(cm_basic.shape)
+        expected_data = np.stack([data[x, dist_inds] for x in time_inds])
+
+        cm1, new_data1 = cm_basic.order(
+            time=new_time,
+            distance=new_dist,
+            array=data,
+        )
+        cm2, new_data2 = cm_basic.order(
+            time=time_inds, distance=dist_inds, array=data, samples=True
+        )
+        assert cm1 == cm2
+        assert np.all(new_data1 == new_data2)
+
+        for cm, new_data in zip([cm1, cm2], [new_data1, new_data2]):
+            assert cm.shape == (len(time_inds), len(dist_inds))
+            # Ensure all the coordinates are correct.
+            assert np.all(cm.get_array("time") == new_time)
+            assert np.all(cm.get_array("distance") == new_dist)
+            # Check that the data were re-arranged correctly
+            assert np.all(expected_data == new_data)
 
 
 class TestEquals:

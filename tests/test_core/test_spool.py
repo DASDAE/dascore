@@ -546,7 +546,7 @@ class TestSpoolStack:
         """Tests for when the spool has patches with different dimensions."""
         new_patch = random_spool[0].rename_coords(time="money")
         spool = dc.spool([random_spool[1], new_patch])
-        msg = "not compatible for merging"
+        msg = "because their dimensions are not equal"
         with pytest.warns(UserWarning, match=msg):
             spool.stack(dim_vary="time", check_behavior="warn")
 

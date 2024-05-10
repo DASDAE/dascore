@@ -126,6 +126,14 @@ def random_date_coord():
     return get_coord(data=dc.to_datetime64(ar))
 
 
+# This is a "special case" so it isnt aggregated into meta fixture.
+@pytest.fixture(scope="class")
+def basic_non_coord():
+    """Create a simple non coord."""
+    out = get_coord(data=10)
+    return out
+
+
 @pytest.fixture(scope="session", params=COORDS)
 def coord(request) -> BaseCoord:
     """Meta-fixture for returning all coords."""
@@ -722,9 +730,23 @@ class TestSelect:
         assert len(out) == bools.sum()
         assert np.all(red == bools)
 
+    def test_bad_range_raises(self, random_coord):
+        """Ensure a non-tuple or slice raises an Error."""
+        bad_vals = [1, 10.0, "hey"]
+        for val in bad_vals:
+            msg = "Range values must be"
+            with pytest.raises(ParameterError, match=msg):
+                random_coord.select(val)
+
 
 class TestOrder:
     """Tests for ordering coordinates."""
+
+    @pytest.fixture(scope="class")
+    def coord_with_duplicates(self):
+        """Create a coordinate with duplicate values."""
+        ar = np.array([0, 0, 1, 1, 1, 2, 2, 2, 2])
+        return get_coord(data=ar)
 
     def test_select_sub_array(self, long_coord):
         """A sub-array should allow indexing."""
@@ -796,6 +818,33 @@ class TestOrder:
         out, red = long_coord.order(bad_indices, samples=True)
         assert out.shape == red.shape
         assert len(out) == 0
+
+    def test_duplicate_coord_single_value(self, coord_with_duplicates):
+        """Ensure order works with duplicate coordinates and single value."""
+        old_values = coord_with_duplicates.values
+        out, inds = coord_with_duplicates.order(np.asarray(1))
+        assert np.all(out.values == 1)
+        assert len(out) == (out.values == 1).sum()
+        assert np.all(np.where(old_values == 1)[0] == inds)
+
+    def test_duplicate_coord_multiple_values(self, coord_with_duplicates):
+        """Ensure order works with duplicate coordinates and values."""
+        # also testing out of order indices
+        old_values = coord_with_duplicates.values
+        to_find = [1, 0]
+        out, inds = coord_with_duplicates.order(np.asarray(to_find))
+        assert set(out.values) == {1, 0}
+        assert len(out) == np.isin(old_values, to_find).sum()
+        expected = np.concatenate([np.where(old_values == x)[0] for x in to_find])
+        assert np.all(inds == expected)
+
+    def test_duplicate_coord_duplicate_values(self, coord_with_duplicates):
+        """Test duplicate coord values and duplicate search values."""
+        old_values = coord_with_duplicates.values
+        to_find = [0, 1, 1]
+        expected_len = sum((old_values == x).sum() for x in to_find)
+        out, inds = coord_with_duplicates.order(to_find)
+        assert len(out) == expected_len
 
 
 class TestEqual:
@@ -1308,12 +1357,6 @@ class TestDegenerateCoords:
 class TestNonCoord:
     """Tests for the non-coordinate."""
 
-    @pytest.fixture(scope="class")
-    def basic_non_coord(self):
-        """Create a simple non coord."""
-        out = get_coord(data=10)
-        return out
-
     def test_init_non_coord(self, basic_non_coord):
         """Ensure a non-coord can be created."""
         assert isinstance(basic_non_coord, NonCoord)
@@ -1346,21 +1389,35 @@ class TestNonCoord:
         assert out1 == out2
         assert len(out1) == 4
 
-    def test_unsupported_methods_raise(self, basic_non_coord):
-        """Ensure unsupported methods raise."""
-        methods = ("max", "min", "update_limits", "sort")
+    def test_update_limits_raises(self, basic_non_coord):
+        """Ensure unsupported update_limits method raises."""
         match = "NonCoord does not support"
-        for name in methods:
-            method = getattr(basic_non_coord, name)
-            with pytest.raises(CoordError, match=match):
-                method()
         with pytest.raises(CoordError, match=match):
-            basic_non_coord.convert_units("ft")
+            basic_non_coord.update_limits()
 
     def test_values_raises(self, basic_non_coord):
         """Ensure values property raises."""
         with pytest.raises(CoordError, match="NonCoord has no values"):
             _ = basic_non_coord.values
+
+    def test_bad_order_params_raise(self, basic_non_coord):
+        """Ensure non coordinates cannot be ordered by value."""
+        match = "does not support relative and samples must"
+        with pytest.raises(CoordError, match=match):
+            basic_non_coord.order((1, 2), relative=True)
+        with pytest.raises(CoordError, match=match):
+            basic_non_coord.order((1, 2), samples=False)
+
+    def test_order_by_samples(self, basic_non_coord):
+        """Ensure coord can be ordered by samples."""
+        order = [0, 1]
+        out, ind = basic_non_coord.order(order, samples=True)
+        assert len(order) == len(out)
+
+    def test_to_summary(self, basic_non_coord):
+        """Ensure we can convert non coord to summary."""
+        summary = basic_non_coord.to_summary()
+        assert isinstance(summary, CoordSummary)
 
 
 class TestCoercion:
@@ -1527,6 +1584,57 @@ class TestUpdate:
         # using the keyword 'values' is deprecated but should also work.
         new_coord = coord.update_data(values=new_data)
         assert all_close(new_coord.data, new_data)
+
+
+class TestAlignTo:
+    """Tests for aligning two coords."""
+    def test_perfect_overlap(self, evenly_sampled_coord):
+        """Ensure nothing changes with perfect overlap."""
+        c1, c2, s1, s2 = evenly_sampled_coord.align_to(evenly_sampled_coord)
+        assert c1 == c2 == evenly_sampled_coord
+        assert s1 == s2 == slice(None, None)
+
+    def test_subset(self, evenly_sampled_coord):
+        """Ensure a subset is properly aligned."""
+        coord = evenly_sampled_coord
+        sub, sub_slice = coord.select((0, 10), samples=True)
+        c1, c2, s1, s2 = coord.align_to(sub)
+        assert c1 == c2 == sub
+        assert s1 == sub_slice
+        assert s2 == slice(None)
+
+    def test_intersection(self, evenly_sampled_coord):
+        """Test for when two coords overlap but aren't contained in the other."""
+        coord1 = evenly_sampled_coord
+        mid_ind = len(coord1)//2
+        coord2 = coord1.update_limits(min=coord1.data[mid_ind])
+        c1, c2, s1, s2 = coord1.align_to(coord2)
+        assert c1 == c2
+        values1 = coord1.data[s1]
+        values2 = coord2.data[s2]
+        assert np.all(values1 == values2)
+
+    def test_no_overlap(self, evenly_sampled_coord):
+        """Ensure no overlap returns empty coord."""
+        coord1 = evenly_sampled_coord
+        coord2 = evenly_sampled_coord.update_limits(min=coord1.max() + 10)
+        c1, c2, s1, s2 = coord1.align_to(coord2)
+        assert c1 == c2
+        assert len(s1) == len(s2) == len(c1) == 0
+
+    def test_non_coord_compatible(self, evenly_sampled_coord):
+        """Ensure when non_coords are compatible the old one is returned. """
+        coord = evenly_sampled_coord
+        non_coord = get_coord(data=1)
+        c1, c2, s1, s2 = coord.align_to(non_coord)
+        assert c1 == coord
+        c1, c2, s1, s2 = non_coord.align_to(coord)
+        assert c1 == coord
+
+
+
+
+
 
 
 class TestIssues:

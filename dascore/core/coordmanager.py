@@ -54,6 +54,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.compat import is_array
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import BaseCoord, CoordSummary, get_coord
 from dascore.exceptions import (
@@ -69,6 +70,7 @@ from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _matches_prefix_suffix,
     all_close,
+    broadcast_for_index,
     cached_method,
     iterate,
     separate_coord_info,
@@ -486,7 +488,7 @@ class CoordManager(DascoreBaseModel):
             for x in self.dims
         )
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
-        return new, self._get_new_data(index, array)
+        return new, self._get_new_data(index, array, new)
 
     def disassociate_coord(self, *coord: str) -> Self:
         """
@@ -596,7 +598,7 @@ class CoordManager(DascoreBaseModel):
                 self, kwargs, samples=samples, relative=relative, operation="select"
             )
             self = self.update(**new_coords)
-            array = self._get_new_data(indexers, array)
+            array = self._get_new_data(indexers, array, self)
         return self, array
 
     @compose_docstring(select_desc=select_values_description)
@@ -633,7 +635,7 @@ class CoordManager(DascoreBaseModel):
                 operation="order",
             )
             self = self.update(**new_coords)
-            array = self._get_new_data(indexers, array)
+            array = self._get_new_data(indexers, array, self)
         return self, array
 
     def _check_multiple_relative(self, kwargs):
@@ -646,11 +648,25 @@ class CoordManager(DascoreBaseModel):
             msg = f"Cannot use {kwargs} for query; some coords " f"share a dimension."
             raise CoordError(msg)
 
-    def _get_new_data(self, indexer, array: MaybeArray) -> MaybeArray:
+    def _get_new_data(self, indexer, array: MaybeArray, cm: CoordManager) -> MaybeArray:
         """Get new data array after applying some trimming."""
         if array is None:  # no array passed, just return.
             return array
-        return array[indexer]
+        # For the case of multiple int arrays we actually don't want numpy's
+        # advanced indexing feature here but rather the union of the array.
+        # For example ar = [[1,2,3], [4,5,6], [7,8,9]]; ar[[0,1], [0,2]] returns
+        # [1, 6] but we want [[1, 3], [4,6]], so we have to break the index apart.
+        # We also want row/column independent boolean indexing, so whenever there
+        # is more than one array in the indexer we need to apply each independently.
+        array_count = sum(is_array(x) for x in indexer)
+        if array_count > 1:
+            out = array
+            ndim = len(out.shape)
+            for axis, ind in enumerate(indexer):
+                out = out[broadcast_for_index(ndim, axis, ind)]
+        else:
+            out = array[indexer]
+        return out
 
     def __rich__(self) -> str:
         """Rich formatting for the coordinate manager."""
@@ -1080,7 +1096,7 @@ def _get_coord_dim_map(coords, dims):
     def _get_coord(coord):
         """Get a coordinate from various inputs."""
         if hasattr(coord, "model_dump"):
-            coord = coord.model_dump()
+            coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict
             out = get_coord(**coord)
         else:
@@ -1120,13 +1136,15 @@ def _get_coord_dim_map(coords, dims):
                 f" Valid dimensions are {dims}"
             )
             raise CoordError(msg)
+        cval = coord[1]
         # pull out any relevant info from attrs.
-        coord_out = _get_coord(coord[1])
+        coord_out = _get_coord(cval)
         # check if this is added a new dimension.
         if len(dim_names) == 1 and (newdname := dim_names[0]) == name:
             if newdname not in dims:
                 new_dims.append(newdname)
-        assert coord_out.shape == np.shape(coord[1])
+        expected_shape = (cval,) if isinstance(cval, int) else np.shape(cval)
+        assert coord_out.shape == expected_shape
         return coord_out, dim_names
 
     assert not isinstance(coords, CoordManager)

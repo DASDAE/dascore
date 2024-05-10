@@ -8,9 +8,10 @@ import pandas as pd
 from scipy.interpolate import interp1d
 from typing_extensions import Self
 
-from dascore.constants import PatchType
+from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord
 from dascore.exceptions import CoordError, ParameterError
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
 
@@ -106,11 +107,40 @@ def get_coord(
         extra = f"as required by {get_parent_code_name()}"  # adds caller name
         msg = f"Coordinate {name} is not evenly sampled {extra}"
         raise CoordError(msg)
-    if require_sorted and not coord.sorted or coord.reverse_sorted:
+    if require_sorted and not (coord.sorted or coord.reverse_sorted):
         extra = f"as required by {get_parent_code_name()}"  # adds caller name
         msg = f"Coordinate {name} is not sorted {extra}"
         raise CoordError(msg)
     return coord
+
+
+def get_array(
+    self: PatchType,
+    name: str | None = None,
+    require_sorted: bool = False,
+    require_evenly_sampled: bool = False,
+) -> BaseCoord:
+    """
+    Get an array associated with patch data or a coordinate.
+
+    Parameters
+    ----------
+    name
+        The name of the coordinate to fetch. If None return patch data.
+    require_sorted
+        If True, require the coordinate to be sorted or raise Error.
+    require_evenly_sampled
+        If True, require the coordinate to be evenly sampled or raise Error.
+    """
+    if name is None:
+        return self.data
+    coord = get_coord(
+        self,
+        name,
+        require_sorted=require_sorted,
+        require_evenly_sampled=require_evenly_sampled,
+    )
+    return coord.data
 
 
 def assert_has_coords(self: PatchType, coord_names: Sequence[str] | str) -> Self:
@@ -155,8 +185,10 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
 
     Parameters
     ----------
-    dims
-        If not None, the new dimensions of the coordinate manager.
+    kwargs
+        The name of the coordinate (key) and coordinate values. Values
+        can either be a sequence (eg array) or a single int. If an int
+        is used it will create a non-coord.
 
     Examples
     --------
@@ -286,3 +318,235 @@ def coords_from_df(
         out = out.convert_units.func(out, **units)
 
     return out
+
+
+@patch_function(history=None)
+@compose_docstring(select_params=select_values_description)
+def select(
+    patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
+) -> PatchType:
+    """
+    Return a subset of the patch.
+
+    {select_params}
+
+    Parameters
+    ----------
+    patch
+        The patch object.
+    copy
+        If True, copy the resulting data. This is needed so the old
+        array can get gc'ed and memory freed.
+    relative
+        If True, select ranges are relative to the start of coordinate, if
+        possitive, or the end of the coordinate, if negative.
+    samples
+        If True, the query meaning is in samples.
+    **kwargs
+        Used to specify the coordinate on which data are selected.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> from dascore.examples import get_example_patch
+    >>> patch = get_example_patch()
+    >>> # select meters 50 to 300
+    >>> new_distance = patch.select(distance=(50, 300))
+    >>> # select channels less than 300
+    >>> lt_dist = patch.select(distance=(..., 300))
+    >>> # select time (1 second from start to -1 second from end)
+    >>> t1 = patch.attrs.time_min + dc.to_timedelta64(1)
+    >>> t2 = patch.attrs.time_max - dc.to_timedelta64(1)
+    >>> new_time1 = patch.select(time=(t1, t2))
+    >>> # this can be accomplished more simply using the relative keyword
+    >>> new_time2 = patch.select(time=(1, -1), relative=True)
+    >>> # filter 1 second from start time to 3 seconds from start time
+    >>> new_time3 = patch.select(time=(1, 3), relative=True)
+    >>> # filter 6 second from end time to 1 second from end time
+    >>> new_time4 = patch.select(time=(-6, -1), relative=True)
+    >>> # Select first 10 distance indices
+    >>> new_distance1 = patch.select(distance=(..., 10), samples=True)
+    >>> # Select last time row/column
+    >>> new_distance2 = patch.select(time=-1, samples=True)
+    >>> # only include certain rows/columns based on a boolean array.
+    >>> time = patch.get_array("time")
+    >>> new_time_5 = patch.select(time=time>time[2])
+    >>> # Select only specific values along a dimension
+    >>> distance = patch.get_array("distance")
+    >>> new_distance_3 = patch.select(distace=distance[1::2])
+
+    Notes
+    -----
+    - It is important to remember select will not change the order of the
+      patch, only fiter values. If the order of the patch should change, or
+      multiple rows/columns need to be repeated,
+      See [`Patch.order`](`dascore.Patch.order`).
+
+    """
+    new_coords, data = patch.coords.select(
+        **kwargs,
+        array=patch.data,
+        relative=relative,
+        samples=samples,
+    )
+    # no slicing was performed, just return original.
+    if data.shape == patch.data.shape:
+        return patch
+    if copy:
+        data = data.copy()
+    return patch.new(data=data, coords=new_coords)
+
+
+@patch_function(history=None)
+@compose_docstring(select_params=select_values_description)
+def order(
+    patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
+) -> PatchType:
+    """
+    Re-order the patch contents based on coordinate values or indices.
+
+    Parameters
+    ----------
+    patch
+        The patch object.
+    copy
+        If True, copy the resulting data. This is needed so the old
+        array can get gc'ed and memory freed.
+    relative
+        If True, order values are relative to the start/end of the coordinates.
+    samples
+        If True, the
+    **kwargs
+        Used to specify the coordinate and values on which the coordinates
+        are ordered.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.examples import get_example_patch
+    >>> patch = get_example_patch()
+    >>> # Sub-select only a section of the distance and ensure order.
+    >>> dist = patch.get_array("distance")
+    >>> new_dist = dist[1:5][::-1]
+    >>> patch_1 = patch.order(distance=new_dist)
+    >>> # Get duplicate the first time row or column
+    >>> patch_2 = patch.order(time=[0, 0, 0], samples=True)
+
+    Notes
+    -----
+    - This function is similar to [`Patch.select`](`dascore.Patch.select`)
+      but it will also change the patch order to match the inputs exactly.
+      If there are repeated values in the requsted values or in the patch
+      coordinate arrays, the data will end up being repeated as well.
+    """
+    new_coords, data = patch.coords.order(
+        **kwargs,
+        array=patch.data,
+        relative=relative,
+        samples=samples,
+    )
+    if copy:
+        data = data.copy()
+    return patch.new(data=data, coords=new_coords)
+
+
+@patch_function(history=None)
+def transpose(self: PatchType, *dims: str) -> PatchType:
+    """
+    Transpose the data array to any dimension order desired.
+
+    Parameters
+    ----------
+    *dims
+        Dimension names which define the new data axis order.
+
+    Examples
+    --------
+    >>> import dascore # import dascore library
+    >>> pa = dascore.get_example_patch() # generate example patch
+    >>> # transpose the time and data array dimensions in the example patch
+    >>> out = dascore.proc.transpose(pa,"time", "distance")
+    """
+    dims = tuple(dims)
+    old_dims = self.coords.dims
+    new_coord = self.coords.transpose(*dims)
+    new_dims = new_coord.dims
+    axes = tuple(old_dims.index(x) for x in new_dims)
+    new_data = np.transpose(self.data, axes)
+    return self.new(data=new_data, coords=new_coord)
+
+
+@patch_function(history=None)
+def append_dims(patch: PatchType, **dim_kwargs) -> PatchType:
+    """
+    Insert dimensions at the end of the patch.
+
+    Parameters
+    ----------
+    dim_kwargs
+        Used to pass keys (new dim names) and values. Values can either be
+        an int specifying the length of the new dimension or a sequence
+        specifying the coordinate values. If an int is used, the new dimension
+        will be a non-coordinate dimension.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+
+    >>> # Add a dummy dimension called "face" to end of patch
+    >>> # which has a coordinate value of [1].
+    >>> new = patch.append_dims(face=[1])
+
+    >>> # Same thing as above, but with a larger coords which broadcasts
+    >>> # the data to shape appropriate to mach coordinates.
+    >>> new = patch.append_dims(face=[1, 2])
+
+    >>> # Add a dummy dimension of length 3 to end of patch.
+    >>> # the data to shape appropriate to mach coordinates.
+    >>> new = patch.append_dims(face=3)
+
+    Notes
+    -----
+    - This tries to be more simple than numpy and xarray's expand_dims.
+    - Use [`Patch.transpose`](`dascore.patch.transpose`) to re-arrange dimensions.
+    - If dimension with the same name already exists nothing will happen.
+    """
+    # Remove duplicate dims and convert non ints to arrays.
+    kwargs = {
+        i: (i, np.atleast_1d(v) if not isinstance(v, int) else v)
+        for i, v in dim_kwargs.items()
+        if i not in patch.dims
+    }
+    # Nothing to do.
+    if not kwargs:
+        return patch
+    ndim = patch.ndim
+    # First get data with empty dimensions
+    insert_inds = [x + ndim for x in range(len(kwargs))]
+    data = np.expand_dims(patch.data, insert_inds)
+    shapes = list(data.shape)
+    for ind, (_, cdata) in zip(insert_inds, kwargs.values()):
+        shapes[ind] = cdata if isinstance(cdata, int) else len(cdata)
+    data = np.broadcast_to(data, shapes)
+    coords = patch.coords.update(**kwargs)
+    return patch.update(data=data, coords=coords)
+
+
+@patch_function()
+def squeeze(self: PatchType, dim=None) -> PatchType:
+    """
+    Return a new object with len one dimensions flattened.
+
+    Parameters
+    ----------
+    dim
+        Selects a subset of the length one dimensions. If a dimension
+        is selected with length greater than one, an error is raised.
+        If None, all length one dimensions are squeezed.
+    """
+    coords = self.coords.squeeze(dim)
+    axis = None if dim is None else self.coords.dims.index(dim)
+    data = np.squeeze(self.data, axis=axis)
+    return self.new(data=data, coords=coords)

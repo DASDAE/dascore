@@ -15,22 +15,22 @@ class TestBasicAggregations:
     def test_first(self, random_patch):
         """Ensure aggregations can occur."""
         out = random_patch.aggregate(dim="distance", method="first")
+        assert out.ndim == random_patch.ndim
         axis = random_patch.dims.index("distance")
         inds = broadcast_for_index(len(random_patch.data.shape), axis, 0)
-        assert len(out.data.shape) == 1
-        assert np.allclose(random_patch.data[inds], out.data)
+        assert np.allclose(random_patch.data[inds].flatten(), out.data.flatten())
 
     def test_last(self, random_patch):
         """Ensure aggregations can occur."""
         out = random_patch.aggregate(dim="time", method="last")
         axis = random_patch.dims.index("time")
         inds = broadcast_for_index(len(random_patch.data.shape), axis, -1)
-        assert np.allclose(random_patch.data[inds], out.data)
+        assert np.allclose(random_patch.data[inds].flatten(), out.data.flatten())
 
     def test_no_dim(self, random_patch):
         """Ensure no dimension argument behaves like numpy."""
         out = random_patch.aggregate(method="mean")
-        assert out == np.mean(random_patch.data)
+        assert np.all(out.data == np.mean(random_patch.data, keepdims=True))
 
     @pytest.mark.parametrize("method", list(_AGG_FUNCS))
     def test_named_aggregations(self, random_patch, method):
@@ -54,3 +54,5 @@ class TestApplyOperators:
         agg = random_patch.first("time")
         out1 = random_patch + agg
         assert isinstance(out1, dc.Patch)
+
+

@@ -202,11 +202,12 @@ class Patch:
     update_attrs = dascore.proc.update_attrs
     assert_has_coords = dascore.proc.assert_has_coords
     get_coord = dascore.proc.get_coord
+    get_array = dascore.proc.get_array
     pipe = dascore.proc.pipe
     set_dims = dascore.proc.set_dims
-    squeeze = dascore.proc.squeeze
-    append_dims = dascore.proc.append_dims
-    transpose = dascore.proc.transpose
+    squeeze = dascore.proc.coords.squeeze
+    append_dims = dascore.proc.coords.append_dims
+    transpose = dascore.proc.coords.transpose
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_coords
     rename_coords = dascore.proc.rename_coords
@@ -227,6 +228,7 @@ class Patch:
     # --- processing funcs
 
     select = dascore.proc.select
+    order = dascore.proc.order
 
     def iselect(self, *args, **kwargs):
         """Deprecated  form of select."""
