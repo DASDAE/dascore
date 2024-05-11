@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coords import get_coord
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.models import ArrayLike
@@ -517,10 +518,6 @@ def pad(
     >>> padded_patch_1 = patch.pad(time = (2, 3))
     >>> # zero pad `distance` dimension with 4 zeros before after
     >>> padded_patch_2 = patch.pad(distance = 4)
-    >>> # zero pad `time` dimension with 2 zeros before and 3 zeros after,
-    >>> # and `distance` dimension with 1 pi value before and 4 pi values after
-    >>> padded_patch_3 = patch.pad(time = (2, 3), distance = (1, 4),
-    ...                            constant_values=(0, np.pi))
     """
     pad_width = [(0, 0)] * len(patch.shape)
     dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
@@ -547,16 +544,21 @@ def pad(
 
         if expand_coords:
             # Get new coordinate
-            coord = patch.get_coord(dim, require_evenly_sampled=True)
             new_start = coord.min() - value[0] * coord.step
-            new_end = coord.max() + value[1] * coord.step
-            new_coord = coord.update_limits(min=new_start, max=new_end)
+            new_end = coord.max() + (value[1] + 1) * coord.step
+            coord = patch.get_coord(dim, require_evenly_sampled=True)
+            old_values = coord.values
+            new_coord = get_coord(
+                start=new_start, stop=new_end, step=coord.step, units=coord.units
+            )
         else:
             # Get new coordinate
             coord = patch.get_coord(dim)
             old_values = coord.values.astype(np.float64)
-            padded_values = np.pad(old_values, pad_width=value, constant_values=np.nan)
-            new_coord = coord.update(data=padded_values)
+            added_nan_values = np.pad(
+                old_values, pad_width=value, constant_values=np.nan
+            )
+            new_coord = coord.update(data=added_nan_values)
         new_coords[dim] = new_coord
 
     new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
