@@ -14,7 +14,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.models import ArrayLike
-from dascore.utils.patch import patch_function
+from dascore.utils.patch import get_multiple_dim_value_from_kwargs, patch_function
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
@@ -480,3 +480,88 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
     cm = patch.coords.update(**{dim: coord[to_keep]})
     attrs = patch.attrs.update(coords={})
     return patch.new(data=new_data, coords=cm, attrs=attrs)
+
+
+@patch_function()
+def pad(
+    patch: PatchType,
+    mode: Literal["constant"] = "constant",
+    constant_values: Any = 0,
+    expand_coords=False,
+    samples=False,
+    **kwargs,
+) -> PatchType:
+    """
+    Pad the patch data along specified dimensions.
+
+    Parameters
+    ----------
+    mode : str, optional
+        The mode of padding, by default 'constant'.
+    constant_values : scalar or sequence, optional
+        If a scalar, this value is used as the pad value for
+        all dimensions. If a sequence, it must be of the same
+        length as the number of dimensions being padded,
+        and each element of the sequence
+
+        specifies the pad value for the corresponding dimension.
+    **kwargs:
+        Used to specify dimension and number of elements,
+        either an integer or a tuple (before, after).
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # zero pad `time` dimension with 2 zeros before and 3 zeros after
+    >>> padded_patch_1 = patch.pad(time = (2, 3))
+    >>> # zero pad `distance` dimension with 4 zeros before after
+    >>> padded_patch_2 = patch.pad(distance = 4)
+    >>> # zero pad `time` dimension with 2 zeros before and 3 zeros after,
+    >>> # and `distance` dimension with 1 pi value before and 4 pi values after
+    >>> padded_patch_3 = patch.pad(time = (2, 3), distance = (1, 4),
+    ...                            constant_values=(0, np.pi))
+    """
+    pad_width = [(0, 0)] * len(patch.shape)
+    dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
+
+    new_coords = {}
+    for _, info in dimfo.items():
+        axis, dim, value = info["axis"], info["dim"], info["value"]
+        # Ensure passed dimension exists
+        if dim not in patch.dims:
+            continue
+
+        # Ensure pad_width is a tuple, even if a single integer is provided
+        if isinstance(value, int):
+            value = (value, value)
+
+        # Ensure kwargs are in samples
+        if not samples:
+            coord = patch.get_coord(dim, require_evenly_sampled=True)
+            value = (
+                coord.get_sample_count(value[0], samples=samples),
+                coord.get_sample_count(value[1], samples=samples),
+            )
+        pad_width[axis] = value
+
+        if expand_coords:
+            # Get new coordinate
+            coord = patch.get_coord(dim, require_evenly_sampled=True)
+            new_start = coord.min() - value[0] * coord.step
+            new_end = coord.max() + value[1] * coord.step
+            new_coord = coord.update_limits(min=new_start, max=new_end)
+        else:
+            # Get new coordinate
+            coord = patch.get_coord(dim)
+            old_values = coord.values.astype(np.float64)
+            padded_values = np.pad(old_values, pad_width=value, constant_values=np.nan)
+            new_coord = coord.update(data=padded_values)
+        new_coords[dim] = new_coord
+
+    new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
+
+    # Update coord manager
+    new_coords = patch.coords.update(**new_coords)
+
+    return patch.new(data=new_data, coords=new_coords)

@@ -563,7 +563,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             out = out.convert_units(units)
         return out
 
-    def get_sample_count(self, value, samples=False) -> int:
+    def get_sample_count(self, value, samples=False, enforce_lt_coord=False) -> int:
         """
         Return the number of samples represented by a value.
 
@@ -589,13 +589,13 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             compat_val = self._get_compatible_value(value, relative=True)
             duration = compat_val - self.min()
             samples = int(np.ceil(duration / self.step))
-        if samples > len(self):
+        if enforce_lt_coord and samples > len(self):
             msg = (
                 f"value of {value} results in a window larger than coordinate "
                 f"length of {len(self)}"
             )
             raise ParameterError(msg)
-        return min(samples, len(self))
+        return samples
 
     def get_next_index(self, value, samples=False, allow_out_of_bounds=False) -> int:
         """
