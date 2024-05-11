@@ -478,12 +478,14 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
 
 
 @patch_function(history=None)
-def append_dims(patch: PatchType, **dim_kwargs) -> PatchType:
+def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     """
     Insert dimensions at the end of the patch.
 
     Parameters
     ----------
+    empty_dims
+        Used to pass the name of empty dimensions.
     dim_kwargs
         Used to pass keys (new dim names) and values. Values can either be
         an int specifying the length of the new dimension or a sequence
@@ -494,6 +496,9 @@ def append_dims(patch: PatchType, **dim_kwargs) -> PatchType:
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
+
+    >>> # Add two dummy dimensions to patch named "end" and "stop"
+    >>> new = patch.append_dims("end", "stop")
 
     >>> # Add a dummy dimension called "face" to end of patch
     >>> # which has a coordinate value of [1].
@@ -513,10 +518,12 @@ def append_dims(patch: PatchType, **dim_kwargs) -> PatchType:
     - Use [`Patch.transpose`](`dascore.patch.transpose`) to re-arrange dimensions.
     - If dimension with the same name already exists nothing will happen.
     """
+    dim_dict = {x: 1 for x in empty_dims}
+    dim_dict.update(dim_kwargs)
     # Remove duplicate dims and convert non ints to arrays.
     kwargs = {
         i: (i, np.atleast_1d(v) if not isinstance(v, int) else v)
-        for i, v in dim_kwargs.items()
+        for i, v in dim_dict.items()
         if i not in patch.dims
     }
     # Nothing to do.

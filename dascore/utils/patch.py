@@ -22,6 +22,7 @@ from dascore.exceptions import (
 )
 from dascore.units import get_quantity
 from dascore.utils.misc import (
+    _apply_union_indexers,
     _merge_tuples,
     all_diffs_close_enough,
     get_middle_value,
@@ -337,7 +338,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
         return [patch_dict_list[0]]
     dims = df["dims"].iloc[0].split(",")
     # get patches, ensure they are oriented the same.
-    patches = [dc.proc.coords.transpose(*dims) for x in df["patch"]]
+    patches = [x.transpose(*dims) for x in df["patch"]]
     axis = patches[0].dims.index(merge_dim)
     # get data, coords, attrs for merging patch together.
     datas = [x.data for x in patches]
@@ -520,42 +521,54 @@ def _get_dx_or_spacing_and_axes(
     return tuple(out), tuple(axes)
 
 
-def _select_compatible(
+def align_patch_coords(
     patch1: PatchType, patch2: PatchType
 ) -> tuple[PatchType, PatchType]:
     """
-    Select common coords for each patch and return.
+    Align patches so they have compatible attrs and data broadcast together.
 
     Parameters
     ----------
     patch1
-        The First patch to make compatible with second.
+        The first patch.
     patch2
-        The second patch to make compatible with the first.
+        The second patch.
     """
-    dim_intersection = _merge_tuples(patch1.dims, patch2.dims)
-    dim_union = set(patch1.dims) & set(patch2.dims)
-    common_dims = tuple(x for x in dim_intersection if x in dim_union)
-    # ensure the patches have the same dimension order and are sorted along common dims.
-    patch1_sorted = patch1.sort_coords(*common_dims)
-    patch2_sorted = patch2.sort_coords(*common_dims)
-    for dim in common_dims:
-        ar1 = patch1_sorted.get_coord(dim)
-        ar2 = patch2_sorted.get_coord(dim)
-        if ar1 != ar2:
-            intersection = np.intersect1d(ar1.values, ar2.values)
-            breakpoint()
-    return patch1, patch2
-
-
-def _make_dims_alike(
-    patch1: PatchType, patch2: PatchType
-) -> tuple[PatchType, PatchType]:
-    """
-    Make the dims identical for each patch, adding dummy dims when needed.
-    """
-    target = _merge_tuples(patch1.dims, patch2.dims)
-    target_dict = {x: 1 for x in target}
-    out1 = dc.proc.coords.transpose(*target)
-    out2 = dc.proc.coords.transpose(*target)
+    # Fast path for no alignment needed
+    if patch1.coords == patch2.coords:
+        return patch1, patch2
+    shared_dims = set(patch1.dims) & set(patch2.dims)
+    if not shared_dims:
+        msg = (
+            "Cannot align patches with no shared dimensions. Dimensions are "
+            f"patch1: {patch1.dims}, patch2: {patch2.dims}"
+        )
+        raise PatchDimError(msg)
+    # First ensure the patches have the same dims
+    dims = _merge_tuples(patch1.dims, patch2.dims)
+    dim_dict = {x: num for num, x in enumerate(dims)}
+    patch1 = patch1.append_dims(*dims).transpose(*dims)
+    patch2 = patch2.append_dims(*dims).transpose(*dims)
+    # Next, find the common coordinates and align.
+    align_1, align_2 = [slice(None)] * len(dims), [slice(None)] * len(dims)
+    new_coords_1, new_coords_2 = {}, {}
+    for dim in shared_dims:
+        coord1, coord2 = patch1.get_coord(dim), patch2.get_coord(dim)
+        if coord1 == coord2:
+            continue
+        dim_ind = dim_dict[dim]
+        # We actually need to do some alignment here.
+        ncoord1, ncoord2, sli1, sli2 = coord1.align_to(coord2)
+        new_coords_1[dim], new_coords_2[dim] = ncoord1, ncoord2
+        align_1[dim_ind], align_2[dim_ind] = sli1, sli2
+    # No alignment needed, just skip.
+    if not (new_coords_1 or new_coords_2):
+        return patch1, patch2
+    # Update coordinate managers and reshape arrays, return new patches.
+    coord1 = patch1.coords.update(**new_coords_1)
+    coord2 = patch2.coords.update(**new_coords_2)
+    array1 = _apply_union_indexers(tuple(align_1), patch1.data)
+    array2 = _apply_union_indexers(tuple(align_2), patch2.data)
+    out1 = patch1.new(data=array1, coords=coord1)
+    out2 = patch2.new(data=array2, coords=coord2)
     return out1, out2

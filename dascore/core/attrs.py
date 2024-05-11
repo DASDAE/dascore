@@ -14,6 +14,7 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import (
+    DEFAULT_ATTRS_TO_IGNORE,
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
     WARN_LEVELS,
@@ -543,10 +544,57 @@ def check_coords(
     return True
 
 
+def _merge_aligned_coords(cm1, cm2):
+    """Merge aligned coordinates removing non coords."""
+    assert cm1.dims == cm2.dims, "coordinates are not aligned"
+    out = {}
+    for name in set(cm1.coord_map) & set(cm2.coord_map):
+        coord1 = cm1.coord_map[name]
+        coord2 = cm2.coord_map[name]
+        # Coords already equal, just use first.
+        if coord1.approx_equal(coord2):
+            out[name] = coord1
+        # Deal with Non coords
+        non_count = sum([coord1._non_coord, coord2._non_coord])
+        if non_count == 1:
+            out[name] = coord1 if coord2._non_coord else coord2
+        elif non_count == 2:
+            out[name] = coord1 if coord1.size > coord2.size else coord2
+        assert name in out
+    return cm1.update(**out)
+
+
+def _merge_models(attrs1, attrs2, coord=None, attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE):
+    """Ensure models are equal in the right ways, merge together."""
+    no_comp_keys = set(attrs_to_ignore)
+    if attrs1 == attrs2:
+        return attrs1
+    dict1, dict2 = dict(attrs1), dict(attrs2)
+    if coord is not None:
+        new_coords = coord.to_summary_dict()
+        dict1["coords"], dict2["coords"] = new_coords, new_coords
+    else:
+        dict1.pop("coords"), dict2.pop("coords")
+    common_keys = set(dict1) & set(dict2)
+    ne_attrs = []
+    for key in common_keys:
+        if key in no_comp_keys:
+            continue
+        if dict2[key] != dict1[key]:
+            ne_attrs.append(key)
+    if ne_attrs:
+        msg = (
+            "Patches are not compatible because the following attributes "
+            f"are not equal. {ne_attrs}"
+        )
+        raise IncompatiblePatchError(msg)
+    return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
+
+
 def merge_compatible_coords_attrs(
     patch1: PatchType,
     patch2: PatchType,
-    attrs_to_ignore=("history", "dims"),
+    attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
     dim_intersection: bool = False,
     validate_coords: bool = True,
 ) -> tuple[CoordManager, PatchAttrs]:
@@ -598,37 +646,13 @@ def merge_compatible_coords_attrs(
         dims = _merge_tuples(coords1.dims, coords2.dims)
         return dc.core.coordmanager.get_coord_manager(out, dims=dims)
 
-    def _merge_models(attrs1, attrs2, coord):
-        """Ensure models are equal in the right ways."""
-        no_comp_keys = set(attrs_to_ignore)
-        if attrs1 == attrs2:
-            return attrs1
-        dict1, dict2 = dict(attrs1), dict(attrs2)
-        # Coords has already handled merging coordinates
-        new_coords = coord.to_summary_dict()
-        dict1["coords"], dict2["coords"] = new_coords, new_coords
-        common_keys = set(dict1) & set(dict2)
-        ne_attrs = []
-        for key in common_keys:
-            if key in no_comp_keys:
-                continue
-            if dict2[key] != dict1[key]:
-                ne_attrs.append(key)
-        if ne_attrs:
-            msg = (
-                "Patches are not compatible because the following attributes "
-                f"are not equal. {ne_attrs}"
-            )
-            raise IncompatiblePatchError(msg)
-        return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
-
     check_dims(patch1, patch2, intersection=dim_intersection)
     if validate_coords:
         check_coords(patch1, patch2)
     coord1, coord2 = patch1.coords, patch2.coords
     attrs1, attrs2 = patch1.attrs, patch2.attrs
     coord_out = _merge_coords(coord1, coord2)
-    attrs = _merge_models(attrs1, attrs2, coord_out)
+    attrs = _merge_models(attrs1, attrs2, coord_out, attrs_to_ignore=attrs_to_ignore)
     return coord_out, attrs
 
 

@@ -8,13 +8,13 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import PatchType
-from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
+from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
+from dascore.core.attrs import PatchAttrs, _merge_aligned_coords, _merge_models
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.models import ArrayLike
-from dascore.utils.patch import _make_dims_alike, _select_compatible, patch_function
+from dascore.utils.patch import align_patch_coords, patch_function
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
@@ -328,7 +328,12 @@ def standardize(
 
 
 @patch_function()
-def apply_operator(patch: PatchType, other, operator) -> PatchType:
+def apply_operator(
+    patch: PatchType,
+    other: PatchType | ArrayLike,
+    operator: Callable,
+    attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
+) -> PatchType:
     """
     Apply a ufunc-type operator to a patch.
 
@@ -369,17 +374,15 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
     """
     # Handle creating merged coords and patch stuff.
     if isinstance(other, dc.Patch):
-        other_patch = other
-        # Trim patches so their shared dims overlap exactly.
-        patch, other_patch = _select_compatible(patch, other_patch)
-        # get metadata. This is done before making the patch coords compatible.
-        coords, attrs = merge_compatible_coords_attrs(
-            patch,
-            other_patch,
-            dim_intersection=True,
+        # Align patches so their coords are identical and data aligned.
+        patch, other_patch = align_patch_coords(patch, other)
+        coords = _merge_aligned_coords(patch.coords, other_patch.coords)
+        # Get new attributes.
+        attrs = _merge_models(
+            patch.attrs,
+            other_patch.attrs,
+            attrs_to_ignore=attrs_to_ignore,
         )
-        # Make sure dims are the same for each patch.
-        patch, other_patch = _make_dims_alike(patch, other_patch)
         other = other_patch.data
         if other_units := get_quantity(other_patch.attrs.data_units):
             other = other * other_units

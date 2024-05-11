@@ -1,6 +1,7 @@
 """Test patch utilities."""
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 import dascore as dc
@@ -9,6 +10,7 @@ from dascore.exceptions import (
     PatchDimError,
 )
 from dascore.utils.patch import (
+    align_patch_coords,
     get_dim_value_from_kwargs,
 )
 
@@ -130,3 +132,62 @@ class TestGetDimValueFromKwargs:
         kwargs = {}
         with pytest.raises(PatchDimError):
             get_dim_value_from_kwargs(random_patch, kwargs)
+
+
+class TestAlignPatches:
+    """Tests for aligning patches."""
+
+    def test_align_self(self, random_patch):
+        """A patch should align with itself."""
+        out1, out2 = align_patch_coords(random_patch, random_patch)
+        assert out1 == out2 == random_patch
+
+    def test_different_dims(self, random_patch):
+        """Ensure alignment works for different dimensions."""
+        no_time = random_patch.select(time=0, samples=True).squeeze()
+        out1, out2 = align_patch_coords(no_time, random_patch)
+        assert out1.dims == out2.dims
+        assert out1.ndim == out2.ndim
+        eq_or_q = [x == y or 1 in {x, y} for x, y in zip(out1.shape, out2.shape)]
+        assert all(eq_or_q)
+
+    def test_subset(self, random_patch):
+        """Ensure a subset of a patch slices output."""
+        sub = random_patch.select(time=(1, 15), samples=True)
+        out1, out2 = align_patch_coords(sub, random_patch)
+        assert out1.shape == out2.shape
+        assert out1.coords == out2.coords
+        # The data should all be the same since this is a sub-patch.
+        assert np.all(out1.data == out2.data)
+
+    def test_align_no_overlap(self, random_patch):
+        """Alignment with no overlap should return null."""
+        dist = random_patch.get_coord("distance")
+        new = random_patch.update_coords(distance_min=dist.max() + 10)
+        out1, out2 = align_patch_coords(new, random_patch)
+        assert out1.shape == out2.shape
+        assert out1.coords == out2.coords
+        # Patches should be degenerate.
+        assert 0 in set(out1.shape)
+
+    def test_no_common_dims_raises(self, random_patch):
+        """Patches with no common dims should not be alignable."""
+        new = random_patch.rename_coords(time="money", distance="gold")
+        msg = "align patches with no shared dimensions."
+        with pytest.raises(PatchDimError, match=msg):
+            align_patch_coords(new, random_patch)
+
+    def test_new_dims_each_patch(self, random_patch):
+        """Tests for when there are new dimensions on each patch."""
+        small = random_patch.select(time=(0, 10), distance=(0, 12), samples=True)
+        p1 = small.rename_coords(time="money")
+        p2 = small.rename_coords(time="about")
+        out1, out2 = align_patch_coords(p1, p2)
+        assert out1.dims == out2.dims
+        assert out1.ndim == out2.ndim
+
+    def test_len_1_non_coord_patch(self, random_patch):
+        """Tests for when there are non-coordinate dimensions of len 1."""
+        non_patch = random_patch.first("time")
+        # Coords should be expanded in out2.
+        out1, out2 = align_patch_coords(non_patch, random_patch)

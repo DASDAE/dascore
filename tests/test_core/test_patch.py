@@ -10,7 +10,6 @@ import pytest
 from rich.text import Text
 
 import dascore as dc
-import dascore.proc.coords
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.exceptions import CoordError
@@ -560,7 +559,7 @@ class TestCoords:
         """Ensure the coord type doesn't change in narrow slice."""
         patch = multi_dim_coords_patch
         time = patch.coords.coord_map["time"]
-        new = dascore.proc.coords.select(time=(time.min(), time.min()))
+        new = patch.select(time=(time.min(), time.min()))
         assert 1 in new.shape
         new_coords = new.coords.coord_map
         assert isinstance(new_coords["time"], CoordRange)

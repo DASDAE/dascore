@@ -20,6 +20,7 @@ from scipy.linalg import solve
 from scipy.special import factorial
 
 import dascore as dc
+from dascore.compat import is_array
 from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
     FilterValueError,
@@ -166,7 +167,9 @@ def all_close(ar1, ar2):
     Just uses numpy.allclose unless ar1 is a datetime, in which case
     strict equality is used.
     """
-    ar1, ar2 = np.array(ar1), np.array(ar2)
+    ar1, ar2 = np.asarray(ar1), np.asarray(ar2)
+    if not ar1.shape == ar2.shape:
+        return False
     try:
         return np.allclose(ar1, ar2)
     except TypeError:
@@ -677,8 +680,11 @@ def _dict_list_diffs(dict_list):
 
 def sanitize_range_param(select) -> tuple:
     """Given a slice or tuple, check and return slice or tuple."""
+    # convert ellipses or ellipses values
+    if select is None or select is Ellipsis:
+        select = (None, None)
     # we allow a len(2) list here to not break old codes, but encourage a tuple.
-    if not isinstance(select, (tuple, slice, list)) and not select is ...:
+    if not isinstance(select, (tuple | slice | list)) and select is not ...:
         msg = "Range values must be a tuple or slice."
         raise ParameterError(msg)
     # handle slices, need to convert to tuple
@@ -690,9 +696,7 @@ def sanitize_range_param(select) -> tuple:
             )
             raise ParameterError(msg)
         select = (select.start, select.stop)
-    # convert ellipses or ellipses values
-    if select is None or select is Ellipsis:
-        select = (None, None)
+
     # validate length (only length 2 allowed)
     if len(select) != 2:
         msg = "Range indices must be a length 2 sequence."
@@ -765,6 +769,30 @@ def _to_slice(limits):
     start = None if val1 is ... or val1 is None else val1
     stop = None if val2 is ... or val2 is None else val2
     return slice(start, stop)
+
+
+def _apply_union_indexers(indexer, array):
+    """
+    Apply indexers to array getting the union of indices.
+
+    For the case of multiple int arrays we actually don't want numpy's
+    advanced indexing feature here but rather the union of the array.
+    For example ar = [[1,2,3], [4,5,6], [7,8,9]]; ar[[0,1], [0,2]] returns
+    [1, 6] but we want [[1, 3], [4,6]], so we have to break the index apart.
+    We also want row/column independent boolean indexing, so whenever there
+    is more than one array in the indexer we need to apply each independently.
+    """
+    if array is None:  # no array passed, just return.
+        return array
+    array_count = sum(is_array(x) for x in indexer)
+    if array_count > 1:
+        out = array
+        ndim = len(out.shape)
+        for axis, ind in enumerate(indexer):
+            out = out[broadcast_for_index(ndim, axis, ind)]
+    else:
+        out = array[indexer]
+    return out
 
 
 def _maybe_array_to_slice(int_array, data_len):

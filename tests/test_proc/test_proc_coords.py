@@ -314,7 +314,7 @@ class TestOrder:
         dist = random_patch.get_array("distance")
         new_dist = dist[1:5][::-1]
         new = random_patch.order(distance=new_dist)
-        assert np.all(new.get_array('distance') == new_dist)
+        assert np.all(new.get_array("distance") == new_dist)
 
     def test_duplicate_data(self, random_patch):
         """Duplicate the data along time dimension."""
@@ -348,7 +348,6 @@ class TestAppendDims:
         assert out.size == random_patch.size * 2
         assert out.shape[-1] == 2
 
-
     def test_expand_dims(self, random_patch):
         """Ensure dimensions can be expanded."""
         out = random_patch.append_dims(new=[1, 2])
@@ -369,6 +368,16 @@ class TestAppendDims:
         assert len(out.shape) == (len(random_patch.shape) + 2)
         # New dim should show up at the end, in order.
         assert out.dims[-2:] == ("new", "old")
+
+    def test_append_with_args(self, random_patch):
+        """Ensure we can append with just the name of the dim."""
+        out = random_patch.append_dims("new", "dim")
+        assert list(out.dims) == [*list(random_patch.dims), "new", "dim"]
+
+    def test_append_with_args_and_kwargs(self, random_patch):
+        """Ensure we can use both kwargs and args."""
+        out = random_patch.append_dims("new", new2=2)
+        assert list(out.dims) == [*list(random_patch.dims), "new", "new2"]
 
 
 class TestSqueeze:

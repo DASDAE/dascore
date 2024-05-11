@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-import dascore.proc.coords
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64

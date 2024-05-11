@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from rich.text import Text
 
 import dascore as dc
-import dascore.proc.coords
 from dascore import to_datetime64
 from dascore.core.coordmanager import (
     CoordManager,
@@ -615,7 +614,7 @@ class TestSelect:
         assert set(out.get_array(name)) == set(values)
 
     def test_array_by_ints(self, coord_manager):
-        """Ensure int array also works"""
+        """Ensure int array also works."""
         name = coord_manager.dims[0]
         coord = coord_manager.get_coord(coord_manager.dims[0])
         if len(coord) <= 1:
@@ -647,7 +646,7 @@ class TestSelect:
         assert len(inds) == len(coord_out)
 
     def test_multiple_dims_array_select(self, cm_basic):
-        """Ensure multiple arrays can be used for selection"""
+        """Ensure multiple arrays can be used for selection."""
         time = cm_basic.get_array("time")
         dist = cm_basic.get_array("distance")
         time_inds = np.array([1, 4, 0])
@@ -759,6 +758,15 @@ class TestEquals:
         assert cm != "bob"
         assert cm != {1: 2, 2: 2}
         assert cm != cm.coord_map["distance"]
+
+    def test_cm_with_non_coord(self, cm_basic):
+        """Non coords should be not equal to other coords."""
+        non_1 = cm_basic.update(time=1)
+        assert non_1 != cm_basic
+        assert cm_basic != non_1
+        non_2 = cm_basic.update(time=len(cm_basic.get_coord("time")))
+        assert non_2 != cm_basic
+        assert cm_basic != non_2
 
 
 class TestTranspose:

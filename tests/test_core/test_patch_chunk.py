@@ -436,3 +436,11 @@ class TestChunkMerge:
         # make sure we can read the patch
         patch = out[0]
         assert isinstance(patch, dc.Patch)
+
+    def test_chunk_patches_with_non_coord(self, random_patch):
+        """Tests for chunking when some patches have non coordinate dimensions."""
+        patches = [random_patch.mean("time") for _ in range(3)]
+        spool = dc.spool(patches)
+        chunked = spool.chunk(time=None)
+        assert chunked
+        assert False  # pick up here.

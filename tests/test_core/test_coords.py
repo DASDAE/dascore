@@ -753,8 +753,7 @@ class TestOrder:
         values = long_coord.values
         sub = values[1:-1]
         out, reduction = long_coord.order(sub)
-        assert np.issubdtype(reduction.dtype, np.integer)
-        assert len(reduction) == len(sub)
+        assert len(out) == len(values[reduction])
 
     def test_overlapping_array(self, long_coord):
         """Ensure an overlapping array works as well."""
@@ -765,7 +764,7 @@ class TestOrder:
         # Ensure this still gets some output.
         in_coord = np.isin(values, long_coord.values)
         out, reduction = long_coord.order(values)
-        assert in_coord.sum() == len(out) == len(reduction)
+        assert in_coord.sum() == len(out) == len(long_coord.values[reduction])
 
     def test_duplicate_array_samples(self, long_coord):
         """Ensure duplicate indices cause duplicates in array."""
@@ -824,8 +823,8 @@ class TestOrder:
         old_values = coord_with_duplicates.values
         out, inds = coord_with_duplicates.order(np.asarray(1))
         assert np.all(out.values == 1)
+        assert np.all(old_values[inds] == 1)
         assert len(out) == (out.values == 1).sum()
-        assert np.all(np.where(old_values == 1)[0] == inds)
 
     def test_duplicate_coord_multiple_values(self, coord_with_duplicates):
         """Ensure order works with duplicate coordinates and values."""
@@ -868,6 +867,37 @@ class TestEqual:
         """Ensure non-coords compare false."""
         assert random_coord is not None
         assert not random_coord == {1, 2}
+
+
+class TestApproxEqual:
+    """Tests for coordinates being approximately equal."""
+
+    def test_non_coord(self, basic_non_coord):
+        """Ensure non-coords of same length are equal."""
+        assert basic_non_coord.approx_equal(basic_non_coord)
+
+    def test_normal_coord(self, evenly_sampled_coord):
+        """Ensure evenly sampled coords are equal."""
+        assert evenly_sampled_coord.approx_equal(evenly_sampled_coord)
+
+    def test_different_shape(self, evenly_sampled_coord):
+        """Coords of different shapes !=."""
+        sub, _ = evenly_sampled_coord.select(0, 2, samples=True)
+        assert not sub.approx_equal(evenly_sampled_coord)
+        assert not evenly_sampled_coord.approx_equal(sub)
+
+    def test_different_values_ne(self, evenly_sampled_float_coord_with_units):
+        """Ensure very different value coords are not approx equal."""
+        coord = evenly_sampled_float_coord_with_units
+        out = coord.update(data=coord.data * 1_000_000)
+        assert not out.approx_equal(coord)
+
+    def test_close_values_equal(self, evenly_sampled_float_coord_with_units):
+        """Ensure very close value coords are equal."""
+        coord = evenly_sampled_float_coord_with_units
+        out = coord.update(data=coord.data * 0.99999999999)
+        assert not np.all(out.data == coord.data)
+        assert out.approx_equal(coord)
 
 
 class TestCoordRange:
@@ -1419,6 +1449,12 @@ class TestNonCoord:
         summary = basic_non_coord.to_summary()
         assert isinstance(summary, CoordSummary)
 
+    def test_equals_to_other_coord(self, basic_non_coord):
+        """Non cord should not be equal to other coord of same length."""
+        other = get_coord(data=np.arange(len(basic_non_coord)))
+        assert other != basic_non_coord
+        assert basic_non_coord != other
+
 
 class TestCoercion:
     """Some data types should support coercion in selecting (eg dates)."""
@@ -1588,6 +1624,7 @@ class TestUpdate:
 
 class TestAlignTo:
     """Tests for aligning two coords."""
+
     def test_perfect_overlap(self, evenly_sampled_coord):
         """Ensure nothing changes with perfect overlap."""
         c1, c2, s1, s2 = evenly_sampled_coord.align_to(evenly_sampled_coord)
@@ -1606,7 +1643,7 @@ class TestAlignTo:
     def test_intersection(self, evenly_sampled_coord):
         """Test for when two coords overlap but aren't contained in the other."""
         coord1 = evenly_sampled_coord
-        mid_ind = len(coord1)//2
+        mid_ind = len(coord1) // 2
         coord2 = coord1.update_limits(min=coord1.data[mid_ind])
         c1, c2, s1, s2 = coord1.align_to(coord2)
         assert c1 == c2
@@ -1623,18 +1660,13 @@ class TestAlignTo:
         assert len(s1) == len(s2) == len(c1) == 0
 
     def test_non_coord_compatible(self, evenly_sampled_coord):
-        """Ensure when non_coords are compatible the old one is returned. """
+        """Ensure when non_coords are compatible original coords returned."""
         coord = evenly_sampled_coord
         non_coord = get_coord(data=1)
         c1, c2, s1, s2 = coord.align_to(non_coord)
         assert c1 == coord
         c1, c2, s1, s2 = non_coord.align_to(coord)
-        assert c1 == coord
-
-
-
-
-
+        assert c1 == non_coord
 
 
 class TestIssues:

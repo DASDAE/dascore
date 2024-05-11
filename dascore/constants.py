@@ -87,6 +87,10 @@ max_lens = {
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
 
+# These attributes are the default to ignore when determine if patches
+# can be merged or broadcast together.
+DEFAULT_ATTRS_TO_IGNORE = ("history", "dims")
+
 # Large and small np.datetime64[ns] (used when defaults are needed)
 SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")

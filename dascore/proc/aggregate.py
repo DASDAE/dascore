@@ -6,7 +6,6 @@ from functools import partial
 
 import numpy as np
 
-from dascore.compat import is_array
 from dascore.constants import PatchType
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate

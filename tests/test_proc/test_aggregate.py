@@ -47,6 +47,7 @@ class TestApplyOperators:
         agg = random_patch.min(None)
         out = random_patch - agg
         assert isinstance(out, dc.Patch)
+        random_patch.data - agg
         assert np.allclose(random_patch.data - agg, out.data)
 
     def test_single_reduction(self, random_patch):
@@ -54,5 +55,3 @@ class TestApplyOperators:
         agg = random_patch.first("time")
         out1 = random_patch + agg
         assert isinstance(out1, dc.Patch)
-
-

@@ -30,13 +30,13 @@ from dascore.units import (
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
+    _maybe_array_to_slice,
     _to_slice,
     all_close,
     all_diffs_close_enough,
     cached_method,
     iterate,
     sanitize_range_param,
-    _maybe_array_to_slice,
 )
 from dascore.utils.models import (
     ArrayLike,
@@ -347,8 +347,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return coord, _maybe_array_to_slice(inds, len(self))
 
     def align_to(
-            self, other: "BaseCoord"
-    ) -> tuple["BaseCoord", "BaseCoord", slice | ArrayLike, slice | ArrayLike]:
+        self, other: BaseCoord
+    ) -> tuple[BaseCoord, BaseCoord, slice | ArrayLike, slice | ArrayLike]:
         """
         Align the coordinate to another coordinate.
 
@@ -360,6 +360,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         other
             The other coordinate.
         """
+
         def valid_non_coord(coord1, coord2):
             lens = {len(x) for x in [coord1, coord2]}
             # For compatibility one coord must have length 1 or
@@ -376,8 +377,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         assert self.ndim == 1, "can only align 1D arrays."
         if isinstance(self, NonCoord) or isinstance(other, NonCoord):
             valid_non_coord(self, other)
-            out = self if isinstance(other, NonCoord) else other
-            return out, out, slice(None), slice(None)
+            return self, other, slice(None), slice(None)
         data1, data2 = self.data, other.data
         intersection = np.intersect1d(data1, data2)
         coord1, slice1 = self.order(intersection)
@@ -804,11 +804,30 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         assert len(ranges)
         return ranges[0]
 
+    def approx_equal(self: BaseCoord, other: BaseCoord) -> bool:
+        """
+        Return True if the coordinates are approximately equal.
+
+        Parameters
+        ----------
+        other
+            Another coordinate.
+        """
+        if self.shape != other.shape:
+            return False
+        non_coords = [self._non_coord, other._non_coord]
+        if all(non_coords):
+            return self == other
+        if any(non_coords):
+            return False
+        return all_close(self.values, other.values)
+
 
 class NonCoord(BaseCoord):
     """
     A Coordinate representing not a coordinate.
     """
+
     length: int
     dtype = np.floating
     _rich_style = dascore_styles["coord_non"]
@@ -826,16 +845,18 @@ class NonCoord(BaseCoord):
         return self.__class__(length=len(dummy))
 
     def _max(self):
-        """dummy funct to do nothing but raise."""
+        """Dummy funct to do nothing but raise."""
         return np.nan
 
     def _min(self):
         return np.nan
 
     def convert_units(self, unit) -> Self:
+        """No possible units, raise Error."""
         self._raise_non_coord_error("convert_units")
 
     def update_limits(self, min=None, max=None, step=None, **kwargs):
+        """No possible units, raises Error."""
         self._raise_non_coord_error("update_limits")
 
     def sort(self, reverse=False):
@@ -899,7 +920,7 @@ class NonCoord(BaseCoord):
         self, array, relative=False, samples=False
     ) -> tuple[Self, slice | ArrayLike]:
         """
-        {doc}
+        {doc}.
         """
         self._check_order_and_select(relative, samples)
         return super().order(array, relative=relative, samples=samples)
@@ -1539,7 +1560,7 @@ def get_coord(
     _check_data_compatibility(data, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
     if data is not None:
-        if isinstance(data, (int, np.integer)):
+        if isinstance(data, (int | np.integer)):
             return NonCoord(length=data)
         if not isinstance(data, np.ndarray | BaseCoord):
             data = array(data)

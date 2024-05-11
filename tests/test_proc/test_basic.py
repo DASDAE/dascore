@@ -10,6 +10,7 @@ from dascore import get_example_patch
 from dascore.exceptions import UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
+from dascore.utils.misc import _merge_tuples
 
 
 @pytest.fixture(scope="session")
@@ -225,12 +226,12 @@ class TestApplyOperator:
         assert np.allclose(new.data, ones + random_patch.data)
 
     def test_incompatible_coords(self, random_patch):
-        """Ensure incompatible dimensions raises."""
+        """Ensure un-alignable coords returns degenerate patch."""
         time = random_patch.get_coord("time")
         new_time = time.max() + time.step
         new = random_patch.update_attrs(time_min=new_time)
         out = apply_operator(new, random_patch, np.multiply)
-        assert False
+        assert 0 in set(out.shape)
 
     def test_quantity_scalar(self, random_patch):
         """Ensure operators work with quantities."""
@@ -313,7 +314,7 @@ class TestPatchBroadcasting:
         axis = random_patch.dims.index("time")
         to_sub = np.min(random_patch.data, axis=axis, keepdims=True)
         # Ensure the time aggregation worked.
-        assert np.allclose(sub_patch.data, to_sub.flatten())
+        assert np.allclose(sub_patch.data, to_sub)
         # Then test that the resulting data is as expected.
         expected = random_patch.data - to_sub
         assert np.allclose(expected, out.data)
@@ -324,22 +325,25 @@ class TestPatchBroadcasting:
     def test_broadcast_single_shared_dim(self, random_patch):
         """Ensure two 2d patches can get broad-casted when one dim is the same."""
         # get two smallish patches to test multidimensional broadcasting.
-        patch1 = dc.proc.coords.select(time=(1, 10), distance=(1, 10), samples=True)
-        patch2 = dc.proc.coords.transpose("distance", "time").rename_coords(
-            distance="length"
-        )
+        patch1 = random_patch.select(time=(1, 10), distance=(1, 10), samples=True)
+        patch2 = patch1.transpose("distance", "time").rename_coords(distance="length")
+        expected_dims = _merge_tuples(patch1.dims, patch2.dims)
         out = patch1 * patch2
-        assert out.dims == ("time", "distance", "length")
+        assert out.dims == expected_dims
         assert out.shape == (9, 9, 9)
 
     def test_patches_different_coords_same_shape(self, random_patch):
         """Ensure the intersection of coordinates in output when coords differ."""
-        distance = random_patch.get_coord("distance").values
-        shifted_patch = random_patch.update_coords(distance_min=distance.mean())
-        assert False
+        distance = random_patch.get_array("distance")
+        mid = distance[len(distance) // 2]
+        shifted_patch = random_patch.update_coords(distance_min=mid)
         out = random_patch + shifted_patch
-
-
+        # Ensure distance is equal to intersecting values
+        dist_out = out.get_array("distance")
+        overlap_dist = np.intersect1d(
+            random_patch.get_array("distance"), out.get_array("distance")
+        )
+        assert np.all(dist_out == overlap_dist)
 
 
 class TestDropNa:
