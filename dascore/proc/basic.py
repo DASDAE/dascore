@@ -516,8 +516,8 @@ def pad(
     >>> patch = dc.get_example_patch()
     >>> # zero pad `time` dimension with 2 zeros before and 3 zeros after
     >>> padded_patch_1 = patch.pad(time = (2, 3))
-    >>> # zero pad `distance` dimension with 4 zeros before after
-    >>> padded_patch_2 = patch.pad(distance = 4)
+    >>> # zero pad `distance` dimension with 4 unit values before and after
+    >>> padded_patch_2 = patch.pad(distance = 4, constant_values = 1)
     """
     pad_width = [(0, 0)] * len(patch.shape)
     dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
