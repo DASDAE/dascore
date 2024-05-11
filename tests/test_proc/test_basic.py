@@ -1,6 +1,8 @@
 """Tests for basic patch functions."""
 from __future__ import annotations
 
+import operator
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,6 +13,9 @@ from dascore.exceptions import UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
 from dascore.utils.misc import _merge_tuples
+
+OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
+TEST_OPS = tuple(getattr(operator, x) for x in OP_NAMES)
 
 
 @pytest.fixture(scope="session")
@@ -344,6 +349,20 @@ class TestPatchBroadcasting:
             random_patch.get_array("distance"), out.get_array("distance")
         )
         assert np.all(dist_out == overlap_dist)
+
+    @pytest.mark.parametrize("test_op", TEST_OPS)
+    def test_broadcast_collapsed_patch(self, random_patch, test_op):
+        """Ensure a collapsed patch can still broadcast."""
+        collapsed_patch = random_patch.min(None)
+        scalar = 10
+        mat1 = np.array([1, 2, 3])
+        mat2 = np.arange(4).reshape(2, 2)
+        # A collapsed patch should broadcast to all these things.
+        for val in (scalar, mat1, mat2, random_patch):
+            p1 = test_op(collapsed_patch, val)
+            p2 = test_op(val, collapsed_patch)
+            assert isinstance(p1, dc.Patch)
+            assert isinstance(p2, dc.Patch)
 
 
 class TestDropNa:

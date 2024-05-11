@@ -120,6 +120,19 @@ class Patch:
     def __pow__(self, other):
         return dascore.proc.apply_operator(self, other, np.power)
 
+    def __mod__(self, other):
+        return dascore.proc.apply_operator(self, other, np.power)
+
+    # Also add reverse operators
+
+    __radd__ = __add__
+    __rsub__ = __sub__
+    __rmul__ = __mul__
+    __rpow__ = __pow__
+    __rtruediv__ = __truediv__
+    __rfloordiv__ = __floordiv__
+    __rmod__ = __mod__
+
     def __neg__(self):
         return self.update(data=-self.data)
 
