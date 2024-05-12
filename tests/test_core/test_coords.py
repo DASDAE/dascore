@@ -1193,10 +1193,14 @@ class TestGetSampleCount:
         # test for using samples kwargWindow or step size is larger than
         msg = "results in a window larger than coordinate"
         with pytest.raises(ParameterError, match=msg):
-            evenly_sampled_coord.get_sample_count(max_len + 2, samples=True)
+            evenly_sampled_coord.get_sample_count(
+                max_len + 2, samples=True, enforce_lt_coord=True
+            )
         # test for using normal mode
         with pytest.raises(ParameterError, match=msg):
-            evenly_sampled_coord.get_sample_count(duration + 2 * step)
+            evenly_sampled_coord.get_sample_count(
+                duration + 2 * step, enforce_lt_coord=True
+            )
 
     def test_non_int_raises_with_samples(self, evenly_sampled_coord):
         """Non integer values should raise when sample=True."""

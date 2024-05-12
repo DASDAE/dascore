@@ -240,6 +240,7 @@ class Patch:
     imag = dascore.proc.imag
     angle = dascore.proc.angle
     resample = dascore.proc.resample
+    pad = dascore.proc.pad
 
     def iresample(self, *args, **kwargs):
         """Deprecated method."""

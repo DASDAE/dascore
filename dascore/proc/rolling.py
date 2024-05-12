@@ -306,8 +306,12 @@ def rolling(
     dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
     roll_hist = f"rolling({dim}={value}, step={step}, center={center}, engine={engine})"
     coord = patch.get_coord(dim)
-    window = coord.get_sample_count(value, samples=samples)
-    step = 1 if step is None else coord.get_sample_count(step, samples=samples)
+    window = coord.get_sample_count(value, samples=samples, enforce_lt_coord=True)
+    step = (
+        1
+        if step is None
+        else coord.get_sample_count(step, samples=samples, enforce_lt_coord=True)
+    )
     if window == 0 or step == 0:
         msg = "Window or step size can't be zero. Use any positive values."
         raise ParameterError(msg)
