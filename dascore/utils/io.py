@@ -140,9 +140,15 @@ def patch_to_xarray(patch: PatchType):
     """Return a data array with patch contents."""
     xr = optional_import("xarray")
     attrs = dict(patch.attrs)
-    dims = patch.dims
-    coords = patch.coords._get_dim_array_dict()
-    return xr.DataArray(patch.data, attrs=attrs, dims=dims, coords=coords)
+    patch_dims = patch.dims
+    coords = {}
+    for name, coord in patch.coords.coord_map.items():
+        if coord._non_coord:
+            continue
+        dims = patch.coords.dim_map[name]
+        coords[name] = (dims, coord.values)
+    # Need to exclude non-coords
+    return xr.DataArray(patch.data, attrs=attrs, dims=patch_dims, coords=coords)
 
 
 def xarray_to_patch(data_array) -> PatchType:

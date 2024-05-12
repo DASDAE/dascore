@@ -7,7 +7,7 @@ import pytest
 import dascore as dc
 from dascore.compat import is_array
 from dascore.core.coords import BaseCoord
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import CoordError, ParameterError, PatchBroadcastError
 from dascore.units import get_quantity
 
 
@@ -437,6 +437,41 @@ class TestGetCoord:
             wacky_dim_patch.get_coord("distance", require_evenly_sampled=True)
         with pytest.raises(CoordError, match=msg):
             wacky_dim_patch.get_coord("time", require_evenly_sampled=True)
+
+
+class TestMakeBroadcastable:
+    """Tests for making patches broadcastable to differnt shapes."""
+
+    def test_broadcast_non_coords(self, random_patch):
+        """Ensure non-coords of length 1 can broadcast."""
+        collapsed_patch = random_patch.sum()
+        shape = (2, 2)
+        patch = collapsed_patch.make_broadcastable_to(shape)
+        assert patch.shape == shape
+
+    def test_raises_real_coord(self, random_patch):
+        """If the dimension has values, it shouldn't be broadcastable."""
+        patch = random_patch.select(time=1, distance=2, samples=True)
+        # The shape is broadcastable, but the coords exist so it cant
+        # broadcast.
+        shape = (1, 2)
+        msg = "Cannot broadcast non-empty coord"
+        with pytest.raises(PatchBroadcastError, match=msg):
+            patch.make_broadcastable_to(shape)
+
+    def test_incompatible_shapes(self, random_patch):
+        """Incompatible shapes should raise."""
+        patch = random_patch.select(time=1, samples=True)
+        shape = (12, 12)
+        msg = "objects cannot be broadcast to a single shape"
+        with pytest.raises(ValueError, match=msg):
+            patch.make_broadcastable_to(shape)
+
+    def test_broadcastable_to_current_shape(self, random_patch):
+        """Making broadcastable to current shape should do nothing."""
+        patch = random_patch
+        out = patch.make_broadcastable_to(patch.shape)
+        assert out == patch
 
 
 class TestGetArray:

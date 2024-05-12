@@ -231,6 +231,40 @@ def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
 
 
+@patch_function()
+def make_broadcastable_to(
+    self: PatchType,
+    shape: tuple[int, ...],
+    drop_coords=False,
+) -> PatchType:
+    """
+    Update the coordiantes of a patch.
+
+    Will either add new coordinates, or update existing ones.
+
+    Parameters
+    ----------
+    shape
+        The new shape the patch should be able to broadcast with.
+    drop_coords
+        If True, drop coords that need to be broadcasted up, otherwise
+        only NonCoordinate dimensions can change shape.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> pa = dc.get_example_patch("random_patch")
+    >>> # Get a patch with non-coordinate dimensions
+    >>> patch = pa.mean()
+    >>> out = patch.make_broadcastable_to(shape=(2, 3))
+    >>> assert out.shape == (2, 3)
+    """
+    coords, data = self.coords.make_broadcastable_to(
+        shape, array=self.data, drop_coords=drop_coords
+    )
+    return self.new(coords=coords, data=data)
+
+
 @patch_function(history="method_name")
 def coords_from_df(
     self: PatchType,

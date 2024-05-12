@@ -171,7 +171,7 @@ class TestAlignPatches:
         assert 0 in set(out1.shape)
 
     def test_no_common_dims_raises(self, random_patch):
-        """Patches with no common dims should not be alignable."""
+        """Patches with no common dims should not be align-able."""
         new = random_patch.rename_coords(time="money", distance="gold")
         msg = "align patches with no shared dimensions."
         with pytest.raises(PatchDimError, match=msg):

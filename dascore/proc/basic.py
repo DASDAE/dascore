@@ -11,7 +11,7 @@ import dascore as dc
 from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
 from dascore.core.attrs import PatchAttrs, _merge_aligned_coords, _merge_models
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.exceptions import UnitError
+from dascore.exceptions import PatchBroadcastError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import align_patch_coords, patch_function
@@ -328,11 +328,13 @@ def standardize(
 
 
 @patch_function()
-def apply_operator(
-    patch: PatchType,
+def apply_ufunc(
+    patch: PatchType | ArrayLike,
     other: PatchType | ArrayLike,
     operator: Callable,
+    *args,
     attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
+    **kwargs,
 ) -> PatchType:
     """
     Apply a ufunc-type operator to a patch.
@@ -350,30 +352,37 @@ def apply_operator(
         must be compatible.
     operator
         The operator. Must be numpy ufunc-like.
+    *args
+        Arguments to pass to the operator.
+    attrs_to_ignore
+        Attributes to ignore when considering if patches are compatible.
+    **kwargs
+        Keyword arguments to pass to the operator.
 
     Examples
     --------
     >>> import numpy as np
     >>> import dascore as dc
-    >>> from dascore.proc.basic import apply_operator
+    >>> from dascore.proc.basic import apply_ufunc
     >>> patch = dc.get_example_patch()
     >>> # multiply the patch by 10
-    >>> new = apply_operator(patch, 10, np.multiply)
+    >>> new = apply_ufunc(patch, 10, np.multiply)
     >>> assert np.allclose(patch.data * 10, new.data)
     >>> # add a random value to each element of patch data
     >>> noise = np.random.random(patch.shape)
-    >>> new = apply_operator(patch, noise, np.add)
+    >>> new = apply_ufunc(patch, noise, np.add)
     >>> assert np.allclose(new.data, patch.data + noise)
     >>> # subtract one patch from another. Coords and attrs must be compatible
-    >>> new = apply_operator(patch, patch, np.subtract)
+    >>> new = apply_ufunc(patch, patch, np.subtract)
     >>> assert np.allclose(new.data, 0)
 
     Notes
     -----
     See [numpy's ufunc docs](https://numpy.org/doc/stable/reference/ufuncs.html)
     """
-    # Handle creating merged coords and patch stuff.
-    if isinstance(other, dc.Patch):
+
+    def _get_coords_attrs_from_patches(patch, other):
+        """Deal with aligning two patches."""
         # Align patches so their coords are identical and data aligned.
         patch, other_patch = align_patch_coords(patch, other)
         coords = _merge_aligned_coords(patch.coords, other_patch.coords)
@@ -386,27 +395,54 @@ def apply_operator(
         other = other_patch.data
         if other_units := get_quantity(other_patch.attrs.data_units):
             other = other * other_units
-    else:
-        coords, attrs = patch.coords, patch.attrs
-    # handle units of output
-    if isinstance(other, Quantity | Unit):
-        data_units = get_quantity(attrs.data_units)
-        data = patch.data if data_units is None else patch.data * data_units
-        # other is not numpy array wrapped w/ quantity, convert to quant
-        if not hasattr(other, "shape"):
-            other = get_quantity(other)
-        try:
-            new_data_w_units = operator(data, other)
-        except DimensionalityError:
-            msg = f"{operator} failed with units {data_units} and {other.units}"
-            raise UnitError(msg)
-        attrs = attrs.update(data_units=str(new_data_w_units.units))
-        new_data = new_data_w_units.magnitude
-    else:  # simpler case; no units.
-        new_data = operator(patch.data, other)
+        return patch, other, coords, attrs
 
+    def _ensure_array_compatible(patch, other):
+        """Deal with broadcasting a patch and an array."""
+        other = np.asarray(other)
+        if patch.shape == other.shape:
+            return patch
+        if (patch_ndims := patch.ndim) < (array_ndims := other.ndim):
+            msg = f"Cannot broadcast patch/array {patch_ndims=} {array_ndims=}"
+            raise PatchBroadcastError(msg)
+        patch = patch.make_broadcastable_to(other.shape)
+        return patch
+
+    def _apply_op(patch, other, operator, attrs):
+        """Apply the operation, handle units."""
+        if isinstance(other, Quantity | Unit):
+            data_units = get_quantity(attrs.data_units)
+            data = patch.data if data_units is None else patch.data * data_units
+            # other is not numpy array wrapped w/ quantity, convert to quant
+            if not hasattr(other, "shape"):
+                other = get_quantity(other)
+            try:
+                new_data_w_units = operator(data, other, *args, **kwargs)
+            except DimensionalityError:
+                msg = f"{operator} failed with units {data_units} and {other.units}"
+                raise UnitError(msg)
+            attrs = attrs.update(data_units=str(new_data_w_units.units))
+            new_data = new_data_w_units.magnitude
+        else:  # simpler case; no units.
+            new_data = operator(patch.data, other, *args, **kwargs)
+        return new_data, attrs
+
+    if not isinstance(patch, dc.Patch):
+        patch, other = other, patch
+    # Align/broadcast patch to input
+    if isinstance(other, dc.Patch):
+        patch, other, coords, attrs = _get_coords_attrs_from_patches(patch, other)
+    else:
+        patch = _ensure_array_compatible(patch, other)
+        coords, attrs = patch.coords, patch.attrs
+    # Apply operation
+    new_data, attrs = _apply_op(patch, other, operator, attrs)
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
+
+
+# This is left here to not break compatibility.
+apply_operator = apply_ufunc
 
 
 @patch_function()

@@ -9,7 +9,7 @@ import pytest
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import UnitError
+from dascore.exceptions import PatchBroadcastError, UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
 from dascore.utils.misc import _merge_tuples
@@ -216,7 +216,7 @@ class TestStandarize:
         )
 
 
-class TestApplyOperator:
+class TestApplyUfunc:
     """Tests for applying various ufunc-type operators."""
 
     def test_scalar(self, random_patch):
@@ -350,11 +350,36 @@ class TestPatchBroadcasting:
         )
         assert np.all(dist_out == overlap_dist)
 
+    def test_patch_broadcast_array(self, random_patch):
+        """Ensure a patch is broadcastable with an array up to the same ndims."""
+        should_work = (np.array(1), np.ones(1), np.ones((1, 1)))
+        for ar in should_work:
+            out = random_patch * ar
+            assert isinstance(out, dc.Patch)
+
+    def test_patch_broadcast_array_more_dims_raises(self, random_patch):
+        """Ensure a patch cannot broadcast to an array which has more dims."""
+        ar = np.ones((1, 1, 1))
+        with pytest.raises(PatchBroadcastError, match="Cannot broadcast"):
+            _ = random_patch * ar
+
+    def test_broadcast_up_array(self, random_patch):
+        """Ensure a patch with empty coords can broadcast up."""
+        # This patch still has empty dims of len 1
+        patch = random_patch.mean()
+        ar = np.ones(random_patch.shape)
+        for out in [patch * ar, ar * patch]:
+            assert isinstance(out, dc.Patch)
+            assert np.allclose(out.data, patch.data)
+
     @pytest.mark.parametrize("test_op", TEST_OPS)
     def test_broadcast_collapsed_patch(self, random_patch, test_op):
         """Ensure a collapsed patch can still broadcast."""
         collapsed_patch = random_patch.min(None)
         scalar = 10
+        # Arrays should raise since we don't know the name of the
+        # dims that would be expanded.
+
         mat1 = np.array([1, 2, 3])
         mat2 = np.arange(4).reshape(2, 2)
         # A collapsed patch should broadcast to all these things.

@@ -62,6 +62,7 @@ from dascore.exceptions import (
     CoordMergeError,
     CoordSortError,
     ParameterError,
+    PatchBroadcastError,
 )
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
@@ -635,6 +636,46 @@ class CoordManager(DascoreBaseModel):
             self = self.update(**new_coords)
             array = _apply_union_indexers(indexers, array)
         return self, array
+
+    def make_broadcastable_to(
+        self,
+        shape: tuple[int, ...],
+        array: MaybeArray,
+        drop_coords: bool = False,
+    ) -> tuple[Self, MaybeArray]:
+        """
+        Try to make coord manager broadcastable to a given shape.
+
+        Only dimensions with Non coords can be broadcasted up.
+
+        Parameters
+        ----------
+        shape
+            A shape tuple (tuple of ints)
+        array
+            The an array with the same shape as coord manager.
+        drop_coords
+            If True, allow dropping coordinates to broadcast cm dimensions.
+            Otherwise, only NonCoords can change shape.
+        """
+        # This guarantees the shapes are compatible
+        target_shape = np.broadcast_shapes(self.shape, shape)
+        # Now just determine which dims need to be expanded and if they can.
+        new_coords = {}
+        dims = self.dims
+        for ind, (current, new) in enumerate(zip(self.shape, target_shape)):
+            if current >= new:
+                continue
+            name = dims[ind]
+            coord = self.get_coord(name)
+            # we can just scale up the coord
+            if coord._non_coord or drop_coords:
+                new_coords[name] = get_coord(length=max(current, new))
+            else:
+                msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
+                raise PatchBroadcastError(msg)
+        out = array if array is None else np.broadcast_to(array, target_shape)
+        return self.update_coords(**new_coords), out
 
     def _check_multiple_relative(self, kwargs):
         """

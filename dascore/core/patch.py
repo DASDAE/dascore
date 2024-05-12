@@ -103,25 +103,25 @@ class Patch:
         return dascore.proc.equals(self, other)
 
     def __add__(self, other):
-        return dascore.proc.apply_operator(self, other, np.add)
+        return dascore.proc.apply_ufunc(self, other, np.add)
 
     def __sub__(self, other):
-        return dascore.proc.apply_operator(self, other, np.subtract)
+        return dascore.proc.apply_ufunc(self, other, np.subtract)
 
     def __floordiv__(self, other):
-        return dascore.proc.apply_operator(self, other, np.floor_divide)
+        return dascore.proc.apply_ufunc(self, other, np.floor_divide)
 
     def __truediv__(self, other):
-        return dascore.proc.apply_operator(self, other, np.divide)
+        return dascore.proc.apply_ufunc(self, other, np.divide)
 
     def __mul__(self, other):
-        return dascore.proc.apply_operator(self, other, np.multiply)
+        return dascore.proc.apply_ufunc(self, other, np.multiply)
 
     def __pow__(self, other):
-        return dascore.proc.apply_operator(self, other, np.power)
+        return dascore.proc.apply_ufunc(self, other, np.power)
 
     def __mod__(self, other):
-        return dascore.proc.apply_operator(self, other, np.power)
+        return dascore.proc.apply_ufunc(self, other, np.power)
 
     # Also add reverse operators
 
@@ -135,6 +135,22 @@ class Patch:
 
     def __neg__(self):
         return self.update(data=-self.data)
+
+    # Numpy Compatibility things
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        """
+        Gets called when a numpy array is ufunc'ed against a patch.
+
+        """
+        assert method == "__call__", "only call supported."
+        # pull out patch and other thing.
+        arg1, arg2, *extras = inputs
+        out = dascore.proc.basic.apply_ufunc(arg1, arg2, ufunc, *extras, **kwargs)
+        return out
+
+    def __array__(self):
+        """Used to convert Patches to arrays."""
+        return self.data
 
     def __rich__(self):
         dascore_text = get_dascore_text()
@@ -227,6 +243,8 @@ class Patch:
     update_coords = dascore.proc.update_coords
     drop_coords = dascore.proc.drop_coords
     coords_from_df = dascore.proc.coords_from_df
+    make_broadcastable_to = dascore.proc.make_broadcastable_to
+    apply_ufunc = dascore.proc.apply_ufunc
 
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords."""
