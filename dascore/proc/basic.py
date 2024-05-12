@@ -499,13 +499,17 @@ def pad(
     ----------
     mode : str, optional
         The mode of padding, by default 'constant'.
-    constant_values : scalar or sequence, optional
-        If a scalar, this value is used as the pad value for
-        all dimensions. If a sequence, it must be of the same
-        length as the number of dimensions being padded,
-        and each element of the sequence
-
-        specifies the pad value for the corresponding dimension.
+    constant_values : scalar , optional
+        A single scalar value used as the padding value across all dimensions.
+        Defaults to 0.
+    expand_coords : bool, optional
+        Determines how coordinates are adjusted when padding is applied.
+        If set to True, the coordinates will be expanded to maintain their
+        order and even sampling (if originally evenly sampled), by extrapolating
+        based on the coordinate's step size.
+        If set to False, the new coordinates introduced by padding will be
+        filled with NaN values, preserving the original coordinate values but
+        not the order or sampling rate.
     **kwargs:
         Used to specify dimension and number of elements,
         either an integer or a tuple (before, after).
@@ -514,20 +518,21 @@ def pad(
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> # zero pad `time` dimension with 2 zeros before and 3 zeros after
+    >>> # zero pad `time` dimension with 2 patch's time unit (e.g., sec)
+    >>> # zeros before and 3 zeros after
     >>> padded_patch_1 = patch.pad(time = (2, 3))
     >>> # zero pad `distance` dimension with 4 unit values before and after
-    >>> padded_patch_2 = patch.pad(distance = 4, constant_values = 1)
+    >>> padded_patch_3 = patch.pad(distance = 4, constant_values = 1, samples=True)
     """
+    if isinstance(constant_values, list | tuple):
+        raise TypeError("constant_values must be a scalar, not a sequence.")
+
     pad_width = [(0, 0)] * len(patch.shape)
     dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
-
     new_coords = {}
+
     for _, info in dimfo.items():
         axis, dim, value = info["axis"], info["dim"], info["value"]
-        # Ensure passed dimension exists
-        if dim not in patch.dims:
-            continue
 
         # Ensure pad_width is a tuple, even if a single integer is provided
         if isinstance(value, int):
@@ -542,8 +547,8 @@ def pad(
             )
         pad_width[axis] = value
 
+        # Get new coordinate
         if expand_coords:
-            # Get new coordinate
             new_start = coord.min() - value[0] * coord.step
             new_end = coord.max() + (value[1] + 1) * coord.step
             coord = patch.get_coord(dim, require_evenly_sampled=True)
@@ -552,7 +557,6 @@ def pad(
                 start=new_start, stop=new_end, step=coord.step, units=coord.units
             )
         else:
-            # Get new coordinate
             coord = patch.get_coord(dim)
             old_values = coord.values.astype(np.float64)
             added_nan_values = np.pad(
@@ -561,6 +565,7 @@ def pad(
             new_coord = coord.update(data=added_nan_values)
         new_coords[dim] = new_coord
 
+    # Pad patch's data
     new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
 
     # Update coord manager

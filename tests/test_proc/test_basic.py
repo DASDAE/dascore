@@ -454,3 +454,8 @@ class TestPad:
             np.pi,
             atol=1e-6,
         )
+
+    def test_error_on_sequence_constant_values(self, random_patch):
+        """Test that providing a sequence for constant_values raises a TypeError."""
+        with pytest.raises(TypeError):
+            random_patch.pad(time=(0, 5), constant_values=(0, 0))
