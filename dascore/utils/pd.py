@@ -257,7 +257,7 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     return out
 
 
-def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.array:
+def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.ndarray:
     """
     Determine if each row of the index meets some filter requirements.
 
@@ -489,3 +489,13 @@ def dataframe_to_patch(
     dims = _get_column_names(df, attrs)
     coords = {dims[0]: df.index.to_numpy(), dims[1]: df.columns.to_numpy()}
     return dc.Patch(data=data, dims=dims, coords=coords, attrs=attrs)
+
+
+def rolling_df(df, window, step=None, axis=0, center=False):
+    """
+    A simple wrapper around pandas rolling to handle deprecated axis.
+
+    See pandas.DataFrame.rolling for more details of arguments.
+    """
+    df = df if not axis else df.T  # silly deprecated axis argument.
+    return df.rolling(window=window, step=step, center=center)

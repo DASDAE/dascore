@@ -32,7 +32,7 @@ def _set_scale(im, scale, scale_type, patch):
         # only one scale parameter provided, center around mean
     if isinstance(scale, float):
         mean = np.nanmean(patch.data)
-        scale = np.array([mean - scale * modifier, mean + scale * modifier])
+        scale = np.asarray([mean - scale * modifier, mean + scale * modifier])
     im.set_clim(scale)
 
 

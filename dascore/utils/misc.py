@@ -300,7 +300,7 @@ def optional_import(package_name: str) -> ModuleType:
 
 def get_middle_value(array):
     """Get the middle value in the differences array without changing dtype."""
-    array = np.sort(np.array(array))
+    array = np.sort(np.asarray(array))
     last_ind = len(array) - 1
     ind = int(np.floor(last_ind / 2))
     return np.sort(array)[ind]
@@ -310,7 +310,7 @@ def all_diffs_close_enough(diffs):
     """Check if all the diffs are 'close' handling timedeltas."""
     if not len(diffs):
         return False
-    diffs = np.array(diffs)
+    diffs = np.asarray(diffs)
     is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
     is_td = np.issubdtype(diffs.dtype, np.datetime64)
     if is_td or is_dt:
@@ -811,3 +811,14 @@ def _maybe_array_to_slice(int_array, data_len):
             # otherwise return sub-slice.
             return slice(int_array[0], int_array[-1] + 1)
     return int_array
+
+
+def to_object_array(object_sequence):
+    """
+    Convert a sequence of objects to a numpy array of objects.
+
+    This is useful, eg, for storing an object array in a dataframe.
+    """
+    out = np.empty(len(object_sequence), dtype=object)
+    out[:] = object_sequence
+    return out

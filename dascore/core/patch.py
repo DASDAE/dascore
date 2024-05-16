@@ -85,7 +85,9 @@ class Patch:
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
-        coords = get_coord_manager(coords, dims=dims)
+
+        shape = None if not hasattr(data, "shape") else data.shape
+        coords = get_coord_manager(coords, dims=dims, shape=shape)
         # the only case we allow attrs to include coords is if they are both
         # dicts, in which case attrs might have unit info for coords.
         if isinstance(attrs, Mapping) and attrs:
@@ -148,9 +150,13 @@ class Patch:
         out = dascore.proc.basic.apply_ufunc(arg1, arg2, ufunc, *extras, **kwargs)
         return out
 
-    def __array__(self):
+    def __array__(self, dtype=None, copy=None):
         """Used to convert Patches to arrays."""
-        return self.data
+        data = self.data
+        out = data.astype(dtype) if dtype is not None else data
+        if copy:
+            out = np.copy(out)
+        return out
 
     def __rich__(self):
         dascore_text = get_dascore_text()
@@ -281,9 +287,12 @@ class Patch:
     imag = dascore.proc.imag
     angle = dascore.proc.angle
     resample = dascore.proc.resample
-    # Add aggregations
+    pad = dascore.proc.pad
+
+    # Patch aggregations shortcuts.
     aggregate = dascore.proc.agg.aggregate
     min = dascore.proc.agg.min
+    max = dascore.proc.agg.max
     max = dascore.proc.agg.max
     mean = dascore.proc.agg.mean
     median = dascore.proc.agg.median
@@ -291,7 +300,6 @@ class Patch:
     first = dascore.proc.agg.first
     last = dascore.proc.agg.last
     sum = dascore.proc.agg.sum
-    pad = dascore.proc.pad
 
     def iresample(self, *args, **kwargs):
         """Deprecated method."""

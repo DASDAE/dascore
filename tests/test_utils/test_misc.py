@@ -19,6 +19,7 @@ from dascore.utils.misc import (
     maybe_get_items,
     optional_import,
     separate_coord_info,
+    to_object_array,
     warn_or_raise,
 )
 
@@ -300,3 +301,13 @@ class TestWarnOrRaise:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             warn_or_raise(msg, behavior=None)
+
+
+class TestToObjectArray:
+    """Tests for converting a sequence of objects to an object array."""
+
+    def test_patches_to_array(self, random_patch):
+        """Ensure a list of patches can be converted to an object array."""
+        patches = [random_patch] * 3
+        out = to_object_array(patches)
+        assert isinstance(out, np.ndarray)

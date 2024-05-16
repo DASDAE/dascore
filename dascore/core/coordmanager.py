@@ -311,7 +311,7 @@ class CoordManager(DascoreBaseModel):
             coord = self.coord_map[name]
             # convert values to dict to determine which should be updated.
             model_contents = coord.to_summary().model_dump(exclude_defaults=True)
-            # see what has changed
+            # see what has changed.
             diff = {
                 i: v for i, v in maybe_updates.items() if v != model_contents.get(i)
             }
@@ -755,7 +755,7 @@ class CoordManager(DascoreBaseModel):
 
     def validate_data(self, data):
         """Ensure data conforms to coordinates."""
-        data = np.array([]) if data is None else data
+        data = np.asarray([]) if data is None else data
         if self.shape != data.shape:
             msg = (
                 f"Data array has a shape of {data.shape} which doesnt match "
@@ -1016,7 +1016,7 @@ class CoordManager(DascoreBaseModel):
 
     def get_array(self, coord_name: str) -> np.ndarray:
         """Return the coordinate values as a numpy array."""
-        return np.array(self.get_coord(coord_name))
+        return np.asarray(self.get_coord(coord_name))
 
     def coord_size(self, coord_name: str) -> int:
         """Return the coordinate size."""
@@ -1031,6 +1031,7 @@ def get_coord_manager(
     coords: Mapping[str, BaseCoord | np.ndarray] | CoordManager | None = None,
     dims: tuple[str, ...] | None = None,
     attrs: dc.PatchAttrs | dict[str, Any] | None = None,
+    shape=None,
 ) -> CoordManager:
     """
     Create a coordinate manager.
@@ -1049,6 +1050,9 @@ def get_coord_manager(
         Cannot be used with coords argument.
         If you want to update [`CoordManager`](`dascore.core.CoordManager`)
         use [`update_from_attrs`](`dascore.core.CoordManager.update_from_attrs`).
+    shape
+        The data array shape which will be managed by coord manager. This
+        allows non-coordinate dimensions to be initiated.
 
     Examples
     --------
@@ -1099,6 +1103,11 @@ def get_coord_manager(
             dims = ()
     coords = {} if coords is None else coords
     coord_map, dim_map, dims = _get_coord_dim_map(coords, dims)
+    # Add missing dims to coord map so they get set as non_coords.
+    if shape and (missing_dims := (set(dims) - set(coord_map))):
+        for name in missing_dims:
+            coord_map[name] = get_coord(length=shape[dims.index(name)])
+            dim_map[name] = (name,)
     if attrs:
         coord_updates, _ = separate_coord_info(attrs, dims)
         updateable_coords = set(coord_updates) - set(coord_map)

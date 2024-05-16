@@ -14,6 +14,7 @@ from dascore.constants import (
     SMALLDT64,
     timeable_types,
 )
+from dascore.exceptions import TimeError
 
 
 @singledispatch
@@ -64,7 +65,7 @@ def _str_to_datetime64(obj: str) -> np.datetime64:
 @to_datetime64.register(np.number)
 def _float_to_datetime(num: float | int) -> np.datetime64:
     """Convert a float to a single datetime."""
-    ar = np.array([num])
+    ar = np.asarray([num])
     return _array_to_datetime64(ar)[0]
 
 
@@ -73,11 +74,11 @@ def _float_to_datetime(num: float | int) -> np.datetime64:
 @to_datetime64.register(tuple)
 def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     """Convert an array of floating point timestamps to an array of np.datatime64."""
-    array = np.array(array)
+    array = np.asarray(array)
     nans = pd.isnull(array)
     # dealing with objects
     if np.issubdtype(array.dtype, np.dtype(object)):
-        array = np.array([to_datetime64(x) for x in array]).astype("datetime64[ns]")
+        array = np.asarray([to_datetime64(x) for x in array]).astype("datetime64[ns]")
     # dealing with a string
     if np.issubdtype(array.dtype, np.dtype(str)):
         array = array.astype("datetime64[ns]")
@@ -90,6 +91,7 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     # dealing with numerical data
     elif not np.issubdtype(array.dtype, np.datetime64) and np.isreal(array[0]):
         with np.errstate(divide="ignore", invalid="ignore"):
+            array = np.array(array)  # need to make copy to write
             array[nans] = 0  # temporary replace NaNs
             abs_array = np.abs(array)
             sign = np.sign(array)
@@ -172,18 +174,16 @@ def to_timedelta64(obj: float | np.ndarray | str | timedelta):
 @to_timedelta64.register(np.number)
 def _float_to_timedelta64(num: float | int) -> np.datetime64:
     """Convert a float to a single datetime."""
-    ar = np.array([num])
+    ar = np.asarray([num])
     return _array_to_timedelta64(ar)[0]
 
 
 @to_timedelta64.register(np.ndarray)
 @to_timedelta64.register(list)
 @to_timedelta64.register(tuple)
-def _array_to_timedelta64(array: np.array) -> np.datetime64:
+def _array_to_timedelta64(array: np.ndarray) -> np.datetime64:
     """Convert an array of floating point timestamps to an array of np.datatime64."""
-    array = np.array(array)
-    nans = pd.isnull(array)
-    array[nans] = 0
+    array = np.asarray(array)
     # convert pure object arrays into float so sign casting works.
     if np.issubdtype(array.dtype, np.dtype(object)):
         array = array.astype(np.float64)
@@ -193,6 +193,8 @@ def _array_to_timedelta64(array: np.array) -> np.datetime64:
         else:
             return array.astype("timedelta64[ns]")
     assert np.isreal(array[0])
+    nans = pd.isnull(array)
+    array[nans] = 0
     # inf/NaN complain, salience these types of warnings for this block.
     with np.errstate(divide="ignore", invalid="ignore"):
         # separate seconds and factions, convert fractions to ns precision,
@@ -235,13 +237,18 @@ def _timedelta_to_timedelta64(td):
 @to_timedelta64.register(str)
 def _time_delta_from_str(time_delta_str: str):
     """Simply return the time delta."""
-    split = time_delta_str.split(" ")
-    assert len(split) == 2
-    val, units = split
-    if units[-1] == "s":
-        units = units[:-1]
-    new_unit = NUMPY_TIME_UNIT_MAPPING[units]
-    return np.timedelta64(int(val), new_unit)
+    match time_delta_str.split():
+        # Can split string into (hopefully) units an values. Standard case.
+        case [val, units]:
+            if units[-1] == "s":
+                units = units[:-1]
+            new_unit = NUMPY_TIME_UNIT_MAPPING[units]
+            return np.timedelta64(int(val), new_unit)
+        case [val] if val.lower() == "nat" or val.lower() == "":
+            return np.timedelta64("NaT")
+        case _:
+            msg = f"Could not convert {time_delta_str} to timedelta64"
+            raise TimeError(msg)
 
 
 @singledispatch
@@ -269,7 +276,7 @@ def _float_to_num(num: float | int) -> float | int:
 @to_int.register(tuple)
 def _array_to_int(array: np.ndarray) -> np.ndarray:
     """Convert an array of floating point timestamps to an array of np.datatime64."""
-    array = np.array(array)
+    array = np.asarray(array)
     if not len(array):
         return array.astype(np.int64)
     # dealing with an array of datetime64 or empty array
@@ -322,7 +329,7 @@ def to_float(obj: timeable_types | np.ndarray) -> np.ndarray:
 @to_float.register(tuple)
 def _array_to_float(array: np.ndarray) -> np.ndarray:
     """Convert an array of floating point timestamps to an array of np.datatime64."""
-    array = np.array(array)
+    array = np.asarray(array)
     if not len(array):
         return array.astype(np.float64)
     if np.issubdtype(array.dtype, np.datetime64):
@@ -362,7 +369,7 @@ def is_datetime64(obj) -> bool:
     if isinstance(obj, np.datetime64):
         return True
     if isinstance(obj, np.ndarray | list | tuple | pd.Series):
-        if np.issubdtype(np.array(obj).dtype, np.datetime64):
+        if np.issubdtype(np.asarray(obj).dtype, np.datetime64):
             return True
     if isinstance(obj, pd.Timestamp):
         return True
@@ -374,7 +381,7 @@ def is_timedelta64(obj) -> bool:
     if isinstance(obj, np.timedelta64):
         return True
     if isinstance(obj, np.ndarray | list | tuple | pd.Series):
-        if np.issubdtype(np.array(obj).dtype, np.timedelta64):
+        if np.issubdtype(np.asarray(obj).dtype, np.timedelta64):
             return True
     if isinstance(obj, pd.Timedelta):
         return True

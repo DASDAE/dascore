@@ -102,7 +102,7 @@ def _get_attrs(patch_group):
         val = patch_group._v_attrs[attr_name]
         # need to unpack one value arrays
         if isinstance(val, np.ndarray) and not val.shape:
-            val = np.array([val])[0]
+            val = np.asarray([val])[0]
         out[key] = val
     with suppress_warnings(DeprecationWarning):
         return PatchAttrs(**out)

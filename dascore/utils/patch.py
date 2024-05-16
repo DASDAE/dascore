@@ -27,6 +27,7 @@ from dascore.utils.misc import (
     all_diffs_close_enough,
     get_middle_value,
     iterate,
+    to_object_array,
 )
 from dascore.utils.time import to_float
 
@@ -247,12 +248,12 @@ def patches_to_df(
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
         else:  # else populate with patches and concat history
             history = df["history"].apply(lambda x: ",".join(x))
-            df = df.assign(patch=patches, history=history)
+            df = df.assign(patch=to_object_array(patches), history=history)
     # Ensure history is in df
     if "history" not in df.columns:
         df = df.assign(history="")
     if "patch" not in df.columns:
-        df["patch"] = [x for x in patches]
+        df["patch"] = to_object_array(patches)
     return df
 
 

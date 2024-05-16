@@ -45,9 +45,10 @@ class TestApplyOperators:
     def test_complete_reduction(self, random_patch):
         """Ensure a patch with complete reduction works."""
         agg = random_patch.min(None)
+        assert np.all(agg.data == np.min(random_patch.data))
+        # Ensure broadcasting works with reduced data
         out = random_patch - agg
         assert isinstance(out, dc.Patch)
-        random_patch.data - agg
         assert np.allclose(random_patch.data - agg, out.data)
 
     def test_single_reduction(self, random_patch):

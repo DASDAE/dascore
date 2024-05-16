@@ -12,12 +12,14 @@ from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
 from dascore.core.attrs import PatchAttrs, _merge_aligned_coords, _merge_models
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import PatchBroadcastError
-from dascore.exceptions import UnitError
+from dascore.exceptions import PatchBroadcastError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.models import ArrayLike
-from dascore.utils.patch import align_patch_coords
-from dascore.utils.patch import get_multiple_dim_value_from_kwargs, patch_function
+from dascore.utils.patch import (
+    align_patch_coords,
+    get_multiple_dim_value_from_kwargs,
+    patch_function,
+)
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
@@ -402,7 +404,9 @@ def apply_ufunc(
 
     def _ensure_array_compatible(patch, other):
         """Deal with broadcasting a patch and an array."""
-        other = np.asarray(other)
+        # This handles warning from quantity.
+        other = other.magnitude if hasattr(other, "magnitude") else other
+        other = np.asanyarray(other)
         if patch.shape == other.shape:
             return patch
         if (patch_ndims := patch.ndim) < (array_ndims := other.ndim):
@@ -411,26 +415,31 @@ def apply_ufunc(
         patch = patch.make_broadcastable_to(other.shape)
         return patch
 
-    def _apply_op(patch, other, operator, attrs):
-        """Apply the operation, handle units."""
-        if isinstance(other, Quantity | Unit):
-            data_units = get_quantity(attrs.data_units)
-            data = patch.data if data_units is None else patch.data * data_units
-            # other is not numpy array wrapped w/ quantity, convert to quant
-            if not hasattr(other, "shape"):
-                other = get_quantity(other)
-            try:
-                new_data_w_units = operator(data, other, *args, **kwargs)
-            except DimensionalityError:
-                msg = f"{operator} failed with units {data_units} and {other.units}"
-                raise UnitError(msg)
-            attrs = attrs.update(data_units=str(new_data_w_units.units))
-            new_data = new_data_w_units.magnitude
-        else:  # simpler case; no units.
-            new_data = operator(patch.data, other, *args, **kwargs)
+    def _apply_op(array1, array2, operator, reversed=False):
+        """Simply apply the operator, account for reversal."""
+        if reversed:
+            array1, array2 = array2, array1
+        return operator(array1, array2, *args, **kwargs)
+
+    def _apply_op_units(patch, other, operator, attrs, reversed=False):
+        """Apply the operation handling units attached to array."""
+        data_units = get_quantity(attrs.data_units)
+        data = patch.data if data_units is None else patch.data * data_units
+        # other is not numpy array wrapped w/ quantity, convert to quant
+        if not hasattr(other, "shape"):
+            other = get_quantity(other)
+        try:
+            new_data_w_units = _apply_op(data, other, operator, reversed=reversed)
+        except DimensionalityError:
+            msg = f"{operator} failed with units {data_units} and {other.units}"
+            raise UnitError(msg)
+        attrs = attrs.update(data_units=str(new_data_w_units.units))
+        new_data = new_data_w_units.magnitude
         return new_data, attrs
 
+    reversed = False  # flag to indicate we need to reverse data and patch
     if not isinstance(patch, dc.Patch):
+        reversed = True
         patch, other = other, patch
     # Align/broadcast patch to input
     if isinstance(other, dc.Patch):
@@ -439,7 +448,10 @@ def apply_ufunc(
         patch = _ensure_array_compatible(patch, other)
         coords, attrs = patch.coords, patch.attrs
     # Apply operation
-    new_data, attrs = _apply_op(patch, other, operator, attrs)
+    if isinstance(other, Quantity | Unit):
+        new_data, attrs = _apply_op_units(patch, other, operator, attrs, reversed)
+    else:
+        new_data = _apply_op(patch.data, other, operator, reversed)
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
 

@@ -120,7 +120,7 @@ def taper(
     """
     func = _get_window_function(window_type)
     # get taper values in samples.
-    out = np.array(patch.data)
+    out = np.array(patch.data)  # Need to make a copy here.
     shape = out.shape
     n_dims = len(out.shape)
     axis, samps, start_slice, end_slice = _get_taper_slices(patch, kwargs)

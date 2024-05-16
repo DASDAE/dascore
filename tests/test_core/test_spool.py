@@ -410,7 +410,7 @@ class TestMap:
 
         def get_dist_max(patch):
             """Function which will be mapped to each patch in spool."""
-            return patch.aggregate("time", "max")
+            return patch.select(time=10, samples=True)
 
         out = list(random_spool.chunk(time=5, overlap=1).map(get_dist_max))
         new_spool = dc.spool(out)

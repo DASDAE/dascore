@@ -659,7 +659,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             new_shape = np.zeros(len(self.shape), dtype=np.int_)
         else:
             assert np.max(axes) <= (len(self) - 1)
-            new_shape = np.array(self.shape)
+            new_shape = np.asarray(self.shape)
             for ind in iterate(axes):
                 new_shape[ind] = 0
         data = np.empty(tuple(new_shape), dtype=self.dtype)
@@ -1119,7 +1119,7 @@ class CoordRange(BaseCoord):
     def values(self) -> ArrayLike:
         """Return the values of the coordinate as an array."""
         if len(self) == 1:
-            return np.array([self.start])
+            return np.asarray([self.start])
         # note: linspace works better for floats that might have slightly
         # uneven spacing. It ensures the length of the output array is robust
         # to small deviations in spacing. However, this doesnt work for datetimes.
@@ -1521,7 +1521,7 @@ def get_coord(
 
     def _maybe_get_start_stop_step(data):
         """Get start, stop, step, is_monotonic."""
-        data = np.array(data)
+        data = np.asarray(data)
         view2 = data[1:]
         view1 = data[:-1]
         is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)

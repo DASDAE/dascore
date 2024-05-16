@@ -442,5 +442,5 @@ class TestChunkMerge:
         patches = [random_patch.mean("time") for _ in range(3)]
         spool = dc.spool(patches)
         chunked = spool.chunk(time=None)
-        assert chunked
-        assert False  # pick up here.
+        # Since the time dims are NaN, this can't work.
+        assert not len(chunked)

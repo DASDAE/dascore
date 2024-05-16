@@ -23,7 +23,7 @@ def _quasi_mean(array):
         out = array.view("i8").mean().astype(array.dtype)
     else:
         out = np.mean(array)
-    return np.array([out], dtype=array.dtype)
+    return np.asarray([out], dtype=array.dtype)
 
 
 def _get_definite_integral(patch, dxs_or_vals, dims, axes):
@@ -35,8 +35,8 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
         # also add related coords indicating start/stop
         for name in dims:
             coord = patch.get_coord(name).data
-            new_coords[f"pre_integrate_{name}_min"] = (name, np.array([coord.min()]))
-            new_coords[f"pre_integrate_{name}_max"] = (name, np.array([coord.max()]))
+            new_coords[f"pre_integrate_{name}_min"] = (name, np.asarray([coord.min()]))
+            new_coords[f"pre_integrate_{name}_max"] = (name, np.asarray([coord.max()]))
         cm = patch.coords.update(**new_coords)
         return array, cm
 

@@ -372,6 +372,13 @@ class TestPatchBroadcasting:
             assert isinstance(out, dc.Patch)
             assert np.allclose(out.data, patch.data)
 
+    def test_broadcast_with_array(self, random_patch):
+        """Ensure a patch can broadcast up and results are correct."""
+        agg = random_patch.min(None)
+        out1 = random_patch - agg
+        out2 = random_patch.data - agg
+        assert np.allclose(out1.data, out2.data)
+
     @pytest.mark.parametrize("test_op", TEST_OPS)
     def test_broadcast_collapsed_patch(self, random_patch, test_op):
         """Ensure a collapsed patch can still broadcast."""
@@ -379,9 +386,8 @@ class TestPatchBroadcasting:
         scalar = 10
         # Arrays should raise since we don't know the name of the
         # dims that would be expanded.
-
         mat1 = np.array([1, 2, 3])
-        mat2 = np.arange(4).reshape(2, 2)
+        mat2 = np.arange(4).reshape(2, 2) + 1  # + 1 to avoid divide by 0
         # A collapsed patch should broadcast to all these things.
         for val in (scalar, mat1, mat2, random_patch):
             p1 = test_op(collapsed_patch, val)

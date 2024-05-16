@@ -60,7 +60,7 @@ def get_intervals(
     """
     # when length is null just use entire length
     if pd.isnull(length):
-        out = np.array([start, stop])
+        out = np.asarray([start, stop])
         if is_datetime64(start):
             out = to_datetime64(out)
         return np.atleast_2d(out)
@@ -71,7 +71,7 @@ def get_intervals(
         length = to_timedelta64(length)
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
-    step = length * 0 if not step else step
+    step = length * 0 if pd.isnull(step) else step
     # Check for errors
     if overlap > length:
         msg = "Cant chunk when overlap is greater than chunk size"
@@ -220,8 +220,9 @@ class ChunkManager:
         if is_datetime64(start):
             step = to_timedelta64(step)
             overlap = to_timedelta64(overlap)
-        over = overlap if not pd.isnull(overlap) else (step * 0).iloc[0]
-        return duration, over
+        if pd.isnull(overlap):
+            overlap = np.asarray([0], dtype=step.dtype)[0]
+        return duration, overlap
 
     def _create_df(self, df, name, start_stop, gnum):
         """Reconstruct the dataframe."""
@@ -343,6 +344,8 @@ class ChunkManager:
         # of the source groups
         assert "_group" in source_df.columns and "_group" in chunked_df.columns
         chunked_groups = set(chunked_df["_group"])
+        if not chunked_groups:
+            return pd.DataFrame(columns=source_df.columns)
         # chunk groups should be a subset of source groups
         assert chunked_groups.issubset(set(source_df["_group"]))
         # iterate each group and create instruction df
@@ -396,6 +399,9 @@ class ChunkManager:
             out.append(sub_new_df)
         return out
 
+    def _filter_nan_dfs(self, df, start, stop):
+        """Filter NaN out of dataframe if they occur in start/stop."""
+
     def chunk(
         self,
         df: pd.DataFrame,
@@ -421,6 +427,11 @@ class ChunkManager:
             return df.assign(_group=None), df.assign(_group=None)
         # get series of start/stop along requested dimension
         start, stop, step = get_interval_columns(df, self._name)
+        # Filter out any NaN in start or stop.
+        keep = ~(pd.isnull(start) | pd.isnull(stop))
+        df, start, stop, step = df[keep], start[keep], stop[keep], step[keep]
+        if df.empty:  # Need to check again since NaN can wipe out df.
+            return df.assign(_group=None), df.assign(_group=None)
         dur, overlap = self._get_duration_overlap(self._value, start, step)
         # get group numbers
         group = self._get_group(df, start, stop, step)

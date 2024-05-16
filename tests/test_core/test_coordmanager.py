@@ -151,6 +151,14 @@ class TestGetCoordManager:
         cm = get_coord_manager(attrs=attrs)
         assert "time" in cm.coord_map
 
+    def test_non_coord_dims(self):
+        """Ensure non coordinate dimensions can be created using shape."""
+        coords = {"time": np.arange(10)}
+        dims = ("time", "money")
+        out = get_coord_manager(coords, dims, shape=(10, 2))
+        assert out.shape == (10, 2)
+        assert out.dims == ("time", "money")
+
 
 class TestBasicCoordManager:
     """Ensure basic things work with coord managers."""

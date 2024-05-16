@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from dascore.exceptions import TimeError
 from dascore.utils.time import (
     get_max_min_times,
     is_datetime64,
@@ -270,6 +271,27 @@ class TestToTimeDelta64:
         """Ensure unsupported types raise."""
         with pytest.raises(NotImplementedError):
             to_timedelta64(Dummy())
+
+    def test_bad_str(self):
+        """Raises if an un-parsable string is passed."""
+        msg = "Could not convert"
+        with pytest.raises(TimeError, match=msg):
+            to_timedelta64("a bad string")
+        with pytest.raises(TimeError, match=msg):
+            to_timedelta64("abadstring")
+
+    def test_nat(self):
+        """Ensure we can initiate NaT."""
+        out1 = to_timedelta64("NaT")
+        out2 = to_timedelta64("nat")
+        assert pd.isnull(out1)
+        assert pd.isnull(out2)
+
+    def test_nat_array(self):
+        """Ensure an array of NaT works."""
+        ar = np.array([to_timedelta64("NaT")] * 4)
+        out = to_timedelta64(ar)
+        assert np.all(pd.isnull(out))
 
 
 class TestToInt:

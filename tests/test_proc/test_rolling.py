@@ -8,6 +8,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.units import m
+from dascore.utils.pd import rolling_df
 
 
 @pytest.fixture(scope="class")
@@ -147,7 +148,7 @@ class TestRolling:
         applied_result = roller.apply(np.mean).dropna("distance").data
         # do the same with pandas and compare result
         df = pd.DataFrame(patch.data)
-        rolling_mean_pandas = df.rolling(window, step=step, axis=axis).mean()
+        rolling_mean_pandas = rolling_df(df, window, step=step, axis=axis).mean()
         filtered_data_pandas = rolling_mean_pandas.dropna(axis=axis).values
         assert applied_result.shape == filtered_data_pandas.shape
         assert np.allclose(applied_result, filtered_data_pandas)

@@ -263,7 +263,7 @@ def obspy_to_patch(stream, dim="distance") -> PatchType:
 
     dims = (dim, "time")
     coords = {
-        dim: ((dim,), np.array(new_dim)),
+        dim: ((dim,), np.asarray(new_dim)),
         "time": (("time",), dc.to_datetime64(tr.times("timestamp"))),
     }
     attrs = _get_attrs(tr)

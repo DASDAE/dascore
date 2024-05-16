@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.utils.chunk import ChunkManager, get_intervals
 from dascore.utils.time import to_timedelta64
@@ -168,6 +169,35 @@ class TestBasicChunkDF:
         assert duration.sum() == ((seg_len - dt) * 3)
         assert len(duration) == 3
         assert (duration > np.timedelta64(0, "s")).all()
+
+    def test_nan_in_df(self, contiguous_df):
+        """Ensure contiguous df with nan inside still works."""
+        df = contiguous_df.copy()
+        # Adding null values on row 3
+        df.loc[3, "time_min"] = dc.to_datetime64("NaT")
+        # Which means new time should start in row 4 because of the gap.
+        expected_start = df.loc[4, "time_min"]
+        chunker = ChunkManager(keep_partial=True, time=dc.to_timedelta64(15))
+        _, chunk_df = chunker.chunk(df)
+        assert expected_start in set(chunk_df["time_min"])
+
+    def test_all_nan(self, contiguous_df):
+        """Ensure when all NaNs are encountered the chunked df is empty."""
+        nat = dc.to_datetime64("NaT")
+        df = contiguous_df.assign(time_min=nat, time_max=nat)
+        chunker = ChunkManager(time=dc.to_timedelta64(1.2))
+        _, chunk_df = chunker.chunk(df)
+        assert chunk_df.empty
+
+    def test_nan_in_sample_ok(self, contiguous_df):
+        """Ensure a NaN in the sampling rate is ok."""
+        df = contiguous_df.assign(time_step=dc.to_timedelta64("NaT"))
+        dur = (df["time_max"] - df["time_min"]).iloc[0]
+        chunker = ChunkManager(time=dc.to_timedelta64(dur / 2))
+        _, chunk_df = chunker.chunk(df)
+        assert isinstance(chunk_df, pd.DataFrame)
+        assert len(chunk_df) == 2 * len(contiguous_df)
+        assert np.all(pd.isnull(chunk_df["time_step"]))
 
 
 class TestChunkExceptions:
