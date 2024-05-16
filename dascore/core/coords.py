@@ -718,7 +718,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             out = out.convert_units(units)
         return out
 
-    def get_sample_count(self, value, samples=False) -> int:
+    def get_sample_count(self, value, samples=False, enforce_lt_coord=False) -> int:
         """
         Return the number of samples represented by a value.
 
@@ -744,13 +744,13 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             compat_val = self._get_compatible_value(value, relative=True)
             duration = compat_val - self.min()
             samples = int(np.ceil(duration / self.step))
-        if samples > len(self):
+        if enforce_lt_coord and samples > len(self):
             msg = (
                 f"value of {value} results in a window larger than coordinate "
                 f"length of {len(self)}"
             )
             raise ParameterError(msg)
-        return min(samples, len(self))
+        return samples
 
     def get_next_index(self, value, samples=False, allow_out_of_bounds=False) -> int:
         """
@@ -1266,15 +1266,9 @@ class CoordArray(BaseCoord):
             start, stop = max_v, min_v + step
         else:
             start, stop = min_v, max_v + step
-        # get potential output, ensure it is the same length as original
+        # Get potential output, ensure it is the same length as original.
         out = CoordRange(start=start, stop=stop, step=step, units=self.units)
-        # A hack to deal with those pesky off-by-one errors.
-        if out.shape != self.shape:
-            diff = len(self) - len(out)
-            new_stop = stop + diff * step  # increase or decrease coord length
-            out = out.update(stop=new_stop)
-        assert len(out) == len(self)
-        return out
+        return out.change_length(len(self))
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:

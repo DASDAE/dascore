@@ -451,3 +451,85 @@ class TestDropNa:
         axis = out.dims.index("time")
         out = patch.dropna("time", how="any")
         assert out.shape[axis] == patch.shape[axis] - 2
+
+
+class TestPad:
+    """Tests for the padding functionality in a patch."""
+
+    def test_pad_time_dimension_samples_true(self, random_patch, samples=True):
+        """Test padding the time dimension with zeros before and after."""
+        padded_patch = random_patch.pad(time=(2, 3), samples=samples)
+        # Check if the padding is applied correctly
+        original_shape = random_patch.shape
+        new_shape = padded_patch.shape
+        time_axis = random_patch.dims.index("time")
+        assert new_shape[time_axis] == original_shape[time_axis] + 5
+        # Ensure that padded values are zeros
+        assert np.all(padded_patch.select(time=(None, 2), samples=samples).data == 0)
+        assert np.all(padded_patch.select(time=(-3, None), samples=samples).data == 0)
+
+    def test_pad_distance_dimension(self, random_patch):
+        """Test padding the distance with same number of zeros on both sides."""
+        padded_patch = random_patch.pad(distance=7)
+        original_shape = random_patch.shape
+        new_shape = padded_patch.shape
+        distance_axis = random_patch.dims.index("distance")
+        ch_spacing = random_patch.attrs["distance_step"]
+        assert (
+            new_shape[distance_axis] == original_shape[distance_axis] + 14 * ch_spacing
+        )
+        # Ensure that padded values are zeros
+        assert np.all(padded_patch.select(distance=(None, 7), samples=True).data == 0)
+        assert np.all(padded_patch.select(distance=(-7, None), samples=True).data == 0)
+
+    def test_pad_distance_dimension_expand_coords(
+        self, random_patch, expand_coords=True
+    ):
+        """Test padding the distance with same number of zeros on both sides."""
+        padded_patch = random_patch.pad(distance=4, expand_coords=expand_coords)
+        original_shape = random_patch.shape
+        new_shape = padded_patch.shape
+        distance_axis = random_patch.dims.index("distance")
+        ch_spacing = random_patch.attrs["distance_step"]
+        dist_max = random_patch.attrs["distance_max"]
+        assert (
+            new_shape[distance_axis] == original_shape[distance_axis] + 8 * ch_spacing
+        )
+        # Ensure that padded values are zeros
+        assert np.all(padded_patch.select(distance=(None, -1)).data == 0)
+        assert np.all(padded_patch.select(distance=(dist_max + 1, None)).data == 0)
+
+    def test_pad_multiple_dimensions_samples_true(self, random_patch, samples=True):
+        """Test padding multiple dimensions with different pad values."""
+        padded_patch = random_patch.pad(
+            time=(6, 7), distance=(1, 4), constant_values=np.pi, samples=samples
+        )
+        # Check dimensions individually
+        time_axis = random_patch.dims.index("time")
+        distance_axis = random_patch.dims.index("distance")
+        assert padded_patch.shape[time_axis] == random_patch.shape[time_axis] + 13
+        assert (
+            padded_patch.shape[distance_axis] == random_patch.shape[distance_axis] + 5
+        )
+        # Check padding values
+        assert np.allclose(
+            padded_patch.select(time=(None, 6), samples=samples).data, np.pi, atol=1e-6
+        )
+        assert np.allclose(
+            padded_patch.select(time=(-7, None), samples=samples).data, np.pi, atol=1e-6
+        )
+        assert np.allclose(
+            padded_patch.select(distance=(None, 1), samples=samples).data,
+            np.pi,
+            atol=1e-6,
+        )
+        assert np.allclose(
+            padded_patch.select(distance=(-4, None), samples=samples).data,
+            np.pi,
+            atol=1e-6,
+        )
+
+    def test_error_on_sequence_constant_values(self, random_patch):
+        """Test that providing a sequence for constant_values raises a TypeError."""
+        with pytest.raises(TypeError):
+            random_patch.pad(time=(0, 5), constant_values=(0, 0))

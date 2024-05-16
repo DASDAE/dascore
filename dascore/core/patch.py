@@ -291,6 +291,7 @@ class Patch:
     first = dascore.proc.agg.first
     last = dascore.proc.agg.last
     sum = dascore.proc.agg.sum
+    pad = dascore.proc.pad
 
     def iresample(self, *args, **kwargs):
         """Deprecated method."""
