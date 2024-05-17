@@ -447,6 +447,15 @@ def memory_spool_small_dt_differences(random_spool):
     return spool
 
 
+@pytest.fixture(scope="session")
+@register_func(SPOOL_FIXTURES)
+def spool_with_non_coords():
+    """Return a spool which has some non-coordinate spools inside."""
+    patches = list(dc.examples.get_example_spool(length=3))
+    patches += [x.mean("time") for x in patches]
+    return dc.spool(patches)
+
+
 @pytest.fixture(scope="class", params=SPOOL_FIXTURES)
 def spool(request):
     """A meta-fixtures for collecting all spools used in testing."""

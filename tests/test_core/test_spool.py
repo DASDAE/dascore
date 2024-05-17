@@ -274,6 +274,17 @@ class TestSelect:
         spool2 = diverse_spool.select(time=(None, "2020-01-01"))
         assert spool1 == spool2
 
+    def test_non_coord_patches(self, spool_with_non_coords):
+        """Ensure non-coords still can be selected."""
+        first = spool_with_non_coords[0]
+        time_coord = first.get_coord("time")
+        time_sel = (time_coord.min(), time_coord.max())
+        out = spool_with_non_coords.select(time=time_sel)
+        # Ensure all remaining patches have valid time coords.
+        for patch in out:
+            assert isinstance(patch, dc.Patch)
+            assert not np.any(pd.isnull(patch.get_array("time")))
+
 
 class TestSort:
     """Tests for sorting spools."""

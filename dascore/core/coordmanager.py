@@ -653,10 +653,10 @@ class CoordManager(DascoreBaseModel):
         shape
             A shape tuple (tuple of ints)
         array
-            The an array with the same shape as coord manager.
+            An array with the same shape as coord manager.
         drop_coords
-            If True, allow dropping coordinates to broadcast cm dimensions.
-            Otherwise, only NonCoords can change shape.
+            If True, allow dropping coordinates to broadcast coord manager
+            dimensions. Otherwise, only NonCoords can change shape.
         """
         # This guarantees the shapes are compatible
         target_shape = np.broadcast_shapes(self.shape, shape)
@@ -668,7 +668,7 @@ class CoordManager(DascoreBaseModel):
                 continue
             name = dims[ind]
             coord = self.get_coord(name)
-            # we can just scale up the coord
+            # We can just scale up the coord
             if coord._non_coord or drop_coords:
                 new_coords[name] = get_coord(length=max(current, new))
             else:

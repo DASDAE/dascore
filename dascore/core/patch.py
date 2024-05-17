@@ -289,18 +289,6 @@ class Patch:
     resample = dascore.proc.resample
     pad = dascore.proc.pad
 
-    # Patch aggregations shortcuts.
-    aggregate = dascore.proc.agg.aggregate
-    min = dascore.proc.agg.min
-    max = dascore.proc.agg.max
-    max = dascore.proc.agg.max
-    mean = dascore.proc.agg.mean
-    median = dascore.proc.agg.median
-    std = dascore.proc.agg.std
-    first = dascore.proc.agg.first
-    last = dascore.proc.agg.last
-    sum = dascore.proc.agg.sum
-
     def iresample(self, *args, **kwargs):
         """Deprecated method."""
         msg = (
@@ -316,6 +304,17 @@ class Patch:
     taper = dascore.proc.taper
     rolling = dascore.proc.rolling
     whiten = dascore.proc.whiten
+
+    # --- Patch aggregations shortcuts.
+    aggregate = dascore.proc.agg.aggregate
+    min = dascore.proc.agg.min
+    max = dascore.proc.agg.max
+    mean = dascore.proc.agg.mean
+    median = dascore.proc.agg.median
+    std = dascore.proc.agg.std
+    first = dascore.proc.agg.first
+    last = dascore.proc.agg.last
+    sum = dascore.proc.agg.sum
 
     # --- transformation functions
     differentiate = transform.differentiate

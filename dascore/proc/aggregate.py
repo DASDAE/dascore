@@ -32,6 +32,13 @@ dim
     If a sequence, apply sequentially in order provided.
 """
 
+AGG_NOTES = """
+Notes
+-----
+See [`Patch.aggregate`](`dascore.Patch.aggregate`) for examples
+and more details.
+"""
+
 
 @patch_function()
 @compose_docstring(params=AGG_DOC_STR, options=list(_AGG_FUNCS))
@@ -53,7 +60,12 @@ def aggregate(
     Notes
     -----
     - The old dimension is kept but its coordiante values are removed.
-      use [`Patch.squeeze`](`dascore.Patch.squeeze`) to remove them.
+      use [`Patch.squeeze`](`dascore.Patch.squeeze`) to remove them or
+      [`Patch.update_coords`](`dascore.Patch.update_coords`) to set a
+      coordinate value.
+
+    - See also the aggregation shortcut methods in the
+      [aggregate module](`dascore.proc.aggregate`).
 
     Examples
     --------
@@ -64,7 +76,7 @@ def aggregate(
     >>> # Calculate mean along time axis
     >>> patch_time = patch.aggregate("time", method=np.nanmean)
     >>> # Calculate median distance along distance dimension
-    >>> patch_dist = patch.median("distance", method=np.nanmedian)
+    >>> patch_dist = patch.aggregate("distance", method=np.nanmedian)
     """
     func = _AGG_FUNCS.get(method, method)
     data = patch.data
@@ -79,7 +91,7 @@ def aggregate(
 
 
 @patch_function()
-@compose_docstring(params=AGG_DOC_STR)
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def min(
     patch: PatchType,
     dim: str | None = None,
@@ -90,12 +102,14 @@ def min(
     Parameters
     ----------
     {params}
+
+    {notes}
     """
     return aggregate.func(patch, dim=dim, method=np.nanmin)
 
 
 @patch_function()
-@compose_docstring(params=AGG_DOC_STR)
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def max(
     patch: PatchType,
     dim: str | None = None,
@@ -106,12 +120,14 @@ def max(
     Parameters
     ----------
     {params}
+
+    {notes}
     """
     return aggregate.func(patch, dim=dim, method=np.nanmax)
 
 
 @patch_function()
-@compose_docstring(params=AGG_DOC_STR)
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def mean(
     patch: PatchType,
     dim: str | None = None,
@@ -122,12 +138,14 @@ def mean(
     Parameters
     ----------
     {params}
+
+    {notes}
     """
     return aggregate.func(patch, dim=dim, method=np.nanmean)
 
 
 @patch_function()
-@compose_docstring(params=AGG_DOC_STR)
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def median(
     patch: PatchType,
     dim: str | None = None,
@@ -138,12 +156,14 @@ def median(
     Parameters
     ----------
     {params}
+
+    {notes}
     """
     return aggregate.func(patch, dim=dim, method=np.nanmedian)
 
 
 @patch_function()
-@compose_docstring(params=AGG_DOC_STR)
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def std(
     patch: PatchType,
     dim: str | None = None,
@@ -154,12 +174,14 @@ def std(
     Parameters
     ----------
     {params}
+
+    {notes}
     """
     return aggregate.func(patch, dim=dim, method=np.nanstd)
 
 
 @patch_function()
-@compose_docstring(params=AGG_DOC_STR)
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def first(
     patch: PatchType,
     dim: str | None = None,
@@ -170,13 +192,15 @@ def first(
     Parameters
     ----------
     {params}
+
+    {notes}
     """
     func = _AGG_FUNCS["first"]
     return aggregate.func(patch, dim=dim, method=func)
 
 
 @patch_function()
-@compose_docstring(params=AGG_DOC_STR)
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def last(
     patch: PatchType,
     dim: str | None = None,
@@ -187,13 +211,15 @@ def last(
     Parameters
     ----------
     {params}
+
+    {notes}
     """
     func = _AGG_FUNCS["last"]
     return aggregate.func(patch, dim=dim, method=func)
 
 
 @patch_function()
-@compose_docstring(params=AGG_DOC_STR)
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def sum(
     patch: PatchType,
     dim: str | None = None,
@@ -204,5 +230,7 @@ def sum(
     Parameters
     ----------
     {params}
+
+    {notes}
     """
     return aggregate.func(patch, dim=dim, method=np.nansum)

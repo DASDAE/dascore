@@ -102,8 +102,8 @@ def integrate(
     Notes
     -----
     The number of dimensions will always remain the same regardless of `definite`
-    value. To remove dimensions with length 1,
-    see [squeeze](`dascore.proc.basic.squeeze`).
+    value. To remove dimensions with length 1, use
+    [`Patch.squeeze`](`dascore.Patch.squeeze`).
 
     Examples
     --------

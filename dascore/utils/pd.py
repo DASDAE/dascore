@@ -160,6 +160,10 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
         if val[1] is not None:
             min_too_small = min_col > val[1]
             bool_index = np.logical_and(~min_too_small, bool_index)
+        # remove null values in either end of query
+        not_null = ~(pd.isnull(df[min_key]) | pd.isnull(df[max_key]))
+        bool_index = np.logical_and(bool_index, not_null)
+
     return bool_index
 
 

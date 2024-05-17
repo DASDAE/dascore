@@ -253,7 +253,7 @@ def make_broadcastable_to(
     Examples
     --------
     >>> import dascore as dc
-    >>> pa = dc.get_example_patch("random_patch")
+    >>> pa = dc.get_example_patch("random_das")
     >>> # Get a patch with non-coordinate dimensions
     >>> patch = pa.mean()
     >>> out = patch.make_broadcastable_to(shape=(2, 3))
@@ -549,7 +549,7 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     Notes
     -----
     - This tries to be more simple than numpy and xarray's expand_dims.
-    - Use [`Patch.transpose`](`dascore.patch.transpose`) to re-arrange dimensions.
+    - Use [`Patch.transpose`](`dascore.Patch.transpose`) to re-arrange dimensions.
     - If dimension with the same name already exists nothing will happen.
     """
     dim_dict = {x: 1 for x in empty_dims}
