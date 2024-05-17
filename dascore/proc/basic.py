@@ -511,7 +511,7 @@ def fillna(patch: PatchType, value) -> PatchType:
     """
     to_replace = pd.isnull(patch.data)
 
-    new_data = patch.data
+    new_data = patch.data.copy()
     new_data[to_replace] = value
 
     return patch.new(data=new_data)
