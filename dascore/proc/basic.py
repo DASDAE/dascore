@@ -484,6 +484,40 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
 
 
 @patch_function()
+def fillna(patch: PatchType, value) -> PatchType:
+    """
+    Return a patch with nullish values replaced by a value.
+
+    Parameters
+    ----------
+    patch
+        The patch which may contain nullish values.
+    value
+        The value to replace nullish values with.
+
+    Notes
+    -----
+    "nullish" is defined by `pandas.isnull`.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> # load an example patch which has some NaN values.
+    >>> patch = dc.get_example_patch("patch_with_null")
+    >>> # Replace all occurences of NaN with 0
+    >>> out = patch.fillna(0)
+    >>> # Replace all occurences of NaN with 5
+    >>> out = patch.fillna(5)
+    """
+    to_replace = pd.isnull(patch.data)
+
+    new_data = patch.data
+    new_data[to_replace] = value
+
+    return patch.new(data=new_data)
+
+
+@patch_function()
 def pad(
     patch: PatchType,
     mode: Literal["constant"] = "constant",
