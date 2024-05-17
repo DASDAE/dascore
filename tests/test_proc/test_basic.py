@@ -379,6 +379,45 @@ class TestDropNa:
         assert out.shape[axis] == patch.shape[axis] - 2
 
 
+class TestFillNa:
+    """Tests for dropping nullish values in a patch."""
+
+    @pytest.fixture(scope="session")
+    def patch_with_null(self):
+        """Return a patch which has nullish values."""
+        return dc.get_example_patch("patch_with_null")
+
+    @pytest.fixture(scope="class")
+    def patch_3d_with_null(self, range_patch_3d):
+        """Return a patch which has nullish values."""
+        data = np.array(range_patch_3d.data).astype(np.float_)
+        nans = [(1, 1, 1), (0, 9, 9)]
+        for nan_ind in nans:
+            data[nan_ind] = np.NaN
+        patch = range_patch_3d.update(data=data)
+        return patch
+
+    def test_fillna(self, patch_with_null):
+        """Ensure we can fillna and keep the other values the same."""
+        patch = patch_with_null.fillna(0)
+
+        assert all(patch.data[pd.isnull(patch_with_null.data)] == 0)
+        assert all(
+            patch.data[~pd.isnull(patch_with_null.data)]
+            == patch_with_null.data[~pd.isnull(patch_with_null.data)]
+        )
+
+    def test_3d(self, patch_3d_with_null):
+        """Ensure 3D patches can fillna and keep the other values the same."""
+        patch = patch_3d_with_null.fillna(0)
+
+        assert all(patch.data[pd.isnull(patch_3d_with_null.data)] == 0)
+        assert all(
+            patch.data[~pd.isnull(patch_3d_with_null.data)]
+            == patch_3d_with_null.data[~pd.isnull(patch_3d_with_null.data)]
+        )
+
+
 class TestPad:
     """Tests for the padding functionality in a patch."""
 
