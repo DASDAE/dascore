@@ -71,8 +71,7 @@ def replace_links(json_data, raw_string):
             start, stop = match.span()
             cross_refs = get_cross_ref_dict()
             key = str_to_scan[start:stop].replace("`", "")
-            new_value = cross_refs.get(key, key)
-            if new_value != key:
+            if (new_value := cross_refs.get(key, key)) != key:
                 # new_sub_str = str_to_scan.replace(f'"%60{key}%60"', f'"{new_value}"')
                 new_sub_str = str_to_scan.replace(f"%60{key}%60", f"{new_value}")
                 if str_to_scan in replace_dict:
