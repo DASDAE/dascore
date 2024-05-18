@@ -249,9 +249,9 @@ def decompose_attrs(attr_list: Sequence[dc.PatchAttrs], exclude=("history",)):
 
 def separate_coord_info(
     obj,
-    dims: tuple[str] | None = None,
+    dims: tuple[str, ...] | None = None,
     required: Sequence[str] | None = None,
-    cant_be_alone: tuple[str] = ("units", "dtype"),
+    cant_be_alone: tuple[str, ...] = ("units", "dtype"),
 ) -> tuple[dict, dict]:
     """
     Separate coordinate information from attr dict.
@@ -362,7 +362,7 @@ def separate_coord_info(
         obj["dims"] = new_dims
         dims = new_dims
     # this is already a dict of coord info.
-    if dims and set(dims) == set(obj):
+    if dims and set(dims).issubset(set(obj)):
         return obj, {}
     _get_coords_from_coord_level(obj, coord_dict)
     _get_coords_from_top_level(obj, coord_dict, dims)

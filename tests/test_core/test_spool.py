@@ -286,6 +286,19 @@ class TestSelect:
             assert not np.any(pd.isnull(patch.get_array("time")))
 
 
+class TestConcatenate:
+    """Tests for concatenating spools."""
+
+    def test_base_raises(self, random_spool):
+        """Ensure the baseSpool raises not implemented Error."""
+        msg = "has no concatenate implementation"
+        with pytest.raises(NotImplementedError, match=msg):
+            BaseSpool.concatenate(random_spool, time=2)
+
+    def test_duplicate_patches_existing_dim(self, random_spool):
+        """Ensure duplicate patches are concatenated together."""
+
+
 class TestSort:
     """Tests for sorting spools."""
 

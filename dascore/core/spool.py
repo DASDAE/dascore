@@ -114,7 +114,7 @@ class BaseSpool(abc.ABC):
         **kwargs,
     ) -> Self:
         """
-        Chunk the data in the spool along specified dimensions.
+        Chunk the data in the spool along specified dimension.
 
         Parameters
         ----------
@@ -146,6 +146,11 @@ class BaseSpool(abc.ABC):
         >>> time_chunked = spool.chunk(time=10, overlap=1)
         >>> # merge along time axis
         >>> time_merged = spool.chunk(time=...)
+
+        Notes
+        -----
+        [`Spool.concatenate`](`dascore.Spool.concatenate`) performs a similar
+        operation but disregards the coordinate values.
         """
 
     @abc.abstractmethod
@@ -252,6 +257,24 @@ class BaseSpool(abc.ABC):
             the progress bar.
         """
         return self
+
+    def concatenate(self, **kwargs):
+        """
+        Concatenate the patches together
+
+        Parameters
+        ----------
+        kwargs
+            Used to specify the dimension and number of patches to merge
+            together.
+
+        Notes
+        -----
+        [`Spool.chunk `](`dascore.Spool.chunk`) performs a similar operation
+        but accounts for coordinate values.
+        """
+        msg = f"spool of type {self.__class__} has no concatenate implementation"
+        raise NotImplementedError(msg)
 
     def map(
         self,
@@ -508,7 +531,7 @@ class DataFrameSpool(BaseSpool):
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         **kwargs,
     ) -> Self:
-        """{doc}."""
+        """{doc}"""
         df = self._df.drop(columns=list(self._drop_columns), errors="ignore")
         chunker = ChunkManager(
             overlap=overlap,
@@ -644,6 +667,10 @@ class MemorySpool(DataFrameSpool):
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory."""
         return kwargs["patch"]
+
+    @compose_docstring(doc=BaseSpool.concatenate.__doc__)
+    def concatenate(self, **kwargs):
+        """{doc}"""
 
 
 @singledispatch

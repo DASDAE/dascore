@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
@@ -14,6 +15,8 @@ from dascore.utils.patch import (
     align_patch_coords,
     get_dim_value_from_kwargs,
     merge_compatible_coords_attrs,
+    patches_to_df,
+    scan_patches,
 )
 
 
@@ -136,6 +139,41 @@ class TestGetDimValueFromKwargs:
             get_dim_value_from_kwargs(random_patch, kwargs)
 
 
+class TestPatchesToDF:
+    """Test for getting metadata from patch into a dataframe."""
+
+    def test_spool_input(self, random_spool):
+        """A spool should return its contents."""
+        df = patches_to_df(random_spool)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == len(random_spool)
+
+    def test_dataframe_input(self, random_spool):
+        """The function should be idempotent."""
+        df = random_spool.get_contents()
+        out = patches_to_df(df)
+        out2 = patches_to_df(out)
+        eq = out == out2
+        is_null = pd.isnull(out) & pd.isnull(out2)
+        assert np.all(eq | is_null)
+
+    def test_history_added(self, random_spool):
+        """Ensure the history column gets added."""
+        df = random_spool.get_contents().drop("history", errors="ignore")
+        out = patches_to_df(df)
+        assert "history" in out.columns
+
+
+class TestScanPaches:
+    """Tests for scanning patches to get metadata."""
+
+    def test_single_patch(self, random_patch):
+        """Ensure a single patch works."""
+        out = scan_patches(random_patch)
+        assert len(out) == 1
+        assert isinstance(out[0], dc.PatchAttrs)
+
+
 class TestAlignPatches:
     """Tests for aligning patches."""
 
@@ -193,6 +231,9 @@ class TestAlignPatches:
         non_patch = random_patch.first("time")
         # Coords should be expanded in out2.
         out1, out2 = align_patch_coords(non_patch, random_patch)
+        desired_shape = tuple(max(x, y) for x, y in zip(out1.shape, out2.shape))
+        # This will raise if the shapes aren't broadcastable
+        np.broadcast_shapes(out1.shape, out2.shape, desired_shape)
 
 
 class TestMergeCompatibleCoordsAttrs:

@@ -129,3 +129,10 @@ class TestSeparateCoordInfo:
         input_dict = {"coords": {"time": {"min": 10}}}
         coords, attrs = separate_coord_info(input_dict)
         assert coords == input_dict["coords"]
+
+    def test_dict_of_coord_info(self, random_patch):
+        """Passing in a dictionary of coord info should work."""
+        coord_dict = random_patch.coords.to_summary_dict()
+        dims = random_patch.dims
+        coords, attrs = separate_coord_info(coord_dict, dims=dims)
+        assert coords == coord_dict

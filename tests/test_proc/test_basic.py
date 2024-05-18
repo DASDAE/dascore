@@ -307,6 +307,23 @@ class TestApplyUfunc:
         with pytest.raises(UnitError):
             apply_operator(pa1, other, np.add)
 
+    def test_patches_non_coords_len_1(self, random_patch):
+        """Ensure patches with non-coords also work."""
+        mean_patch = random_patch.mean("distance")
+        out = mean_patch / mean_patch
+        assert np.allclose(out.data, 1)
+
+    def test_patches_non_coords_different_len(self, random_patch):
+        """Ensure patches with non-coords of different lengths work."""
+        patch_1 = random_patch.mean("distance")
+        dist_ind = patch_1.dims.index("distance")
+        old_shape = list(patch_1.shape)
+        old_shape[dist_ind] = old_shape[dist_ind] + 2
+        patch_2 = patch_1.make_broadcastable_to(tuple(old_shape))
+        out = patch_1 / patch_2
+        assert np.allclose(out.data, 1)
+        assert out.shape == patch_2.shape
+
 
 class TestPatchBroadcasting:
     """Tests for patches broadcasting to allow operations on each other."""
