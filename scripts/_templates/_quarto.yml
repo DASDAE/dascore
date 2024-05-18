@@ -6,6 +6,7 @@ project:
   output-dir: _site
 
 filters:
+  - quarto
   - filters/fill_links.py
 
 execute:
