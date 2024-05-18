@@ -333,6 +333,13 @@ def _array_to_float(array: np.ndarray) -> np.ndarray:
     return array.astype(np.float64)
 
 
+@to_float.register(pd.Series)
+def _series_to_float(series: pd.Series) -> pd.Series:
+    """Convert a series of possible dates to floats."""
+    array = to_float(series.values)
+    return pd.Series(array, index=series.index)
+
+
 @to_float.register(np.datetime64)
 @to_float.register(datetime)
 @to_float.register(pd.Timestamp)
