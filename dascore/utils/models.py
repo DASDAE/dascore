@@ -1,6 +1,7 @@
 """Utilities for models."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import cached_property
 from typing import Annotated
 
@@ -67,19 +68,17 @@ FrozenDictType = Annotated[
 UTF8Str = Annotated[str, PlainValidator(unbyte)]
 
 
-def sensible_model_equals(self, other):
+def sensible_model_equals(
+    self: BaseModel | Mapping, other: BaseModel | Mapping
+) -> bool:
     """Custom equality to not compare private attrs and handle numpy arrays."""
-    try:
-        d1, d2 = self.model_dump(), other.model_dump()
-    except (TypeError, ValueError, AttributeError):
-        return False
+    d1 = self.model_dump() if hasattr(self, "model_dump") else self
+    d2 = other.model_dump() if hasattr(other, "model_dump") else other
     if not set(d1) == set(d2):  # different keys, not equal
         return False
-    for name, val1 in d1.items():
+    for name in set(x for x in d1 if not x.startswith("_")):
         # skip any private attributes.
-        if name.startswith("_"):
-            continue
-        val2 = d2[name]
+        val1, val2 = d1[name], d2[name]
         if is_array(val1):
             if not all_close(val1, val2):
                 return False

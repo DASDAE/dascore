@@ -141,8 +141,7 @@ class Patch:
     # Numpy Compatibility things
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         """
-        Gets called when a numpy array is ufunc'ed against a patch.
-
+        Called when a numpy array is ufunc'ed against a patch.
         """
         assert method == "__call__", "only call supported."
         # pull out patch and other thing.
@@ -154,8 +153,7 @@ class Patch:
         """Used to convert Patches to arrays."""
         data = self.data
         out = data.astype(dtype) if dtype is not None else data
-        if copy:
-            out = np.copy(out)
+        out = out if not copy else np.copy(out)
         return out
 
     def __rich__(self):

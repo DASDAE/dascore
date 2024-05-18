@@ -18,7 +18,6 @@ from dascore.utils.misc import (
     iterate,
     maybe_get_items,
     optional_import,
-    separate_coord_info,
     to_object_array,
     warn_or_raise,
 )
@@ -250,21 +249,6 @@ class TestCachedMethod:
         john = self._JohnnyCached()
         assert john.multiargs(1, b=1) == 2
         assert john.multiargs(a=2, b=3) == 5
-
-
-class TestSeparateCoordInfo:
-    """Tests for separating coord info from attr dict."""
-
-    def test_empty(self):
-        """Empty args should return emtpy dicts."""
-        out1, out2 = separate_coord_info(None)
-        assert out1 == out2 == {}
-
-    def test_meets_reqs(self):
-        """Simple case for filtering out required attrs."""
-        input_dict = {"coords": {"time": {"min": 10}}}
-        coords, attrs = separate_coord_info(input_dict)
-        assert coords == input_dict["coords"]
 
 
 class TestMaybeGetItems:

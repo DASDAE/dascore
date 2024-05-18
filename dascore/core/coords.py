@@ -273,7 +273,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def _order_by_sample_array(self, array):
         """Select based on index values."""
         if not np.issubdtype(array.dtype, np.integer):
-            msg = "Using an array input for select with samples requires integer dtype."
+            msg = (
+                "Using an array input for select "
+                "with samples requires integer dtype."
+            )
             raise CoordError(msg)
         # Filter out bad indices
         array = array[np.abs(array) < len(self)]
@@ -368,7 +371,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             if not (1 in lens or len(lens) == 1):
                 msg = (
                     "Non coordinates must be the same length as coordinate "
-                    "for broadcasting to work."
+                    "or length 1 for broadcasting to work."
                 )
                 raise CoordError(msg)
 
@@ -822,6 +825,23 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return False
         return all_close(self.values, other.values)
 
+    def change_length(self, length: int) -> Self:
+        """
+        Adjust the length of the coordinate by changing the end value.
+
+        This is useful for floating point coordinates who frequently suffer
+        from off by one errors.
+
+        Note: Not all coordinates implement this method.
+
+        Parameters
+        ----------
+        length
+            The output length.
+        """
+        msg = f"Coordinate type {self.__class__} does not implement change_length"
+        raise NotImplementedError(msg)
+
 
 class NonCoord(BaseCoord):
     """
@@ -854,6 +874,8 @@ class NonCoord(BaseCoord):
     def convert_units(self, unit) -> Self:
         """No possible units, raise Error."""
         self._raise_non_coord_error("convert_units")
+
+    set_units = convert_units
 
     def update_limits(self, min=None, max=None, step=None, **kwargs):
         """No possible units, raises Error."""
@@ -929,6 +951,13 @@ class NonCoord(BaseCoord):
         """Update coordinate."""
         length = self.length if length is None else length
         return self.__class__(length=length)
+
+    @compose_docstring(doc=BaseCoord.change_length.__doc__)
+    def change_length(self, length: int) -> Self:
+        """
+        {doc}
+        """
+        return get_coord(length=length)
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""
@@ -1141,17 +1170,10 @@ class CoordRange(BaseCoord):
         # the min/max are needed for reverse sorted coord.
         return np.max([self.stop - self.step, self.start])
 
+    @compose_docstring(doc=BaseCoord.change_length.__doc__)
     def change_length(self, length: int) -> Self:
         """
-        Adjust the length of the coordinate by changing the end value.
-
-        This is useful for floating point coordinates who frequently suffer
-        from off by one errors.
-
-        Parameters
-        ----------
-        length
-            The output length.
+        {doc}
         """
         if (current := len(self)) == length:
             return self

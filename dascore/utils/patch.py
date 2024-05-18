@@ -12,15 +12,23 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import FLOAT_PRECISION, PatchType, SpoolType, dascore_styles
-from dascore.core.attrs import combine_patch_attrs
-from dascore.core.coordmanager import merge_coord_managers
+from dascore.constants import (
+    DEFAULT_ATTRS_TO_IGNORE,
+    FLOAT_PRECISION,
+    WARN_LEVELS,
+    PatchType,
+    SpoolType,
+    dascore_styles,
+)
 from dascore.exceptions import (
     CoordDataError,
+    IncompatiblePatchError,
     PatchAttributeError,
     PatchDimError,
 )
 from dascore.units import get_quantity
+from dascore.utils.attrs import combine_patch_attrs
+from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.misc import (
     _apply_union_indexers,
     _merge_tuples,
@@ -28,6 +36,7 @@ from dascore.utils.misc import (
     get_middle_value,
     iterate,
     to_object_array,
+    warn_or_raise,
 )
 from dascore.utils.time import to_float
 
@@ -573,3 +582,203 @@ def align_patch_coords(
     out1 = patch1.new(data=array1, coords=coord1)
     out2 = patch2.new(data=array2, coords=coord2)
     return out1, out2
+
+
+def check_dims(
+    patch1,
+    patch2,
+    check_behavior: WARN_LEVELS = "raise",
+    intersection: bool = False,
+) -> bool:
+    """
+    Return True if dimensions of two patches are equal.
+
+    Parameters
+    ----------
+    patch1
+        first patch
+    patch2
+        second patch
+    check_behavior
+        String with 'raise' will raise an error if incompatible,
+        'warn' will provide a warning, None will do nothing.
+    intersection
+        If True, allow any intersection of dimensions to pass. This is useful
+        when only broad-castablity needs to be checked. If false require dims
+        to be equal.
+    """
+    dims1, dims2 = patch1.dims, patch2.dims
+    dims_ok = True
+    if not intersection and patch1.dims == patch2.dims:
+        return True
+    dset1, dset2 = set(dims1), set(dims2)
+    if intersection and (dset1 | dset2):
+        return True
+    msg = (
+        "Patch dimensions are not compatible for merging."
+        f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
+    )
+    warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
+    return dims_ok
+
+
+def check_coords(
+    patch1, patch2, check_behavior: WARN_LEVELS = "raise", dim_to_ignore=None
+) -> bool:
+    """
+    Return True if the coordinates of two patches are compatible, else False.
+
+    Parameters
+    ----------
+    patch1
+        patch 1
+    patch2
+        patch 2
+    check_behavior
+        String with 'raise' will raise an error if incompatible,
+        'warn' will provide a warning.
+    dim_to_ignore
+        None by default (all coordinates must be identical).
+        String specifying a dimension that differences in values,
+        but not shape, are allowed.
+    """
+    cm1 = patch1.coords
+    cm2 = patch2.coords
+    cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)
+    shared = cset1 & cset2
+    not_equal_coords = []
+    for coord in shared:
+        coord1 = cm1.coord_map[coord]
+        coord2 = cm2.coord_map[coord]
+        if coord1 == coord2:
+            # Straightforward case, coords are identical.
+            continue
+        elif coord == dim_to_ignore:
+            # If dimension that's ok to ignore value differences,
+            # check whether shape is the same.
+            if coord1.shape == coord2.shape:
+                continue
+            else:
+                not_equal_coords.append(coord)
+        else:
+            not_equal_coords.append(coord)
+    if not_equal_coords and len(shared):
+        msg = (
+            f"Patches are not compatible. The following shared coordinates "
+            f"are not equal: {coord}"
+        )
+        warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
+        return False
+    return True
+
+
+def _merge_aligned_coords(cm1, cm2):
+    """Merge aligned coordinates removing non coords."""
+    assert cm1.dims == cm2.dims, "coordinates are not aligned"
+    out = {}
+    for name in set(cm1.coord_map) & set(cm2.coord_map):
+        coord1 = cm1.coord_map[name]
+        coord2 = cm2.coord_map[name]
+        # Coords already equal, just use first.
+        if coord1.approx_equal(coord2):
+            out[name] = coord1
+        # Deal with Non coords
+        non_count = sum([coord1._non_coord, coord2._non_coord])
+        if non_count == 1:
+            out[name] = coord1 if coord2._non_coord else coord2
+        elif non_count == 2:
+            out[name] = coord1 if coord1.size > coord2.size else coord2
+        assert name in out
+    return cm1.update(**out)
+
+
+def _merge_models(attrs1, attrs2, coord=None, attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE):
+    """Ensure models are equal in the right ways, merge together."""
+    no_comp_keys = set(attrs_to_ignore)
+    if attrs1 == attrs2:
+        return attrs1
+    dict1, dict2 = dict(attrs1), dict(attrs2)
+    if coord is not None:
+        new_coords = coord.to_summary_dict()
+        dict1["coords"], dict2["coords"] = new_coords, new_coords
+    else:
+        dict1.pop("coords"), dict2.pop("coords")
+    common_keys = set(dict1) & set(dict2)
+    ne_attrs = []
+    for key in common_keys:
+        if key in no_comp_keys:
+            continue
+        if dict2[key] != dict1[key]:
+            ne_attrs.append(key)
+    if ne_attrs:
+        msg = (
+            "Patches are not compatible because the following attributes "
+            f"are not equal. {ne_attrs}"
+        )
+        raise IncompatiblePatchError(msg)
+    return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
+
+
+def merge_compatible_coords_attrs(
+    patch1: PatchType,
+    patch2: PatchType,
+    attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
+    dim_intersection: bool = False,
+    validate_coords: bool = True,
+) -> tuple[dc.core.CoordManager, dc.PatchAttrs]:
+    """
+    Merge the coordinates and attributes of patches or raise if incompatible.
+
+    The rules for compatibility are:
+
+    - All attrs must be equal other than those specified in attrs_to_ignore.
+    - Patches must share the same dimensions unless dim_intersection == True.
+    - All shared dimensional coordinates must be strictly equal
+    - If patches share a non-dimensional coordinate they must be equal.
+
+    Any coordinates or attributes contained by a single patch will be included
+    in the output.
+
+    Parameters
+    ----------
+    patch1
+        The first patch
+    patch2
+        The second patch
+    attrs_to_ignore
+        A sequence of attributes to not consider in equality. Only these
+        attributes from the first patch are kept in outputs.
+    dim_intersection
+        If True, merge if any dimensions overlap, else raise if all do not
+        overlap.
+    validate_coords
+        If True, ensure the coords are equal, else the responsibility for this
+        was handled upstream.
+    """
+
+    def _merge_coords(coords1, coords2):
+        out = {}
+        cmap1, cmap2 = coords1.coord_map, coords2.coord_map
+        coord_names = set(cmap1) | set(cmap2)
+        # fast path to update identical coordinates
+        if coord_names == set(cmap1):
+            return coords1
+        if coord_names == set(cmap2):
+            return coords2
+        # otherwise just squish coords from both managers together.
+        for name in coord_names:
+            coord = coords1 if name in coords1.coord_map else coords2
+            dims = coord.dim_map[name]
+            out[name] = (dims, coord.coord_map[name])
+        # Need to get coordinate that are in output, but preserve order.
+        dims = _merge_tuples(coords1.dims, coords2.dims)
+        return dc.core.coordmanager.get_coord_manager(out, dims=dims)
+
+    check_dims(patch1, patch2, intersection=dim_intersection)
+    if validate_coords:
+        check_coords(patch1, patch2)
+    coord1, coord2 = patch1.coords, patch2.coords
+    attrs1, attrs2 = patch1.attrs, patch2.attrs
+    coord_out = _merge_coords(coord1, coord2)
+    attrs = _merge_models(attrs1, attrs2, coord_out, attrs_to_ignore=attrs_to_ignore)
+    return coord_out, attrs

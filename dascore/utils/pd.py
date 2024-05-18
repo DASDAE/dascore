@@ -188,7 +188,18 @@ def _convert_times(df, some_dict):
 
 
 def get_interval_columns(df, name, arrays=False):
-    """Return a series of start, stop, step for columns."""
+    """
+    Return a series of start, stop, step for columns.
+
+    Parameters
+    ----------
+    df
+        The input dataframe.
+    name
+        The name of the coordinate (eg time).
+    arrays
+        If True, return output as numpy arrays, else pandas series.
+    """
     names = f"{name}_min", f"{name}_max", f"{name}_step"
     missing_cols = set(names) - set(df.columns)
     if missing_cols:

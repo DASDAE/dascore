@@ -13,6 +13,7 @@ from dascore.utils.pd import (
     dataframe_to_patch,
     fill_defaults_from_pydantic,
     filter_df,
+    get_interval_columns,
     patch_to_dataframe,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
@@ -320,3 +321,21 @@ class TestDFtoPatch:
         attrs = {"dims": ("time", "distance")}
         patch = dataframe_to_patch(random_df_no_dims, attrs=attrs)
         assert patch.dims == ("time", "distance")
+
+
+class TestGetIntervalColumns:
+    """Tests for finding interval columns in a dataframe."""
+
+    def test_simple(self, random_spool):
+        """Ensure simple case works."""
+        df = random_spool.get_contents()
+        outs = get_interval_columns(df, "time")
+        for ser in outs:
+            assert isinstance(ser, pd.Series)
+        assert len(outs) == 3
+
+    def test_raises(self, random_df_from_patch):
+        """Ensure an error is raised if columns don't exist."""
+        msg = "Dataframe is missing"
+        with pytest.raises(KeyError, match=msg):
+            get_interval_columns(random_df_from_patch, "money")

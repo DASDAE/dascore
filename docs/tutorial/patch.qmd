@@ -304,10 +304,15 @@ import dascore as dc
 
 patch = dc.get_example_patch()
 
-dist_order = np.array([20., 10., 15.])
-patch_dist = patch.order(distance=dist_order)
+# Get a patch with a new distance ordering
+dist_order1 = np.array([20., 10., 15.])
+patch_dist1 = patch.order(distance=dist_order1)
+assert np.all(dist_order1 == patch_dist1.get_array("distance"))
 
-assert np.all(dist_order == patch_dist.get_array("distance"))
+# Get a patch with duplicate entries for distance
+dist_order2 = np.array([20., 20., 20.])
+patch_dist2 = patch.order(distance=dist_order2)
+assert np.all(dist_order2 == patch_dist2.get_array("distance"))
 ```
 
 ## New dimensions

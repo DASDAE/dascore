@@ -22,7 +22,6 @@ from dascore.constants import (
     numeric_types,
     timeable_types,
 )
-from dascore.core.attrs import check_coords, check_dims
 from dascore.core.patch import Patch
 from dascore.exceptions import InvalidSpoolError, ParameterError, PatchDimError
 from dascore.utils.chunk import ChunkManager
@@ -30,7 +29,12 @@ from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor, _spool_map
-from dascore.utils.patch import _force_patch_merge, patches_to_df
+from dascore.utils.patch import (
+    _force_patch_merge,
+    check_coords,
+    check_dims,
+    patches_to_df,
+)
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     adjust_segments,

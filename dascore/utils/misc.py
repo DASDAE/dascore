@@ -8,7 +8,6 @@ import inspect
 import os
 import re
 import warnings
-from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence, Sized
 from functools import cache
 from pathlib import Path
@@ -448,131 +447,6 @@ def is_valid_coord_str(input_str, prefixes=None):
     """Return True if an input string is valid for representing coord info."""
     _valid_keys = tuple(dc.core.CoordSummary.model_fields)
     return _matches_prefix_suffix(input_str, _valid_keys, prefixes)
-
-
-def separate_coord_info(
-    obj,
-    dims: tuple[str] | None = None,
-    required: Sequence[str] | None = None,
-    cant_be_alone: tuple[str] = ("units", "dtype"),
-) -> tuple[dict, dict]:
-    """
-    Separate coordinate information from attr dict.
-
-    These can be in the flat-form (ie {time_min, time_max, time_step, ...})
-    or a nested coord: {coords: {time: {min, max, step}}
-
-    Parameters
-    ----------
-    obj
-        The object or model to
-    dims
-        The dimension to look for.
-    required
-        If provided, the required attributes (e.g., min, max, step).
-    cant_be_alone
-        names which cannot be on their own.
-
-    Returns
-    -------
-    coord_dict and attrs_dict.
-    """
-
-    def _meets_required(coord_dict, strict=True):
-        """
-        Return True coord dict meets the minimum required keys.
-
-        coord_dict represents potential coordinate fields.
-
-        Strict ensures all required values exist.
-        """
-        if not coord_dict:
-            return False
-        if not required and (set(coord_dict) - cant_be_alone):
-            return True
-        if required or not strict:
-            return set(coord_dict).issuperset(required)
-        return False
-
-    def _get_dims(obj):
-        """Try to ascertain dims from keys in obj."""
-        # check first for coord manager
-        if isinstance(obj, dict) and hasattr(obj.get("coords", None), "dims"):
-            return obj["coords"].dims
-
-        # This object already has dims, just honor it.
-        if dims := obj.get("dims", None):
-            return tuple(dims.split(",")) if isinstance(dims, str) else dims
-
-        potential_keys = defaultdict(set)
-        for key in obj:
-            if not is_valid_coord_str(key):
-                continue
-            potential_keys[key.split("_")[0]].add(key.split("_")[1])
-        return tuple(i for i, v in potential_keys.items() if _meets_required(v))
-
-    def _get_coords_from_top_level(obj, out, dims):
-        """First get coord info from top level."""
-        for dim in iterate(dims):
-            potential_coord = {
-                i.split("_")[1]: v for i, v in obj.items() if is_valid_coord_str(i, dim)
-            }
-            # nasty hack for handling d_{dim} for backward compatibility.
-            if (bad_name := f"d_{dim}") in obj:
-                msg = f"d_{dim} is deprecated, use {dim}_step"
-                warnings.warn(msg, DeprecationWarning, stacklevel=3)
-                potential_coord["step"] = obj[bad_name]
-
-            if _meets_required(potential_coord, strict=False):
-                out[dim] = potential_coord
-
-    def _get_coords_from_coord_level(obj, out):
-        """Get coords from coordinate level."""
-        coords = obj.get("coords", {})
-        if hasattr(coords, "to_summary_dict"):
-            coords = coords.to_summary_dict()
-        for key, value in coords.items():
-            if hasattr(value, "to_summary"):
-                value = value.to_summary()
-            if hasattr(value, "model_dump"):
-                value = value.model_dump()
-            if _meets_required(value, strict=False):
-                out[key] = value
-
-    def _pop_keys(obj, out):
-        """Pop out old keys for attrs, and unused keys from out."""
-        # first coord subdict
-        obj.pop("coords", None)
-        # then top-level
-        for coord_name, sub_dict in out.items():
-            for thing_name in sub_dict:
-                obj.pop(f"{coord_name}_{thing_name}", None)
-            if "step" in sub_dict:
-                obj.pop(f"d_{coord_name}", None)
-
-    # sequence of short-circuit checks
-    coord_dict = {}
-    required = set(required) if required is not None else set()
-    cant_be_alone = set(cant_be_alone)
-    if obj is None:
-        return coord_dict, {}
-    if hasattr(obj, "model_dump"):
-        obj = obj.model_dump()
-    obj = dict(obj)
-    # Check if dims need to be updated.
-    new_dims = _get_dims(obj)
-    if new_dims and new_dims != dims:
-        obj["dims"] = new_dims
-        dims = new_dims
-    # this is already a dict of coord info.
-    if dims and set(dims) == set(obj):
-        return obj, {}
-    _get_coords_from_coord_level(obj, coord_dict)
-    _get_coords_from_top_level(obj, coord_dict, dims)
-    _pop_keys(obj, coord_dict)
-    if "dims" not in obj and dims is not None:
-        obj["dims"] = dims
-    return coord_dict, obj
 
 
 def cached_method(func):

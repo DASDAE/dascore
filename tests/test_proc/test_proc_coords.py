@@ -321,6 +321,11 @@ class TestOrder:
         out = random_patch.order(time=[0, 0, 0], samples=True)
         assert isinstance(out, dc.Patch)
 
+    def test_copy(self, random_patch):
+        """Ensure copy creates a copy of the data array."""
+        out = random_patch.order(time=[1, 2, 3], samples=True, copy=True)
+        assert isinstance(out.data, np.ndarray)
+
 
 class TestAppendDims:
     """Tests for appending dummy dimensions to data array."""

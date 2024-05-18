@@ -11,19 +11,14 @@ from dascore import to_datetime64
 from dascore.core.coordmanager import (
     CoordManager,
     get_coord_manager,
-    merge_coord_managers,
 )
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
-    CoordMonotonicArray,
-    CoordRange,
     get_coord,
 )
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
-    CoordMergeError,
     CoordSortError,
     ParameterError,
 )
@@ -31,108 +26,14 @@ from dascore.units import get_quantity
 from dascore.utils.misc import (
     all_close,
     get_middle_value,
-    register_func,
     suppress_warnings,
 )
 
-COORD_MANAGERS = []
-
 COORDS = {
-    "time": to_datetime64(np.arange(10, 100, 10)),
-    "distance": get_coord(data=np.arange(0, 1_000, 10)),
+    "time": dc.to_datetime64(np.arange(10, 100, 10)),
+    "distance": dc.get_coord(data=np.arange(0, 1_000, 10)),
 }
 DIMS = ("time", "distance")
-
-
-@pytest.fixture(scope="class")
-@register_func(COORD_MANAGERS)
-def cm_basic():
-    """The simplest coord manager."""
-    return get_coord_manager(COORDS, DIMS)
-
-
-@pytest.fixture(scope="class")
-@register_func(COORD_MANAGERS)
-def cm_with_units(cm_basic):
-    """The simplest coord manager."""
-    return cm_basic.set_units(time="s", distance="m")
-
-
-@pytest.fixture(scope="class")
-@register_func(COORD_MANAGERS)
-def cm_basic_degenerate(cm_basic):
-    """A degenerate coord manager on time axis."""
-    time_coord = cm_basic.coord_map["time"]
-    degenerate = time_coord.empty()
-    return cm_basic.update(time=degenerate)
-
-
-@pytest.fixture(scope="class")
-@register_func(COORD_MANAGERS)
-def cm_multidim() -> CoordManager:
-    """The simplest coord manager with several coords added."""
-    coords = {
-        "time": to_datetime64(np.arange(10, 110, 10)),
-        "distance": get_coord(data=np.arange(0, 1000, 10)),
-        "quality": (("time", "distance"), np.ones((10, 100))),
-        "latitude": ("distance", np.random.rand(100)),
-    }
-    dims = ("time", "distance")
-
-    return get_coord_manager(coords, dims)
-
-
-@pytest.fixture(scope="class")
-@register_func(COORD_MANAGERS)
-def cm_degenerate_time(cm_multidim) -> CoordManager:
-    """A coordinate manager with degenerate (length 1) time array."""
-    new_time = to_datetime64(["2017-09-18T01:00:01"])
-    out = cm_multidim.update(time=new_time)
-    return out
-
-
-@pytest.fixture(scope="class")
-@register_func(COORD_MANAGERS)
-def cm_wacky_dims() -> CoordManager:
-    """A coordinate manager with non evenly sampled dims."""
-    patch = dc.get_example_patch("wacky_dim_coords_patch")
-    return patch.coords
-
-
-@pytest.fixture(scope="class")
-@register_func(COORD_MANAGERS)
-def cm_dt_small_diff(memory_spool_small_dt_differences):
-    """A list of coordinate managers with differences in dt merged."""
-    spool = memory_spool_small_dt_differences
-    coords = [x.coords for x in spool]
-    out = merge_coord_managers(coords, dim="time")
-    return out
-
-
-@pytest.fixture(scope="class")
-@register_func(COORD_MANAGERS)
-def cm_non_associated_coord(cm_basic):
-    """A cm with coordinates that are not associated with a dimension."""
-    new = cm_basic.update(
-        bob=(None, np.arange(10)),
-        bill=((), np.arange(100)),
-    )
-    return new
-
-
-@pytest.fixture(scope="class")
-def cm_non_coord_dim():
-    """A cm with a dimension that has an UnCoord (no coordinate)."""
-    coords = {"time": 10, "distance": np.arange(5)}
-    dims = ("time", "distance")
-    out = get_coord_manager(coords=coords, dims=dims)
-    return out
-
-
-@pytest.fixture(scope="class", params=COORD_MANAGERS)
-def coord_manager(request) -> CoordManager:
-    """Meta fixture for aggregating coordinates."""
-    return request.getfixturevalue(request.param)
 
 
 class TestGetCoordManager:
@@ -1088,133 +989,6 @@ class TestDecimate:
         out, _ = cm.decimate(distance=2)
         assert len(out.coord_map["distance"]) < len(cm.coord_map["distance"])
         assert (out.shape[ind] * 2) == cm.shape[ind]
-
-
-class TestMergeCoordManagers:
-    """Tests for merging coord managers together."""
-
-    def _get_offset_coord_manager(self, cm, from_max=True, **kwargs):
-        """Get a new coord manager offset by some amount along a dim."""
-        name, value = next(iter(kwargs.items()))
-        coord = cm.coord_map[name]
-        start = coord.max() if from_max else coord.min()
-        attr_name = f"{name}_min"
-        new, _ = cm.update_from_attrs({attr_name: start + value})
-        return new
-
-    def test_merge_simple(self, cm_basic):
-        """Ensure we can merge simple, contiguous, coordinates together."""
-        cm1 = cm_basic
-        time = cm1.coord_map["time"]
-        cm2 = self._get_offset_coord_manager(cm1, time=time.step)
-        out = merge_coord_managers([cm1, cm2], dim="time")
-        new_time = out.coord_map["time"]
-        assert isinstance(new_time, CoordRange)
-        assert new_time.min() == time.min()
-        assert new_time.max() == cm2.coord_map["time"].max()
-
-    def test_merge_offset_close_no_snap(self, cm_basic):
-        """When the coordinate don't line up, it should produce monotonic Coord."""
-        cm1 = cm_basic
-        dt = cm1.coord_map["time"].step
-        # try a little more than dt
-        cm2 = self._get_offset_coord_manager(cm1, time=dt * 1.1)
-        out = merge_coord_managers([cm1, cm2], dim="time")
-        assert isinstance(out.coord_map["time"], CoordMonotonicArray)
-        # try a little less
-        cm2 = self._get_offset_coord_manager(cm1, time=dt * 0.9)
-        out = merge_coord_managers([cm1, cm2], dim="time")
-        assert isinstance(out.coord_map["time"], CoordMonotonicArray)
-
-    def test_merge_offset_overlap(self, cm_basic):
-        """Ensure coordinates that have overlap produce Coord Array."""
-        cm1 = cm_basic
-        dt = cm1.coord_map["time"].step
-        cm2 = self._get_offset_coord_manager(cm1, time=-dt * 1.1)
-        out = merge_coord_managers([cm1, cm2], dim="time")
-        assert isinstance(out.coord_map["time"], CoordArray)
-
-    def test_merge_snap_but_not_needed(self, cm_basic):
-        """Specifying a snap tolerance even if coords line up should work."""
-        cm1 = cm_basic
-        time = cm1.coord_map["time"]
-        cm2 = self._get_offset_coord_manager(cm1, time=time.step)
-        out = merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
-        new_time = out.coord_map["time"]
-        assert isinstance(new_time, CoordRange)
-        assert new_time.min() == time.min()
-        assert new_time.max() == cm2.coord_map["time"].max()
-
-    @pytest.mark.parametrize("factor", (1.1, 0.9, 1.3, 1.01, 0))
-    def test_merge_snap_when_needed(self, cm_basic, factor):
-        """Snap should be applied because when other cm is close expected."""
-        cm1 = cm_basic
-        time = cm1.coord_map["time"]
-        nt = time.step * factor
-        cm2 = self._get_offset_coord_manager(cm1, time=nt)
-        out = merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
-        new_time = out.coord_map["time"]
-        assert isinstance(new_time, CoordRange)
-        assert new_time.min() == time.min()
-        new_dim_len = out.shape[cm1.dims.index("time")]
-        expected_end = time.min() + (new_dim_len - 1) * time.step
-        assert new_time.max() == expected_end
-
-    @pytest.mark.parametrize("factor", (10, -10, 6, -6))
-    def test_merge_raise_snap_too_big(self, cm_basic, factor):
-        """When snap is too big, an error should be raised."""
-        cm1 = cm_basic
-        time = cm1.coord_map["time"]
-        nt = time.step * factor
-        cm2 = self._get_offset_coord_manager(cm1, time=nt)
-        with pytest.raises(CoordMergeError, match="Snap tolerance"):
-            merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
-
-    def test_different_dims_raises(self, cm_basic):
-        """When dimensions differ merge should raise."""
-        cm1 = cm_basic
-        cm2 = cm1.rename_coord(distance="dist")
-        with pytest.raises(CoordMergeError, match="same dimensions"):
-            merge_coord_managers([cm1, cm2], "time")
-        with pytest.raises(CoordMergeError, match="same dimensions"):
-            merge_coord_managers([cm1, cm2], "distance")
-
-    def test_different_units_raises(self, cm_basic):
-        """When dimensions differ merge should raise."""
-        cm1 = cm_basic
-        cm2 = cm1.set_units(distance="furlong")
-        with pytest.raises(CoordMergeError, match="share the same units"):
-            merge_coord_managers([cm1, cm2], "distance")
-
-    def test_unequal_non_merge_coords(self, cm_basic):
-        """When coords that won't be merged arent equal merge should fail."""
-        cm1 = cm_basic
-        dist = cm1.coord_map["distance"]
-        new_dist = dist.update_limits(min=dist.max())
-        cm2 = cm1.update(distance=new_dist)
-        with pytest.raises(CoordMergeError, match="Non merging coordinates"):
-            merge_coord_managers([cm1, cm2], "time")
-
-    def test_unshared_coord_dropped(self, cm_basic):
-        """
-        When one coord manager has coords and the other doesn't they should
-        be dropped.
-        """
-        cm1 = cm_basic
-        cm2 = cm1.update(time2=("time", cm1.get_array("time")))
-        out_no_range = merge_coord_managers([cm1, cm2], "time")
-        assert "time2" not in out_no_range.coord_map
-        out_with_range = merge_coord_managers([cm1, cm2], "time")
-        assert "time2" not in out_with_range.coord_map
-
-    def test_slightly_different_dt(self, cm_dt_small_diff):
-        """
-        Ensure coord managers with slightly different dt can still merge
-        but produce uneven sampled dimension.
-        """
-        cm = cm_dt_small_diff
-        coord = cm.coord_map["time"]
-        assert coord.sorted
 
 
 class TestSort:

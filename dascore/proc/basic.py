@@ -9,13 +9,15 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
-from dascore.core.attrs import PatchAttrs, _merge_aligned_coords, _merge_models
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import PatchBroadcastError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
+    _merge_aligned_coords,
+    _merge_models,
     align_patch_coords,
     get_multiple_dim_value_from_kwargs,
     patch_function,

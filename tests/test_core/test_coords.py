@@ -845,6 +845,13 @@ class TestOrder:
         out, inds = coord_with_duplicates.order(to_find)
         assert len(out) == expected_len
 
+    def test_order_samples_non_int_aray(self, evenly_sampled_coord):
+        """Ensure an error is raised if non-int array is used with samples."""
+        msg = "requires integer dtype"
+        bad_array = np.array([1.22, 2.33])
+        with pytest.raises(CoordError, match=msg):
+            evenly_sampled_coord.order(bad_array, samples=True)
+
 
 class TestEqual:
     """Tests for comparing coord equality."""
@@ -1130,25 +1137,6 @@ class TestCoordRange:
         time_coord = get_coord(data=time)
         assert len(time) == len(time_coord)
 
-    def test_change_length_no_change(self, evenly_sampled_coord):
-        """Ensure change_length works when no length change is needed."""
-        new = evenly_sampled_coord.change_length(len(evenly_sampled_coord))
-        assert new == evenly_sampled_coord
-
-    def test_change_length_lengthen(self, evenly_sampled_float_coord_with_units):
-        """Ensure the length can increase."""
-        coord = evenly_sampled_float_coord_with_units
-        current = len(coord)
-        new = coord.change_length(current + 1)
-        assert len(new) == current + 1
-
-    def test_change_length_shorten(self, evenly_sampled_float_coord_with_units):
-        """Ensure the length can increase."""
-        coord = evenly_sampled_float_coord_with_units
-        current = len(coord)
-        new = coord.change_length(current - 1)
-        assert len(new) == current - 1
-
 
 class TestMonotonicCoord:
     """Tests for monotonic array coords."""
@@ -1419,11 +1407,24 @@ class TestNonCoord:
         assert out1 == out2
         assert len(out1) == 4
 
+    def test_select_array(self, basic_non_coord):
+        """Ensure an array can be used for selections."""
+        ar = np.array([1, 2, 4])
+        out, _ = basic_non_coord.select(ar, samples=True)
+        assert isinstance(out, basic_non_coord.__class__)
+        assert len(out) == len(ar)
+
     def test_update_limits_raises(self, basic_non_coord):
         """Ensure unsupported update_limits method raises."""
         match = "NonCoord does not support"
         with pytest.raises(CoordError, match=match):
             basic_non_coord.update_limits()
+
+    def test_convert_units_raises(self, basic_non_coord):
+        """Ensure unsupported update_limits method raises."""
+        match = "NonCoord does not support"
+        with pytest.raises(CoordError, match=match):
+            basic_non_coord.convert_units("m")
 
     def test_values_raises(self, basic_non_coord):
         """Ensure values property raises."""
@@ -1454,6 +1455,18 @@ class TestNonCoord:
         other = get_coord(data=np.arange(len(basic_non_coord)))
         assert other != basic_non_coord
         assert basic_non_coord != other
+
+    def test_min_max(self, basic_non_coord):
+        """Min and max should both be NaN."""
+        v_min, v_max = basic_non_coord.min(), basic_non_coord.max()
+        assert pd.isnull(v_max)
+        assert pd.isnull(v_min)
+
+    def test_sort(self, basic_non_coord):
+        """Sort should do nothing."""
+        out, ind = basic_non_coord.sort()
+        assert out is basic_non_coord
+        assert ind == slice(None)
 
 
 class TestCoercion:
@@ -1671,6 +1684,50 @@ class TestAlignTo:
         assert c1 == coord
         c1, c2, s1, s2 = non_coord.align_to(coord)
         assert c1 == non_coord
+
+    def test_incompatible_non_coords(self, basic_non_coord):
+        """Ensure 2 incompatible non coords raise when aligning."""
+        first = basic_non_coord
+        second = basic_non_coord.change_length(len(first) + 3)
+        msg = "Non coordinates must be the same length"
+        with pytest.raises(CoordError, match=msg):
+            first.align_to(second)
+
+
+class TestChangeLength:
+    """Tests for chaning length of coordinate."""
+
+    def test_change_length_no_change(self, evenly_sampled_coord):
+        """Ensure change_length works when no length change is needed."""
+        new = evenly_sampled_coord.change_length(len(evenly_sampled_coord))
+        assert new == evenly_sampled_coord
+
+    def test_change_length_lengthen(self, evenly_sampled_float_coord_with_units):
+        """Ensure the length can increase."""
+        coord = evenly_sampled_float_coord_with_units
+        current = len(coord)
+        new = coord.change_length(current + 1)
+        assert len(new) == current + 1
+
+    def test_change_length_shorten(self, evenly_sampled_float_coord_with_units):
+        """Ensure the length can increase."""
+        coord = evenly_sampled_float_coord_with_units
+        current = len(coord)
+        new = coord.change_length(current - 1)
+        assert len(new) == current - 1
+
+    def test_non_coord_change_length(self, basic_non_coord):
+        """Ensure non coord can change length."""
+        out = basic_non_coord.change_length(2 * len(basic_non_coord))
+        assert len(out) == 2 * len(basic_non_coord)
+        # The type shouldn't change.
+        assert isinstance(out, basic_non_coord.__class__)
+
+    def test_not_implemented_in_baseclass(self, evenly_sampled_coord):
+        """Ensure Change coords is not implemented in base class."""
+        coord = evenly_sampled_coord
+        with pytest.raises(NotImplementedError):
+            BaseCoord.change_length(coord, 10)
 
 
 class TestIssues:
