@@ -25,7 +25,7 @@ def get_cross_ref_dict() -> dict[str, str]:
         count += 1
         if count > 100:
             raise ValueError("failed to find cross-ref file")
-    for cross_ref_path in path.rglob("cross_ref.json"):
+    for cross_ref_path in path.rglob(".cross_ref.json"):
         out.update(json.loads(cross_ref_path.read_text()))
     assert out, "didn't find cross ref dict"
     return out
@@ -53,17 +53,18 @@ def replace_links(json_data, raw_string):
         if isinstance(element, list):
             for sub_element in element:
                 yield from _yield_links(sub_element)
-        elif isinstance(element, (dict)):
+        elif isinstance(element, dict):
             if element.get("t") == "Link":
                 yield element
             else:
-                yield from _yield_links(element.get("c", []))
+                for item, value in element.items():
+                    yield from _yield_links(value)
+                # yield from _yield_links(element.get("c", []))
 
-    reg_pattern = r'(?<="\%60)(.*?)(?=\%60")'
-    blocks = json_data["blocks"]
-
+    # reg_pattern = r'(?<="\%60)(.*?)(?=\%60")'
+    reg_pattern = r"(?<=\%60)(.*?)(?=\%60)"
     replace_dict = {}
-    for link in _yield_links(blocks):
+    for link in _yield_links(json_data):
         str_to_scan = json.dumps(link, separators=(",", ":"), ensure_ascii=False)
         matches = re.finditer(reg_pattern, str_to_scan)
         for match in matches:
@@ -72,7 +73,10 @@ def replace_links(json_data, raw_string):
             key = str_to_scan[start:stop].replace("`", "")
             new_value = cross_refs.get(key, key)
             if new_value != key:
-                new_sub_str = str_to_scan.replace(f'"%60{key}%60"', f'"{new_value}"')
+                # new_sub_str = str_to_scan.replace(f'"%60{key}%60"', f'"{new_value}"')
+                new_sub_str = str_to_scan.replace(f"%60{key}%60", f"{new_value}")
+                if str_to_scan in replace_dict:
+                    assert replace_dict[str_to_scan] == new_sub_str
                 replace_dict[str_to_scan] = new_sub_str
     for i, v in replace_dict.items():
         raw_string = raw_string.replace(i, v)
@@ -82,7 +86,7 @@ def replace_links(json_data, raw_string):
 def test():
     """Function to test filter."""
     here = Path(__file__).parent
-    data_path = here / "filter_test_data" / "test_data_2.json"
+    data_path = here / "filter_test_data" / "test_data_4.json"
     with data_path.open("r") as fi:
         data = fi.read()
     input_stream = io.StringIO(data)
@@ -99,3 +103,11 @@ def main(raw_data=None):
 
 if __name__ == "__main__":
     main()
+    # test()
+
+
+# This is useful for debugging, but need to first install remote_pdb
+# from remote_pdb import RemotePdb
+# RemotePdb('127.0.0.1', 4444).set_trace()
+# Then telnet into the debugger
+# telnet 127.0.0.1 4444

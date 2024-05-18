@@ -31,7 +31,7 @@ def yield_links(text, pattern=r"(?<=\]\(`).*?(?=`\))"):
 def load_index(path=None):
     """Load the index with the linked locations."""
     if path is None:
-        path = _get_docs_path() / "api" / "cross_ref.json"
+        path = _get_docs_path() / ".cross_ref.json"
     with open(path) as fi:
         out = json.load(fi)
     return out

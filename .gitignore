@@ -79,6 +79,7 @@ _autosummary
 docs/site_libs
 docs/_quarto.yml
 docs/**/*.ipynb
+.cross_ref.json
 
 # profile stuff from asv
 .asv
