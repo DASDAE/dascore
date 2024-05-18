@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from _operator import and_, or_
+from collections.abc import Sequence
 from functools import reduce
-from typing import Sequence
 
 import numpy as np
+from _operator import and_, or_
 
 import dascore as dc
 from dascore.exceptions import CoordMergeError
