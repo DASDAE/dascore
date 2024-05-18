@@ -576,14 +576,33 @@ def _clear_empty_directories(parent_path):
             os.rmdir(path)
 
 
+def _map_other_qmd_files(doc_path=DOC_PATH, api_path=API_DOC_PATH):
+    """Add all other qmd files, excluding API."""
+    out = {}
+    parent_doc = doc_path.parent
+    api_relative = str(api_path.relative_to(doc_path))
+    for path in DOC_PATH.rglob("*.qmd"):
+        path_relative = str(path.relative_to(parent_doc))
+        # Skip API docs
+        if path_relative.startswith(api_relative):
+            continue
+        value = "/" + str(path.relative_to(doc_path))
+        out[path_relative] = value
+        # also add key with no qmd extension.
+        out[path_relative.split(".")[0]] = value
+    return out
+
+
 def render_project(data_dict, address_dict, api_path=API_DOC_PATH, debug=False):
     """Render the markdown files."""
     # Create and write the qmd files for each function/class/module
     write_api_markdown(data_dict, api_path, address_dict, debug=debug)
     # put the parts together; alias; path to docs
     path_mapping = create_json_mapping(data_dict, address_dict, api_path)
+    # Add the other parts of the documentation.
+    path_mapping.update(_map_other_qmd_files())
     # dump the json mapping to disk in doc folder
-    cross_ref_path = Path(api_path) / "cross_ref.json"
+    cross_ref_path = Path(DOC_PATH) / ".cross_ref.json"
     with open(cross_ref_path, "w") as fi:
         json.dump(path_mapping, fi, indent=2)
     # Clear out empty directories
