@@ -149,6 +149,16 @@ Any dimension name can be passed as key, and the values can be:
       `True` indicates values to keep. 
 """
 
+check_behavior_description = """
+check_behavior
+    Indicates what to do when an incompatible patch is found in the
+    spool. `None` will silently skip any incompatible patches,
+    'warn' will issue a warning and then skip incompatible patches,
+    'raise' will raise an
+    [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`)
+    if any incompatible patches are found.
+"""
+
 
 # Rich styles for various object displays.
 dascore_styles = dict(

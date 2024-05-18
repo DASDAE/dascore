@@ -18,6 +18,7 @@ from dascore.constants import (
     WARN_LEVELS,
     PatchType,
     SpoolType,
+    check_behavior_description,
     dascore_styles,
 )
 from dascore.exceptions import (
@@ -29,6 +30,7 @@ from dascore.exceptions import (
 from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.coordmanager import merge_coord_managers
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     _apply_union_indexers,
     _merge_tuples,
@@ -37,6 +39,7 @@ from dascore.utils.misc import (
     iterate,
     to_object_array,
     warn_or_raise,
+    yield_sub_sequences,
 )
 from dascore.utils.time import to_float
 
@@ -243,10 +246,8 @@ def patches_to_df(
     A dataframe with the attrs of each patch converted to a columns
     plus a field called 'patch' which contains a reference to the patches.
     """
-    if hasattr(patches, "_df"):
-        df = patches._df
     # Handle spool case
-    elif hasattr(patches, "get_contents"):
+    if hasattr(patches, "get_contents"):
         df = patches.get_contents()
     elif isinstance(patches, pd.DataFrame):
         df = patches
@@ -782,3 +783,156 @@ def merge_compatible_coords_attrs(
     coord_out = _merge_coords(coord1, coord2)
     attrs = _merge_models(attrs1, attrs2, coord_out, attrs_to_ignore=attrs_to_ignore)
     return coord_out, attrs
+
+
+def _add_history_str(attrs, hist_str):
+    """Add a single string to the history attribute in attrs."""
+    new_history = list(attrs.history)
+    new_history.append(hist_str)
+    return attrs.update(history=new_history)
+
+
+def _spool_up(func):
+    """
+    Spool the output of a function.
+
+    This is primarily to turn methods that return a list of patches
+    into something that can be used as a spool method.
+    """
+
+    @functools.wraps(func)
+    def _wrapper(self, *args, **kwargs):
+        """Wrapper for function."""
+        out = func(self, *args, **kwargs)
+        return dc.spool(out)
+
+    return _wrapper
+
+
+@compose_docstring(check_bev=check_behavior_description)
+def concatenate_patches(
+    patches: Sequence[dc.Patch] | dc.BaseSpool,
+    check_behavior: WARN_LEVELS = "warn",
+    **kwargs,
+):
+    """
+    Concatenate the patches together.
+
+    Parameters
+    ----------
+    {check_bev}
+    **kwargs
+        Used to specify the dimension and number of patches to merge
+        together.
+
+    Notes
+    -----
+    [`Spool.chunk `](`dascore.Spool.chunk`) performs a similar operation
+    but accounts for coordinate values.
+    """
+
+    def _get_dim_and_value(kwargs):
+        """Get the dimension name and value"""
+        assert len(kwargs) == 1
+        [(dim, val)] = kwargs.items()
+
+        return dim, val
+
+    def get_compatible_patches(patches, dim, check_behavior):
+        """Get the patches which can be concatenated, dim names, and new dim."""
+        patches = list(patches)
+        first_patch = patches[0]
+        compat_patches = []
+        # Ensure patch dimensions are compatible.
+        dim_set = {x.dims for x in patches}
+        if not len(dim_set) == 1:
+            msg = "Cannot concatenate patches with different dimensions."
+            raise PatchDimError(msg)
+        # Get dim name and such
+        first_dims = next(iter(dim_set))
+        new_dim = dim not in first_dims
+        dims = tuple([*list(first_dims), dim]) if new_dim else first_dims
+        # Get patches compatible with first.
+        for p in patches:
+            dims_ok = check_dims(first_patch, p, check_behavior)
+            coords_ok = check_coords(first_patch, p, check_behavior, dim)
+            if dims_ok and coords_ok:
+                compat_patches.append(p)
+        return compat_patches, dims, new_dim
+
+    def get_output_array(patches, axis, new_dim):
+        """Get a list of output arrays."""
+        sub_arrays = [x.data[..., None] if new_dim else x.data for x in patches]
+        out = np.concatenate(sub_arrays, axis=axis)
+        return out
+
+    def _get_new_coords(patch_list, dim, new_dim):
+        """Get new coordinates for creating patch."""
+        coords = patch_list[0].coords
+        if new_dim:
+            coords = coords.update(**{dim: (dim, len(patch_list))})
+        else:
+            array_list = [x.get_array(dim) for x in patch_list]
+            array = np.concatenate(array_list, axis=0)
+            coords = coords.update(**{dim: array})
+        return coords
+
+    dim, val = _get_dim_and_value(kwargs)
+    patches, dims, new_dim = get_compatible_patches(patches, dim, check_behavior)
+    out = []
+    for patch_list in yield_sub_sequences(patches, val):
+        ar = get_output_array(patch_list, dims.index(dim), new_dim)
+        attrs = _add_history_str(patch_list[0].attrs, "concatenate")
+        coords = _get_new_coords(patch_list, dim, new_dim)
+        out.append(dc.Patch(data=ar, attrs=attrs, coords=coords, dims=dims))
+    return out
+
+
+@compose_docstring(check_desc=check_behavior_description)
+def stack_patches(
+    patches, dim_vary=None, check_behavior: WARN_LEVELS = "warn"
+) -> PatchType:
+    """
+    Stack (add) all patches compatible with first patch together.
+
+    Parameters
+    ----------
+    dim_vary
+        The name of the dimension which can be different in values
+        (but not shape) and patches still added together.
+    {check_desc}
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> # add a spool with equal sized patches but progressing time dim
+    >>> spool = dc.get_example_spool()
+    >>> stacked_patch = spool.stack(dim_vary='time')
+    """
+    # check the dims/coords of first patch (considered to be standard for rest)
+    init_patch = patches[0]
+    stack_arr = np.zeros_like(init_patch.data)
+
+    # ensure dim_vary is in dims
+    if dim_vary is not None and dim_vary not in init_patch.dims:
+        msg = f"Dimension {dim_vary} is not in first patch."
+        raise PatchDimError(msg)
+
+    for p in patches:
+        # check dimensions of patch compared to init_patch
+        dims_ok = check_dims(init_patch, p, check_behavior)
+        coords_ok = check_coords(init_patch, p, check_behavior, dim_vary)
+        # actually do the stacking of data
+        if dims_ok and coords_ok:
+            stack_arr = stack_arr + p.data
+
+    # create attributes for the stack with adjusted history
+    stack_attrs = _add_history_str(init_patch.attrs, "stack")
+
+    # create coords array for the stack
+    stack_coords = init_patch.coords
+    if dim_vary:  # adjust dim_vary to start at 0 for junk dimension indicator
+        coord_to_change = stack_coords.coord_map[dim_vary]
+        new_dim = coord_to_change.update_limits(min=0)
+        stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
+    return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
