@@ -24,6 +24,7 @@ from dascore.constants import (
 from dascore.exceptions import (
     CoordDataError,
     IncompatiblePatchError,
+    ParameterError,
     PatchAttributeError,
     PatchDimError,
 )
@@ -823,7 +824,8 @@ def concatenate_patches(
     {check_bev}
     **kwargs
         Used to specify the dimension and number of patches to merge
-        together.
+        together. A value of None attempts to concatenate all patches
+        into as single patch.
 
     Examples
     --------
@@ -854,6 +856,9 @@ def concatenate_patches(
 
     def _get_dim_and_value(kwargs):
         """Get the dimension name and value"""
+        if not len(kwargs) == 1:
+            msg = "Exactly one keyword argument must be passed to concatenate."
+            raise ParameterError(msg)
         assert len(kwargs) == 1
         [(dim, val)] = kwargs.items()
 
@@ -893,9 +898,16 @@ def concatenate_patches(
         if new_dim:
             coords = coords.update(**{dim: (dim, len(patch_list))})
         else:
-            array_list = [x.get_array(dim) for x in patch_list]
-            array = np.concatenate(array_list, axis=0)
-            coords = coords.update(**{dim: array})
+            coord_list = [x.get_coord(dim) for x in patch_list]
+            is_non_coord = [x._non_coord for x in coord_list]
+            if any(is_non_coord):  # Any Null coord
+                coord_lens = [len(x) for x in coord_list]
+                new_coord = dc.get_coord(length=sum(coord_lens))
+                coords = coords.update(**{dim: new_coord})
+            else:
+                array_list = [x.get_array(dim) for x in patch_list]
+                array = np.concatenate(array_list, axis=0)
+                coords = coords.update(**{dim: array})
         return coords
 
     dim, val = _get_dim_and_value(kwargs)

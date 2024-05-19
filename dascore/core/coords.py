@@ -937,7 +937,7 @@ class NonCoord(BaseCoord):
             self._check_order_and_select(relative, samples)
         except CoordError as e:
             if not is_array(args):
-                args = self.get_slice_tuple(args, relative=relative)
+                args = self.get_slice_tuple(args, relative=False)
                 # Check if the select has no effect and return self or raise.
                 if all(pd.isnull(x) for x in args):
                     return self, slice(None)

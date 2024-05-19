@@ -8,6 +8,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import (
     IncompatiblePatchError,
+    ParameterError,
     PatchAttributeError,
     PatchDimError,
 )
@@ -359,6 +360,23 @@ class TestConcatenate:
         merged = spool.concatenate(time=None)
         assert len(merged) == 1
         assert isinstance(merged[0], dc.Patch)
+
+    def test_bad_kwargs(self, random_patch):
+        """Ensure bad number of keywords raise."""
+        msg = "Exactly one keyword argument"
+        with pytest.raises(ParameterError, match=msg):
+            concatenate_patches([random_patch])
+        with pytest.raises(ParameterError, match=msg):
+            concatenate_patches([random_patch], time=None, distance=None)
+
+    def test_concat_along_non_dim(self, random_patch):
+        """Ensure we can concat along non dims."""
+        patches = [random_patch.mean("time") for _ in range(10)]
+        out = concatenate_patches(patches, time=None)
+        assert len(out) == 1
+        patch = out[0]
+        coord = patch.get_coord("time")
+        assert len(coord) == 10
 
 
 class TestStackPatches:
