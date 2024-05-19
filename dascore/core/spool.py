@@ -149,8 +149,8 @@ class BaseSpool(abc.ABC):
 
         Notes
         -----
-        [`Spool.concatenate`](`dascore.Spool.concatenate`) performs a similar
-        operation but disregards the coordinate values.
+        [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) performs a
+        similar operation but disregards the coordinate values.
         """
 
     @abc.abstractmethod

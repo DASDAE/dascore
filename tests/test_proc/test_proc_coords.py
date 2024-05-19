@@ -305,6 +305,14 @@ class TestSelect:
         # if no select performed everything should be identical.
         assert new.equals(random_patch, only_required_attrs=False)
 
+    def test_patch_non_coord(self, random_patch):
+        """Test select for a patch with a non coord."""
+        new_shape = tuple([*random_patch.shape, 10])
+        patch = random_patch.append_dims("face_angle").make_broadcastable_to(new_shape)
+        face_angle = patch.get_coord("face_angle")
+        new = patch.select(face_angle=(face_angle.min(), face_angle.max()))
+        assert new == patch
+
 
 class TestOrder:
     """Tests for ordering Patches."""

@@ -160,6 +160,29 @@ subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
 merged_spool = spool.chunk(time=None)
 ```
 
+# concatenate
+Similar to `chunk`, [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) is used to combine patches together. However, `concatenate doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. 
+
+:::{.callout-warning}
+However, unlike [`chunk`](`dascore.BaseSpool.chunk`), not all `Spool` types implement [`concatenate`](`dascore.BaseSpool.concatenate`). 
+:::
+
+```python 
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# Create a spool with patches that have a large gap
+time = patch.get_coord("time")
+one_hour = dc.to_timedelta64(3600)
+patch2 = patch.update_coords(time_min=time.max() + one_hour)
+spool = dc.spool([patch, patch2])
+
+# chunk rightfully wouldn't merge these patches, but concatenate will.
+merged = spool.concatenate(time=None)
+print(merged[0].coords)
+```
+
 # map
 
 The [`map`](`dascore.core.spool.BaseSpool.map`) method applies a function to all patches in the spool. It provides an efficient way to process large datasets, especially when combined with clients (aka executors).

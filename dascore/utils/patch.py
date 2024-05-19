@@ -814,7 +814,7 @@ def concatenate_patches(
     patches: Sequence[dc.Patch] | dc.BaseSpool,
     check_behavior: WARN_LEVELS = "warn",
     **kwargs,
-):
+) -> Sequence[dc.Patch]:
     """
     Concatenate the patches together.
 
@@ -825,10 +825,31 @@ def concatenate_patches(
         Used to specify the dimension and number of patches to merge
         together.
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Concatenate patches along time axis
+    >>> spool = dc.spool([patch, patch])
+    >>> spool_concat = spool.concatenate(time=None)
+    >>> assert len(spool_concat) == 1
+    >>>
+    >>> # Concatenate patches along a new dimension
+    >>> spool_concat = spool.concatenate(wave_rank=None)
+    >>> assert "wave_rank" in spool_concat[0].dims
+    >>>
+    >>> # concatenate patches in groups of 3.
+    >>> big_spool = dc.spool([patch] * 12)
+    >>> spool_concat = big_spool.concatenate(time=3)
+    >>> assert len(spool_concat) == 4
+
     Notes
     -----
-    [`Spool.chunk `](`dascore.Spool.chunk`) performs a similar operation
-    but accounts for coordinate values.
+    - [`Spool.chunk `](`dascore.BaseSpool.chunk`) performs a similar operation
+      but accounts for coordinate values.
+    - See also the
+      [chunk section of the spool tutorial](`docs/tutorial/spool`#concatenate)
     """
 
     def _get_dim_and_value(kwargs):

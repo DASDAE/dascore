@@ -359,7 +359,7 @@ def coords_from_df(
 def select(
     patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
 ) -> PatchType:
-    """
+    """t
     Return a subset of the patch.
 
     {select_params}

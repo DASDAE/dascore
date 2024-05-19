@@ -341,6 +341,25 @@ class TestConcatenate:
         out = func([random_patch] * 3, time=None)
         assert isinstance(out, dc.BaseSpool)
 
+    def test_new_dim_spool(self, random_patch):
+        """Ensure a patch with new dim can be retrieved from spool."""
+        spool = dc.spool([random_patch, random_patch])
+        spool_concat = spool.concatenate(wave_rank=None)
+        assert "wave_rank" in spool_concat[0].dims
+
+    def test_patch_with_gap(self, random_patch):
+        """Ensure a patch with a time gap still concats."""
+        # Create a spool with patches that have a large gap
+        time = random_patch.get_coord("time")
+        one_hour = dc.to_timedelta64(3600)
+        patch2 = random_patch.update_coords(time_min=time.max() + one_hour)
+        spool = dc.spool([random_patch, patch2])
+
+        # chunk rightfully wouldn't merge these patches, but concatenate will.
+        merged = spool.concatenate(time=None)
+        assert len(merged) == 1
+        assert isinstance(merged[0], dc.Patch)
+
 
 class TestStackPatches:
     """Tests for stacking (adding) spool content."""

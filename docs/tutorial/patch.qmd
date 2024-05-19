@@ -615,7 +615,7 @@ Patches implement many [ufunc](https://numpy.org/doc/stable/reference/ufuncs.htm
 In the case of scalars and numpy arrays, the operations are broadcast over the patch data. In the case of two patches, compatibility between patches are first checked, the intersection of the coords and attrs are calculated, then the operator is applied to both patches' data. Here are a few examples:
 
 :::{.callout-note}
-See [`merge_compatible_coords_attrs`](`dascore.core.attrs.merge_compatible_coords_attrs`) for more details on how attributes and coordinates are handled when performing operations on two patches.
+See [`merge_compatible_coords_attrs`](`dascore.utils.patch.merge_compatible_coords_attrs`) for more details on how attributes and coordinates are handled when performing operations on two patches.
 :::
 
 ## Patch operations with scalars
