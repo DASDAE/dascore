@@ -380,7 +380,7 @@ class TestDropNa:
 
 
 class TestFillNa:
-    """Tests for dropping nullish values in a patch."""
+    """Tests for replacing nullish values in a patch."""
 
     @pytest.fixture(scope="session")
     def patch_with_null(self):
