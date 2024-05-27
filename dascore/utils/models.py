@@ -83,7 +83,7 @@ def sensible_model_equals(
             if not all_close(val1, val2):
                 return False
         else:
-            if not val1 == val2:
+            if val1 != val2 and not (pd.isnull(val1) and pd.isnull(val2)):
                 return False
     return True
 

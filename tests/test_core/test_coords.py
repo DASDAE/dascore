@@ -1468,6 +1468,22 @@ class TestNonCoord:
         assert out is basic_non_coord
         assert ind == slice(None)
 
+    def test_get_coord_array_of_nan(self):
+        """An array of NaN should return uncoord."""
+        array = np.empty(10) * np.nan
+        out = get_coord(data=array)
+        assert isinstance(out, NonCoord)
+
+    def test_start_stop(self):
+        """Ensure start/stop/step are maintained in NonCoords."""
+        coord = get_coord(length=10, step=1)
+        assert isinstance(coord, NonCoord)
+        assert coord.step == 1
+        # Test start/stop
+        coord = get_coord(start=10, length=10)
+        assert coord.start == 10
+        assert len(coord) == 10
+
 
 class TestCoercion:
     """Some data types should support coercion in selecting (eg dates)."""

@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 import numpy as np
 import pandas as pd
 from pydantic import (
+    field_validator,
     model_serializer,
     model_validator,
 )
@@ -848,10 +849,21 @@ class NonCoord(BaseCoord):
     A Coordinate representing not a coordinate.
     """
 
+    start: float | int | np.datetime64 = np.nan
+    stop: float | int | np.datetime64 = np.nan
+    step: float | int | np.datetime64 = np.nan
     length: int
     dtype = np.floating
     _rich_style = dascore_styles["coord_non"]
     _non_coord = True
+
+    @field_validator("start", "stop", "step", mode="before")
+    @classmethod
+    def _validate_nullish_to_nan(cls, value):
+        """Ensure nullish values are actually set as NaN"""
+        if pd.isnull(value):
+            return np.nan
+        return value
 
     def _raise_non_coord_error(self, name):
         """Raises a coord error for things NonCoord doesn't support."""
@@ -866,10 +878,10 @@ class NonCoord(BaseCoord):
 
     def _max(self):
         """Dummy funct to do nothing but raise."""
-        return np.nan
+        return self.stop
 
     def _min(self):
-        return np.nan
+        return self.start
 
     def convert_units(self, unit) -> Self:
         """No possible units, raise Error."""
@@ -1352,11 +1364,6 @@ class CoordArray(BaseCoord):
         """Return the shape of the coordinate."""
         return np.shape(self.values)
 
-    # def __eq__(self, other):
-    #     # Frustratingly, all cose doesn't work with datetime64 so we we need
-    #     # this short-circuiting equality check.
-    #     if values_same and self_d == other_d and values_same:
-
 
 class CoordMonotonicArray(CoordArray):
     """A coordinate with strictly increasing or decreasing values."""
@@ -1586,7 +1593,7 @@ def get_coord(
     # data array was passed; see if it is monotonic/evenly sampled
     if data is not None:
         if isinstance(data, (int | np.integer)):
-            return NonCoord(length=data)
+            return NonCoord(length=data, start=start, stop=stop, step=step, units=units)
         if not isinstance(data, np.ndarray | BaseCoord):
             data = array(data)
         # values = np.array(values)  # ensure we have a numpy array
@@ -1608,6 +1615,10 @@ def get_coord(
             return out.change_length(len(data))
         elif monotonic:
             return CoordMonotonicArray(values=data, units=units)
+        elif np.all(pd.isnull(data)):
+            return NonCoord(
+                length=len(data), units=units, start=start, stop=stop, step=step
+            )
         return CoordArray(values=data, units=units)
     else:
         return CoordRange(start=start, stop=stop, step=step, units=units)
