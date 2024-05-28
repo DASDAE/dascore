@@ -1137,6 +1137,24 @@ class TestCoordRange:
         time_coord = get_coord(data=time)
         assert len(time) == len(time_coord)
 
+    def test_length_with_stop(self):
+        """The length argument should work for setting start."""
+        out1 = CoordRange(start=0, step=1, stop=10)
+        out2 = CoordRange(start=0, step=1, length=10)
+        assert out1 == out2
+
+    def test_length_with_start(self):
+        """The length argument should work for setting stop."""
+        out1 = CoordRange(start=0, step=1, stop=10)
+        out2 = CoordRange(stop=10, step=1, length=10)
+        assert out1 == out2
+
+    def test_length_with_step(self):
+        """The length argument should work for setting step."""
+        out1 = CoordRange(start=0, step=1, stop=10)
+        out2 = CoordRange(start=0, stop=10, length=10)
+        assert out1 == out2
+
 
 class TestMonotonicCoord:
     """Tests for monotonic array coords."""

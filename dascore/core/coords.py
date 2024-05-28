@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 import numpy as np
 import pandas as pd
 from pydantic import (
+    ValidationError,
     field_validator,
     model_serializer,
     model_validator,
@@ -209,6 +210,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     units: UnitQuantity = None
     step: Any = None
+    length: int | None = None
 
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False
@@ -852,7 +854,6 @@ class NonCoord(BaseCoord):
     start: float | int | np.datetime64 = np.nan
     stop: float | int | np.datetime64 = np.nan
     step: float | int | np.datetime64 = np.nan
-    length: int
     dtype = np.floating
     _rich_style = dascore_styles["coord_non"]
     _non_coord = True
@@ -1017,32 +1018,40 @@ class CoordRange(BaseCoord):
 
     @model_validator(mode="before")
     @classmethod
-    def ensure_all_attrs_set(cls, values):
-        """If any info is neglected the coord is invalid."""
-        for name in ["start", "stop", "step"]:
-            assert values[name] is not None
+    def validate_start_stop_step_len(cls, values):
+        """Coherce the needed values from the inputs."""
+        req_values = ("start", "stop", "step", "length")
+        _attrs = [values.get(x, None) for x in req_values]
+        valid_count = sum(not pd.isnull(x) for x in _attrs)
+        if valid_count < 3:
+            msg = (
+                f"Three of {req_values} are to create CoordRange. "
+                f"You passed {values}"
+            )
+            raise ValidationError(msg)
+        # Now get start, stop, step from length, if provided.
+        start, stop, step, length = _attrs
+        if not pd.isnull(length):
+            if pd.isnull(start):
+                start = stop - step * length
+            if pd.isnull(stop):
+                stop = start + step * length
+            if pd.isnull(step):
+                step = (stop - start) / length
+        else:  # Or calculate Length
+            if step != 0:
+                int_val = int(np.ceil(np.round((stop - start) / step, 1)))
+                stop = start + step * int_val
+            length = 1 if start == step else int(np.round((stop - start) / step))
+        values.update(dict(start=start, stop=stop, length=length, step=step))
         # step should have the same sign as stop-start, see #321.
-        diff = values["stop"] - values["start"]
+        diff = stop - start
         # note: we need to the to_float since np.sign(datetime64) returns a
         # datetime64 which includes precision, so even if the sign is the same
         # if the precision is different this validation fails.
         if not np.sign(to_float(values["step"])) == np.sign(to_float(diff)):
             msg = "Sign of step must match sign of stop - start"
             raise CoordError(msg)
-        return values
-
-    @model_validator(mode="before")
-    @classmethod
-    def _set_stop(cls, values):
-        """Set stop to integral value >= current stop."""
-        start, stop = values.get("start"), values.get("stop")
-        step = values.get("step")
-        assert all(x is not None for x in [start, stop, step])
-        dur = stop - start
-        if step == 0:
-            return values
-        int_val = int(np.ceil(np.round(dur / step, 1)))
-        values["stop"] = start + step * int_val
         return values
 
     def __getitem__(self, item):
@@ -1061,12 +1070,7 @@ class CoordRange(BaseCoord):
 
     @cached_method
     def __len__(self):
-        if self.start == self.stop:
-            return 1
-        out = abs((self.stop - self.start) / self.step)
-        # due to floating point weirdness this can sometimes be very close
-        # but not exactly an int, so we need to round.
-        return int(np.round(out))
+        return self.length
 
     def convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
@@ -1577,7 +1581,7 @@ def get_coord(
         return None, None, None, is_monotonic
 
     if length is not None:
-        return NonCoord(length=length)
+        return NonCoord(length=length, start=start, stop=stop, step=step, units=units)
     # ensure data and values are not used
     if data is not None and values is not None:
         msg = "Cannot specify both data and values. Use only data."
