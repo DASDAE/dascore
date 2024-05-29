@@ -235,7 +235,7 @@ class TestRoundTrips:
 
     def test_roundtrip_nullish_datetime_coord(self, tmp_path_factory, random_patch):
         """Ensure a patch with an attached datetime coord with nulls works."""
-        path = tmp_path_factory.mktemp("roundtrip_datetme_coord") / "out.h5"
+        path = tmp_path_factory.mktemp("roundtrip_datetime_coord") / "out.h5"
         dist = random_patch.get_coord("distance")
         dt = dc.to_datetime64(np.zeros_like(dist))
         dt[~dt.astype(bool)] = np.datetime64("nat")
@@ -245,3 +245,18 @@ class TestRoundTrips:
         new.io.write(path, "dasdae")
         patch = dc.spool(path, file_format="DASDAE")[0]
         assert isinstance(patch, dc.Patch)
+
+    # Frustratingly, it doesn't seem pytables can store NaN values using
+    # create_array, even when specifying an Atom with dflt=np.nan. See
+    # https://github.com/PyTables/PyTables/issues/423
+    @pytest.mark.xfail(reason="Pytables issue 423")
+    def test_roundtrip_len_1_non_coord(self, random_spool, tmp_path_factory):
+        """Ensure we can round-trip Non-coords."""
+        path = tmp_path_factory.mktemp("roundtrip_non_coord") / "out.h5"
+        # create a spool that has all non coords
+        spool = dc.spool([x.mean("time") for x in random_spool])
+        in_patch = spool[0]
+        in_patch.io.write(path, "dasdae")
+        new_spool = dc.spool(path, file_format="DASDAE")
+        out_patch = new_spool[0]
+        assert in_patch == out_patch

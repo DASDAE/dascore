@@ -175,6 +175,23 @@ def all_close(ar1, ar2):
         return np.all(ar1 == ar2)
 
 
+def _all_null(maybe_ar):
+    """Return True if values is nullish, or all sub-values nullish if sequence."""
+    out = pd.isnull(maybe_ar)
+    if hasattr(out, "all"):
+        out = out.all()
+    return out
+
+
+def _get_nullish(dtype=np.floating):
+    """Get nullish values for a given dtype."""
+    if np.issubdtype(dtype, np.datetime64):
+        return np.datetime64("NaT")
+    elif np.issubdtype(dtype, np.timedelta64):
+        return np.timedelta64("NaT")
+    return np.nan
+
+
 def iter_files(
     paths: str | Iterable[str],
     ext: str | None = None,

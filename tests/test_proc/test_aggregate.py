@@ -32,6 +32,13 @@ class TestBasicAggregations:
         out = random_patch.aggregate(method="mean")
         assert np.all(out.data == np.mean(random_patch.data, keepdims=True))
 
+    def test_dtype_of_coord_unchanged(self, random_patch):
+        """The dtype of the coord should not change."""
+        out = random_patch.aggregate(dim="time", method="median")
+        coord_new = out.get_coord("time")
+        coord_old = random_patch.get_coord("time")
+        assert coord_old.dtype == coord_new.dtype
+
     @pytest.mark.parametrize("method", list(_AGG_FUNCS))
     def test_named_aggregations(self, random_patch, method):
         """Simply run the named aggregations."""

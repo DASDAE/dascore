@@ -378,6 +378,35 @@ class TestConcatenate:
         coord = patch.get_coord("time")
         assert len(coord) == 10
 
+    def test_concat_different_sizes(self, random_patch):
+        """Ensure coordinates with different sizes (along concat axis) work."""
+        p1 = random_patch.select(time=(0, 10), samples=True)
+        p2 = random_patch.select(time=(15, 20), samples=True)
+        out = concatenate_patches([p1, p2], time=None)
+        assert len(out) == 1
+        patch = out[0]
+        new_time = patch.get_array("time")
+        old_times = np.concatenate([p1.get_array("time"), p2.get_array("time")])
+        assert np.all(new_time == old_times)
+
+    def test_concatenate_normal_with_non_dim(self, spool_with_non_coords):
+        """Ensure normal and non-dim patches can be concatenated together."""
+        old_arrays = [x.get_array("time") for x in spool_with_non_coords]
+        old_array = np.concatenate(old_arrays)
+        out = spool_with_non_coords.concatenate(time=None)
+        assert len(out) == 1
+        patch = out[0]
+        new_array = patch.get_array("time")
+        # The coordinates should be the same length
+        assert sum([len(x) for x in old_arrays]) == len(new_array)
+        # The array values should either both be NaN or nearly equal
+        both_nan = pd.isnull(old_array) & pd.isnull(new_array)
+        try:
+            nearly_eq = np.isclose(old_array, new_array)
+        except TypeError:
+            nearly_eq = old_array == new_array
+        assert np.all(both_nan | nearly_eq)
+
 
 class TestStackPatches:
     """Tests for stacking (adding) spool content."""

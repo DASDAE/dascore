@@ -15,11 +15,10 @@ from pydantic import ValidationError
 import dascore as dc
 from dascore.core.coords import (
     BaseCoord,
-    CoordDegenerate,
     CoordMonotonicArray,
+    CoordPartial,
     CoordRange,
     CoordSummary,
-    NonCoord,
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
@@ -463,22 +462,6 @@ class TestGetSliceTuple:
         assert out_sli == (None, None) or out_sli == (0, len(coord))
 
 
-class TestNDCoords:
-    """Tests for multidimensional coordinates."""
-
-    def test_empty(self, two_d_coord):
-        """Ensure 2D coordinate can be emptied out."""
-        out = two_d_coord.empty()
-        assert out.degenerate
-        assert tuple([0] * 2) == out.shape
-
-    def test_empty_axis(self, two_d_coord):
-        """Ensure 2D coordinate can be emptied out."""
-        out = two_d_coord.empty(axes=1)
-        assert out.degenerate
-        assert (out.shape[0], 0) == out.shape
-
-
 class TestSelect:
     """Generic tests for selecting values from coords."""
 
@@ -498,7 +481,7 @@ class TestSelect:
         arg = values[0] + (values[1] - values[0]) / 2
         assert arg not in np.unique(values)
         out, indexer = coord.select((arg, arg))
-        assert isinstance(out, CoordDegenerate)
+        assert out.degenerate
         assert np.size(coord.data[indexer]) == 0
 
     def test_select_start_start_time(self, coord):
@@ -1072,7 +1055,7 @@ class TestCoordRange:
     def test_empty(self, coord):
         """Ensure coords can be emptied out."""
         new = coord.empty()
-        assert isinstance(new, CoordDegenerate)
+        assert new.degenerate
         assert new.dtype == coord.dtype
 
     def test_init_length_one(self):
@@ -1353,17 +1336,9 @@ class TestDegenerateCoords:
         ]
         for ar in arrays:
             out = get_coord(data=ar)
-            assert isinstance(out, CoordDegenerate)
+            assert out.degenerate
             assert out.dtype == ar.dtype
             assert len(out) == 0
-
-    def test_select(self, degenerate_time_coord):
-        """Selecting should simply return the same degenerate."""
-        coord = degenerate_time_coord
-        assert coord.select((10, 100))[0] == coord
-        assert coord.select((None, 100))[0] == coord
-        assert coord.select((10, None))[0] == coord
-        assert coord.select((None, None))[0] == coord
 
     def test_empty(self, degenerate_time_coord):
         """Ensure empty just returns self."""
@@ -1395,7 +1370,7 @@ class TestNonCoord:
 
     def test_init_non_coord(self, basic_non_coord):
         """Ensure a non-coord can be created."""
-        assert isinstance(basic_non_coord, NonCoord)
+        assert isinstance(basic_non_coord, CoordPartial)
 
     def test_str_repr(self, basic_non_coord):
         """Ensure NonCoord has a string repr."""
@@ -1406,8 +1381,16 @@ class TestNonCoord:
         """Ensure update returns a new non coord."""
         out = basic_non_coord.update(length=2)
         assert len(out) == 2
-        assert isinstance(out, NonCoord)
-        assert basic_non_coord.update() == basic_non_coord
+        assert isinstance(out, CoordPartial)
+
+    def test_non_coord_eq_self(self, basic_non_coord):
+        """Ensure non coords are equal to themselves."""
+        assert basic_non_coord == basic_non_coord
+
+    def test_empty_update_equal(self, basic_non_coord):
+        """Empty update should produce an equal coord."""
+        out = basic_non_coord.update()
+        assert out == basic_non_coord
 
     def test_bad_select_raises(self, basic_non_coord):
         """If relative or not samples NonCoord raises."""
@@ -1432,22 +1415,19 @@ class TestNonCoord:
         assert isinstance(out, basic_non_coord.__class__)
         assert len(out) == len(ar)
 
-    def test_update_limits_raises(self, basic_non_coord):
-        """Ensure unsupported update_limits method raises."""
-        match = "NonCoord does not support"
-        with pytest.raises(CoordError, match=match):
-            basic_non_coord.update_limits()
+    def test_nan_float_dtype(self):
+        """Ensure data are NaN and float dtype."""
+        default = get_coord(length=10)
+        data = default.data
+        assert np.all(pd.isnull(data))
+        assert np.issubdtype(data.dtype, np.floating)
 
-    def test_convert_units_raises(self, basic_non_coord):
-        """Ensure unsupported update_limits method raises."""
-        match = "NonCoord does not support"
-        with pytest.raises(CoordError, match=match):
-            basic_non_coord.convert_units("m")
-
-    def test_values_raises(self, basic_non_coord):
-        """Ensure values property raises."""
-        with pytest.raises(CoordError, match="NonCoord has no values"):
-            _ = basic_non_coord.values
+    def test_nat_datetime_dtype(self):
+        """Ensure data are Nat and datetime dtype."""
+        coord = get_coord(length=10, dtype="datetime64[us]")
+        data = coord.data
+        assert np.all(pd.isnull(data))
+        assert np.issubdtype(data.dtype, np.datetime64)
 
     def test_bad_order_params_raise(self, basic_non_coord):
         """Ensure non coordinates cannot be ordered by value."""
@@ -1490,17 +1470,36 @@ class TestNonCoord:
         """An array of NaN should return uncoord."""
         array = np.empty(10) * np.nan
         out = get_coord(data=array)
-        assert isinstance(out, NonCoord)
+        assert isinstance(out, CoordPartial)
 
     def test_start_stop(self):
         """Ensure start/stop/step are maintained in NonCoords."""
         coord = get_coord(length=10, step=1)
-        assert isinstance(coord, NonCoord)
+        assert isinstance(coord, CoordPartial)
         assert coord.step == 1
         # Test start/stop
         coord = get_coord(start=10, length=10)
         assert coord.start == 10
         assert len(coord) == 10
+
+    def test_length_zero(self):
+        """Ensure length 0 non coord is possible."""
+        coord = get_coord(length=0)
+        assert coord.degenerate
+
+    def test_uptype_with_data(self):
+        """Ensure adding a data array converts to Coord Array."""
+        coord = get_coord(length=10)
+        data = np.random.rand(10)
+        out = coord.update(data=data)
+        assert np.all(out.data == data)
+
+    def test_uptype_with_step(self):
+        """Ensure adding a step to existing length/start creates CoordRange."""
+        partial = get_coord(length=10, start=0)
+        expected = get_coord(start=0, stop=10, step=1)
+        out = partial.update(step=1)
+        assert out == expected
 
 
 class TestCoercion:
@@ -1658,6 +1657,13 @@ class TestGetNextIndex:
 class TestUpdate:
     """Tests for updating coordinates."""
 
+    def test_update_changes_length(self, evenly_sampled_coord):
+        """Ensure the length can be changed."""
+        coord = evenly_sampled_coord
+        start, stop, step = coord.start, coord.stop, coord.step
+        new = coord.update(start=start, stop=stop + step * 10)
+        assert len(new) == (len(coord) + 10)
+
     def test_update_data(self, coord):
         """Test updating data in the coordinate."""
         if coord.degenerate:
@@ -1729,7 +1735,7 @@ class TestAlignTo:
 
 
 class TestChangeLength:
-    """Tests for chaning length of coordinate."""
+    """Tests for changing length of coordinate."""
 
     def test_change_length_no_change(self, evenly_sampled_coord):
         """Ensure change_length works when no length change is needed."""

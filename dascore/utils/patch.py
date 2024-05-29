@@ -42,7 +42,7 @@ from dascore.utils.misc import (
     warn_or_raise,
     yield_sub_sequences,
 )
-from dascore.utils.time import to_float
+from dascore.utils.time import to_datetime64, to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
 
@@ -398,7 +398,7 @@ def get_default_patch_name(patch):
 
     def _format_datetime64(dt):
         """Format the datetime string in a sensible way."""
-        out = str(np.datetime64(dt).astype("datetime64[ns]"))
+        out = str(to_datetime64(dt))
         return out.replace(":", "_").replace("-", "_").replace(".", "_")
 
     attrs = patch.attrs
@@ -625,7 +625,11 @@ def check_dims(
 
 
 def check_coords(
-    patch1, patch2, check_behavior: WARN_LEVELS = "raise", dim_to_ignore=None
+    patch1,
+    patch2,
+    check_behavior: WARN_LEVELS = "raise",
+    dim_to_ignore=None,
+    ignore_dim_eq_shape=True,
 ) -> bool:
     """
     Return True if the coordinates of two patches are compatible, else False.
@@ -643,6 +647,9 @@ def check_coords(
         None by default (all coordinates must be identical).
         String specifying a dimension that differences in values,
         but not shape, are allowed.
+    ignore_dim_eq_shape
+        If True, the ignored dims must be equal shape to pass check.
+        If dim_to_ignore is None this has no effect.
     """
     cm1 = patch1.coords
     cm2 = patch2.coords
@@ -660,7 +667,7 @@ def check_coords(
             # check whether shape is the same.
             if coord1.shape == coord2.shape:
                 continue
-            else:
+            elif ignore_dim_eq_shape:
                 not_equal_coords.append(coord)
         else:
             not_equal_coords.append(coord)
@@ -685,9 +692,9 @@ def _merge_aligned_coords(cm1, cm2):
         if coord1.approx_equal(coord2):
             out[name] = coord1
         # Deal with Non coords
-        non_count = sum([coord1._non_coord, coord2._non_coord])
+        non_count = sum([coord1._partial, coord2._partial])
         if non_count == 1:
-            out[name] = coord1 if coord2._non_coord else coord2
+            out[name] = coord1 if coord2._partial else coord2
         elif non_count == 2:
             out[name] = coord1 if coord1.size > coord2.size else coord2
         assert name in out
@@ -881,7 +888,13 @@ def concatenate_patches(
         # Get patches compatible with first.
         for p in patches:
             dims_ok = check_dims(first_patch, p, check_behavior)
-            coords_ok = check_coords(first_patch, p, check_behavior, dim)
+            coords_ok = check_coords(
+                patch1=first_patch,
+                patch2=p,
+                check_behavior=check_behavior,
+                dim_to_ignore=dim,
+                ignore_dim_eq_shape=False,
+            )
             if dims_ok and coords_ok:
                 compat_patches.append(p)
         return compat_patches, dims, new_dim
@@ -898,16 +911,9 @@ def concatenate_patches(
         if new_dim:
             coords = coords.update(**{dim: (dim, len(patch_list))})
         else:
-            coord_list = [x.get_coord(dim) for x in patch_list]
-            is_non_coord = [x._non_coord for x in coord_list]
-            if any(is_non_coord):  # Any Null coord
-                coord_lens = [len(x) for x in coord_list]
-                new_coord = dc.get_coord(length=sum(coord_lens))
-                coords = coords.update(**{dim: new_coord})
-            else:
-                array_list = [x.get_array(dim) for x in patch_list]
-                array = np.concatenate(array_list, axis=0)
-                coords = coords.update(**{dim: array})
+            array_list = [x.get_array(dim) for x in patch_list]
+            array = np.concatenate(array_list, axis=0)
+            coords = coords.update(**{dim: array})
         return coords
 
     dim, val = _get_dim_and_value(kwargs)

@@ -143,7 +143,7 @@ def patch_to_xarray(patch: PatchType):
     patch_dims = patch.dims
     coords = {}
     for name, coord in patch.coords.coord_map.items():
-        if coord._non_coord:
+        if coord._partial:
             continue
         dims = patch.coords.dim_map[name]
         coords[name] = (dims, coord.values)

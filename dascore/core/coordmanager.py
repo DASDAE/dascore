@@ -665,7 +665,7 @@ class CoordManager(DascoreBaseModel):
             name = dims[ind]
             coord = self.get_coord(name)
             # We can just scale up the coord
-            if coord._non_coord or drop_coords:
+            if coord._partial or drop_coords:
                 new_coords[name] = get_coord(length=max(current, new))
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."

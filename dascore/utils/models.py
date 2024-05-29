@@ -13,11 +13,7 @@ from typing_extensions import Self
 from dascore.compat import array, is_array
 from dascore.units import Quantity, get_quantity, get_quantity_str
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import (
-    all_close,
-    to_str,
-    unbyte,
-)
+from dascore.utils.misc import _all_null, all_close, to_str, unbyte
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- A list of custom types with appropriate serialization/deserialization
@@ -83,7 +79,7 @@ def sensible_model_equals(
             if not all_close(val1, val2):
                 return False
         else:
-            if val1 != val2 and not (pd.isnull(val1) and pd.isnull(val2)):
+            if val1 != val2 and not (_all_null(val1) and _all_null(val2)):
                 return False
     return True
 
@@ -105,8 +101,7 @@ class DascoreBaseModel(BaseModel):
     def new(self, **kwargs) -> Self:
         """Create new instance with some attributed updated."""
         out = dict(self)
-        for item, value in kwargs.items():
-            out[item] = value
+        out.update(kwargs)
         return self.__class__(**out)
 
     @classmethod

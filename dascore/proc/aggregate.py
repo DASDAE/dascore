@@ -83,9 +83,12 @@ def aggregate(
     # iterate all
     for current_dim in iterate(patch.dims if dim is None else dim):
         axis = patch.dims.index(current_dim)
+        new_coord = patch.get_coord(current_dim).update(
+            length=1, start=None, stop=None, data=None
+        )
         # Use expand dims
         data = np.expand_dims(func(data, axis=axis), axis)
-        coords = patch.coords.update(**{current_dim: 1})
+        coords = patch.coords.update(**{current_dim: new_coord})
         patch = patch.new(data=data, coords=coords)
     return patch
 

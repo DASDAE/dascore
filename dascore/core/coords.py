@@ -32,6 +32,7 @@ from dascore.units import (
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
+    _get_nullish,
     _maybe_array_to_slice,
     _to_slice,
     all_close,
@@ -43,7 +44,6 @@ from dascore.utils.misc import (
 from dascore.utils.models import (
     ArrayLike,
     DascoreBaseModel,
-    DTypeLike,
     UnitQuantity,
 )
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
@@ -163,18 +163,6 @@ def _get_coord_filter_validators(dtype):
     return tuple(out)
 
 
-def _get_nullish_for_type(dtype):
-    """Returns an appropriate null value for a given numpy type."""
-    if np.issubdtype(dtype, np.datetime64):
-        return np.datetime64("NaT")
-    if np.issubdtype(dtype, np.timedelta64):
-        return np.timedelta64("NaT")
-    # everything else should be a NaN (which is a float). This is
-    # a bit of a problem for ints, which have no null rep., but upcasting
-    # to float will probably cause less damage then using None
-    return np.NaN
-
-
 def get_compatible_values(val, dtype):
     """
     Get values compatible with dtype.
@@ -211,12 +199,13 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     units: UnitQuantity = None
     step: Any = None
     length: int | None = None
+    dtype: Any = None
 
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False
     _sorted = False
     _reverse_sorted = False
-    _non_coord = False
+    _partial = False
 
     @model_validator(mode="before")
     @classmethod
@@ -381,7 +370,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if self == other:
             return self, other, slice(None), slice(None)
         assert self.ndim == 1, "can only align 1D arrays."
-        if isinstance(self, NonCoord) or isinstance(other, NonCoord):
+        if isinstance(self, CoordPartial) or isinstance(other, CoordPartial):
             valid_non_coord(self, other)
             return self, other, slice(None), slice(None)
         data1, data2 = self.data, other.data
@@ -448,11 +437,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Return a unit string."""
         return get_quantity_str(self.units)
 
-    @property
-    def degenerate(self):
-        """Returns true if coord is degenerate (empty)."""
-        return not bool(len(self))
-
     @abc.abstractmethod
     def _min(self):
         """Returns (or generates) the array data."""
@@ -466,11 +450,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def limits(self) -> tuple[Any, Any]:
         """Returns a numpy datatype."""
         return self.min(), self.max()
-
-    @property
-    @abc.abstractmethod
-    def dtype(self) -> DTypeLike:
-        """Returns a numpy datatype."""
 
     @property
     @cached_method
@@ -503,6 +482,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def reverse_sorted(self) -> tuple[int, ...]:
         """Returns True if the coord in sorted in reverse order."""
         return self._reverse_sorted
+
+    @property
+    def degenerate(self) -> bool:
+        """Return True of the coord is degenerate."""
+        shape = self.shape
+        return not len(shape) or np.prod(shape) == 0
 
     def set_units(self, units) -> Self:
         """Set new units on coordinates."""
@@ -581,6 +566,19 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         data = values if data is None else data
         units = kwargs.get("units")
         return get_coord(data=data, units=units)
+
+    def new(self, **kwargs):
+        """Update coordinate."""
+        info = self.model_dump(exclude_unset=True, exclude_defaults=True)
+        # Need to only pass "values" rather than data to update
+        if "data" in kwargs:
+            kwargs["values"] = kwargs.pop("data")
+        # Need to ensure new data is used in constructor, not old length
+        if "values" in kwargs:
+            info.pop("length", None)
+
+        info.update(kwargs)
+        return get_coord(**info)
 
     @property
     def data(self):
@@ -713,13 +711,15 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def update(self, **kwargs):
         """Update parts of the coordinate."""
+        out = self
         info = self.model_dump()
         update_fields = {
             i: v for i, v in kwargs.items() if not all_close(v, info.get(i))
         }
         units = update_fields.pop("units", None)
         _ = update_fields.pop("dtype", None)
-        out = self.update_limits(**update_fields).update_data(**update_fields)
+        if update_fields:
+            out = out.update_limits(**update_fields).update_data(**update_fields)
         if units is not None:
             out = out.convert_units(units)
         return out
@@ -821,7 +821,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         if self.shape != other.shape:
             return False
-        non_coords = [self._non_coord, other._non_coord]
+        non_coords = [self._partial, other._partial]
         if all(non_coords):
             return self == other
         if any(non_coords):
@@ -846,30 +846,24 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         raise NotImplementedError(msg)
 
 
-class NonCoord(BaseCoord):
+class CoordPartial(BaseCoord):
     """
-    A Coordinate representing not a coordinate.
+    A coordinate which only contains partial information.
     """
 
     start: float | int | np.datetime64 = np.nan
     stop: float | int | np.datetime64 = np.nan
     step: float | int | np.datetime64 = np.nan
-    dtype = np.floating
     _rich_style = dascore_styles["coord_non"]
-    _non_coord = True
+    _partial = True
 
     @field_validator("start", "stop", "step", mode="before")
     @classmethod
-    def _validate_nullish_to_nan(cls, value):
+    def _validate_nullish_to_nan(cls, value, info):
         """Ensure nullish values are actually set as NaN"""
         if pd.isnull(value):
             return np.nan
         return value
-
-    def _raise_non_coord_error(self, name):
-        """Raises a coord error for things NonCoord doesn't support."""
-        msg = f"NonCoord does not support {name}"
-        raise CoordError(msg)
 
     def __getitem__(self, item):
         # We init a temporary array just to get numpy to do the
@@ -884,35 +878,34 @@ class NonCoord(BaseCoord):
     def _min(self):
         return self.start
 
-    def convert_units(self, unit) -> Self:
-        """No possible units, raise Error."""
-        self._raise_non_coord_error("convert_units")
+    def update(self, **kwargs):
+        """No values to change so update can just call new."""
+        return self.new(**kwargs)
 
-    set_units = convert_units
-
-    def update_limits(self, min=None, max=None, step=None, **kwargs):
-        """No possible units, raises Error."""
-        self._raise_non_coord_error("update_limits")
+    # Other operations that normally modify data do not in this case.
+    update_limits = update
+    set_units = update
+    convert_units = update
 
     def sort(self, reverse=False):
         """Sort dummy array. Does nothing."""
         return self, slice(None, None)
 
     def __rich__(self):
+        contents = self.model_dump(exclude_defaults=True)
         key_style = dascore_styles["keys"]
         base = Text("")
-        base += Text(self.__class__.__name__, style=self._rich_style)
+        base += Text(" NonCoord ", style=self._rich_style)
         base += Text("(")
+        for key, val in contents.items():
+            # We don't need to display length since shape is shown or unset vals.
+            if pd.isnull(val) or key == "length":
+                continue
+            base += Text(f" {key}: {get_nice_text(val)} ")
         base += Text(" shape: ", key_style)
         base += get_nice_text(self.shape)
         base += Text(" )")
         return base
-
-    @property
-    @cached_method
-    def dtype(self):
-        """Returns datatype."""
-        return None
 
     @property
     @cached_method
@@ -926,7 +919,9 @@ class NonCoord(BaseCoord):
     @property
     def values(self):
         """Return the internal data. Same as values attribute."""
-        raise CoordError("NonCoord has no values")
+        null_val = np.asarray(_get_nullish(self.dtype))
+        data = np.broadcast_to(null_val, self.shape)
+        return data
 
     def _check_order_and_select(self, relative, samples):
         """Check that samples is True and relative false else raise msg."""
@@ -968,11 +963,6 @@ class NonCoord(BaseCoord):
         """
         self._check_order_and_select(relative, samples)
         return super().order(array, relative=relative, samples=samples)
-
-    def update(self, length=None, **kwargs):
-        """Update coordinate."""
-        length = self.length if length is None else length
-        return self.__class__(length=length)
 
     @compose_docstring(doc=BaseCoord.change_length.__doc__)
     def change_length(self, length: int) -> Self:
@@ -1019,16 +1009,16 @@ class CoordRange(BaseCoord):
     @model_validator(mode="before")
     @classmethod
     def validate_start_stop_step_len(cls, values):
-        """Coherce the needed values from the inputs."""
+        """Coerce the needed values from the inputs."""
         req_values = ("start", "stop", "step", "length")
         _attrs = [values.get(x, None) for x in req_values]
         valid_count = sum(not pd.isnull(x) for x in _attrs)
         if valid_count < 3:
             msg = (
-                f"Three of {req_values} are to create CoordRange. "
+                f"Three of {req_values} are required to create CoordRange. "
                 f"You passed {values}"
             )
-            raise ValidationError(msg)
+            raise CoordError(msg)
         # Now get start, stop, step from length, if provided.
         start, stop, step, length = _attrs
         if not pd.isnull(length):
@@ -1038,11 +1028,10 @@ class CoordRange(BaseCoord):
                 stop = start + step * length
             if pd.isnull(step):
                 step = (stop - start) / length
-        else:  # Or calculate Length
-            if step != 0:
-                int_val = int(np.ceil(np.round((stop - start) / step, 1)))
-                stop = start + step * int_val
-            length = 1 if start == step else int(np.round((stop - start) / step))
+        if step != 0:
+            int_val = int(np.ceil(np.round((stop - start) / step, 1)))
+            stop = start + step * int_val
+        length = 1 if start == stop else int(np.round((stop - start) / step))
         values.update(dict(start=start, stop=stop, length=length, step=step))
         # step should have the same sign as stop-start, see #321.
         diff = stop - start
@@ -1052,6 +1041,9 @@ class CoordRange(BaseCoord):
         if not np.sign(to_float(values["step"])) == np.sign(to_float(diff)):
             msg = "Sign of step must match sign of stop - start"
             raise CoordError(msg)
+        # Note: dtype was a property before but it messed up model
+        # serialization.
+        values["dtype"] = np.asarray(start).dtype
         return values
 
     def __getitem__(self, item):
@@ -1218,15 +1210,6 @@ class CoordRange(BaseCoord):
         """Returns true if sorted in ascending order."""
         return self.step < 0
 
-    @property
-    @cached_method
-    def dtype(self):
-        """Returns datatype."""
-        # some types are weird so we create a small array here to let
-        # numpy determine its dtype. It should only be 1 element long
-        # so not expensive to do.
-        return np.arange(self.start, self.start + self.step, self.step).dtype
-
 
 class CoordArray(BaseCoord):
     """
@@ -1237,6 +1220,13 @@ class CoordArray(BaseCoord):
 
     values: ArrayLike
     _rich_style = dascore_styles["coord_array"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_start_stop_step_len(cls, values):
+        """Coerce the needed values from the inputs."""
+        values["dtype"] = values["values"].dtype
+        return values
 
     def convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
@@ -1344,23 +1334,11 @@ class CoordArray(BaseCoord):
 
     def _min(self):
         """Return min value."""
-        try:
-            return np.min(self.values)
-        except ValueError:  # degenerate data case
-            return _get_nullish_for_type(self.dtype)
+        return np.nanmin(self.values)
 
     def _max(self):
         """Return max value in range."""
-        try:
-            return np.max(self.values)
-        except ValueError:  # degenerate data case
-            return _get_nullish_for_type(self.dtype)
-
-    @property
-    @cached_method
-    def dtype(self):
-        """Returns datatype."""
-        return self.values.dtype
+        return np.nanmax(self.values)
 
     @property
     @cached_method
@@ -1443,33 +1421,6 @@ class CoordMonotonicArray(CoordArray):
         return self._step_meets_requirement(lt)
 
 
-class CoordDegenerate(CoordArray):
-    """A coordinate with degenerate (empty on one axis) data."""
-
-    values: ArrayLike
-    step: Any = None
-    _rich_style = dascore_styles["coord_degenerate"]
-
-    def select(
-        self, args, relative=False, samples=False
-    ) -> tuple[Self, slice | ArrayLike]:
-        """Select for Degenerate coords does nothing."""
-        return self, slice(None, None)
-
-    def empty(self, axes=None) -> Self:
-        """Empty simply returns self."""
-        return self
-
-    def snap(self, axes=None) -> Self:
-        """Empty simply returns self."""
-        return self
-
-    @property
-    def evenly_sampled(self):
-        """If the degenerate was evenly sampled."""
-        return self.step is not None
-
-
 def get_coord(
     *,
     data: ArrayLike | None | np.ndarray = None,
@@ -1510,9 +1461,7 @@ def get_coord(
         If an int, the output should be a NonCoord of this length. Otherwise,
         leave unset.
     dtype
-        Only used for compatibility with kwargs produced by other
-        functions. Doesn't do anything as dtype is inferred from other
-        arguments.
+        Data type for coord. Often can be inferred from other arguments.
 
     Notes
     -----
@@ -1580,8 +1529,14 @@ def get_coord(
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 
-    if length is not None:
-        return NonCoord(length=length, start=start, stop=stop, step=step, units=units)
+    if data is None and length is not None:
+        attrs = dict(
+            length=length, start=start, stop=stop, step=step, units=units, dtype=dtype
+        )
+        try:  # This could be a normal RangeCoord
+            return CoordRange(**attrs)
+        except (ValidationError, CoordError):  # If not it's a NonCoord
+            return CoordPartial(**attrs)
     # ensure data and values are not used
     if data is not None and values is not None:
         msg = "Cannot specify both data and values. Use only data."
@@ -1597,14 +1552,17 @@ def get_coord(
     # data array was passed; see if it is monotonic/evenly sampled
     if data is not None:
         if isinstance(data, (int | np.integer)):
-            return NonCoord(length=data, start=start, stop=stop, step=step, units=units)
-        if not isinstance(data, np.ndarray | BaseCoord):
-            data = array(data)
-        # values = np.array(values)  # ensure we have a numpy array
+            attrs = dict(
+                length=data, start=start, stop=stop, step=step, units=units, dtype=dtype
+            )
+            return CoordPartial(**attrs)
         if isinstance(data, BaseCoord):  # just return coordinate
             return data
+        if not isinstance(data, np.ndarray):
+            data = array(data)
         if np.size(data) == 0:
-            return CoordDegenerate(values=data, units=units, step=step)
+            dtype = dtype or data.dtype
+            return CoordPartial(length=0, units=units, step=step, dtype=dtype)
         # special case of len 1 array either get range, if step specified
         # or sorted monotonic array if not.
         elif len(data) == 1:
@@ -1620,8 +1578,13 @@ def get_coord(
         elif monotonic:
             return CoordMonotonicArray(values=data, units=units)
         elif np.all(pd.isnull(data)):
-            return NonCoord(
-                length=len(data), units=units, start=start, stop=stop, step=step
+            return CoordPartial(
+                length=len(data),
+                units=units,
+                start=start,
+                stop=stop,
+                step=step,
+                dtype=dtype,
             )
         return CoordArray(values=data, units=units)
     else:

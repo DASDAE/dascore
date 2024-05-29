@@ -114,7 +114,7 @@ def cm_with_units(cm_basic):
 
 
 @pytest.fixture(scope="class")
-@register_func(COORD_MANAGERS)
+# @register_func(COORD_MANAGERS)
 def cm_basic_degenerate(cm_basic):
     """A degenerate coord manager on time axis."""
     time_coord = cm_basic.coord_map["time"]
@@ -140,7 +140,7 @@ def cm_multidim() -> dc.CoordManager:
 @pytest.fixture(scope="class")
 @register_func(COORD_MANAGERS)
 def cm_degenerate_time(cm_multidim) -> dc.CoordManager:
-    """A coordinate manager with degenerate (length 1) time array."""
+    """A coordinate manager with len 1 time array."""
     new_time = dc.to_datetime64(["2017-09-18T01:00:01"])
     out = cm_multidim.update(time=new_time)
     return out
@@ -177,7 +177,7 @@ def cm_non_associated_coord(cm_basic):
 
 @pytest.fixture(scope="class")
 def cm_non_coord_dim():
-    """A cm with a dimension that has an UnCoord (no coordinate)."""
+    """A cm with a dimension that has a partial (no coordinate)."""
     coords = {"time": 10, "distance": np.arange(5)}
     dims = ("time", "distance")
     out = dc.get_coord_manager(coords=coords, dims=dims)
@@ -553,7 +553,7 @@ def memory_spool_small_dt_differences(random_spool):
 @pytest.fixture(scope="session")
 @register_func(SPOOL_FIXTURES)
 def spool_with_non_coords():
-    """Return a spool which has some non-coordinate spools inside."""
+    """Return a spool which has some non-coordinate patches inside."""
     patches = list(dc.examples.get_example_spool(length=3))
     patches += [x.mean("time") for x in patches]
     return dc.spool(patches)
