@@ -261,6 +261,20 @@ class TestChunkToMerge:
         durations = out["time_max"] - out["time_min"]
         assert expected_durations.equals(durations)
 
+    def test_modified_flag_after_merge(self, contiguous_df):
+        """Test that the modified flag shows False for simple merge."""
+        cm = ChunkManager(time=None)
+        # Need to remove overlapping sample so these really are contiguous
+        # with no overlaps.
+        contiguous_df = contiguous_df.assign(
+            time_max=lambda x: x['time_max'] - x['time_step']
+        )
+        source, current = cm.chunk(contiguous_df)
+        inst_df = cm.get_instruction_df(source, current)
+        assert len(current) == 1
+        assert current["time_min"].min() == contiguous_df["time_min"].min()
+        assert not inst_df["_modified"].any()
+
 
 class TestInstructionDF:
     """Sanity checks on intermediary df."""
@@ -296,3 +310,32 @@ class TestInstructionDF:
         used = in_df.loc[instruction.index]
         assert set(used["station"]) == set(in_df["station"])
         assert set(used["_group"]) == set(in_df["_group"])
+
+    def test_modified_flag_if_chunked(self, contiguous_df):
+        """Ensure the modified flag shows up for modified rows."""
+        df = contiguous_df
+        chunker = ChunkManager(
+            overlap=0,
+            time=5,
+            group_columns=("station",),
+            keep_partial=True,
+        )
+        in_df, out_df = chunker.chunk(df)
+        instruction = chunker.get_instruction_df(in_df, out_df)
+        assert instruction["_modified"].all()
+
+    def test_modified_flag_no_chunk(self, contiguous_df):
+        """Ensure the rows that don't change limits aren't modified."""
+        time_diff = contiguous_df["time_max"] - contiguous_df["time_min"]
+        df = contiguous_df.assign(time_max=lambda x: (x["time_max"] - x["time_step"]))
+        chunker = ChunkManager(
+            overlap=0,
+            time=time_diff.iloc[0],
+            group_columns=("station",),
+            keep_partial=True,
+        )
+        in_df, out_df = chunker.chunk(df)
+
+        assert (out_df[sorted(out_df.columns)]).equals(in_df[sorted(in_df.columns)])
+        instruction = chunker.get_instruction_df(in_df, out_df)
+        assert not instruction["_modified"].any()

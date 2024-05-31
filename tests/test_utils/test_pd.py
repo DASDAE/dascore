@@ -198,6 +198,16 @@ class TestAdjustSegments:
         assert np.all(new["time_min"] >= new_min)
         assert np.all(new["time_max"] <= new_max)
 
+    def test_modified_tracked(self, example_df_2):
+        """Ensure The modified flag gets added to start/end."""
+        df = example_df_2
+        new_min = df["time_min"].min() + np.timedelta64(1, "s")
+        new_max = df["time_max"].max() - np.timedelta64(1, "s")
+        new = adjust_segments(df, time=(new_min, new_max))
+        assert new.iloc[0]["_modified"]
+        assert new.iloc[-1]["_modified"]
+        assert not np.any(new.iloc[1:-1]["_modified"])
+
     def test_multiple_kwargs(self, adjacent_df):
         """Ensure multiple dimensions can be adjusted with one function call."""
         time = [
@@ -218,45 +228,46 @@ class TestAdjustSegments:
         with pytest.raises(ParameterError):
             _ = adjust_segments(df, distance=(100, 200))
 
-    class TestFillDefaultsFromPydantic:
-        """Tests for initing empty columns from pydanitc models."""
 
-        class Model(pydantic.BaseModel):
-            """Example basemodel."""
+class TestFillDefaultsFromPydantic:
+    """Tests for initing empty columns from pydanitc models."""
 
-            int_with_default: int = 10
-            str_with_default: str = "bob"
-            float_with_default: float = 10.0
-            float_no_default: float
+    class Model(pydantic.BaseModel):
+        """Example basemodel."""
 
-        @pytest.fixture(scope="class")
-        def simple_df(self):
-            """Create a simple df for testing."""
-            df = pd.DataFrame(index=range(10)).assign(
-                int_with_default=20,
-                str_with_default="bill",
-                float_with_default=22.2,
-                float_no_default=42.0,
-            )
-            return df
+        int_with_default: int = 10
+        str_with_default: str = "bob"
+        float_with_default: float = 10.0
+        float_no_default: float
 
-        def test_no_missing_does_nothing(self, simple_df):
-            """Ensure the default gets filled."""
-            out = fill_defaults_from_pydantic(simple_df, self.Model)
-            assert out.equals(simple_df)
+    @pytest.fixture(scope="class")
+    def simple_df(self):
+        """Create a simple df for testing."""
+        df = pd.DataFrame(index=range(10)).assign(
+            int_with_default=20,
+            str_with_default="bill",
+            float_with_default=22.2,
+            float_no_default=42.0,
+        )
+        return df
 
-        def test_missing_with_default_fills_default(self, simple_df):
-            """Ensure the default values are filled in when missing."""
-            df = simple_df.drop(columns="int_with_default")
-            out = fill_defaults_from_pydantic(df, self.Model)
-            assert "int_with_default" in out.columns
-            assert (out["int_with_default"] == 10).all()
+    def test_no_missing_does_nothing(self, simple_df):
+        """Ensure the default gets filled."""
+        out = fill_defaults_from_pydantic(simple_df, self.Model)
+        assert out.equals(simple_df)
 
-        def test_missing_with_no_default_raises(self, simple_df):
-            """Ensure Value error is raised if no default is there."""
-            df = simple_df.drop(columns="float_no_default")
-            with pytest.raises(ValueError, match="required value"):
-                fill_defaults_from_pydantic(df, self.Model)
+    def test_missing_with_default_fills_default(self, simple_df):
+        """Ensure the default values are filled in when missing."""
+        df = simple_df.drop(columns="int_with_default")
+        out = fill_defaults_from_pydantic(df, self.Model)
+        assert "int_with_default" in out.columns
+        assert (out["int_with_default"] == 10).all()
+
+    def test_missing_with_no_default_raises(self, simple_df):
+        """Ensure Value error is raised if no default is there."""
+        df = simple_df.drop(columns="float_no_default")
+        with pytest.raises(ValueError, match="required value"):
+            fill_defaults_from_pydantic(df, self.Model)
 
 
 class TestPatchToDF:

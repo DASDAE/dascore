@@ -13,6 +13,7 @@ from dascore.exceptions import ChunkError, CoordMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_middle_value
 from dascore.utils.pd import (
+    _instructions_modified,
     _remove_overlaps,
     get_column_names_from_dim,
     get_dim_names_from_columns,
@@ -233,7 +234,8 @@ class ChunkManager:
         # get dims to determine which columns are still compared. Some test
         # dfs don't have dims though, so it should still work without dims col.
         dims = set(df.iloc[0].get("dims", "").split(","))
-        for col in set(merger.columns):
+        # We exclude private columns for considering if merge can happen.
+        for col in set(x for x in merger.columns if not x.startswith("_")):
             prefix = col.split("_")[0]
             # If we have specified to ignore or remove conflicting attrs
             # we don't need to check them here, but we do still check dims.
@@ -324,7 +326,9 @@ class ChunkManager:
             if col in out.columns:
                 continue
             out[col] = sub_source[col].values[source_inds]
-        return out.sort_index()
+        out = out.sort_index()
+        out["_modified"] = _instructions_modified(out, sub_source)
+        return out
 
     def get_instruction_df(self, source_df, chunked_df):
         """
@@ -345,7 +349,7 @@ class ChunkManager:
         assert "_group" in source_df.columns and "_group" in chunked_df.columns
         chunked_groups = set(chunked_df["_group"])
         if not chunked_groups:
-            return pd.DataFrame(columns=source_df.columns)
+            return pd.DataFrame(columns=[*list(source_df.columns), "_modified"])
         # chunk groups should be a subset of source groups
         assert chunked_groups.issubset(set(source_df["_group"]))
         # iterate each group and create instruction df

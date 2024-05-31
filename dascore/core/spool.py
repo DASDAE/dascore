@@ -36,6 +36,7 @@ from dascore.utils.patch import (
     stack_patches,
 )
 from dascore.utils.pd import (
+    _column_or_value,
     _convert_min_max_in_kwargs,
     adjust_segments,
     filter_df,
@@ -411,17 +412,22 @@ class DataFrameSpool(BaseSpool):
             # convert kwargs to format understood by parser/patch.select
             kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
             patch = self._load_patch(kwargs)
-            # apply any trimming needed on patch
-            select_kwargs = {
-                i: v
-                for i, v in kwargs.items()
-                if i in patch.dims or i in patch.coords.coord_map
-            }
-            trimmed_patch: dc.Patch = patch.select(**select_kwargs)
+            # If the limits of the source patch were not modified, we can just
+            # use the select kwargs. This is important for missing coordinates
+            # (NaN values) to not get trimmed out.
+            if kwargs.get("_modified"):
+                select_kwargs = {
+                    i: v
+                    for i, v in kwargs.items()
+                    if i in patch.dims or i in patch.coords.coord_map
+                }
+            else:
+                select_kwargs = self._select_kwargs
+            patch: dc.Patch = patch.select(**select_kwargs)
             # its unfortunate, but currently we need to regenerate the patch
             # dict because the index doesn't carry all the dimensional info
-            info = trimmed_patch.attrs.flat_dump(exclude=["history"])
-            info["patch"] = trimmed_patch
+            info = patch.attrs.flat_dump(exclude=["history"])
+            info["patch"] = patch
             out.append(info)
         if len(out) > expected_len:
             out = _force_patch_merge(out, merge_kwargs=self._merge_kwargs)
@@ -438,8 +444,12 @@ class DataFrameSpool(BaseSpool):
         dims = get_dim_names_from_columns(source)
         cols2keep = get_column_names_from_dim(dims)
         instruction = (
-            current.copy()[cols2keep]
-            .assign(source_index=source.index, current_index=source.index)
+            current.copy(deep=False)[cols2keep]
+            .assign(
+                source_index=source.index,
+                current_index=source.index,
+                _modified=lambda x: _column_or_value(x, "_modified", False),
+            )
             .set_index("source_index")
             .sort_values("current_index")
         )
@@ -454,7 +464,7 @@ class DataFrameSpool(BaseSpool):
         return df.to_dict("records")
 
     @abc.abstractmethod
-    def _load_patch(self, kwargs) -> Self:
+    def _load_patch(self, kwargs) -> dc.Patch:
         """Given a row from the managed dataframe, return a patch."""
 
     @compose_docstring(doc=BaseSpool.chunk.__doc__)
@@ -519,6 +529,7 @@ class DataFrameSpool(BaseSpool):
             ignore_bad_kwargs=True,
             **kwargs,
         ).loc[lambda x: x["current_index"].isin(filtered_df.index)]
+        # Determine if the instructions are the same as the source dataframe.
         out = self.new_from_df(
             filtered_df,
             source_df=self._source_df,

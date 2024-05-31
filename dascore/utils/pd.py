@@ -260,6 +260,8 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     """
     # apply filtering, this creates a copy so we *should* be ok to update inplace.
     out = df[filter_df(df, ignore_bad_kwargs=ignore_bad_kwargs, **kwargs)]
+    # Track which rows have been modified
+    not_modified = ~_column_or_value(out, "_modified", False)
     # find slice kwargs, get series corresponding to interval columns
     for name, (val_min, val_max) in yield_range_tuple_from_kwargs(out, kwargs):
         start, stop, step = get_interval_columns(out, name)
@@ -269,7 +271,8 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
         too_large = stop > max_val
         out.loc[too_large, too_large.name] = max_val
         out.loc[too_small, too_small.name] = min_val
-    return out
+        not_modified &= ~(too_small.values | too_large.values)
+    return out.assign(_modified=~not_modified)
 
 
 def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.ndarray:
@@ -342,7 +345,7 @@ def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
     """
     Returns the names of columns which represent and range in the dataframe.
 
-    For example, time_min, time_max, d_time would be returned if in dataframe.
+    For example, time_min, time_max, time_step would be returned if in dataframe.
     """
     cols = set(df.columns)
     possible_dims = {
@@ -434,7 +437,37 @@ def _remove_overlaps(df, name):
     corrected_starts = _get_correct_starts(start, stop, df, step_name)
     # wrap around in roll gives wrong start value, correct it.
     corrected_starts[0] = start[0]
-    return df.assign(**{min_name: corrected_starts})
+    old_modified = _column_or_value(df, "_modified", False)
+    _modified = old_modified | (corrected_starts != start)
+    return df.assign(**{min_name: corrected_starts, "_modified": _modified})
+
+
+def _column_or_value(df, col, value):
+    """Return the values from a column, if they exist, else bool array of False."""
+    if col in df.columns:
+        return df[col].values
+    out = np.broadcast_to(np.array(value), len(df))
+    return out
+
+
+def _instructions_modified(instruct_df, sub_source):
+    """
+    Determine if the instruction df columns are the same as the source.
+
+    This is useful for determining which patches need select arguments.
+    """
+    # Get the source and desired output dfs broadcast together.
+    names = set(sub_source.columns) & set(instruct_df.columns)
+    source = sub_source.loc[instruct_df["source_index"].values]
+    # not_modified = np.ones(len(instruct_df), dtype=bool)
+    not_modified = ~_column_or_value(source, "_modified", False)
+    for name in names:
+        val1, val2 = source[name].values, instruct_df[name].values
+        eq = val1 == val2
+        null = pd.isnull(val1) & pd.isnull(val2)
+        not_modified &= eq | null
+    modified = ~not_modified
+    return modified
 
 
 def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
