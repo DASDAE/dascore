@@ -80,8 +80,8 @@ def read_xml_metadata(path):
 #        dims = ('time', 'distance')
 #        axes = [0,1]
 #     # Create coordinates, labels for each axis in the array
+#     # need to figure out time_start based on file name, not the start time from xml
 #     time_start = dc.to_datetime64(time_start)
-#     patch_index = to_timedelta64(patch_index) # need to figure out
 #     time_step = to_timedelta64(time_step)
 #     time = time_start + np.arange(data.shape[axes[0]]) * time_step
 
