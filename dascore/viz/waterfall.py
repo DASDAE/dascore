@@ -30,7 +30,7 @@ def _set_scale(im, scale, scale_type, patch):
     if scale_type == "relative":
         modifier = 0.5 * (np.nanmax(data) - np.nanmin(data))
         # only one scale parameter provided, center around mean
-    if isinstance(scale, float):
+    if isinstance(scale, float | int):
         mean = np.nanmean(patch.data)
         scale = np.array([mean - scale * modifier, mean + scale * modifier])
     im.set_clim(scale)
