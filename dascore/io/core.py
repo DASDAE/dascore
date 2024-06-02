@@ -7,15 +7,15 @@ from __future__ import annotations
 import inspect
 import os.path
 from collections import defaultdict
-from functools import cached_property, wraps, cache
+from collections.abc import Generator
+from functools import cache, cached_property, wraps
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Annotated, Literal, get_type_hints, Generator
+from typing import Annotated, Any, Literal, get_type_hints
 
 import numpy as np
 import pandas as pd
 from pydantic import ConfigDict, Field, model_validator
-from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import (
@@ -102,7 +102,8 @@ class _FiberIOManager:
         self._format_version = defaultdict(dict)
         self._extension_list = defaultdict(list)
         # This is a dict of {input_type: (fiberio_name, version)}
-        self._fiber_io_by_input_type = defaultdict(list)
+        self._fiber_io_by_input_type = defaultdict(set)
+        self._name_version_by_input_type = defaultdict(set)
         # The last used fiber Io for a specific input type.
         self._last_used = dict()
 
@@ -148,7 +149,8 @@ class _FiberIOManager:
                 second_class_formatters.extend(formatters[1:])
         maybe_ios = priority_formatters + second_class_formatters
         # Now filter to input_type
-        out = tuple(x for x in maybe_ios if x in self._fiber_io_by_input_type)
+        valid_fiberio_by_type = self._fiber_io_by_input_type[input_type]
+        out = tuple(x for x in maybe_ios if x in valid_fiberio_by_type)
         # And return fiberIOs that much the input type.
         return out
 
@@ -170,16 +172,19 @@ class _FiberIOManager:
     def register_fiberio(self, fiberio: FiberIO):
         """Register a new fiber IO to manage."""
         forma, ver = fiberio.name.upper(), fiberio.version
-
         self._loaded_eps.add(fiberio.name)
         for ext in iter(fiberio.preferred_extensions):
             self._extension_list[ext].append(fiberio)
         self._format_version[forma][ver] = fiberio
-        self._fiber_io_by_input_type[fiberio.input_type].append(fiberio)
+        self._fiber_io_by_input_type[fiberio.input_type].add(fiberio)
+        self._name_version_by_input_type[fiberio.input_type].add(
+            (fiberio.name, fiberio.version)
+        )
 
     @cached_method
     def get_fiberio(
         self,
+        obj: Any = None,
         format: str | None = None,
         version: str | None = None,
         extension: str | None = None,
@@ -191,6 +196,8 @@ class _FiberIOManager:
 
         Parameters
         ----------
+        obj
+            The object which will be tested; optional
         format
             The format string indicating the format name
         version
@@ -198,7 +205,9 @@ class _FiberIOManager:
         extension
             The extension of the file.
         """
+        input_type = self._get_input_type_name(obj)
         iterator = self.yield_fiberio(
+            input_type=input_type,
             format=format,
             version=version,
             extension=extension,
@@ -256,7 +265,7 @@ class _FiberIOManager:
         else:
             yield from self._get_prioritized_list(input_type)
 
-    def _yield_format_version(self, format, version):
+    def _yield_format_version(self, format, version, input_type="file"):
         """Yield file format/version prioritized formatters."""
         if format is not None:
             format = format.upper()
@@ -283,24 +292,26 @@ class _FiberIOManager:
                 yield formatter
             return
 
-    def _yield_extensions(self, extension):
+    def _yield_extensions(self, extension, input_type="file"):
         """Generator to get formatter prioritized by preferred extensions."""
         has_yielded = set()
         self.load_plugins()
+        potential_fiberios = self._fiber_io_by_input_type.get(input_type, {})
         for formatter in self._extension_list[extension]:
-            yield formatter
+            if formatter in potential_fiberios:
+                yield formatter
             has_yielded.add(formatter)
-        for formatter in self._get_prioritized_list:
+        for formatter in self._get_prioritized_list(input_type):
             if formatter not in has_yielded:
                 yield formatter
 
     def _get_format(
-            self,
-            path: str | Path | IOResourceManager,
-            file_format: str | None = None,
-            file_version: str | None = None,
-            formatter_hint: FiberIO | None = None,
-            **kwargs,
+        self,
+        path: str | Path | IOResourceManager,
+        file_format: str | None = None,
+        file_version: str | None = None,
+        formatter_hint: FiberIO | None = None,
+        **kwargs,
     ) -> tuple[str, str]:
         """
         Return the name of the format contained in the file and version number.
@@ -361,12 +372,14 @@ class _FiberIOManager:
                     # raise, in which case the format doesn't belong.
                     func_input = man.get_resource(required_type)
                     format_version = func(func_input, _pre_cast=True)
-                except Exception:  # noqa ; we need to catch everything here
+                except Exception:  # ; we need to catch everything here
                     continue
                 finally:
                     # If file handle-like seek back to 0 so it can be reused.
                     getattr(func_input, "seek", lambda x: None)(0)
                 if format_version:
+                    # Set the last used to try first next time.
+                    self._last_used[input_type] = formatter
                     return format_version
             else:
                 msg = f"Could not determine file format of {man.source}"
@@ -376,9 +389,10 @@ class _FiberIOManager:
         """Get the name of the IO type."""
         # This effectively acts as a dispatch to determine which type of
         # FiberIO could possibly read the obj.
-        if isinstance(obj, (str, Path)) and Path(obj).exists():
+        if isinstance(obj, str | Path) and Path(obj).exists():
             return "directory"
         return "file"
+
 
 # ------------- Protocol for File Format support
 
@@ -452,7 +466,7 @@ class FiberIO:
     version: str = ""
     preferred_extensions: tuple[str] = ()
     # Specifies if this fiber IO expects a directory or single file
-    input_type: Literal['file', 'directory'] = 'file'
+    input_type: Literal["file", "directory"] = "file"
 
     manager = _FiberIOManager("dascore.fiber_io")
 
@@ -733,7 +747,7 @@ def scan(
     >>> attr_list = dc.scan(file_path)
     """
     out = []
-    formatter = None
+    fiber_io = None
     for patch_source in _iterate_scan_inputs(path):
         # just pull attrs from patch
         if isinstance(patch_source, dc.Patch):
@@ -747,7 +761,7 @@ def scan(
                         man,
                         file_format=file_format,
                         file_version=file_version,
-                        formatter_hint=formatter,
+                        formatter_hint=fiber_io,
                     )
                 except UnknownFiberFormatError:  # skip bad entities
                     continue
@@ -755,11 +769,11 @@ def scan(
                 # we need separate loop variables so this doesn't get assumed
                 # to be the version/format in all subsequent values for the loop.
                 file_format_, file_version_ = file_format, file_version
-            formatter = FiberIO.manager.get_fiberio(file_format_, file_version_)
-            req_type = getattr(formatter.scan, "_required_type", None)
-            # this will get an open file handle to pass to get_resource
+            fiber_io = FiberIO.manager.get_fiberio(file_format_, file_version_)
+            req_type = getattr(fiber_io.scan, "_required_type", None)
+            # this will get the required resource type to pass to scan.
             patch_thing = man.get_resource(req_type)
-            for attr in formatter.scan(patch_thing, _pre_cast=True):
+            for attr in fiber_io.scan(patch_thing, _pre_cast=True):
                 out.append(dc.PatchAttrs.from_dict(attr))
     return out
 
@@ -803,41 +817,10 @@ def get_format(
     >>>
     >>> file_format, file_version = dc.get_format(file_path)
     """
-    with IOResourceManager(path) as man:
-        path = man.source
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"{path} does not exist.")
-        # get extension (minus .)
-        suffix = Path(path).suffix
-        ext = suffix[1:] if suffix else None
-        iterator = FiberIO.manager.yield_fiberio(
-            file_format,
-            file_version,
-            extension=ext,
-            formatter_hint=formatter_hint,
-        )
-        for formatter in iterator:
-            # We need to wrap this in try except to make it robust to what
-            # may happen in each formatters get_format method, many of which
-            # may be third party code.
-            func = formatter.get_format
-            required_type = func._required_type
-            func_input = None
-            try:
-                # get resource has to be in the try block because it can also
-                # raise, in which case the format doesn't belong.
-                func_input = man.get_resource(required_type)
-                format_version = func(func_input, _pre_cast=True)
-            except Exception:  # noqa ; we need to catch everything here
-                continue
-            finally:
-                # If file handle-like seek back to 0 so it can be reused.
-                getattr(func_input, "seek", lambda x: None)(0)
-            if format_version:
-                return format_version
-        else:
-            msg = f"Could not determine file format of {man.source}"
-            raise UnknownFiberFormatError(msg)
+    out = FiberIO.manager._get_format(
+        path, file_format, file_version, formatter_hint, **kwargs
+    )
+    return out
 
 
 def write(

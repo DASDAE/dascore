@@ -94,7 +94,6 @@ class _FiberDirectory(FiberIO):
     """A FiberIO which accepts a directory."""
 
 
-
 class TestPatchFileSummary:
     """Tests for getting patch file information."""
 

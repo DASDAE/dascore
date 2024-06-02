@@ -71,4 +71,3 @@ class TestReadXMLMetadata:
         expected_attrs = ["file_format", "date_time", "units"]
         for attr in expected_attrs:
             assert hasattr(metadata, attr)
-

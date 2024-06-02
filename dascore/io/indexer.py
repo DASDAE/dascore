@@ -270,7 +270,7 @@ class DirectoryIndexer(AbstractIndexer):
                 for x in iterate(paths)
             ]
         # return file iterator
-        return iter_contents(paths, ext=self.ext, mtime=mtime)
+        return iter_contents(paths, ext=self.ext, mtime=mtime, include_directories=True)
 
     def _enforce_min_version(self):
         """Ensure the minimum version is met, else delete index file."""
@@ -296,6 +296,40 @@ class DirectoryIndexer(AbstractIndexer):
         }
         return out
 
+    def _estimate_number_of_updates(self, paths):
+        """Estimate the number of updates needed."""
+        # TODO: This is a but sloppy, need to think of a better way to do
+        # this to avoid double iteration.
+        # First get total number of possible update-able files
+        entity_count = 0
+        for _ in self._get_file_iterator(paths=paths, only_new=True):
+            entity_count += 1
+        return entity_count
+
+    def _get_update_contents(self, paths, progress, entity_count=None):
+        """Get the content to put in the update."""
+        # Now iterate each file, get fiber IO and scan.
+        data_list = []
+        generator = self._get_file_iterator(paths=paths, only_new=False)
+        smooth_iterator = track(
+            generator,
+            f"Indexing {self.path.name}",
+            progress=progress,
+            length=entity_count,
+        )
+        dc.io.core.FiberIO.manager.load_plugins()  # load all plugins
+        dir_fibers = dc.io.FiberIO.manager._fiber_io_by_input_type
+        get_fiber_io = dc.io.core.FiberIO.manager.get_fiberio
+        for entity in smooth_iterator:
+            fiber_io = get_fiber_io(entity)
+            # if we found a directory fiber IO we need to skip everything
+            # else in the directory.
+            if fiber_io in dir_fibers:
+                generator.send("skip")
+            data_list.extend(fiber_io.scan(entity))
+        df = pd.DataFrame(data_list)
+        return df
+
     def update(self, paths=None, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
         Updates the contents of the Indexer.
@@ -313,12 +347,8 @@ class DirectoryIndexer(AbstractIndexer):
         """
         self._enforce_min_version()  # delete index if schema has changed
         update_time = time.time()
-        new_files = list(self._get_file_iterator(paths=paths, only_new=True))
-        smooth_iterator = track(
-            new_files, f"Indexing {self.path.name}", progress=progress
-        )
-        data_list = [y.flat_dump() for x in smooth_iterator for y in dc.scan(x)]
-        df = pd.DataFrame(data_list)
+        entity_count = self._estimate_number_of_updates(paths)
+        df = self._get_update_contents(paths, entity_count=entity_count)
         if not df.empty:
             # Some users were surprised the spool wasn't sorted. We still cant
             # guarantee all spools will be sorted but we can make sure most are

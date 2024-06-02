@@ -159,7 +159,7 @@ class TestIterContents:
         assert out[0] == dummy_text_file
 
     def test_no_directories(self, simple_dir):
-        """Ensure no directories are included when include_directories=False"""
+        """Ensure no directories are included when include_directories=False."""
         out = list(iter_contents(simple_dir, include_directories=False))
         has_dirs = [Path(x).is_dir() for x in out]
         assert not any(has_dirs)
@@ -330,6 +330,7 @@ class TestWarnOrRaise:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             warn_or_raise(msg, behavior=None)
+
 
 #
 # class TestIterContents:

@@ -9,10 +9,9 @@ import os
 import re
 import warnings
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from functools import cache
 from pathlib import Path
-from typing import Generator
 from types import ModuleType
 
 import numpy as np

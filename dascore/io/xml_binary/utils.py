@@ -9,11 +9,12 @@ from pydantic.alias_generators import to_pascal
 from dascore.utils.models import BaseModel, DateTime64
 from dascore.utils.xml import xml_to_dict
 
-
 # -- Create a pydantic model for the metadata info to help keep thins organized.
+
 
 class _XMLModel(BaseModel):
     """Base model which converts camel case to snake."""
+
     model_config = ConfigDict(
         alias_generator=to_pascal,
     )
@@ -21,6 +22,7 @@ class _XMLModel(BaseModel):
 
 class XMLLaserZones(_XMLModel):
     """Zones in the xml header."""
+
     start_channel: int
     end_channel: int
     stride: int
@@ -29,6 +31,7 @@ class XMLLaserZones(_XMLModel):
 
 class XMLBinaryInfo(_XMLModel):
     """Base level of information about XML index file."""
+
     file_format: str
     date_time: DateTime64
     das_interrogator_serial: dict[str, str]
@@ -48,7 +51,7 @@ class XMLBinaryInfo(_XMLModel):
     transposed_data: bool
 
 
-@lru_cache()
+@lru_cache
 def read_xml_metadata(path):
     """A function to read metadata from the xml file."""
     contents = xml_to_dict(path.read_bytes())

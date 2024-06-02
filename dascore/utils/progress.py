@@ -28,7 +28,7 @@ def get_progress_instance(progress: PROGRESS_LEVELS = "standard"):
     return prog.Progress(*progress_list, **kwargs)
 
 
-def track(sequence, description, progress: PROGRESS_LEVELS = "standard"):
+def track(sequence, description, progress: PROGRESS_LEVELS = "standard", length=None):
     """A simple iterator for tracking updates."""
     # This is a dirty hack to allow debugging while running tests.
     # Otherwise, pdb doesn't work in any tracking scope.
@@ -41,7 +41,7 @@ def track(sequence, description, progress: PROGRESS_LEVELS = "standard"):
     with progress:
         yield from progress.track(
             sequence,
-            total=len(sequence),
+            total=length or len(sequence),
             description=description,
             update_period=update,
         )
