@@ -613,7 +613,7 @@ def pad(
 
 
 @patch_function()
-def roll(patch, samples=False, **kwargs):
+def roll(patch, samples=False, update_coord=False, **kwargs):
     """
     Roll patch array elements along a given dimension.
 
@@ -622,7 +622,9 @@ def roll(patch, samples=False, **kwargs):
     patch
         input patch
     samples
-        If True value indicates coordinate or value of dimension
+        if True, value indicates coordinate or value of dimension
+    update_coord
+        if True, updates coord based on rolled amount
     **kwargs
         specifies dimension and number of elements to roll
 
@@ -634,12 +636,20 @@ def roll(patch, samples=False, **kwargs):
     >>> rolled_patch = patch.roll(time=5, samples=True)
     >>> # roll distance dimension 30 meters(or units of distance in patch)
     >>> rolled_patch2 = patch.roll(distance=30, samples=False)
+    >>> # roll time dimension 5 elements and update coordinates
+    >>> rolled_patch3 = patch.roll(time=5, samples=True, update_coord=True)
     """
     dim, axis, input_value = get_dim_value_from_kwargs(patch, kwargs)
     arr = patch.data
     coord = patch.get_coord(dim)
     value = coord.get_sample_count(input_value, samples=samples)
-
+  
     roll_arr = np.roll(arr, value, axis=axis)
+
+    #update coords if True
+    if update_coord:
+        roll_coord_arr = np.roll(coord.values,value,axis=axis)
+        new_coord = coord.update(values=roll_coord_arr)
+        patch = patch.update_coords(**{dim: new_coord})
 
     return patch.new(data=roll_arr)
