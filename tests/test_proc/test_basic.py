@@ -518,15 +518,21 @@ class TestRoll:
         assert random_patch.shape == rolled_patch.shape
         assert np.all(random_patch.data[0] == rolled_patch.data[value])
 
-    def test_coord_update_roll(self,random_patch):
-        """Test roll when update_coord=True"""
+    def test_coord_update_roll(self, random_patch):
+        """Test roll when update_coord=True."""
         patcht = random_patch.transpose("time", ...)
         rolled_patch = patcht.roll(time=5, samples=True, update_coord=True)
-        assert patcht.coords.get_array("time")[0] == rolled_patch.coords.get_array("time")[5]
-    
-    def test_dist_coord_roll(self,random_patch):
-        """Test roll when samples=False and coords will be updated"""
+        assert (
+            patcht.coords.get_array("time")[0]
+            == rolled_patch.coords.get_array("time")[5]
+        )
+
+    def test_dist_coord_roll(self, random_patch):
+        """Test roll when samples=False and coords will be updated."""
         rolled_patch = random_patch.roll(distance=30, samples=False, update_coord=True)
         coord = random_patch.get_coord("distance")
         value = coord.get_sample_count(30)
-        assert random_patch.coords.get_array("distance")[0] == rolled_patch.coords.get_array("distance")[value]
+        assert (
+            random_patch.coords.get_array("distance")[0]
+            == rolled_patch.coords.get_array("distance")[value]
+        )

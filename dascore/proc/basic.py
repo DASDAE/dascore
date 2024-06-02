@@ -643,12 +643,12 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     arr = patch.data
     coord = patch.get_coord(dim)
     value = coord.get_sample_count(input_value, samples=samples)
-  
+
     roll_arr = np.roll(arr, value, axis=axis)
 
-    #update coords if True
+    # update coords if True
     if update_coord:
-        roll_coord_arr = np.roll(coord.values,value,axis=axis)
+        roll_coord_arr = np.roll(coord.values, value, axis=axis)
         new_coord = coord.update(values=roll_coord_arr)
         patch = patch.update_coords(**{dim: new_coord})
 
