@@ -12,6 +12,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from functools import cache
 from pathlib import Path
+from typing import Generator
 from types import ModuleType
 
 import numpy as np
@@ -27,10 +28,6 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.utils.progress import track
-
-
-class _Sentinel:
-    """Sentinel for key checks."""
 
 
 def register_func(list_or_dict: list | dict, key=None):
@@ -173,15 +170,15 @@ def all_close(ar1, ar2):
         return np.all(ar1 == ar2)
 
 
-def iter_files(
-    paths: str | Iterable[str],
+def iter_contents(
+    paths: str | Path | Iterable[str | Path],
     ext: str | None = None,
     mtime: float | None = None,
     skip_hidden: bool = True,
-) -> Iterable[str]:
+    include_directories: bool = False,
+) -> Generator[str, str, None]:
     """
-    Use os.scan dir to iter files, optionally only for those with given
-    extension (ext) or modified times after mtime.
+    Iterate contents of paths, optionally filtering and terminating early.
 
     Parameters
     ----------
@@ -194,11 +191,21 @@ def iter_files(
         Time stamp indicating the minimum mtime.
     skip_hidden : bool
         If True skip files or folders (they begin with a '.')
+    include_directories
+        If True, also yield directories. In this case, a "skip" can be
+        passed back to the generator to indicate the rest of the directory
+        contents should be skipped.
 
     Yields
     ------
     Paths, as strings, meeting requirements.
     """
+    # handle returning directories if requested.
+    if include_directories and os.path.isdir(paths):
+        if not (skip_hidden and str(paths).startswith(".")):
+            signal = yield paths
+            if signal is not None and signal == "skip":
+                return
     try:  # a single path was passed
         for entry in os.scandir(paths):
             if entry.is_file() and (ext is None or entry.name.endswith(ext)):
@@ -206,12 +213,16 @@ def iter_files(
                     if entry.name[0] != "." or not skip_hidden:
                         yield entry.path
             elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from iter_files(
-                    entry.path, ext=ext, mtime=mtime, skip_hidden=skip_hidden
+                yield from iter_contents(
+                    entry.path,
+                    ext=ext,
+                    mtime=mtime,
+                    skip_hidden=skip_hidden,
+                    include_directories=include_directories,
                 )
-    except TypeError:  # multiple paths were passed
+    except (TypeError, AttributeError):  # multiple paths were passed
         for path in paths:
-            yield from iter_files(path, ext, mtime, skip_hidden)
+            yield from iter_contents(path, ext, mtime, skip_hidden)
     except NotADirectoryError:  # a file path was passed, just return it
         yield paths
 

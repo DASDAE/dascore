@@ -7,10 +7,10 @@ from __future__ import annotations
 import inspect
 import os.path
 from collections import defaultdict
-from functools import cached_property, wraps
+from functools import cached_property, wraps, cache
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Annotated, Literal, get_type_hints
+from typing import Annotated, Literal, get_type_hints, Generator
 
 import numpy as np
 import pandas as pd
@@ -101,6 +101,10 @@ class _FiberIOManager:
         self._loaded_eps: set[str] = set()
         self._format_version = defaultdict(dict)
         self._extension_list = defaultdict(list)
+        # This is a dict of {input_type: (fiberio_name, version)}
+        self._fiber_io_by_input_type = defaultdict(list)
+        # The last used fiber Io for a specific input type.
+        self._last_used = dict()
 
     @cached_property
     def _eps(self):
@@ -123,8 +127,13 @@ class _FiberIOManager:
         """Return names of known formats."""
         return sorted(self.known_formats - set(self._format_version))
 
-    @cached_property
-    def _prioritized_list(self):
+    def _filter_by_input_type(self, fiberios, input_type):
+        """
+        Filter the fiberio sequence to only include those that fit input type.
+        """
+
+    @cache
+    def _get_prioritized_list(self, input_type="file"):
         """Yield a prioritized list of formatters."""
         # must load all plugins before getting list
         self.load_plugins()
@@ -137,7 +146,11 @@ class _FiberIOManager:
             priority_formatters.append(formatters[0])
             if len(formatters) > 1:
                 second_class_formatters.extend(formatters[1:])
-        return tuple(priority_formatters + second_class_formatters)
+        maybe_ios = priority_formatters + second_class_formatters
+        # Now filter to input_type
+        out = tuple(x for x in maybe_ios if x in self._fiber_io_by_input_type)
+        # And return fiberIOs that much the input type.
+        return out
 
     @cached_method
     def load_plugins(self, format: str | None = None):
@@ -157,10 +170,12 @@ class _FiberIOManager:
     def register_fiberio(self, fiberio: FiberIO):
         """Register a new fiber IO to manage."""
         forma, ver = fiberio.name.upper(), fiberio.version
+
         self._loaded_eps.add(fiberio.name)
         for ext in iter(fiberio.preferred_extensions):
             self._extension_list[ext].append(fiberio)
         self._format_version[forma][ver] = fiberio
+        self._fiber_io_by_input_type[fiberio.input_type].append(fiberio)
 
     @cached_method
     def get_fiberio(
@@ -197,7 +212,8 @@ class _FiberIOManager:
         version: str | None = None,
         extension: str | None = None,
         formatter_hint: FiberIO | None = None,
-    ) -> Self:
+        input_type: str = "file",
+    ) -> Generator[FiberIO, None, None]:
         """
         Yields fiber IO object based on input priorities.
 
@@ -226,21 +242,19 @@ class _FiberIOManager:
             If not None, a suspected formatter to use first. This is an
             optimization for file archives which tend to have many files of
             the same format.
-
         """
-        # TODO replace this with concise pattern matching once 3.9 is dropped
-        if formatter_hint is not None:
-            yield formatter_hint
+        if last_used := self._last_used.get(input_type):
+            yield last_used
         if version and not format:
             msg = "Providing only a version is not sufficient to determine format"
             raise UnknownFiberFormatError(msg)
         if format is not None:
             self.load_plugins(format)
-            yield from self._yield_format_version(format, version)
+            yield from self._yield_format_version(format, version, input_type)
         elif extension is not None:
-            yield from self._yield_extensions(extension)
+            yield from self._yield_extensions(extension, input_type)
         else:
-            yield from self._prioritized_list
+            yield from self._get_prioritized_list(input_type)
 
     def _yield_format_version(self, format, version):
         """Yield file format/version prioritized formatters."""
@@ -276,10 +290,95 @@ class _FiberIOManager:
         for formatter in self._extension_list[extension]:
             yield formatter
             has_yielded.add(formatter)
-        for formatter in self._prioritized_list:
+        for formatter in self._get_prioritized_list:
             if formatter not in has_yielded:
                 yield formatter
 
+    def _get_format(
+            self,
+            path: str | Path | IOResourceManager,
+            file_format: str | None = None,
+            file_version: str | None = None,
+            formatter_hint: FiberIO | None = None,
+            **kwargs,
+    ) -> tuple[str, str]:
+        """
+        Return the name of the format contained in the file and version number.
+
+        Parameters
+        ----------
+        path
+            The path to the file.
+        file_format
+            The known file format.
+        file_version
+            The known file version.
+        formatter_hint
+            A suspected formatter to try first. This is primarily an optimization
+            for reading file archives where the formats usually are the same.
+
+        Returns
+        -------
+        A tuple of (file_format_name, version) both as strings.
+
+        Raises
+        ------
+        dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.utils.downloader import fetch
+        >>>
+        >>> file_path = fetch("prodml_2.1.h5")
+        >>>
+        >>> file_format, file_version = dc.get_format(file_path)
+        """
+        with IOResourceManager(path) as man:
+            path = man.source
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"{path} does not exist.")
+            # get extension (minus .)
+            suffix = Path(path).suffix
+            ext = suffix[1:] if suffix else None
+            input_type = self._get_input_type_name(path)
+            iterator = self.yield_fiberio(
+                file_format,
+                file_version,
+                extension=ext,
+                formatter_hint=formatter_hint,
+                input_type=input_type,
+            )
+            for formatter in iterator:
+                # We need to wrap this in try except to make it robust to what
+                # may happen in each formatters get_format method, many of which
+                # may be third party code.
+                func = formatter.get_format
+                required_type = func._required_type
+                func_input = None
+                try:
+                    # get resource has to be in the try block because it can also
+                    # raise, in which case the format doesn't belong.
+                    func_input = man.get_resource(required_type)
+                    format_version = func(func_input, _pre_cast=True)
+                except Exception:  # noqa ; we need to catch everything here
+                    continue
+                finally:
+                    # If file handle-like seek back to 0 so it can be reused.
+                    getattr(func_input, "seek", lambda x: None)(0)
+                if format_version:
+                    return format_version
+            else:
+                msg = f"Could not determine file format of {man.source}"
+                raise UnknownFiberFormatError(msg)
+
+    def _get_input_type_name(self, obj):
+        """Get the name of the IO type."""
+        # This effectively acts as a dispatch to determine which type of
+        # FiberIO could possibly read the obj.
+        if isinstance(obj, (str, Path)) and Path(obj).exists():
+            return "directory"
+        return "file"
 
 # ------------- Protocol for File Format support
 
@@ -294,7 +393,7 @@ def _type_caster(func, sig, required_type, arg_name):
         return func
 
     @wraps(func)
-    def _wraper(*args, _pre_cast=False, **kwargs):
+    def _wrapper(*args, _pre_cast=False, **kwargs):
         """Wraps args but performs coercion to get proper stream."""
         # TODO look at replacing this with pydantic's type_guard thing.
 
@@ -323,14 +422,14 @@ def _type_caster(func, sig, required_type, arg_name):
         return out
 
     # attach the function and required type for later use
-    _wraper.func = func
+    _wrapper.func = func
     # subclasses of FIBERIO subclasses can wrap this twice, so we mark
     # it to avoid that scenario.
-    _wraper._type_caster_wrapped = True
+    _wrapper._type_caster_wrapped = True
     # also specify required type
-    _wraper._required_type = required_type
+    _wrapper._required_type = required_type
 
-    return _wraper
+    return _wrapper
 
 
 def _is_wrapped_func(func1, func2):
@@ -352,6 +451,9 @@ class FiberIO:
     name: str = ""
     version: str = ""
     preferred_extensions: tuple[str] = ()
+    # Specifies if this fiber IO expects a directory or single file
+    input_type: Literal['file', 'directory'] = 'file'
+
     manager = _FiberIOManager("dascore.fiber_io")
 
     # A dict of methods which should implement automatic type casting.
@@ -715,9 +817,9 @@ def get_format(
             formatter_hint=formatter_hint,
         )
         for formatter in iterator:
-            # we need to wrap this in try except to make it robust to what
+            # We need to wrap this in try except to make it robust to what
             # may happen in each formatters get_format method, many of which
-            # may be third party code
+            # may be third party code.
             func = formatter.get_format
             required_type = func._required_type
             func_input = None
@@ -726,7 +828,7 @@ def get_format(
                 # raise, in which case the format doesn't belong.
                 func_input = man.get_resource(required_type)
                 format_version = func(func_input, _pre_cast=True)
-            except Exception:  # we need to catch everythign here
+            except Exception:  # noqa ; we need to catch everything here
                 continue
             finally:
                 # If file handle-like seek back to 0 so it can be reused.

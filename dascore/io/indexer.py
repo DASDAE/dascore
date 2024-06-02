@@ -18,7 +18,7 @@ import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS, path_types
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.utils.hdf5 import HDFPatchIndexManager
-from dascore.utils.misc import iter_files, iterate
+from dascore.utils.misc import iter_contents, iterate
 from dascore.utils.pd import filter_df
 from dascore.utils.progress import track
 from dascore.utils.time import get_max_min_times, to_timedelta64
@@ -270,7 +270,7 @@ class DirectoryIndexer(AbstractIndexer):
                 for x in iterate(paths)
             ]
         # return file iterator
-        return iter_files(paths, ext=self.ext, mtime=mtime)
+        return iter_contents(paths, ext=self.ext, mtime=mtime)
 
     def _enforce_min_version(self):
         """Ensure the minimum version is met, else delete index file."""

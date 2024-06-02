@@ -79,7 +79,7 @@ class _FiberCaster(FiberIO):
 
 
 class _FiberUnsupportedTypeHints(FiberIO):
-    """A fiber io which implements typehints which have not casting meaning."""
+    """A fiber io which implements typehints which have no casting meaning."""
 
     name = "_TypeHinterNotRight"
     version = "2"
@@ -88,6 +88,11 @@ class _FiberUnsupportedTypeHints(FiberIO):
         """Dummy read."""
         with open(resource) as fi:
             return fi.read()
+
+
+class _FiberDirectory(FiberIO):
+    """A FiberIO which accepts a directory."""
+
 
 
 class TestPatchFileSummary:

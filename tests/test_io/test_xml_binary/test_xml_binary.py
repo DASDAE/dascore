@@ -66,5 +66,9 @@ class TestReadXMLMetadata:
         """Test reading xml metadata contents and metadata types."""
         metadata_path_1 = binary_xml_directory / "metadata.xml"
         metadata = read_xml_metadata(metadata_path_1)
-        assert metadata
-        assert isinstance(metadata, dict)
+        assert metadata is not None
+        # Just test a couple of attrs, pydantic should handle the rest.
+        expected_attrs = ["file_format", "date_time", "units"]
+        for attr in expected_attrs:
+            assert hasattr(metadata, attr)
+
