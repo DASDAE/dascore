@@ -88,6 +88,9 @@ def split_df_query(kwargs, df, ignore_bad_kwargs=False):
             new_val = [None if x is ... else x for x in val]
             range_query[key] = tuple(new_val)
             out.pop(key, None)
+        # If this is an empty range query just pop out key.
+        elif val is None:
+            out.pop(key, None)
         else:
             unsupported[key] = val
     # raise if bad keys are found and not ignored.

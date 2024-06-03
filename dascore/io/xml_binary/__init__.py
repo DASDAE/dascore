@@ -6,4 +6,4 @@ Notes
 The metadata is stored in each data directory in an XML file.
 """
 from __future__ import annotations
-from .core import XMLBinary
+from .core import XMLBinaryV1
