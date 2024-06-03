@@ -169,7 +169,7 @@ def all_close(ar1, ar2):
         return np.all(ar1 == ar2)
 
 
-def iter_contents(
+def iter_fs_contents(
     paths: str | Path | Iterable[str | Path],
     ext: str | None = None,
     mtime: float | None = None,
@@ -177,7 +177,9 @@ def iter_contents(
     include_directories: bool = False,
 ) -> Generator[str, str, None]:
     """
-    Iterate contents of paths, optionally filtering and terminating early.
+    Iterate contents of a filesystem like thing.
+
+    Options allow for filtering and terminating early.
 
     Parameters
     ----------
@@ -185,9 +187,9 @@ def iter_contents(
         The path to the base directory to traverse. Can also use a collection
         of paths.
     ext : str or None
-        The extensions to map.
+        The extensions of files to return.
     mtime : int or float
-        Time stamp indicating the minimum mtime.
+        Time stamp indicating the minimum mtime to scan.
     skip_hidden : bool
         If True skip files or folders (they begin with a '.')
     include_directories
@@ -212,7 +214,7 @@ def iter_contents(
                     if entry.name[0] != "." or not skip_hidden:
                         yield entry.path
             elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from iter_contents(
+                yield from iter_fs_contents(
                     entry.path,
                     ext=ext,
                     mtime=mtime,
@@ -221,7 +223,7 @@ def iter_contents(
                 )
     except (TypeError, AttributeError):  # multiple paths were passed
         for path in paths:
-            yield from iter_contents(path, ext, mtime, skip_hidden)
+            yield from iter_fs_contents(path, ext, mtime, skip_hidden)
     except NotADirectoryError:  # a file path was passed, just return it
         yield paths
 

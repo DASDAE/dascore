@@ -93,6 +93,18 @@ class _FiberUnsupportedTypeHints(FiberIO):
 class _FiberDirectory(FiberIO):
     """A FiberIO which accepts a directory."""
 
+    name = "_directory_test_io"
+    version = "0.1"
+    input_type = "directory"
+
+    def get_format(self, resource) -> tuple[str, str] | bool:
+        """Only accept directories which have specific naming."""
+        path = Path(resource)
+        name = path.name
+        if self.name in name:
+            return self.name, self.version
+        return False
+
 
 class TestPatchFileSummary:
     """Tests for getting patch file information."""
@@ -124,7 +136,9 @@ class TestFormatManager:
         return manager
 
     def test_specific_format_and_version(self, format_manager):
-        """Specifying a known format and version should return exactly one formatter."""
+        """
+        Specifying a known format and version should return exactly one formatter.
+        """
         out = list(format_manager.yield_fiberio("DASDAE", "1"))
         assert len(out) == 1
         assert isinstance(out[0], DASDAEV1)
@@ -242,6 +256,15 @@ class TestGetFormat:
         """Ensure a missing file raises."""
         with pytest.raises(FileNotFoundError):
             dc.get_format("bad/file")
+
+    def test_fiberio_directory(self, tmp_path_factory):
+        """Ensure a directory can be recognized as a FiberIO."""
+        fiber_io = _FiberDirectory()
+        path = tmp_path_factory.mktemp(fiber_io.name)
+        assert fiber_io.get_format(path)
+        (name, version) = dc.get_format(path)
+        assert fiber_io.name == name
+        assert fiber_io.version == version
 
 
 class TestScan:

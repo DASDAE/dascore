@@ -7,7 +7,7 @@ import os
 import time
 import warnings
 from contextlib import suppress
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 
 import pandas as pd
@@ -15,10 +15,10 @@ import pooch
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS, path_types
+from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.utils.hdf5 import HDFPatchIndexManager
-from dascore.utils.misc import iter_contents, iterate
+from dascore.utils.misc import iter_fs_contents, iterate
 from dascore.utils.pd import filter_df
 from dascore.utils.progress import track
 from dascore.utils.time import get_max_min_times, to_timedelta64
@@ -252,7 +252,7 @@ class DirectoryIndexer(AbstractIndexer):
         out = str([(item, kwargs[item]) for item in keys])
         return out
 
-    def _get_file_iterator(self, paths: path_types | None = None, only_new=True):
+    def _get_mtime(self, only_new=True):
         """Return an iterator of potential un-indexed files."""
         # get mtime, subtract a bit to avoid odd bugs
         mtime = None
@@ -261,6 +261,9 @@ class DirectoryIndexer(AbstractIndexer):
         if last_updated is not None and only_new:
             mtime = last_updated - 0.001
         # get paths to iterate
+        return mtime
+
+    def _get_paths(self, paths):
         path = self.path
         if paths is None:
             paths = path
@@ -269,8 +272,7 @@ class DirectoryIndexer(AbstractIndexer):
                 f"{path}/{x}" if str(path) not in str(x) else str(x)
                 for x in iterate(paths)
             ]
-        # return file iterator
-        return iter_contents(paths, ext=self.ext, mtime=mtime, include_directories=True)
+        return paths
 
     def _enforce_min_version(self):
         """Ensure the minimum version is met, else delete index file."""
@@ -296,39 +298,16 @@ class DirectoryIndexer(AbstractIndexer):
         }
         return out
 
-    def _estimate_number_of_updates(self, paths):
+    def _estimate_number_of_updates(self, paths, mtime):
         """Estimate the number of updates needed."""
         # TODO: This is a but sloppy, need to think of a better way to do
         # this to avoid double iteration.
         # First get total number of possible update-able files
         entity_count = 0
-        for _ in self._get_file_iterator(paths=paths, only_new=True):
+        generator = iter_fs_contents(paths, mtime=mtime)
+        for _ in generator:
             entity_count += 1
         return entity_count
-
-    def _get_update_contents(self, paths, progress, entity_count=None):
-        """Get the content to put in the update."""
-        # Now iterate each file, get fiber IO and scan.
-        data_list = []
-        generator = self._get_file_iterator(paths=paths, only_new=False)
-        smooth_iterator = track(
-            generator,
-            f"Indexing {self.path.name}",
-            progress=progress,
-            length=entity_count,
-        )
-        dc.io.core.FiberIO.manager.load_plugins()  # load all plugins
-        dir_fibers = dc.io.FiberIO.manager._fiber_io_by_input_type
-        get_fiber_io = dc.io.core.FiberIO.manager.get_fiberio
-        for entity in smooth_iterator:
-            fiber_io = get_fiber_io(entity)
-            # if we found a directory fiber IO we need to skip everything
-            # else in the directory.
-            if fiber_io in dir_fibers:
-                generator.send("skip")
-            data_list.extend(fiber_io.scan(entity))
-        df = pd.DataFrame(data_list)
-        return df
 
     def update(self, paths=None, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
@@ -347,8 +326,22 @@ class DirectoryIndexer(AbstractIndexer):
         """
         self._enforce_min_version()  # delete index if schema has changed
         update_time = time.time()
-        entity_count = self._estimate_number_of_updates(paths)
-        df = self._get_update_contents(paths, entity_count=entity_count)
+        mtime = self._get_mtime(only_new=True)
+        paths = self._get_paths(paths)
+        entity_count = self._estimate_number_of_updates(paths, mtime)
+        new_progress = partial(
+            track,
+            progress=progress,
+            length=entity_count,
+            description="Updating index",
+        )
+        df = dc.scan_to_df(
+            path=paths,
+            mtime=mtime,
+            progress=new_progress,
+            ext=self.ext,
+        )
+        # Put contents found into database.
         if not df.empty:
             # Some users were surprised the spool wasn't sorted. We still cant
             # guarantee all spools will be sorted but we can make sure most are

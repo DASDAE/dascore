@@ -14,7 +14,7 @@ from dascore.utils.misc import (
     MethodNameSpace,
     cached_method,
     get_stencil_coefs,
-    iter_contents,
+    iter_fs_contents,
     iterate,
     maybe_get_items,
     optional_import,
@@ -59,7 +59,7 @@ class TestNamespaceClass:
         assert pc.namespace.new_method(ParentClass)
 
 
-class TestIterContents:
+class TestIterFSContents:
     """Tests for iterating directories of files."""
 
     sub = {"D": {"C": ".mseed"}, "F": ".json", "G": {"H": ".txt"}}  # noqa
@@ -102,20 +102,20 @@ class TestIterContents:
     def test_basic(self, simple_dir):
         """Test basic usage of iterfiles."""
         files = set(self.get_file_paths(self.file_paths, simple_dir))
-        out = {Path(x) for x in iter_contents(simple_dir)}
+        out = {Path(x) for x in iter_fs_contents(simple_dir)}
         assert files == out
 
     def test_one_subdir(self, simple_dir):
         """Test with one sub directory."""
         subdirs = simple_dir / "B" / "D"
-        out = set(iter_contents(subdirs))
+        out = set(iter_fs_contents(subdirs))
         assert len(out) == 1
 
     def test_multiple_subdirs(self, simple_dir):
         """Test with multiple sub directories."""
         path1 = simple_dir / "B" / "D"
         path2 = simple_dir / "B" / "G"
-        out = {Path(x) for x in iter_contents([path1, path2])}
+        out = {Path(x) for x in iter_fs_contents([path1, path2])}
         files = self.get_file_paths(self.file_paths, simple_dir)
         expected = {
             x
@@ -126,7 +126,7 @@ class TestIterContents:
 
     def test_extension(self, simple_dir):
         """Test filtering based on extention."""
-        out = set(iter_contents(simple_dir, ext=".txt"))
+        out = set(iter_fs_contents(simple_dir, ext=".txt"))
         for val in out:
             assert val.endswith(".txt")
 
@@ -138,35 +138,35 @@ class TestIterContents:
         first_file = files[0]
         os.utime(first_file, (now + 10, now + 10))
         # get output make sure it only returned first file
-        out = list(iter_contents(simple_dir, mtime=now + 5))
+        out = list(iter_fs_contents(simple_dir, mtime=now + 5))
         assert len(out) == 1
         assert Path(out[0]) == first_file
 
     def test_skips_files_in_hidden_directory(self, dir_with_hidden_dir):
         """Hidden directory files should be skipped."""
-        out1 = list(iter_contents(dir_with_hidden_dir))
+        out1 = list(iter_fs_contents(dir_with_hidden_dir))
         has_hidden_by_parent = ["hidden_by_parent" in x for x in out1]
         assert not any(has_hidden_by_parent)
         # But if skip_hidden is False it should be there
-        out2 = list(iter_contents(dir_with_hidden_dir, skip_hidden=False))
+        out2 = list(iter_fs_contents(dir_with_hidden_dir, skip_hidden=False))
         has_hidden_by_parent = ["hidden_by_parent" in x for x in out2]
         assert sum(has_hidden_by_parent) == 1
 
     def test_pass_file(self, dummy_text_file):
         """Just pass a single file and ensure it gets returned."""
-        out = list(iter_contents(dummy_text_file))
+        out = list(iter_fs_contents(dummy_text_file))
         assert len(out) == 1
         assert out[0] == dummy_text_file
 
     def test_no_directories(self, simple_dir):
         """Ensure no directories are included when include_directories=False."""
-        out = list(iter_contents(simple_dir, include_directories=False))
+        out = list(iter_fs_contents(simple_dir, include_directories=False))
         has_dirs = [Path(x).is_dir() for x in out]
         assert not any(has_dirs)
 
     def test_include_directories(self, simple_dir):
         """Ensure we can get directories back."""
-        out = list(iter_contents(simple_dir, include_directories=True))
+        out = list(iter_fs_contents(simple_dir, include_directories=True))
         returned_dirs = [Path(x) for x in out if Path(x).is_dir()]
         assert len(returned_dirs)
         # The top level directory should have been included
@@ -179,7 +179,7 @@ class TestIterContents:
     def test_skip_signal_directory(self, simple_dir):
         """Ensure a skip signal can be sent to stop parsing on directory."""
         out = []
-        iterator = iter_contents(simple_dir, include_directories=True)
+        iterator = iter_fs_contents(simple_dir, include_directories=True)
         for path in iterator:
             if Path(path).name == "B":
                 iterator.send("skip")
