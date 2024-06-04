@@ -245,7 +245,7 @@ The name and version of the format are separated by a double underscore.
 
 ## Directories as Inputs
 
-Some `FiberIO` formats may not be self-contained files, but rather must be understood in the context of an entire directory. In these cases, the `input_type` parameter on the `FiberIO` subclass should be set to "directory". See the [xml_binary](`dascore.core.io.xml_binary`) module for an example of a directory based `FiberIO` implementation. 
+Some `FiberIO` formats may not be self-contained files, but rather must be understood in the context of an entire directory. In these cases, the `input_type` parameter on the `FiberIO` subclass should be set to "directory". See the [xml_binary](`dascore.io.xml_binary`) module for an example of a directory based `FiberIO` implementation. 
 
 :::{.callout-warning}
 DASCore assumes a directory-based `FiberIO` does not have any sub patch files of a different format. Once a valid `FiberIO` directory is found, contents of the directory are no longer searched for Patch files.  
