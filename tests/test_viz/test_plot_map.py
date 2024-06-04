@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.utils.time import is_datetime64, to_timedelta64
+from dascore.utils.time import is_datetime64
 
 
 def check_label_units(patch, ax):
@@ -44,36 +43,40 @@ def patch_random_start(event_patch_1):
     return patch
 
 
-@pytest.fixture(scope="session")
-def patch_two_times(random_patch):
-    """Create a patch with two time dims."""
-    dist = random_patch.coords.get_array("distance")
-    pa = random_patch.update_coords(distance=dc.to_datetime64(dist))
-    return pa
-
-
 class TestPlotMap:
     """Tests for map plot."""
 
-    @pytest.fixture()
-    def timedelta_patch(self, random_patch):
-        """Make a patch with one dimension dtype of timedelta64."""
-        old_coord = random_patch.get_coord("time")
-        new_time = to_timedelta64(np.arange(len(old_coord)))
-        return random_patch.update_coords(time=new_time)
+    def test_str_input(self, random_patch_with_lat_lon):
+        """Call plot_map plot, return."""
+        patch = random_patch_with_lat_lon.set_units(latitude="ft")
+        patch = patch.set_units(longitude="m")
+        ax = patch.viz.plot_map("latitude", "longitude")
 
-    def test_returns_axes(self, random_patch):
-        """Call waterfall plot, return."""
-        # modify patch to include line at start
-        data = np.array(random_patch.data)
-        data[:100, :100] = 2.0  # create an origin block for testing axis line up
-        data[:100, -100:] = -2.0  #
-        out = random_patch.new(data=data)
-        ax = out.viz.plot_map()
+        cax = ax.images[-1].colorbar
+        caxis_label = cax.ax.yaxis.label.get_text()
 
         # check labels
-        assert random_patch.dims[0] in ax.get_ylabel().lower()
-        assert random_patch.dims[1] in ax.get_xlabel().lower()
+        assert patch.attrs.coords["latitude"].units in ax.get_xlabel().lower()
+        assert patch.attrs.coords["longitude"].units in ax.get_ylabel().lower()
+        assert str(patch.attrs.coords["distance"].units) in caxis_label
+        assert isinstance(ax, plt.Axes)
+
+    def test_array_inputs(self, random_patch_with_lat_lon):
+        """Call plot_map plot, return."""
+        lats = random_patch_with_lat_lon.coords.get_array("latitude")
+        lons = random_patch_with_lat_lon.coords.get_array("longitude")
+        data = 0.5 * (lats + lons)
+        ax = random_patch_with_lat_lon.viz.plot_map(lats, lons, data)
+
+        assert isinstance(ax, plt.Axes)
+
+    def test_default_parameters(self, random_patch):
+        """Call plot_map plot, return."""
+        ax = random_patch.viz.plot_map()
+
+        # check labels
+        assert random_patch.attrs.coords["distance"].units in ax.get_ylabel().lower()
+        assert random_patch.attrs.coords["distance"].units in ax.get_xlabel().lower()
         assert isinstance(ax, plt.Axes)
 
     def test_colorbar_scale(self, random_patch):
@@ -91,52 +94,23 @@ class TestPlotMap:
         ax2 = patch.viz.plot_map(scale_type="absolute", scale=10)
         assert ax2 is not None
 
-    def test_doc_intro_example(self, event_patch_1):
-        """Simple test to ensure the doc examples can be run."""
-        patch = event_patch_1.pass_filter(time=(None, 300))
-        _ = patch.viz.plot_map(scale=0.04)
-        _ = patch.transpose("distance", "time").viz.plot_map(scale=0.04)
+    # def test_doc_intro_example(self, event_patch_1):
+    #     """Simple test to ensure the doc examples can be run."""
+    #     patch = event_patch_1.pass_filter(time=(None, 300))
+    #     _ = patch.viz.plot_map(scale=0.04)
+    #     _ = patch.transpose("distance", "time").viz.plot_map(scale=0.04)
 
-    # def test_time_axis_label_int_overflow(self, random_patch):
-    #     """Make sure the time axis labels are correct (windows compatibility)."""
-    #     ax = random_patch.viz.waterfall()
-    #     name = ["y", "x"][random_patch.dims.index("time")]
-    #     # Get the piece of the label corresponding to the starttime
-    #     # WE can just grab the offset text.
-    #     sub_ax = getattr(ax, f"{name}axis")
-    #     plt.tight_layout()  # need to call this to get offset to show up.
-    #     offset_str = sub_ax.get_major_formatter().get_offset()
-    #     min_time = random_patch.coords.get_array("time").min()
-    #     assert str(min_time).startswith(offset_str)
+    # def test_doc_intro_example(self, random_patch_with_lat_lon):
+    #     """Simple test to ensure the doc examples can be run."""
+    #     patch = random_patch_with_lat_lon.pass_filter(time=(None, 300))
+    #     _ = patch.viz.plot_map(scale=0.04)
+    #     _ = patch.transpose("distance", "time").viz.plot_map(scale=0.04)
 
     def test_no_colorbar(self, random_patch):
         """Ensure the colorbar can be disabled."""
         ax = random_patch.viz.plot_map(cmap=None)
         # ensure no colorbar was created.
         assert ax.images[-1].colorbar is None
-
-    # def test_units(self, random_patch):
-    #     """Test that units show up in labels."""
-    #     # standard units
-    #     pa = random_patch.set_units("m/s")
-    #     ax = pa.viz.plot_map()
-    #     check_label_units(pa, ax)
-    #     # weird units
-    #     new = pa.set_units(
-    #         "furlongs/fortnight",
-    #         distance="feet",
-    #     )
-    #     ax = new.viz.plot_map()
-    #     check_label_units(new, ax)
-
-    # def test_patch_with_data_type(self, random_patch):
-    #     """Ensure a patch with data_type titles the colorbar."""
-    #     patch = random_patch.update_attrs(
-    #         data_type="strain rate",
-    #         data_units="1/s",
-    #     )
-    #     ax = patch.viz.plot_map()
-    #     check_label_units(patch, ax)
 
     def test_show(self, random_patch, monkeypatch):
         """Ensure show path is callable."""

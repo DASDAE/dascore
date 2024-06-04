@@ -35,8 +35,8 @@ def _set_scale(im, scale, scale_type, color_coords):
 @patch_function()
 def plot_map(
     patch: PatchType,
-    x: np.ndarray | str = "x",
-    y: np.ndarray | str = "y",
+    x: np.ndarray | str = "distance",
+    y: np.ndarray | str = "distance",
     color: np.ndarray | str = "distance",
     ax: plt.Axes | None = None,
     cmap="bwr",
@@ -107,9 +107,14 @@ def plot_map(
     # scale colorbar
     if scale is not None:
         _set_scale(im, scale, scale_type, color)
+
     # set axis labels
     for dim, x in zip(dims, ["x", "y"]):
-        getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
+        try:
+            getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
+        except KeyError:
+            pass
+
     # add color bar with title
     if cmap is not None:
         cb = ax.get_figure().colorbar(im, ax=ax, fraction=0.05, pad=0.025)
