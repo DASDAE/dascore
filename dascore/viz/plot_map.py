@@ -86,12 +86,15 @@ def plot_map(
     """
     dims = []
     if isinstance(x, str):
+        assert x in patch.coords, f"{x} not found in patch coordinates"
         dims.append(x)
         x = patch.coords.get_array(x)
     if isinstance(y, str):
+        assert y in patch.coords, f"{y} not found in patch coordinates"
         dims.append(y)
         y = patch.coords.get_array(y)
     if isinstance(color, str):
+        assert color in patch.coords, f"{color} not found in patch coordinates"
         data_type = color
         data_units = patch.attrs.coords[color].units
         color = patch.coords.get_array(color)
@@ -110,10 +113,7 @@ def plot_map(
 
     # set axis labels
     for dim, x in zip(dims, ["x", "y"]):
-        try:
-            getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
-        except KeyError:
-            pass
+        getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
 
     # add color bar with title
     if cmap is not None:
