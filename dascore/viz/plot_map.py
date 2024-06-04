@@ -94,7 +94,7 @@ def plot_map(
     if isinstance(color, str):
         data_type = color
         data_units = patch.attrs.coords[color].units
-        color = patch.coords.get_array[color]
+        color = patch.coords.get_array(color)
     else:
         data_type = ""
         data_units = ""
