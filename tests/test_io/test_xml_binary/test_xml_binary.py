@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -66,12 +67,12 @@ def binary_xml_directory(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def binary_xml_with_other_files(
-        binary_xml_directory,
-        tmp_path_factory,
+    binary_xml_directory,
+    tmp_path_factory,
 ):
     """Ensure other files can be included at the top level."""
     new = tmp_path_factory.mktemp("binary_xml_and_others")
-    shutil.copytree(binary_xml_directory, new / 'xml_binary')
+    shutil.copytree(binary_xml_directory, new / "xml_binary")
     sp = dc.get_example_spool()
     dc.examples.spool_to_directory(sp, new)
     return new
@@ -130,6 +131,18 @@ class TestScanContents:
         fiber = XMLBinaryV1()
         out = fiber.scan(binary_xml_directory)
         assert len(out) == 2
+
+    def test_mtime(self, binary_xml_directory):
+        """Ensure scan returns contents appropriate to mtime."""
+        # With no time specified, all contents should be scanned.
+        scan1 = dc.scan_to_df(binary_xml_directory)
+        assert len(scan1) == 2
+        # When time is specified only those after should be returned.
+        mtime = Path(binary_xml_directory).stat().st_mtime
+        scan2 = dc.scan(binary_xml_directory, mtime=mtime + 50)
+        assert not len(scan2)
+        scan3 = dc.scan(binary_xml_directory, mtime=mtime - 50)
+        assert len(scan3) == 2
 
 
 class TestRead:

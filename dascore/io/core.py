@@ -540,6 +540,12 @@ class FiberIO:
                 out.append(format_info)
         return pd.DataFrame(out)
 
+    def _updated_after(self, resource, timestamp):
+        """Determine if the resource was updated after specified mtime."""
+        if not timestamp:
+            return True
+        return Path(resource).stat().st_mtime > timestamp
+
     def __hash__(self):
         """FiberIO instances should be uniquely defined by (format, version)."""
         return hash((self.name, self.version))
@@ -677,12 +683,12 @@ def scan_to_df(
     return df
 
 
-def _iterate_scan_inputs(patch_source, ext, mtime, **kwargs):
+def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):
     """Yield scan candidates."""
     for el in iterate(patch_source):
         if isinstance(el, str | Path) and (path := Path(el)).exists():
             generator = iter_filesystem(
-                path, ext=ext, mtime=mtime, include_directories=True
+                path, ext=ext, mtime=mtime, include_directories=include_directories
             )
             yield from generator
         else:
@@ -785,7 +791,9 @@ def scan(
     fiber_io_hint: dict[str, FiberIO] = {}
     # Unfortunately, we have to iterate the scan candidates twice to get
     # an estimate for the progress bar length. Maybe there is a better way...
-    _generator = _iterate_scan_inputs(path, ext=ext, mtime=mtime)
+    _generator = _iterate_scan_inputs(
+        path, ext=ext, mtime=mtime, include_directories=False
+    )
     length = _count_generator(_generator)
     generator = _iterate_scan_inputs(path, ext=ext, mtime=mtime)
     tracker = track(
@@ -812,12 +820,16 @@ def scan(
                 continue
             # Cache this fiber io to given preferential treatment next iteration.
             fiber_io_hint[fiber_io.input_type] = fiber_io
+            # Special handling of directory FiberIOs.
+            if fiber_io.input_type == "directory":
+                # Directory fiber_io should send skip signal back to generator
+                # so that no files/sub directories are scanned.
+                generator.send("skip")
+                if not fiber_io._updated_after(resource, mtime):
+                    continue
             for attr in fiber_io.scan(resource, _pre_cast=True):
                 out.append(dc.PatchAttrs.from_dict(attr))
-            # Directory fiber_io should send skip signal back to generator
-            # so that no files/sub directories are scanned.
-            if fiber_io.input_type == "directory":
-                generator.send("skip")
+
     return out
 
 
