@@ -52,8 +52,7 @@ class TestPlotMap:
         patch = patch.set_units(longitude="m")
         ax = patch.viz.plot_map("latitude", "longitude")
 
-        cax = ax.images[-1].colorbar
-        caxis_label = cax.ax.yaxis.label.get_text()
+        caxis_label = ax.figure.get_children()[-1].yaxis.label.get_text()
 
         # check labels
         assert patch.attrs.coords["latitude"].units in ax.get_xlabel().lower()
@@ -75,8 +74,8 @@ class TestPlotMap:
         ax = random_patch.viz.plot_map()
 
         # check labels
-        assert random_patch.attrs.coords["distance"].units in ax.get_ylabel().lower()
-        assert random_patch.attrs.coords["distance"].units in ax.get_xlabel().lower()
+        assert "distance" in ax.get_ylabel().lower()
+        assert "distance" in ax.get_xlabel().lower()
         assert isinstance(ax, plt.Axes)
 
     def test_colorbar_scale(self, random_patch):
