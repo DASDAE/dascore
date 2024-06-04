@@ -315,6 +315,11 @@ class TestScan:
         out = dc.scan(nested_directory_with_patches)
         assert len(out) == 3
 
+    def test_scan_single_file(self, terra15_v6_path):
+        """Ensure scan works on a single file."""
+        out = dc.scan(terra15_v6_path)
+        assert len(out) == 1
+
     def test_can_raise(self):
         """
         Scan, when called from a FiberIO, should be able to raise if

@@ -724,6 +724,17 @@ def _get_fiber_io_and_req_type(
     return fiber_io_hint, resource
 
 
+def _count_generator(generator):
+    """Estimate the number of updates needed."""
+    # TODO: This is a but sloppy, need to think of a better way to do
+    # this to avoid double iteration.
+    # First get total number of possible update-able files
+    entity_count = 0
+    for _ in generator:
+        entity_count += 1
+    return entity_count
+
+
 def scan(
     path: Path | str | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
@@ -772,11 +783,18 @@ def scan(
     """
     out = []
     fiber_io_hint: dict[str, FiberIO] = {}
+    # Unfortunately, we have to iterate the scan candidates twice to get
+    # an estimate for the progress bar length. Maybe there is a better way...
+    _generator = _iterate_scan_inputs(path, ext=ext, mtime=mtime)
+    length = _count_generator(_generator)
     generator = _iterate_scan_inputs(path, ext=ext, mtime=mtime)
-    if callable(progress):
-        tracker = progress(generator)
-    else:
-        tracker = track(generator, f"scanning {path}", progress=progress)
+    tracker = track(
+        generator,
+        f"scan {path}",
+        progress=progress,
+        length=length,
+        min_length=20,
+    )
     for patch_source in tracker:
         # just pull attrs from patch
         if isinstance(patch_source, dc.Patch):

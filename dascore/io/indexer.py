@@ -298,17 +298,6 @@ class DirectoryIndexer(AbstractIndexer):
         }
         return out
 
-    def _estimate_number_of_updates(self, paths, mtime):
-        """Estimate the number of updates needed."""
-        # TODO: This is a but sloppy, need to think of a better way to do
-        # this to avoid double iteration.
-        # First get total number of possible update-able files
-        entity_count = 0
-        generator = iter_fs_contents(paths, mtime=mtime)
-        for _ in generator:
-            entity_count += 1
-        return entity_count
-
     def update(self, paths=None, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
         Updates the contents of the Indexer.
@@ -328,17 +317,10 @@ class DirectoryIndexer(AbstractIndexer):
         update_time = time.time()
         mtime = self._get_mtime(only_new=True)
         paths = self._get_paths(paths)
-        entity_count = self._estimate_number_of_updates(paths, mtime)
-        new_progress = partial(
-            track,
-            progress=progress,
-            length=entity_count,
-            description="Updating index",
-        )
         df = dc.scan_to_df(
             path=paths,
             mtime=mtime,
-            progress=new_progress,
+            progress=progress,
             ext=self.ext,
         )
         # Put contents found into database.
