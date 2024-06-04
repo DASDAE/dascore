@@ -15,7 +15,11 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.models import ArrayLike
-from dascore.utils.patch import get_multiple_dim_value_from_kwargs, patch_function
+from dascore.utils.patch import (
+    get_dim_value_from_kwargs,
+    get_multiple_dim_value_from_kwargs,
+    patch_function,
+)
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
@@ -606,3 +610,46 @@ def pad(
     new_coords = patch.coords.update(**new_coords)
 
     return patch.new(data=new_data, coords=new_coords)
+
+
+@patch_function()
+def roll(patch, samples=False, update_coord=False, **kwargs):
+    """
+    Roll patch array elements along a given dimension.
+
+    Parameters
+    ----------
+    patch
+        input patch
+    samples
+        if True, value indicates coordinate or value of dimension
+    update_coord
+        if True, updates coord based on rolled amount
+    **kwargs
+        specifies dimension and number of elements to roll
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # roll time dimension 5 elements
+    >>> rolled_patch = patch.roll(time=5, samples=True)
+    >>> # roll distance dimension 30 meters(or units of distance in patch)
+    >>> rolled_patch2 = patch.roll(distance=30, samples=False)
+    >>> # roll time dimension 5 elements and update coordinates
+    >>> rolled_patch3 = patch.roll(time=5, samples=True, update_coord=True)
+    """
+    dim, axis, input_value = get_dim_value_from_kwargs(patch, kwargs)
+    arr = patch.data
+    coord = patch.get_coord(dim)
+    value = coord.get_sample_count(input_value, samples=samples)
+
+    roll_arr = np.roll(arr, value, axis=0)
+
+    # update coords if True
+    if update_coord:
+        roll_coord_arr = np.roll(coord.values, value, axis=0)
+        new_coord = coord.update(values=roll_coord_arr)
+        patch = patch.update_coords(**{dim: new_coord})
+
+    return patch.new(data=roll_arr)

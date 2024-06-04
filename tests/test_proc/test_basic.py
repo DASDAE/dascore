@@ -498,3 +498,41 @@ class TestPad:
         """Test that providing a sequence for constant_values raises a TypeError."""
         with pytest.raises(TypeError):
             random_patch.pad(time=(0, 5), constant_values=(0, 0))
+
+
+class TestRoll:
+    """Test cases for patch roll method."""
+
+    def test_time_roll(self, random_patch):
+        """Test basic sample roll."""
+        rand_patcht = random_patch.transpose("time", ...)
+        rolled_patch = rand_patcht.roll(time=5, samples=True)
+        assert rand_patcht.shape == rolled_patch.shape
+        assert np.all(rand_patcht.data[0] == rolled_patch.data[5])
+
+    def test_dist_roll(self, random_patch):
+        """Test roll when samples=False."""
+        rolled_patch = random_patch.roll(distance=30, samples=False)
+        coord = random_patch.get_coord("distance")
+        value = coord.get_sample_count(30)
+        assert random_patch.shape == rolled_patch.shape
+        assert np.all(random_patch.data[0] == rolled_patch.data[value])
+
+    def test_coord_update_roll(self, random_patch):
+        """Test roll when update_coord=True."""
+        patcht = random_patch.transpose("time", ...)
+        rolled_patch = patcht.roll(time=5, samples=True, update_coord=True)
+        assert (
+            patcht.coords.get_array("time")[0]
+            == rolled_patch.coords.get_array("time")[5]
+        )
+
+    def test_dist_coord_roll(self, random_patch):
+        """Test roll when samples=False and coords will be updated."""
+        rolled_patch = random_patch.roll(distance=30, samples=False, update_coord=True)
+        coord = random_patch.get_coord("distance")
+        value = coord.get_sample_count(30)
+        assert (
+            random_patch.coords.get_array("distance")[0]
+            == rolled_patch.coords.get_array("distance")[value]
+        )
