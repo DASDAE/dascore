@@ -7,7 +7,7 @@ import os
 import time
 import warnings
 from contextlib import suppress
-from functools import cache, partial
+from functools import cache
 from pathlib import Path
 
 import pandas as pd
@@ -18,9 +18,8 @@ import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.utils.hdf5 import HDFPatchIndexManager
-from dascore.utils.misc import iter_fs_contents, iterate
+from dascore.utils.misc import iterate
 from dascore.utils.pd import filter_df
-from dascore.utils.progress import track
 from dascore.utils.time import get_max_min_times, to_timedelta64
 
 # supported read_hdf5 kwargs

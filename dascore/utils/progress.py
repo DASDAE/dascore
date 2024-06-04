@@ -1,10 +1,10 @@
 """Simple interface for progress markers."""
 from __future__ import annotations
 
-from typing import Sized, Generator
+from collections.abc import Generator, Sized
+from contextlib import suppress
 
 import rich.progress as prog
-from contextlib import suppress
 
 import dascore as dc
 from dascore.constants import PROGRESS_LEVELS
@@ -32,11 +32,11 @@ def get_progress_instance(progress: PROGRESS_LEVELS = "standard"):
 
 
 def track(
-        sequence: Sized | Generator,
-        description: str,
-        progress: PROGRESS_LEVELS = "standard",
-        length: int=None,
-        min_length: int=1,
+    sequence: Sized | Generator,
+    description: str,
+    progress: PROGRESS_LEVELS = "standard",
+    length: int | None = None,
+    min_length: int = 1,
 ):
     """
     A simple iterator for tracking updates.
