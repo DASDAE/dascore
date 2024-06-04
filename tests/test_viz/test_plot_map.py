@@ -8,9 +8,9 @@ import dascore as dc
 from dascore.utils.time import is_datetime64
 
 
-def check_label_units(patch, ax, dims):
+def check_label_units(patch, ax, dims, color="distance"):
     """Ensure patch label units match axis."""
-    axis_dict = {0: "yaxis", 1: "xaxis"}
+    axis_dict = {0: "xaxis", 1: "yaxis"}
     # dims = []
     # Check coord-inate names
     for coord_name in dims:
@@ -24,9 +24,9 @@ def check_label_units(patch, ax, dims):
         assert coord_name in label_text
     # check colorbar labels
     # cax = ax.images[-1].colorbar
+    coord = patch.coords.coord_map[color]
     yaxis_label = ax.figure.get_children()[-1].yaxis.label.get_text()
-    assert str(patch.attrs.data_units.units) in yaxis_label
-    assert str(patch.attrs.data_type) in yaxis_label
+    assert str(coord.units.units) in yaxis_label
 
 
 @pytest.fixture(scope="session")
@@ -103,7 +103,7 @@ class TestPlotMap:
         """Test that units show up in labels."""
         # standard units
 
-        pa = random_patch_with_lat_lon.set_units("m/s")
+        pa = random_patch_with_lat_lon.set_units(distance="m/s")
         ax = pa.viz.plot_map()
         check_label_units(pa, ax, ["distance", "distance"])
 
