@@ -160,7 +160,7 @@ def _read_single_file(path, metadata, time, distance):
         {"time": time_coord, "distance": distance_coord},
         dims=attr.dim_tuple,
     )
-    data = np.fromfile(path, dtype=metadata.data_type).reshape(cm.shape)
+    data = np.memmap(path, dtype=metadata.data_type, shape=cm.shape)
     patch = dc.Patch(
         data=data,
         dims=attr.dim_tuple,
@@ -168,10 +168,6 @@ def _read_single_file(path, metadata, time, distance):
         attrs=attr.update(coord=None),
     )
     return patch.select(time=time, distance=distance)
-
-
-def _patch_from_series(ser):
-    """Get a patch from a series with relevant info."""
 
 
 def _load_patches(paths, metadata, time, distance, attr_cls):
@@ -187,7 +183,18 @@ def _load_patches(paths, metadata, time, distance, attr_cls):
     filtered_df = df[filter_df(df, time=time, distance=distance)].pipe(
         adjust_segments, time=time, distance=distance
     )
-    out = []
+    # Then we can just recurse into this function.
+    out = [
+        _load_patches(
+            Path(ser["path"]),
+            metadata=metadata,
+            time=time,
+            distance=distance,
+            attr_cls=attr_cls,
+        )
+        for _, ser in filtered_df.iterrows()
+    ]
+    return out
 
 
 def _paths_to_attrs(

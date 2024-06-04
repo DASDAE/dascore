@@ -681,12 +681,10 @@ def _iterate_scan_inputs(patch_source, ext, mtime, **kwargs):
     """Yield scan candidates."""
     for el in iterate(patch_source):
         if isinstance(el, str | Path) and (path := Path(el)).exists():
-            generator = iter_fs_contents(path, ext=ext, mtime=mtime)
-            for sub_el in generator:
-                # This allows consumers to send signal back to generator.
-                sig = yield sub_el
-                if sig is not None:
-                    generator.send(sig)
+            generator = iter_fs_contents(
+                path, ext=ext, mtime=mtime, include_directories=True
+            )
+            yield from generator
         else:
             yield el
 

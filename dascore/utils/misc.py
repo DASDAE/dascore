@@ -206,13 +206,19 @@ def iter_fs_contents(
         if not (skip_hidden and str(paths).startswith(".")):
             signal = yield paths
             if signal is not None and signal == "skip":
+                yield None
                 return
     try:  # a single path was passed
         for entry in os.scandir(paths):
             if entry.is_file() and (ext is None or entry.name.endswith(ext)):
                 if mtime is None or entry.stat().st_mtime >= mtime:
                     if entry.name[0] != "." or not skip_hidden:
-                        yield entry.path
+                        sig = yield entry.path
+                        # Handle skip sig. One extra yield so StopIteration wont
+                        # Raise on send call.
+                        if sig is not None and sig == "skip":
+                            yield
+                            return
             elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
                 yield from iter_fs_contents(
                     entry.path,

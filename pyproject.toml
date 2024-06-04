@@ -117,7 +117,7 @@ TERRA15__V6 = "dascore.io.terra15.core:Terra15FormatterV6"
 SEGY__V2 = "dascore.io.segy.core:SegyV2"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
-Binary = "dascore.io.binary.core:BinaryRaw"
+XML_BINARY_V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
 
 
 # --- External tool configuration

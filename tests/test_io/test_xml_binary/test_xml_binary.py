@@ -132,8 +132,11 @@ class TestRead:
         """Ensure the simple path can be read by fiber io instance."""
         fiber_io = XMLBinaryV1()
         spool = fiber_io.read(binary_xml_directory)
+        assert len(spool) == 2
+        for patch in spool:
+            assert isinstance(patch, dc.Patch)
 
     def test_simple_spool(self, binary_xml_directory):
         """Ensure the simple path can be read into a spool."""
-        spool = dc.spool(binary_xml_directory)
+        spool = dc.spool(binary_xml_directory).update()
         assert len(spool) == 2
