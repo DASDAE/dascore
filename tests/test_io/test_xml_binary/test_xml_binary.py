@@ -1,6 +1,8 @@
 """Misc. tests for xml binary."""
 from __future__ import annotations
 
+import shutil
+
 import numpy as np
 import pytest
 
@@ -59,6 +61,19 @@ def binary_xml_directory(tmp_path_factory):
     with open(data_2_path, "wb") as fi:
         ar = np.arange(1000 * 10, dtype=np.dtype("uint16"))
         ar.tofile(fi)
+    return new
+
+
+@pytest.fixture(scope="session")
+def binary_xml_with_other_files(
+        binary_xml_directory,
+        tmp_path_factory,
+):
+    """Ensure other files can be included at the top level."""
+    new = tmp_path_factory.mktemp("binary_xml_and_others")
+    shutil.copytree(binary_xml_directory, new / 'xml_binary')
+    sp = dc.get_example_spool()
+    dc.examples.spool_to_directory(sp, new)
     return new
 
 
@@ -141,3 +156,10 @@ class TestRead:
         spool = dc.spool(binary_xml_directory).update()
         assert isinstance(spool, dc.BaseSpool)
         assert len(spool) == 2
+
+    def test_read_with_other_files(self, binary_xml_with_other_files):
+        """Ensure other files are also included/indexed."""
+        spool = dc.spool(binary_xml_with_other_files).update()
+        assert len(spool) == 5
+        for patch in spool:
+            assert isinstance(patch, dc.Patch)

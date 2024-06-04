@@ -67,7 +67,7 @@ class XMLBinaryV1(FiberIO):
             Extra keyword arguments are ignored.
         """
         path = Path(resource)
-        base_path = path if resource.is_dir() else path.parent
+        base_path = path if path.is_dir() else path.parent
         meta_data = _read_xml_metadata(base_path / self._metadata_name)
         if path.is_dir():
             path = list(path.glob(f"*{self._data_extension}"))
