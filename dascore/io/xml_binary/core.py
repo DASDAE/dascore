@@ -32,7 +32,7 @@ class XMLBinaryV1(FiberIO):
     input_type = "directory"
 
     _metadata_name = "metadata.xml"
-    # File exetension for data files.
+    # File extension for data files.
     _data_extension = ".raw"
 
     def scan(self, resource) -> list[dc.PatchAttrs]:
