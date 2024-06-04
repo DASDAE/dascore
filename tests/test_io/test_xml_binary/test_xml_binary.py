@@ -139,4 +139,5 @@ class TestRead:
     def test_simple_spool(self, binary_xml_directory):
         """Ensure the simple path can be read into a spool."""
         spool = dc.spool(binary_xml_directory).update()
+        assert isinstance(spool, dc.BaseSpool)
         assert len(spool) == 2

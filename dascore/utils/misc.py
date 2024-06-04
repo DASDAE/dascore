@@ -169,7 +169,7 @@ def all_close(ar1, ar2):
         return np.all(ar1 == ar2)
 
 
-def iter_fs_contents(
+def iter_filesystem(
     paths: str | Path | Iterable[str | Path],
     ext: str | None = None,
     mtime: float | None = None,
@@ -213,14 +213,9 @@ def iter_fs_contents(
             if entry.is_file() and (ext is None or entry.name.endswith(ext)):
                 if mtime is None or entry.stat().st_mtime >= mtime:
                     if entry.name[0] != "." or not skip_hidden:
-                        sig = yield entry.path
-                        # Handle skip sig. One extra yield so StopIteration wont
-                        # Raise on send call.
-                        if sig is not None and sig == "skip":
-                            yield
-                            return
+                        yield entry.path
             elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from iter_fs_contents(
+                yield from iter_filesystem(
                     entry.path,
                     ext=ext,
                     mtime=mtime,
@@ -229,7 +224,7 @@ def iter_fs_contents(
                 )
     except (TypeError, AttributeError):  # multiple paths were passed
         for path in paths:
-            yield from iter_fs_contents(path, ext, mtime, skip_hidden)
+            yield from iter_filesystem(path, ext, mtime, skip_hidden)
     except NotADirectoryError:  # a file path was passed, just return it
         yield paths
 

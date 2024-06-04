@@ -31,8 +31,14 @@ class TestXMLtoDict:
         expected_dict = {"a": {"b": "1"}, "c": {"d": "2"}}
         assert xml_to_dict(xml_string) == expected_dict
 
-    def test_repeated_elements(self):
+    def test_elements_repeated_twice(self):
         """Test conversion of XML with repeated elements."""
         xml_string = "<root><a>1</a><a>2</a></root>"
         expected_dict = {"a": ["1", "2"]}
+        assert xml_to_dict(xml_string) == expected_dict
+
+    def test_repeated_elements(self):
+        """Test conversion of XML with repeated elements."""
+        xml_string = "<root><a>1</a><a>2</a><a>3</a></root>"
+        expected_dict = {"a": ["1", "2", "3"]}
         assert xml_to_dict(xml_string) == expected_dict

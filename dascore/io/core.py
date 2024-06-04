@@ -31,7 +31,7 @@ from dascore.core.attrs import str_validator
 from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import cached_method, iter_fs_contents, iterate
+from dascore.utils.misc import cached_method, iter_filesystem, iterate
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,
@@ -361,10 +361,10 @@ class _FiberIOManager:
         """Get the name of the IO type."""
         # This effectively acts as a dispatch to determine which type of
         # FiberIO could possibly read the obj.
+        out = "file"
         if isinstance(obj, str | Path) and (path := Path(obj)).exists():
             out = "directory" if path.is_dir() else "file"
-            return out
-        return "file"
+        return out
 
 
 # ------------- Protocol for File Format support
@@ -681,7 +681,7 @@ def _iterate_scan_inputs(patch_source, ext, mtime, **kwargs):
     """Yield scan candidates."""
     for el in iterate(patch_source):
         if isinstance(el, str | Path) and (path := Path(el)).exists():
-            generator = iter_fs_contents(
+            generator = iter_filesystem(
                 path, ext=ext, mtime=mtime, include_directories=True
             )
             yield from generator
