@@ -93,23 +93,11 @@ class TestPlotMap:
         ax2 = patch.viz.plot_map(scale_type="absolute", scale=10)
         assert ax2 is not None
 
-    # def test_doc_intro_example(self, event_patch_1):
-    #     """Simple test to ensure the doc examples can be run."""
-    #     patch = event_patch_1.pass_filter(time=(None, 300))
-    #     _ = patch.viz.plot_map(scale=0.04)
-    #     _ = patch.transpose("distance", "time").viz.plot_map(scale=0.04)
-
-    # def test_doc_intro_example(self, random_patch_with_lat_lon):
-    #     """Simple test to ensure the doc examples can be run."""
-    #     patch = random_patch_with_lat_lon.pass_filter(time=(None, 300))
-    #     _ = patch.viz.plot_map(scale=0.04)
-    #     _ = patch.transpose("distance", "time").viz.plot_map(scale=0.04)
-
     def test_no_colorbar(self, random_patch):
         """Ensure the colorbar can be disabled."""
         ax = random_patch.viz.plot_map(cmap=None)
         # ensure no colorbar was created.
-        assert ax.images[-1].colorbar is None
+        assert len(ax.figure.get_children()) == 2
 
     def test_show(self, random_patch, monkeypatch):
         """Ensure show path is callable."""
