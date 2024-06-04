@@ -8,10 +8,10 @@ import dascore as dc
 from dascore.utils.time import is_datetime64
 
 
-def check_label_units(patch, ax):
+def check_label_units(patch, ax, dims):
     """Ensure patch label units match axis."""
     axis_dict = {0: "yaxis", 1: "xaxis"}
-    dims = patch.dims
+    # dims = []
     # Check coord-inate names
     for coord_name in dims:
         coord = patch.coords.coord_map[coord_name]
@@ -23,8 +23,8 @@ def check_label_units(patch, ax):
         assert str(coord.units.units) in label_text
         assert coord_name in label_text
     # check colorbar labels
-    cax = ax.images[-1].colorbar
-    yaxis_label = cax.ax.yaxis.label.get_text()
+    # cax = ax.images[-1].colorbar
+    yaxis_label = ax.figure.get_children()[-1].yaxis.label.get_text()
     assert str(patch.attrs.data_units.units) in yaxis_label
     assert str(patch.attrs.data_type) in yaxis_label
 
@@ -55,9 +55,9 @@ class TestPlotMap:
         caxis_label = ax.figure.get_children()[-1].yaxis.label.get_text()
 
         # check labels
-        assert patch.attrs.coords["latitude"].units in ax.get_xlabel().lower()
-        assert patch.attrs.coords["longitude"].units in ax.get_ylabel().lower()
-        assert str(patch.attrs.coords["distance"].units) in caxis_label
+        assert "latitude" in ax.get_xlabel().lower()
+        assert "longitude" in ax.get_ylabel().lower()
+        assert "distance" in caxis_label
         assert isinstance(ax, plt.Axes)
 
     def test_array_inputs(self, random_patch_with_lat_lon):
@@ -98,6 +98,18 @@ class TestPlotMap:
         ax = random_patch.viz.plot_map(cmap=None)
         # ensure no colorbar was created.
         assert len(ax.figure.get_children()) == 2
+
+    def test_units(self, random_patch_with_lat_lon):
+        """Test that units show up in labels."""
+        # standard units
+
+        pa = random_patch_with_lat_lon.set_units("m/s")
+        ax = pa.viz.plot_map()
+        check_label_units(pa, ax, ["distance", "distance"])
+
+        new = pa.set_units(latitude="ft", longitude="m")
+        ax = new.viz.plot_map("latitude", "longitude")
+        check_label_units(new, ax, ["latitude", "longitude"])
 
     def test_show(self, random_patch, monkeypatch):
         """Ensure show path is callable."""
