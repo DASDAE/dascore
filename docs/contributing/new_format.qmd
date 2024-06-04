@@ -242,3 +242,7 @@ JINGLE__V1 = "dascore.io.jingle.core:JingleV1"
 :::{.callout-note}
 The name and version of the format are separated by a double underscore.
 :::
+
+## Directories as Inputs
+
+Some `FiberIO` formats may not be self-contained files, but rather must be understood in the context of an entire directory. In these cases, the `input_type` parameter on the `FiberIO` subclass should be set to "directory". See the [xml_binary](`dascore.core.io.xml_binary`) module for an example of a directory based `FiberIO` implementation. 
