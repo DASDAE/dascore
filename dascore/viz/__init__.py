@@ -7,6 +7,7 @@ from dascore.utils.misc import MethodNameSpace
 from .spectrogram import spectrogram
 from .waterfall import waterfall
 from .wiggle import wiggle
+from .plot_map import plot_map
 
 
 class VizPatchNameSpace(MethodNameSpace):
@@ -15,3 +16,4 @@ class VizPatchNameSpace(MethodNameSpace):
     waterfall = waterfall
     spectrogram = spectrogram
     wiggle = wiggle
+    plot_map = plot_map
