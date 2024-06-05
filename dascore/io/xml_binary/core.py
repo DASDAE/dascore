@@ -1,7 +1,6 @@
 """IO module for reading binary raw format DAS data."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from xml.etree.ElementTree import ParseError
 
