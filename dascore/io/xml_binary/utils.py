@@ -77,12 +77,11 @@ def _make_distance_coord(metadata: XMLLaserZones):
     zones = metadata.zones
     zone = next(iter(zones.values()))
     dx = metadata.original_spatial_sampling_interval
-
     distance = get_coord(
         start=(zone.start_channel - 1) * dx,
         stop=zone.end_channel * dx,
         step=dx,
-        units="m",
+        units=metadata.units,
     )
     return distance
 
@@ -110,7 +109,6 @@ def _make_base_attrs_dict(metadata: XMLLaserZones):
         pulse_width_ns=metadata.pulse_width_ns,
         gauge_length=metadata.gauge_length_m,
         instrument_id=iu_name,
-        distance_units=metadata.units,
         zone_name=zone_name,
     )
     return attrs
@@ -146,7 +144,7 @@ def _get_path_datetime_64(paths):
     return pd.Series(dt, index=ser.values)
 
 
-def paths_to_df(paths, metadata, attr_cls):
+def _paths_to_df(paths, metadata, attr_cls):
     """Convert paths to dataframe of info."""
     attrs = _paths_to_attrs(paths=paths, metadata=metadata, attr_cls=attr_cls)
     return _model_list_to_df(attrs)
@@ -180,7 +178,7 @@ def _load_patches(paths, metadata, time, distance, attr_cls):
     # Since there could be **MANY** files, we have to create a mini-index
     # here to determine which files to read. Under normal circumstances
     # this isn't required as a spool can manage it.
-    df = paths_to_df(paths=paths, metadata=metadata, attr_cls=attr_cls)
+    df = _paths_to_df(paths=paths, metadata=metadata, attr_cls=attr_cls)
     df["path"] = paths
     filtered_df = df[filter_df(df, time=time, distance=distance)].pipe(
         adjust_segments, time=time, distance=distance
