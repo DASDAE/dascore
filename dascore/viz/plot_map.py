@@ -39,7 +39,7 @@ def plot_map(
     y: np.ndarray | str = "distance",
     color: np.ndarray | str = "distance",
     ax: plt.Axes | None = None,
-    cmap="cividis",
+    cmap="cividis_r",
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     show=False,
