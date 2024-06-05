@@ -1,7 +1,6 @@
 """IO module for reading binary raw format DAS data."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from xml.etree.ElementTree import ParseError
 
@@ -53,14 +52,6 @@ class XMLBinaryV1(FiberIO):
             attr_cls=BinaryPatchAttrs,
             extra_attrs=extra_attrs,
         )
-        # This is a dirty hack. Creating a dascore index inside the xml_binary
-        # updates the file mtime, which can cause the entire contents to get
-        # re-indexed. If the timestamp caused no contents to be returned this
-        # is the case. We need to adjust the file timestamp back a bit to avoid
-        # this in in future.
-        if timestamp is not None and not len(attrs):
-            times = timestamp - 10, timestamp - 10
-            os.utime(path, times=times)
         return attrs
 
     def read(self, resource, time=None, distance=None, **kwargs) -> dc.BaseSpool:
