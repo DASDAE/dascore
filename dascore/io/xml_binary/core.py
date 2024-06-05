@@ -21,7 +21,7 @@ class BinaryPatchAttrs(dc.PatchAttrs):
     pulse_width_ns: float = np.NAN
     gauge_length: float = np.NaN
     instrument_id: UTF8Str = ""
-    data_units: UTF8Str = ""
+    distance_units: UTF8Str = ""
     zone_name: UTF8Str = ""
 
 

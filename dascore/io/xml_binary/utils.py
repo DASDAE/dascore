@@ -110,7 +110,7 @@ def _make_base_attrs_dict(metadata: XMLLaserZones):
         pulse_width_ns=metadata.pulse_width_ns,
         gauge_length=metadata.gauge_length_m,
         instrument_id=iu_name,
-        data_units=metadata.units,
+        distance_units=metadata.units,
         zone_name=zone_name,
     )
     return attrs
