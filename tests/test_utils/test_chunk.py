@@ -267,7 +267,7 @@ class TestChunkToMerge:
         # Need to remove overlapping sample so these really are contiguous
         # with no overlaps.
         contiguous_df = contiguous_df.assign(
-            time_max=lambda x: x['time_max'] - x['time_step']
+            time_max=lambda x: x["time_max"] - x["time_step"]
         )
         source, current = cm.chunk(contiguous_df)
         inst_df = cm.get_instruction_df(source, current)
