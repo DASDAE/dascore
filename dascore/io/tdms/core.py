@@ -17,7 +17,7 @@ class TDMSFormatterV4713(FiberIO):
     preferred_extensions = ("tdms",)
     lead_in_length = 28
 
-    def get_format(self, stream: BinaryReader) -> tuple[str, str] | bool:
+    def get_format(self, stream: BinaryReader, **kwargs) -> tuple[str, str] | bool:
         """
         Return a tuple of (TDMS, version) if TDMS else False.
 
@@ -35,7 +35,7 @@ class TDMSFormatterV4713(FiberIO):
         except Exception:
             return False
 
-    def scan(self, resource: BinaryReader) -> list[dc.PatchAttrs]:
+    def scan(self, resource: BinaryReader, **kwargs) -> list[dc.PatchAttrs]:
         """Scan a tdms file, return summary information about the file's contents."""
         out = _get_default_attrs(resource)
         out["path"] = getattr(resource, "name", "")

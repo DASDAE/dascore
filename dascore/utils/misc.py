@@ -169,10 +169,10 @@ def all_close(ar1, ar2):
         return np.all(ar1 == ar2)
 
 
-def iter_filesystem(
+def _iter_filesystem(
     paths: str | Path | Iterable[str | Path],
     ext: str | None = None,
-    mtime: float | None = None,
+    timestamp: float | None = None,
     skip_hidden: bool = True,
     include_directories: bool = False,
 ) -> Generator[str, str, None]:
@@ -188,7 +188,7 @@ def iter_filesystem(
         of paths.
     ext : str or None
         The extensions of files to return.
-    mtime : int or float
+    timestamp : int or float
         Time stamp indicating the minimum mtime to scan.
     skip_hidden : bool
         If True skip files or folders (they begin with a '.')
@@ -211,20 +211,20 @@ def iter_filesystem(
     try:  # a single path was passed
         for entry in os.scandir(paths):
             if entry.is_file() and (ext is None or entry.name.endswith(ext)):
-                if mtime is None or entry.stat().st_mtime >= mtime:
+                if timestamp is None or entry.stat().st_mtime >= timestamp:
                     if entry.name[0] != "." or not skip_hidden:
                         yield entry.path
             elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from iter_filesystem(
+                yield from _iter_filesystem(
                     entry.path,
                     ext=ext,
-                    mtime=mtime,
+                    timestamp=timestamp,
                     skip_hidden=skip_hidden,
                     include_directories=include_directories,
                 )
     except (TypeError, AttributeError):  # multiple paths were passed
         for path in paths:
-            yield from iter_filesystem(path, ext, mtime, skip_hidden)
+            yield from _iter_filesystem(path, ext, timestamp, skip_hidden)
     except NotADirectoryError:  # a file path was passed, just return it
         yield paths
 

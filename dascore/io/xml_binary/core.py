@@ -1,6 +1,7 @@
 """IO module for reading binary raw format DAS data."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from xml.etree.ElementTree import ParseError
 
@@ -35,7 +36,7 @@ class XMLBinaryV1(FiberIO):
     # File extension for data files.
     _data_extension = ".raw"
 
-    def scan(self, resource) -> list[dc.PatchAttrs]:
+    def scan(self, resource, timestamp=None, **kwargs) -> list[dc.PatchAttrs]:
         """Scan the contents of the directory."""
         path = Path(resource)
         metadata = _read_xml_metadata(path / self._metadata_name)
@@ -44,12 +45,23 @@ class XMLBinaryV1(FiberIO):
             "file_version": self.version,
             "file_format": self.name,
         }
-        return _paths_to_attrs(
+        # Need to update time
+        attrs = _paths_to_attrs(
             data_files,
             metadata,
+            timestamp=timestamp,
             attr_cls=BinaryPatchAttrs,
             extra_attrs=extra_attrs,
         )
+        # This is a dirty hack. Creating a dascore index inside the xml_binary
+        # updates the file mtime, which can cause the entire contents to get
+        # re-indexed. If the timestamp caused no contents to be returned this
+        # is the case. We need to adjust the file timestamp back a bit to avoid
+        # this in in future.
+        if timestamp is not None and not len(attrs):
+            times = timestamp - 10, timestamp - 10
+            os.utime(path, times=times)
+        return attrs
 
     def read(self, resource, time=None, distance=None, **kwargs) -> dc.BaseSpool:
         """
@@ -81,7 +93,7 @@ class XMLBinaryV1(FiberIO):
         )
         return dc.spool(patches)
 
-    def get_format(self, resource) -> tuple[str, str] | bool:
+    def get_format(self, resource, **kwargs) -> tuple[str, str] | bool:
         """Determine if directory is an XML Binary type."""
         path = Path(resource)
         index_path = path / self._metadata_name

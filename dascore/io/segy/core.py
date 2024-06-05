@@ -18,7 +18,7 @@ class SegyV2(FiberIO):
     # just make another class in the same module named JingleV2.
     version = "2"
 
-    def get_format(self, path) -> tuple[str, str] | bool:
+    def get_format(self, path, **kwargs) -> tuple[str, str] | bool:
         """Make sure input is segy."""
         try:
             with segyio.open(path, ignore_geometry=True):
@@ -45,7 +45,7 @@ class SegyV2(FiberIO):
         patch_trimmed = patch.select(time=time, channel=channel)
         return dc.spool([patch_trimmed])
 
-    def scan(self, path) -> list[dc.PatchAttrs]:
+    def scan(self, path, **kwargs) -> list[dc.PatchAttrs]:
         """
         Used to get metadata about a file without reading the whole file.
 

@@ -71,7 +71,7 @@ class JingleV1(FiberIO):
         be implemented as well.
         """
 
-    def get_format(self, path):
+    def get_format(self, path, **kwargs):
         """
         Used to determine if path is a supported jingle file.
 
@@ -80,7 +80,7 @@ class JingleV1(FiberIO):
         dascore.exceptions.UnknownFiberFormat exception.
         """
 
-    def scan(self, path):
+    def scan(self, path, **kwargs):
         """
         Used to get metadata about a file without reading the whole file.
 
@@ -97,6 +97,11 @@ class JingleV1(FiberIO):
 ```
 
 All 4 methods are optional; some formats will only support reading, others only writing. If `is_format` is not implemented the format will not be auto-detectable, meaning you will have to manually pass the format to [`read`](`dascore.read`) and [`spool`](`dascore.spool`).
+
+
+:::{.callout-note}
+Note that each of these methods should have `**kwargs` at the end. This allows certain formats to have special keywords while others are not required.
+:::
 
 :::{.callout-warning}
 It is very important that the `scan` method returns *exactly* the same patch information as reading the patch would, otherwise the lazy merge planning done by spool can be wrong!

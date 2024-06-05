@@ -16,7 +16,9 @@ class WavIO(FiberIO):
 
     name = "WAV"
 
-    def write(self, spool: SpoolType, resource: str | Path, resample_frequency=None):
+    def write(
+        self, spool: SpoolType, resource: str | Path, resample_frequency=None, **kwargs
+    ):
         """
         Write the contents of the patch to one or more wav files.
 

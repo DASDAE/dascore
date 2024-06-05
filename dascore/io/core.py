@@ -31,7 +31,7 @@ from dascore.core.attrs import str_validator
 from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import cached_method, iter_filesystem, iterate
+from dascore.utils.misc import _iter_filesystem, cached_method, iterate
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,
@@ -465,7 +465,7 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, resource) -> list[dc.PatchAttrs]:
+    def scan(self, resource, **kwargs) -> list[dc.PatchAttrs]:
         """Returns a list of summary info for patches contained in file."""
         # default scan method reads in the file and returns required attributes
         # however, this can be very slow, so each parser should implement scan
@@ -484,12 +484,12 @@ class FiberIO:
             out.append(new)
         return out
 
-    def write(self, spool: SpoolType, resource):
+    def write(self, spool: SpoolType, resource, **kwargs):
         """Write the spool to a resource (eg path, stream, etc.)."""
         msg = f"FiberIO: {self.name} has no write method"
         raise NotImplementedError(msg)
 
-    def get_format(self, resource) -> tuple[str, str] | bool:
+    def get_format(self, resource, **kwargs) -> tuple[str, str] | bool:
         """
         Return a tuple of (format_name, version_numbers).
 
@@ -641,7 +641,7 @@ def scan_to_df(
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
-    mtime: float | None = None,
+    timestamp: float | None = None,
     progress: PROGRESS_LEVELS = "standard",
     exclude=("history",),
 ) -> pd.DataFrame:
@@ -676,7 +676,7 @@ def scan_to_df(
         file_format=file_format,
         file_version=file_version,
         ext=ext,
-        mtime=mtime,
+        timestamp=timestamp,
         progress=progress,
     )
     df = _model_list_to_df(info, exclude=exclude)
@@ -687,8 +687,8 @@ def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **k
     """Yield scan candidates."""
     for el in iterate(patch_source):
         if isinstance(el, str | Path) and (path := Path(el)).exists():
-            generator = iter_filesystem(
-                path, ext=ext, mtime=mtime, include_directories=include_directories
+            generator = _iter_filesystem(
+                path, ext=ext, timestamp=mtime, include_directories=include_directories
             )
             yield from generator
         else:
@@ -746,7 +746,7 @@ def scan(
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
-    mtime: float | None = None,
+    timestamp: float | None = None,
     progress: PROGRESS_LEVELS = "standard",
 ) -> list[dc.PatchAttrs]:
     """
@@ -764,7 +764,7 @@ def scan(
         Only applicable for path-like inputs.
     ext : str or None
         The extensions to map.
-    mtime : int or float
+    timestamp : int or float
         Time stamp indicating the minimum mtime.
     progress
         The type of progress bar to use. None disables progress bar and
@@ -792,10 +792,10 @@ def scan(
     # Unfortunately, we have to iterate the scan candidates twice to get
     # an estimate for the progress bar length. Maybe there is a better way...
     _generator = _iterate_scan_inputs(
-        path, ext=ext, mtime=mtime, include_directories=False
+        path, ext=ext, mtime=timestamp, include_directories=False
     )
     length = _count_generator(_generator)
-    generator = _iterate_scan_inputs(path, ext=ext, mtime=mtime)
+    generator = _iterate_scan_inputs(path, ext=ext, mtime=timestamp)
     tracker = track(
         generator,
         f"scan {path}",
@@ -825,11 +825,15 @@ def scan(
                 # Directory fiber_io should send skip signal back to generator
                 # so that no files/sub directories are scanned.
                 generator.send("skip")
-                if not fiber_io._updated_after(resource, mtime):
+                if not fiber_io._updated_after(resource, timestamp):
                     continue
-            for attr in fiber_io.scan(resource, _pre_cast=True):
+                # Directory FiberIO may need to know the time after which
+                # contents should be returned.
+                source = fiber_io.scan(resource, timestamp=timestamp, _pre_cast=True)
+            else:
+                source = fiber_io.scan(resource, _pre_cast=True)
+            for attr in source:
                 out.append(dc.PatchAttrs.from_dict(attr))
-
     return out
 
 

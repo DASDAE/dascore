@@ -35,11 +35,11 @@ class SentekV5(FiberIO):
         # is probably ok though since Sentek files tend to be quite small.
         return dc.spool(patch).select(time=time, distance=distance)
 
-    def get_format(self, resource: BinaryReader) -> tuple[str, str] | bool:
+    def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
         """Auto detect sentek format."""
         return _get_version(resource)
 
-    def scan(self, resource: BinaryReader):
+    def scan(self, resource: BinaryReader, **kwargs):
         """Extract metadata from sentek file."""
         extras = {
             "file_format": self.name,

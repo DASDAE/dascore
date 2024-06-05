@@ -95,7 +95,7 @@ class DASDAEV1(FiberIO):
         )
         return df
 
-    def get_format(self, resource: PyTablesReader) -> tuple[str, str] | bool:
+    def get_format(self, resource: PyTablesReader, **kwargs) -> tuple[str, str] | bool:
         """Return the format from a dasdae file."""
         is_dasdae, version = False, ""  # NOQA
         with contextlib.suppress(KeyError):
@@ -116,7 +116,7 @@ class DASDAEV1(FiberIO):
             patches.append(_read_patch(patch_group, **kwargs))
         return dc.spool(patches)
 
-    def scan(self, resource: PyTablesReader):
+    def scan(self, resource: PyTablesReader, **kwargs):
         """
         Get the patch info from the file.
 

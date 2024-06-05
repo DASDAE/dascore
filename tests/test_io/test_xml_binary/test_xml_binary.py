@@ -11,8 +11,12 @@ import dascore as dc
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.xml_binary import XMLBinaryV1
 from dascore.io.xml_binary.utils import _read_xml_metadata
+from dascore.utils.time import to_float
 
-metadata = """<?xml version='1.0' encoding='utf-8'?>
+sampling_rate = 1000
+expected_duration = 1
+
+metadata = f"""<?xml version='1.0' encoding='utf-8'?>
 <Metadata>
   <FileFormat>RAW</FileFormat>
   <DateTime>2024-05-30T01:15:00Z</DateTime>
@@ -28,7 +32,7 @@ metadata = """<?xml version='1.0' encoding='utf-8'?>
     <Laser_2>10</Laser_2>
   </ITUChannels>
   <OriginalTemporalSamplingRate>1000</OriginalTemporalSamplingRate>
-  <OutputTemporalSamplingRate>1000</OutputTemporalSamplingRate>
+  <OutputTemporalSamplingRate>{sampling_rate}</OutputTemporalSamplingRate>
   <OriginalSpatialSamplingInterval>1</OriginalSpatialSamplingInterval>
   <Units>m</Units>
   <Zones>
@@ -75,6 +79,16 @@ def binary_xml_with_other_files(
     shutil.copytree(binary_xml_directory, new / "xml_binary")
     sp = dc.get_example_spool()
     dc.examples.spool_to_directory(sp, new)
+    return new
+
+
+@pytest.fixture(scope="session")
+def xml_directory_no_data(tmp_path_factory):
+    """Creates a directory of xml metadata with no binary files."""
+    new = tmp_path_factory.mktemp("binary_xml_no_data")
+    metadata_path = new / "metadata.xml"
+    with open(metadata_path, "w") as fi:
+        fi.write(metadata)
     return new
 
 
@@ -139,9 +153,9 @@ class TestScanContents:
         assert len(scan1) == 2
         # When time is specified only those after should be returned.
         mtime = Path(binary_xml_directory).stat().st_mtime
-        scan2 = dc.scan(binary_xml_directory, mtime=mtime + 50)
+        scan2 = dc.scan(binary_xml_directory, timestamp=mtime + 50)
         assert not len(scan2)
-        scan3 = dc.scan(binary_xml_directory, mtime=mtime - 50)
+        scan3 = dc.scan(binary_xml_directory, timestamp=mtime - 50)
         assert len(scan3) == 2
 
 
@@ -163,6 +177,22 @@ class TestRead:
         assert len(spool) == 2
         for patch in spool:
             assert isinstance(patch, dc.Patch)
+            # test time axis
+            time_coord = patch.get_coord("time")
+            time_step = to_float(time_coord.step)
+            assert np.allclose(time_step, 1 / sampling_rate)
+            # Expecting duration to be 1 second for each file.
+            duration = (time_coord.max() - time_coord.min()) / dc.to_timedelta64(1)
+            assert np.isclose(duration + time_step, 1)
+
+    def test_doesnt_reindex(self, binary_xml_directory):
+        """Indexing twice shouldn't double length of spool."""
+        spool = dc.spool(binary_xml_directory)
+        assert len(spool) == 2
+        # Before, the spool would re-index exactly once doubling size.
+        # We need to ensure this doesn't happen.
+        new_spool = spool.update()
+        assert len(new_spool) == 2
 
     def test_simple_spool(self, binary_xml_directory):
         """Ensure the simple path can be read into a spool."""
@@ -176,3 +206,10 @@ class TestRead:
         assert len(spool) == 5
         for patch in spool:
             assert isinstance(patch, dc.Patch)
+
+    def test_read_empty_data_dir(self, xml_directory_no_data):
+        """Try reading the directory without data."""
+        fiberio = XMLBinaryV1()
+        path = Path(xml_directory_no_data)
+        out = fiberio.read(path)
+        assert not len(out)

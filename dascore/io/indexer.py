@@ -314,11 +314,11 @@ class DirectoryIndexer(AbstractIndexer):
         """
         self._enforce_min_version()  # delete index if schema has changed
         update_time = time.time()
-        mtime = self._get_mtime(only_new=True)
+        timestamp = self._get_mtime(only_new=True)
         paths = self._get_paths(paths)
         df = dc.scan_to_df(
             path=paths,
-            mtime=mtime,
+            timestamp=timestamp,
             progress=progress,
             ext=self.ext,
         )

@@ -15,6 +15,7 @@ from dascore.core import get_coord, get_coord_manager
 from dascore.utils.misc import iterate
 from dascore.utils.models import BaseModel, DateTime64
 from dascore.utils.pd import _model_list_to_df, adjust_segments, filter_df
+from dascore.utils.time import to_float
 from dascore.utils.xml import xml_to_dict
 
 # -- Create a pydantic model for the metadata info to help keep thins organized.
@@ -88,7 +89,7 @@ def _make_distance_coord(metadata: XMLLaserZones):
 
 def _make_time_coord(file_start_times, metadata: XMLLaserZones):
     """Create time coord for each file."""
-    dt = dc.to_timedelta64(metadata.output_temporal_sampling_rate)
+    dt = dc.to_timedelta64(1.0 / metadata.output_temporal_sampling_rate)
     nt = metadata.number_of_frames
     for start in file_start_times:
         yield get_coord(start=start, stop=start + dt * nt, step=dt, units="s")
@@ -153,6 +154,7 @@ def paths_to_df(paths, metadata, attr_cls):
 
 def _read_single_file(path, metadata, time, distance):
     """Read a single file into a patch."""
+    assert not metadata.transposed_data, "Cant handle data transposition yet."
     attr = _paths_to_attrs(path, metadata, summarize=False)[0]
     time_coord = attr.coords["time"].to_coord()
     distance_coord = attr.coords["distance"].to_coord()
@@ -203,10 +205,18 @@ def _paths_to_attrs(
     summarize=True,
     attr_cls=dc.PatchAttrs,
     extra_attrs=None,
+    timestamp=None,
 ):
     """Convert a path to a Patch attribute."""
     extra_attrs = {} if not extra_attrs else extra_attrs
     paths = iterate(paths)
+    # filter based on timestamp
+    if timestamp is not None:
+        ts = to_float(timestamp)
+        paths = list(x for x in paths if Path(x).stat().st_mtime >= ts)
+    # No data to index.
+    if not len(paths):
+        return []
     base_attrs = _make_base_attrs_dict(metadata)
     distance_coord = _make_distance_coord(metadata)
     dt_ser = _get_path_datetime_64(paths)
