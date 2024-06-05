@@ -149,9 +149,8 @@ def long_coord(coord) -> BaseCoord:
 
 @pytest.fixture()
 def degenerate_time_coord():
-    """Return a simply degenerate coord."""
-    ar = np.empty((0, 10), dtype="datetime64[ns]")
-    return get_coord(data=ar)
+    """Return a simple degenerate coord."""
+    return get_coord(data=10, dtype="datetime64[ns]")
 
 
 @pytest.fixture(scope="session")
@@ -1123,19 +1122,19 @@ class TestCoordRange:
     def test_length_with_stop(self):
         """The length argument should work for setting start."""
         out1 = CoordRange(start=0, step=1, stop=10)
-        out2 = CoordRange(start=0, step=1, length=10)
+        out2 = CoordRange(start=0, step=1, shape=(10,))
         assert out1 == out2
 
     def test_length_with_start(self):
         """The length argument should work for setting stop."""
         out1 = CoordRange(start=0, step=1, stop=10)
-        out2 = CoordRange(stop=10, step=1, length=10)
+        out2 = CoordRange(stop=10, step=1, shape=(10,))
         assert out1 == out2
 
     def test_length_with_step(self):
         """The length argument should work for setting step."""
         out1 = CoordRange(start=0, step=1, stop=10)
-        out2 = CoordRange(start=0, stop=10, length=10)
+        out2 = CoordRange(start=0, stop=10, shape=10)
         assert out1 == out2
 
 
@@ -1324,49 +1323,19 @@ class TestNonOrderedArrayCoords:
         assert not coord.degenerate
 
 
-class TestDegenerateCoords:
-    """Tests for degenerate coordinates."""
+class TestCoordArray:
+    """Tests for a coordinate managing an array."""
 
-    def test_init_degen(self):
-        """Ensure degen is inited by any sort of empty array."""
-        arrays = [
-            np.empty((0,), dtype=np.float64),
-            np.empty((0,), dtype=np.int_),
-            np.empty((0, 10), dtype="datetime64[ns]"),
-        ]
-        for ar in arrays:
-            out = get_coord(data=ar)
-            assert out.degenerate
-            assert out.dtype == ar.dtype
-            assert len(out) == 0
-
-    def test_empty(self, degenerate_time_coord):
-        """Ensure empty just returns self."""
-        assert degenerate_time_coord.empty() == degenerate_time_coord
-
-    def test_min_max(self, degenerate_time_coord):
-        """Ensure min/max are nullish."""
-        assert pd.isnull(degenerate_time_coord.min())
-        assert pd.isnull(degenerate_time_coord.max())
-
-    def test_degenerate_with_step_from_array(self):
-        """CoordRange should be possible empty."""
-        ar = np.empty(0, dtype=int)
-        coord = get_coord(data=ar, step=1)
-        assert coord.step == 1
-        assert coord.dtype == ar.dtype
-
-    def test_properties_degenerate_from_coord_range(self, evenly_sampled_coord):
-        """Test key properties for degenerate coord."""
-        coord = evenly_sampled_coord.empty()
-        assert not coord.evenly_sampled
-        assert not coord.sorted
-        assert not coord.reverse_sorted
-        assert coord.degenerate
+    def test_empty_2d(self, two_d_coord):
+        """Ensure the coord can be emptied along any/all axis."""
+        out1 = two_d_coord.empty()
+        out2 = two_d_coord.empty(axes=1)
+        out3 = two_d_coord.empty(axes=0)
+        assert out1.size == out2.size == out3.size == 0
 
 
-class TestNonCoord:
-    """Tests for the non-coordinate."""
+class TestPartialCoord:
+    """Tests for the Partial coordinate."""
 
     def test_init_non_coord(self, basic_non_coord):
         """Ensure a non-coord can be created."""
@@ -1379,7 +1348,7 @@ class TestNonCoord:
 
     def test_update(self, basic_non_coord):
         """Ensure update returns a new non coord."""
-        out = basic_non_coord.update(length=2)
+        out = basic_non_coord.update(shape=2)
         assert len(out) == 2
         assert isinstance(out, CoordPartial)
 
@@ -1417,14 +1386,14 @@ class TestNonCoord:
 
     def test_nan_float_dtype(self):
         """Ensure data are NaN and float dtype."""
-        default = get_coord(length=10)
+        default = get_coord(shape=10)
         data = default.data
         assert np.all(pd.isnull(data))
         assert np.issubdtype(data.dtype, np.floating)
 
     def test_nat_datetime_dtype(self):
         """Ensure data are Nat and datetime dtype."""
-        coord = get_coord(length=10, dtype="datetime64[us]")
+        coord = get_coord(shape=10, dtype="datetime64[us]")
         data = coord.data
         assert np.all(pd.isnull(data))
         assert np.issubdtype(data.dtype, np.datetime64)
@@ -1474,32 +1443,77 @@ class TestNonCoord:
 
     def test_start_stop(self):
         """Ensure start/stop/step are maintained in NonCoords."""
-        coord = get_coord(length=10, step=1)
+        coord = get_coord(shape=10, step=1)
         assert isinstance(coord, CoordPartial)
         assert coord.step == 1
         # Test start/stop
-        coord = get_coord(start=10, length=10)
+        coord = get_coord(start=10, shape=10)
         assert coord.start == 10
         assert len(coord) == 10
 
     def test_length_zero(self):
         """Ensure length 0 non coord is possible."""
-        coord = get_coord(length=0)
+        coord = get_coord(shape=0)
         assert coord.degenerate
 
     def test_uptype_with_data(self):
         """Ensure adding a data array converts to Coord Array."""
-        coord = get_coord(length=10)
+        coord = get_coord(shape=10)
         data = np.random.rand(10)
         out = coord.update(data=data)
         assert np.all(out.data == data)
 
     def test_uptype_with_step(self):
         """Ensure adding a step to existing length/start creates CoordRange."""
-        partial = get_coord(length=10, start=0)
+        partial = get_coord(shape=10, start=0)
         expected = get_coord(start=0, stop=10, step=1)
         out = partial.update(step=1)
         assert out == expected
+
+    def test_init_degen(self):
+        """Ensure degen is inited by any sort of empty array."""
+        arrays = [
+            np.empty((0,), dtype=np.float64),
+            np.empty((0,), dtype=np.int_),
+            np.empty((0, 10), dtype="datetime64[ns]"),
+        ]
+        for ar in arrays:
+            out = get_coord(data=ar)
+            assert out.degenerate
+            assert out.dtype == ar.dtype
+            assert len(out) == 0
+
+    def test_empty(self, degenerate_time_coord):
+        """Ensure empty changes length"""
+        empty = degenerate_time_coord.empty()
+        assert len(empty) == 0
+
+    def test_min_max_degen(self, degenerate_time_coord):
+        """Ensure min/max are nullish."""
+        assert pd.isnull(degenerate_time_coord.min())
+        assert pd.isnull(degenerate_time_coord.max())
+
+    def test_degenerate_with_step_from_array(self):
+        """CoordRange should be possible empty."""
+        ar = np.empty(0, dtype=int)
+        coord = get_coord(data=ar, step=1)
+        assert coord.step == 1
+        assert coord.dtype == ar.dtype
+
+    def test_properties_degenerate_from_coord_range(self, evenly_sampled_coord):
+        """Test key properties for degenerate coord."""
+        coord = evenly_sampled_coord.empty()
+        assert not coord.evenly_sampled
+        assert not coord.sorted
+        assert not coord.reverse_sorted
+        assert coord.degenerate
+
+    def test_update_degenerate_datetime_to_coord_range(self, degenerate_time_coord):
+        """Ensure updating partial with enough info creates coord range."""
+        out = degenerate_time_coord.update(step=dc.to_timedelta64(10)).update(
+            start=dc.to_datetime64("2020-10-01")
+        )
+        assert isinstance(out, CoordRange)
 
 
 class TestCoercion:
@@ -1807,7 +1821,7 @@ class TestIssues:
     def test_update_degenerate_from_attrs(self, degenerate_time_coord):
         """Ensure updating dt on degenerate time coord doesn't fail."""
         # before this would cause infinite recursion.
-        out = degenerate_time_coord.update(step=10)
+        out = degenerate_time_coord.empty().update(step=10)
         assert isinstance(out, BaseCoord)
         assert len(out) == 0
 

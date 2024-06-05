@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import abc
+from collections.abc import Sized
 from functools import cache
 from operator import gt, lt
 from typing import Any, TypeVar
@@ -198,7 +199,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     units: UnitQuantity = None
     step: Any = None
-    length: int | None = None
+    shape: tuple[int, ...] | None = None
     dtype: Any = None
 
     _rich_style = dascore_styles["default_coord"]
@@ -221,6 +222,13 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             if is_timey and data.get("units") != (quant := get_quantity("s")):
                 data["units"] = quant
         return data
+
+    @field_validator("shape", mode="before")
+    @classmethod
+    def _validate_nullish_to_nan(cls, value):
+        """Ensure shape is a tuple."""
+        # This also allows shape to be an int.
+        return tuple(iterate(value))
 
     @abc.abstractmethod
     def convert_units(self, unit) -> Self:
@@ -386,7 +394,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     @cached_method
     def __len__(self):
         """Total number of elements."""
-        return np.prod(self.shape)
+        return self.shape[0]
 
     def __rich__(self):
         key_style = dascore_styles["keys"]
@@ -450,12 +458,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def limits(self) -> tuple[Any, Any]:
         """Returns a numpy datatype."""
         return self.min(), self.max()
-
-    @property
-    @cached_method
-    def shape(self) -> tuple[int, ...]:
-        """Return the shape of the coordinate data."""
-        return self.data.shape
 
     @property
     @cached_method
@@ -573,9 +575,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # Need to only pass "values" rather than data to update
         if "data" in kwargs:
             kwargs["values"] = kwargs.pop("data")
-        # Need to ensure new data is used in constructor, not old length
+        # Need to ensure new data is used in constructor, not old shape
         if "values" in kwargs:
-            info.pop("length", None)
+            info.pop("shape", None)
 
         info.update(kwargs)
         return get_coord(**info)
@@ -738,6 +740,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         samples
             If True, value is already in units of samples.
         """
+        assert self.ndim == 1, "get sample count only works for 1D coords."
         if not self.evenly_sampled:
             msg = "Coordinate is not evenly sampled, cant get sample count."
             raise CoordError(msg)
@@ -851,9 +854,9 @@ class CoordPartial(BaseCoord):
     A coordinate which only contains partial information.
     """
 
-    start: float | int | np.datetime64 = np.nan
-    stop: float | int | np.datetime64 = np.nan
-    step: float | int | np.datetime64 = np.nan
+    start: Any = np.nan
+    stop: Any = np.nan
+    step: Any = np.nan
     _rich_style = dascore_styles["coord_non"]
     _partial = True
 
@@ -868,8 +871,8 @@ class CoordPartial(BaseCoord):
     def __getitem__(self, item):
         # We init a temporary array just to get numpy to do the
         # indexing. There is probably a faster way but this is robust.
-        dummy = np.empty(self.length)[item]
-        return self.__class__(length=len(dummy))
+        dummy = np.empty(self.shape)[item]
+        return self.__class__(shape=dummy.shape)
 
     def _max(self):
         """Dummy funct to do nothing but raise."""
@@ -891,30 +894,21 @@ class CoordPartial(BaseCoord):
         """Sort dummy array. Does nothing."""
         return self, slice(None, None)
 
-    def __rich__(self):
-        contents = self.model_dump(exclude_defaults=True)
-        key_style = dascore_styles["keys"]
-        base = Text("")
-        base += Text(" NonCoord ", style=self._rich_style)
-        base += Text("(")
-        for key, val in contents.items():
-            # We don't need to display length since shape is shown or unset vals.
-            if pd.isnull(val) or key == "length":
-                continue
-            base += Text(f" {key}: {get_nice_text(val)} ")
-        base += Text(" shape: ", key_style)
-        base += get_nice_text(self.shape)
-        base += Text(" )")
-        return base
-
-    @property
-    @cached_method
-    def shape(self):
-        """Returns datatype."""
-        return (self.length,)
+    # def __rich__(self):
+    #     contents = self.model_dump(exclude_defaults=True)
+    #     key_style = dascore_styles["keys"]
+    #     base = Text("")
+    #     base += Text(" Partial ", style=self._rich_style)
+    #     base += Text("(")
+    #     for key, val in contents.items():
+    #         if pd.isnull(val):
+    #             continue
+    #         base += Text(f" {key}: {get_nice_text(val)} ")
+    #     base += Text(" )")
+    #     return base
 
     def __len__(self):
-        return self.length
+        return self.shape[0]
 
     @property
     def values(self):
@@ -938,7 +932,7 @@ class CoordPartial(BaseCoord):
         """
         Select new values inside coord.
 
-        For NonCoord, samples =  True or raise.
+        For partial, samples==True or raise.
         """
         # Need to ensure relative is used OR the select has no effect.
         try:
@@ -969,7 +963,8 @@ class CoordPartial(BaseCoord):
         """
         {doc}
         """
-        return get_coord(length=length)
+        assert self.ndim == 1, "change_length only works on 1D coords."
+        return get_coord(shape=(length,))
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""
@@ -1010,7 +1005,7 @@ class CoordRange(BaseCoord):
     @classmethod
     def validate_start_stop_step_len(cls, values):
         """Coerce the needed values from the inputs."""
-        req_values = ("start", "stop", "step", "length")
+        req_values = ("start", "stop", "step", "shape")
         _attrs = [values.get(x, None) for x in req_values]
         valid_count = sum(not pd.isnull(x) for x in _attrs)
         if valid_count < 3:
@@ -1020,8 +1015,11 @@ class CoordRange(BaseCoord):
             )
             raise CoordError(msg)
         # Now get start, stop, step from length, if provided.
-        start, stop, step, length = _attrs
-        if not pd.isnull(length):
+        start, stop, step, shape = _attrs
+        if not pd.isnull(shape):
+            shape = tuple(iterate(shape))
+            assert len(shape) == 1, "Coord range only works for 1D coords."
+            length = shape[0]
             if pd.isnull(start):
                 start = stop - step * length
             if pd.isnull(stop):
@@ -1032,7 +1030,8 @@ class CoordRange(BaseCoord):
             int_val = int(np.ceil(np.round((stop - start) / step, 1)))
             stop = start + step * int_val
         length = 1 if start == stop else int(np.round((stop - start) / step))
-        values.update(dict(start=start, stop=stop, length=length, step=step))
+        shape = (length,)
+        values.update(dict(start=start, stop=stop, shape=shape, step=step))
         # step should have the same sign as stop-start, see #321.
         diff = stop - start
         # note: we need to the to_float since np.sign(datetime64) returns a
@@ -1062,7 +1061,7 @@ class CoordRange(BaseCoord):
 
     @cached_method
     def __len__(self):
-        return self.length
+        return self.shape[0]
 
     def convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
@@ -1173,7 +1172,7 @@ class CoordRange(BaseCoord):
             out = np.arange(self.start, self.stop, self.step)
         else:
             out = np.linspace(self.start, self.stop - self.step, num=len(self))
-        # again, due to roundoff error the array can one element longer than
+        # again, due to round-off error the array can one element longer than
         # anticipated. The slice here just ensures shape and len match.
         return array(out[: len(self)])
 
@@ -1192,6 +1191,7 @@ class CoordRange(BaseCoord):
         """
         {doc}
         """
+        assert self.ndim == 1, "Can only change length for 1D coords."
         if (current := len(self)) == length:
             return self
         diff = length - current
@@ -1226,6 +1226,7 @@ class CoordArray(BaseCoord):
     def validate_start_stop_step_len(cls, values):
         """Coerce the needed values from the inputs."""
         values["dtype"] = values["values"].dtype
+        values["shape"] = values["values"].shape
         return values
 
     def convert_units(self, units) -> Self:
@@ -1340,12 +1341,6 @@ class CoordArray(BaseCoord):
         """Return max value in range."""
         return np.nanmax(self.values)
 
-    @property
-    @cached_method
-    def shape(self):
-        """Return the shape of the coordinate."""
-        return np.shape(self.values)
-
 
 class CoordMonotonicArray(CoordArray):
     """A coordinate with strictly increasing or decreasing values."""
@@ -1431,20 +1426,20 @@ def get_coord(
     max=None,
     step=None,
     units: None | Unit | Quantity | str = None,
-    length: None | int = None,
+    shape: None | int | tuple[int, ...] = None,
     dtype: str | np.dtype = None,
 ) -> BaseCoord:
     """
-    Given multiple types of input, return a coordinate.
+    Return a coordinate from provided inputs.
 
-    This function automatically figures out which kind of Coordinate
-    should be returned for a given type of input.
+    This function figures out which kind of Coordinate should be returned
+    for provided inputs.
 
     Parameters
     ----------
     data
         An array indicating the values or an integer to specify the length
-        of a NonCoord.
+        of a partial coordinate.
     values
         Deprecated, use data instead.
     start
@@ -1457,9 +1452,9 @@ def get_coord(
         The sampling spacing of an array.
     units
         Indication of units.
-    length
-        If an int, the output should be a NonCoord of this length. Otherwise,
-        leave unset.
+    shape
+        If an int or tuple, the output should be a partial coord of with
+        this shape. Otherwise, leave unset.
     dtype
         Data type for coord. Often can be inferred from other arguments.
 
@@ -1490,6 +1485,9 @@ def get_coord(
     >>> # Coordinate from random array
     >>> array = np.random.rand(20)
     >>> array_coord3 = get_coord(data=array)
+    >>>
+    >>> # Create a partial coordinate of a given shape
+    >>> partial_coord = get_coord(shape=(10,))
     """
 
     def _check_data_compatibility(data, start, stop, step):
@@ -1510,6 +1508,22 @@ def get_coord(
             max = data[-1]
         return max
 
+    def _get_shape(shape):
+        """Return proper shape tuple or None."""
+        if shape is None or isinstance(shape, Sized):
+            return shape
+        return (shape,)
+
+    def _get_array(data, values):
+        """Get the array from either data or values."""
+        # ensure data and values are not used
+        if data is not None and values is not None:
+            msg = "Cannot specify both data and values. Use only data."
+            raise CoordError(msg)
+        elif values is not None:
+            data = values
+        return data
+
     def _maybe_get_start_stop_step(data):
         """Get start, stop, step, is_monotonic."""
         data = np.asarray(data)
@@ -1529,20 +1543,17 @@ def get_coord(
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 
-    if data is None and length is not None:
+    data = _get_array(data, values)
+    shape = _get_shape(shape)
+    if data is None and shape is not None:
         attrs = dict(
-            length=length, start=start, stop=stop, step=step, units=units, dtype=dtype
+            shape=shape, start=start, stop=stop, step=step, units=units, dtype=dtype
         )
         try:  # This could be a normal RangeCoord
             return CoordRange(**attrs)
-        except (ValidationError, CoordError):  # If not it's a NonCoord
+        except (ValidationError, CoordError):  # If not it's a partial
             return CoordPartial(**attrs)
-    # ensure data and values are not used
-    if data is not None and values is not None:
-        msg = "Cannot specify both data and values. Use only data."
-        raise CoordError(msg)
-    elif values is not None:
-        data = values
+
     # maybe convert min/max to start stop.
     if start is None and min is not None:
         start = min
@@ -1552,8 +1563,9 @@ def get_coord(
     # data array was passed; see if it is monotonic/evenly sampled
     if data is not None:
         if isinstance(data, (int | np.integer)):
+            shape = _get_shape(data)
             attrs = dict(
-                length=data, start=start, stop=stop, step=step, units=units, dtype=dtype
+                shape=shape, start=start, stop=stop, step=step, units=units, dtype=dtype
             )
             return CoordPartial(**attrs)
         if isinstance(data, BaseCoord):  # just return coordinate
@@ -1562,7 +1574,7 @@ def get_coord(
             data = array(data)
         if np.size(data) == 0:
             dtype = dtype or data.dtype
-            return CoordPartial(length=0, units=units, step=step, dtype=dtype)
+            return CoordPartial(shape=data.shape, units=units, step=step, dtype=dtype)
         # special case of len 1 array either get range, if step specified
         # or sorted monotonic array if not.
         elif len(data) == 1:
@@ -1579,7 +1591,7 @@ def get_coord(
             return CoordMonotonicArray(values=data, units=units)
         elif np.all(pd.isnull(data)):
             return CoordPartial(
-                length=len(data),
+                shape=data.shape,
                 units=units,
                 start=start,
                 stop=stop,

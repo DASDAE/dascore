@@ -666,7 +666,7 @@ class CoordManager(DascoreBaseModel):
             coord = self.get_coord(name)
             # We can just scale up the coord
             if coord._partial or drop_coords:
-                new_coords[name] = get_coord(length=max(current, new))
+                new_coords[name] = get_coord(shape=max(current, new))
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
                 raise PatchBroadcastError(msg)
@@ -1102,7 +1102,7 @@ def get_coord_manager(
     # Add missing dims to coord map so they get set as non_coords.
     if shape and (missing_dims := (set(dims) - set(coord_map))):
         for name in missing_dims:
-            coord_map[name] = get_coord(length=shape[dims.index(name)])
+            coord_map[name] = get_coord(shape=shape[dims.index(name)])
             dim_map[name] = (name,)
     if attrs:
         coord_updates, _ = separate_coord_info(attrs, dims)
