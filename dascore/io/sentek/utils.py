@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 import dascore as dc
@@ -77,7 +79,7 @@ def _get_patch_attrs(fid, extras=None):
     distance_step = (distance_stop - distance_start) / sensor_num
     dist = get_coord(start=distance_start, stop=distance_stop, step=distance_step)
     # create time coord
-    file_time = _get_time_from_file_name(fid.name)
+    file_time = _get_time_from_file_name(Path(fid.name).name)
     offset_start = np.fromfile(fid, dtype=np.float32, count=1)[0]
     fid.seek(int(measurement_count - 1) * 4)
     offset_stop = np.fromfile(fid, dtype=np.float32, count=1)[0]

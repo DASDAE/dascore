@@ -19,6 +19,7 @@ from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
     align_patch_coords,
+    get_dim_value_from_kwargs,
     get_multiple_dim_value_from_kwargs,
     patch_function,
 )
@@ -511,6 +512,40 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
 
 
 @patch_function()
+def fillna(patch: PatchType, value) -> PatchType:
+    """
+    Return a patch with nullish values replaced by a value.
+
+    Parameters
+    ----------
+    patch
+        The patch which may contain nullish values.
+    value
+        The value to replace nullish values with.
+
+    Notes
+    -----
+    "nullish" is defined by `pandas.isnull`.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> # load an example patch which has some NaN values.
+    >>> patch = dc.get_example_patch("patch_with_null")
+    >>> # Replace all occurences of NaN with 0
+    >>> out = patch.fillna(0)
+    >>> # Replace all occurences of NaN with 5
+    >>> out = patch.fillna(5)
+    """
+    to_replace = pd.isnull(patch.data)
+
+    new_data = patch.data.copy()
+    new_data[to_replace] = value
+
+    return patch.new(data=new_data)
+
+
+@patch_function()
 def pad(
     patch: PatchType,
     mode: Literal["constant"] = "constant",
@@ -599,3 +634,46 @@ def pad(
     new_coords = patch.coords.update(**new_coords)
 
     return patch.new(data=new_data, coords=new_coords)
+
+
+@patch_function()
+def roll(patch, samples=False, update_coord=False, **kwargs):
+    """
+    Roll patch array elements along a given dimension.
+
+    Parameters
+    ----------
+    patch
+        input patch
+    samples
+        if True, value indicates coordinate or value of dimension
+    update_coord
+        if True, updates coord based on rolled amount
+    **kwargs
+        specifies dimension and number of elements to roll
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # roll time dimension 5 elements
+    >>> rolled_patch = patch.roll(time=5, samples=True)
+    >>> # roll distance dimension 30 meters(or units of distance in patch)
+    >>> rolled_patch2 = patch.roll(distance=30, samples=False)
+    >>> # roll time dimension 5 elements and update coordinates
+    >>> rolled_patch3 = patch.roll(time=5, samples=True, update_coord=True)
+    """
+    dim, axis, input_value = get_dim_value_from_kwargs(patch, kwargs)
+    arr = patch.data
+    coord = patch.get_coord(dim)
+    value = coord.get_sample_count(input_value, samples=samples)
+
+    roll_arr = np.roll(arr, value, axis=0)
+
+    # update coords if True
+    if update_coord:
+        roll_coord_arr = np.roll(coord.values, value, axis=0)
+        new_coord = coord.update(values=roll_coord_arr)
+        patch = patch.update_coords(**{dim: new_coord})
+
+    return patch.new(data=roll_arr)
