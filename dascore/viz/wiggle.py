@@ -40,7 +40,7 @@ def _shade(offsets, ax, data_scaled, color, wiggle_labels):
 def _format_y_axis_ticks(ax, offsets, other_axis_ticks, max_ticks=10):
     """Format the Y axis tick labels."""
     # set the offset
-    ax.set_yticks(offsets, other_axis_ticks)
+    ax.set_yticks(offsets, np.around(other_axis_ticks, 2))
     min_bins = min(len(other_axis_ticks), max_ticks)
     plt.locator_params(axis="y", nbins=min_bins)
 
