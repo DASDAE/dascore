@@ -32,15 +32,23 @@ See [`get_example_patch`](`dascore.examples.get_example_patch`) for supported pa
 
 A single file can be loaded like this:
 
+
 ```{python}
+#| code-fold: true
+# This codeblock is just to get a usable path for the next cell.
 import dascore as dc
 from dascore.utils.downloader import fetch
 
-# here we download an example data file. You can replace
-# the next line with the path to your file.
 path = fetch("terra15_das_1_trimmed.hdf5")
+```
 
-# then we get the first patch in the spool
+
+```{python}
+import dascore as dc
+
+# path should be a path to your file. EG,
+# path = mydata.hdf5
+
 pa = dc.spool(path)[0]
 ```
 
