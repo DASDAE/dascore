@@ -79,10 +79,11 @@ def plot_map(
 
     Examples
     --------
-    >>> # Plot the default patch
+    >>> # Plot patch
     >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> _ = patch.viz.waterfall(scale=0.1)
+    >>> patch = dc.get_example_patch("random_patch_with_lat_lon")
+    >>> patch = patch.set_units(latitude="m", longitude="m")
+    >>> _ = patch.viz.plot_map("latitude", "longitude", "distance")
     """
     dims = []
     if isinstance(x, str):
