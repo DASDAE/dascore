@@ -330,31 +330,3 @@ class TestWarnOrRaise:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             warn_or_raise(msg, behavior=None)
-
-
-#
-# class TestIterContents:
-#     """Tests for iterating contents of a directory."""
-#
-#     @pytest.fixture(scope='class')
-#     def basic_dir(self, tmp_path_factory):
-#         """
-#         Basic directory setup with contents like:
-#         top
-#           file.txt
-#           folder
-#              file.txt
-#              another.bin
-#              sub_folder
-#                file.txt
-#         """
-#         path = Path(tmp_path_factory.mktemp('basic_dir'))
-#         (path / 'file.txt').write_text("content of txt")
-#         folder_path = (path / "folder")
-#         folder_path.mkdir(exist_ok=True)
-#         (folder_path / "file.txt").write_text("content of sub text")
-#         (folder_path / "another.bin").write_bytes(b"bytey bytes")
-#         sub_folder_path = folder_path / "sub_folder"
-#         sub_folder_path.mkdir(exist_ok=True)
-#         (sub_folder_path / "file.txt").write_text("content of sub sub text")
-#         return path
