@@ -1,7 +1,10 @@
 """Function for querying Patchs."""
 from __future__ import annotations
 
+import numpy as np
+
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
 
 
@@ -56,6 +59,24 @@ def select(
     >>> # Select last time row/column
     >>> new_distance2 = patch.select(time=-1, samples=True)
     """
+    # Raise error when samples=True but kwargs are not integers
+    if samples:
+        for value in kwargs.values():
+            start, stop = (
+                (value.start, value.stop)
+                if isinstance(value, slice)
+                else (value[0], value[1])
+                if isinstance(value, tuple)
+                else (value, value)
+            )
+
+            if not all(
+                isinstance(v, (int | np.integer | type(None) | type(Ellipsis)))
+                for v in (start, stop)
+            ):
+                msg = "When samples=True, values must be integers."
+                raise ParameterError(msg)
+
     new_coords, data = patch.coords.select(
         **kwargs,
         array=patch.data,

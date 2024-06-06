@@ -475,7 +475,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             An object for determining select range.
         """
         select_tuple = sanitize_range_param(select)
-
         p1, p2 = (
             self._get_compatible_value(x, relative=relative) for x in select_tuple
         )
@@ -578,7 +577,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             If True, value is already in units of samples.
         """
         if not self.evenly_sampled:
-            msg = "Coordinate is not evenly sampled, cant get sample count."
+            msg = "Coordinate is not evenly sampled, can't get sample count."
             raise CoordError(msg)
         if samples:
             if not isinstance(value, int | np.integer):
@@ -751,13 +750,13 @@ class CoordRange(BaseCoord):
         if self.reverse_sorted:
             start, stop = stop, start
         # we add 1 to stop in slice since its upper limit is exclusive
-        out = slice(start, (stop + 1) if stop is not None else stop)
-        if self._slice_degenerate(out):
+        data = slice(start, (stop + 1) if stop is not None else stop)
+        if self._slice_degenerate(data):
             return self.empty(), slice(0, 0)
         new_start = self[start] if start is not None else self.start
         new_end = self[stop] + self.step if stop is not None else self.stop
-        new = self.new(start=new_start, stop=new_end)
-        return new, out
+        new_coords = self.new(start=new_start, stop=new_end)
+        return new_coords, data
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the contents of the coord. Return new coord and slice for sorting."""

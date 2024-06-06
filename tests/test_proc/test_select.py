@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import ParameterError
 
 
 class TestSelect:
@@ -120,6 +121,20 @@ class TestSelect:
         msg = "iselect is deprecated"
         with pytest.warns(DeprecationWarning, match=msg):
             _ = random_patch.iselect(time=(10, -10))
+
+    def test_dist_float_values_samples_true(self, random_patch, samples=True):
+        """Ensure range values are integer when samples=True."""
+        start = 2.1
+        end = 5.7
+        with pytest.raises(ParameterError, match="When samples=True"):
+            random_patch.select(distance=(start, end), samples=samples)
+
+    def test_time_float_values_samples_true(self, random_patch, samples=True):
+        """Ensure range values are integer when samples=True."""
+        start = 1.1
+        end = int(3.4)
+        with pytest.raises(ParameterError, match="When samples=True"):
+            random_patch.select(time=(start, end), samples=samples)
 
 
 class TestSelectHistory:
