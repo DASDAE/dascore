@@ -509,6 +509,7 @@ class DataFrameSpool(BaseSpool):
         chunker = ChunkManager(
             overlap=overlap,
             keep_partial=keep_partial,
+            snap_coords=snap_coords,
             group_columns=self._group_columns,
             tolerance=tolerance,
             conflict=conflict,

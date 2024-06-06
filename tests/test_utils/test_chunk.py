@@ -188,6 +188,13 @@ class TestChunkExceptions:
         with pytest.raises(ParameterError, match="must be greater than 0"):
             ChunkManager(time=0)
 
+    def test_raises_invalid_key_in_kwargs(self):
+        """Ensure an invalid key in kwargs raises an error."""
+        chunk_manager = ChunkManager(time=10)
+        chunk_manager.patch = type("Patch", (object,), {"dims": ["time", "distance"]})()
+        with pytest.raises(ParameterError, match="Invalid dimension key"):
+            chunk_manager._validate_kwargs({"Times": 1})
+
 
 class TestChunkToMerge:
     """Tests for using chunking to merge contiguous, or overlapping, data."""
