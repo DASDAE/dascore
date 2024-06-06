@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import UnknownExample
+from dascore.exceptions import UnknownExampleError
 from dascore.utils.time import to_float
 
 
@@ -19,7 +19,7 @@ class TestGetExamplePatch:
 
     def test_raises_on_bad_key(self):
         """Ensure a bad key raises expected error."""
-        with pytest.raises(UnknownExample, match="No example patch"):
+        with pytest.raises(UnknownExampleError, match="No example patch"):
             dc.get_example_patch("NotAnExampleRight????")
 
     def test_example_1(self):
@@ -37,6 +37,11 @@ class TestGetExamplePatch:
         out = dc.get_example_patch("sin_wav")
         assert isinstance(out, dc.Patch)
 
+    def test_data_file_name(self):
+        """Ensure get_example_spool works on a datafile."""
+        spool = dc.get_example_spool("dispersion_event.h5")
+        assert isinstance(spool, dc.BaseSpool)
+
 
 class TestGetExampleSpool:
     """Test suite for `get_example_spool`."""
@@ -48,8 +53,13 @@ class TestGetExampleSpool:
 
     def test_raises_on_bad_key(self):
         """Ensure a bad key raises expected error."""
-        with pytest.raises(UnknownExample, match="No example spool"):
+        with pytest.raises(UnknownExampleError, match="No example spool"):
             dc.get_example_spool("NotAnExampleRight????")
+
+    def test_data_file_name(self):
+        """Ensure get_example_spool works on a datafile."""
+        spool = dc.get_example_spool("dispersion_event.h5")
+        assert isinstance(spool, dc.BaseSpool)
 
 
 class TestRickerMoveout:

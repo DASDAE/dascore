@@ -135,7 +135,7 @@ def idas_h5_example_path():
 
 
 @pytest.fixture(scope="session")
-def brady_hs_DAS_DTS_coords_path():
+def brady_hs_das_dts_coords_path():
     """Return the path to the brady Hotspot DAS/DTS coords file."""
     out = fetch("brady_hs_DAS_DTS_coords.csv")
     assert out.exists()
@@ -221,6 +221,13 @@ def random_patch_many_coords(random_patch):
 def event_patch_1():
     """Fetch event patch 1."""
     return dc.get_example_patch("example_event_1")
+
+
+@pytest.fixture(scope="session")
+@register_func(PATCH_FIXTURES)
+def event_patch_2():
+    """Fetch event patch 2."""
+    return dc.get_example_patch("example_event_2")
 
 
 @pytest.fixture(scope="session")
@@ -326,7 +333,7 @@ def terra15_das_unfinished_path() -> Path:
     return out
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="class")
 @register_func(SPOOL_FIXTURES)
 def random_spool() -> SpoolType:
     """Init a random array."""
@@ -368,7 +375,7 @@ def one_file_directory_spool(one_file_dir):
 @register_func(SPOOL_FIXTURES)
 def diverse_spool():
     """Create a spool with a diverse set of patches for testing."""
-    return ex._diverse_spool()
+    return ex.diverse_spool()
 
 
 @pytest.fixture(scope="class")
@@ -406,7 +413,7 @@ def memory_spool_dim_1_patches():
         time_step=0.999767552,
         shape=(100, 1),
         length=10,
-        starttime="2023-06-13T15:38:00.49953408",
+        time_min="2023-06-13T15:38:00.49953408",
     )
     return spool
 
@@ -476,7 +483,7 @@ def dummy_text_file(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def brady_hs_DAS_DTS_coords():
+def brady_hs_das_dts_coords():
     """Return a pandas dataframe with X,Y,Z coordinates."""
     path = fetch("brady_hs_DAS_DTS_coords.csv")
     coord_table = pd.read_csv(path)

@@ -1,23 +1,17 @@
 ---
 title: Documentation
 ---
-There are several levels of documentation in DASCore. These include: code comments
-(which are primarily for developers), docstrings (which are used to generate the API docs),
-and markdown documentation pages like this one.
+There are several levels of documentation in DASCore. These include: code comments (which are primarily for developers), docstrings (which are used to generate the API docs), and markdown documentation pages like this one which have a .qmd extension.
 
 # Code comments
 
-Code comments are primarily for developers. They should describe useful information and not
-just restate obvious parts of the code. Consider refactoring with better named variables or
-smaller, well named functions if you find yourself making lots of these types of comments.
+Code comments are primarily for developers. They should describe useful information and not  just restate obvious parts of the code. Consider refactoring with better named variables or smaller, well named functions if you find yourself making lots of these types of comments.
 
 Don't be afraid to make multi-line comments if needed.
 
 # Doc-Strings
 
-Use [numpy style docstrings](https://numpydoc.readthedocs.io/en/latest/format.html). All public code
-(doesn't start with a `_`) should have a "full" docstring but private code (starts with a `_`) can have an
-abbreviated docstring.
+Use [numpy style docstrings](https://numpydoc.readthedocs.io/en/latest/format.html). All public code (doesn't start with a `_`) should have a "full" docstring but private code (starts with a `_`) can have an abbreviated docstring.
 
 DASCore makes extensive use of Python 3's [type hints](https://docs.python.org/3/library/typing.html).
 Please make an effort to accurately annotate public functions/classes/methods.
@@ -75,8 +69,7 @@ def _recombobulate(df, arg1, arg2):
 
 ## Examples in docstrings
 
-Examples in docstrings can be done using the standard
-[doctest](https://docs.python.org/3/library/doctest.html) syntax as above, or [quarto code blocks](https://quarto org/docs/output-formats/html-code.html) can be used directly. The latter gives more control over outputs and display options.
+Examples in docstrings can be done using the standard [doctest](https://docs.python.org/3/library/doctest.html) syntax as above, or [quarto code blocks](https://quarto org/docs/output-formats/html-code.html) can be used directly. The latter gives more control over outputs and display options.
 
 You can also specify [quarto html code block options](https://quarto.org/docs/output-formats/html-code.html) using a "#|" type comment and add headings using "###". For example:
 
@@ -134,19 +127,26 @@ Conversely, you can also preview the documentation so changes are rendered in re
 quarto preview docs
 ```
 
+:::{.callout-warning}
 If you need to change the structure of the site, like adding a new section/subsection, the file to edit is scripts/_templates/_quarto.yml.
+Do not modify docs/_quarto.yml because it will be overwritten.
+:::
 
 # Cross references
 
-Cross references provide a means of linking parts of the documentation to the API docs for specific modules, classes,
-functions, or methods. They work just like normal markdown links except the reference is a dascore object surrounded
-by backticks like so:
+Cross references provide a means of linking parts of the documentation to the API docs for specific modules, classes, functions, or methods. They work just like normal markdown links except the reference is a dascore object surrounded by backticks like so:
 
 ```
 This is a link to DASCore's [Patch](`dascore.core.Patch`).
 ```
 
-This can be used in both docstrings and the documentation pages.
+To link to qmd files in the documentation folder (eg from a docstring) the path relative to the docs folder can be used:
+
+```
+This is a link to [this qmd file](`docs/contributing/documentation.qmd`).
+```
+
+Cross references can be used in both docstrings and the qmd documentation pages.
 
 # Referencing publications
 
@@ -161,14 +161,11 @@ Citing @lindsey2021fiber or [@lindsey2021fiber] is done like so:
 Citing @lindsey2021fiber or [@lindsey2021fiber]
 ```
 
-References then show up at the bottom of the page, or if the mouse pointer hovers over
-the link.
+References then show up at the bottom of the page, or if the mouse pointer hovers over the link.
 
 # Equations
 
-Equations use standard latex. In line equations ($E=mc^2$) are surrounded by a single dollar sign (`$`)
-like this: `$E=mc^2$`. Multiline comments start and end with double dollar signs (`$$`) and can
-be given a reference-able label. For example:
+Equations use standard latex. In line equations ($E=mc^2$) are surrounded by a single dollar sign (`$`) like this: `$E=mc^2$`. Multiline comments start and end with double dollar signs (`$$`) and can be given a reference-able label. For example:
 
 $$
 \begin{array}{l}
@@ -194,5 +191,4 @@ and @eq-rotations is referenced by `@eq-rotations`.
 
 # Additional Tips
 
-For more information about figure alignment, code blocks, formatting, etc. checkout the
-excellent [quarto docs](https://quarto.org/).
+For more information about figure alignment, code blocks, formatting, etc. checkout the excellent [quarto docs](https://quarto.org/).

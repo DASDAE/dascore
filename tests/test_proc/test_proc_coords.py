@@ -42,7 +42,7 @@ class TestSortCoords:
         for dim, array, ind in zip(dims, array_list, (1, 0)):
             coord = patch.coords.coord_map[dim]
             arg_sort = np.argsort(coord.values)
-            new = patch.new(data=array).sort_coords(dim)
+            new = patch.update(data=array).sort_coords(dim)
             data_along_slice = np.take(new.data, 0, ind)
             assert np.all(np.equal(arg_sort, data_along_slice))
 
@@ -105,11 +105,11 @@ class TestCoordsFromDf:
         return _func
 
     @pytest.fixture()
-    def coord_df(self, brady_hs_DAS_DTS_coords, random_patch):
+    def coord_df(self, brady_hs_das_dts_coords, random_patch):
         """Get a coordinate dataframe that is compatible with random_patch."""
         dist_max = random_patch.coords.max("distance")
         df = (
-            brady_hs_DAS_DTS_coords.rename(columns={"Channel": "distance"})
+            brady_hs_das_dts_coords.rename(columns={"Channel": "distance"})
             .sample(frac=1 / 5)
             .loc[lambda x: x["distance"] <= dist_max]
             .sort_values("distance")

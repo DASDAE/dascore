@@ -13,6 +13,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.constants import PROGRESS_LEVELS
 from dascore.core.spool import BaseSpool, DataFrameSpool
 from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
 from dascore.utils.docs import compose_docstring
@@ -100,10 +101,10 @@ class DirectorySpool(DataFrameSpool):
         return self._df
 
     @compose_docstring(doc=BaseSpool.update.__doc__)
-    def update(self) -> Self:
+    def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
         """{doc}."""
         out = self.__class__(
-            base_path=self.indexer.update(),
+            base_path=self.indexer.update(progress=progress),
             preferred_format=self._preferred_format,
             select_kwargs=self._select_kwargs,
         )

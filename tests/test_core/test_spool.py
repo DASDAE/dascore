@@ -11,7 +11,12 @@ import pytest
 import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
-from dascore.exceptions import InvalidSpoolError, ParameterError
+from dascore.exceptions import (
+    IncompatiblePatchError,
+    InvalidSpoolError,
+    ParameterError,
+    PatchDimError,
+)
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -484,7 +489,7 @@ class TestMisc:
         # create new patch with cleared history
         new_attrs = dict(patch.attrs)
         new_attrs["history"] = []
-        new_patch = patch.new(attrs=new_attrs)
+        new_patch = patch.update(attrs=new_attrs)
         assert not new_patch.attrs.history
         # add new patch (w/ no history) to spool, get first patch out.
         spool = dc.spool([new_patch])
@@ -503,3 +508,70 @@ class TestMisc:
         spool = dc.spool(random_dft_patch)
         patch = spool[0]
         assert isinstance(patch, dc.Patch)
+
+
+class TestSpoolStack:
+    """Tests for stacking (adding) spool content."""
+
+    def test_stack_data(self):
+        """
+        Try the stack method on an example spool that has repeated
+        copies of the same patch with different times. Check data.
+        """
+        # Grab the example spool which has repeats of the same patch
+        # but with different time dimensions. Stack the patches.
+        spool = dc.get_example_spool()
+        stack_patch = spool.stack(dim_vary="time")
+        # We expect the sum/stack to be same as a multiple of
+        # the first patch's data.
+        baseline = float(len(spool)) * spool[0].data
+        assert np.allclose(baseline, stack_patch.data)
+
+    def test_same_dim_different_shape(self, random_spool):
+        """Ensure when stack dimensions have different shape an error is raised."""
+        # Create a spool with two patches, each with time dim but with different
+        # lengths.
+        patch1, patch2 = random_spool[:2]
+        patch2 = patch2.select(time=(1, 30), samples=True)
+        spool = dc.spool([patch1, patch2])
+        # Check that warnings/exceptions are raised.
+        msg = "Patches are not compatible"
+        with pytest.raises(IncompatiblePatchError, match=msg):
+            spool.stack(dim_vary="time", check_behavior="raise")
+        # Or a warning issued.
+        with pytest.warns(UserWarning, match=msg):
+            spool.stack(dim_vary="time", check_behavior="warn")
+
+    def test_different_dimensions(self, random_spool):
+        """Tests for when the spool has patches with different dimensions."""
+        new_patch = random_spool[0].rename_coords(time="money")
+        spool = dc.spool([random_spool[1], new_patch])
+        msg = "because their dimensions are not equal"
+        with pytest.warns(UserWarning, match=msg):
+            spool.stack(dim_vary="time", check_behavior="warn")
+
+    def test_bad_dim_vary(self, random_spool):
+        """Ensure when dim_vary is not in patch an error is raised."""
+        with pytest.raises(PatchDimError):
+            random_spool.stack(dim_vary="money")
+
+    def test_stack_coords(self):
+        """
+        Try the stack method on an example spool that has repeated
+        copies of the same patch with different times. Check coords.
+        """
+        # Grab the example spool which has repeats of the same patch
+        # but with different time dimensions. Stack the patches.
+        spool = dc.get_example_spool()
+        stack_patch = spool.stack(dim_vary="time")
+        # check that 'time' coordinates has same step as original patch
+        time_coords = stack_patch.coords.coord_map["time"]
+        orig_time_coords = spool[0].coords.coord_map["time"]
+        assert time_coords.step == orig_time_coords.step
+        # check that distance coordinates are the same
+        dist_coords = stack_patch.coords.coord_map["distance"]
+        orig_dist_coords = spool[0].coords.coord_map["distance"]
+        assert dist_coords.start == orig_dist_coords.start
+        assert dist_coords.stop == orig_dist_coords.stop
+        assert dist_coords.step == orig_dist_coords.step
+        assert dist_coords.units == orig_dist_coords.units

@@ -24,7 +24,7 @@ from tables import File as PyTablesFile
 
 import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, max_lens
-from dascore.exceptions import InvalidFileHandler, InvalidIndexVersionError
+from dascore.exceptions import InvalidFileHandlerError, InvalidIndexVersionError
 from dascore.io.core import PatchFileSummary
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -111,7 +111,7 @@ def open_hdf5_file(
                 f"A HDF5 file handler with mode 'r' was provided but "
                 f"mode: {desired_mode} was requested."
             )
-            raise InvalidFileHandler(msg)
+            raise InvalidFileHandlerError(msg)
 
     if isinstance(path_or_handler, str | Path):
         # Note: We suppress DataTypeWarnings because pytables fails to read
@@ -456,3 +456,15 @@ class H5Writer(H5Reader):
 # used in new code.
 HDF5Writer = PyTablesWriter
 HDF5Reader = PyTablesReader
+
+
+def unpack_scalar_h5_dataset(dataset):
+    """
+    Unpack a scalar H5Py dataset.
+    """
+    assert dataset.size == 1
+    # This gets weird because datasets can be of shape () or (1,).
+    value = dataset[()]
+    if isinstance(value, np.ndarray):
+        value = value[0]
+    return value

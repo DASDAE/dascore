@@ -18,6 +18,7 @@ from dascore.utils.misc import (
     cached_method,
     optional_import,
 )
+from dascore.utils.time import to_float
 
 HANDLE_FUNCTIONS = {
     str: lambda x: str(x),
@@ -182,10 +183,14 @@ def patch_to_obspy(patch: PatchType):
     def _get_time_stats(patch):
         """Get stats dict with time values."""
         coord = patch.get_coord("time")
+        tmin = dc.to_datetime64(coord.min())
+        tmax = dc.to_datetime64(coord.max())
+        dt = np.timedelta64(1, "s") / coord.step
+
         time_stats = {
-            "starttime": obspy.UTCDateTime(str(coord.min())),
-            "endtime": obspy.UTCDateTime(str(coord.max())),
-            "sampling_rate": np.timedelta64(1, "s") / coord.step,
+            "starttime": obspy.UTCDateTime(str(tmin)),
+            "endtime": obspy.UTCDateTime(str(tmax)),
+            "sampling_rate": to_float(dt),
         }
         return time_stats
 

@@ -38,7 +38,13 @@ def get_registry():
 
 @cache
 def get_unit(value) -> Unit:
-    """Convert a value to a pint unit."""
+    """
+    Convert a value to a pint unit.
+
+    Usually quantities, generated with
+    [`get_quantity`](`dascore.units.get_quantity`), are easy to work
+    with.
+    """
     if isinstance(value, Quantity):
         assert value.magnitude == 1.0
         value = value.units
@@ -55,7 +61,20 @@ def _str_to_quant(qunat_str):
 
 
 def get_quantity(value: str_or_none) -> Quantity | None:
-    """Convert a value to a pint quantity."""
+    """
+    Convert a value to a pint quantity.
+
+    Parameters
+    ----------
+    value
+        The value to convert to a quantity.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> meters = dc.get_quantity("m")
+    >>> accel = dc.get_quantity("m/s^2")
+    """
     value = unbyte(value)
     if value is None or value is ... or value == "":
         return None

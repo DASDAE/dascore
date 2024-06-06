@@ -20,9 +20,10 @@ from scipy.linalg import solve
 from scipy.special import factorial
 
 import dascore as dc
+from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
     FilterValueError,
-    MissingOptionalDependency,
+    MissingOptionalDependencyError,
     ParameterError,
 )
 from dascore.utils.progress import track
@@ -72,7 +73,7 @@ def _pass_through_method(func):
 class _NameSpaceMeta(type):
     """Metaclass for namespace class."""
 
-    def __setattr__(self, key, value):
+    def __setattr__(cls, key, value):
         if callable(value):
             value = _pass_through_method(value)
         super().__setattr__(key, value)
@@ -92,6 +93,33 @@ def suppress_warnings(category=Warning):
         warnings.simplefilter("ignore", category=category)
         yield
     return None
+
+
+def warn_or_raise(
+    msg: str,
+    exception: type[Exception] = Exception,
+    warning: type[Warning] = UserWarning,
+    behavior: WARN_LEVELS = "warn",
+):
+    """
+    A helper function to issues a warning, raise an exception or do nothing.
+
+    Parameters
+    ----------
+    msg
+        The message to attach to warning or exception.
+    exception
+        The exception class to raise.
+    warning
+        The type of warning to use. Must be a subclass of Warning.
+    behavior
+        If None, do nothing. If
+    """
+    if not behavior:
+        return
+    if behavior == "raise":
+        raise exception(msg)
+    warnings.warn(msg, warning)
 
 
 class MethodNameSpace(metaclass=_NameSpaceMeta):
@@ -139,12 +167,10 @@ def all_close(ar1, ar2):
     strict equality is used.
     """
     ar1, ar2 = np.array(ar1), np.array(ar2)
-    is_date = np.issubdtype(ar1.dtype, np.datetime64)
-    is_timedelta = np.issubdtype(ar1.dtype, np.timedelta64)
-    if is_date or is_timedelta:
-        return np.all(ar1 == ar2)
-    else:
+    try:
         return np.allclose(ar1, ar2)
+    except TypeError:
+        return np.all(ar1 == ar2)
 
 
 def iter_files(
@@ -250,12 +276,12 @@ def optional_import(package_name: str) -> ModuleType:
     Examples
     --------
     >>> from dascore.utils.misc import optional_import
-    >>> from dascore.exceptions import MissingOptionalDependency
+    >>> from dascore.exceptions import MissingOptionalDependencyError
     >>> # import a module (this is the same as import dascore as dc)
     >>> dc = optional_import('dascore')
     >>> try:
     ...     optional_import('boblib5')  # doesn't exist so this raises
-    ... except MissingOptionalDependency:
+    ... except MissingOptionalDependencyError:
     ...     pass
     """
     try:
@@ -265,7 +291,7 @@ def optional_import(package_name: str) -> ModuleType:
             f"{package_name} is not installed but is required for the "
             f"requested functionality"
         )
-        raise MissingOptionalDependency(msg)
+        raise MissingOptionalDependencyError(msg)
     return mod
 
 
@@ -318,8 +344,8 @@ def _get_stencil_weights(array, ref_point, order):
     """
     ell = np.arange(len(array))
     assert order in ell, "Order must be in domain"
-    A = (((array - ref_point)[:, np.newaxis] ** ell) / factorial(ell)).T
-    weights = solve(A, ell == order)
+    mat = (((array - ref_point)[:, np.newaxis] ** ell) / factorial(ell)).T
+    weights = solve(mat, ell == order)
     return weights.flatten()
 
 
@@ -363,14 +389,37 @@ def maybe_get_attrs(obj, attr_map: Mapping):
     return out
 
 
-def maybe_get_items(obj, attr_map: Mapping):
-    """Maybe get items from a mapping (if they exist)."""
+def maybe_get_items(
+    obj, attr_map: Mapping[str, str], unpack_names: None | set[str] = None
+):
+    """
+    Maybe get items from a mapping (if they exist).
+
+    Parameters
+    ----------
+    obj
+        Any map like object.
+    attr_map
+        A mapping of {current_name: output_name}
+    unpack_names
+        A set of names which should be unpacked (ie collapse 0d arrays).
+    """
+    unpack_names = set() if unpack_names is None else unpack_names
     out = {}
     for old_name, new_name in attr_map.items():
         if not (value := obj.get(old_name, None)):
             continue
-        out[new_name] = unbyte(value)
+        val = unbyte(value)
+        out[new_name] = _maybe_unpack(val) if old_name in unpack_names else val
     return out
+
+
+def _maybe_unpack(maybe_array):
+    """Unpack an array like object if it is size one, else return input."""
+    size = getattr(maybe_array, "size", 0)
+    if size == 1:
+        maybe_array = maybe_array[0]
+    return maybe_array
 
 
 @cache
@@ -426,16 +475,32 @@ def separate_coord_info(
     coord_dict and attrs_dict.
     """
 
-    def _meets_required(coord_dict):
-        """Return True coord dict meets the minimum required keys."""
+    def _meets_required(coord_dict, strict=True):
+        """
+        Return True coord dict meets the minimum required keys.
+
+        coord_dict represents potential coordinate fields.
+
+        Strict ensures all required values exist.
+        """
         if not coord_dict:
             return False
         if not required and (set(coord_dict) - cant_be_alone):
             return True
-        return set(coord_dict).issuperset(required)
+        if required or not strict:
+            return set(coord_dict).issuperset(required)
+        return False
 
     def _get_dims(obj):
         """Try to ascertain dims from keys in obj."""
+        # check first for coord manager
+        if isinstance(obj, dict) and hasattr(obj.get("coords", None), "dims"):
+            return obj["coords"].dims
+
+        # This object already has dims, just honor it.
+        if dims := obj.get("dims", None):
+            return tuple(dims.split(",")) if isinstance(dims, str) else dims
+
         potential_keys = defaultdict(set)
         for key in obj:
             if not is_valid_coord_str(key):
@@ -455,7 +520,7 @@ def separate_coord_info(
                 warnings.warn(msg, DeprecationWarning, stacklevel=3)
                 potential_coord["step"] = obj[bad_name]
 
-            if _meets_required(potential_coord):
+            if _meets_required(potential_coord, strict=False):
                 out[dim] = potential_coord
 
     def _get_coords_from_coord_level(obj, out):
@@ -468,7 +533,7 @@ def separate_coord_info(
                 value = value.to_summary()
             if hasattr(value, "model_dump"):
                 value = value.model_dump()
-            if _meets_required(value):
+            if _meets_required(value, strict=False):
                 out[key] = value
 
     def _pop_keys(obj, out):
@@ -483,23 +548,28 @@ def separate_coord_info(
                 obj.pop(f"d_{coord_name}", None)
 
     # sequence of short-circuit checks
-    out = {}
+    coord_dict = {}
     required = set(required) if required is not None else set()
     cant_be_alone = set(cant_be_alone)
     if obj is None:
-        return out, {}
+        return coord_dict, {}
     if hasattr(obj, "model_dump"):
         obj = obj.model_dump()
-    if dims is None:
-        dims = _get_dims(obj)
-    # this is already a dict of coord info.
-    if set(dims) == set(obj):
-        return obj, {}
     obj = dict(obj)
-    _get_coords_from_coord_level(obj, out)
-    _get_coords_from_top_level(obj, out, dims)
-    _pop_keys(obj, out)
-    return out, obj
+    # Check if dims need to be updated.
+    new_dims = _get_dims(obj)
+    if new_dims and new_dims != dims:
+        obj["dims"] = new_dims
+        dims = new_dims
+    # this is already a dict of coord info.
+    if dims and set(dims) == set(obj):
+        return obj, {}
+    _get_coords_from_coord_level(obj, coord_dict)
+    _get_coords_from_top_level(obj, coord_dict, dims)
+    _pop_keys(obj, coord_dict)
+    if "dims" not in obj and dims is not None:
+        obj["dims"] = dims
+    return coord_dict, obj
 
 
 def cached_method(func):

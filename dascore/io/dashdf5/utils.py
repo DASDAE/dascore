@@ -42,14 +42,14 @@ def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
     def _get_spatialcoord(hdf_fi, code):
         """Get spatial coord."""
         return get_coord(
-            values=hdf_fi[code],
+            data=hdf_fi[code],
             units=hdf_fi[code].attrs["units"],
         )
 
     coords_map = {
-        "channel": get_coord(values=hdf_fi["channel"][:]),
-        "trace": get_coord(values=hdf_fi["trace"][:]),
-        "time": get_coord(values=dc.to_datetime64(hdf_fi["t"][:])),
+        "channel": get_coord(data=hdf_fi["channel"][:]),
+        "trace": get_coord(data=hdf_fi["trace"][:]),
+        "time": get_coord(data=dc.to_datetime64(hdf_fi["t"][:])),
         "x": _get_spatialcoord(hdf_fi, "x"),
         "y": _get_spatialcoord(hdf_fi, "y"),
         "z": _get_spatialcoord(hdf_fi, "z"),

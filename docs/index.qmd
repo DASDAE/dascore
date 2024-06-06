@@ -1,21 +1,9 @@
-
-  warning: false
+---
+execute:
+    warning: false
 ---
 
-# DASCore
-
-A python library for distributed fiber optic sensing.
-
-[![coverage](https://codecov.io/gh/dasdae/dascore/branch/master/graph/badge.svg)](https://codecov.io/gh/dasdae/dascore)
-[![supported versions](https://img.shields.io/pypi/pyversions/dascore.svg?label=python_versions)](https://pypi.python.org/pypi/dascore)
-[![PyPI Downloads](https://img.shields.io/pypi/dm/dascore.svg?label=pypi)](https://pypi.org/project/dascore/)
-[![Conda Downloads](https://img.shields.io/conda/dn/conda-forge/dascore.svg?label=conda)](https://github.com/conda-forge/dascore-feedstock)
-[![Licence](https://www.gnu.org/graphics/lgplv3-88x31.png)](https://www.gnu.org/licenses/lgpl.html)
-
-[Code](https://github.com/DASDAE/dascore)
-
-Documentation [[stable](https://dascore.org), [development](https://dascore.quarto.pub/dascore/)]
-
+{{< include ../readme.md >}}
 
 :::{.callout minimal="true"}
 Version-specific documentation builds are attached to the [release pages](https://github.com/DASDAE/dascore/releases).
@@ -30,15 +18,19 @@ DASCore is a Python library for distributed acoustic sensing (DAS). It provides:
 3. Basic visualizations
 
 :::{.callout-note}
-DASCore is a foundational package of the [DAS Data Analysis Ecosystem (DASDAE)](https://github.com/DASDAE). It facilitates rapid development of other DASDAE packages that do more specialized analysis/visualization.
+DASCore is a foundational package of the [DAS Data Analysis Ecosystem (DASDAE)](https://dasdae.org). It facilitates rapid development of other DASDAE packages that do more specialized analysis/visualization.
 :::
 
 # Supported file formats
 ```{python}
 #| echo: false
+#| output: asis
 import pandas as pd
 from dascore.io.core import FiberIO
-FiberIO.get_supported_io_table().replace(True, value='✅').replace(False, value='❌')
+out_str = FiberIO.get_supported_io_table().replace(True, value='✅').replace(False, value='❌').to_markdown(index=False, stralign="center")
+
+out_str += '\n: {.striped}'
+print(out_str)
 ```
 
 # Introductory usage
@@ -53,9 +45,10 @@ from dascore.utils.downloader import fetch
 file_path = fetch('terra15_das_1_trimmed.hdf5')
 
 spool = dc.spool(file_path)
+patch = spool[0]
 ```
 
-## Index a directory of DAS files
+## Working with a directory of DAS files
 
 ```{python}
 #| output: false
@@ -65,11 +58,14 @@ from dascore.utils.downloader import fetch
 # get a path to a directory of das files, replace with your path
 directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
 
-# index a directory of data, sub-select, then specify chunk shapes
 spool = (
+    # Create a spool to interact with directory data
     dc.spool(directory_path)
+    # Index the directory contents
     .update()
+    # Sub-select a specific time range
     .select(time_min=('2020-01-01', ...))
+    # Specify chunk of the output patches
     .chunk(time=60, overlap=10)
 )
 ```
@@ -81,11 +77,11 @@ import dascore as dc
 
 spool = dc.get_example_spool('diverse_das')
 
-# get patches through iteration
+# Spools are like lists, you can get patches through iteration
 for patch in spool:
     ...
 
-# Or through indexing
+# or through indexing
 patch = spool[0]
 ```
 
@@ -97,9 +93,12 @@ import dascore as dc
 patch = dc.get_example_patch('random_das')
 
 out = (
-    patch.decimate(time=8)  # decimate along time axis (keep every 8th sample)
-    .detrend(dim='distance')  # detrend in distance axis
-    .pass_filter(time=(..., 10))  # apply low-pass filter
+    # Decimate along time axis (keep every 8th sample)
+    patch.decimate(time=8)
+    # Detrend along the distance dimension
+    .detrend(dim='distance') 
+    # Apply 10Hz low-pass filter along time dimension
+    .pass_filter(time=(..., 10))
 )
 ```
 
@@ -108,11 +107,7 @@ out = (
 ```{python}
 import dascore as dc
 
-patch = (
-    dc.get_example_patch('example_event_1')
-    .taper(time=0.05)
-    .pass_filter(time=(..., 300))
-)
+patch = dc.get_example_patch('example_event_2')
 
 patch.viz.waterfall(show=True, scale=0.2);
 ```
@@ -129,30 +124,7 @@ pip install dascore
 conda install dascore -c conda-forge
 ```
 
-## Run using Docker
-
-If you have [Docker](https://www.docker.com/) installed, you may also run the stable build of DASCore in a Docker container.
-
-First you need to clone the DAScore main repository:
-```bash
-https://github.com/DASDAE/dascore
-```
-
-Then go to the DAScore directory and run docker build:
-```bash
-cd dascore
-docker build -t dascore .
-```
-
-
-To run a Python script with the DAScore, mount the directory containing your scripts to the `/app` directory to the image using `-v` flag:
-
-```bash
-docker run -it -v $PWD:/app dascore python /app/test.py
-```
-
-In the example above, we assume `test.py` is in our parent working directory (`$PWD`).
-
+See [this recipe](recipes/docker_basic.qmd) for installation with Docker.
 
 See the [contributing docs](contributing/contributing.qmd) for development installations.
 

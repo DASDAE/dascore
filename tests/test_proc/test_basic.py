@@ -331,7 +331,7 @@ class TestDropNa:
         nans = [(1, 1, 1), (0, 9, 9)]
         for nan_ind in nans:
             data[nan_ind] = np.NaN
-        patch = range_patch_3d.new(data=data)
+        patch = range_patch_3d.update(data=data)
         return patch
 
     def test_drop_time_any(self, patch_with_null):
@@ -377,3 +377,162 @@ class TestDropNa:
         axis = out.dims.index("time")
         out = patch.dropna("time", how="any")
         assert out.shape[axis] == patch.shape[axis] - 2
+
+
+class TestFillNa:
+    """Tests for replacing nullish values in a patch."""
+
+    @pytest.fixture(scope="session")
+    def patch_with_null(self):
+        """Return a patch which has nullish values."""
+        return dc.get_example_patch("patch_with_null")
+
+    @pytest.fixture(scope="class")
+    def patch_3d_with_null(self, range_patch_3d):
+        """Return a patch which has nullish values."""
+        data = np.array(range_patch_3d.data).astype(np.float_)
+        nans = [(1, 1, 1), (0, 9, 9)]
+        for nan_ind in nans:
+            data[nan_ind] = np.NaN
+        patch = range_patch_3d.update(data=data)
+        return patch
+
+    def test_fillna(self, patch_with_null):
+        """Ensure we can fillna and keep the other values the same."""
+        patch = patch_with_null.fillna(0)
+
+        assert all(patch.data[pd.isnull(patch_with_null.data)] == 0)
+        assert all(
+            patch.data[~pd.isnull(patch_with_null.data)]
+            == patch_with_null.data[~pd.isnull(patch_with_null.data)]
+        )
+
+    def test_3d(self, patch_3d_with_null):
+        """Ensure 3D patches can fillna and keep the other values the same."""
+        patch = patch_3d_with_null.fillna(0)
+
+        assert all(patch.data[pd.isnull(patch_3d_with_null.data)] == 0)
+        assert all(
+            patch.data[~pd.isnull(patch_3d_with_null.data)]
+            == patch_3d_with_null.data[~pd.isnull(patch_3d_with_null.data)]
+        )
+
+
+class TestPad:
+    """Tests for the padding functionality in a patch."""
+
+    def test_pad_time_dimension_samples_true(self, random_patch, samples=True):
+        """Test padding the time dimension with zeros before and after."""
+        padded_patch = random_patch.pad(time=(2, 3), samples=samples)
+        # Check if the padding is applied correctly
+        original_shape = random_patch.shape
+        new_shape = padded_patch.shape
+        time_axis = random_patch.dims.index("time")
+        assert new_shape[time_axis] == original_shape[time_axis] + 5
+        # Ensure that padded values are zeros
+        assert np.all(padded_patch.select(time=(None, 2), samples=samples).data == 0)
+        assert np.all(padded_patch.select(time=(-3, None), samples=samples).data == 0)
+
+    def test_pad_distance_dimension(self, random_patch):
+        """Test padding the distance with same number of zeros on both sides."""
+        padded_patch = random_patch.pad(distance=7)
+        original_shape = random_patch.shape
+        new_shape = padded_patch.shape
+        distance_axis = random_patch.dims.index("distance")
+        ch_spacing = random_patch.attrs["distance_step"]
+        assert (
+            new_shape[distance_axis] == original_shape[distance_axis] + 14 * ch_spacing
+        )
+        # Ensure that padded values are zeros
+        assert np.all(padded_patch.select(distance=(None, 7), samples=True).data == 0)
+        assert np.all(padded_patch.select(distance=(-7, None), samples=True).data == 0)
+
+    def test_pad_distance_dimension_expand_coords(
+        self, random_patch, expand_coords=True
+    ):
+        """Test padding the distance with same number of zeros on both sides."""
+        padded_patch = random_patch.pad(distance=4, expand_coords=expand_coords)
+        original_shape = random_patch.shape
+        new_shape = padded_patch.shape
+        distance_axis = random_patch.dims.index("distance")
+        ch_spacing = random_patch.attrs["distance_step"]
+        dist_max = random_patch.attrs["distance_max"]
+        assert (
+            new_shape[distance_axis] == original_shape[distance_axis] + 8 * ch_spacing
+        )
+        # Ensure that padded values are zeros
+        assert np.all(padded_patch.select(distance=(None, -1)).data == 0)
+        assert np.all(padded_patch.select(distance=(dist_max + 1, None)).data == 0)
+
+    def test_pad_multiple_dimensions_samples_true(self, random_patch, samples=True):
+        """Test padding multiple dimensions with different pad values."""
+        padded_patch = random_patch.pad(
+            time=(6, 7), distance=(1, 4), constant_values=np.pi, samples=samples
+        )
+        # Check dimensions individually
+        time_axis = random_patch.dims.index("time")
+        distance_axis = random_patch.dims.index("distance")
+        assert padded_patch.shape[time_axis] == random_patch.shape[time_axis] + 13
+        assert (
+            padded_patch.shape[distance_axis] == random_patch.shape[distance_axis] + 5
+        )
+        # Check padding values
+        assert np.allclose(
+            padded_patch.select(time=(None, 6), samples=samples).data, np.pi, atol=1e-6
+        )
+        assert np.allclose(
+            padded_patch.select(time=(-7, None), samples=samples).data, np.pi, atol=1e-6
+        )
+        assert np.allclose(
+            padded_patch.select(distance=(None, 1), samples=samples).data,
+            np.pi,
+            atol=1e-6,
+        )
+        assert np.allclose(
+            padded_patch.select(distance=(-4, None), samples=samples).data,
+            np.pi,
+            atol=1e-6,
+        )
+
+    def test_error_on_sequence_constant_values(self, random_patch):
+        """Test that providing a sequence for constant_values raises a TypeError."""
+        with pytest.raises(TypeError):
+            random_patch.pad(time=(0, 5), constant_values=(0, 0))
+
+
+class TestRoll:
+    """Test cases for patch roll method."""
+
+    def test_time_roll(self, random_patch):
+        """Test basic sample roll."""
+        rand_patcht = random_patch.transpose("time", ...)
+        rolled_patch = rand_patcht.roll(time=5, samples=True)
+        assert rand_patcht.shape == rolled_patch.shape
+        assert np.all(rand_patcht.data[0] == rolled_patch.data[5])
+
+    def test_dist_roll(self, random_patch):
+        """Test roll when samples=False."""
+        rolled_patch = random_patch.roll(distance=30, samples=False)
+        coord = random_patch.get_coord("distance")
+        value = coord.get_sample_count(30)
+        assert random_patch.shape == rolled_patch.shape
+        assert np.all(random_patch.data[0] == rolled_patch.data[value])
+
+    def test_coord_update_roll(self, random_patch):
+        """Test roll when update_coord=True."""
+        patcht = random_patch.transpose("time", ...)
+        rolled_patch = patcht.roll(time=5, samples=True, update_coord=True)
+        assert (
+            patcht.coords.get_array("time")[0]
+            == rolled_patch.coords.get_array("time")[5]
+        )
+
+    def test_dist_coord_roll(self, random_patch):
+        """Test roll when samples=False and coords will be updated."""
+        rolled_patch = random_patch.roll(distance=30, samples=False, update_coord=True)
+        coord = random_patch.get_coord("distance")
+        value = coord.get_sample_count(30)
+        assert (
+            random_patch.coords.get_array("distance")[0]
+            == rolled_patch.coords.get_array("distance")[value]
+        )

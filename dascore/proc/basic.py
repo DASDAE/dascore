@@ -11,10 +11,15 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coords import get_coord
 from dascore.exceptions import UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.models import ArrayLike
-from dascore.utils.patch import patch_function
+from dascore.utils.patch import (
+    get_dim_value_from_kwargs,
+    get_multiple_dim_value_from_kwargs,
+    patch_function,
+)
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
@@ -139,7 +144,7 @@ def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
     return np.equal(self.data, other.data).all()
 
 
-def new(
+def update(
     self: PatchType,
     data: ArrayLike | np.ndarray | None = None,
     coords: None | dict[str | Sequence[str], ArrayLike] | CoordManager = None,
@@ -477,6 +482,174 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
     slices[axis] = to_keep
     new_data = patch.data[tuple(slices)]
     coord = patch.get_coord(dim)
-    cm = patch.coords.update_coords(**{dim: coord[to_keep]})
+    cm = patch.coords.update(**{dim: coord[to_keep]})
     attrs = patch.attrs.update(coords={})
     return patch.new(data=new_data, coords=cm, attrs=attrs)
+
+
+@patch_function()
+def fillna(patch: PatchType, value) -> PatchType:
+    """
+    Return a patch with nullish values replaced by a value.
+
+    Parameters
+    ----------
+    patch
+        The patch which may contain nullish values.
+    value
+        The value to replace nullish values with.
+
+    Notes
+    -----
+    "nullish" is defined by `pandas.isnull`.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> # load an example patch which has some NaN values.
+    >>> patch = dc.get_example_patch("patch_with_null")
+    >>> # Replace all occurences of NaN with 0
+    >>> out = patch.fillna(0)
+    >>> # Replace all occurences of NaN with 5
+    >>> out = patch.fillna(5)
+    """
+    to_replace = pd.isnull(patch.data)
+
+    new_data = patch.data.copy()
+    new_data[to_replace] = value
+
+    return patch.new(data=new_data)
+
+
+@patch_function()
+def pad(
+    patch: PatchType,
+    mode: Literal["constant"] = "constant",
+    constant_values: Any = 0,
+    expand_coords=False,
+    samples=False,
+    **kwargs,
+) -> PatchType:
+    """
+    Pad the patch data along specified dimensions.
+
+    Parameters
+    ----------
+    mode : str, optional
+        The mode of padding, by default 'constant'.
+    constant_values : scalar , optional
+        A single scalar value used as the padding value across all dimensions.
+        Defaults to 0.
+    expand_coords : bool, optional
+        Determines how coordinates are adjusted when padding is applied.
+        If set to True, the coordinates will be expanded to maintain their
+        order and even sampling (if originally evenly sampled), by extrapolating
+        based on the coordinate's step size.
+        If set to False, the new coordinates introduced by padding will be
+        filled with NaN values, preserving the original coordinate values but
+        not the order or sampling rate.
+    **kwargs:
+        Used to specify dimension and number of elements,
+        either an integer or a tuple (before, after).
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # zero pad `time` dimension with 2 patch's time unit (e.g., sec)
+    >>> # zeros before and 3 zeros after
+    >>> padded_patch_1 = patch.pad(time = (2, 3))
+    >>> # zero pad `distance` dimension with 4 unit values before and after
+    >>> padded_patch_3 = patch.pad(distance = 4, constant_values = 1, samples=True)
+    """
+    if isinstance(constant_values, list | tuple):
+        raise TypeError("constant_values must be a scalar, not a sequence.")
+
+    pad_width = [(0, 0)] * len(patch.shape)
+    dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
+    new_coords = {}
+
+    for _, info in dimfo.items():
+        axis, dim, value = info["axis"], info["dim"], info["value"]
+
+        # Ensure pad_width is a tuple, even if a single integer is provided
+        if isinstance(value, int):
+            value = (value, value)
+
+        # Ensure kwargs are in samples
+        if not samples:
+            coord = patch.get_coord(dim, require_evenly_sampled=True)
+            value = (
+                coord.get_sample_count(value[0], samples=samples),
+                coord.get_sample_count(value[1], samples=samples),
+            )
+        pad_width[axis] = value
+
+        # Get new coordinate
+        if expand_coords:
+            new_start = coord.min() - value[0] * coord.step
+            new_end = coord.max() + (value[1] + 1) * coord.step
+            coord = patch.get_coord(dim, require_evenly_sampled=True)
+            old_values = coord.values
+            new_coord = get_coord(
+                start=new_start, stop=new_end, step=coord.step, units=coord.units
+            )
+        else:
+            coord = patch.get_coord(dim)
+            old_values = coord.values.astype(np.float64)
+            added_nan_values = np.pad(
+                old_values, pad_width=value, constant_values=np.nan
+            )
+            new_coord = coord.update(data=added_nan_values)
+        new_coords[dim] = new_coord
+
+    # Pad patch's data
+    new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
+
+    # Update coord manager
+    new_coords = patch.coords.update(**new_coords)
+
+    return patch.new(data=new_data, coords=new_coords)
+
+
+@patch_function()
+def roll(patch, samples=False, update_coord=False, **kwargs):
+    """
+    Roll patch array elements along a given dimension.
+
+    Parameters
+    ----------
+    patch
+        input patch
+    samples
+        if True, value indicates coordinate or value of dimension
+    update_coord
+        if True, updates coord based on rolled amount
+    **kwargs
+        specifies dimension and number of elements to roll
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # roll time dimension 5 elements
+    >>> rolled_patch = patch.roll(time=5, samples=True)
+    >>> # roll distance dimension 30 meters(or units of distance in patch)
+    >>> rolled_patch2 = patch.roll(distance=30, samples=False)
+    >>> # roll time dimension 5 elements and update coordinates
+    >>> rolled_patch3 = patch.roll(time=5, samples=True, update_coord=True)
+    """
+    dim, axis, input_value = get_dim_value_from_kwargs(patch, kwargs)
+    arr = patch.data
+    coord = patch.get_coord(dim)
+    value = coord.get_sample_count(input_value, samples=samples)
+
+    roll_arr = np.roll(arr, value, axis=0)
+
+    # update coords if True
+    if update_coord:
+        roll_coord_arr = np.roll(coord.values, value, axis=0)
+        new_coord = coord.update(values=roll_coord_arr)
+        patch = patch.update_coords(**{dim: new_coord})
+
+    return patch.new(data=roll_arr)

@@ -11,18 +11,21 @@ from scipy.signal.windows import tukey
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.transform.fourier import _get_dft_attrs, _get_dft_new_coords
 from dascore.utils.misc import check_filter_kwargs, check_filter_range
-from dascore.utils.patch import get_dim_sampling_rate
+from dascore.utils.patch import _get_dx_or_spacing_and_axes, get_dim_sampling_rate
 
 
 def whiten(
     patch: PatchType,
     smooth_size: float | None = None,
     tukey_alpha: float = 0.1,
+    ifft: bool = True,
     **kwargs,
 ) -> PatchType:
     """
     Band-limited signal whitening.
+    The whitened signal is returned in either frequency or time domains.
 
     Parameters
     ----------
@@ -38,6 +41,9 @@ def whiten(
         its value is 0.1.
         See more details at https://docs.scipy.org/doc/scipy/reference
         /generated/scipy.signal.windows.tukey.html
+    ifft
+        If False, returns the whitened result in the frequency domain without
+        converting it back to the time domain. Defaults to True.
     **kwargs
         Used to specify the dimension and frequency, wavelength, or equivalent
         limits. If no input is provided, whitening is also the last axis
@@ -55,6 +61,12 @@ def whiten(
 
     3) Amplitude is NOT preserved
 
+    4) If ifft = False, since for the purely real input data the negative
+       frequency terms are just the complex conjugates of the corresponding
+       positive-frequency terms, the output does not include the negative
+       frequency terms, and therefore the length of the transformed axis
+       of the output is n//2 + 1. Refer to the
+       [dft patch function](`dascore.transform.fourier.dft`) and its `real` flag.
 
     Example
     -------
@@ -214,10 +226,20 @@ def whiten(
 
     norm_amp *= tiled_win
 
-    # Revert back to time-domain, using the phase of the original signal
-    whitened_data = np.real(
-        nft.irfft(norm_amp * np.exp(1j * phase), n=comp_nsamp, axis=dim_ind)
-    )
-    whitened_data = np.take(whitened_data, np.arange(nsamp), axis=dim_ind)
-
-    return patch.new(data=whitened_data)
+    if ifft:
+        # revert back to time-domain, using the phase of the original signal
+        whitened_data = np.real(
+            nft.irfft(norm_amp * np.exp(1j * phase), n=comp_nsamp, axis=dim_ind)
+        )
+        whitened_data = np.take(whitened_data, np.arange(nsamp), axis=dim_ind)
+        return patch.new(data=whitened_data)
+    else:
+        dims = list(patch.dims)
+        dxs, axes = _get_dx_or_spacing_and_axes(patch, dims, require_evenly_spaced=True)
+        # get new coordinates
+        real = dims[dim_ind]
+        new_coords = _get_dft_new_coords(patch, dxs, dims, axes, real)
+        # get attributes
+        attrs = _get_dft_attrs(patch, dims, new_coords)
+        # return the frequency domain data directly without taking the inverse FFT
+        return patch.new(norm_amp * np.exp(1j * phase), coords=new_coords, attrs=attrs)

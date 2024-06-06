@@ -41,7 +41,7 @@ class _PatchRollerInfo(DascoreBaseModel):
         coord = self.patch.get_coord(self.dim)
         if self.step > 1:
             coord = coord[:: self.step]
-        return self.patch.coords.update_coords(**{self.dim: coord})
+        return self.patch.coords.update(**{self.dim: coord})
 
     def _get_attrs_with_apply_history(self, func_or_str):
         """Get new attrs that has history from apply attached."""
@@ -112,7 +112,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         out = self._pad_roll_array(raw)
         new_coords = self.get_coords()
         attrs = self._get_attrs_with_apply_history(function)
-        return self.patch.new(data=out, coords=new_coords, attrs=attrs)
+        return self.patch.update(data=out, coords=new_coords, attrs=attrs)
 
     def mean(self):
         """Apply mean to moving window."""
@@ -168,7 +168,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
         if len(data.shape) != len(self.patch.data.shape):
             data = np.squeeze(data)
         coords = self.get_coords()
-        return self.patch.new(data=data, coords=coords, attrs=attrs)
+        return self.patch.update(data=data, coords=coords, attrs=attrs)
 
     def _call_rolling_func(self, name, *args, **kwargs):
         """Helper function for calling a rolling function."""
@@ -215,9 +215,13 @@ def rolling(
     engine: Literal["numpy", "pandas", None] = None,
     samples=False,
     **kwargs,
-) -> _NumpyPatchRoller:
+) -> _NumpyPatchRoller | _PandasPatchRoller:
     """
     Apply a rolling function along a specified dimension.
+
+    See also the
+    [rolling section of the processing tutorial](/tutorial/processing.qmd#rolling)
+    and the [smoothing recipe](/recipes/smoothing.qmd).
 
     Parameters
     ----------
@@ -243,28 +247,18 @@ def rolling(
         For example `time=10` represents window size of
         10*(default unit) along the time axis.
 
-    Examples
-    --------
-    >>> # Simple example for rolling mean function
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> # apply rolling over 1 second with 0.5 step
-    >>> mean_patch = patch.rolling(time=1, step=0.5).mean()
-    >>> # drop nan at the start of the time axis.
-    >>> out = mean_patch.dropna("time")
-
     Notes
     -----
-    This class behaves like pandas.rolling
-    (https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html)
-    which has some important implications.
+    Rolling is designed to behaves like Pandas [DataFrame.rolling](
+    https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html)
+    which has some important implications:
 
-    First, when step is not defined or set to 1, the output patch will have the
+    - First, when step is not defined or set to 1, the output patch will have the
     same shape as the input patch. The consequence of this is that NaN values
     will appear at the start of the dimension. You can use
     [`patch.dropna`](`dascore.Patch.dropna`) to remove the NaN values.
 
-    Second, the step parameter is equivalent applying to the output along the
+    - Second, the step parameter is equivalent applying to the output along the
     specified dimension. For example, if step=2 the output of the chosen
     dimension will be 1/2 of the input length.
 
@@ -272,14 +266,31 @@ def rolling(
 
     Consider a patch with a simple 1D array in the dimension "time":
         [0, 1, 2, 3, 4, 5]
-    If time = 2 * dt the output is
+
+    - If time = 2 * dt the output is
         [NaN, 0.5, 1.5, 2.5, 3.5, 4.5]
-    If time = 3 * dt the output is
+
+    - If time = 3 * dt the output is
         [NaN, NaN, 1.0, 2.0, 3.0, 4.0]
-    if time = 3 * dt and step = 2 * dt
+
+    - if time = 3 * dt and step = 2 * dt
         [NaN, 1.0, 3.0]
-    if time = 3 * dt and step = 3 * dt
+
+    - if time = 3 * dt and step = 3 * dt
         [NaN, 2.0]
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>>
+    >>> # Simple example for rolling mean function
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # apply rolling over 1 second with 0.5 step
+    >>> mean_patch = patch.rolling(time=1, step=0.5).mean()
+    >>>
+    >>> # drop nan at the start of the time axis.
+    >>> out = mean_patch.dropna("time")
     """
 
     def _get_engine(step, engine, patch):
@@ -295,8 +306,12 @@ def rolling(
     dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
     roll_hist = f"rolling({dim}={value}, step={step}, center={center}, engine={engine})"
     coord = patch.get_coord(dim)
-    window = coord.get_sample_count(value, samples=samples)
-    step = 1 if step is None else coord.get_sample_count(step, samples=samples)
+    window = coord.get_sample_count(value, samples=samples, enforce_lt_coord=True)
+    step = (
+        1
+        if step is None
+        else coord.get_sample_count(step, samples=samples, enforce_lt_coord=True)
+    )
     if window == 0 or step == 0:
         msg = "Window or step size can't be zero. Use any positive values."
         raise ParameterError(msg)

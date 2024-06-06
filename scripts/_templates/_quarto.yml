@@ -6,6 +6,7 @@ project:
   output-dir: _site
 
 filters:
+  - quarto
   - filters/fill_links.py
 
 execute:
@@ -16,10 +17,10 @@ format:
     toc: true
     theme:
       light: yeti
+      dark: darkly
     code-copy: true
     code-overflow: wrap
     css: styles.css
-
 
 website:
   title: {{ dascore_version_str }}
@@ -76,13 +77,13 @@ website:
           href: index.qmd
 
         - text: Changelog
-          href: changelog.md
+          href: changelog.qmd
 
         - text: Contributors
-          href: contributors.md
+          href: contributors.qmd
 
         - text: Acknowledgements
-          href: acknowledgements.md
+          href: acknowledgements.qmd
 
     - id: tutorial
       title: "Tutorial"
@@ -108,28 +109,46 @@ website:
         - text: File IO
           href: tutorial/file_io.qmd
 
+        - text: Coordinates
+          href: tutorial/coords.qmd
+
     - id: Recipes
       title: 'Recipes'
+      collapse-level: 1
       contents:
         - recipes/overview.qmd
 
-        - text: Parallelization
-          href: recipes/parallelization.qmd
+        - section: "Contributing"
+          contents:
 
-        - text: Plotting channel number
-          href: recipes/plotting_channel_number.qmd
+            - recipes/how_to_contribute.qmd
+            - recipes/contributing_to_documentation.qmd
 
-        - text: How to Contribute?
-          href: recipes/how_to_contribute.qmd
+        - section: "Coordinates"
+          contents:
 
-        - text: Contributing to Documentation
-          href: recipes/contributing_to_documentation.qmd
+            - recipes/add_spatial_coordinates_to_patch.qmd
+            - recipes/plotting_channel_number.qmd
 
-        - text: Adding coordinates from a dataframe
-          href: recipes/add_spatial_coordinates_to_patch.qmd
+        - section: "Processing"
+          contents:
 
-        - text: Converting Patches to External Formats
-          href: recipes/external_conversion.qmd
+            - recipes/correlate.qmd
+            - recipes/edge_effects.qmd
+            - recipes/fk.qmd
+            - recipes/real_time_proc.qmd
+            - recipes/smoothing.qmd
+            - recipes/parallelization.qmd
+
+        - section: "IO"
+          contents:
+
+            - recipes/external_conversion.qmd
+
+        - section: "Misc"
+          contents:
+
+            - recipes/docker_basic.qmd
 
     - id: contributing
       title: "Contributing"

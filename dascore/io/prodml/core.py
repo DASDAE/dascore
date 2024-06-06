@@ -22,7 +22,7 @@ class ProdMLPatchAttrs(dc.PatchAttrs):
     schema_version: UTF8Str = ""
 
 
-class ProdMLV2_0(FiberIO):
+class ProdMLV2_0(FiberIO):  # noqa
     """Support for ProdML V 2.0."""
 
     name = "PRODML"
@@ -31,12 +31,12 @@ class ProdMLV2_0(FiberIO):
 
     def get_format(self, resource: PyTablesReader) -> tuple[str, str] | bool:
         """
-        Return True if file contains terra15 version 2 data else False.
+        Return True if file contains prodML version 2 data else False.
 
         Parameters
         ----------
         resource
-            A path to the file which may contain terra15 data.
+            A path to the file which may contain prodML data.
         """
         version_str = _get_prodml_version_str(resource)
         if version_str:
@@ -67,7 +67,7 @@ class ProdMLV2_0(FiberIO):
         return dc.spool(patches)
 
 
-class ProdMLV2_1(ProdMLV2_0):
+class ProdMLV2_1(ProdMLV2_0):  # noqa
     """Support for ProdML V 2.1."""
 
     version = "2.1"

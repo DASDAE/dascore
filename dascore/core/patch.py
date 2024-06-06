@@ -18,12 +18,15 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
+from dascore.utils.time import to_float
 from dascore.viz import VizPatchNameSpace
 
 
 class Patch:
     """
     A Class for managing data and metadata.
+
+    See the [patch tutorial](/tutorial/patch.qmd) for examples.
 
     Parameters
     ----------
@@ -90,6 +93,7 @@ class Patch:
         else:
             # ensure attrs conforms to coords
             attrs = dc.PatchAttrs.from_dict(attrs).update(coords=coords)
+        assert coords.dims == attrs.dim_tuple, "dim mismatch on coords and attrs"
         self._coords = coords
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
@@ -158,7 +162,7 @@ class Patch:
 
     @property
     def data(self) -> ArrayLike:
-        """Return the dimensions contained in patch."""
+        """Return the data contained in patch."""
         return self._data
 
     @property
@@ -168,12 +172,24 @@ class Patch:
 
     @property
     def size(self) -> tuple[int, ...]:
-        """Return the shape of the data array."""
+        """Return the size of the data array."""
         return self.coords.size
+
+    @property
+    def seconds(self) -> float:
+        """Return number of seconds in the time coordinate."""
+        return to_float(self.coords.coord_range("time"))
+
+    @property
+    def channel_count(self) -> int:
+        """Return number of channels in the distance coordinate."""
+        return self.coords.coord_size("distance")
 
     # --- basic patch functionality.
 
-    new = dascore.proc.new
+    update = dascore.proc.update
+    # Before 0.1.0 update was called new, this is for backwards compatibility.
+    new = dascore.proc.update
     equals = dascore.proc.equals
     update_attrs = dascore.proc.update_attrs
     assert_has_coords = dascore.proc.assert_has_coords
@@ -213,15 +229,20 @@ class Patch:
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
+    fillna = dascore.proc.fillna
     pass_filter = dascore.proc.pass_filter
     sobel_filter = dascore.proc.sobel_filter
     median_filter = dascore.proc.median_filter
+    savgol_filter = dascore.proc.savgol_filter
+    gaussian_filter = dascore.proc.gaussian_filter
     aggregate = dascore.proc.aggregate
     abs = dascore.proc.abs
     real = dascore.proc.real
     imag = dascore.proc.imag
     angle = dascore.proc.angle
     resample = dascore.proc.resample
+    pad = dascore.proc.pad
+    roll = dascore.proc.roll
 
     def iresample(self, *args, **kwargs):
         """Deprecated method."""

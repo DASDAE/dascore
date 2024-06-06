@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+<<<<<<< HEAD
+=======
+from pathlib import Path
+
+>>>>>>> master
 import numpy as np
 
 import dascore as dc
@@ -11,8 +16,26 @@ from dascore.core import get_coord, get_coord_manager
 def _get_version(fid):
     """Determine if Sentek file."""
     name = fid.name
+    # Sentek files cannot change the extension, or file name.
     sw_data = name.endswith(".das")
-    if sw_data:
+    fid.seek(0)
+    # There isn't anything in the header particularly useful for determining
+    # if it is a Sentek file, so we do what we can here.
+    # First check if sensor_num and measurement_count are positive and nearly
+    # ints.
+    sensor_num = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    measurement_count = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    _ = np.fromfile(fid, dtype=np.float32, count=1)[0]  # sampling_interval
+    is_positive = (sensor_num > 1) and (measurement_count > 1)
+    sens_nearly_int = np.round(sensor_num, 5) == np.round(sensor_num)
+    meas_nearly_int = np.round(measurement_count, 5) == np.round(measurement_count)
+    nearly_ints = sens_nearly_int and meas_nearly_int
+    # Then check if strain_rate value is valid.
+    strain_rate = int(np.fromfile(fid, dtype=np.float32, count=1)[0])
+    proper_strain_rate = strain_rate in {0, 1}
+    # Note: We will need to modify this later for different versions of the
+    # sentek data, but for now we only support 5.
+    if sw_data and is_positive and proper_strain_rate and nearly_ints:
         return ("sentek", "5")
     return False
 
@@ -36,6 +59,7 @@ def _get_time_from_file_name(name) -> np.datetime64:
 def _get_patch_attrs(fid, extras=None):
     """Extracts patch metadata.
 
+<<<<<<< HEAD
     This function reads the log file (.das files) of DASnova system
     Output:
         Result: a dictionary containing the following fields:
@@ -50,6 +74,16 @@ def _get_patch_attrs(fid, extras=None):
             Strain: signal in micro strain, SensorNumber x Meanumber matrix
 
 
+=======
+    A few important fields in the header and their meaning:
+
+    sensor_num: number of channels in the sensing fiber
+    measurement_count: number of measurements in ONE single file
+    sampling_interval: sampling interval in nanosecond (delta t)
+    strain_rate: flag that is set when the loaded data represents strain rate
+    trigger_position: index position where the trigger occurs
+    decimation_factor: decimation factor (integer)
+>>>>>>> master
     """
     fid.seek(0)
     sensor_num = np.fromfile(fid, dtype=np.float32, count=1)[0]
@@ -65,7 +99,11 @@ def _get_patch_attrs(fid, extras=None):
     distance_step = (distance_stop - distance_start) / sensor_num
     dist = get_coord(start=distance_start, stop=distance_stop, step=distance_step)
     # create time coord
+<<<<<<< HEAD
     file_time = _get_time_from_file_name(fid.name)
+=======
+    file_time = _get_time_from_file_name(Path(fid.name).name)
+>>>>>>> master
     offset_start = np.fromfile(fid, dtype=np.float32, count=1)[0]
     fid.seek(int(measurement_count - 1) * 4)
     offset_stop = np.fromfile(fid, dtype=np.float32, count=1)[0]

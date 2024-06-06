@@ -14,13 +14,25 @@ from dascore.utils.time import to_float
 
 @pytest.fixture(scope="session")
 def ones_patch(random_patch):
-    """Return a patch of ones with nornal axis."""
+    """Return a patch of ones with normal axis."""
     array = np.ones_like(random_patch.data)
     return random_patch.new(data=array)
 
 
 class TestIndefiniteIntegrals:
     """Tests for indefinite integrals."""
+
+    @pytest.fixture(scope="class")
+    def simple_func_patch(self, random_patch):
+        """Create a simple function patch for testing. f(x) = x + 1."""
+        time = np.arange(100) * 0.1
+        data = time[:, None] + 1
+        out = dc.Patch(
+            data=data,
+            coords={"time": time, "other": np.array([1])},
+            dims=("time", "other"),
+        )
+        return out
 
     def test_indef_integration(self, ones_patch):
         """Happy path for default time/distance integrals."""
@@ -57,6 +69,14 @@ class TestIndefiniteIntegrals:
                 coord1 = patch.get_coord(dim)
                 coord2 = patch.get_coord(dim)
                 assert coord2.units == coord1.units
+
+    def test_simple_func(self, simple_func_patch):
+        """Ensure the values are approximate correct for a simple function."""
+        out = simple_func_patch.integrate(dim="time", definite=False)
+        time = simple_func_patch.get_coord("time").values
+        expected = (time**2) / 2 + time
+        data_out = out.data.flatten()
+        assert np.allclose(expected, data_out)
 
 
 class TestDefiniteIntegration:

@@ -23,7 +23,9 @@ import dascore as dc
 from dascore.io import BinaryReader
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
+from dascore.io.febus import Febus2
 from dascore.io.h5simple import H5Simple
+from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.segy import SegyV2
@@ -47,6 +49,8 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    Febus2(): ("febus_1.h5",),
+    OptoDASV8(): ("opto_das_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
@@ -70,6 +74,9 @@ COMMON_IO_READ_TESTS = {
 # generic patches. If the patch has to be in some special form, for example
 # only flat patches can be written to WAV, don't put it here.
 COMMON_IO_WRITE_TESTS = (PickleIO(), DASDAEV1())
+
+# Specifies data registry entries which should not be tested.
+SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv"}
 
 
 @cache
@@ -111,10 +118,10 @@ def io_path_tuple(request):
 @pytest.fixture(scope="session", params=get_registry_df()["name"])
 def data_file_path(request):
     """A fixture of all data files. Will download if needed."""
-    # TODO remove this segy skip once we support it.
     param = request.param
-    if param.endswith("csv"):
-        pytest.skip("Not a DAS file.")
+    # Some files should be skipped if not DAS or too big.
+    if str(param) in SKIP_DATA_FILES:
+        pytest.skip(f"Skipping {param}")
     return fetch(request.param)
 
 
@@ -265,7 +272,7 @@ class TestRead:
             stop = getattr(attrs_init, f"{dim}_max")
             duration = stop - start
             # first test double ended query
-            trim_tuple = (start + duration / 10, start + 2 * duration // 10)
+            trim_tuple = (start + duration / 10, start + 2 * duration / 10)
             spool = io.read(path, **{dim: trim_tuple})
             assert len(spool) == 1
             patch = spool[0]

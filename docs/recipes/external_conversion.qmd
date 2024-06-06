@@ -14,10 +14,10 @@ import dascore as dc
 
 patch = dc.get_example_patch()
 
-# convert to a dataframe
+# Convert to a dataframe
 df = patch.io.to_dataframe()
 
-# convert a dataframe to a patch
+# Convert a dataframe to a patch
 patch_from_df = dc.io.dataframe_to_patch(df)
 ```
 
@@ -28,10 +28,10 @@ import dascore as dc
 
 patch = dc.get_example_patch()
 
-# convert to xarray's DataArray
+# Convert to xarray's DataArray
 dar = patch.io.to_xarray()
 
-# convert a DataArray to a patch
+# Convert a DataArray to a patch
 patch_from_dar = dc.io.xarray_to_patch(dar)
 ```
 
@@ -42,10 +42,10 @@ import dascore as dc
 
 patch = dc.get_example_patch()
 
-# convert the patch to an ObsPy Stream
+# Convert the patch to an ObsPy Stream
 stream = patch.io.to_obspy()
 
-# convert an ObsPy Stream to a patch
+# Convert an ObsPy Stream to a patch
 patch_from_dar = dc.io.obspy_to_patch(stream)
 ```
 

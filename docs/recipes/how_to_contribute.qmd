@@ -2,14 +2,13 @@
 title: "How to Contribute?"
 ---
 
-On this page, we provide a step-by-step procedure on how you can start contributing to the DASCore package.
+On this page, we provide a step-by-step procedure on how you can start contributing to DASCore.
 
 # DASDAE developers
 
 ## Step 1: Install DASCore in development mode
 
-For the first time using DASCore in development mode, or if a new release is out, you need to install DASCore as it is mentioned [here](https://dascore.org/contributing/dev_install.html).
-Otherwise, you just need to activate the environment:
+For the first time using DASCore in development mode, or if a new release is out, you need to install DASCore as it is mentioned [here](https://dascore.org/contributing/dev_install.html).  Otherwise, you just need to activate the environment:
 
 ```bash
 conda activate dascore
@@ -90,6 +89,7 @@ Go to the [DASCore repository](https://github.com/DASDAE/dascore) an click on "F
 
 ## Step 2: Clone your fork
 Once you have forked the repository, you need to clone it to your local machine to start making changes. Then navigate to your local repository:
+
 ```bash
 cd dascore
 ```

@@ -96,7 +96,7 @@ def _scan_terra15(h5_fi, data_node, extras=None):
 def _get_raw_time_coord(data_node):
     """Read the time from the data node and return it."""
     time = _get_time_node(data_node)[:]
-    return get_coord(values=to_datetime64(time))
+    return get_coord(data=to_datetime64(time))
 
 
 def _read_terra15(

@@ -15,7 +15,7 @@ from dascore.utils.patch import (
 )
 
 
-def _get_correlated_coord(old_coord, data_shape):
+def _get_correlated_coord(old_coord, data_shape, real=True):
     """Get the new coordinate which corresponds to correlated values."""
     step = old_coord.step
     one_sided_len = data_shape // 2
@@ -28,14 +28,29 @@ def _get_correlated_coord(old_coord, data_shape):
     return new
 
 
+def _shift(data, cx_len, axis):
+    """
+    Re-assemble fft data so zero lag is in center.
+
+    Also accounts for padding for fast fft.
+    """
+    ndims = len(data.shape)
+    start_slice = slice(-np.floor(cx_len / 2).astype(int), None)
+    start_ind = broadcast_for_index(ndims, axis, start_slice)
+    stop_slice = slice(None, np.ceil(cx_len / 2).astype(int))
+    stop_ind = broadcast_for_index(ndims, axis, stop_slice)
+    data1 = data[start_ind]
+    data2 = data[stop_ind]
+    data = np.concatenate([data1, data2], axis=axis)
+    return data
+
+
 @patch_function()
 def correlate(
     patch: PatchType, lag: int | float | Quantity | None = None, samples=False, **kwargs
 ) -> PatchType:
     """
     Correlate a single row/column in a 2D patch with every other row/column.
-
-    The This may be useful for interferometry workflows.
 
     Parameters
     ----------
@@ -61,18 +76,22 @@ def correlate(
 
     >>> # Example 1
     >>> # Calculate cc for all channels as receivers and
-    >>> # the 10 m channel as the master channel. The new patch has dimensions
-    >>> # (lag_time, distance)
+    >>> # the 10 m channel as the master channel.
     >>> cc_patch = patch.correlate(distance = 10 * m)
 
     >>> # Example 2
     >>> # Calculate cc within (-2,2) sec of lag for all channels as receivers and
-    >>> # the 10 m channel as the master channel.
+    >>> # the 10 m channel as the master channel. The new patch has dimensions
+    >>> # (lag_time, distance)
     >>> cc_patch = patch.correlate(distance = 10 * m, lag = 2 * s)
 
     >>> # Example 3
     >>> # Use 2nd channel (python is 0 indexed) along distance as master channel
     >>> cc_patch = patch.correlate(distance=1, samples=True)
+
+    >>> # Example 4
+    >>> # Correlate along time dimension
+    >>> cc_patch = patch.correlate(time=100, samples=True)
 
     Notes
     -----
@@ -93,6 +112,8 @@ def correlate(
     # get the coordinate which contains the source
     coord_source = patch.get_coord(dim)
     index_source = coord_source.get_next_index(source, samples=samples)
+    # get the closest fast length. Some padding is applied in the fft to avoid
+    # inefficient lengths. Note: This is not always a power of 2.
     cx_len = patch.shape[fft_axis] * 2 - 1
     fast_len = next_fast_len(cx_len)
     # determine proper fft, ifft functions based on data being real or complex
@@ -107,13 +128,14 @@ def correlate(
     source_fft = fft[inds]
     # perform correlation in freq domain and transform back to time domain
     fft_prod = fft * np.conj(source_fft)
-    # the n parameter needs to be odd so we have a 0 lag time. Hopefully this
-    # is right...
-    cor_array = ifft_func(fft_prod, axis=fft_axis, n=fast_len - 1)
-    corr_data = np.fft.fftshift(cor_array, axes=fft_axis)
+    # the n parameter needs to be odd so we have a 0 lag time. This only
+    # applies to real fft
+    n_out = fast_len if (not is_real or fast_len % 2 != 0) else fast_len - 1
+    corr_array = ifft_func(fft_prod, axis=fft_axis, n=n_out)
+    corr_data = _shift(corr_array, cx_len, axis=fft_axis)
     # get new coordinate along correlation dimension
     new_coord = _get_correlated_coord(fft_coord, corr_data.shape[fft_axis])
-    coords = patch.coords.update_coords(**{fft_dim: new_coord}).rename_coord(
+    coords = patch.coords.update(**{fft_dim: new_coord}).rename_coord(
         **{fft_dim: f"lag_{fft_dim}"}
     )
     out = dc.Patch(coords=coords, data=corr_data, attrs=patch.attrs)

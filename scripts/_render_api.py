@@ -236,7 +236,9 @@ class NumpyDocStrParser:
         return out
 
     def style_parameters(self, param_str):
-        """Style the parameters block."""
+        """
+        Style the parameters block.
+        """
         lines = param_str.split("\n")
         # parameters dont have spaces at the start
         param_start = [num for num, x in enumerate(lines) if not x.startswith(" ")]
@@ -245,8 +247,16 @@ class NumpyDocStrParser:
         param_desc = []
         for ind_num, ind in enumerate(param_start[:-1]):
             key = lines[ind].strip()
-            vals = [x.strip() for x in lines[ind + 1 : param_start[ind_num + 1]]]
-            param_desc.append((key, "\n".join(vals)))
+            # get the number of indents (usually 4)
+            in_char = (len(lines[1]) - len(lines[1].lstrip())) * " "
+            desc_lines = lines[ind + 1 : param_start[ind_num + 1]]
+            vals = [
+                # strip out the first indentation line
+                (x[len(in_char) :] if x.startswith(in_char) and in_char else x)
+                for x in desc_lines
+            ]
+            # breakpoint()
+            param_desc.append((key, "<br>".join(vals)))
         table = pd.DataFrame(param_desc, columns=["Parameter", "Description"])
         return build_table(table)
 
@@ -285,11 +295,12 @@ class NumpyDocStrParser:
                 out.append(f"\n{self.heading_char} {name}\n{content}")
         return "\n".join(out)
 
-    # stylers is used to decide which style function to apply for various
+    # stylers are used to decide which style function to apply for various
     # sections.
     stylers = {  # noqa
         "parameter": style_parameters,
         "parameters": style_parameters,
+        "attributes": style_parameters,
         "examples": style_examples,
         "example": style_examples,
         "notes": style_notes,
@@ -565,14 +576,33 @@ def _clear_empty_directories(parent_path):
             os.rmdir(path)
 
 
+def _map_other_qmd_files(doc_path=DOC_PATH, api_path=API_DOC_PATH):
+    """Add all other qmd files, excluding API."""
+    out = {}
+    parent_doc = doc_path.parent
+    api_relative = str(api_path.relative_to(doc_path))
+    for path in DOC_PATH.rglob("*.qmd"):
+        path_relative = str(path.relative_to(parent_doc))
+        # Skip API docs
+        if path_relative.startswith(api_relative):
+            continue
+        value = "/" + str(path.relative_to(doc_path))
+        out[path_relative] = value
+        # also add key with no qmd extension.
+        out[path_relative.split(".")[0]] = value
+    return out
+
+
 def render_project(data_dict, address_dict, api_path=API_DOC_PATH, debug=False):
     """Render the markdown files."""
     # Create and write the qmd files for each function/class/module
     write_api_markdown(data_dict, api_path, address_dict, debug=debug)
     # put the parts together; alias; path to docs
     path_mapping = create_json_mapping(data_dict, address_dict, api_path)
+    # Add the other parts of the documentation.
+    path_mapping.update(_map_other_qmd_files())
     # dump the json mapping to disk in doc folder
-    cross_ref_path = Path(api_path) / "cross_ref.json"
+    cross_ref_path = Path(DOC_PATH) / ".cross_ref.json"
     with open(cross_ref_path, "w") as fi:
         json.dump(path_mapping, fi, indent=2)
     # Clear out empty directories

@@ -1,6 +1,9 @@
 /* css styles */
 
-/* Table stuff */
+body {
+    font-size: 18px;
+}
+
 table {
     border-collapse: collapse;
     border: 2px solid rgb(200, 200, 200);
@@ -12,7 +15,7 @@ table {
 }
 
 caption {
-    padding: 1px;
+    padding: 10px;
     caption-side: top;
     color: #666;
     text-align: center;
@@ -20,27 +23,29 @@ caption {
     font-size: small;
 }
 
-td, th {
-    border: 1px solid rgb(190, 190, 190);
+td {
+    border: 0.5px solid rgb(190, 190, 190);
     padding: 10px 20px;
+    text-align: left;
+    vertical-align: middle;
+    /*white-space: pre;*/
+}
+
+/*Try not to let first column wrap.*/
+td:first-child {
+  white-space: nowrap;
 }
 
 th {
-    background-color: rgb(235, 235, 235);
+    border: 0.5px solid rgb(190, 190, 190);
+    padding: 10px 20px;
     text-align: center;
 }
 
-td {
-    text-align: center;
-}
 
-
-caption {
-    padding: 10px;
-}
-
-tbody tr:nth-child(even) {
-    background-color: rgba(210, 209, 209, 0.4);
+/*This makes every other row striped. */
+tbody tr:nth-child(odd) {
+    background-color: rgba(210, 209, 209, 0.35);
 }
 
 
@@ -51,7 +56,7 @@ tbody tr:nth-child(even) {
 }
 
 .def_block {
-    background-color: rgba(210, 209, 209, 0.4);
+    background-color: rgba(210, 209, 209, 0.3);
     margin: 1em;
     box-sizing: content-box;
     padding-left: 10px;

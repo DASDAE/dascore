@@ -36,6 +36,9 @@ class RSFV1(FiberIO):
 
         spool needs to have a single patch in it
 
+        time origin is forced to 0.0 in the new RSF file, but a dummy
+        variable named 'starttime' still holds the real start time
+
         Parameters
         ----------
         spool
@@ -71,7 +74,7 @@ class RSFV1(FiberIO):
         file_esize = dtype.itemsize
         file_formt = 'data_format="native_float"'
 
-        data_bytes = data.astype(np.float32).tobytes()
+        data_bytes = data.astype(np.float32).tobytes("F")
 
         hdr_str = f"DASCORE {dc.__version__}   {dt.datetime.now()} \n"
 
@@ -79,7 +82,11 @@ class RSFV1(FiberIO):
         hdr_info = [hdr_str, file_formt, f"esize={file_esize}"]
         for i in range(length):
             hdr_info.append(f"n{i+1}={axis_lengs[i]}")
-            hdr_info.append(f"o{i+1}={axis_origs[i]}")
+            if axis_names[i] == "time":
+                hdr_info.append(f"o{i+1}=0.0")
+                hdr_info.append(f"starttime={axis_origs[i]}")
+            else:
+                hdr_info.append(f"o{i+1}={axis_origs[i]}")
             hdr_info.append(f"d{i+1}={axis_steps[i]}")
             hdr_info.append(f'label{i+1}="{axis_names[i]}"')
             hdr_info.append(f'unit{i+1}="{axis_units[i]}"')

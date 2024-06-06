@@ -24,13 +24,28 @@ def to_datetime64(obj: timeable_types | np.ndarray):
     This function accepts a wide range of inputs and returns something
     of the same shape, but converted to numpy's datetime64 representation.
 
+    Parameters
+    ----------
+    obj
+        An object to convert to a datetime64. If a string is passed, it
+        should conform to [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601).
+        Floats and integers are interpreted as seconds from Jan 1st, 1970.
+        Arrays and Series of floats or strings are also supported.
+
     Examples
     --------
-    >>> # Convert an [iso 8601](https://en.wikipedia.org/wiki/ISO_8601) string
+    >>> import numpy as np
     >>> import dascore as dc
-    >>> time = dc.to_datetime64('2017-09-17T12:11:01.23212')
-    >>> # Convert a timestamp (float)
-    >>> dt = dc.to_datetime64(631152000.0)
+    >>>
+    >>> # Convert an iso 8601 string to datetime64
+    >>> dt_1 = dc.to_datetime64('2017-09-17T12:11:01.23212')
+    >>>
+    >>> # Convert a time stamp (seconds from 1970) to datetime64
+    >>> dt_2 = dc.to_datetime64(631152000.0)
+    >>>
+    >>> # Convert an array of time stamps to datetime64
+    >>> timestamp_array = np.random.uniform(1704400000, 1704900000)
+    >>> dt_array = dc.to_datetime64(timestamp_array)
     """
     if pd.isnull(obj):
         return np.datetime64("NaT")
@@ -124,13 +139,27 @@ def to_timedelta64(obj: float | np.ndarray | str | timedelta):
     This function accepts a wide range of inputs and returns something
     of the same shape, but converted to numpy's timedelta64 representation.
 
+    Parameters
+    ----------
+    obj
+        An object to convert to timedelta64. Can be a float, str or arary of
+        such. Floats are interpreted as seconds and strings must conform to
+        the output style of timedeltas (e.g. str(time_delta)).
+
     Examples
     --------
-    >>> # Convert a float to seconds
     >>> import dascore as dc
-    >>> d_time_1 = dc.to_timedelta64(10.1232)
-    >>> # also works on negative numbers
-    >>> d_time_2 = dc.to_datetime64(-10.5)
+    >>>
+    >>> # Convert a float to timedelta64 representing seconds.
+    >>> td_1 = dc.to_timedelta64(10.1232)
+    >>>
+    >>> # This also works on negative numbers.
+    >>> td_2 = dc.to_datetime64(-10.5)
+    >>>
+    >>> # Convert a string to timedelta64
+    >>> td_str = "1000000000 nanoseconds"
+    >>> td_3 = dc.to_timedelta64(td_str)
+
     """
     if pd.isnull(obj):
         return np.timedelta64("NaT")
@@ -302,6 +331,13 @@ def _array_to_float(array: np.ndarray) -> np.ndarray:
     if np.issubdtype(array.dtype, np.timedelta64):
         array = array / ONE_SECOND
     return array.astype(np.float64)
+
+
+@to_float.register(pd.Series)
+def _series_to_float(series: pd.Series) -> pd.Series:
+    """Convert a series of possible dates to floats."""
+    array = to_float(series.values)
+    return pd.Series(array, index=series.index)
 
 
 @to_float.register(np.datetime64)

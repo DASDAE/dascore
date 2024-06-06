@@ -36,7 +36,7 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
             coord = patch.get_coord(name).data
             new_coords[f"pre_integrate_{name}_min"] = (name, np.array([coord.min()]))
             new_coords[f"pre_integrate_{name}_max"] = (name, np.array([coord.max()]))
-        cm = patch.coords.update_coords(**new_coords)
+        cm = patch.coords.update(**new_coords)
         return array, cm
 
     array = patch.data
@@ -58,24 +58,28 @@ def _get_indefinite_integral(patch, dxs_or_vals, axes):
     We need to calculate the distance weighted average for the areas between
     samples for the integration dimension.
     """
-    array = np.array(patch.data)
+    out = np.zeros_like(patch.data)
+    array = patch.data
     for dx_or_val, ax in zip(dxs_or_vals, axes):
         # if coordinate values are provided need to get diffs.
         if isinstance(dx_or_val, np.ndarray):
             dx_or_val = dx_or_val[1:] - dx_or_val[:-1]
-        ndim = len(array.shape)
+        ndim = len(out.shape)
         # get diffs along dimension
         stop_indexer = broadcast_for_index(ndim, ax, slice(1, None), fill=slice(None))
         start_indexer = broadcast_for_index(ndim, ax, slice(None, -1), fill=slice(None))
+        # first_indexer = broadcast_for_index(ndim, ax, slice(0, 1), fill=slice(None))
         # get average values of trapezoid between points
-        avs = (array[stop_indexer] + array[start_indexer]) / (2 * dx_or_val)
-        array[stop_indexer] = np.cumsum(avs, axis=ax)
-    return array, patch.coords  # coords shouldn't change
+        avs = (array[stop_indexer] + array[start_indexer]) * (dx_or_val / 2)
+        out[stop_indexer] = np.cumsum(avs, axis=ax)
+    return out, patch.coords  # coords shouldn't change
 
 
 @patch_function()
 def integrate(
-    patch: PatchType, dim: Sequence[str] | str | None, definite: bool = False
+    patch: PatchType,
+    dim: Sequence[str] | str | None,
+    definite: bool = False,
 ) -> PatchType:
     """
     Integrate along a specified dimension using composite trapezoidal rule.
@@ -91,13 +95,14 @@ def integrate(
         If True, consider the integration to be defined from the minimum to
         the maximum value along specified dimension(s). In essense, this
         collapses the integrated dimensions to a lenght of 1.
-        If define is False, the shape of the patch is preserved.
+        If define is False, the shape of the patch is preserved and a
+        "cumulative" type integration in performed.
 
     Notes
     -----
     The number of dimensions will always remain the same regardless of `definite`
-    value. To remove dimensions with length 1, see
-    [squeeze](`dascore.proc.basic.squeeze`)
+    value. To remove dimensions with length 1,
+    see [squeeze](`dascore.proc.basic.squeeze`).
 
     Examples
     --------

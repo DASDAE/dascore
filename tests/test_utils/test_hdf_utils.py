@@ -9,7 +9,7 @@ import tables
 from tables.exceptions import ClosedNodeError
 
 import dascore as dc
-from dascore.exceptions import InvalidFileHandler
+from dascore.exceptions import InvalidFileHandlerError
 from dascore.utils.hdf5 import (
     HDFPatchIndexManager,
     PyTablesWriter,
@@ -53,7 +53,7 @@ class TestGetHDF5Handlder:
 
     def test_read_only_filehandle_raises(self, simple_hdf_file_handler_read):
         """If write is requested but read handler is provided an error should raise."""
-        with pytest.raises(InvalidFileHandler, match="but mode"):
+        with pytest.raises(InvalidFileHandlerError, match="but mode"):
             with open_hdf5_file(simple_hdf_file_handler_read, mode="w"):
                 pass
 

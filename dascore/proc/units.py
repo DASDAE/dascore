@@ -11,9 +11,11 @@ from dascore.utils.patch import patch_function
 def _update_attrs_coord_units(patch: dc.Patch, data_units, coords):
     """Update attributes with new units."""
     attrs = patch.attrs
-    data_units = data_units or attrs.get("data_units")
     # set data units
-    attrs = attrs.update(data_units=data_units, coords=coords.to_summary_dict())
+    attrs = attrs.update(
+        data_units=data_units,
+        coords=coords.to_summary_dict(),
+    )
     return attrs
 
 
@@ -46,6 +48,8 @@ def set_units(
     >>> patch_with_units = patch.set_units("km/ms")
     >>> # set the units of the distance coordinate
     >>> patch_feet = patch.set_units(distance='feet')
+    >>> # remove data units
+    >>> patch_removed_units = patch_with_units.set_units(None)
     """
     new_coords = patch.coords.set_units(**kwargs)
     new_attrs = _update_attrs_coord_units(patch, data_units, new_coords)

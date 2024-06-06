@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import textwrap
 
+import pandas as pd
+
 from dascore.core.attrs import PatchAttrs
-from dascore.utils.docs import compose_docstring, format_dtypes
+from dascore.examples import EXAMPLE_PATCHES
+from dascore.utils.docs import compose_docstring, format_dtypes, objs_to_doc_df
 
 
 class TestFormatDtypes:
@@ -66,3 +69,19 @@ class TestDocsting:
         white_space_counts = [self.count_white_space(x) for x in list_lines]
         # all whitespace counts should be the same for the list lines.
         assert len(set(white_space_counts)) == 1
+
+
+class TestObjToDocDF:
+    """Tests for generating documentation dataframes."""
+
+    def test_examples_cross_ref(self):
+        """Tests for documenting examples with cross references."""
+        df = objs_to_doc_df(EXAMPLE_PATCHES, cross_reference=True)
+        assert "(`dascore.examples" in df["Name"].iloc[0]
+        assert isinstance(df, pd.DataFrame)
+
+    def test_example_no_cross_ref(self):
+        """Tests for documenting examples without cross references."""
+        df = objs_to_doc_df(EXAMPLE_PATCHES, cross_reference=False)
+        assert "(`dascore.examples" not in df["Name"].iloc[0]
+        assert isinstance(df, pd.DataFrame)

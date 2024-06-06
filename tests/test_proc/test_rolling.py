@@ -75,7 +75,7 @@ class TestRolling:
         # window size of 1 with no step results in the same as input.
         assert out.equals(random_patch)
 
-    def test_1D_patch(self):
+    def test_1d_patch(self):
         """Ensure rolling works with 1D patch."""
         patch = dc.Patch(
             data=np.arange(10),
@@ -87,7 +87,7 @@ class TestRolling:
         out = roll.min().dropna("time")
         assert np.allclose(expected, out.data)
 
-    def test_3D_patch(self, range_patch_3d):
+    def test_3d_patch(self, range_patch_3d):
         """Ensure rolling works with 3D patch."""
         patch = range_patch_3d
         # first try along time axis.

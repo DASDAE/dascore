@@ -32,6 +32,9 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
     "Topic :: Scientific/Engineering",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 
 keywords = ["geophysics", "distributed-acoustic-sensing"]
@@ -47,7 +50,7 @@ dependencies = [
      "pooch>=1.2",
      "pydantic>2.1",
      "rich",
-     "scipy>=1.10.0",
+     "scipy>=1.11.0",
      "tables>=3.7",
      "typing_extensions",
      "pint",
@@ -65,6 +68,7 @@ extras = [
 docs = [
     "jinja2",
     "ipywidgets",
+    "tabulate",
 ]
 
 test = [
@@ -99,6 +103,9 @@ dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore[extras]"]
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
 DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
 H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
+FEBUS__V1 = "dascore.io.febus.core:Febus1"
+FEBUS__V2 = "dascore.io.febus.core:Febus2"
+OPTODAS__V8 = "dascore.io.optodas.core:OptoDASV8"
 PICKLE = "dascore.io.pickle.core:PickleIO"
 PRODML__V2_0 = "dascore.io.prodml.core:ProdMLV2_0"
 PRODML__V2_1 = "dascore.io.prodml.core:ProdMLV2_1"
@@ -119,7 +126,7 @@ WAV = "dascore.io.wav.core:WavIO"
 line-length = 88
 
 # enable certain types of linting
-select = ["E", "F", "UP", "RUF", "I001", "D", "FA", "T"]
+select = ["E", "F", "UP", "RUF", "I001", "D", "FA", "T", "N"]
 
 # Exclude a variety of commonly ignored directories.
 exclude = [
@@ -153,7 +160,7 @@ target-version = "py310"
 fixable = ["ALL"]
 
 # List of codes to ignore
-ignore = ["D105", "D107", "D401", "D205"]
+ignore = ["D105", "D107", "D401", "D205", "D200"]
 
 [tool.ruff.mccabe]
 # Unlike Flake8, default to a complexity level of 10.

@@ -11,7 +11,7 @@ The following highlights some DASCore features for working with IO.
 
 Patches can be written to disk using the `io` namespace. The following shows how to write a Patch to disk in the [DASDAE format](`dascore.io.dasdae`)
 
-```{.python}
+```{python}
 from pathlib import Path
 import dascore as dc
 
@@ -21,7 +21,7 @@ patch = dc.get_example_patch()
 patch.io.write(write_path, "dasdae")
 ```
 
-```{.python}
+```{python}
 #| echo: false
 if write_path.exists():
     write_path.unlink()
@@ -33,7 +33,7 @@ The [DirectorySpool](`dascore.clients.dirspool.DirectorySpool`) is used to retri
 
 For example:
 
-```{.python}
+```{python}
 #| output: false
 
 import dascore
@@ -68,7 +68,7 @@ of the directory which can be efficiently queried for directory contents
 (it is used internally by the `DirectorySpool`).
 
 
-```{.python}
+```{python}
 #| output: false
 import dascore
 from dascore.io.indexer import DirectoryIndexer
@@ -89,8 +89,9 @@ df = indexer.get_contents()
 # This dataframe can be used to ascertain data availability, detect gaps, etc.
 ```
 
-```{.python}
+```{python}
 #| echo: false
+
 from IPython.display import display
 
 display(df.head())

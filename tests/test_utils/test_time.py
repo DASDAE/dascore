@@ -425,6 +425,15 @@ class TestToFloat:
         assert len(out) == 0
         assert np.issubdtype(out.dtype, np.float_)
 
+    def test_series(self):
+        """Ensure a series works."""
+        ser1 = pd.Series([1, 2, 3])
+        ser2 = pd.Series([to_datetime64(10), to_datetime64(1_000_000.12)])
+        out1 = to_float(ser1)
+        out2 = to_float(ser2)
+        assert isinstance(out1, pd.Series)
+        assert isinstance(out2, pd.Series)
+
 
 class TestIsTimeDelta:
     """Test suite for determining time deltas."""

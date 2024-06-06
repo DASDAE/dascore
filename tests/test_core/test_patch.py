@@ -14,6 +14,7 @@ from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.exceptions import CoordError
 from dascore.proc.basic import apply_operator
+from dascore.utils.misc import suppress_warnings
 
 
 def get_simple_patch() -> Patch:
@@ -173,7 +174,7 @@ class TestInit:
     def test_sin_wave_patch(self):
         """Ensure the sin wave patch is consistent with its coord dims."""
         # For some reason this combination can make coords with wrong shape.
-        patch = dc.examples._sin_wave_patch(
+        patch = dc.examples.sin_wave_patch(
             sample_rate=1000,
             frequency=[200, 10],
             channel_count=2,
@@ -206,6 +207,13 @@ class TestInit:
         """Ensure patches have same size as data."""
         assert random_patch.size == random_patch.data.size
 
+    def test_new_patch_non_standard_dims(self):
+        """Ensure a non-standard dimension has matching dims in attrs and coords."""
+        data = np.random.rand(10, 5)
+        coords = {"time": np.arange(10), "can": np.arange(5)}
+        patch = dc.Patch(data=data, coords=coords, dims=("time", "can"))
+        assert patch.dims == patch.attrs.dim_tuple
+
 
 class TestNew:
     """Tests for `Patch.new` method."""
@@ -217,7 +225,7 @@ class TestNew:
         assert patch.attrs.history
         new_attrs = dict(patch.attrs)
         new_attrs["history"] = []
-        new_patch = patch.new(attrs=new_attrs)
+        new_patch = patch.update(attrs=new_attrs)
         assert not new_patch.attrs.history
 
     def test_new_coord_dict_order(self, random_patch):
@@ -237,7 +245,7 @@ class TestNew:
     def test_attrs_preserved_when_not_specified(self, random_patch):
         """If attrs is not passed to new, old attrs should remain."""
         pa = random_patch.update_attrs(network="bob", tag="2", station="10")
-        new_1 = pa.new(data=pa.data * 10)
+        new_1 = pa.update(data=pa.data * 10)
         assert new_1.attrs == pa.attrs
 
     def test_new_dims_renames_dims(self, random_patch):
@@ -295,7 +303,8 @@ class TestEquals:
     def test_coords_named_differently(self, random_patch):
         """Ensure if the coords are named differently patches are not equal."""
         dims = random_patch.dims
-        new_coords = dict(random_patch.coords)
+        with suppress_warnings():
+            new_coords = dict(random_patch.coords)
         new_coords["bob"] = new_coords.pop(dims[-1])
         new_dims = tuple(list(dims)[:-1] + ["bob"])
         patch_2 = random_patch.new(coords=new_coords, dims=new_dims)
@@ -303,7 +312,8 @@ class TestEquals:
 
     def test_coords_not_equal(self, random_patch):
         """Ensure if the coords are not equal neither are the arrays."""
-        new_coords = dict(random_patch.coords)
+        with suppress_warnings():
+            new_coords = dict(random_patch.coords)
         new_coords["distance"] = new_coords["distance"] + 10
         patch_2 = random_patch.new(coords=new_coords)
         assert not patch_2.equals(random_patch)
@@ -365,7 +375,7 @@ class TestEquals:
         coord_array[20:30] *= 0.9
         assert not np.allclose(coord_array, coords.get_array("distance"))
         new_patch = patch.update_coords(distance=coord_array)
-        new = patch.new(coords=new_patch.coords)
+        new = patch.update(coords=new_patch.coords)
         assert new != patch
 
     def test_other_types(self, random_patch):
@@ -548,6 +558,22 @@ class TestCoords:
         assert 1 in new.shape
         new_coords = new.coords.coord_map
         assert isinstance(new_coords["time"], CoordRange)
+
+    def test_seconds(self, random_patch_with_lat):
+        """Ensure we can get number of seconds in the patch."""
+        sampling_interval = random_patch_with_lat.attrs["time_step"] / np.timedelta64(
+            1, "s"
+        )
+        expected = (
+            random_patch_with_lat.attrs["time_max"]
+            - random_patch_with_lat.attrs["time_min"]
+        ) / np.timedelta64(1, "s") + sampling_interval
+        assert random_patch_with_lat.seconds == expected
+
+    def test_channel_count(self, random_patch_with_lat):
+        """Ensure we can get number of channels in the patch."""
+        expected = len(random_patch_with_lat.get_coord("distance"))
+        assert random_patch_with_lat.channel_count == expected
 
 
 class TestApplyOperator:

@@ -14,13 +14,17 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.constants import (
+    PROGRESS_LEVELS,
+    WARN_LEVELS,
     ExecutorType,
     PatchType,
     attr_conflict_description,
     numeric_types,
     timeable_types,
 )
-from dascore.exceptions import InvalidSpoolError, ParameterError
+from dascore.core.attrs import check_coords, check_dims
+from dascore.core.patch import Patch
+from dascore.exceptions import InvalidSpoolError, ParameterError, PatchDimError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
@@ -231,8 +235,18 @@ class BaseSpool(abc.ABC):
         msg = f"spool of type {self.__class__} has no split implementation"
         raise NotImplementedError(msg)
 
-    def update(self) -> Self:
-        """Updates the contents of the spool and returns a spool."""
+    def update(self, progress: PROGRESS_LEVELS = "standard") -> Self:
+        """
+        Updates the contents of the spool, return the updated spool.
+
+        Parameters
+        ----------
+        progress
+            Controls the progress bar. "standard" produces the standard
+            progress bar. "basic" is a simplified version with lower refresh
+            rates, best for high-latency environments, and None disables
+            the progress bar.
+        """
         return self
 
     def map(
@@ -292,6 +306,61 @@ class BaseSpool(abc.ABC):
             progress=progress,
             **kwargs,
         )
+
+    def stack(self, dim_vary=None, check_behavior: WARN_LEVELS = "warn") -> PatchType:
+        """
+        Stack (add) all patches compatible with first patch together.
+
+        Parameters
+        ----------
+        dim_vary
+            The name of the dimension which can be different in values
+            (but not shape) and patches still added together.
+        check_behavior
+            Indicates what to do when an incompatible patch is found in the
+            spool. `None` will silently skip any incompatible patches,
+            'warn' will issue a warning and then skip incompatible patches,
+            'raise' will raise an
+            [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`)
+            if any incompatible patches are found.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> # add a spool with equal sized patches but progressing time dim
+        >>> spool = dc.get_example_spool()
+        >>> stacked_patch = spool.stack(dim_vary='time')
+        """
+        # check the dims/coords of first patch (considered to be standard for rest)
+        init_patch = self[0]
+        stack_arr = np.zeros_like(init_patch.data)
+
+        # ensure dim_vary is in dims
+        if dim_vary is not None and dim_vary not in init_patch.dims:
+            msg = f"Dimension {dim_vary} is not in first patch."
+            raise PatchDimError(msg)
+
+        for p in self:
+            # check dimensions of patch compared to init_patch
+            dims_ok = check_dims(init_patch, p, check_behavior)
+            coords_ok = check_coords(init_patch, p, check_behavior, dim_vary)
+            # actually do the stacking of data
+            if dims_ok and coords_ok:
+                stack_arr = stack_arr + p.data
+
+        # create attributes for the stack with adjusted history
+        stack_attrs = init_patch.attrs
+        new_history = list(init_patch.attrs.history)
+        new_history.append("stack")
+        stack_attrs = stack_attrs.update(history=new_history)
+
+        # create coords array for the stack
+        stack_coords = init_patch.coords
+        if dim_vary:  # adjust dim_vary to start at 0 for junk dimension indicator
+            coord_to_change = stack_coords.coord_map[dim_vary]
+            new_dim = coord_to_change.update_limits(min=0)
+            stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
+        return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
 
 
 class DataFrameSpool(BaseSpool):
@@ -576,9 +645,9 @@ class MemorySpool(DataFrameSpool):
 @singledispatch
 def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSpool:
     """
-    Create a spool from some data source.
+    Create a spool from a data source.
 
-    This function is used to load data from many different sources.
+    This is the main function for loading in DASCore.
 
     Parameters
     ----------
