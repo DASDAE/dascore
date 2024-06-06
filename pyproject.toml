@@ -100,6 +100,7 @@ dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore[extras]"]
 # --- Entry Points
 
 [project.entry-points."dascore.fiber_io"]
+APSENSING__V10 = "dascore.io.ap_sensing.core:APSensingV10"
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
 DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
 H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
