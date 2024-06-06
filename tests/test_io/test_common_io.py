@@ -21,7 +21,7 @@ import pytest
 
 import dascore as dc
 from dascore.io import BinaryReader
-from dascore.io.ap_sesning import APSensingV10
+from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus2
