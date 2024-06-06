@@ -33,7 +33,7 @@ def _set_scale(im, scale, scale_type, color_coords):
 
 
 @patch_function()
-def plot_map(
+def map_fiber(
     patch: PatchType,
     x: np.ndarray | str = "distance",
     y: np.ndarray | str = "distance",
@@ -83,7 +83,7 @@ def plot_map(
     >>> import dascore as dc
     >>> patch = dc.get_example_patch("random_patch_with_lat_lon")
     >>> patch = patch.set_units(latitude="m", longitude="m")
-    >>> _ = patch.viz.plot_map("latitude", "longitude", "distance")
+    >>> _ = patch.viz.map_fiber("latitude", "longitude", "distance")
     """
     dims = []
     if isinstance(x, str):

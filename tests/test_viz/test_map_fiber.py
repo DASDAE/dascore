@@ -47,10 +47,10 @@ class TestPlotMap:
     """Tests for map plot."""
 
     def test_str_input(self, random_patch_with_lat_lon):
-        """Call plot_map plot, return."""
+        """Call map_fiber plot, return."""
         patch = random_patch_with_lat_lon.set_units(latitude="ft")
         patch = patch.set_units(longitude="m")
-        ax = patch.viz.plot_map("latitude", "longitude")
+        ax = patch.viz.map_fiber("latitude", "longitude")
 
         caxis_label = ax.figure.get_children()[-1].yaxis.label.get_text()
 
@@ -61,17 +61,17 @@ class TestPlotMap:
         assert isinstance(ax, plt.Axes)
 
     def test_array_inputs(self, random_patch_with_lat_lon):
-        """Call plot_map plot, return."""
+        """Call map_fiber plot, return."""
         lats = random_patch_with_lat_lon.coords.get_array("latitude")
         lons = random_patch_with_lat_lon.coords.get_array("longitude")
         data = 0.5 * (lats + lons)
-        ax = random_patch_with_lat_lon.viz.plot_map(lats, lons, data)
+        ax = random_patch_with_lat_lon.viz.map_fiber(lats, lons, data)
 
         assert isinstance(ax, plt.Axes)
 
     def test_default_parameters(self, random_patch):
-        """Call plot_map plot, return."""
-        ax = random_patch.viz.plot_map()
+        """Call map_fiber plot, return."""
+        ax = random_patch.viz.map_fiber()
 
         # check labels
         assert "distance" in ax.get_ylabel().lower()
@@ -80,22 +80,22 @@ class TestPlotMap:
 
     def test_colorbar_scale(self, random_patch):
         """Tests for the scaling parameter."""
-        ax_scalar = random_patch.viz.plot_map(scale=0.2)
+        ax_scalar = random_patch.viz.map_fiber(scale=0.2)
         assert ax_scalar is not None
-        seq_scalar = random_patch.viz.plot_map(scale=[0.1, 0.3])
+        seq_scalar = random_patch.viz.map_fiber(scale=[0.1, 0.3])
         assert seq_scalar is not None
 
     def test_colorbar_absolute_scale(self, random_patch):
         """Tests for absolute scaling of colorbar."""
         patch = random_patch.new(data=random_patch.data * 100 - 50)
-        ax1 = patch.viz.plot_map(scale_type="absolute", scale=(-50, 50))
+        ax1 = patch.viz.map_fiber(scale_type="absolute", scale=(-50, 50))
         assert ax1 is not None
-        ax2 = patch.viz.plot_map(scale_type="absolute", scale=10)
+        ax2 = patch.viz.map_fiber(scale_type="absolute", scale=10)
         assert ax2 is not None
 
     def test_no_colorbar(self, random_patch):
         """Ensure the colorbar can be disabled."""
-        ax = random_patch.viz.plot_map(cmap=None)
+        ax = random_patch.viz.map_fiber(cmap=None)
         # ensure no colorbar was created.
         assert len(ax.figure.get_children()) == 2
 
@@ -104,14 +104,14 @@ class TestPlotMap:
         # standard units
 
         pa = random_patch_with_lat_lon.set_units(distance="m/s")
-        ax = pa.viz.plot_map()
+        ax = pa.viz.map_fiber()
         check_label_units(pa, ax, ["distance", "distance"])
 
         new = pa.set_units(latitude="ft", longitude="m")
-        ax = new.viz.plot_map("latitude", "longitude")
+        ax = new.viz.map_fiber("latitude", "longitude")
         check_label_units(new, ax, ["latitude", "longitude"])
 
     def test_show(self, random_patch, monkeypatch):
         """Ensure show path is callable."""
         monkeypatch.setattr(plt, "show", lambda: None)
-        random_patch.viz.plot_map(show=True)
+        random_patch.viz.map_fiber(show=True)

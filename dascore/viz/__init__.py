@@ -7,7 +7,7 @@ from dascore.utils.misc import MethodNameSpace
 from .spectrogram import spectrogram
 from .waterfall import waterfall
 from .wiggle import wiggle
-from .plot_map import plot_map
+from .map_fiber import map_fiber
 
 
 class VizPatchNameSpace(MethodNameSpace):
@@ -16,4 +16,4 @@ class VizPatchNameSpace(MethodNameSpace):
     waterfall = waterfall
     spectrogram = spectrogram
     wiggle = wiggle
-    plot_map = plot_map
+    map_fiber = map_fiber
