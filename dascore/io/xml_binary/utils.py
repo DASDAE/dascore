@@ -160,7 +160,10 @@ def _read_single_file(path, metadata, time, distance):
         {"time": time_coord, "distance": distance_coord},
         dims=attr.dim_tuple,
     )
-    data = np.memmap(path, dtype=metadata.data_type, shape=cm.shape)
+    memmap = np.memmap(path, dtype=metadata.data_type)
+    size = np.prod(cm.shape)
+    assert memmap.size == size, f"wrong data shape for {path}"
+    data = memmap.reshape(cm.shape)
     patch = dc.Patch(
         data=data,
         dims=attr.dim_tuple,
