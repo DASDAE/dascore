@@ -16,7 +16,7 @@ class H5Simple(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(self, resource: PyTablesReader) -> tuple[str, str] | bool:
+    def get_format(self, resource: PyTablesReader, **kwargs) -> tuple[str, str] | bool:
         """Determine if is simple h5 format."""
         if _is_h5simple(resource):
             return self.name, self.version
@@ -40,7 +40,9 @@ class H5Simple(FiberIO):
         patch = dc.Patch(coords=new_cm, data=new_data[:], attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, resource: PyTablesReader, snap=True) -> list[dc.PatchAttrs]:
+    def scan(
+        self, resource: PyTablesReader, snap=True, **kwargs
+    ) -> list[dc.PatchAttrs]:
         """Get the attributes of a h5simple file."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
         attrs["coords"] = cm.to_summary_dict()

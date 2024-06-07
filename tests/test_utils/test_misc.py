@@ -12,9 +12,9 @@ import pytest
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
     MethodNameSpace,
+    _iter_filesystem,
     cached_method,
     get_stencil_coefs,
-    iter_files,
     iterate,
     maybe_get_items,
     optional_import,
@@ -59,7 +59,7 @@ class TestNamespaceClass:
         assert pc.namespace.new_method(ParentClass)
 
 
-class TestIterFiles:
+class TestIterFS:
     """Tests for iterating directories of files."""
 
     sub = {"D": {"C": ".mseed"}, "F": ".json", "G": {"H": ".txt"}}  # noqa
@@ -102,20 +102,20 @@ class TestIterFiles:
     def test_basic(self, simple_dir):
         """Test basic usage of iterfiles."""
         files = set(self.get_file_paths(self.file_paths, simple_dir))
-        out = {Path(x) for x in iter_files(simple_dir)}
+        out = {Path(x) for x in _iter_filesystem(simple_dir)}
         assert files == out
 
     def test_one_subdir(self, simple_dir):
         """Test with one sub directory."""
         subdirs = simple_dir / "B" / "D"
-        out = set(iter_files(subdirs))
+        out = set(_iter_filesystem(subdirs))
         assert len(out) == 1
 
     def test_multiple_subdirs(self, simple_dir):
         """Test with multiple sub directories."""
         path1 = simple_dir / "B" / "D"
         path2 = simple_dir / "B" / "G"
-        out = {Path(x) for x in iter_files([path1, path2])}
+        out = {Path(x) for x in _iter_filesystem([path1, path2])}
         files = self.get_file_paths(self.file_paths, simple_dir)
         expected = {
             x
@@ -124,9 +124,9 @@ class TestIterFiles:
         }
         assert out == expected
 
-    def test_extention(self, simple_dir):
+    def test_extension(self, simple_dir):
         """Test filtering based on extention."""
-        out = set(iter_files(simple_dir, ext=".txt"))
+        out = set(_iter_filesystem(simple_dir, ext=".txt"))
         for val in out:
             assert val.endswith(".txt")
 
@@ -138,25 +138,55 @@ class TestIterFiles:
         first_file = files[0]
         os.utime(first_file, (now + 10, now + 10))
         # get output make sure it only returned first file
-        out = list(iter_files(simple_dir, mtime=now + 5))
+        out = list(_iter_filesystem(simple_dir, timestamp=now + 5))
         assert len(out) == 1
         assert Path(out[0]) == first_file
 
     def test_skips_files_in_hidden_directory(self, dir_with_hidden_dir):
         """Hidden directory files should be skipped."""
-        out1 = list(iter_files(dir_with_hidden_dir))
+        out1 = list(_iter_filesystem(dir_with_hidden_dir))
         has_hidden_by_parent = ["hidden_by_parent" in x for x in out1]
         assert not any(has_hidden_by_parent)
         # But if skip_hidden is False it should be there
-        out2 = list(iter_files(dir_with_hidden_dir, skip_hidden=False))
+        out2 = list(_iter_filesystem(dir_with_hidden_dir, skip_hidden=False))
         has_hidden_by_parent = ["hidden_by_parent" in x for x in out2]
         assert sum(has_hidden_by_parent) == 1
 
     def test_pass_file(self, dummy_text_file):
         """Just pass a single file and ensure it gets returned."""
-        out = list(iter_files(dummy_text_file))
+        out = list(_iter_filesystem(dummy_text_file))
         assert len(out) == 1
         assert out[0] == dummy_text_file
+
+    def test_no_directories(self, simple_dir):
+        """Ensure no directories are included when include_directories=False."""
+        out = list(_iter_filesystem(simple_dir, include_directories=False))
+        has_dirs = [Path(x).is_dir() for x in out]
+        assert not any(has_dirs)
+
+    def test_include_directories(self, simple_dir):
+        """Ensure we can get directories back."""
+        out = list(_iter_filesystem(simple_dir, include_directories=True))
+        returned_dirs = [Path(x) for x in out if Path(x).is_dir()]
+        assert len(returned_dirs)
+        # The top level directory should have been included
+        assert simple_dir in returned_dirs
+        # Directory names
+        dir_names = {x.name for x in returned_dirs}
+        expected_names = {"B", "G", "D"}
+        assert expected_names.issubset(dir_names)
+
+    def test_skip_signal_directory(self, simple_dir):
+        """Ensure a skip signal can be sent to stop parsing on directory."""
+        out = []
+        iterator = _iter_filesystem(simple_dir, include_directories=True)
+        for path in iterator:
+            if Path(path).name == "B":
+                iterator.send("skip")
+            out.append(path)
+        names = {Path(x).name.split(".")[0] for x in out}
+        # Anything after B should have been skipped
+        assert {"C", "D", "E", "F"}.isdisjoint(names)
 
 
 class TestIterate:

@@ -15,12 +15,11 @@ import pooch
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS, path_types
+from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.utils.hdf5 import HDFPatchIndexManager
-from dascore.utils.misc import iter_files, iterate
+from dascore.utils.misc import iterate
 from dascore.utils.pd import filter_df
-from dascore.utils.progress import track
 from dascore.utils.time import get_max_min_times, to_timedelta64
 
 # supported read_hdf5 kwargs
@@ -252,7 +251,7 @@ class DirectoryIndexer(AbstractIndexer):
         out = str([(item, kwargs[item]) for item in keys])
         return out
 
-    def _get_file_iterator(self, paths: path_types | None = None, only_new=True):
+    def _get_mtime(self, only_new=True):
         """Return an iterator of potential un-indexed files."""
         # get mtime, subtract a bit to avoid odd bugs
         mtime = None
@@ -261,6 +260,9 @@ class DirectoryIndexer(AbstractIndexer):
         if last_updated is not None and only_new:
             mtime = last_updated - 0.001
         # get paths to iterate
+        return mtime
+
+    def _get_paths(self, paths):
         path = self.path
         if paths is None:
             paths = path
@@ -269,8 +271,7 @@ class DirectoryIndexer(AbstractIndexer):
                 f"{path}/{x}" if str(path) not in str(x) else str(x)
                 for x in iterate(paths)
             ]
-        # return file iterator
-        return iter_files(paths, ext=self.ext, mtime=mtime)
+        return paths
 
     def _enforce_min_version(self):
         """Ensure the minimum version is met, else delete index file."""
@@ -313,12 +314,15 @@ class DirectoryIndexer(AbstractIndexer):
         """
         self._enforce_min_version()  # delete index if schema has changed
         update_time = time.time()
-        new_files = list(self._get_file_iterator(paths=paths, only_new=True))
-        smooth_iterator = track(
-            new_files, f"Indexing {self.path.name}", progress=progress
+        timestamp = self._get_mtime(only_new=True)
+        paths = self._get_paths(paths)
+        df = dc.scan_to_df(
+            path=paths,
+            timestamp=timestamp,
+            progress=progress,
+            ext=self.ext,
         )
-        data_list = [y.flat_dump() for x in smooth_iterator for y in dc.scan(x)]
-        df = pd.DataFrame(data_list)
+        # Put contents found into database.
         if not df.empty:
             # Some users were surprised the spool wasn't sorted. We still cant
             # guarantee all spools will be sorted but we can make sure most are

@@ -104,7 +104,7 @@ class IOResourceManager:
         return source
 
     def get_resource(self, required_type: RequiredType) -> RequiredType:
-        """Get the requested resource from."""
+        """Get the requested resource."""
         # no required type, just return source of manager.
         if required_type is None:
             return self.source
