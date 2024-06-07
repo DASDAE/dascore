@@ -188,8 +188,12 @@ def get_interval_columns(df, name, arrays=False):
     names = f"{name}_min", f"{name}_max", f"{name}_step"
     missing_cols = set(names) - set(df.columns)
     if missing_cols:
-        msg = f"Dataframe is missing {missing_cols} to chunk on {name}"
-        raise KeyError(msg)
+        dims = get_dim_names_from_columns(df)
+        msg = (
+            f"Cannot chunk spool or dataframe on {missing_cols}, "
+            f"valid dimensions or columns to chunk on are {dims}"
+        )
+        raise ParameterError(msg)
     start, stop, step = df[names[0]], df[names[1]], df[names[2]]
     if not arrays:
         return start, stop, step

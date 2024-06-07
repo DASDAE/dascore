@@ -132,7 +132,7 @@ class ChunkManager:
 
     Notes
     -----
-    This class is used internally by `dc.spool.chunk`.
+    This class is used internally by `dc.BaseSpool.chunk`.
     """
 
     def __init__(
@@ -163,12 +163,6 @@ class ChunkManager:
             )
             raise ParameterError(msg)
         ((key, value),) = kwargs.items()
-        if key not in {"time", "distance"}:
-            msg = (
-                f"Invalid dimension key. Allowed dimensions are: {'time', 'distance'}. "
-                f"You passed key: {key}"
-            )
-            raise ParameterError(msg)
         value = None if value is ... else value
         return key, value
 
