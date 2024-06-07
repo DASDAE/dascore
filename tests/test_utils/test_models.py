@@ -30,3 +30,10 @@ class TestModelEquals:
         mod1 = _TestModel(_private=1)
         mod2 = _TestModel(_private=2)
         assert sensible_model_equals(mod1, mod2)
+
+    def test_new(self):
+        """Ensure a new model can b e created."""
+        mod = _TestModel(some_str="test")
+        new = mod.new(some_str="bob")
+        assert new.some_str == "bob"
+        assert new is not mod

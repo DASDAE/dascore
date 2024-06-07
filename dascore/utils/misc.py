@@ -664,6 +664,20 @@ def _merge_tuples(dims1, dims2):
     return out
 
 
+def _validate_sample_values(value):
+    """
+    Validate values, or ranges, which represent samples.
+    """
+    slice_ = _to_slice(value)
+    start, stop = slice_.start, slice_.stop
+    if not all(
+        isinstance(v, (int | np.integer | type(None) | type(Ellipsis)))
+        for v in (start, stop)
+    ):
+        msg = "When samples=True, values must be integers."
+        raise ParameterError(msg)
+
+
 def _to_slice(limits):
     """Convert slice or two len tuple to slice."""
     if isinstance(limits, slice):

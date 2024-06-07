@@ -30,8 +30,7 @@ def _remove_base_path(series: pd.Series, base="") -> pd.Series:
     Ensure paths stored in column name use unix style paths and have base
     path removed.
     """
-    if series.empty:
-        return series
+    assert not series.empty, "Series must be non-empty"
     unix_paths = series.str.replace(os.sep, "/")
     unix_base_path = (str(base) + "/").replace(os.sep, "/")
     out = unix_paths.str.replace(unix_base_path, "", regex=False)

@@ -720,6 +720,12 @@ class TestSelect:
             with pytest.raises(ParameterError, match=msg):
                 random_coord.select(val)
 
+    def test_select_samples_no_int_raises(self, random_coord):
+        """An error is raised when samples=True and non int values are used."""
+        expected = "When samples=True"
+        with pytest.raises(ParameterError, match=expected):
+            random_coord.select((1, 1.2), samples=True)
+
 
 class TestOrder:
     """Tests for ordering coordinates."""
@@ -1507,6 +1513,13 @@ class TestPartialCoord:
         assert not coord.sorted
         assert not coord.reverse_sorted
         assert coord.degenerate
+
+    def test_timedelta_nulls(self):
+        """Ensure timedelta coordinate returns proper null values in array."""
+        coord = get_coord(shape=(10,), dtype="timedelta64[s]")
+        array = coord.values
+        assert np.issubdtype(array.dtype, np.timedelta64)
+        assert pd.isnull(array).all()
 
     def test_update_degenerate_datetime_to_coord_range(self, degenerate_time_coord):
         """Ensure updating partial with enough info creates coord range."""

@@ -44,6 +44,17 @@ def example_df_2():
     return out
 
 
+@pytest.fixture
+def example_df_timedeltas(example_df_2):
+    """An example dataframe with timedelta columns."""
+    time = to_timedelta64(10)
+    time_min = [time + x * np.timedelta64(1, "s") for x in range(5)]
+    time_max = time_min + np.timedelta64(10, "m")
+
+    out = example_df_2.assign(time_min=time_min, time_max=time_max)
+    return out
+
+
 class TestFilterDfBasic:
     """Tests for filtering dataframes."""
 
@@ -170,6 +181,12 @@ class TestFilterDfAdvanced:
         """Empty filter kwargs, for convenience, should be ok."""
         out = filter_df(example_df_2, time=None)
         assert np.all(out)
+
+    def test_timedelta_columns(self, example_df_timedeltas):
+        """Ensure timedelta columns work when specifying ranges of single col."""
+        df = example_df_timedeltas
+        out = filter_df(df, time_step_min=0.5, time_step_max=2)
+        assert out.all()
 
 
 class TestAdjustSegments:
@@ -350,8 +367,8 @@ class TestGetIntervalColumns:
             assert isinstance(ser, pd.Series)
         assert len(outs) == 3
 
-    def test_raises(self, random_df_from_patch):
+    def test_raises(self, example_df_2):
         """Ensure an error is raised if columns don't exist."""
-        msg = "Dataframe is missing"
-        with pytest.raises(KeyError, match=msg):
-            get_interval_columns(random_df_from_patch, "money")
+        msg = "Cannot chunk spool or dataframe"
+        with pytest.raises(ParameterError, match=msg):
+            get_interval_columns(example_df_2, "money")

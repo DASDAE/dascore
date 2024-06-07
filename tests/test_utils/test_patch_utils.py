@@ -163,7 +163,7 @@ class TestPatchesToDF:
 
     def test_history_added(self, random_spool):
         """Ensure the history column gets added."""
-        df = random_spool.get_contents().drop("history", errors="ignore")
+        df = random_spool.get_contents().drop(columns="history", errors="ignore")
         out = patches_to_df(df)
         assert "history" in out.columns
 

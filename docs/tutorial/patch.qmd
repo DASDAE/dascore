@@ -211,7 +211,7 @@ print(patch)
 
 ## Shortcuts
 
-DASCore Patches offer a hew shortcuts for quickly accessing commonly used information:
+DASCore Patches offer a few shortcuts for quickly accessing commonly used information:
 
 ```{python}
 import dascore as dc

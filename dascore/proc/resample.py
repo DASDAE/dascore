@@ -65,7 +65,7 @@ def decimate(
     else:  # No filter, simply slice along specified dimension.
         data = patch.data[slices]
         # Need to copy so array isn't a slice and holds onto reference of parent
-        data = np.asarray(data) if copy else data
+        data = np.array(data) if copy else data
     # Update delta_dim since spacing along dimension has changed.
     return patch.new(data=data, coords=coords)
 

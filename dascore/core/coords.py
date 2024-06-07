@@ -36,6 +36,7 @@ from dascore.utils.misc import (
     _get_nullish,
     _maybe_array_to_slice,
     _to_slice,
+    _validate_sample_values,
     all_close,
     all_diffs_close_enough,
     cached_method,
@@ -311,6 +312,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def _select_by_samples(self, arg):
         """Select using samples."""
+        _validate_sample_values(arg)
         reductions = _to_slice(arg)
         new = self[reductions]
         return new, reductions
@@ -892,19 +894,6 @@ class CoordPartial(BaseCoord):
     def sort(self, reverse=False):
         """Sort dummy array. Does nothing."""
         return self, slice(None, None)
-
-    # def __rich__(self):
-    #     contents = self.model_dump(exclude_defaults=True)
-    #     key_style = dascore_styles["keys"]
-    #     base = Text("")
-    #     base += Text(" Partial ", style=self._rich_style)
-    #     base += Text("(")
-    #     for key, val in contents.items():
-    #         if pd.isnull(val):
-    #             continue
-    #         base += Text(f" {key}: {get_nice_text(val)} ")
-    #     base += Text(" )")
-    #     return base
 
     def __len__(self):
         return self.shape[0]

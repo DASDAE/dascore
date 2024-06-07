@@ -100,7 +100,7 @@ class DascoreBaseModel(BaseModel):
 
     def new(self, **kwargs) -> Self:
         """Create new instance with some attributed updated."""
-        out = dict(self)
+        out = self.model_dump(exclude_unset=True)
         out.update(kwargs)
         return self.__class__(**out)
 

@@ -586,6 +586,13 @@ class TestSelect:
             # Check that the data were re-arranged correctly
             assert np.all(expected_data == new_data)
 
+    def test_select_non_dim_coord(self, cm_basic):
+        """Ensure selecting on a non-dimension coord does nothing."""
+        # TODO should this raise in the future?
+        new_cm = cm_basic.update(new_dim=(None, [1, 2, 3]))
+        out, _ = new_cm.select(new_dim=(1, 20))
+        assert new_cm == out
+
 
 class TestOrder:
     """Tests for ordering coordinate managers."""

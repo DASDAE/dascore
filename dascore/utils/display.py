@@ -138,12 +138,9 @@ def attrs_to_text(attrs) -> Text:
     txt += Text("\n")
     for name, attr in dict(attrs).items():
         # determine styles here based on keys
-        style = None
+        style = dascore_styles.get(name, None)
         if name.endswith("units"):
-            style = dascore_styles["units"]
             attr = get_quantity_str(attr)
-        if name.endswith("dtype"):
-            style = dascore_styles["dtypes"]
         # assemble text
         txt += Text("    ")
         txt += Text(f"{name}: ", dascore_styles["keys"])
