@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.units import get_quantity_str
 from dascore.utils.time import is_datetime64, to_timedelta64
 
 
@@ -156,3 +157,24 @@ class TestWaterfall:
         """Ensure show path is callable."""
         monkeypatch.setattr(plt, "show", lambda: None)
         random_patch.viz.waterfall(show=True)
+
+    def test_log(self, random_patch):
+        """Ensure log is callable."""
+        ax = random_patch.viz.waterfall(log=True)
+
+        # Retrieve the colorbar label
+        cb = ax.get_figure().get_axes()[-1]
+        cb_label = cb.get_ylabel()
+
+        # Retrieve the expected data type and data units
+        data_type = str(random_patch.attrs["data_type"])
+        data_units = get_quantity_str(random_patch.attrs.data_units) or ""
+        expected_dunits = f" ({data_units})" if data_units else ""
+
+        # Construct the expected label
+        expected_label = f"{data_type}{expected_dunits} - log_10"
+
+        # Check if the colorbar label matches the expected label
+        assert (
+            cb_label == expected_label
+        ), f"Expected '{expected_label}', but got '{cb_label}'"

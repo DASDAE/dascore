@@ -132,7 +132,7 @@ class ChunkManager:
 
     Notes
     -----
-    This class is used internally by `dc.Spool.chunk`.
+    This class is used internally by `dc.BaseSpool.chunk`.
     """
 
     def __init__(
@@ -140,6 +140,7 @@ class ChunkManager:
         overlap: timeable_types | numeric_types | None = None,
         group_columns: Collection[str] | None = None,
         keep_partial=False,
+        snap_coords=True,
         tolerance=1.5,
         conflict="raise",
         **kwargs,
@@ -147,6 +148,7 @@ class ChunkManager:
         self._overlap = overlap
         self._group_columns = group_columns
         self._keep_partials = keep_partial
+        self._snap_coords = snap_coords
         self._tolerance = tolerance
         self._name, self._value = self._validate_kwargs(kwargs)
         self._attr_conflict = conflict

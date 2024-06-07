@@ -43,6 +43,7 @@ def waterfall(
     cmap="bwr",
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
+    log=False,
     show=False,
 ) -> plt.Axes:
     """
@@ -68,6 +69,8 @@ def waterfall(
         are:
             relative - scale based on half the dynamic range in patch
             absolute - scale based on absolute values provided to `scale`
+    log
+        If True, visualize the common logarithm of the absolute values of patch data.
     show
         If True, show the plot, else just return axis.
 
@@ -80,7 +83,7 @@ def waterfall(
     """
     ax = _get_ax(ax)
     cmap = _get_cmap(cmap)
-    data = patch.data
+    data = np.log10(np.absolute(patch.data)) if log else patch.data
     dims = patch.dims
     assert len(dims) == 2, "Can only make waterfall plot of 2D Patch"
     dims_r = tuple(reversed(dims))
@@ -102,6 +105,8 @@ def waterfall(
         data_type = str(patch.attrs["data_type"])
         data_units = get_quantity_str(patch.attrs.data_units) or ""
         dunits = f" ({data_units})" if (data_type and data_units) else f"{data_units}"
+        if log:
+            dunits = f"{dunits} - log_10"
         label = f"{data_type}{dunits}"
         cb.set_label(label)
     ax.invert_yaxis()  # invert y axis so origin is at top
