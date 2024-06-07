@@ -194,7 +194,7 @@ website:
         - text: Documentation Strategy
           href: notes/doc_strategy.qmd
 
-        - text: Fourier transforms
+        - text: Fourier Transforms
           href: notes/dft_notes.qmd
 
     - id: API

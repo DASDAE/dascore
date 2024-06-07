@@ -100,6 +100,7 @@ dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore[extras]"]
 # --- Entry Points
 
 [project.entry-points."dascore.fiber_io"]
+APSENSING__V10 = "dascore.io.ap_sensing.core:APSensingV10"
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
 DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
 H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
@@ -117,6 +118,7 @@ TERRA15__V6 = "dascore.io.terra15.core:Terra15FormatterV6"
 SEGY__V2 = "dascore.io.segy.core:SegyV2"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
+XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
 
 
 # --- External tool configuration

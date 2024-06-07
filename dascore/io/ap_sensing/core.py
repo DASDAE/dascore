@@ -1,4 +1,6 @@
-"""IO module for reading OptoDAS data."""
+"""
+Core modules for AP sensing support.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -7,25 +9,23 @@ import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.models import UnitQuantity, UTF8Str
 
-from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_das
+from .utils import _get_attrs_dict, _get_patch, _get_version_string
 
 
-class OptoDASPatchAttrs(dc.PatchAttrs):
-    """Patch attrs for OptoDAS."""
+class APSensingPatchAttrs(dc.PatchAttrs):
+    """Patch Attributes for AP sensing."""
 
     gauge_length: float = np.NaN
-    gauge_length_units: UnitQuantity | None = None
-    schema_version: UTF8Str = ""
+    radians_to_nano_strain: float = np.NaN
 
 
-class OptoDASV8(FiberIO):
-    """Support for OptoDAS V 8."""
+class APSensingV10(FiberIO):
+    """Support for APSensing V 10."""
 
-    name = "OptoDAS"
+    name = "APSensing"
     preferred_extensions = ("hdf5", "h5")
-    version = "8"
+    version = "10"
 
     def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """
@@ -36,21 +36,21 @@ class OptoDASV8(FiberIO):
         resource
             A path to the file which may contain terra15 data.
         """
-        version_str = _get_opto_das_version_str(resource)
+        version_str = _get_version_string(resource)
         if version_str:
             return self.name, version_str
 
     def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
         """Scan a OptoDAS file, return summary information about the file's contents."""
-        file_version = _get_opto_das_version_str(resource)
+        file_version = _get_version_string(resource)
         extras = {
             "path": resource.filename,
             "file_format": self.name,
             "file_version": str(file_version),
         }
-        attrs = _get_opto_das_attrs(resource)
+        attrs = _get_attrs_dict(resource)
         attrs.update(extras)
-        return [OptoDASPatchAttrs(**attrs)]
+        return [APSensingPatchAttrs(**attrs)]
 
     def read(
         self,
@@ -59,8 +59,8 @@ class OptoDASV8(FiberIO):
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
     ) -> dc.BaseSpool:
-        """Read a OptoDAS spool of patches."""
-        patches = _read_opto_das(
-            resource, time=time, distance=distance, attr_cls=OptoDASPatchAttrs
+        """Read a single file with APSensing data inside."""
+        patches = _get_patch(
+            resource, time=time, distance=distance, attr_cls=APSensingPatchAttrs
         )
         return dc.spool(patches)

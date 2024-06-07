@@ -482,6 +482,7 @@ class DataFrameSpool(BaseSpool):
         chunker = ChunkManager(
             overlap=overlap,
             keep_partial=keep_partial,
+            snap_coords=snap_coords,
             group_columns=self._group_columns,
             tolerance=tolerance,
             conflict=conflict,
@@ -666,7 +667,7 @@ def _spool_from_str(path, **kwargs):
     # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
-        formatter = dc.io.FiberIO.manager.get_fiberio(_format, _version)
+        formatter = dc.io.FiberIO.manager.get_fiberio(format=_format, version=_version)
         if formatter.implements_scan:
             from dascore.clients.filespool import FileSpool
 

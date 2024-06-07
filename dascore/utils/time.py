@@ -57,6 +57,9 @@ def to_datetime64(obj: timeable_types | np.ndarray):
 @to_datetime64.register(str)
 def _str_to_datetime64(obj: str) -> np.datetime64:
     """Convert a string to a datetime64 object."""
+    # strip off timezone info so numpy doesn't complain.
+    if obj.endswith("Z"):
+        obj = obj[:-1]
     return np.datetime64(obj, "ns")
 
 

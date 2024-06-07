@@ -26,7 +26,7 @@ class PickleIO(FiberIO):
         spool_or_patch = b"Spool" in byte_stream or b"Patch" in byte_stream
         return has_dascore and spool_or_patch
 
-    def get_format(self, resource: BinaryReader) -> tuple[str, str] | bool:
+    def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
         """
         Return True if file contains a pickled Patch or Spool.
 

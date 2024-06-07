@@ -452,7 +452,7 @@ class TestGetSliceTuple:
         with pytest.raises(ParameterError, match=match):
             evenly_sampled_coord.select(slice(1, 10, 2))
 
-    def test_slice_with_step(self, evenly_sampled_coord):
+    def test_slice_works_as_tuple(self, evenly_sampled_coord):
         """Ensure slice works like tuple."""
         coord = evenly_sampled_coord
         vmin, vmax = coord.min(), coord.max()

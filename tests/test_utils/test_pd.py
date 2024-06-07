@@ -166,6 +166,11 @@ class TestFilterDfAdvanced:
         out2 = filter_df(example_df_2, time=(None, str(tmax)))
         assert len(out2) == len(example_df_2)
 
+    def test_empty_filter(self, example_df_2):
+        """Empty filter kwargs, for convenience, should be ok."""
+        out = filter_df(example_df_2, time=None)
+        assert np.all(out)
+
 
 class TestAdjustSegments:
     """Tests for adjusting segments of dataframes."""

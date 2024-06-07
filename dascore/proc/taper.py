@@ -98,7 +98,7 @@ def taper(
             {taper_type}.
     **kwargs
         Used to specify the dimension along which to taper and the percentage
-        of total length of the dimension or abolsute units. If a single value
+        of total length of the dimension or absolute units. If a single value
         is passed, the taper will be applied to both ends. A length two tuple
         can specify different values for each end, or no taper on one end.
 

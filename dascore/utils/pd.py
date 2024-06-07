@@ -88,6 +88,9 @@ def split_df_query(kwargs, df, ignore_bad_kwargs=False):
             new_val = [None if x is ... else x for x in val]
             range_query[key] = tuple(new_val)
             out.pop(key, None)
+        # If this is an empty range query just pop out key.
+        elif val is None:
+            out.pop(key, None)
         else:
             unsupported[key] = val
     # raise if bad keys are found and not ignored.
@@ -203,8 +206,12 @@ def get_interval_columns(df, name, arrays=False):
     names = f"{name}_min", f"{name}_max", f"{name}_step"
     missing_cols = set(names) - set(df.columns)
     if missing_cols:
-        msg = f"Dataframe is missing {missing_cols} to chunk on {name}"
-        raise KeyError(msg)
+        dims = get_dim_names_from_columns(df)
+        msg = (
+            f"Cannot chunk spool or dataframe on {missing_cols}, "
+            f"valid dimensions or columns to chunk on are {dims}"
+        )
+        raise ParameterError(msg)
     start, stop, step = df[names[0]], df[names[1]], df[names[2]]
     if not arrays:
         return start, stop, step

@@ -79,7 +79,7 @@ class _FiberCaster(FiberIO):
 
 
 class _FiberUnsupportedTypeHints(FiberIO):
-    """A fiber io which implements typehints which have not casting meaning."""
+    """A fiber io which implements typehints which have no casting meaning."""
 
     name = "_TypeHinterNotRight"
     version = "2"
@@ -88,6 +88,22 @@ class _FiberUnsupportedTypeHints(FiberIO):
         """Dummy read."""
         with open(resource) as fi:
             return fi.read()
+
+
+class _FiberDirectory(FiberIO):
+    """A FiberIO which accepts a directory."""
+
+    name = "_directory_test_io"
+    version = "0.1"
+    input_type = "directory"
+
+    def get_format(self, resource) -> tuple[str, str] | bool:
+        """Only accept directories which have specific naming."""
+        path = Path(resource)
+        name = path.name
+        if self.name in name:
+            return self.name, self.version
+        return False
 
 
 class TestPatchFileSummary:
@@ -120,7 +136,9 @@ class TestFormatManager:
         return manager
 
     def test_specific_format_and_version(self, format_manager):
-        """Specifying a known format and version should return exactly one formatter."""
+        """
+        Specifying a known format and version should return exactly one formatter.
+        """
         out = list(format_manager.yield_fiberio("DASDAE", "1"))
         assert len(out) == 1
         assert isinstance(out[0], DASDAEV1)
@@ -239,6 +257,15 @@ class TestGetFormat:
         with pytest.raises(FileNotFoundError):
             dc.get_format("bad/file")
 
+    def test_fiberio_directory(self, tmp_path_factory):
+        """Ensure a directory can be recognized as a FiberIO."""
+        fiber_io = _FiberDirectory()
+        path = tmp_path_factory.mktemp(fiber_io.name)
+        assert fiber_io.get_format(path)
+        (name, version) = dc.get_format(path)
+        assert fiber_io.name == name
+        assert fiber_io.version == version
+
 
 class TestScan:
     """Tests for scanning fiber files."""
@@ -287,6 +314,11 @@ class TestScan:
         """Ensure scan picks up files in nested directories."""
         out = dc.scan(nested_directory_with_patches)
         assert len(out) == 3
+
+    def test_scan_single_file(self, terra15_v6_path):
+        """Ensure scan works on a single file."""
+        out = dc.scan(terra15_v6_path)
+        assert len(out) == 1
 
     def test_can_raise(self):
         """
