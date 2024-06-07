@@ -70,7 +70,7 @@ def waterfall(
             relative - scale based on half the dynamic range in patch
             absolute - scale based on absolute values provided to `scale`
     log
-        If True, visualize the common logarithm of the data.
+        If True, visualize the common logarithm of the absolute values of patch data.
     show
         If True, show the plot, else just return axis.
 
@@ -83,7 +83,7 @@ def waterfall(
     """
     ax = _get_ax(ax)
     cmap = _get_cmap(cmap)
-    data = np.log10(patch.data) if log else patch.data
+    data = np.log10(np.absolute(patch.data)) if log else patch.data
     dims = patch.dims
     assert len(dims) == 2, "Can only make waterfall plot of 2D Patch"
     dims_r = tuple(reversed(dims))
