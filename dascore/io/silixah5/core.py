@@ -25,7 +25,7 @@ class SilixaPatchAttrs(dc.PatchAttrs):
 class SilixaH5V1(FiberIO):
     """Support for Silixa hdf5 format."""
 
-    name = "SilixaH5"
+    name = "Silixa_H5"
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
