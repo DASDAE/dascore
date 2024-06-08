@@ -72,6 +72,9 @@ def _get_dft_attrs(patch, dims, new_coords):
     new = dict(patch.attrs)
     new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
+    # As per #390, we also want to remove data_type (eg the patch is no
+    # longer in strain rate after the dft)
+    new["_pre_dft_data_type"] = new.pop("data_type", None)
     return PatchAttrs(**new)
 
 
@@ -224,6 +227,9 @@ def _get_idft_attrs(patch, dims, new_coords):
     new = dict(patch.attrs)
     new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
+    # Restore the pre-dft datatype.
+    if "_pre_dft_data_type" in new:
+        new["data_type"] = new.pop("_pre_dft_data_type", None)
     return PatchAttrs(**new)
 
 
