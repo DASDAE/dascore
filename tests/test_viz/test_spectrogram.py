@@ -29,3 +29,14 @@ class TestPlotSpectrogram:
         """Ensure a ValueError was raised."""
         with pytest.raises(ValueError, match="requires 1D"):
             random_patch.viz.spectrogram()
+
+    def test_1d_patch(self, random_patch):
+        """Ensure spectrogram works with 1D patch."""
+        out = random_patch.mean("time").squeeze()
+        out.viz.spectrogram()
+
+    def test_show(self, random_patch, monkeypatch):
+        """Ensure show path is callable."""
+        monkeypatch.setattr(plt, "show", lambda: None)
+        mean_patch = random_patch.aggregate(dim="time")
+        mean_patch.viz.spectrogram(show=True)

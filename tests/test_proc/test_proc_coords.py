@@ -4,7 +4,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dascore.exceptions import ParameterError
+import dascore as dc
+from dascore.compat import is_array
+from dascore.core.coords import BaseCoord
+from dascore.exceptions import CoordError, ParameterError, PatchBroadcastError
 from dascore.units import get_quantity
 
 
@@ -176,3 +179,324 @@ class TestCoordsFromDf:
         bad_df = coord_df.drop(columns="distance")
         with pytest.raises(ParameterError, match="Exactly one column"):
             random_patch.coords_from_df(bad_df)
+
+
+class TestSelect:
+    """Tests for selecting data from patch."""
+
+    def test_select_by_distance(self, random_patch):
+        """Ensure distance can be used to filter patch."""
+        dmin, dmax = 100, 200
+        pa = random_patch.select(distance=(dmin, dmax))
+        assert pa.data.shape < random_patch.data.shape
+        # the attrs should have updated as well
+        assert pa.attrs["distance_min"] >= 100
+        assert pa.attrs["distance_max"] <= 200
+
+    def test_select_by_absolute_time(self, random_patch):
+        """Ensure the data can be sub-selected using absolute time."""
+        shape = random_patch.data.shape
+        t1 = random_patch.attrs["time_min"] + np.timedelta64(1, "s")
+        t2 = t1 + np.timedelta64(3, "s")
+
+        pa1 = random_patch.select(time=(None, t1))
+        assert pa1.attrs["time_max"] <= t1
+        assert pa1.data.shape < shape
+
+        pa2 = random_patch.select(time=(t1, None))
+        assert pa2.attrs["time_min"] >= t1
+        assert pa2.data.shape < shape
+
+        tr3 = random_patch.select(time=(t1, t2))
+        assert tr3.attrs["time_min"] >= t1
+        assert tr3.attrs["time_max"] <= t2
+        assert tr3.data.shape < shape
+
+    def test_select_out_of_bounds_time(self, random_patch):
+        """Selecting out of coordinate range should leave patch unchanged."""
+        # this equates to a timestamp of 1 (eg 1 sec after 1970)
+        pa1 = random_patch.select(time=(1, None))
+        assert pa1 == random_patch
+        # it should also work with proper datetimes.
+        t1 = random_patch.attrs["time_min"] - dc.to_timedelta64(1)
+        pa2 = random_patch.select(time=(t1, None))
+        assert pa2 == random_patch
+
+    def test_select_distance_leaves_time_attr_unchanged(self, random_patch):
+        """Ensure selecting on distance doesn't change time."""
+        dist = random_patch.coords.get_array("distance")
+        dist_max, dist_mean = np.max(dist), np.mean(dist)
+        out = random_patch.select(distance=(dist_mean, dist_max - 1))
+        assert out.attrs["time_max"] == out.coords.max("time")
+
+    def test_select_emptify_array(self, random_patch):
+        """If select range excludes data range patch should be emptied."""
+        out = random_patch.select(distance=(-100, -10))
+        assert len(out.shape) == len(random_patch.shape)
+        deleted_axis = out.dims.index("distance")
+        assert out.shape[deleted_axis] == 0
+        assert np.size(out.data) == 0
+
+    def test_select_relative_start_end(self, random_patch):
+        """Ensure relative select works on start to end."""
+        patch1 = random_patch.select(time=(1, -1), relative=True)
+        t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
+        t2 = random_patch.attrs.time_max - dc.to_timedelta64(1)
+        patch2 = random_patch.select(time=(t1, t2))
+        assert patch1 == patch2
+
+    def test_select_relative_end_end(self, random_patch):
+        """Ensure relative works for end to end."""
+        patch1 = random_patch.select(time=(-3, -1), relative=True)
+        t1 = random_patch.attrs.time_max - dc.to_timedelta64(1)
+        t2 = random_patch.attrs.time_max - dc.to_timedelta64(3)
+        patch2 = random_patch.select(time=(t1, t2))
+        assert patch1 == patch2
+
+    def test_select_relative_start_start(self, random_patch):
+        """Ensure relative start ot start."""
+        patch1 = random_patch.select(time=(1, 3), relative=True)
+        t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
+        t2 = random_patch.attrs.time_min + dc.to_timedelta64(3)
+        patch2 = random_patch.select(time=(t1, t2))
+        assert patch1 == patch2
+
+    def test_select_relative_start_open(self, random_patch):
+        """Ensure relative start to open end."""
+        patch1 = random_patch.select(time=(1, None), relative=True)
+        t1 = random_patch.attrs.time_min + dc.to_timedelta64(1)
+        patch2 = random_patch.select(time=(t1, None))
+        assert patch1 == patch2
+
+    def test_select_relative_end_open(self, random_patch):
+        """Ensure relative start to open end."""
+        patch1 = random_patch.select(time=(-1, None), relative=True)
+        t1 = random_patch.attrs.time_max - dc.to_timedelta64(1)
+        patch2 = random_patch.select(time=(t1, None))
+        assert patch1 == patch2
+
+    def test_time_slice_samples(self, random_patch):
+        """Ensure a simple time slice works."""
+        pa1 = random_patch.select(time=(1, 5), samples=True)
+        pa2 = random_patch.select(time=slice(1, 5), samples=True)
+        assert pa1 == pa2
+
+    def test_non_slice_samples(self, random_patch):
+        """Ensure a non-slice doesnt change patch."""
+        pa1 = random_patch.select(distance=(..., ...), samples=True)
+        pa2 = random_patch.select(distance=(None, ...), samples=True)
+        pa3 = random_patch.select(distance=slice(None, None), samples=True)
+        pa4 = random_patch.select(distance=...)
+        assert pa1 == pa2 == pa3 == pa4
+
+    def test_iselect_deprecated(self, random_patch):
+        """Ensure Patch.iselect raises deprecation error."""
+        msg = "iselect is deprecated"
+        with pytest.warns(DeprecationWarning, match=msg):
+            _ = random_patch.iselect(time=(10, -10))
+
+    def test_select_history_outside_bounds(self, random_patch):
+        """Selecting outside the bounds should do nothing to history."""
+        attrs = random_patch.attrs
+        dt = dc.to_timedelta64(1)
+        time = (attrs["time_min"] - dt, attrs["time_max"] + dt)
+        dist = (attrs["distance_min"] - 1, attrs["distance_max"] + 1)
+        new = random_patch.select(time=time, distance=dist)
+        # if no select performed everything should be identical.
+        assert new.equals(random_patch, only_required_attrs=False)
+
+    def test_patch_non_coord(self, random_patch):
+        """Test select for a patch with a non coord."""
+        new_shape = tuple([*random_patch.shape, 10])
+        patch = random_patch.append_dims("face_angle").make_broadcastable_to(new_shape)
+        face_angle = patch.get_coord("face_angle")
+        new = patch.select(face_angle=(face_angle.min(), face_angle.max()))
+        assert new == patch
+
+
+class TestOrder:
+    """Tests for ordering Patches."""
+
+    def test_simple_ordering(self, random_patch):
+        """Ensure order changes to specify on patch."""
+        dist = random_patch.get_array("distance")
+        new_dist = dist[1:5][::-1]
+        new = random_patch.order(distance=new_dist)
+        assert np.all(new.get_array("distance") == new_dist)
+
+    def test_duplicate_data(self, random_patch):
+        """Duplicate the data along time dimension."""
+        out = random_patch.order(time=[0, 0, 0], samples=True)
+        assert isinstance(out, dc.Patch)
+
+    def test_copy(self, random_patch):
+        """Ensure copy creates a copy of the data array."""
+        out = random_patch.order(time=[1, 2, 3], samples=True, copy=True)
+        assert isinstance(out.data, np.ndarray)
+
+
+class TestAppendDims:
+    """Tests for appending dummy dimensions to data array."""
+
+    def test_no_dims_unchanged_patch(self, random_patch):
+        """Ensure no kwargs yields equal patches."""
+        out = random_patch.append_dims()
+        assert out == random_patch
+
+    def test_flat_dimension(self, random_patch):
+        """Ensure a flat dimension only expands dimensionality."""
+        out = random_patch.append_dims(new=[1])
+        assert len(out.shape) == (len(random_patch.shape) + 1)
+        # New dim should show up at the end.
+        assert out.dims[-1] == "new"
+        coord = out.coords.get_array("new")
+        assert np.all(coord == np.array([1]))
+        # The flatten data should remain the same.
+        assert np.allclose(out.data.flatten(), random_patch.data.flatten())
+
+    def test_non_coordinate_dim(self, random_patch):
+        """Ensure we can add non dimensional coordinates."""
+        out = random_patch.append_dims(new=2)
+        assert "new" in out.dims
+        assert out.size == random_patch.size * 2
+        assert out.shape[-1] == 2
+
+    def test_expand_dims(self, random_patch):
+        """Ensure dimensions can be expanded."""
+        out = random_patch.append_dims(new=[1, 2])
+        assert len(out.shape) == (len(random_patch.shape) + 1)
+        # New dim should show up at the end.
+        assert out.dims[-1] == "new"
+        coord = out.coords.get_array("new")
+        assert np.all(coord == np.array([1, 2]))
+
+    def test_expand_multiple_dims(self, random_patch):
+        """Ensure several dimensions can be expanded."""
+        small_patch = random_patch.select(
+            time=(1, 4),
+            distance=(1, 6),
+            samples=True,
+        )
+        out = small_patch.append_dims(new=[1, 2], old=[1, 2])
+        assert len(out.shape) == (len(random_patch.shape) + 2)
+        # New dim should show up at the end, in order.
+        assert out.dims[-2:] == ("new", "old")
+
+    def test_append_with_args(self, random_patch):
+        """Ensure we can append with just the name of the dim."""
+        out = random_patch.append_dims("new", "dim")
+        assert list(out.dims) == [*list(random_patch.dims), "new", "dim"]
+
+    def test_append_with_args_and_kwargs(self, random_patch):
+        """Ensure we can use both kwargs and args."""
+        out = random_patch.append_dims("new", new2=2)
+        assert list(out.dims) == [*list(random_patch.dims), "new", "new2"]
+
+
+class TestSqueeze:
+    """Tests for squeeze."""
+
+    @pytest.fixture(scope="class")
+    def flat_patch(self):
+        """Create a patch with a degenerate dimension."""
+        data = np.atleast_2d(np.arange(10))
+        coords = {"time": np.arange(10), "distance": np.array([1])}
+        dims = ("distance", "time")
+        out = dc.Patch(data=data, dims=dims, coords=coords)
+        assert 1 in out.shape
+        return out
+
+    def test_remove_dimension(self, flat_patch):
+        """Tests for removing degenerate dimensions."""
+        out = flat_patch.squeeze("distance")
+        assert "distance" not in out.dims
+        assert len(out.data.shape) == 1, "data should be 1d"
+
+    def test_tutorial_example(self, random_patch):
+        """Ensure the tutorial snippet works."""
+        patch = random_patch.select(distance=0, samples=True)
+        squeezed = patch.squeeze()
+        assert len(squeezed.dims) < len(patch.dims)
+
+    def test_non_zero_length_raises(self, flat_patch):
+        """Ensure squeezing a non-flat dim raises helpful error."""
+        msg = "because it has non-zero length"
+        with pytest.raises(CoordError, match=msg):
+            flat_patch.squeeze(dim="time")
+
+
+class TestGetCoord:
+    """Tests for the get_coord convenience function."""
+
+    def test_returns_coord(self, random_patch):
+        """Simply ensure a coordinate is returned."""
+        for dim in random_patch.dims:
+            coord = random_patch.get_coord(dim)
+            assert isinstance(coord, BaseCoord)
+
+    def test_require_sorted(self, wacky_dim_patch):
+        """Test required sorted raises if coord isn't sorted."""
+        msg = "is not sorted"
+        with pytest.raises(CoordError, match=msg):
+            wacky_dim_patch.get_coord("distance", require_sorted=True)
+        # but this should work
+        coord = wacky_dim_patch.get_coord("time", require_sorted=True)
+        assert isinstance(coord, BaseCoord)
+
+    def test_require_evenly_sampled(self, wacky_dim_patch):
+        """Test required evenly sampled raises if coord isn't."""
+        msg = "is not evenly sampled"
+        with pytest.raises(CoordError, match=msg):
+            wacky_dim_patch.get_coord("distance", require_evenly_sampled=True)
+        with pytest.raises(CoordError, match=msg):
+            wacky_dim_patch.get_coord("time", require_evenly_sampled=True)
+
+
+class TestMakeBroadcastable:
+    """Tests for making patches broadcastable to differnt shapes."""
+
+    def test_broadcast_non_coords(self, random_patch):
+        """Ensure non-coords of length 1 can broadcast."""
+        collapsed_patch = random_patch.sum()
+        shape = (2, 2)
+        patch = collapsed_patch.make_broadcastable_to(shape)
+        assert patch.shape == shape
+
+    def test_raises_real_coord(self, random_patch):
+        """If the dimension has values, it shouldn't be broadcastable."""
+        patch = random_patch.select(time=1, distance=2, samples=True)
+        # The shape is broadcastable, but the coords exist so it cant
+        # broadcast.
+        shape = (1, 2)
+        msg = "Cannot broadcast non-empty coord"
+        with pytest.raises(PatchBroadcastError, match=msg):
+            patch.make_broadcastable_to(shape)
+
+    def test_incompatible_shapes(self, random_patch):
+        """Incompatible shapes should raise."""
+        patch = random_patch.select(time=1, samples=True)
+        shape = (12, 12)
+        msg = "objects cannot be broadcast to a single shape"
+        with pytest.raises(ValueError, match=msg):
+            patch.make_broadcastable_to(shape)
+
+    def test_broadcastable_to_current_shape(self, random_patch):
+        """Making broadcastable to current shape should do nothing."""
+        patch = random_patch
+        out = patch.make_broadcastable_to(patch.shape)
+        assert out == patch
+
+
+class TestGetArray:
+    """Tests for getting data/coordinate array."""
+
+    def test_patch_data(self, random_patch):
+        """Ensure no arguments returns patch data."""
+        out = random_patch.get_array()
+        assert out is random_patch.data
+
+    def test_patch_coord_array(self, random_patch):
+        """Ensure we can also get arrays from coordinates."""
+        for dim in random_patch.dims:
+            array = random_patch.get_array(dim)
+            assert is_array(array)

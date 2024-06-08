@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-import dascore.proc.coords
 from dascore.transform.fourier import dft, idft
 from dascore.units import get_quantity
 

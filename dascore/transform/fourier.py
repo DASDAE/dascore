@@ -198,7 +198,7 @@ def _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real):
     ft = FourierTransformatter()
     new_dims = ft.rename_dims(patch.dims, index=axes, forward=False)
     cm = get_coord_manager(coord_map, dims=new_dims).drop_coords(*dims)[0]
-    out_size = np.array(sizes) if len(sizes) else None
+    out_size = np.asarray(sizes) if len(sizes) else None
     return cm, out_size
 
 

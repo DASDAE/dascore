@@ -58,6 +58,10 @@ class PatchDimError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's dimension."""
 
 
+class PatchBroadcastError(ValueError, PatchError):
+    """Raised when patch cant be broadcast to a specified shape."""
+
+
 class PatchAttributeError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's attributes."""
 

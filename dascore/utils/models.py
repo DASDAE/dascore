@@ -1,6 +1,7 @@
 """Utilities for models."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import cached_property
 from typing import Annotated
 
@@ -9,14 +10,10 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
 from typing_extensions import Self
 
-from dascore.compat import array
+from dascore.compat import array, is_array
 from dascore.units import Quantity, get_quantity, get_quantity_str
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import (
-    all_close,
-    to_str,
-    unbyte,
-)
+from dascore.utils.misc import _all_null, all_close, to_str, unbyte
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- A list of custom types with appropriate serialization/deserialization
@@ -67,24 +64,22 @@ FrozenDictType = Annotated[
 UTF8Str = Annotated[str, PlainValidator(unbyte)]
 
 
-def sensible_model_equals(self, other):
+def sensible_model_equals(
+    self: BaseModel | Mapping, other: BaseModel | Mapping
+) -> bool:
     """Custom equality to not compare private attrs and handle numpy arrays."""
-    try:
-        d1, d2 = self.model_dump(), other.model_dump()
-    except (TypeError, ValueError, AttributeError):
-        return False
+    d1 = self.model_dump() if hasattr(self, "model_dump") else self
+    d2 = other.model_dump() if hasattr(other, "model_dump") else other
     if not set(d1) == set(d2):  # different keys, not equal
         return False
-    for name, val1 in d1.items():
+    for name in set(x for x in d1 if not x.startswith("_")):
         # skip any private attributes.
-        if name.startswith("_"):
-            continue
-        val2 = d2[name]
-        if isinstance(val1, np.ndarray):
+        val1, val2 = d1[name], d2[name]
+        if is_array(val1):
             if not all_close(val1, val2):
                 return False
         else:
-            if not val1 == val2:
+            if val1 != val2 and not (_all_null(val1) and _all_null(val2)):
                 return False
     return True
 
@@ -105,9 +100,8 @@ class DascoreBaseModel(BaseModel):
 
     def new(self, **kwargs) -> Self:
         """Create new instance with some attributed updated."""
-        out = dict(self)
-        for item, value in kwargs.items():
-            out[item] = value
+        out = self.model_dump(exclude_unset=True)
+        out.update(kwargs)
         return self.__class__(**out)
 
     @classmethod

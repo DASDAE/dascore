@@ -74,3 +74,13 @@ class TestFrozenDict:
         # test modifying existing key
         original["one"] = 11
         assert froz["one"] == 1
+
+    def test_repr(self, frozen_dict):
+        """Ensure repr returns a string"""
+        repr_str = repr(frozen_dict)
+        assert isinstance(repr_str, str)
+
+    def test_new(self, frozen_dict):
+        """Ensure new values can be added to the dict."""
+        out = frozen_dict.new(bob=10)
+        assert out["bob"] == 10

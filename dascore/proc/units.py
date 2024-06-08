@@ -112,9 +112,5 @@ def simplify_units(
     data = patch.data * d_factor if d_factor != 1 else patch.data
     # update coords and coord units in attrs
     coords = patch.coords.simplify_units()
-    for name, coord in coords.coord_map.items():
-        label = f"{name}_units"
-        if label in attrs:
-            attrs[label] = coord.units
     new_attrs = attrs.update(data_units=d_units, coords=coords.to_summary_dict())
     return patch.new(data=data, coords=coords, attrs=new_attrs, dims=patch.dims)

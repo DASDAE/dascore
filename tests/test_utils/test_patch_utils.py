@@ -1,15 +1,26 @@
 """Test patch utilities."""
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
 from dascore.exceptions import (
+    IncompatiblePatchError,
+    ParameterError,
     PatchAttributeError,
     PatchDimError,
 )
 from dascore.utils.patch import (
+    _spool_up,
+    align_patch_coords,
+    concatenate_patches,
     get_dim_value_from_kwargs,
+    merge_compatible_coords_attrs,
+    patches_to_df,
+    scan_patches,
+    stack_patches,
 )
 
 
@@ -130,3 +141,335 @@ class TestGetDimValueFromKwargs:
         kwargs = {}
         with pytest.raises(PatchDimError):
             get_dim_value_from_kwargs(random_patch, kwargs)
+
+
+class TestPatchesToDF:
+    """Test for getting metadata from patch into a dataframe."""
+
+    def test_spool_input(self, random_spool):
+        """A spool should return its contents."""
+        df = patches_to_df(random_spool)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == len(random_spool)
+
+    def test_dataframe_input(self, random_spool):
+        """The function should be idempotent."""
+        df = random_spool.get_contents()
+        out = patches_to_df(df)
+        out2 = patches_to_df(out)
+        eq = out == out2
+        is_null = pd.isnull(out) & pd.isnull(out2)
+        assert np.all(eq | is_null)
+
+    def test_history_added(self, random_spool):
+        """Ensure the history column gets added."""
+        df = random_spool.get_contents().drop(columns="history", errors="ignore")
+        out = patches_to_df(df)
+        assert "history" in out.columns
+
+
+class TestScanPaches:
+    """Tests for scanning patches to get metadata."""
+
+    def test_single_patch(self, random_patch):
+        """Ensure a single patch works."""
+        out = scan_patches(random_patch)
+        assert len(out) == 1
+        assert isinstance(out[0], dc.PatchAttrs)
+
+
+class TestAlignPatches:
+    """Tests for aligning patches."""
+
+    def test_align_self(self, random_patch):
+        """A patch should align with itself."""
+        out1, out2 = align_patch_coords(random_patch, random_patch)
+        assert out1 == out2 == random_patch
+
+    def test_different_dims(self, random_patch):
+        """Ensure alignment works for different dimensions."""
+        no_time = random_patch.select(time=0, samples=True).squeeze()
+        out1, out2 = align_patch_coords(no_time, random_patch)
+        assert out1.dims == out2.dims
+        assert out1.ndim == out2.ndim
+        eq_or_q = [x == y or 1 in {x, y} for x, y in zip(out1.shape, out2.shape)]
+        assert all(eq_or_q)
+
+    def test_subset(self, random_patch):
+        """Ensure a subset of a patch slices output."""
+        sub = random_patch.select(time=(1, 15), samples=True)
+        out1, out2 = align_patch_coords(sub, random_patch)
+        assert out1.shape == out2.shape
+        assert out1.coords == out2.coords
+        # The data should all be the same since this is a sub-patch.
+        assert np.all(out1.data == out2.data)
+
+    def test_align_no_overlap(self, random_patch):
+        """Alignment with no overlap should return null."""
+        dist = random_patch.get_coord("distance")
+        new = random_patch.update_coords(distance_min=dist.max() + 10)
+        out1, out2 = align_patch_coords(new, random_patch)
+        assert out1.shape == out2.shape
+        assert out1.coords == out2.coords
+        # Patches should be degenerate.
+        assert 0 in set(out1.shape)
+
+    def test_no_common_dims_raises(self, random_patch):
+        """Patches with no common dims should not be align-able."""
+        new = random_patch.rename_coords(time="money", distance="gold")
+        msg = "align patches with no shared dimensions."
+        with pytest.raises(PatchDimError, match=msg):
+            align_patch_coords(new, random_patch)
+
+    def test_new_dims_each_patch(self, random_patch):
+        """Tests for when there are new dimensions on each patch."""
+        small = random_patch.select(time=(0, 10), distance=(0, 12), samples=True)
+        p1 = small.rename_coords(time="money")
+        p2 = small.rename_coords(time="about")
+        out1, out2 = align_patch_coords(p1, p2)
+        assert out1.dims == out2.dims
+        assert out1.ndim == out2.ndim
+
+    def test_len_1_non_coord_patch(self, random_patch):
+        """Tests for when there are non-coordinate dimensions of len 1."""
+        non_patch = random_patch.first("time")
+        # Coords should be expanded in out2.
+        out1, out2 = align_patch_coords(non_patch, random_patch)
+        desired_shape = tuple(max(x, y) for x, y in zip(out1.shape, out2.shape))
+        # This will raise if the shapes aren't broadcastable
+        np.broadcast_shapes(out1.shape, out2.shape, desired_shape)
+
+
+class TestMergeCompatibleCoordsAttrs:
+    """Tests for merging compatible attrs, coords."""
+
+    def test_simple(self, random_patch):
+        """Simple merge test."""
+        coords, attrs = merge_compatible_coords_attrs(random_patch, random_patch)
+        assert coords == random_patch.coords
+        assert attrs == random_patch.attrs
+
+    def test_incompatible_dims(self, random_patch):
+        """Ensure incompatible dims raises."""
+        new = random_patch.rename_coords(time="money")
+        match = "not compatible for merging"
+        with pytest.raises(IncompatiblePatchError, match=match):
+            merge_compatible_coords_attrs(random_patch, new)
+
+    def test_incompatible_coords(self, random_patch):
+        """Ensure an incompatible error is raised for coords that dont match."""
+        new_time = random_patch.attrs.time_max
+        new = random_patch.update_attrs(time_min=new_time)
+        match = "coordinates are not equal"
+        with pytest.raises(IncompatiblePatchError, match=match):
+            merge_compatible_coords_attrs(new, random_patch)
+
+    def test_incompatible_attrs(self, random_patch):
+        """Ensure if attrs are off an Error is raised."""
+        new = random_patch.update_attrs(network="TA")
+        match = "attributes are not equal"
+        with pytest.raises(IncompatiblePatchError, match=match):
+            merge_compatible_coords_attrs(new, random_patch)
+
+    def test_extra_coord(self, random_patch, random_patch_with_lat_lon):
+        """Extra coords on both patch should end up in the merged patch."""
+        new_coord = np.ones(random_patch.coord_shapes["time"])
+        pa1 = random_patch.update_coords(new_time=("time", new_coord))
+        pa2 = random_patch_with_lat_lon.update_coords(new_time=("time", new_coord))
+        expected = set(pa1.coords.coord_map) | set(pa2.coords.coord_map)
+        coords, attrs = merge_compatible_coords_attrs(pa1, pa2)
+        assert set(coords.coord_map) == expected
+        assert set(attrs.coords) == expected
+
+    def test_extra_attrs(self, random_patch):
+        """Ensure extra attributes are added to patch."""
+        patch = random_patch.update_attrs(new_attr=10)
+        coords, attrs = merge_compatible_coords_attrs(patch, random_patch)
+        assert attrs.get("new_attr") == 10
+
+    def test_different_dims(self, random_patch):
+        """Ensure we can merge patches which share some dims but not all."""
+        patch1 = random_patch
+        patch2 = random_patch.rename_coords(time="money")
+        coord, attrs = merge_compatible_coords_attrs(
+            patch1, patch2, dim_intersection=True
+        )
+        assert set(coord.dims) == (set(patch1.dims) | set(patch2.dims))
+
+
+class TestConcatenate:
+    """Tests for concatenating spools."""
+
+    def test_different_dims_raises(self, random_patch):
+        """Patches can't be concated when they have different dims."""
+        p1 = random_patch
+        p2 = random_patch.rename_coords(time="money")
+        msg = "Cannot concatenate"
+        with pytest.raises(PatchDimError, match=msg):
+            concatenate_patches([p1, p2], time=None)
+
+    def test_duplicate_patches_existing_dim(self, random_patch):
+        """Ensure duplicate patches are concatenated together."""
+        spool = dc.spool([random_patch, random_patch])
+        out = concatenate_patches(spool, time=None)
+        assert len(out) == 1
+        patch = out[0]
+        time_coord = patch.get_coord("time")
+        old_coord = random_patch.get_coord("time")
+        assert len(time_coord) == 2 * len(old_coord)
+        # Also ensure the new coord is just the old one repeated twice.
+        val1, val2 = patch.get_array("time"), random_patch.get_array("time")
+        assert np.all(val1[: len(val2)] == val2)
+        assert np.all(val1[len(val2) :] == val2)
+
+    def test_different_lens(self, random_patch):
+        """Ensure different lengths can be chunked on same dim."""
+        patches = [random_patch] * 6
+        out = concatenate_patches(patches, time=2)
+        assert len(out) == 3
+
+    def test_new_dim(self, random_patch):
+        """Ensure we create a new dimension."""
+        patches = [random_patch, random_patch]
+        out = concatenate_patches(patches, zoolou=None)
+        assert len(out) == 1
+        patch = out[0]
+        assert "zoolou" in patch.dims
+
+    def test_spool_up(self, random_patch):
+        """Ensure a patch is returned in the wrapper is used."""
+        func = _spool_up(concatenate_patches)
+        out = func([random_patch] * 3, time=None)
+        assert isinstance(out, dc.BaseSpool)
+
+    def test_new_dim_spool(self, random_patch):
+        """Ensure a patch with new dim can be retrieved from spool."""
+        spool = dc.spool([random_patch, random_patch])
+        spool_concat = spool.concatenate(wave_rank=None)
+        assert "wave_rank" in spool_concat[0].dims
+
+    def test_patch_with_gap(self, random_patch):
+        """Ensure a patch with a time gap still concats."""
+        # Create a spool with patches that have a large gap
+        time = random_patch.get_coord("time")
+        one_hour = dc.to_timedelta64(3600)
+        patch2 = random_patch.update_coords(time_min=time.max() + one_hour)
+        spool = dc.spool([random_patch, patch2])
+
+        # chunk rightfully wouldn't merge these patches, but concatenate will.
+        merged = spool.concatenate(time=None)
+        assert len(merged) == 1
+        assert isinstance(merged[0], dc.Patch)
+
+    def test_bad_kwargs(self, random_patch):
+        """Ensure bad number of keywords raise."""
+        msg = "Exactly one keyword argument"
+        with pytest.raises(ParameterError, match=msg):
+            concatenate_patches([random_patch])
+        with pytest.raises(ParameterError, match=msg):
+            concatenate_patches([random_patch], time=None, distance=None)
+
+    def test_concat_along_non_dim(self, random_patch):
+        """Ensure we can concat along non dims."""
+        patches = [random_patch.mean("time") for _ in range(10)]
+        out = concatenate_patches(patches, time=None)
+        assert len(out) == 1
+        patch = out[0]
+        coord = patch.get_coord("time")
+        assert len(coord) == 10
+
+    def test_concat_different_sizes(self, random_patch):
+        """Ensure coordinates with different sizes (along concat axis) work."""
+        p1 = random_patch.select(time=(0, 10), samples=True)
+        p2 = random_patch.select(time=(15, 20), samples=True)
+        out = concatenate_patches([p1, p2], time=None)
+        assert len(out) == 1
+        patch = out[0]
+        new_time = patch.get_array("time")
+        old_times = np.concatenate([p1.get_array("time"), p2.get_array("time")])
+        assert np.all(new_time == old_times)
+
+    def test_concatenate_normal_with_non_dim(self, spool_with_non_coords):
+        """Ensure normal and non-dim patches can be concatenated together."""
+        old_arrays = [x.get_array("time") for x in spool_with_non_coords]
+        old_array = np.concatenate(old_arrays)
+        out = spool_with_non_coords.concatenate(time=None)
+        assert len(out) == 1
+        patch = out[0]
+        new_array = patch.get_array("time")
+        # The coordinates should be the same length
+        assert sum([len(x) for x in old_arrays]) == len(new_array)
+        # The array values should either both be NaN or nearly equal
+        both_nan = pd.isnull(old_array) & pd.isnull(new_array)
+        try:
+            nearly_eq = np.isclose(old_array, new_array)
+        except TypeError:
+            nearly_eq = old_array == new_array
+        assert np.all(both_nan | nearly_eq)
+
+
+class TestStackPatches:
+    """Tests for stacking (adding) spool content."""
+
+    def test_stack_data(self):
+        """
+        Try the stack method on an example spool that has repeated
+        copies of the same patch with different times. Check data.
+        """
+        # Grab the example spool which has repeats of the same patch
+        # but with different time dimensions. Stack the patches.
+        spool = dc.get_example_spool()
+        stack_patch = stack_patches(spool, dim_vary="time")
+        # We expect the sum/stack to be same as a multiple of
+        # the first patch's data.
+        baseline = float(len(spool)) * spool[0].data
+        assert np.allclose(baseline, stack_patch.data)
+
+    def test_same_dim_different_shape(self, random_spool):
+        """Ensure when stack dimensions have different shape an error is raised."""
+        # Create a spool with two patches, each with time dim but with different
+        # lengths.
+        patch1, patch2 = random_spool[:2]
+        patch2 = patch2.select(time=(1, 30), samples=True)
+        spool = dc.spool([patch1, patch2])
+        # Check that warnings/exceptions are raised.
+        msg = "Patches are not compatible"
+        with pytest.raises(IncompatiblePatchError, match=msg):
+            stack_patches(spool, dim_vary="time", check_behavior="raise")
+        # Or a warning issued.
+        with pytest.warns(UserWarning, match=msg):
+            stack_patches(spool, dim_vary="time", check_behavior="warn")
+
+    def test_different_dimensions(self, random_spool):
+        """Tests for when the spool has patches with different dimensions."""
+        new_patch = random_spool[0].rename_coords(time="money")
+        spool = dc.spool([random_spool[1], new_patch])
+        msg = "not compatible for merging"
+        with pytest.warns(UserWarning, match=msg):
+            stack_patches(spool, dim_vary="time", check_behavior="warn")
+
+    def test_bad_dim_vary(self, random_spool):
+        """Ensure when dim_vary is not in patch an error is raised."""
+        with pytest.raises(PatchDimError):
+            stack_patches(random_spool, dim_vary="money")
+
+    def test_stack_coords(self):
+        """
+        Try the stack method on an example spool that has repeated
+        copies of the same patch with different times. Check coords.
+        """
+        # Grab the example spool which has repeats of the same patch
+        # but with different time dimensions. Stack the patches.
+        spool = dc.get_example_spool()
+        stack_patch = stack_patches(spool, dim_vary="time")
+        # check that 'time' coordinates has same step as original patch
+        time_coords = stack_patch.coords.coord_map["time"]
+        orig_time_coords = spool[0].coords.coord_map["time"]
+        assert time_coords.step == orig_time_coords.step
+        # check that distance coordinates are the same
+        dist_coords = stack_patch.coords.coord_map["distance"]
+        orig_dist_coords = spool[0].coords.coord_map["distance"]
+        assert dist_coords.start == orig_dist_coords.start
+        assert dist_coords.stop == orig_dist_coords.stop
+        assert dist_coords.step == orig_dist_coords.step
+        assert dist_coords.units == orig_dist_coords.units

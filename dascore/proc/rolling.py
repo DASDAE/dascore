@@ -13,6 +13,7 @@ from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_value_from_kwargs
+from dascore.utils.pd import rolling_df
 
 
 class _PatchRollerInfo(DascoreBaseModel):
@@ -153,7 +154,8 @@ class _PandasPatchRoller(_PatchRollerInfo):
     def _get_rolling(self):
         """Get rolling."""
         df = self._get_df()
-        roll = df.rolling(
+        roll = rolling_df(
+            df=df,
             window=self.window,
             step=self.step,
             axis=self.axis,
@@ -163,7 +165,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
 
     def _repack_patch(self, df, attrs=None):
         """Repack patch into dataframe."""
-        data = df.values
+        data = df.values if not self.axis else df.T.values
         # get rid of extra dims if original data doesn't have them.
         if len(data.shape) != len(self.patch.data.shape):
             data = np.squeeze(data)

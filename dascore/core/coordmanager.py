@@ -42,10 +42,8 @@ from __future__ import annotations
 
 import warnings
 from collections import defaultdict
-from collections.abc import Mapping, Sequence, Sized
-from functools import reduce
+from collections.abc import Mapping, Sequence
 from itertools import zip_longest
-from operator import and_, or_
 from typing import Annotated, Any, TypeVar
 
 import numpy as np
@@ -54,23 +52,23 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import dascore_styles
+from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import BaseCoord, CoordSummary, get_coord
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
-    CoordMergeError,
     CoordSortError,
     ParameterError,
+    PatchBroadcastError,
 )
-from dascore.utils.display import get_nice_text
+from dascore.utils.attrs import separate_coord_info
+from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
+    _apply_union_indexers,
     _matches_prefix_suffix,
-    all_close,
     cached_method,
     iterate,
-    separate_coord_info,
 )
 from dascore.utils.models import (
     ArrayLike,
@@ -82,7 +80,7 @@ from dascore.utils.models import (
 MaybeArray = TypeVar("MaybeArray", ArrayLike, np.ndarray, None)
 
 
-def _validate_select_coords(coord, coord_name: str):
+def _ensure_1d_coord(coord, coord_name: str):
     """Ensure multi-dims are not used."""
     if not len(coord.shape) == 1:
         msg = (
@@ -107,42 +105,27 @@ def _indirect_coord_updates(cm, dim_name, coord_name: str, reduction, new_coords
         new_coords[icoord] = (dims, new)
 
 
-def _to_slice(limits):
-    """Convert slice or two len tuple to slice."""
-    if isinstance(limits, slice):
-        return limits
-    # ints should be interpreted as Slice(int, int+1) to not collapse dim.
-    if isinstance(limits, int):
-        if limits == -1:  # -1 case needs open interval to work
-            return slice(-1, None)
-        return slice(limits, limits + 1)
-    if limits is ... or limits is None:
-        return slice(None, None)
-    assert isinstance(limits, Sized) and len(limits) == 2
-    val1, val2 = limits
-    start = None if val1 is ... or val1 is None else val1
-    stop = None if val2 is ... or val2 is None else val2
-    return slice(start, stop)
-
-
-def _get_indexers_and_new_coords_dict(cm, kwargs, samples=False, relative=False):
-    """Function to get reductions for each dimension."""
+def _get_indexers_and_new_coords_dict(
+    cm,
+    kwargs,
+    samples=False,
+    relative=False,
+    operation="select",
+):
+    """Get reductions for each dimension."""
     dim_reductions = {x: slice(None, None) for x in cm.dims}
     dimap = cm.dim_map
     new_coords = dict(cm._get_dim_array_dict(keep_coord=True))
-    for coord_name, limits in kwargs.items():
+    for coord_name, vals in kwargs.items():
         # this is not a selectable coord, just skip.
         if coord_name not in cm.coord_map or not len(cm.dim_map[coord_name]):
             continue
         coord = cm.coord_map[coord_name]
-        _validate_select_coords(coord, coord_name)
+        _ensure_1d_coord(coord, coord_name)
         dim_name = dimap[coord_name][0]
         # different logic if we are using indices or values
-        if not samples:
-            new_coord, reductions = coord.select(limits, relative=relative)
-        else:
-            reductions = _to_slice(limits)
-            new_coord = coord[reductions]
+        method = getattr(coord, operation)
+        new_coord, reductions = method(vals, relative=relative, samples=samples)
         # this handles the case of out-of-bound selections.
         # These should be converted to degenerate coords.
         dim_reductions[dim_name] = reductions
@@ -284,7 +267,7 @@ class CoordManager(DascoreBaseModel):
 
         coord_updates, coord_to_drop, coord_to_add = _divide_kwargs(kwargs)
         # get coords to drop from selecting None
-        coord_map, dim_map = _get_coord_dim_map(coord_to_add, self.dims)
+        coord_map, dim_map, dims = _get_coord_dim_map(coord_to_add, self.dims)
         # find coords to drop because their dimension changed.
         indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
         # drop coords then call get_coords to handle adding new ones.
@@ -297,8 +280,8 @@ class CoordManager(DascoreBaseModel):
             new = list(out[coord_name])
             new[1] = new[1].update(**{attr: value})
             out[coord_name] = tuple(new)
-        dims = tuple(x for x in self.dims if x not in coord_to_drop)
 
+        dims = tuple(x for x in dims if x not in coord_to_drop)
         return get_coord_manager(out, dims=dims)
 
     # we need this here to maintain backwards compatibility
@@ -324,7 +307,7 @@ class CoordManager(DascoreBaseModel):
             coord = self.coord_map[name]
             # convert values to dict to determine which should be updated.
             model_contents = coord.to_summary().model_dump(exclude_defaults=True)
-            # see what has changed
+            # see what has changed.
             diff = {
                 i: v for i, v in maybe_updates.items() if v != model_contents.get(i)
             }
@@ -500,7 +483,7 @@ class CoordManager(DascoreBaseModel):
             for x in self.dims
         )
         new = self.__class__(coord_map=coord_map, dim_map=dim_map, dims=dims)
-        return new, self._get_new_data(index, array)
+        return new, _apply_union_indexers(index, array)
 
     def disassociate_coord(self, *coord: str) -> Self:
         """
@@ -578,48 +561,127 @@ class CoordManager(DascoreBaseModel):
             out.append({x: kwargs[x] for x in args if x is not None})
         return out
 
+    @compose_docstring(select_desc=select_values_description)
     def select(
         self, array: MaybeArray = None, relative=False, samples=False, **kwargs
     ) -> tuple[Self, MaybeArray]:
         """
-        Perform value-based selection on coordinates.
+        Perform selection on coordinates.
+
+        {select_desc}
 
         Parameters
         ----------
         array
             An array to which the selection will be applied.
         relative
-            If True, coordinate updates are relative.
+            If True, coordinate updates are relative. Does nothing if values
+            passed are numpy arrays.
         samples
             If True, the query meaning is in samples.
         **kwargs
-            Used to specify select arguments. Can be of the form
-            {coord_name: (lower_limit, upper_limit)}.
+            Used to specify dimension and select arguments.
+
+        See also [`CoordManager.order`](`dascore.core.CoordManager.order`).
         """
-        # Relative or sample queries cannot be performed multiple times on
-        # the same dimension (since multiple coords can reference the same dim)
         if relative or samples:
-            used_dims = [self.dim_map[x] for x in kwargs if x in self.coord_map]
-            if len(set(used_dims)) < len(used_dims):
-                msg = (
-                    f"Cannot use {kwargs} for query; some coords " f"share a dimension."
-                )
-                raise CoordError(msg)
+            self._check_multiple_relative(kwargs)
         # Otherwise, we need to sort through kwargs and call in a loop.
         kwarg_list = self._get_single_dim_kwarg_list(kwargs)
         for kwargs in kwarg_list:
             new_coords, indexers = _get_indexers_and_new_coords_dict(
-                self, kwargs, samples=samples, relative=relative
+                self, kwargs, samples=samples, relative=relative, operation="select"
             )
             self = self.update(**new_coords)
-            array = self._get_new_data(indexers, array)
+            array = _apply_union_indexers(indexers, array)
         return self, array
 
-    def _get_new_data(self, indexer, array: MaybeArray) -> MaybeArray:
-        """Get new data array after applying some trimming."""
-        if array is None:  # no array passed, just return.
-            return array
-        return array[indexer]
+    @compose_docstring(select_desc=select_values_description)
+    def order(
+        self, array: MaybeArray = None, relative=False, samples=False, **kwargs
+    ) -> tuple[Self, MaybeArray]:
+        """
+        Perform value-based ordering on coordinates.
+
+        Parameters
+        ----------
+        array
+            An array to which the selection will be applied.
+        relative
+            If True, coordinate updates are relative. Does nothing if values
+            passed are numpy arrays.
+        samples
+            If True, the query meaning is in samples.
+        **kwargs
+            Used to specify dimension and select arguments.
+
+        See also [`CoordManager.select`](`dascore.core.CoordManager.select`).
+        """
+        if relative or samples:
+            self._check_multiple_relative(kwargs)
+        # Otherwise, we need to sort through kwargs and call in a loop.
+        kwarg_list = self._get_single_dim_kwarg_list(kwargs)
+        for kwargs in kwarg_list:
+            new_coords, indexers = _get_indexers_and_new_coords_dict(
+                self,
+                kwargs,
+                samples=samples,
+                relative=relative,
+                operation="order",
+            )
+            self = self.update(**new_coords)
+            array = _apply_union_indexers(indexers, array)
+        return self, array
+
+    def make_broadcastable_to(
+        self,
+        shape: tuple[int, ...],
+        array: MaybeArray,
+        drop_coords: bool = False,
+    ) -> tuple[Self, MaybeArray]:
+        """
+        Try to make coord manager broadcastable to a given shape.
+
+        Only dimensions with Non coords can be broadcasted up.
+
+        Parameters
+        ----------
+        shape
+            A shape tuple (tuple of ints)
+        array
+            An array with the same shape as coord manager.
+        drop_coords
+            If True, allow dropping coordinates to broadcast coord manager
+            dimensions. Otherwise, only NonCoords can change shape.
+        """
+        # This guarantees the shapes are compatible
+        target_shape = np.broadcast_shapes(self.shape, shape)
+        # Now just determine which dims need to be expanded and if they can.
+        new_coords = {}
+        dims = self.dims
+        for ind, (current, new) in enumerate(zip(self.shape, target_shape)):
+            if current >= new:
+                continue
+            name = dims[ind]
+            coord = self.get_coord(name)
+            # We can just scale up the coord
+            if coord._partial or drop_coords:
+                new_coords[name] = get_coord(shape=max(current, new))
+            else:
+                msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
+                raise PatchBroadcastError(msg)
+        out = array if array is None else np.broadcast_to(array, target_shape)
+        return self.update_coords(**new_coords), out
+
+    def _check_multiple_relative(self, kwargs):
+        """
+        Relative or sample queries cannot be performed multiple times on
+        the same dimension (since multiple coords can reference the same dim).
+        """
+        used_dims = [self.dim_map[x] for x in kwargs if x in self.coord_map]
+        if len(set(used_dims)) < len(used_dims):
+            msg = f"Cannot use {kwargs} for query; some coords " f"share a dimension."
+            raise CoordError(msg)
 
     def __rich__(self) -> str:
         """Rich formatting for the coordinate manager."""
@@ -652,15 +714,17 @@ class CoordManager(DascoreBaseModel):
     def __str__(self):
         return str(self.__rich__())
 
+    __repr__ = __str__
+
     def equals(self, other) -> bool:
         """Return True if other coordinates are approx equal."""
         if not isinstance(other, self.__class__):
             return False
-        if not set(self.coord_map) == set(other.coord_map):
+        if not (coord_set := set(self.coord_map)) == set(other.coord_map):
             return False
-        coord_1, coord_2 = self.coord_map, other.coord_map
-        for name, _coord in self.coord_map.items():
-            if not all_close(coord_1[name].values, coord_2[name].values):
+        cdict_1, cdict_2 = self.coord_map, other.coord_map
+        for name in coord_set:
+            if not cdict_1[name].approx_equal(cdict_2[name]):
                 return False
         return True
 
@@ -680,9 +744,14 @@ class CoordManager(DascoreBaseModel):
         """Return the size of the patch data matrix."""
         return np.prod(self.shape)
 
+    @property
+    def ndim(self):
+        """Return the number of dimensions in the coordinage manager."""
+        return len(self.dims)
+
     def validate_data(self, data):
         """Ensure data conforms to coordinates."""
-        data = np.array([]) if data is None else data
+        data = np.asarray([]) if data is None else data
         if self.shape != data.shape:
             msg = (
                 f"Data array has a shape of {data.shape} which doesnt match "
@@ -943,7 +1012,7 @@ class CoordManager(DascoreBaseModel):
 
     def get_array(self, coord_name: str) -> np.ndarray:
         """Return the coordinate values as a numpy array."""
-        return np.array(self.get_coord(coord_name))
+        return np.asarray(self.get_coord(coord_name))
 
     def coord_size(self, coord_name: str) -> int:
         """Return the coordinate size."""
@@ -958,6 +1027,7 @@ def get_coord_manager(
     coords: Mapping[str, BaseCoord | np.ndarray] | CoordManager | None = None,
     dims: tuple[str, ...] | None = None,
     attrs: dc.PatchAttrs | dict[str, Any] | None = None,
+    shape=None,
 ) -> CoordManager:
     """
     Create a coordinate manager.
@@ -976,6 +1046,9 @@ def get_coord_manager(
         Cannot be used with coords argument.
         If you want to update [`CoordManager`](`dascore.core.CoordManager`)
         use [`update_from_attrs`](`dascore.core.CoordManager.update_from_attrs`).
+    shape
+        The data array shape which will be managed by coord manager. This
+        allows non-coordinate dimensions to be initiated.
 
     Examples
     --------
@@ -1025,7 +1098,12 @@ def get_coord_manager(
         else:
             dims = ()
     coords = {} if coords is None else coords
-    coord_map, dim_map = _get_coord_dim_map(coords, dims)
+    coord_map, dim_map, dims = _get_coord_dim_map(coords, dims)
+    # Add missing dims to coord map so they get set as non_coords.
+    if shape and (missing_dims := (set(dims) - set(coord_map))):
+        for name in missing_dims:
+            coord_map[name] = get_coord(shape=shape[dims.index(name)])
+            dim_map[name] = (name,)
     if attrs:
         coord_updates, _ = separate_coord_info(attrs, dims)
         updateable_coords = set(coord_updates) - set(coord_map)
@@ -1037,12 +1115,12 @@ def get_coord_manager(
 
 
 def _get_coord_dim_map(coords, dims):
-    """Get coord_map and dim_map from coord input."""
+    """Get coord_map, dim_map, and new dims from coord input."""
 
     def _get_coord(coord):
         """Get a coordinate from various inputs."""
         if hasattr(coord, "model_dump"):
-            coord = coord.model_dump()
+            coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict
             out = get_coord(**coord)
         else:
@@ -1061,7 +1139,7 @@ def _get_coord_dim_map(coords, dims):
         out = _get_coord(coord)
         return out, (name,)
 
-    def _maybe_coord_from_nested(coord):
+    def _maybe_coord_from_nested(name, coord, new_dims):
         """
         Get coordinates from {coord_name: (dim_name, coord)} or
         {coord_name: ((dim_names...,), coord)}.
@@ -1073,17 +1151,24 @@ def _get_coord_dim_map(coords, dims):
             )
             raise CoordError(msg)
         dim_names = iterate(coord[0])
-        # all dims must be in the input dims.
-        if not (d1 := set(dim_names)).issubset(d2 := set(dims)):
-            bad_dims = d2 - d1
+        # # all dims must be in the input dims or a new coord.
+        d1, d2 = set(dim_names), set(dims)
+        if (not d1.issubset(d2)) and d1 != {name}:
+            bad_dims = d1 - d2
             msg = (
                 f"Coordinate specified invalid dimension(s) {bad_dims}."
                 f" Valid dimensions are {dims}"
             )
             raise CoordError(msg)
+        cval = coord[1]
         # pull out any relevant info from attrs.
-        coord_out = _get_coord(coord[1])
-        assert coord_out.shape == np.shape(coord[1])
+        coord_out = _get_coord(cval)
+        # check if this is added a new dimension.
+        if len(dim_names) == 1 and (newdname := dim_names[0]) == name:
+            if newdname not in dims:
+                new_dims.append(newdname)
+        expected_shape = (cval,) if isinstance(cval, int) else np.shape(cval)
+        assert coord_out.shape == expected_shape
         return coord_out, dim_names
 
     assert not isinstance(coords, CoordManager)
@@ -1092,133 +1177,13 @@ def _get_coord_dim_map(coords, dims):
     #     coords_dump = coords.model_dump()
     #     return dict(coords_dump["coord_map"]), dict(coords_dump["dim_map"])
 
-    c_map, d_map = {}, {}
+    c_map, d_map, new_dims = {}, {}, []
     # iterate coords, get coordinate output.
     for name, coord in coords.items():
         if not isinstance(coord, tuple):
             c_map[name], d_map[name] = _coord_from_simple(name, coord)
         else:
-            c_map[name], d_map[name] = _maybe_coord_from_nested(coord)
-    return c_map, d_map
-
-
-def merge_coord_managers(
-    coord_managers: Sequence[CoordManager],
-    dim: str,
-    snap_tolerance: float | None = None,
-) -> CoordManager:
-    """
-    Merger coordinate managers along a specified dimension.
-
-    Parameters
-    ----------
-    coord_managers
-        A sequence of coord_managers to merge.
-    dim
-        The dimension along which to merge.
-    snap_tolerance
-        The tolerance for snapping CoordRanges together. E.G, allows
-        coord ranges that have snap_tolerances differences from their
-        start/end to be joined together. If they don't meet this requirement
-        an [CoordMergeError](`dascore.exceptions.CoordMergeError`) is raised.
-        If None, no checks are performed.
-    """
-
-    def _get_dims(managers):
-        """Ensure all managers have same dimensions."""
-        dims = {x.dims for x in managers}
-        if len(dims) != 1:
-            msg = (
-                "Can't merge coord managers, they don't all have the "
-                "same dimensions!"
-            )
-            raise CoordMergeError(msg)
-        return managers[0].dims
-
-    def _drop_unshared_coordinates(managers):
-        """Any coordinates not shared between managers should be dropped."""
-        # gets [{(coord, dims, ...), (coord, dims, ...)}, ...] to ensure
-        # both the coords name and their dimensions are common between managers
-        coord_sets = [set(x._get_coord_dims_tuple()) for x in managers]
-        common_coords = reduce(and_, coord_sets)
-        all_coords = reduce(or_, coord_sets)
-        if not (drop_coords := all_coords - common_coords):
-            return managers
-        coords_to_drop = [x[0] for x in drop_coords]
-        return [x.drop_coords(*coords_to_drop)[0] for x in managers]
-
-    def _get_non_merge_coords(managers, non_merger_names):
-        """Ensure all non-merge coords are equal."""
-        out = {}
-        for coord_name in non_merger_names:
-            first = managers[0].coord_map[coord_name]
-            if all([first == x.coord_map[coord_name] for x in managers]):
-                dims = managers[0].dim_map[coord_name]
-                out[coord_name] = (dims, first)
-                continue
-            msg = (
-                f"Non merging coordinates {coord_name} are not equal. "
-                "Coordinate managers cannot be merged."
-            )
-            raise CoordMergeError(msg)
-        return out
-
-    def _snap_coords(coord_list):
-        """Snap coordinates together."""
-        if snap_tolerance is None:
-            return coord_list  # skip snapping if no snap tolerance.
-        for ind in range(1, len(coord_list)):
-            c_coord = coord_list[ind - 1]
-            n_coord = coord_list[ind]
-            tolerance = snap_tolerance * c_coord.step
-            assumed_start = c_coord.max() + c_coord.step
-            diff = np.abs(assumed_start - n_coord.min())
-            # snap is close enough, update coord.
-            if diff > 0 and diff <= tolerance:
-                coord_list[ind] = n_coord.update_limits(min=assumed_start)
-            # snap is too far off, bail out.
-            elif diff > tolerance:
-                msg = (
-                    f"Cannot merge. Snap tolerance: {get_nice_text(tolerance)}"
-                    f" not met"
-                )
-                raise CoordMergeError(msg)
-        return coord_list
-
-    def _get_merged_coords(managers, coords_to_merge):
-        """Get the merged coordinates."""
-        out = {}
-        for coord_name in coords_to_merge:
-            merge_coords = [x.coord_map[dim] for x in managers]
-            axis = managers[0].dim_map[coord_name].index(dim)
-            if len(units := {x.units for x in merge_coords}) != 1:
-                # TODO: we might try to convert all the units to a common
-                # unit in the future.
-                msg = (
-                    f"Cannot merge coordinates {coord_name}, they dont all "
-                    f"share the same units. Units found are: {set(units)}"
-                )
-                raise CoordMergeError(msg)
-            snap_coords = _snap_coords(merge_coords)
-            datas = [x.data for x in snap_coords]
-            dims = managers[0].dim_map[dim]
-            new_data = np.concatenate(datas, axis=axis)
-            out[coord_name] = (dims, new_data)
-        return out
-
-    def _get_new_coords(managers) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:
-        """Merge relevant coordinates together."""
-        # build up merged coords.
-        coords_to_merge = managers[0].dim_to_coord_map[dim]
-        coords_not_to_merge = set(managers[0].coord_map) - set(coords_to_merge)
-        # non-merging coordinates should be identical.
-        coords_dict = _get_non_merge_coords(managers, coords_not_to_merge)
-        # merge coordinates
-        coords_dict.update(_get_merged_coords(managers, coords_to_merge))
-        return coords_dict
-
-    dims = _get_dims(coord_managers)
-    coord_managers = _drop_unshared_coordinates(coord_managers)
-    sort_managers = sorted(coord_managers, key=lambda x: x.coord_map[dim].min())
-    merged_coords = _get_new_coords(sort_managers)
-    return get_coord_manager(merged_coords, dims=dims)
+            c_map[name], d_map[name] = _maybe_coord_from_nested(name, coord, new_dims)
+    if new_dims:
+        dims = tuple(list(dims) + new_dims)
+    return c_map, d_map, dims

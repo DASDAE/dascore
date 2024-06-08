@@ -19,7 +19,7 @@ def _get_1d_array_dim_name(patch):
     data = patch.data
     if len(data.shape) == 1:  # if array only has one dimension.
         return data, patch.dims[0]
-    shape = np.array(data.shape)
+    shape = np.asarray(data.shape)
     not_one_len = shape > 1
     if np.sum(not_one_len) != 1:
         msg = f"Spectrogram requires 1D patch, not {data.shape}"

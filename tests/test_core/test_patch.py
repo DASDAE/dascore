@@ -214,6 +214,13 @@ class TestInit:
         patch = dc.Patch(data=data, coords=coords, dims=("time", "can"))
         assert patch.dims == patch.attrs.dim_tuple
 
+    def test_non_coord_dims(self):
+        """Ensure non-coordinate dimensions can work and create non-coord."""
+        data = np.random.rand(10, 5)
+        coords = {"time": np.arange(10)}
+        patch = dc.Patch(data=data, coords=coords, dims=("time", "money"))
+        assert patch.dims == ("time", "money")
+
 
 class TestNew:
     """Tests for `Patch.new` method."""
@@ -383,6 +390,11 @@ class TestEquals:
         assert not random_patch.equals(None)
         assert not random_patch.equals(1)
         assert not random_patch.equals(random_patch.data)
+
+    def test_negative_equals(self, random_patch):
+        """Ensure negative of random patch is equal to negative of same patch."""
+        assert -random_patch == -random_patch
+        assert (-random_patch).abs() == random_patch
 
 
 class TestTranspose:

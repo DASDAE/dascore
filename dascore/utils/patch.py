@@ -12,17 +12,37 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import FLOAT_PRECISION, PatchType, SpoolType, dascore_styles
-from dascore.core.attrs import combine_patch_attrs
-from dascore.core.coordmanager import merge_coord_managers
+from dascore.constants import (
+    DEFAULT_ATTRS_TO_IGNORE,
+    FLOAT_PRECISION,
+    WARN_LEVELS,
+    PatchType,
+    SpoolType,
+    check_behavior_description,
+    dascore_styles,
+)
 from dascore.exceptions import (
     CoordDataError,
+    IncompatiblePatchError,
+    ParameterError,
     PatchAttributeError,
     PatchDimError,
 )
 from dascore.units import get_quantity
-from dascore.utils.misc import all_diffs_close_enough, get_middle_value, iterate
-from dascore.utils.time import to_float
+from dascore.utils.attrs import combine_patch_attrs
+from dascore.utils.coordmanager import merge_coord_managers
+from dascore.utils.docs import compose_docstring
+from dascore.utils.misc import (
+    _apply_union_indexers,
+    _merge_tuples,
+    all_diffs_close_enough,
+    get_middle_value,
+    iterate,
+    to_object_array,
+    warn_or_raise,
+    yield_sub_sequences,
+)
+from dascore.utils.time import to_datetime64, to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
 
@@ -227,10 +247,8 @@ def patches_to_df(
     A dataframe with the attrs of each patch converted to a columns
     plus a field called 'patch' which contains a reference to the patches.
     """
-    if hasattr(patches, "_df"):
-        df = patches._df
     # Handle spool case
-    elif hasattr(patches, "get_contents"):
+    if hasattr(patches, "get_contents"):
         df = patches.get_contents()
     elif isinstance(patches, pd.DataFrame):
         df = patches
@@ -241,12 +259,12 @@ def patches_to_df(
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
         else:  # else populate with patches and concat history
             history = df["history"].apply(lambda x: ",".join(x))
-            df = df.assign(patch=patches, history=history)
+            df = df.assign(patch=to_object_array(patches), history=history)
     # Ensure history is in df
     if "history" not in df.columns:
         df = df.assign(history="")
     if "patch" not in df.columns:
-        df["patch"] = [x for x in patches]
+        df["patch"] = to_object_array(patches)
     return df
 
 
@@ -380,7 +398,7 @@ def get_default_patch_name(patch):
 
     def _format_datetime64(dt):
         """Format the datetime string in a sensible way."""
-        out = str(np.datetime64(dt).astype("datetime64[ns]"))
+        out = str(to_datetime64(dt))
         return out.replace(":", "_").replace("-", "_").replace(".", "_")
 
     attrs = patch.attrs
@@ -513,3 +531,447 @@ def _get_dx_or_spacing_and_axes(
         axes.append(patch.dims.index(dim_))
 
     return tuple(out), tuple(axes)
+
+
+def align_patch_coords(
+    patch1: PatchType, patch2: PatchType
+) -> tuple[PatchType, PatchType]:
+    """
+    Align patches so they have compatible attrs and data broadcast together.
+
+    Parameters
+    ----------
+    patch1
+        The first patch.
+    patch2
+        The second patch.
+    """
+    # Fast path for no alignment needed
+    if patch1.coords == patch2.coords:
+        return patch1, patch2
+    shared_dims = set(patch1.dims) & set(patch2.dims)
+    if not shared_dims:
+        msg = (
+            "Cannot align patches with no shared dimensions. Dimensions are "
+            f"patch1: {patch1.dims}, patch2: {patch2.dims}"
+        )
+        raise PatchDimError(msg)
+    # First ensure the patches have the same dims
+    dims = _merge_tuples(patch1.dims, patch2.dims)
+    dim_dict = {x: num for num, x in enumerate(dims)}
+    patch1 = patch1.append_dims(*dims).transpose(*dims)
+    patch2 = patch2.append_dims(*dims).transpose(*dims)
+    # Next, find the common coordinates and align.
+    align_1, align_2 = [slice(None)] * len(dims), [slice(None)] * len(dims)
+    new_coords_1, new_coords_2 = {}, {}
+    for dim in shared_dims:
+        coord1, coord2 = patch1.get_coord(dim), patch2.get_coord(dim)
+        if coord1 == coord2:
+            continue
+        dim_ind = dim_dict[dim]
+        # We actually need to do some alignment here.
+        ncoord1, ncoord2, sli1, sli2 = coord1.align_to(coord2)
+        new_coords_1[dim], new_coords_2[dim] = ncoord1, ncoord2
+        align_1[dim_ind], align_2[dim_ind] = sli1, sli2
+    # No alignment needed, just skip.
+    if not (new_coords_1 or new_coords_2):
+        return patch1, patch2
+    # Update coordinate managers and reshape arrays, return new patches.
+    coord1 = patch1.coords.update(**new_coords_1)
+    coord2 = patch2.coords.update(**new_coords_2)
+    array1 = _apply_union_indexers(tuple(align_1), patch1.data)
+    array2 = _apply_union_indexers(tuple(align_2), patch2.data)
+    out1 = patch1.new(data=array1, coords=coord1)
+    out2 = patch2.new(data=array2, coords=coord2)
+    return out1, out2
+
+
+def check_dims(
+    patch1,
+    patch2,
+    check_behavior: WARN_LEVELS = "raise",
+    intersection: bool = False,
+) -> bool:
+    """
+    Return True if dimensions of two patches are equal.
+
+    Parameters
+    ----------
+    patch1
+        first patch
+    patch2
+        second patch
+    check_behavior
+        String with 'raise' will raise an error if incompatible,
+        'warn' will provide a warning, None will do nothing.
+    intersection
+        If True, allow any intersection of dimensions to pass. This is useful
+        when only broad-castablity needs to be checked. If false require dims
+        to be equal.
+    """
+    dims1, dims2 = patch1.dims, patch2.dims
+    dims_ok = True
+    if not intersection and patch1.dims == patch2.dims:
+        return True
+    dset1, dset2 = set(dims1), set(dims2)
+    if intersection and (dset1 | dset2):
+        return True
+    msg = (
+        "Patch dimensions are not compatible for merging."
+        f" Patch1 dims: {dims1}, Patch2 dims: {dims2}"
+    )
+    warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
+    return dims_ok
+
+
+def check_coords(
+    patch1,
+    patch2,
+    check_behavior: WARN_LEVELS = "raise",
+    dim_to_ignore=None,
+    ignore_dim_eq_shape=True,
+) -> bool:
+    """
+    Return True if the coordinates of two patches are compatible, else False.
+
+    Parameters
+    ----------
+    patch1
+        patch 1
+    patch2
+        patch 2
+    check_behavior
+        String with 'raise' will raise an error if incompatible,
+        'warn' will provide a warning.
+    dim_to_ignore
+        None by default (all coordinates must be identical).
+        String specifying a dimension that differences in values,
+        but not shape, are allowed.
+    ignore_dim_eq_shape
+        If True, the ignored dims must be equal shape to pass check.
+        If dim_to_ignore is None this has no effect.
+    """
+    cm1 = patch1.coords
+    cm2 = patch2.coords
+    cset1, cset2 = set(cm1.coord_map), set(cm2.coord_map)
+    shared = cset1 & cset2
+    not_equal_coords = []
+    for coord in shared:
+        coord1 = cm1.coord_map[coord]
+        coord2 = cm2.coord_map[coord]
+        if coord1 == coord2:
+            # Straightforward case, coords are identical.
+            continue
+        elif coord == dim_to_ignore:
+            # If dimension that's ok to ignore value differences,
+            # check whether shape is the same.
+            if coord1.shape == coord2.shape:
+                continue
+            elif ignore_dim_eq_shape:
+                not_equal_coords.append(coord)
+        else:
+            not_equal_coords.append(coord)
+    if not_equal_coords and len(shared):
+        msg = (
+            f"Patches are not compatible. The following shared coordinates "
+            f"are not equal: {coord}"
+        )
+        warn_or_raise(msg, exception=IncompatiblePatchError, behavior=check_behavior)
+        return False
+    return True
+
+
+def _merge_aligned_coords(cm1, cm2):
+    """Merge aligned coordinates removing non coords."""
+    assert cm1.dims == cm2.dims, "coordinates are not aligned"
+    out = {}
+    for name in set(cm1.coord_map) & set(cm2.coord_map):
+        coord1 = cm1.coord_map[name]
+        coord2 = cm2.coord_map[name]
+        # Coords already equal, just use first.
+        if coord1.approx_equal(coord2):
+            out[name] = coord1
+        # Deal with Non coords
+        non_count = sum([coord1._partial, coord2._partial])
+        if non_count == 1:
+            out[name] = coord1 if coord2._partial else coord2
+        elif non_count == 2:
+            out[name] = coord1 if coord1.size > coord2.size else coord2
+        assert name in out
+    return cm1.update(**out)
+
+
+def _merge_models(attrs1, attrs2, coord=None, attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE):
+    """Ensure models are equal in the right ways, merge together."""
+    no_comp_keys = set(attrs_to_ignore)
+    if attrs1 == attrs2:
+        return attrs1
+    dict1, dict2 = dict(attrs1), dict(attrs2)
+    if coord is not None:
+        new_coords = coord.to_summary_dict()
+        dict1["coords"], dict2["coords"] = new_coords, new_coords
+    else:
+        dict1.pop("coords"), dict2.pop("coords")
+    common_keys = set(dict1) & set(dict2)
+    ne_attrs = []
+    for key in common_keys:
+        if key in no_comp_keys:
+            continue
+        if dict2[key] != dict1[key]:
+            ne_attrs.append(key)
+    if ne_attrs:
+        msg = (
+            "Patches are not compatible because the following attributes "
+            f"are not equal. {ne_attrs}"
+        )
+        raise IncompatiblePatchError(msg)
+    return combine_patch_attrs([dict1, dict2], conflicts="keep_first")
+
+
+def merge_compatible_coords_attrs(
+    patch1: PatchType,
+    patch2: PatchType,
+    attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
+    dim_intersection: bool = False,
+    validate_coords: bool = True,
+) -> tuple[dc.core.CoordManager, dc.PatchAttrs]:
+    """
+    Merge the coordinates and attributes of patches or raise if incompatible.
+
+    The rules for compatibility are:
+
+    - All attrs must be equal other than those specified in attrs_to_ignore.
+    - Patches must share the same dimensions unless dim_intersection == True.
+    - All shared dimensional coordinates must be strictly equal
+    - If patches share a non-dimensional coordinate they must be equal.
+
+    Any coordinates or attributes contained by a single patch will be included
+    in the output.
+
+    Parameters
+    ----------
+    patch1
+        The first patch
+    patch2
+        The second patch
+    attrs_to_ignore
+        A sequence of attributes to not consider in equality. Only these
+        attributes from the first patch are kept in outputs.
+    dim_intersection
+        If True, merge if any dimensions overlap, else raise if all do not
+        overlap.
+    validate_coords
+        If True, ensure the coords are equal, else the responsibility for this
+        was handled upstream.
+    """
+
+    def _merge_coords(coords1, coords2):
+        out = {}
+        cmap1, cmap2 = coords1.coord_map, coords2.coord_map
+        coord_names = set(cmap1) | set(cmap2)
+        # fast path to update identical coordinates
+        if coord_names == set(cmap1):
+            return coords1
+        if coord_names == set(cmap2):
+            return coords2
+        # otherwise just squish coords from both managers together.
+        for name in coord_names:
+            coord = coords1 if name in coords1.coord_map else coords2
+            dims = coord.dim_map[name]
+            out[name] = (dims, coord.coord_map[name])
+        # Need to get coordinate that are in output, but preserve order.
+        dims = _merge_tuples(coords1.dims, coords2.dims)
+        return dc.core.coordmanager.get_coord_manager(out, dims=dims)
+
+    check_dims(patch1, patch2, intersection=dim_intersection)
+    if validate_coords:
+        check_coords(patch1, patch2)
+    coord1, coord2 = patch1.coords, patch2.coords
+    attrs1, attrs2 = patch1.attrs, patch2.attrs
+    coord_out = _merge_coords(coord1, coord2)
+    attrs = _merge_models(attrs1, attrs2, coord_out, attrs_to_ignore=attrs_to_ignore)
+    return coord_out, attrs
+
+
+def _add_history_str(attrs, hist_str):
+    """Add a single string to the history attribute in attrs."""
+    new_history = list(attrs.history)
+    new_history.append(hist_str)
+    return attrs.update(history=new_history)
+
+
+def _spool_up(func):
+    """
+    Spool the output of a function.
+
+    This is primarily to turn methods that return a list of patches
+    into something that can be used as a spool method.
+    """
+
+    @functools.wraps(func)
+    def _wrapper(self, *args, **kwargs):
+        """Wrapper for function."""
+        out = func(self, *args, **kwargs)
+        return dc.spool(out)
+
+    return _wrapper
+
+
+@compose_docstring(check_bev=check_behavior_description)
+def concatenate_patches(
+    patches: Sequence[dc.Patch] | dc.BaseSpool,
+    check_behavior: WARN_LEVELS = "warn",
+    **kwargs,
+) -> Sequence[dc.Patch]:
+    """
+    Concatenate the patches together.
+
+    Parameters
+    ----------
+    {check_bev}
+    **kwargs
+        Used to specify the dimension and number of patches to merge
+        together. A value of None attempts to concatenate all patches
+        into as single patch.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Concatenate patches along time axis
+    >>> spool = dc.spool([patch, patch])
+    >>> spool_concat = spool.concatenate(time=None)
+    >>> assert len(spool_concat) == 1
+    >>>
+    >>> # Concatenate patches along a new dimension
+    >>> spool_concat = spool.concatenate(wave_rank=None)
+    >>> assert "wave_rank" in spool_concat[0].dims
+    >>>
+    >>> # concatenate patches in groups of 3.
+    >>> big_spool = dc.spool([patch] * 12)
+    >>> spool_concat = big_spool.concatenate(time=3)
+    >>> assert len(spool_concat) == 4
+
+    Notes
+    -----
+    - [`Spool.chunk `](`dascore.BaseSpool.chunk`) performs a similar operation
+      but accounts for coordinate values.
+    - See also the
+      [chunk section of the spool tutorial](`docs/tutorial/spool`#concatenate)
+    """
+
+    def _get_dim_and_value(kwargs):
+        """Get the dimension name and value"""
+        if not len(kwargs) == 1:
+            msg = "Exactly one keyword argument must be passed to concatenate."
+            raise ParameterError(msg)
+        assert len(kwargs) == 1
+        [(dim, val)] = kwargs.items()
+
+        return dim, val
+
+    def get_compatible_patches(patches, dim, check_behavior):
+        """Get the patches which can be concatenated, dim names, and new dim."""
+        patches = list(patches)
+        first_patch = patches[0]
+        compat_patches = []
+        # Ensure patch dimensions are compatible.
+        dim_set = {x.dims for x in patches}
+        if not len(dim_set) == 1:
+            msg = "Cannot concatenate patches with different dimensions."
+            raise PatchDimError(msg)
+        # Get dim name and such
+        first_dims = next(iter(dim_set))
+        new_dim = dim not in first_dims
+        dims = tuple([*list(first_dims), dim]) if new_dim else first_dims
+        # Get patches compatible with first.
+        for p in patches:
+            dims_ok = check_dims(first_patch, p, check_behavior)
+            coords_ok = check_coords(
+                patch1=first_patch,
+                patch2=p,
+                check_behavior=check_behavior,
+                dim_to_ignore=dim,
+                ignore_dim_eq_shape=False,
+            )
+            if dims_ok and coords_ok:
+                compat_patches.append(p)
+        return compat_patches, dims, new_dim
+
+    def get_output_array(patches, axis, new_dim):
+        """Get a list of output arrays."""
+        sub_arrays = [x.data[..., None] if new_dim else x.data for x in patches]
+        out = np.concatenate(sub_arrays, axis=axis)
+        return out
+
+    def _get_new_coords(patch_list, dim, new_dim):
+        """Get new coordinates for creating patch."""
+        coords = patch_list[0].coords
+        if new_dim:
+            coords = coords.update(**{dim: (dim, len(patch_list))})
+        else:
+            array_list = [x.get_array(dim) for x in patch_list]
+            array = np.concatenate(array_list, axis=0)
+            coords = coords.update(**{dim: array})
+        return coords
+
+    dim, val = _get_dim_and_value(kwargs)
+    patches, dims, new_dim = get_compatible_patches(patches, dim, check_behavior)
+    out = []
+    for patch_list in yield_sub_sequences(patches, val):
+        ar = get_output_array(patch_list, dims.index(dim), new_dim)
+        attrs = _add_history_str(patch_list[0].attrs, "concatenate")
+        coords = _get_new_coords(patch_list, dim, new_dim)
+        out.append(dc.Patch(data=ar, attrs=attrs, coords=coords, dims=dims))
+    return out
+
+
+@compose_docstring(check_desc=check_behavior_description)
+def stack_patches(
+    patches, dim_vary=None, check_behavior: WARN_LEVELS = "warn"
+) -> PatchType:
+    """
+    Stack (add) all patches compatible with first patch together.
+
+    Parameters
+    ----------
+    dim_vary
+        The name of the dimension which can be different in values
+        (but not shape) and patches still added together.
+    {check_desc}
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> # add a spool with equal sized patches but progressing time dim
+    >>> spool = dc.get_example_spool()
+    >>> stacked_patch = spool.stack(dim_vary='time')
+    """
+    # check the dims/coords of first patch (considered to be standard for rest)
+    init_patch = patches[0]
+    stack_arr = np.zeros_like(init_patch.data)
+
+    # ensure dim_vary is in dims
+    if dim_vary is not None and dim_vary not in init_patch.dims:
+        msg = f"Dimension {dim_vary} is not in first patch."
+        raise PatchDimError(msg)
+
+    for p in patches:
+        # check dimensions of patch compared to init_patch
+        dims_ok = check_dims(init_patch, p, check_behavior)
+        coords_ok = check_coords(init_patch, p, check_behavior, dim_vary)
+        # actually do the stacking of data
+        if dims_ok and coords_ok:
+            stack_arr = stack_arr + p.data
+
+    # create attributes for the stack with adjusted history
+    stack_attrs = _add_history_str(init_patch.attrs, "stack")
+
+    # create coords array for the stack
+    stack_coords = init_patch.coords
+    if dim_vary:  # adjust dim_vary to start at 0 for junk dimension indicator
+        coord_to_change = stack_coords.coord_map[dim_vary]
+        new_dim = coord_to_change.update_limits(min=0)
+        stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
+    return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)

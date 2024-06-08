@@ -21,6 +21,7 @@ from dascore.core import Patch
 from dascore.examples import get_example_patch
 from dascore.io.core import read
 from dascore.io.indexer import DirectoryIndexer
+from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 
@@ -85,6 +86,108 @@ def swap_index_map_path(tmp_path_factory):
     """For all tests cases, use a temporary index file."""
     tmp_map_path = tmp_path_factory.mktemp("cache_paths") / "cache_paths.json"
     setattr(DirectoryIndexer, "index_map_path", tmp_map_path)
+
+
+# --- Coordinate fixtures
+
+COORD_MANAGERS = []
+
+COORDS = {
+    "time": dc.to_datetime64(np.arange(10, 100, 10)),
+    "distance": dc.get_coord(data=np.arange(0, 1_000, 10)),
+}
+DIMS = ("time", "distance")
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def cm_basic():
+    """The simplest coord manager."""
+    return dc.get_coord_manager(COORDS, DIMS)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def cm_with_units(cm_basic):
+    """The simplest coord manager."""
+    return cm_basic.set_units(time="s", distance="m")
+
+
+@pytest.fixture(scope="class")
+# @register_func(COORD_MANAGERS)
+def cm_basic_degenerate(cm_basic):
+    """A degenerate coord manager on time axis."""
+    time_coord = cm_basic.coord_map["time"]
+    degenerate = time_coord.empty()
+    return cm_basic.update(time=degenerate)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def cm_multidim() -> dc.CoordManager:
+    """The simplest coord manager with several coords added."""
+    coords = {
+        "time": dc.to_datetime64(np.arange(10, 110, 10)),
+        "distance": dc.get_coord(data=np.arange(0, 1000, 10)),
+        "quality": (("time", "distance"), np.ones((10, 100))),
+        "latitude": ("distance", np.random.rand(100)),
+    }
+    dims = ("time", "distance")
+
+    return dc.get_coord_manager(coords, dims)
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def cm_degenerate_time(cm_multidim) -> dc.CoordManager:
+    """A coordinate manager with len 1 time array."""
+    new_time = dc.to_datetime64(["2017-09-18T01:00:01"])
+    out = cm_multidim.update(time=new_time)
+    return out
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def cm_wacky_dims() -> dc.CoordManager:
+    """A coordinate manager with non evenly sampled dims."""
+    patch = dc.get_example_patch("wacky_dim_coords_patch")
+    return patch.coords
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def cm_dt_small_diff(memory_spool_small_dt_differences):
+    """A list of coordinate managers with differences in dt merged."""
+    spool = memory_spool_small_dt_differences
+    coords = [x.coords for x in spool]
+    out = merge_coord_managers(coords, dim="time")
+    return out
+
+
+@pytest.fixture(scope="class")
+@register_func(COORD_MANAGERS)
+def cm_non_associated_coord(cm_basic):
+    """A cm with coordinates that are not associated with a dimension."""
+    new = cm_basic.update(
+        bob=(None, np.arange(10)),
+        bill=((), np.arange(100)),
+    )
+    return new
+
+
+@pytest.fixture(scope="class")
+def cm_non_coord_dim():
+    """A cm with a dimension that has a partial (no coordinate)."""
+    coords = {"time": 10, "distance": np.arange(5)}
+    dims = ("time", "distance")
+    out = dc.get_coord_manager(coords=coords, dims=dims)
+    return out
+
+
+@pytest.fixture(scope="class", params=COORD_MANAGERS)
+def coord_manager(request) -> dc.CoordManager:
+    """Meta fixture for aggregating coordinates."""
+    return request.getfixturevalue(request.param)
 
 
 # --- Patch Fixtures
@@ -445,6 +548,15 @@ def memory_spool_small_dt_differences(random_spool):
     spool = dc.spool(out)
     assert len(out) == len(spool)
     return spool
+
+
+@pytest.fixture(scope="session")
+@register_func(SPOOL_FIXTURES)
+def spool_with_non_coords():
+    """Return a spool which has some non-coordinate patches inside."""
+    patches = list(dc.examples.get_example_spool(length=3))
+    patches += [x.mean("time") for x in patches]
+    return dc.spool(patches)
 
 
 @pytest.fixture(scope="class", params=SPOOL_FIXTURES)
