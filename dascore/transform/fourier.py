@@ -4,6 +4,7 @@ Module for Fourier transforms.
 See the [FFT note](/notes/dft_notes.qmd) for discussion on the
 implementation.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence

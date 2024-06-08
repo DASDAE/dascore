@@ -4,15 +4,19 @@ Compatibility module for DASCore.
 All components/functions that may be exchanged for other numpy/scipy
 compatible libraries should go in this model.
 """
+
 from __future__ import annotations
 
 from contextlib import suppress
 
 import numpy as np
 from numpy import floor, interp  # NOQA
+from numpy.random import RandomState
 from scipy.interpolate import interp1d  # NOQA
 from scipy.ndimage import zoom  # NOQA
 from scipy.signal import decimate, resample, resample_poly  # NOQA
+
+random_state = RandomState(42)
 
 
 class DataArray:

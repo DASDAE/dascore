@@ -1,4 +1,5 @@
 """Find all python files which dont have "from __future__ import annotation"."""
+
 from __future__ import annotations
 
 from pathlib import Path

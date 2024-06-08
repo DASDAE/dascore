@@ -1,4 +1,5 @@
 """Core module for reading and writing DASDAE format."""
+
 from __future__ import annotations
 
 import contextlib

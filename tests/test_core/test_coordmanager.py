@@ -1,4 +1,5 @@
 """Tests for coordinate manager."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -8,6 +9,7 @@ from rich.text import Text
 
 import dascore as dc
 from dascore import to_datetime64
+from dascore.compat import random_state
 from dascore.core.coordmanager import (
     CoordManager,
     get_coord_manager,
@@ -240,7 +242,7 @@ class TestCoordManagerInputs:
     def test_additional_coords(self):
         """Ensure a additional (non-dimensional) coords work."""
         coords = dict(COORDS)
-        lats = np.random.rand(len(COORDS["distance"]))
+        lats = random_state.rand(len(COORDS["distance"]))
         coords["latitude"] = ("distance", lats)
         out = get_coord_manager(coords, DIMS)
         assert isinstance(out.coord_map["latitude"], BaseCoord)

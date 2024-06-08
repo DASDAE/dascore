@@ -1,4 +1,5 @@
 """Processing for applying roller operations."""
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -75,7 +76,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         num_nans = 1 + (self.window - 2) // self.step
         pad_width = [(0, 0)] * len(data.shape)
         pad_width[self.axis] = (num_nans, 0)
-        padded = np.pad(data, pad_width, constant_values=np.NaN)
+        padded = np.pad(data, pad_width, constant_values=np.nan)
         if self.step == 1:
             assert padded.shape == self.patch.data.shape
         if self.center:
@@ -109,7 +110,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         # apply function, then pad with zeros and roll
         kwargs = self.func_kwargs
         trimmed_slide_view = slide_view[tuple(step_slice)]
-        raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float_)
+        raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float64)
         out = self._pad_roll_array(raw)
         new_coords = self.get_coords()
         attrs = self._get_attrs_with_apply_history(function)

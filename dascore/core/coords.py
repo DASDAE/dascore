@@ -1,4 +1,5 @@
 """Machinery for coordinates."""
+
 from __future__ import annotations
 
 import abc
@@ -72,7 +73,7 @@ def ensure_consistent_dtype(value, name, dtype):
         value = dc.to_timedelta64(value)
     # convert numpy numerics back to python
     elif np.issubdtype(dtype, np.floating):
-        value = float(value) if value is not None else np.NaN
+        value = float(value) if value is not None else np.nan
     elif np.issubdtype(dtype, np.integer):
         value = int(value)
     return value

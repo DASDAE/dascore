@@ -1,4 +1,5 @@
 """Utility for working with time."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -304,7 +305,7 @@ def _time_to_int(datetime):
 @to_int.register(type(pd.NA))
 def _return_number_null(null):
     """Convert non to NaT."""
-    return np.NaN
+    return np.nan
 
 
 @to_int.register(np.timedelta64)
@@ -364,7 +365,7 @@ def _time_to_float(datetime):
 @to_float.register(type(pd.NA))
 def _return_null(null):
     """Convert non to NaT."""
-    return np.NaN
+    return np.nan
 
 
 @to_float.register(np.timedelta64)

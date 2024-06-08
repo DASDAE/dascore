@@ -1,4 +1,5 @@
 """IO module for reading Terra15 DAS data."""
+
 from __future__ import annotations
 
 import dascore as dc

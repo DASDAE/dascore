@@ -1,4 +1,5 @@
 """Utilities for models."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

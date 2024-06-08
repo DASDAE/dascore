@@ -1,4 +1,5 @@
 """Module for spools, containers of patches."""
+
 from __future__ import annotations
 
 import abc

@@ -1,4 +1,5 @@
 """IO module for reading binary raw format DAS data."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,7 +19,7 @@ class BinaryPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Binary."""
 
     pulse_width_ns: float = np.NAN
-    gauge_length: float = np.NaN
+    gauge_length: float = np.nan
     instrument_id: UTF8Str = ""
     distance_units: UTF8Str = ""
     zone_name: UTF8Str = ""

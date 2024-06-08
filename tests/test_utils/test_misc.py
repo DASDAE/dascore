@@ -1,4 +1,5 @@
 """Misc. tests for misfit utilities."""
+
 from __future__ import annotations
 
 import os

@@ -1,4 +1,5 @@
 """Utilities for documentation."""
+
 from __future__ import annotations
 
 import inspect
@@ -79,7 +80,7 @@ def compose_docstring(**kwargs: str | Sequence[str]):
             value = value if isinstance(value, str) else "\n".join(value)
             # strip out first line if needed
             value = textwrap.dedent(value).lstrip()
-            search_value = "{%s}" % key
+            search_value = f"{{{key}}}"
             # find all lines that match values
             lines = [x for x in docstring.split("\n") if search_value in x]
             for line in lines:

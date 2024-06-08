@@ -1,4 +1,5 @@
 """Test for basic IO and related functions."""
+
 from __future__ import annotations
 
 import copy

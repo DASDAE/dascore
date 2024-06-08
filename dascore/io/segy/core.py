@@ -1,4 +1,5 @@
 """IO module for reading SEGY file format support."""
+
 from __future__ import annotations
 
 import segyio
