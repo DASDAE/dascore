@@ -152,6 +152,12 @@ class Patch:
     def __array__(self, dtype=None, copy=None):
         """Used to convert Patches to arrays."""
         data = self.data
+        # dascore.utils.misc.to_object_array stores patch references in numpy
+        # object arrays. When that function is called it tries to make a copy
+        # of the array data with dtype == object, which takes a TON of memory.
+        # For now, just don't let this method convert to object dtype arrays.
+        if np.issubdtype(dtype, np.dtype(object)):
+            dtype = None
         out = data.astype(dtype) if dtype is not None else data
         out = out if not copy else np.copy(out)
         return out
