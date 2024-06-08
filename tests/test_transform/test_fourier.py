@@ -123,6 +123,31 @@ class TestDiscreteFourierTransform:
         vals2 = (pa2.abs() ** 2).integrate("ft_time", definite=True)
         assert np.allclose(vals1.data, vals2.data)
 
+    def test_idempotent_single_dim(self, fft_sin_patch_time):
+        """
+        Ensure dft is idempotent for a single dimension.
+        """
+        out = fft_sin_patch_time.dft("time")
+        assert out.equals(fft_sin_patch_time)
+
+    def test_idempotent_all_dims(self, fft_sin_patch_all):
+        """
+        Ensure dft is idempotent for transforms applied to all dims.
+        """
+        out = fft_sin_patch_all.dft(dim=("time", "distance"))
+        assert out.equals(fft_sin_patch_all)
+
+    def test_transform_single_dim(
+        self, sin_patch, fft_sin_patch_time, fft_sin_patch_all
+    ):
+        """
+        Ensure dft is idempotent for time, but untransformed axis still gets
+        transformed.
+        """
+        out = fft_sin_patch_time.dft(dim=("time", "distance"))
+        assert not out.equals(fft_sin_patch_time)
+        assert np.allclose(out.data, fft_sin_patch_all.data)
+
 
 class TestInverseDiscreteFourierTransform:
     """Inverse DFT suite."""
