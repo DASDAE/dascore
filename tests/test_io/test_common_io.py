@@ -51,6 +51,7 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    DASDAEV1(): ("example_dasdae_event_1.h5",),
     SilixaH5V1(): ("silixa_h5_1.hdf5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
     Febus2(): ("febus_1.h5",),
@@ -68,6 +69,7 @@ COMMON_IO_READ_TESTS = {
         "terra15_das_unfinished.hdf5",
     ),
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
+    Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     SegyV2(): ("conoco_segy_1.sgy",),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
@@ -186,6 +188,7 @@ class TestGetFormat:
     def test_expected_version(self, io_path_tuple):
         """Each io should get its own version/name for its test files."""
         io, path = io_path_tuple
+        breakpoint()
         expected = (io.name, io.version)
         out = io.get_format(path)
         assert out == expected

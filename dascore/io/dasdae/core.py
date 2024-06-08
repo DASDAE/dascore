@@ -13,6 +13,7 @@ from dascore.utils.hdf5 import (
     NodeError,
     PyTablesReader,
     PyTablesWriter,
+    HDF5Reader,
 )
 from dascore.utils.patch import get_default_patch_name
 
@@ -95,7 +96,7 @@ class DASDAEV1(FiberIO):
         )
         return df
 
-    def get_format(self, resource: PyTablesReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, resource: HDF5Reader, **kwargs) -> tuple[str, str] | bool:
         """Return the format from a dasdae file."""
         is_dasdae, version = False, ""  # NOQA
         with contextlib.suppress(KeyError):
