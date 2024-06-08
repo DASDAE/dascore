@@ -31,6 +31,7 @@ from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.segy import SegyV2
 from dascore.io.sentek import SentekV5
+from dascore.io.silixah5 import SilixaH5V1
 from dascore.io.tdms import TDMSFormatterV4713
 from dascore.io.terra15 import (
     Terra15FormatterV4,
@@ -50,6 +51,7 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    SilixaH5V1(): ("silixa_h5_1.hdf5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
     Febus2(): ("febus_1.h5",),
     OptoDASV8(): ("opto_das_1.hdf5",),
