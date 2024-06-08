@@ -566,10 +566,6 @@ class FiberIO:
         manager.register_fiberio(cls())
         # decorate methods for type-casting
         for name, param_ind in cls._automatic_type_casters.items():
-
-            if "DASDAE" in cls.name:
-                breakpoint()
-
             method = getattr(cls, name)
             sig = inspect.signature(method)
             arg_name = list(sig.parameters)[param_ind]

@@ -120,7 +120,7 @@ def _is_h5simple(h5):
 
 def _has_required_arrays(h5):
     """Determine if h5 file has required arrays to be h5 simple."""
-    array_names = {x.name for x in h5.list_nodes("/") if hasattr(x, "shape")}
+    array_names = set(h5)
     data_node = array_names & DATA_ARRAY_NAMES
     time_node = array_names & TIME_ARRAY_NAMES
     return bool(data_node) and bool(time_node)
@@ -128,8 +128,8 @@ def _has_required_arrays(h5):
 
 def _no_format_or_simple_specified(h5):
     """Ensure no other format is specified, or that simpleH5 is."""
-    attrs = h5.root._v_attrs
-    attr_names = set(attrs._v_attrnames)
+    attrs = h5.attrs
+    attr_names = set(attrs)
     file_format = attr_names & FILE_FORMAT_ATTR_NAMES
     format = getattr(attrs, next(iter(file_format))) if file_format else "h5simple"
     if format == "h5simple":

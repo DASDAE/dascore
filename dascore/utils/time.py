@@ -314,7 +314,7 @@ def _time_delta_to_number(time_delta: np.timedelta64):
 
 @to_int.register(pd.Series)
 def _pandas_timestamp_to_num(ser: pd.Series):
-    return ser.view(np.int64)
+    return ser.astype(np.int64)
 
 
 @singledispatch

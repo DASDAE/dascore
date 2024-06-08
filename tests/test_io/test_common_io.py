@@ -51,18 +51,18 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
+    ProdMLV2_1(): (
+        "prodml_2.1.h5",
+        "iDAS005_hdf5_example.626.h5",
+    ),
+    H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     SilixaH5V1(): ("silixa_h5_1.hdf5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
     Febus2(): ("febus_1.h5",),
     OptoDASV8(): ("opto_das_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
-    H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
-    ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
-    ProdMLV2_1(): (
-        "prodml_2.1.h5",
-        "iDAS005_hdf5_example.626.h5",
-    ),
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
     Terra15FormatterV4(): (
         "terra15_das_1_trimmed.hdf5",
@@ -188,7 +188,6 @@ class TestGetFormat:
     def test_expected_version(self, io_path_tuple):
         """Each io should get its own version/name for its test files."""
         io, path = io_path_tuple
-        breakpoint()
         expected = (io.name, io.version)
         out = io.get_format(path)
         assert out == expected
