@@ -37,8 +37,8 @@ def velocity_to_strain_rate(
     order
         The order for the finite difference 1st derivative stencil (accuracy).
 
-    Notes
-    -----
+    See Also
+    --------
     See also [velocity_to_strain_rate_fd]\
     (`dascore.transform.strain.velocity_to_strain_rate_fd`)
     """
@@ -75,10 +75,9 @@ def velocity_to_strain_rate_fd(
     gauge_multiple : int, optional
         The multiples of spatial sampling to make the simulated gauge length.
 
-    Notes
-    -----
-    See also [velocity_to_strain_rate]\
-    (`dascore.transform.strain.velocity_to_strain_rate`)
+    See Also
+    --------
+    [velocity_to_strain_rate](`dascore.transform.strain.velocity_to_strain_rate`)
     """
     assert isinstance(gauge_multiple, int), "gauge_multiple must be an integer."
     coord = patch.get_coord("distance", require_evenly_sampled=True)
