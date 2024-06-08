@@ -51,6 +51,7 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    SilixaH5V1(): ("silixa_h5_1.hdf5",),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",
@@ -58,7 +59,6 @@ COMMON_IO_READ_TESTS = {
     ),
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
-    SilixaH5V1(): ("silixa_h5_1.hdf5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
     Febus2(): ("febus_1.h5",),
     OptoDASV8(): ("opto_das_1.hdf5",),

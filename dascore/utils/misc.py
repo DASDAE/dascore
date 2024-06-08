@@ -418,16 +418,6 @@ def yield_sub_sequences(sequence, length=None):
         yield sequence[i : i + length]
 
 
-def maybe_get_attrs(obj, attr_map: Mapping):
-    """Maybe get attributes from object (if they exist)."""
-    out = {}
-    for old_name, new_name in attr_map.items():
-        if hasattr(obj, old_name):
-            value = getattr(obj, old_name)
-            out[new_name] = unbyte(value)
-    return out
-
-
 def maybe_get_items(
     obj, attr_map: Mapping[str, str], unpack_names: None | set[str] = None
 ):

@@ -132,6 +132,11 @@ To make this easy, DASCore will automatically manage and serve the right input t
 Deciding which to use depends on whether the file is an HDF5-based or binary format, and which hdf5 library you want to use.
 
 :::{.callout-note}
+H5Reader should be preferred to PytablesReader, especially for the `get_format` method.
+:::
+
+
+:::{.callout-note}
 If a type hint other than the ones listed above is given to the relevant parameter (path, or resource in these examples) it will have no effect.
 :::
 

@@ -21,6 +21,8 @@ _ATTR_MAP = {
     "MeasureLength[m]": "measured_length",
     "StartPosition[m]": "start_position",
     "SpatialResolution[m]": "spatial_resolution",
+    # oops, they spelled information "infomation"
+    "SystemInfomation.Devices1.SerialNum": "instrument_id",
 }
 
 _EXPECTED_ATTRS = set(_ATTR_MAP)
@@ -28,11 +30,10 @@ _EXPECTED_ATTRS = set(_ATTR_MAP)
 
 def _get_version_string(resource, version):
     """Return version string if silixa h5 format else False."""
-    dataset = resource.get("Acoustic")
-    if dataset is None:
-        return False
-    attrs_names = set(dataset.attrs)
-    if not _EXPECTED_ATTRS.issubset(attrs_names):
+    dataset = resource.get("Acoustic", {})
+    attrs_names = set(getattr(dataset, "attrs", dataset))
+    has_attrs = _EXPECTED_ATTRS.issubset(attrs_names)
+    if dataset is None or not has_attrs:
         return False
     return version
 
