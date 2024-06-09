@@ -789,30 +789,37 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         >>> # The next (not closest) index is return for value not in coord.
         >>> assert coord.get_next_index(2.000001) == 3
         """
+        if not self.sorted:
+            msg = f"Coords must be sorted to use get_next_index, {self} is not."
+            raise CoordError(msg)
+        array = np.atleast_1d(value)
         # handle samples
         if samples:
             min_val, max_val = 0, len(self) - 1
-            value = int(np.round(value))
+            array = array.astype(np.int64)
+            wrap_around = array < 0
             # account for negative indexing
-            value = value if value >= 0 else value + max_val + 1
+            array[wrap_around] = array[wrap_around] + max_val + 1
         else:
-            value = self._get_compatible_value(value)
+            array = self._get_compatible_value(array)
             min_val, max_val = self.min(), self.max()
         # handle out of bounds cases
-        if (is_gt := value > max_val) or (value < min_val):
-            if not allow_out_of_bounds:
-                msg = f"Value: {value} is out of bounds for {self}"
-                raise ValueError(msg)
-            return max_val if is_gt else min_val
+        is_gt, is_lt = array > max_val, array < min_val
+        if not allow_out_of_bounds and np.any(is_gt | is_lt):
+            msg = f"Value: {array} is out of bounds for {self}"
+            raise ValueError(msg)
+        # Fix max values
+        array[is_gt] = max_val
+        array[is_lt] = min_val
         # samples should already have the answer, just return
         if samples:
-            return value
+            return array if is_array(value) else array[0]
         # otherwise get forward and backward inds
-        for_index = self._get_index(value, forward=True)
-        back_index = self._get_index(value, forward=False)
-        ranges = [x for x in [for_index, back_index] if x is not None]
-        assert len(ranges)
-        return ranges[0]
+        for_index = self._get_index(array, forward=True)
+        back_index = self._get_index(array, forward=False)
+        bad_for_index = pd.isnull(for_index) | for_index == -9999
+        for_index[bad_for_index] = back_index[bad_for_index]
+        return for_index if is_array(value) else for_index[0]
 
     def approx_equal(self: BaseCoord, other: BaseCoord) -> bool:
         """
@@ -1034,7 +1041,7 @@ class CoordRange(BaseCoord):
         return values
 
     def __getitem__(self, item):
-        if isinstance(item, int):
+        if isinstance(item, (int | np.integer)):
             if item >= len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
             return self.values[item]
@@ -1108,14 +1115,21 @@ class CoordRange(BaseCoord):
         """Get the index corresponding to a value."""
         if (value := self._get_compatible_value(value)) is None:
             return value
+        array = np.atleast_1d(value)
         func = np.ceil if forward else np.floor
-        start, _, step = self.start, self.stop, self.step
+        start, step = self.start, self.step
         # Due to float weirdness we need a little bit of a fudge factor here.
-        fraction = func(np.round((value - start) / step, decimals=10))
-        out = int(fraction)
-        if (out <= 0 and forward) or (out >= len(self) and not forward):
+        fraction = func(np.round((array - start) / step, decimals=10))
+        out = fraction.astype(np.int64)
+        lt_forward = (out <= 0) & forward
+        gt_back = (out >= len(self)) & (not forward)
+        bad_values = lt_forward | gt_back
+        if not is_array(value) and np.any(bad_values):
             return None
-        return out
+        # Bad array values should be mined out so min finds them later.
+        elif np.any(bad_values):
+            out[bad_values] = -9999
+        return out if is_array(value) else int(out[0])
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
@@ -1351,32 +1365,40 @@ class CoordMonotonicArray(CoordArray):
         # by -1 in _get_index the inverted range is used.
         if self.reverse_sorted:
             v1, v2 = v2, v1
-        start = self._get_index(v1, left=True)
+        start = self._get_index(v1, forward=False)
         new_start = start if start is not None and start > 0 else None
-        stop = self._get_index(v2, left=False)
+        stop = self._get_index(v2, forward=True)
         new_stop = stop if stop is not None and stop < len(self) else None
+        # We need to add 1 to end so 1 sample get selected if start == stop
+        if self.values[new_start] == self.values[new_stop]:
+            new_stop = new_stop + 1
         out = slice(new_start, new_stop)
         if self._slice_degenerate(out):
             return self.empty(), slice(0, 0)
         return self.new(values=self.values[out]), out
 
-    def _get_index(self, value, left=True):
+    def _get_index(self, value, forward=True):
         """
         Get the index corresponding to a value.
 
-        Left indicates if this is the min value.
+        forward indicates if this is the min value.
         """
-        if (value := self._get_compatible_value(value)) is None:
-            return value
-        values = self.values
-        side_dict = {True: "left", False: "right"}
+        if (new_value := self._get_compatible_value(value)) is None:
+            return new_value
+        values = np.atleast_1d(self.values)
         # since search sorted only works on ascending monotonic arrays we
         # negative descending arrays to get the same effect.
         if self.reverse_sorted:
             values = to_float(values) * -1
-            value = to_float(value) * -1
-        ind = np.searchsorted(values, value, side=side_dict[left])
-        return ind
+            new_value = to_float(new_value) * -1
+        new_value = np.atleast_1d(new_value)
+        right = np.searchsorted(values, new_value, side="right")
+        left = np.searchsorted(values, new_value, side="left")
+        eq = values[left] == new_value
+        out = right if forward else left
+        # where equal it should also be left values
+        out[eq] = left[eq]
+        return out if is_array(value) else int(out[0])
 
     def _step_meets_requirement(self, op):
         """Return True is any data increment meets the comp. requirement."""

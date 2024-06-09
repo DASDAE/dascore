@@ -467,12 +467,14 @@ class TestSelect:
     def test_select_end_end_time(self, coord):
         """Ensure when time range is == (end, end) that dim has len 1."""
         out = coord.select((coord.max(), coord.max()))[0]
+        if not len(out) == 1:
+            breakpoint()
+            coord.select((coord.max(), coord.max()))[0]
         assert len(out) == 1
 
     def test_intra_sample_select(self, coord):
         """
-        Selecting ranges that fall within samples should raise.
-
+        Selecting ranges that fall within samples should become de-generate.
         This is consistent with pandas indices.
         """
         values = coord.values
@@ -480,6 +482,11 @@ class TestSelect:
         arg = values[0] + (values[1] - values[0]) / 2
         assert arg not in np.unique(values)
         out, indexer = coord.select((arg, arg))
+
+        if not out.degenerate:
+            breakpoint()
+            coord.select((arg, arg))
+
         assert out.degenerate
         assert np.size(coord.data[indexer]) == 0
 
@@ -1679,6 +1686,29 @@ class TestGetNextIndex:
         ind1 = coord.get_next_index(val1)
         ind2 = coord.get_next_index(val2)
         assert ind1 == ind2
+
+    def test_array_input(self, evenly_sampled_coord):
+        """Get next coord should work with an array."""
+        inds = np.array([1, 2, 3, 4])
+        out1 = evenly_sampled_coord.get_next_index(inds)
+        out2 = evenly_sampled_coord.get_next_index(inds, samples=True)
+        # Since this coord is just [0,1,2,3,4] the outputs should be eq.
+        assert np.all(out1 == inds) and np.all(out2 == out1)
+
+    def test_array_input_sorted_coord(self, monotonic_float_coord):
+        """Ensure array input also works on sorted coord."""
+        inds = np.array([0, 1, 2])
+        # test exact values
+        coord_array = monotonic_float_coord.values
+        vals = coord_array[inds]
+        out1 = monotonic_float_coord.get_next_index(vals)
+        assert np.all(monotonic_float_coord.values[out1] == vals)
+
+    def test_non_sorted_coord_raises(self, random_coord):
+        """Ensure a non-sorted coord raises."""
+        msg = "Coords must be sorted"
+        with pytest.raises(CoordError, match=msg):
+            random_coord.get_next_index(10)
 
 
 class TestUpdate:
