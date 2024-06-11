@@ -5,7 +5,7 @@ from __future__ import annotations
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
-from dascore.utils.hdf5 import PyTablesReader
+from dascore.utils.hdf5 import H5Reader, PyTablesReader
 
 from .utils import _get_attrs_coords_and_data, _is_h5simple, _maybe_trim_data
 
@@ -17,7 +17,7 @@ class H5Simple(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
-    def get_format(self, resource: PyTablesReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """Determine if is simple h5 format."""
         if _is_h5simple(resource):
             return self.name, self.version

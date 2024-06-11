@@ -10,11 +10,13 @@ import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import (
+    H5Reader,
     HDFPatchIndexManager,
     NodeError,
     PyTablesReader,
     PyTablesWriter,
 )
+from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_default_patch_name
 
 from .utils import (
@@ -96,15 +98,15 @@ class DASDAEV1(FiberIO):
         )
         return df
 
-    def get_format(self, resource: PyTablesReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """Return the format from a dasdae file."""
         is_dasdae, version = False, ""  # NOQA
-        with contextlib.suppress(KeyError):
-            is_dasdae = resource.root._v_attrs["__format__"] == "DASDAE"
-            dasdae_file_version = resource.root._v_attrs["__DASDAE_version__"]
-        if is_dasdae:
-            return (self.name, dasdae_file_version)
-        return False
+        attrs = resource.attrs
+        file_format = unbyte(attrs.get("__format__", ""))
+        if file_format != self.name:
+            return False
+        version = unbyte(attrs.get("__DASDAE_version__", ""))
+        return file_format, version
 
     def read(self, resource: PyTablesReader, **kwargs) -> SpoolType:
         """Read a dascore file."""

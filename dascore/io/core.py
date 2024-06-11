@@ -106,6 +106,7 @@ class _FiberIOManager:
         self._extension_list = defaultdict(list)
         # This is a dict of {input_type: (fiberio_name, version)}
         self._fiber_io_by_input_type = defaultdict(set)
+        self._fiber_io_name_ver = set()
 
     @cached_property
     def _eps(self):
@@ -178,11 +179,15 @@ class _FiberIOManager:
     def register_fiberio(self, fiberio: FiberIO):
         """Register a new fiber IO to manage."""
         forma, ver = fiberio.name.upper(), fiberio.version
+        id_tuple = (forma, ver)
+        if id_tuple in self._fiber_io_name_ver:
+            return
         self._loaded_eps.add(fiberio.name)
         for ext in iter(fiberio.preferred_extensions):
             self._extension_list[ext].append(fiberio)
         self._format_version[forma][ver] = fiberio
         self._fiber_io_by_input_type[fiberio.input_type].add(fiberio)
+        self._fiber_io_name_ver.add(id_tuple)
 
     @cached_method
     def get_fiberio(

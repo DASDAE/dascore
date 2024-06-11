@@ -9,7 +9,7 @@ from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.models import UnitQuantity, UTF8Str
 
-from ...utils.hdf5 import PyTablesReader
+from ...utils.hdf5 import H5Reader
 from .utils import _get_prodml_attrs, _get_prodml_version_str, _read_prodml
 
 
@@ -30,7 +30,7 @@ class ProdMLV2_0(FiberIO):  # noqa
     preferred_extensions = ("hdf5", "h5")
     version = "2.0"
 
-    def get_format(self, resource: PyTablesReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """
         Return True if file contains prodML version 2 data else False.
 
@@ -43,7 +43,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: PyTablesReader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
         """Scan a prodml file, return summary information about the file's contents."""
         file_version = _get_prodml_version_str(resource)
         extras = {
@@ -56,7 +56,7 @@ class ProdMLV2_0(FiberIO):  # noqa
 
     def read(
         self,
-        resource: PyTablesReader,
+        resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
