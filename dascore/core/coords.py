@@ -1371,9 +1371,8 @@ class CoordMonotonicArray(CoordArray):
         stop = self._get_index(v2, forward=True)
         new_stop = stop if stop is not None and stop < len(self) else None
         # We need to add 1 to end so 1 sample get selected if start == stop
-        if new_start is not None and new_stop is not None:
-            eq_values = self.values[new_start] == self.values[new_stop]
-            if eq_values and self.values[new_start] == v1:
+        if new_stop is not None:
+            if self.values[new_stop] == v2:
                 new_stop = new_stop + 1
         out = slice(new_start, new_stop)
         if self._slice_degenerate(out):
@@ -1403,7 +1402,7 @@ class CoordMonotonicArray(CoordArray):
         # right_ok = (right < len(self)) & (right < 0)
         left = np.searchsorted(values, new_value, side="left")
         left_ok = (left < len(self)) & (left > 0)
-        eq = left_ok & (values.take(left, mode='clip') == new_value)
+        eq = left_ok & (values.take(left, mode="clip") == new_value)
         out = right if forward else left
         # where equal it should also be left values. This makes the function
         # behavior consistent with BaseCoord._get_index.

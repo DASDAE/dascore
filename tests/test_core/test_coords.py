@@ -467,9 +467,6 @@ class TestSelect:
     def test_select_end_end_time(self, coord):
         """Ensure when time range is == (end, end) that dim has len 1."""
         out = coord.select((coord.max(), coord.max()))[0]
-        if not len(out) == 1:
-            breakpoint()
-            coord.select((coord.max(), coord.max()))[0]
         assert len(out) == 1
 
     def test_intra_sample_select(self, coord):
@@ -482,22 +479,12 @@ class TestSelect:
         arg = values[0] + (values[1] - values[0]) / 2
         assert arg not in np.unique(values)
         out, indexer = coord.select((arg, arg))
-
-        if not out.degenerate:
-            breakpoint()
-            coord.select((arg, arg))
-
         assert out.degenerate
         assert np.size(coord.data[indexer]) == 0
 
     def test_select_start_start_time(self, coord):
         """Ensure when time range is == (start, start) that dim has len 1."""
         out = coord.select((coord.min(), coord.min()))[0]
-
-        if not len(out) == 1:
-            breakpoint()
-            coord.select((coord.min(), coord.min()))[0]
-
         assert len(out) == 1
 
     def test_select_inclusive(self, long_coord):
@@ -543,11 +530,6 @@ class TestSelect:
         assert np.size(coord.data[indexer]) == 0
         # Same thing if end time is too early
         new, indexer = coord.select((None, v2))
-
-        if not new.degenerate:
-            breakpoint()
-            coord.select((None, v2))
-
         assert new.degenerate
         assert np.size(coord.data[indexer]) == 0
         # but this should be fine
@@ -585,15 +567,7 @@ class TestSelect:
         v1 = coord.min() - 10 * diff
         v2 = coord.max() + 10 * diff
         out, slice_thing = coord.select((v1, v2))
-
-        try:
-            _is_equal(coord, out, slice_thing)
-        except:
-            breakpoint()
-            out, slice_thing = coord.select((v1, v2))
-
-
-
+        _is_equal(coord, out, slice_thing)
         out, slice_thing = coord.select((None, v2))
         _is_equal(coord, out, slice_thing)
         out, slice_thing = coord.select((v1, None))
@@ -619,16 +593,7 @@ class TestSelect:
         assert slice_value == 20
         # test end index
         new, sliced = coord.select((..., value1))
-
-
-        try:
-            assert sliced.stop == 11 if new.sorted else sliced.start == 10
-        except AssertionError:
-            breakpoint()
-            coord.select((..., value1))
-
-
-
+        assert sliced.stop == 11 if new.sorted else sliced.start == 10
         new, sliced = coord.select((..., value2))
         assert sliced.stop == 21 if new.sorted else sliced.start == 20
         # test range
@@ -1724,13 +1689,7 @@ class TestGetNextIndex:
             pytest.skip(f"{coord} doesn't support get_next_index.")
         values = coord.values[inds]
         out2 = coord.get_next_index(values)
-
-        try:
-            assert np.all(out1 == inds) and np.all(out2 == out1)
-        except:
-            breakpoint()
-            coord.get_next_index(values)
-
+        assert np.all(out1 == inds) and np.all(out2 == out1)
 
     def test_non_sorted_coord_raises(self, random_coord):
         """Ensure a non-sorted coord raises."""

@@ -6,15 +6,11 @@ from scipy.fftpack import next_fast_len
 
 import dascore as dc
 from dascore.constants import PatchType
-from dascore.core.coordmanager import get_coord_manager
-from dascore.transform.fourier import _get_dft_attrs
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import (
-    _get_dx_or_spacing_and_axes,
     get_dim_value_from_kwargs,
     patch_function,
 )
-from dascore.utils.transformatter import FourierTransformatter
 
 
 def _get_correlated_coord(old_coord, data_shape):
@@ -82,8 +78,8 @@ def _get_sources(patch, fft, dim, source, source_axis, samples):
     slicer = slice(index_source, index_source + 1)
     inds = broadcast_for_index(ndim, axis=source_axis, value=slicer)
     source_fft = fft[inds]
-    print(source_fft)
-    assert 0
+    # print(source_fft)
+    assert source_fft
     pass
 
 
@@ -181,6 +177,9 @@ def correlate(
     # the n parameter needs to be odd so we have a 0 lag time. This only
     # applies to real fft
     n_out = fast_len if (not is_real or fast_len % 2 != 0) else fast_len - 1
+
+    assert fft_prod
+    assert n_out
     #
     # if idft:
     #     ifft_func = np.fft.irfft if is_real else np.fft.ifft
