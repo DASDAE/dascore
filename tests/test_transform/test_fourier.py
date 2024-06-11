@@ -15,9 +15,12 @@ F_0 = 2
 @pytest.fixture(scope="session")
 def sin_patch():
     """Get the sine wave patch, set units for testing."""
-    patch = dc.get_example_patch("sin_wav", sample_rate=100, duration=3, frequency=F_0)
-    out = patch.set_units(get_quantity("1.0 V"), time="s", distance="m")
-    return out
+    patch = (
+        dc.get_example_patch("sin_wav", sample_rate=100, duration=3, frequency=F_0)
+        .set_units(get_quantity("1.0 V"), time="s", distance="m")
+        .update_attrs(data_type="strain_rate")
+    )
+    return patch
 
 
 @pytest.fixture(scope="session")
@@ -124,6 +127,36 @@ class TestDiscreteFourierTransform:
         vals2 = (pa2.abs() ** 2).integrate("ft_time", definite=True)
         assert np.allclose(vals1.data, vals2.data)
 
+    def test_idempotent_single_dim(self, fft_sin_patch_time):
+        """
+        Ensure dft is idempotent for a single dimension.
+        """
+        out = fft_sin_patch_time.dft("time")
+        assert out.equals(fft_sin_patch_time)
+
+    def test_idempotent_all_dims(self, fft_sin_patch_all):
+        """
+        Ensure dft is idempotent for transforms applied to all dims.
+        """
+        out = fft_sin_patch_all.dft(dim=("time", "distance"))
+        assert out.equals(fft_sin_patch_all)
+
+    def test_transform_single_dim(
+        self, sin_patch, fft_sin_patch_time, fft_sin_patch_all
+    ):
+        """
+        Ensure dft is idempotent for time, but untransformed axis still gets
+        transformed.
+        """
+        out = fft_sin_patch_time.dft(dim=("time", "distance"))
+        assert not out.equals(fft_sin_patch_time)
+        assert np.allclose(out.data, fft_sin_patch_all.data)
+
+    def test_datatype_removed(self, fft_sin_patch_time, sin_patch):
+        """Ensure the data_type attr is removed after transform."""
+        assert sin_patch.attrs.data_type == "strain_rate"
+        assert fft_sin_patch_time.attrs.data_type == ""
+
 
 class TestInverseDiscreteFourierTransform:
     """Inverse DFT suite."""
@@ -168,3 +201,8 @@ class TestInverseDiscreteFourierTransform:
         # and then if we reverse distance it should be the same as original
         full_inverse = ift.idft("distance")
         self._patches_about_equal(full_inverse, sin_patch)
+
+    def test_data_type_restored(self, fft_sin_patch_time, sin_patch):
+        """Ensure data_type attr is restored."""
+        out = fft_sin_patch_time.idft("time")
+        assert out.attrs.data_type == sin_patch.attrs.data_type

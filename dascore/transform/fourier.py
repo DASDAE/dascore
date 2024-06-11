@@ -73,7 +73,22 @@ def _get_dft_attrs(patch, dims, new_coords):
     new = dict(patch.attrs)
     new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
+    # As per #390, we also want to remove data_type (eg the patch is no
+    # longer in strain rate after the dft)
+    new["_pre_dft_data_type"] = new.pop("data_type", None)
     return PatchAttrs(**new)
+
+
+def _get_untransformed_dims(patch, dims):
+    """Return dimensions which have not been transformed."""
+    dim_set = set(patch.dims)
+    out = []
+    for dim in dims:
+        # This dim has already been transformed.
+        if (dim not in dim_set) and f"ft_{dim}" in dim_set:
+            continue
+        out.append(dim)
+    return out
 
 
 @patch_function()
@@ -112,7 +127,7 @@ def dft(
     - Non-dimensional coordiantes associated with transformed coordinates
       will be dropped in the output.
 
-    - See the [FFT note](dascore.org/notes/fft_notes.html) in the Notes section
+    - See the [FFT note](`notes/dft_notes.qmd`) in the Notes section
       of DASCore's documentation for more details.
 
     See Also
@@ -132,11 +147,15 @@ def dft(
     """
     dims = list(iterate(dim if dim is not None else patch.dims))
     patch.assert_has_coords(dims)
+    real = dims[-1] if real is True else real  # if true grab last dim
+    dims = _get_untransformed_dims(patch, dims)
+    real = real if real in dims else None  # may need to reset real
+    if not dims:  # no transformation needed.
+        return patch
     # re-arrange list so real dim is last (if provided)
     if isinstance(real, str):
         assert real in dims, "real must be in provided dimensions."
         dims.append(dims.pop(dims.index(real)))
-    real = dims[-1] if real is True else real  # if true grab last dim
     # get axes and spacing along desired dimensions.
     dxs, axes = _get_dx_or_spacing_and_axes(patch, dims, require_evenly_spaced=True)
     func = nft.rfftn if real is not None else nft.fftn
@@ -209,6 +228,9 @@ def _get_idft_attrs(patch, dims, new_coords):
     new = dict(patch.attrs)
     new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
+    # Restore the pre-dft datatype.
+    if "_pre_dft_data_type" in new:
+        new["data_type"] = new.pop("_pre_dft_data_type", None)
     return PatchAttrs(**new)
 
 
