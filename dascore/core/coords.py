@@ -815,11 +815,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if samples:
             return array if is_array(value) else array[0]
         # otherwise get forward and backward inds
-        for_index = self._get_index(array, forward=True)
+        forward_index = self._get_index(array, forward=True)
         back_index = self._get_index(array, forward=False)
-        bad_for_index = pd.isnull(for_index) | for_index == -9999
-        for_index[bad_for_index] = back_index[bad_for_index]
-        return for_index if is_array(value) else for_index[0]
+        bad_for_index = pd.isnull(forward_index) | forward_index == -9999
+        forward_index[bad_for_index] = back_index[bad_for_index]
+        return forward_index if is_array(value) else forward_index[0]
 
     def approx_equal(self: BaseCoord, other: BaseCoord) -> bool:
         """
@@ -1088,6 +1088,7 @@ class CoordRange(BaseCoord):
         if self.reverse_sorted:
             start, stop = stop, start
         # we add 1 to stop in slice since its upper limit is exclusive
+        start = None if start == 0 else start
         data = slice(start, (stop + 1) if stop is not None else stop)
         if self._slice_degenerate(data):
             return self.empty(), slice(0, 0)
@@ -1121,7 +1122,7 @@ class CoordRange(BaseCoord):
         # Due to float weirdness we need a little bit of a fudge factor here.
         fraction = func(np.round((array - start) / step, decimals=10))
         out = fraction.astype(np.int64)
-        lt_forward = (out <= 0) & forward
+        lt_forward = (out < 0) & forward
         gt_back = (out >= len(self)) & (not forward)
         bad_values = lt_forward | gt_back
         if not is_array(value) and np.any(bad_values):
@@ -1370,8 +1371,10 @@ class CoordMonotonicArray(CoordArray):
         stop = self._get_index(v2, forward=True)
         new_stop = stop if stop is not None and stop < len(self) else None
         # We need to add 1 to end so 1 sample get selected if start == stop
-        if self.values[new_start] == self.values[new_stop]:
-            new_stop = new_stop + 1
+        if new_start is not None and new_stop is not None:
+            eq_values = self.values[new_start] == self.values[new_stop]
+            if eq_values and self.values[new_start] == v1:
+                new_stop = new_stop + 1
         out = slice(new_start, new_stop)
         if self._slice_degenerate(out):
             return self.empty(), slice(0, 0)
@@ -1381,7 +1384,7 @@ class CoordMonotonicArray(CoordArray):
         """
         Get the index corresponding to a value.
 
-        forward indicates if this is the min value.
+        Forward indicates if this is the max (left) value.
         """
         if (new_value := self._get_compatible_value(value)) is None:
             return new_value
@@ -1391,13 +1394,21 @@ class CoordMonotonicArray(CoordArray):
         if self.reverse_sorted:
             values = to_float(values) * -1
             new_value = to_float(new_value) * -1
+        # side = "right" if forward else "left"
+        # out = np.atleast_1d(np.searchsorted(values, new_value, side=side))
+        # Search values. Ensure the returned index is in bounds (eg values GT
+        # coord max should still have a range in coords.
         new_value = np.atleast_1d(new_value)
         right = np.searchsorted(values, new_value, side="right")
+        # right_ok = (right < len(self)) & (right < 0)
         left = np.searchsorted(values, new_value, side="left")
-        eq = values[left] == new_value
+        left_ok = (left < len(self)) & (left > 0)
+        eq = left_ok & (values.take(left, mode='clip') == new_value)
         out = right if forward else left
-        # where equal it should also be left values
-        out[eq] = left[eq]
+        # where equal it should also be left values. This makes the function
+        # behavior consistent with BaseCoord._get_index.
+        if not self.reverse_sorted:
+            out[eq] = left[eq]
         return out if is_array(value) else int(out[0])
 
     def _step_meets_requirement(self, op):
