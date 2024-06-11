@@ -55,7 +55,7 @@ def _correlate_fft(patch, fft_axis, fft_dim):
     fft = fft_func(patch.data, axis=fft_axis, n=fast_len)
     # ensure coordinate is evenly spaced
     fft_coord = patch.get_coord(fft_dim)
-    return fft, fft_coord, fast_len, is_real
+    return fft, fft_coord, cx_len, fast_len, is_real
 
 
 def _get_fft_array(patch, fft_axis, fft_dim):
@@ -66,21 +66,25 @@ def _get_fft_array(patch, fft_axis, fft_dim):
     fast_len = cx_len
     # If fft axis is strictly positive a real dft was used.
     is_real = fft_coord.min() >= 0
-    return fft, fft_coord, fast_len, is_real
+    return fft, fft_coord, cx_len, fast_len, is_real
 
 
-def _get_sources(patch, fft, dim, source, source_axis, samples):
-    """Get an array of coordinate sources."""
+def _get_source_fft(patch, fft, dim, source, source_axis, fft_axis, samples):
+    """Get an array of coordinate sources.
+    This function will place the new sources in a third dimension so
+    they broadcast with the original fft matrix.
+    """
     # get the coordinate which contains the source
     ndim = patch.ndim
     coord_source = patch.get_coord(dim)
     index_source = coord_source.get_next_index(source, samples=samples)
     slicer = slice(index_source, index_source + 1)
     inds = broadcast_for_index(ndim, axis=source_axis, value=slicer)
-    source_fft = fft[inds]
+    flat_fft = fft[inds]
+    # The new dimension should be the old source dimension.
+    source_fft = np.expand_dims(flat_fft, axis=source_axis)
     # print(source_fft)
-    assert source_fft
-    pass
+    return source_fft
 
 
 @patch_function()
@@ -169,32 +173,29 @@ def correlate(
     fft_dim = patch.dims[fft_axis]
     # Determine if the DFT needs to be performed or just extract dft array.
     dft_func = _get_fft_array if fft_dim.startswith("ft_") else _correlate_fft
-    fft, fft_coord, fast_len, is_real = dft_func(patch, fft_axis, fft_dim)
+    fft, fft_coord, cx_len, fast_len, is_real = dft_func(patch, fft_axis, fft_dim)
     # Get the sources.
-    source_fft = _get_sources(patch, fft, dim, source, source_axis, samples)
-    # Perform correlation in freq domain
-    fft_prod = fft * np.conj(source_fft)
+    source_fft = _get_source_fft(
+        patch, fft, dim, source, source_axis, fft_axis, samples
+    )
+    # Perform correlation in freq domain. The last dim corresponds to sources.
+    fft_prod = fft[..., None] * np.conj(source_fft)
     # the n parameter needs to be odd so we have a 0 lag time. This only
     # applies to real fft
     n_out = fast_len if (not is_real or fast_len % 2 != 0) else fast_len - 1
 
-    assert fft_prod
-    assert n_out
+    assert fft_prod * n_out
     #
     # if idft:
     #     ifft_func = np.fft.irfft if is_real else np.fft.ifft
-    #     if needed_fft:
-    #         corr_array = ifft_func(fft_prod, axis=fft_axis, n=n_out)
-    #         corr_data = _shift(corr_array, cx_len, axis=fft_axis)
-    #         # get new coordinate along correlation dimension
-    #         new_coord = _get_correlated_coord(fft_coord, corr_data.shape[fft_axis])
-    #         coords = patch.coords.update(**{fft_dim: new_coord}).rename_coord(
-    #             **{fft_dim: f"lag_{fft_dim}"}
-    #         )
-    #         out = dc.Patch(coords=coords, data=corr_data, attrs=patch.attrs)
-    #         if lag is not None:
-    #             out = out.select(**{f"lag_{fft_dim}": (-lag, +lag)})
-    #         return out
+    #     corr_array = ifft_func(fft_prod, axis=fft_axis, n=n_out)
+    #     corr_data = _shift(corr_array, cx_len, axis=fft_axis)
+    #     # get new coordinate along correlation dimension
+    #     new_coord = _get_correlated_coord(fft_coord, corr_data.shape[fft_axis])
+    #     coords = patch.coords.update(**{fft_dim: new_coord}).rename_coord(
+    #         **{fft_dim: f"lag_{fft_dim}"}
+    #     )
+    #     out = dc.Patch(coords=coords, data=corr_data, attrs=patch.attrs)
     #     else:
     #         corr_array = np.real(ifft_func(fft_prod, axis=fft_axis, n=n_out))
     #         corr_data = _shift(corr_array, cx_len, axis=fft_axis)
