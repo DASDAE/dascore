@@ -8,6 +8,25 @@ from dascore.units import m, s
 from dascore.utils.time import to_float
 
 
+
+class TestCorrelateShift:
+    """Tests for the correlation shift function. """
+
+    def test_auto_correlation(self, random_dft_patch):
+        """Perform auto correlation and undo shifting."""
+        dft_conj = random_dft_patch.conj()
+        dft_sq = random_dft_patch * dft_conj
+        idft = dft_sq.idft()
+        auto_patch = idft.correlate_shift(dim="time")
+        assert np.allclose(np.imag(auto_patch.data), 0)
+        assert "lag_time" in auto_patch.dims
+        coord_array = auto_patch.get_array("lag_time")
+        # ensure the max value happens at zero lag time.
+        time_ax = auto_patch.dims.index("lag_time")
+        argmax = np.argmax(random_dft_patch.data, axis=time_ax)
+        assert np.allclose(coord_array[argmax], 0)
+
+
 class TestCorrelateInternal:
     """Tests case of intra-patch correlation function."""
 
@@ -62,13 +81,15 @@ class TestCorrelateInternal:
         dstep2 = corr_patch.get_coord("distance").step
         assert dstep1 == dstep2
 
-    def test_correlation_with_lag(self, corr_patch):
-        """Ensure correlation works with a lag specified."""
-        lag = 1.9
-        out = corr_patch.correlate(distance=0, samples=True, lag=lag)
-        coord = out.get_coord("lag_time").values
-        assert to_float(coord[0]) >= -lag
-        assert to_float(coord[-1]) <= lag
+    def test_transpose_independent(self, corr_patch):
+        """The order of the dims shouldn't affect the result."""
+        new_order = corr_patch.dims[::-1]
+        patch1 = corr_patch
+        patch2 = corr_patch.transpose(*new_order)
+        corr1 = patch1.correlate(time=3, samples=True)
+        corr2 = patch2.correlate(time=3, samples=True)
+        assert corr1.transpose(*new_order).equals(corr2.transpose(*new_order))
+
 
     def test_time_lags(self, ricker_moveout_patch):
         """Ensure time lags are consistent with expected velocities."""
@@ -79,11 +100,12 @@ class TestCorrelateInternal:
         lag_times = to_float(corr.get_coord("lag_time").values[argmax])
         # get calculated times, they should be close to lag times
         expected_times = distances / self.moveout_velocity
-        assert np.allclose(lag_times, expected_times)
+        assert np.allclose(lag_times.flatten(), expected_times)
 
     def test_units(self, random_patch):
-        """Ensure units can be passed as kwarg and lag params."""
-        c_patch = random_patch.correlate(distance=10 * m, lag=2 * s)
+        """Ensure units can be passed as kwarg params."""
+        breakpoint()
+        c_patch = random_patch.correlate(distance=10 * m)
         assert isinstance(c_patch, dc.Patch)
 
     def test_complex_patch(self, ricker_moveout_patch):
@@ -101,55 +123,15 @@ class TestCorrelateInternal:
 
     def test_correlation_freq_domain_patch(self, corr_patch):
         """
-        Test correlation when the input patch is already in the frequency domain.
+        Test correlation when the input patch is already in the frequency
+        domain.
         """
         # perform FFT on the original patch to simulate frequency domain data
         fft_patch = corr_patch.dft("time")
         out = fft_patch.correlate(distance=0, samples=True)
-        # check if the data is real, as a simple proxy for being in the time domain
-        assert np.isrealobj(
-            out.data
-        ), "Expected the output data to be real, indicating time domain."
+        # The patch should still be complex.
+        assert np.issubdtype(out.data.datatype, np.complexfloating)
         # check if the shape of the output is the same as the original patch
-        # (since no "lag" argument is used)
         assert (
-            out.seconds == corr_patch.seconds
+            out.shape == corr_patch.shape
         ), "Expected size of the output time coordinate to match the original patch"
-        assert (
-            out.channel_count == corr_patch.channel_count
-        ), "Expected size of the output distance coordinate to match the original patch"
-
-    def test_correlation_idft_false(self, corr_patch):
-        """
-        Ensure correlate function can return the result in the frequency domain
-        when the idft flag is set to Flase.
-        """
-        # return correlation in frequency domain
-        correlated_patch_freq_domain = corr_patch.correlate(
-            distance=2, samples=True, idft=False
-        )
-
-        # check if the returned data is in the frequency domain
-        assert np.iscomplexobj(
-            correlated_patch_freq_domain.data
-        ), "Expected the output to be complex, indicating freq. domain representation."
-        # need to add asserts to test coords and attrs
-
-    def test_correlation_with_step(self, corr_patch):
-        """
-        Ensure the correlation function properly skips rows/columns according to
-        the step argument.
-        """
-        step_size = 2
-        out = corr_patch.correlate(distance=0, samples=True, step_size=step_size)
-        # Verify that only the correct indices have been considered in the output.
-        # Since `samples=True` and `distance=0`, we expect the first row/column to
-        # be used as the master channel.
-        input_shape = corr_patch.data.shape
-        dist_axis = corr_patch.dims.index("distance")
-        expected_indices = range(0, input_shape[dist_axis], step_size)
-        # check if the output data shape matches the expected number of correlations
-        expected_shape = len(expected_indices)
-        assert (
-            out.data.shape[dist_axis] == expected_shape
-        ), f"Expected shape {expected_shape}, but got {out.data.shape[dist_axis]}"

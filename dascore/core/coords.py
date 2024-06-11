@@ -1591,7 +1591,7 @@ def get_coord(
         if isinstance(data, BaseCoord):  # just return coordinate
             return data
         if not isinstance(data, np.ndarray):
-            data = array(data)
+            data = np.atleast_1d(data)
         if np.size(data) == 0:
             dtype = dtype or data.dtype
             return CoordPartial(shape=data.shape, units=units, step=step, dtype=dtype)

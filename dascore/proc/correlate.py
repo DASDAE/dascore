@@ -7,6 +7,7 @@ from scipy.fftpack import next_fast_len
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.utils.misc import broadcast_for_index
+from dascore.utils.time import to_float
 from dascore.utils.patch import (
     get_dim_value_from_kwargs,
     patch_function,
@@ -69,34 +70,98 @@ def _get_fft_array(patch, fft_axis, fft_dim):
     return fft, fft_coord, cx_len, fast_len, is_real
 
 
-def _get_source_fft(patch, fft, dim, source, source_axis, fft_axis, samples):
-    """Get an array of coordinate sources.
+def _get_source_fft(patch, dim, source, source_axis, samples):
+    """
+    Get an array of coordinate sources.
+
     This function will place the new sources in a third dimension so
     they broadcast with the original fft matrix.
     """
-    # get the coordinate which contains the source
     ndim = patch.ndim
+    # Extract an array containing just the sources
     coord_source = patch.get_coord(dim)
     index_source = coord_source.get_next_index(source, samples=samples)
-    slicer = slice(index_source, index_source + 1)
-    inds = broadcast_for_index(ndim, axis=source_axis, value=slicer)
-    flat_fft = fft[inds]
-    # The new dimension should be the old source dimension.
-    source_fft = np.expand_dims(flat_fft, axis=source_axis)
-    # print(source_fft)
-    return source_fft
+    selecter = [slice(None), slice(None), None]
+    selecter[source_axis] = np.atleast_1d(index_source)
+    source = patch.data[tuple(selecter)]
+    # Now transpose source so source dim is list. Essentially we just
+    # need to swap the source axis with the last axis.
+    dims_now = list(range(len(source.shape)))
+    dims_now[-1] = source_axis
+    dims_now[source_axis] = len(dims_now) - 1
+    out = np.transpose(source, tuple(dims_now))
+    return out
+
+
+@patch_function()
+def correlate_shift(patch, dim, undo_weighting=True):
+    """
+    Apply a shift to the patch data to undo correlation in frequency domain.
+
+    Also adds the appropriate coordinate prefixed with "lag" and has a datatype
+    of float.
+
+    Parameters
+    ----------
+    patch
+        The input patch
+    dim
+        The dimension name that was correlated in the freq. domain.
+    undo_weighting
+        If True, also undo the weighting artifact caused by DASCore's dft
+        weighting. This is done by simply dividing by the coordinate step.
+        See [dft note](`notes/dft_notes.qmd`) for more details.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Example 1
+    >>> # An auto-correlation of the example patch
+    >>> dft = patch.dft("time", real=True)
+    >>> dft_sq = dft * dft.conj()
+    >>> idft = dft_sq.idft()
+    >>> auto_patch = idft.correlate_shift(dim="time")
+    """
+    coord = patch.get_coord(dim, require_evenly_sampled=True)
+    axis = patch.dims.index(dim)
+    data = np.fft.fftshift(patch.data, axes=axis)
+    if undo_weighting:
+        data = data / to_float(coord.step)
+    # so it appears (from testing) there is one lest sample on the positive
+    # side.
+    step = to_float(coord.step)
+    new_start = -np.ceil((len(coord) - 1) / 2) * step
+    new_end = np.ceil((len(coord) - 1) / 2) * step
+    new_coord = dc.get_coord(start=new_start, stop=new_end, step=step)
+    assert len(new_coord) == len(coord)
+    cm = patch.coords
+    new_cm = cm.update(**{dim: new_coord}).rename_coord(**{dim: f"lag_{dim}"})
+    out = patch.update(data=data, coords=new_cm)
+    return out
 
 
 @patch_function()
 def correlate(
     patch: PatchType,
     samples=False,
-    idft=True,
     **kwargs,
 ) -> PatchType:
     """
-    Correlate row/column (virtual sources) in a 2D patch with other
-    rows/columns (virtual receivers).
+    Correlate source row/columns in a 2D patch with all other row/columns.
+
+    Correlations are done in the frequency domain. This function can accept a
+    patch whose target dimension has already been transformed with the
+    [`Patch.dft`](`dascore.proc.fourier.dft`) method, otherwise the dft
+    will be performed. If the input has already been transformed,
+    [`Patch.correlation_shift`](`dascore.proc.correlation.correlation_shift`)
+    is useful to undo dft artefacts after the idft is applied.
+
+    While a 2D patch is required for input, a 3D patch is returned where the
+    3rd dimesion cooresponds to the source rows/columns. For the case of a
+    single source, the [`Patch.squeeze`](`dascore.Patch.squeeze`) method
+    can be helpful to remove length 1 dimensions.
 
     Parameters
     ----------
@@ -106,33 +171,42 @@ def correlate(
     samples : bool, optional (default = False)
         If True, the argument specified in kwargs refers to the *sample* not
         value along that axis. See examples for details.
-    idft : bool, optional (default = Ture)
-        If True, it applies idft and return results in time domain.
     **kwargs
-        Additional arguments to specify cc dimension and the
-        master source(s), to which we want to cross-correlate all other
-        channels/time samples (with or without a step_size).
-        If the master source is an array, the function will compute cc for all
-        the half of all possible pairs (i.e., only a-b and not b-a).
-        This will result in a 3D patch.
+        Specifies correlation dimension and the master source(s), to which
+        we want to cross-correlate all other channels/time samples.If the
+        master source is an array, the function will compute cc for all
+        the posible pairs.
 
     Examples
     --------
     >>> import dascore as dc
     >>> from dascore.units import m, s
 
-    >>> patch = dc.get_example_patch()
+    >>> # Get a patch composed of sin waves whose correlation results
+    >>> # can easily be checked.
+    >>> patch = dc.get_example_patch(
+    >>>     "sin_wav",
+    >>>     sample_rate=100,
+    >>>     frequency=range(10, 20),
+    >>>     duration=5,
+    >>>     channel_count=10,
+    >>> ).taper(time=0.5)
 
     >>> # Example 1
     >>> # Calculate cc for all channels as receivers and
-    >>> # the 10 m channel as the master channel.
-    >>> cc_patch = patch.correlate(distance = 10 * m)
+    >>> # the 10 m channel as the master channel. Squeeze the output
+    >>> # so the returned patch is 2D.
+    >>> cc_patch = patch.correlate(distance = 10 * m).squeeze()
 
     >>> # Example 2
-    >>> # Calculate cc within (-2,2) sec of lag for all channels as receivers and
-    >>> # the 10 m channel as the master channel. The new patch has dimensions
-    >>> # (lag_time, distance)
-    >>> cc_patch = patch.correlate(distance = 10 * m, lag = 2 * s)
+    >>> # Get cc within (-2,2) sec of lag for all channels as receivers
+    >>> # and the 10 m channel as the master channel. The new patch has dimensions
+    >>> # (lag_time, distance, source_distance)
+    >>> cc_patch = (
+    >>>     patch.correlate(distance = 10 * m)
+    >>>     .select(lag_time=(-2, 2))
+    >>> )
+    >>>
 
     >>> # Example 3
     >>> # Use 2nd channel (python is 0 indexed) along distance as master channel
@@ -143,16 +217,18 @@ def correlate(
     >>> cc_patch = patch.correlate(time=100, samples=True)
 
     >>> # Example 5
-    >>> # Calculate cc of a patch for all channels as receivers and
-    >>> # the 10 m channel as the master channel and result data in frequency domain.
-    >>> # The new patch has dimensions (ft_time, distance).
-    >>> cc_patch = patch.correlate(distance = 10 * m, idft = False)
-
-    # Example 6
-    # Calculate cc of channel numbers [1,3,7,8,20] as master channels
-    # and every fourth channel as receivers.
-    # The new patch has dimensions (lag_time, distance, source_distance).
-    cc_patch = patch.correlate(distance = [1,3,7,8,20], step_size = 4)
+    >>> # An example pipeline of frequency domain correlation.
+    >>> padded_patch = patch.pad(time="correlate")  # pad to at least 2n + 1
+    >>> dft_patch = patch.dft("time", real=True)
+    >>> # Any other pre-processing steps go here...
+    >>> ...
+    >>> # Perform the correlation with 3 source channels
+    >>> cc_patch = dft_patch.correlate(distance=[1, 3, 7], samples=True)
+    >>> # Perform any post-processing here
+    >>> ...
+    >>> # Convert back to time domain, apply `correlate shift` to undo
+    >>> # fft related shifting and scaling.
+    >>> cc_out = cc_patch.idft().correlate_shift("time")
 
     Notes
     -----
@@ -171,54 +247,27 @@ def correlate(
     # Get the axis and coord over which fft should be calculated.
     fft_axis = next(iter(set(range(len(patch.dims))) - {source_axis}))
     fft_dim = patch.dims[fft_axis]
-    # Determine if the DFT needs to be performed or just extract dft array.
-    dft_func = _get_fft_array if fft_dim.startswith("ft_") else _correlate_fft
-    fft, fft_coord, cx_len, fast_len, is_real = dft_func(patch, fft_axis, fft_dim)
+    # Determine if the input patch has already been transformed.
+    input_dft = fft_dim.startswith("ft_")
+    is_real = not np.issubdtype(patch.data.dtype, np.complexfloating)
+    if not input_dft:  # Standard dft workflow for correlation
+        # Note: we use .func here to avoid getting these added to the history.
+        padded = patch.pad.func(patch, **{fft_dim: "correlate"})
+        patch = padded.dft.func(padded, fft_dim, real=fft_dim if is_real else None)
     # Get the sources.
-    source_fft = _get_source_fft(
-        patch, fft, dim, source, source_axis, fft_axis, samples
-    )
-    # Perform correlation in freq domain. The last dim corresponds to sources.
-    fft_prod = fft[..., None] * np.conj(source_fft)
-    # the n parameter needs to be odd so we have a 0 lag time. This only
-    # applies to real fft
-    n_out = fast_len if (not is_real or fast_len % 2 != 0) else fast_len - 1
+    source = patch.get_coord(dim).values if source is None else source
+    source_fft = _get_source_fft(patch, dim, source, source_axis, samples)
+    # Need to insert new axis so the arrays broadcast correctly.
+    fft_patch_array = patch.data[..., None]
+    fft_prod = fft_patch_array * np.conj(source_fft)
+    # Create frequency domain patch with results
+    new_coord = dc.get_coord(values=np.atleast_1d(source))
+    dim_name = f"source_{dim}"
+    cm = patch.coords.update(**{dim_name: (dim_name, new_coord)})
+    out = patch.update(data=fft_prod, coords=cm)
+    # Undo fft if this function did one, shift, and update coord.
+    if not input_dft:
+        idft = out.idft.func(out)
+        out = idft.correlate_shift.func(idft, fft_dim)
+    return out
 
-    assert fft_prod * n_out
-    #
-    # if idft:
-    #     ifft_func = np.fft.irfft if is_real else np.fft.ifft
-    #     corr_array = ifft_func(fft_prod, axis=fft_axis, n=n_out)
-    #     corr_data = _shift(corr_array, cx_len, axis=fft_axis)
-    #     # get new coordinate along correlation dimension
-    #     new_coord = _get_correlated_coord(fft_coord, corr_data.shape[fft_axis])
-    #     coords = patch.coords.update(**{fft_dim: new_coord}).rename_coord(
-    #         **{fft_dim: f"lag_{fft_dim}"}
-    #     )
-    #     out = dc.Patch(coords=coords, data=corr_data, attrs=patch.attrs)
-    #     else:
-    #         corr_array = np.real(ifft_func(fft_prod, axis=fft_axis, n=n_out))
-    #         corr_data = _shift(corr_array, cx_len, axis=fft_axis)
-    #         # get new coordinate along correlation dimension
-    #         new_coord = _get_correlated_coord(fft_coord, corr_data.shape[fft_axis])
-    #         coords = patch.coords.update(**{fft_dim: new_coord}).rename_coord(
-    #             **{fft_dim: f"{fft_dim}"}
-    #         )
-    #         out = dc.Patch(coords=coords, data=corr_data, attrs=patch.attrs)
-    #         return out
-    # else:
-    #     dims = fft_dim
-    #     _, axes = _get_dx_or_spacing_and_axes(patch, dims, require_evenly_spaced=True)
-    #     # get new coordinates
-    #     old_cm = patch.coords.disassociate_coord(dims)
-    #     new_cm = old_cm.get_coord_tuple_map()
-    #     ft = FourierTransformatter()
-    #     name = ft.rename_dims(fft_dim)[0]
-    #     coord = _get_correlated_coord(fft_coord, fft_prod.shape[fft_axis])
-    #     new_cm[name] = (name, coord)
-    #     new_dims = ft.rename_dims(patch.dims, index=axes)
-    #     new_coords = get_coord_manager(new_cm, dims=new_dims)
-    #     # get attributes
-    #     attrs = _get_dft_attrs(patch, dims, new_coords)
-    #     # return the frequency domain data directly without taking the inverse FFT
-    #     return patch.new(fft_prod, coords=new_coords, attrs=attrs)
