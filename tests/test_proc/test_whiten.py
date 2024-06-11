@@ -1,4 +1,5 @@
 """Tests for signal whiten."""
+
 import numpy as np
 import pytest
 

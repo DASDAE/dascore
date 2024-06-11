@@ -38,6 +38,7 @@ print(f"New data shape: {new_data.shape}")
 print(new_cm)
 ```
 """
+
 from __future__ import annotations
 
 import warnings

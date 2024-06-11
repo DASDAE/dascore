@@ -1,4 +1,5 @@
 """Utils for displaying dascore objects."""
+
 from __future__ import annotations
 
 import textwrap
@@ -35,7 +36,7 @@ def get_nice_text(value, style=None) -> Text:
 
 
 @get_nice_text.register(float)
-@get_nice_text.register(np.float_)
+@get_nice_text.register(np.float64)
 def _nice_float_string(value, style=None):
     """Nice print value for floats."""
     fmt_str = f".{FLOAT_PRECISION}"

@@ -1,6 +1,7 @@
 """
 Utils for working with attributes.
 """
+
 from __future__ import annotations
 
 import warnings

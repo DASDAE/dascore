@@ -1,4 +1,5 @@
 """A 2D trace object."""
+
 from __future__ import annotations
 
 import warnings

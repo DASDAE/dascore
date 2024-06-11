@@ -1,4 +1,5 @@
 """Processing operations that have much to do with coordinates."""
+
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence

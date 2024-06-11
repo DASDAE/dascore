@@ -1,4 +1,5 @@
 """IO module for reading Silixa's TDMS DAS data format."""
+
 from __future__ import annotations
 
 import dascore as dc

@@ -1,4 +1,5 @@
 """pytest configuration for dascore."""
+
 from __future__ import annotations
 
 import os
@@ -16,6 +17,7 @@ import tables.parameters
 import dascore as dc
 import dascore.examples as ex
 from dascore.clients.dirspool import DirectorySpool
+from dascore.compat import random_state
 from dascore.constants import SpoolType
 from dascore.core import Patch
 from dascore.examples import get_example_patch
@@ -130,7 +132,7 @@ def cm_multidim() -> dc.CoordManager:
         "time": dc.to_datetime64(np.arange(10, 110, 10)),
         "distance": dc.get_coord(data=np.arange(0, 1000, 10)),
         "quality": (("time", "distance"), np.ones((10, 100))),
-        "latitude": ("distance", np.random.rand(100)),
+        "latitude": ("distance", random_state.rand(100)),
     }
     dims = ("time", "distance")
 
@@ -312,9 +314,9 @@ def random_patch_many_coords(random_patch):
     """Get a random patch with many different coordinates."""
     shapes = random_patch.coord_shapes
     patch = random_patch.update_coords(
-        lat=("distance", np.random.random(shapes["distance"])),
-        time2=("time", np.random.random(shapes["time"])),
-        quality=(random_patch.dims, np.random.random(random_patch.shape)),
+        lat=("distance", random_state.random(shapes["distance"])),
+        time2=("time", random_state.random(shapes["time"])),
+        quality=(random_patch.dims, random_state.random(random_patch.shape)),
     )
     return patch
 
@@ -581,7 +583,7 @@ def generic_hdf5(tmp_path_factory):
 
     with tb.open_file(str(path), "w") as fi:
         group = fi.create_group("/", "bob")
-        fi.create_carray(group, "data", obj=np.random.rand(10))
+        fi.create_carray(group, "data", obj=random_state.rand(10))
     return path
 
 

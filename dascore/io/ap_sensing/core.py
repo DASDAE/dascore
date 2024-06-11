@@ -1,6 +1,7 @@
 """
 Core modules for AP sensing support.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -16,8 +17,8 @@ from .utils import _get_attrs_dict, _get_patch, _get_version_string
 class APSensingPatchAttrs(dc.PatchAttrs):
     """Patch Attributes for AP sensing."""
 
-    gauge_length: float = np.NaN
-    radians_to_nano_strain: float = np.NaN
+    gauge_length: float = np.nan
+    radians_to_nano_strain: float = np.nan
 
 
 class APSensingV10(FiberIO):

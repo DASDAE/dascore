@@ -1,4 +1,5 @@
 """Tests for decimation."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -6,6 +7,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.compat import random_state
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
 
@@ -102,7 +104,7 @@ class TestDecimate:
 
         See scipy#15072.
         """
-        ar = np.random.random((10_000, 2)).astype("float32")
+        ar = random_state.random((10_000, 2)).astype("float32")
         dt = dc.to_timedelta64(0.001)
         t1 = dc.to_datetime64("2020-01-01")
         coords = {

@@ -2,6 +2,7 @@
 Base functionality for reading, writing, determining file formats, and scanning
 Das Data.
 """
+
 from __future__ import annotations
 
 import inspect

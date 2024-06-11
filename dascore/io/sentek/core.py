@@ -1,4 +1,5 @@
 """IO module for reading Sentek's DAS data format."""
+
 from __future__ import annotations
 
 import numpy as np
