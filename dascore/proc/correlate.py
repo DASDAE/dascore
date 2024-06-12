@@ -142,9 +142,9 @@ def correlate(
     >>> # and the 10 m channel as the master channel. The new patch has dimensions
     >>> # (lag_time, distance, source_distance)
     >>> cc_patch = (
-    >>>     patch.correlate(distance = 10 * m)
-    >>>     .select(lag_time=(-2, 2))
-    >>> )
+    ...     patch.correlate(distance = 10 * m)
+    ...     .select(lag_time=(-2, 2))
+    ... )
     >>>
     >>> # Example 3
     >>> # Use 2nd channel (python is 0 indexed) along distance as master channel
@@ -159,11 +159,11 @@ def correlate(
     >>> padded_patch = patch.pad(time="correlate")  # pad to at least 2n + 1
     >>> dft_patch = patch.dft("time", real=True)
     >>> # Any other pre-processing steps go here...
-    >>> ...
+    >>> # ...
     >>> # Perform the correlation with 3 source channels
     >>> cc_patch = dft_patch.correlate(distance=[1, 3, 7], samples=True)
     >>> # Perform any post-processing here
-    >>> ...
+    >>> # ...
     >>> # Convert back to time domain, apply `correlate shift` to undo
     >>> # fft related shifting and scaling.
     >>> cc_out = cc_patch.idft().correlate_shift("time")
