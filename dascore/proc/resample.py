@@ -20,7 +20,6 @@ from dascore.utils.patch import (
 from dascore.utils.time import to_int, to_timedelta64
 
 
-
 def _apply_scipy_decimation(patch, factor, ftype, axis):
     """
     Apply decimation along axis.
@@ -35,7 +34,6 @@ def _apply_scipy_decimation(patch, factor, ftype, axis):
         )
         raise FilterValueError(msg)
     return data
-
 
 
 @patch_function()
@@ -85,9 +83,7 @@ def decimate(
     coords, slices = patch.coords.decimate(**{dim: int(factor)})
     # Apply scipy.signal.decimate and get new coords
     if filter_type:
-        data = _apply_scipy_decimation(
-            patch.data, factor, ftype=filter_type, axis=axis
-        )
+        data = _apply_scipy_decimation(patch.data, factor, ftype=filter_type, axis=axis)
     else:  # No filter, simply slice along specified dimension.
         data = patch.data[slices]
         # Need to copy so array isn't a slice and holds onto reference of parent
