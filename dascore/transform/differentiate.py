@@ -123,7 +123,7 @@ def differentiate(
     >>> # Example 3
     >>> # 1st derivative using a step size of 3. This spaces out the columns
     >>> # or rows used for estimating the derivative.
-    >>> patch_diff_3 = patch.differentiate(step=3, order=2)
+    >>> patch_diff_3 = patch.differentiate(dim="distance", step=3, order=2)
     """
     dims = iterate(dim if dim is not None else patch.dims)
     dx_or_spacing, axes = _get_dx_or_spacing_and_axes(patch, dims)
