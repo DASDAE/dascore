@@ -1130,9 +1130,6 @@ class CoordRange(BaseCoord):
         bad_values = lt_forward | gt_back
         if not input_is_array and np.any(bad_values):
             return None
-        # Bad array values should be mined out so min finds them later.
-        elif np.any(bad_values):
-            out[bad_values] = -9999
         return out if input_is_array else int(out[0])
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)

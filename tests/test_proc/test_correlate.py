@@ -133,6 +133,13 @@ class TestCorrelateInternal:
         # plus a dimension 1 for the source.
         assert out.shape == tuple([*corr_patch.shape, 1])
 
+    def test_correlate_decimated_patch(self, corr_patch):
+        """Ensure a decimated patch can be correlated."""
+        out = corr_patch.decimate(distance=2, filter_type=None).correlate(
+            distance=1, samples=True
+        )
+        assert isinstance(out, dc.Patch)
+
     def test_correlate_units_raises(self, corr_patch):
         """When the patch doesn't have units an error should raise."""
         patch = corr_patch.set_units(distance=None)

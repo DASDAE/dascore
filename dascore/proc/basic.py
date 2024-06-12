@@ -16,6 +16,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.utils.misc import _get_nullish
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
     _merge_aligned_coords,
@@ -586,10 +587,10 @@ def pad(
     expand_coords : bool, optional
         Determines how coordinates are adjusted when padding is applied.
         If set to True, the coordinates will be expanded to maintain their
-        order and even sampling (if originally evenly sampled), by extrapolating
-        based on the coordinate's step size.
-        If set to False, or coordinate is not evenly sampled, the new
-        coordinates introduced by padding will be padded with NaN values.
+        order and even sampling (if evenly sampled), by extrapolating
+        based on the coordinate's step size. If set to False, or coordinate
+        is not evenly sampled, the new coordinates introduced by padding
+        will be padded with NaN values.
     **kwargs:
         Used to specify dimension and number of elements,
         either an integer or a tuple (before, after).
@@ -641,9 +642,13 @@ def pad(
                 start=new_start, stop=new_end, step=coord.step, units=coord.units
             )
         else:
-            old_values = coord.values.astype(np.float64)
+            old_values = coord.values
+            # Need to convert ints to float so NaN can be used.
+            if np.issubdtype(old_values.dtype, np.integer):
+                old_values = old_values.astype(np.float64)
+            null_value = _get_nullish(old_values.dtype)
             added_nan_values = np.pad(
-                old_values, pad_width=pad_tuple, constant_values=np.nan
+                old_values, pad_width=pad_tuple, constant_values=null_value
             )
             new_coord = coord.update(data=added_nan_values)
         return new_coord

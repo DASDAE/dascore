@@ -618,6 +618,31 @@ class TestPad:
         out = random_patch.pad(time="correlate")
         assert out.shape[axis] == next_fast
 
+    def test_pad_no_expand(self, random_patch):
+        """Ensure we can pad without expanding dimensions."""
+        out = random_patch.pad(time=10, samples=True, expand_coords=False)
+        coord_array = out.get_array("time")
+        # Check the first and last nans
+        assert np.all(pd.isnull(coord_array[:10]))
+        assert np.all(pd.isnull(coord_array[-10:]))
+        # Check the middle values are equal to old values.
+        old_array = random_patch.get_array("time")
+        # The datatype should not have changed
+        assert coord_array.dtype == old_array.dtype
+        assert np.all(old_array == coord_array[10:-10])
+
+    def test_pad_no_expand_int_coord(self, random_patch):
+        """Ensure we can pad an integer coordinate."""
+        # Ensure distances in an in coordinate.
+        coord = random_patch.get_coord("distance")
+        new_vals = np.arange(len(coord), dtype=np.int64)
+        patch = random_patch.update_coords(distance=new_vals)
+        # Apply padding, ensure NaN values appear.
+        padded = patch.pad(distance=4, expand_coords=False)
+        coord_array = padded.get_array("distance")
+        assert np.all(pd.isnull(coord_array[:4]))
+        assert np.all(pd.isnull(coord_array[-4:]))
+
     def test_error_on_sequence_constant_values(self, random_patch):
         """Test that providing a sequence for constant_values raises a TypeError."""
         with pytest.raises(ParameterError):

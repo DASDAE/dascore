@@ -113,8 +113,8 @@ def correlate(
     **kwargs
         Specifies correlation dimension and the master source(s), to which
         we want to cross-correlate all other channels/time samples.If the
-        master source is an array, the function will compute cc for all
-        the posible pairs.
+        master source is an array, the function will compute correlations for
+        all the posible pairs.
 
     Examples
     --------
@@ -147,15 +147,20 @@ def correlate(
     ... )
     >>>
     >>> # Example 3
-    >>> # Use 2nd channel (python is 0 indexed) along distance as master channel
-    >>> cc_patch = patch.correlate(distance=1, samples=True)
+    >>> # Correlate along distance having the 2nd channel (python is 0 indexed)
+    >>> # as a master channel and skip every other channel to reduce memory
+    >>> cc_patch = (
+    ...     patch.decimate(distance=2, filter_type=None)
+    ...     .correlate(distance=1, samples=True)
+    ... )
     >>>
     >>> # Example 4
-    >>> # Correlate along time dimension
+    >>> # Correlate along time dimension (perhaps for template matching
+    >>> # applications)
     >>> cc_patch = patch.correlate(time=100, samples=True)
     >>>
     >>> # Example 5
-    >>> # An example pipeline of frequency domain correlation.
+    >>> # A pipeline of frequency domain correlation and an array of sources
     >>> padded_patch = patch.pad(time="correlate")  # pad to at least 2n + 1
     >>> dft_patch = patch.dft("time", real=True)
     >>> # Any other pre-processing steps go here...
@@ -165,7 +170,7 @@ def correlate(
     >>> # Perform any post-processing here
     >>> # ...
     >>> # Convert back to time domain, apply `correlate shift` to undo
-    >>> # fft related shifting and scaling.
+    >>> # fft related shifting and scaling as well as create lag coordinate.
     >>> cc_out = cc_patch.idft().correlate_shift("time")
 
     Notes

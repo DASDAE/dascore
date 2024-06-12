@@ -1703,6 +1703,14 @@ class TestGetNextIndex:
         out2 = coord.get_next_index(values)
         assert np.all(out1 == inds) and np.all(out2 == out1)
 
+    def test_out_of_bounds_array_range_coord(self, evenly_sampled_coord):
+        """Ensure get index works with array that has out of bounds values."""
+        coord = evenly_sampled_coord
+        values = coord.values
+        inputs = np.arange(3) + np.max(values)
+        out = coord.get_next_index(inputs, allow_out_of_bounds=True)
+        assert np.allclose(out, 99)
+
     def test_non_sorted_coord_raises(self, random_coord):
         """Ensure a non-sorted coord raises."""
         msg = "Coords must be sorted"
