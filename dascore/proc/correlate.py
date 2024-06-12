@@ -147,8 +147,8 @@ def correlate(
     ... )
     >>>
     >>> # Example 3
-    >>> # Correlate along distance having the 2nd channel (python is 0 indexed)
-    >>> # as a master channel and skip every other channel to reduce memory
+    >>> # First remove every other distance channel (less memory usage)
+    >>> # the use the new 2nd channel as the source.
     >>> cc_patch = (
     ...     patch.decimate(distance=2, filter_type=None)
     ...     .correlate(distance=1, samples=True)
