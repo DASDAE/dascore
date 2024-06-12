@@ -1,9 +1,11 @@
 """Tests for converting velocity to strain-rate."""
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore.exceptions import PatchAttributeError
 from dascore.units import get_quantity
 
@@ -38,6 +40,16 @@ class TestStrainRateConversion:
         old_units = get_quantity(terra15_das_patch.attrs.data_units)
         assert new_units != old_units
         assert new_units == old_units / get_quantity("m")
+
+    def test_gauge_length_multiple(self, terra15_das_patch):
+        """Ensure strain rate multiples > 1 are supported."""
+        # Note: this is a bit of a weak test. However, since we just call
+        # Patch.differentiate under the hood, and that is better tested
+        # for supporting different step sizes, its probably sufficient.
+        out1 = terra15_das_patch.velocity_to_strain_rate(gauge_multiple=2)
+        assert isinstance(out1, dc.Patch)
+        out2 = terra15_das_patch.velocity_to_strain_rate(gauge_multiple=4)
+        assert isinstance(out2, dc.Patch)
 
 
 class TestFdStrainRateConversion:
