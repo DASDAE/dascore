@@ -1879,3 +1879,16 @@ class TestIssues:
         """Ensure off by one error don't occur with snap."""
         out = awkward_off_by_one.snap()
         assert out.shape == awkward_off_by_one.shape
+
+    def test_dtype_start_int_others_float(self):
+        """
+        Ensure the correct dtype is given when the start value is an int
+        but the other values are not.
+        """
+        coord = get_coord(
+            start=0,
+            step=1.1,
+            stop=11.2,
+            units="m",
+        )
+        assert np.issubdtype(coord.dtype, np.floating)

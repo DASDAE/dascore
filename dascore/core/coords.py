@@ -1023,6 +1023,9 @@ class CoordRange(BaseCoord):
                 stop = start + step * length
             if pd.isnull(step):
                 step = (stop - start) / length
+                # handle conversion to integer if other values are ints.
+                if isinstance(start, int) and isinstance(stop, int):
+                    step = int(step) if np.isclose(np.round(step), step) else step
         if step != 0:
             int_val = int(np.ceil(np.round((stop - start) / step, 1)))
             stop = start + step * int_val
@@ -1039,7 +1042,7 @@ class CoordRange(BaseCoord):
             raise CoordError(msg)
         # Note: dtype was a property before but it messed up model
         # serialization.
-        values["dtype"] = np.asarray(start).dtype
+        values["dtype"] = np.asarray(start + step).dtype
         return values
 
     def __getitem__(self, item):
@@ -1174,7 +1177,9 @@ class CoordRange(BaseCoord):
         if is_datetime64(self.start) or is_timedelta64(self.start):
             out = np.arange(self.start, self.stop, self.step)
         else:
-            out = np.linspace(self.start, self.stop - self.step, num=len(self))
+            out = np.linspace(
+                self.start, self.stop - self.step, num=len(self), dtype=self.dtype
+            )
         # again, due to round-off error the array can one element longer than
         # anticipated. The slice here just ensures shape and len match.
         return array(out[: len(self)])
