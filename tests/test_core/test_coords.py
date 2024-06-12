@@ -1674,6 +1674,16 @@ class TestGetNextIndex:
     def test_units(self, evenly_sampled_float_coord_with_units):
         """Ensure values with units work."""
         coord = evenly_sampled_float_coord_with_units
+        val1 = np.array([10, 20]) * get_quantity("m")
+        val2 = val1.to(get_quantity("ft"))
+        ind1 = coord.get_next_index(val1)
+        ind2 = coord.get_next_index(val2)
+        assert len(val1) == len(ind1)
+        assert np.all(ind1 == ind2)
+
+    def test_unit_array(self, evenly_sampled_float_coord_with_units):
+        """Ensure an array of units returns inds of equal shape."""
+        coord = evenly_sampled_float_coord_with_units.set_units("m")
         val1 = 10 * get_quantity("m")
         val2 = val1.to(get_quantity("ft"))
         ind1 = coord.get_next_index(val1)

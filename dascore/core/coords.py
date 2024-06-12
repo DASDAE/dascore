@@ -792,6 +792,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if not self.sorted:
             msg = f"Coords must be sorted to use get_next_index, {self} is not."
             raise CoordError(msg)
+        input_array_like = isinstance(value, Sized)
         array = np.atleast_1d(value)
         # handle samples
         if samples:
@@ -813,13 +814,13 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         array[is_lt] = min_val
         # samples should already have the answer, just return
         if samples:
-            return array if is_array(value) else array[0]
+            return array if input_array_like else array[0]
         # otherwise get forward and backward inds
         forward_index = self._get_index(array, forward=True)
         back_index = self._get_index(array, forward=False)
         bad_for_index = pd.isnull(forward_index) | forward_index == -9999
         forward_index[bad_for_index] = back_index[bad_for_index]
-        return forward_index if is_array(value) else forward_index[0]
+        return forward_index if input_array_like else forward_index[0]
 
     def approx_equal(self: BaseCoord, other: BaseCoord) -> bool:
         """
@@ -1116,6 +1117,7 @@ class CoordRange(BaseCoord):
         """Get the index corresponding to a value."""
         if (value := self._get_compatible_value(value)) is None:
             return value
+        input_is_array = isinstance(value, Sized)
         array = np.atleast_1d(value)
         func = np.ceil if forward else np.floor
         start, step = self.start, self.step
@@ -1125,12 +1127,12 @@ class CoordRange(BaseCoord):
         lt_forward = (out < 0) & forward
         gt_back = (out >= len(self)) & (not forward)
         bad_values = lt_forward | gt_back
-        if not is_array(value) and np.any(bad_values):
+        if not input_is_array and np.any(bad_values):
             return None
         # Bad array values should be mined out so min finds them later.
         elif np.any(bad_values):
             out[bad_values] = -9999
-        return out if is_array(value) else int(out[0])
+        return out if input_is_array else int(out[0])
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:

@@ -2,72 +2,14 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.fftpack import next_fast_len
 
 import dascore as dc
 from dascore.constants import PatchType
-from dascore.utils.misc import broadcast_for_index
-from dascore.utils.time import to_float
 from dascore.utils.patch import (
     get_dim_value_from_kwargs,
     patch_function,
 )
-
-
-def _get_correlated_coord(old_coord, data_shape):
-    """Get the new coordinate which corresponds to correlated values."""
-    step = old_coord.step
-    one_sided_len = data_shape // 2
-    new = dc.core.get_coord(
-        start=-one_sided_len * step,
-        stop=(one_sided_len + 1) * step,
-        step=step,
-    )
-    return new.change_length(data_shape)
-
-
-def _shift(data, cx_len, axis):
-    """
-    Re-assemble fft data so zero lag is in center.
-
-    Also accounts for padding for fast fft.
-    """
-    ndims = len(data.shape)
-    start_slice = slice(-np.floor(cx_len / 2).astype(int), None)
-    start_ind = broadcast_for_index(ndims, axis, start_slice)
-    stop_slice = slice(None, np.ceil(cx_len / 2).astype(int))
-    stop_ind = broadcast_for_index(ndims, axis, stop_slice)
-    data1 = data[start_ind]
-    data2 = data[stop_ind]
-    data = np.concatenate([data1, data2], axis=axis)
-    return data
-
-
-def _correlate_fft(patch, fft_axis, fft_dim):
-    """Perform a padded FFT for correlations."""
-    is_real = not np.issubdtype(patch.data.dtype, np.complexfloating)
-    # perform FFT (since the input is not already in the frequency domain)
-    fft_func = np.fft.rfft if is_real else np.fft.fft
-    # get the closest fast length. Some padding is applied in the fft to avoid
-    # inefficient lengths. Note: This is not always a power of 2.
-    cx_len = patch.shape[fft_axis] * 2 - 1
-    fast_len = next_fast_len(cx_len)
-    # perform ffts and get source array (a sub-slice of larger fft)
-    fft = fft_func(patch.data, axis=fft_axis, n=fast_len)
-    # ensure coordinate is evenly spaced
-    fft_coord = patch.get_coord(fft_dim)
-    return fft, fft_coord, cx_len, fast_len, is_real
-
-
-def _get_fft_array(patch, fft_axis, fft_dim):
-    """Get the array info from pre-transformed patch."""
-    fft = patch.data
-    fft_coord = patch.get_coord(fft_dim)
-    cx_len = patch.shape[fft_axis]
-    fast_len = cx_len
-    # If fft axis is strictly positive a real dft was used.
-    is_real = fft_coord.min() >= 0
-    return fft, fft_coord, cx_len, fast_len, is_real
+from dascore.utils.time import to_float
 
 
 def _get_source_fft(patch, dim, source, source_axis, samples):
@@ -77,7 +19,6 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
     This function will place the new sources in a third dimension so
     they broadcast with the original fft matrix.
     """
-    ndim = patch.ndim
     # Extract an array containing just the sources
     coord_source = patch.get_coord(dim)
     index_source = coord_source.get_next_index(source, samples=samples)
@@ -86,10 +27,7 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
     source = patch.data[tuple(selecter)]
     # Now transpose source so source dim is list. Essentially we just
     # need to swap the source axis with the last axis.
-    dims_now = list(range(len(source.shape)))
-    dims_now[-1] = source_axis
-    dims_now[source_axis] = len(dims_now) - 1
-    out = np.transpose(source, tuple(dims_now))
+    out = np.swapaxes(source, source_axis, -1)
     return out
 
 
@@ -185,12 +123,12 @@ def correlate(
     >>> # Get a patch composed of sin waves whose correlation results
     >>> # can easily be checked.
     >>> patch = dc.get_example_patch(
-    >>>     "sin_wav",
-    >>>     sample_rate=100,
-    >>>     frequency=range(10, 20),
-    >>>     duration=5,
-    >>>     channel_count=10,
-    >>> ).taper(time=0.5)
+    ...     "sin_wav",
+    ...     sample_rate=100,
+    ...     frequency=range(10, 20),
+    ...     duration=5,
+    ...     channel_count=10,
+    ... ).taper(time=0.5)
 
     >>> # Example 1
     >>> # Calculate cc for all channels as receivers and
@@ -232,15 +170,10 @@ def correlate(
 
     Notes
     -----
-    1- The cross-correlation is performed in the frequency domain.
+    1 - The cross-correlation is performed in the frequency domain.
 
-    2- The output dimension is opposite of the one specified in kwargs, has
+    2 - The output dimension is opposite of the one specified in kwargs, has
     the units of float, and the string "lag_" prepended. For example, "lag_time".
-
-    3- If the patch is in the frequency domain, it needs to be zero-padded in
-    the time domain first. If not, first apply the
-    [idft](`dascore.transform.fourier.idft`) function to the patch, and then
-    use the correlate function, which automatically handles the zero padding.
     """
     assert len(patch.dims) == 2, "must be a 2D patch."
     dim, source_axis, source = get_dim_value_from_kwargs(patch, kwargs)
@@ -261,6 +194,7 @@ def correlate(
     fft_patch_array = patch.data[..., None]
     fft_prod = fft_patch_array * np.conj(source_fft)
     # Create frequency domain patch with results
+    source = getattr(source, "magnitude", source)  # strips units
     new_coord = dc.get_coord(values=np.atleast_1d(source))
     dim_name = f"source_{dim}"
     cm = patch.coords.update(**{dim_name: (dim_name, new_coord)})
@@ -270,4 +204,3 @@ def correlate(
         idft = out.idft.func(out)
         out = idft.correlate_shift.func(idft, fft_dim)
     return out
-

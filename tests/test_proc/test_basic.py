@@ -544,14 +544,14 @@ class TestPad:
         distance_axis = random_patch.dims.index("distance")
         ch_spacing = random_patch.attrs["distance_step"]
         assert (
-                new_shape[distance_axis] == original_shape[distance_axis] + 14 * ch_spacing
+            new_shape[distance_axis] == original_shape[distance_axis] + 14 * ch_spacing
         )
         # Ensure that padded values are zeros
         assert np.all(padded_patch.select(distance=(None, 7), samples=True).data == 0)
         assert np.all(padded_patch.select(distance=(-7, None), samples=True).data == 0)
 
     def test_pad_distance_dimension_expand_coords(
-            self, random_patch, expand_coords=True
+        self, random_patch, expand_coords=True
     ):
         """Test padding the distance with same number of zeros on both sides."""
         padded_patch = random_patch.pad(distance=4, expand_coords=expand_coords)
@@ -561,7 +561,7 @@ class TestPad:
         ch_spacing = random_patch.attrs["distance_step"]
         dist_max = random_patch.attrs["distance_max"]
         assert (
-                new_shape[distance_axis] == original_shape[distance_axis] + 8 * ch_spacing
+            new_shape[distance_axis] == original_shape[distance_axis] + 8 * ch_spacing
         )
         # Ensure that padded values are zeros
         assert np.all(padded_patch.select(distance=(None, -1)).data == 0)
@@ -577,7 +577,7 @@ class TestPad:
         distance_axis = random_patch.dims.index("distance")
         assert padded_patch.shape[time_axis] == random_patch.shape[time_axis] + 13
         assert (
-                padded_patch.shape[distance_axis] == random_patch.shape[distance_axis] + 5
+            padded_patch.shape[distance_axis] == random_patch.shape[distance_axis] + 5
         )
         # Check padding values
         assert np.allclose(
@@ -624,7 +624,7 @@ class TestPad:
 
 
 class TestConj:
-    """Tests for complex conjugate. """
+    """Tests for complex conjugate."""
 
     def test_imaginary_part_reversed(self, random_dft_patch):
         """Ensure the imaginary part of the array is reversed."""
@@ -657,8 +657,8 @@ class TestRoll:
         patcht = random_patch.transpose("time", ...)
         rolled_patch = patcht.roll(time=5, samples=True, update_coord=True)
         assert (
-                patcht.coords.get_array("time")[0]
-                == rolled_patch.coords.get_array("time")[5]
+            patcht.coords.get_array("time")[0]
+            == rolled_patch.coords.get_array("time")[5]
         )
 
     def test_dist_coord_roll(self, random_patch):
@@ -667,6 +667,6 @@ class TestRoll:
         coord = random_patch.get_coord("distance")
         value = coord.get_sample_count(30)
         assert (
-                random_patch.coords.get_array("distance")[0]
-                == rolled_patch.coords.get_array("distance")[value]
+            random_patch.coords.get_array("distance")[0]
+            == rolled_patch.coords.get_array("distance")[value]
         )

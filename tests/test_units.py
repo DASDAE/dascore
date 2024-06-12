@@ -254,3 +254,9 @@ class TestConvertUnits:
         f_array = (array * (9 * 2.5 / 5) + 32.0) / 6
         out = convert_units(array, from_units="2.5*degC", to_units="6*degF")
         assert np.allclose(f_array, out)
+
+    def test_not_output_units_raises(self):
+        """Ensure an error is raised if output units are None."""
+        msg = "are not specified"
+        with pytest.raises(UnitError, match=msg):
+            convert_units(1, from_units="m", to_units=None)

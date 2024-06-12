@@ -216,7 +216,7 @@ def conj(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>>
     >>> # Example 1
-    >>> dft = pa.dft()  # multi-dim dft
+    >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
     return patch.new(data=np.conj(patch.data))

@@ -4,13 +4,13 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.units import m, s
+from dascore.exceptions import UnitError
+from dascore.units import m
 from dascore.utils.time import to_float
 
 
-
 class TestCorrelateShift:
-    """Tests for the correlation shift function. """
+    """Tests for the correlation shift function."""
 
     def test_auto_correlation(self, random_dft_patch):
         """Perform auto correlation and undo shifting."""
@@ -88,8 +88,7 @@ class TestCorrelateInternal:
         patch2 = corr_patch.transpose(*new_order)
         corr1 = patch1.correlate(time=3, samples=True)
         corr2 = patch2.correlate(time=3, samples=True)
-        assert corr1.transpose(*new_order).equals(corr2.transpose(*new_order))
-
+        assert corr1.transpose(*corr2.dims).equals(corr2)
 
     def test_time_lags(self, ricker_moveout_patch):
         """Ensure time lags are consistent with expected velocities."""
@@ -104,7 +103,6 @@ class TestCorrelateInternal:
 
     def test_units(self, random_patch):
         """Ensure units can be passed as kwarg params."""
-        breakpoint()
         c_patch = random_patch.correlate(distance=10 * m)
         assert isinstance(c_patch, dc.Patch)
 
@@ -119,7 +117,7 @@ class TestCorrelateInternal:
         lag_times = to_float(corr.get_coord("lag_time").values[argmax])
         # get calculated times, they should be close to lag times
         expected_times = distances / self.moveout_velocity
-        assert np.allclose(lag_times, expected_times)
+        assert np.allclose(lag_times.flatten(), expected_times)
 
     def test_correlation_freq_domain_patch(self, corr_patch):
         """
@@ -130,8 +128,21 @@ class TestCorrelateInternal:
         fft_patch = corr_patch.dft("time")
         out = fft_patch.correlate(distance=0, samples=True)
         # The patch should still be complex.
-        assert np.issubdtype(out.data.datatype, np.complexfloating)
-        # check if the shape of the output is the same as the original patch
-        assert (
-            out.shape == corr_patch.shape
-        ), "Expected size of the output time coordinate to match the original patch"
+        assert np.issubdtype(out.data.dtype, np.complexfloating)
+        # Check if the shape of the output is the same as the original patch
+        # plus a dimension 1 for the source.
+        assert out.shape == tuple([*corr_patch.shape, 1])
+
+    def test_correlate_units_raises(self, corr_patch):
+        """When the patch doesn't have units an error should raise."""
+        patch = corr_patch.set_units(distance=None)
+        with pytest.raises(UnitError):
+            patch.correlate(distance=0 * m)
+
+    def test_correlate_units(self, corr_patch):
+        """When the patch has units it should work to specify them."""
+        patch = corr_patch.set_units(distance="m")
+        out1 = patch.correlate(distance=1 * m)
+        assert isinstance(out1, dc.Patch)
+        out2 = patch.correlate(distance=np.array([1, 2]) * m)
+        assert isinstance(out2, dc.Patch)
