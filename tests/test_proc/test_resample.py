@@ -8,6 +8,7 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
+from dascore.exceptions import FilterValueError
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
 
@@ -123,6 +124,13 @@ class TestDecimate:
 
         decimated_none = patch.decimate(time=10, filter_type=None)
         assert not np.any(pd.isnull(decimated_none.data))
+
+    def test_decimate_small_dimension(self, random_patch):
+        """Ensure decimation raises helpful error on small dimensions."""
+        small_patch = random_patch.select(distance=(0, 10), samples=True)
+        match = "Scipy decimation failed."
+        with pytest.raises(FilterValueError, match=match):
+            small_patch.decimate(distance=2)
 
 
 class TestResample:
