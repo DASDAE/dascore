@@ -4,6 +4,7 @@ Custom filter that makes dynamic (sphinx-esc) cross links work.
 Replaces markdown such as [Patch](`dascore.Patch`) with the path to the markdown
 file created from dascore/scripts/build_api_docs.py.
 """
+
 from __future__ import annotations
 
 import io

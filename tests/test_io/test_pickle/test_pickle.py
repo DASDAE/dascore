@@ -1,4 +1,5 @@
 """Tests for reading/writing pickles."""
+
 from __future__ import annotations
 
 import pickle

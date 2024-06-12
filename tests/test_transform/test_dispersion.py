@@ -1,4 +1,5 @@
 """Tests for Dispersion transforms."""
+
 import numpy as np
 import pytest
 

@@ -1,4 +1,5 @@
 """Dispersion computation using the phase-shift (Park et al., 1999) method."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

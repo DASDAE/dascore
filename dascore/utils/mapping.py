@@ -3,6 +3,7 @@ A few mappings that might be useful.
 
 We can't simply use types.MappingProxyType because it can't be pickled.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping as ABCMap

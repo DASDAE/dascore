@@ -1,4 +1,5 @@
 """Tests for Patch attrs modules."""
+
 from __future__ import annotations
 
 import numpy as np

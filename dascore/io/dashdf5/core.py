@@ -1,4 +1,5 @@
 """IO module for reading prodML data."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -17,7 +18,7 @@ class ProdMLPatchAttrs(dc.PatchAttrs):
 
     pulse_width: float = np.NAN
     pulse_width_units: UnitQuantity | None = None
-    gauge_length: float = np.NaN
+    gauge_length: float = np.nan
     gauge_length_units: UnitQuantity | None = None
     schema_version: UTF8Str = ""
 

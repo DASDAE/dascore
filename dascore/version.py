@@ -1,4 +1,5 @@
 """Module for reporting the version of dascore."""
+
 from __future__ import annotations
 
 from contextlib import suppress

@@ -1,4 +1,5 @@
 """A spool for working with a single file."""
+
 from __future__ import annotations
 
 import copy

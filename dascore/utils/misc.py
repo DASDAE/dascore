@@ -1,4 +1,5 @@
 """Misc Utilities."""
+
 from __future__ import annotations
 
 import contextlib
@@ -416,16 +417,6 @@ def yield_sub_sequences(sequence, length=None):
     length = length if length is not None else len(sequence)
     for i in range(0, len(sequence), length):
         yield sequence[i : i + length]
-
-
-def maybe_get_attrs(obj, attr_map: Mapping):
-    """Maybe get attributes from object (if they exist)."""
-    out = {}
-    for old_name, new_name in attr_map.items():
-        if hasattr(obj, old_name):
-            value = getattr(obj, old_name)
-            out[new_name] = unbyte(value)
-    return out
 
 
 def maybe_get_items(

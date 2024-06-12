@@ -44,7 +44,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 dependencies = [
      "h5py",
      "matplotlib>=3.5",
-     "numpy>=1.24",
+     "numpy>=1.24, <2",
      "packaging",
      "pandas>=2.0",
      "pooch>=1.2",
@@ -115,6 +115,7 @@ TDMS__V4713 = "dascore.io.tdms.core:TDMSFormatterV4713"
 TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
 TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
 TERRA15__V6 = "dascore.io.terra15.core:Terra15FormatterV6"
+SILIXA_H5__V1 = "dascore.io.silixah5:SilixaH5V1"
 SEGY__V2 = "dascore.io.segy.core:SegyV2"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
@@ -128,7 +129,19 @@ XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
 line-length = 88
 
 # enable certain types of linting
-select = ["E", "F", "UP", "RUF", "I001", "D", "FA", "T", "N"]
+lint.select = [
+    "E",
+    "F",
+    "UP",
+    "RUF",
+    "I001",
+    "D",
+    "FA",
+    "T",
+    "N",
+    "NPY",
+    "NPY201",
+]
 
 # Exclude a variety of commonly ignored directories.
 exclude = [
@@ -159,17 +172,17 @@ exclude = [
 # lowest python version supported
 target-version = "py310"
 
-fixable = ["ALL"]
+lint.fixable = ["ALL"]
 
 # List of codes to ignore
-ignore = ["D105", "D107", "D401", "D205", "D200", "D400"]
+lint.ignore = ["D105", "D107", "D401", "D205", "D200", "D400"]
 
-[tool.ruff.mccabe]
+[tool.ruff.lint.mccabe]
 # Unlike Flake8, default to a complexity level of 10.
 max-complexity = 10
 
 # config for docstring parsing
-[tool.ruff.pydocstyle]
+[tool.ruff.lint.pydocstyle]
 convention = "numpy"
 
 [tool.pytest.ini_options]

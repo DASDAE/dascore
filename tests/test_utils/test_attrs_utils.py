@@ -1,6 +1,7 @@
 """
 Tests for attr utilities.
 """
+
 from __future__ import annotations
 
 import pytest

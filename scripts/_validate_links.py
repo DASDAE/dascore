@@ -1,4 +1,5 @@
 """Script to validate links in qmd files."""
+
 from __future__ import annotations
 
 import json

@@ -4,6 +4,7 @@ Test file for chunk/merge.
 This is separated from spool tests because these need to be quite
 extensive.
 """
+
 from __future__ import annotations
 
 import random

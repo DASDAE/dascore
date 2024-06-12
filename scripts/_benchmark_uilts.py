@@ -1,4 +1,5 @@
 """Utils for running benchmarks."""
+
 from __future__ import annotations
 
 import os

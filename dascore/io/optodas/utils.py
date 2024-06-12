@@ -1,4 +1,5 @@
 """Utilities for OptoDAS."""
+
 from __future__ import annotations
 
 import dascore as dc

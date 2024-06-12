@@ -1,4 +1,5 @@
 """IO module for reading OptoDAS data."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -15,7 +16,7 @@ from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_da
 class OptoDASPatchAttrs(dc.PatchAttrs):
     """Patch attrs for OptoDAS."""
 
-    gauge_length: float = np.NaN
+    gauge_length: float = np.nan
     gauge_length_units: UnitQuantity | None = None
     schema_version: UTF8Str = ""
 

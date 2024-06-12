@@ -1,4 +1,5 @@
 """Tests for basic patch functions."""
+
 from __future__ import annotations
 
 import operator
@@ -43,7 +44,7 @@ class TestAbs:
     def test_all_real(self, random_complex_patch):
         """Ensure all values are real after abs on complex data."""
         out = random_complex_patch.abs()
-        assert np.issubdtype(out.data.dtype, np.float_)
+        assert np.issubdtype(out.data.dtype, np.float64)
         assert np.allclose(np.imag(out.data), 0)
 
 
@@ -424,10 +425,10 @@ class TestDropNa:
     @pytest.fixture(scope="class")
     def patch_3d_with_null(self, range_patch_3d):
         """Return a patch which has nullish values."""
-        data = np.array(range_patch_3d.data).astype(np.float_)
+        data = np.array(range_patch_3d.data).astype(np.float64)
         nans = [(1, 1, 1), (0, 9, 9)]
         for nan_ind in nans:
-            data[nan_ind] = np.NaN
+            data[nan_ind] = np.nan
         patch = range_patch_3d.update(data=data)
         return patch
 
@@ -487,10 +488,10 @@ class TestFillNa:
     @pytest.fixture(scope="class")
     def patch_3d_with_null(self, range_patch_3d):
         """Return a patch which has nullish values."""
-        data = np.array(range_patch_3d.data).astype(np.float_)
+        data = np.array(range_patch_3d.data).astype(np.float64)
         nans = [(1, 1, 1), (0, 9, 9)]
         for nan_ind in nans:
-            data[nan_ind] = np.NaN
+            data[nan_ind] = np.nan
         patch = range_patch_3d.update(data=data)
         return patch
 

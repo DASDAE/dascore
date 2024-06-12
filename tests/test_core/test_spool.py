@@ -1,4 +1,5 @@
 """Test for spool functions."""
+
 from __future__ import annotations
 
 import copy
@@ -392,7 +393,7 @@ class TestMap:
         """Ensure outputs don't have to be patches."""
         out = list(random_spool.map(lambda x: np.max(x.data)))
         for val in out:
-            assert isinstance(val, np.float_)
+            assert isinstance(val, np.float64)
 
     def test_dummy_client(self, random_spool):
         """Ensure a client arguments works."""

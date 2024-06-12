@@ -1,4 +1,5 @@
 """Tests for DASDAE format."""
+
 from __future__ import annotations
 
 import shutil
@@ -8,6 +9,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.compat import random_state
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
@@ -184,7 +186,7 @@ class TestRoundTrips:
         dims = random_patch_with_lat_lon.dims
         # add time deltas to ensure they are also serialized/deserialized.
         dist_shape = shape[dims.index("distance")]
-        time_deltas = dc.to_timedelta64(np.random.random(dist_shape))
+        time_deltas = dc.to_timedelta64(random_state.random(dist_shape))
         patch = random_patch_with_lat_lon.update_coords(
             delta_times=("distance", time_deltas),
         )

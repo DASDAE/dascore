@@ -1,4 +1,5 @@
 """Tests for hdf5 utils."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -108,7 +109,7 @@ class TestHDFPatchIndexManager:
         # create hdf5 file with no index
         path = tmp_path / "empty.h5"
         df = pd.DataFrame([1, 2, 3], columns=["first"])
-        df.to_hdf(str(path), "df")
+        df.to_hdf(str(path), key="df")
         # assert it doesn't have an index
         assert not HDFPatchIndexManager(path).has_index
 
