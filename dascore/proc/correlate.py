@@ -49,7 +49,7 @@ def correlate_shift(patch, dim, undo_weighting=True):
     undo_weighting
         If True, also undo the weighting artifact caused by DASCore's dft
         weighting. This is done by simply dividing by the coordinate step.
-        See [dft note](`notes/dft_notes.qmd`) for more details.
+        See [dft note](`docs/notes/dft_notes.qmd`) for more details.
 
     Examples
     --------
@@ -92,9 +92,9 @@ def correlate(
 
     Correlations are done in the frequency domain. This function can accept a
     patch whose target dimension has already been transformed with the
-    [`Patch.dft`](`dascore.proc.fourier.dft`) method, otherwise the dft
+    [`Patch.dft`](`dascore.transform.fourier.dft`) method, otherwise the dft
     will be performed. If the input has already been transformed,
-    [`Patch.correlation_shift`](`dascore.proc.correlation.correlation_shift`)
+    [`Patch.correlation_shift`](`dascore.proc.correlate.correlate_shift`)
     is useful to undo dft artefacts after the idft is applied.
 
     While a 2D patch is required for input, a 3D patch is returned where the
@@ -129,14 +129,14 @@ def correlate(
     ...     frequency=range(10, 20),
     ...     duration=5,
     ...     channel_count=10,
-    ... ).taper(time=0.5)
-
+    ... ).taper(time=0.5).set_units(distance='m')
+    >>>
     >>> # Example 1
     >>> # Calculate cc for all channels as receivers and
     >>> # the 10 m channel as the master channel. Squeeze the output
     >>> # so the returned patch is 2D.
     >>> cc_patch = patch.correlate(distance = 10 * m).squeeze()
-
+    >>>
     >>> # Example 2
     >>> # Get cc within (-2,2) sec of lag for all channels as receivers
     >>> # and the 10 m channel as the master channel. The new patch has dimensions
@@ -146,15 +146,14 @@ def correlate(
     >>>     .select(lag_time=(-2, 2))
     >>> )
     >>>
-
     >>> # Example 3
     >>> # Use 2nd channel (python is 0 indexed) along distance as master channel
     >>> cc_patch = patch.correlate(distance=1, samples=True)
-
+    >>>
     >>> # Example 4
     >>> # Correlate along time dimension
     >>> cc_patch = patch.correlate(time=100, samples=True)
-
+    >>>
     >>> # Example 5
     >>> # An example pipeline of frequency domain correlation.
     >>> padded_patch = patch.pad(time="correlate")  # pad to at least 2n + 1
