@@ -1,4 +1,5 @@
 """Create the html tables for parameters and such from dataframes."""
+
 from __future__ import annotations
 
 import hashlib

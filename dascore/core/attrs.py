@@ -1,4 +1,5 @@
 """Pydantic schemas used by DASCore."""
+
 from __future__ import annotations
 
 import warnings
@@ -281,5 +282,5 @@ class PatchAttrs(DascoreBaseModel):
                 if is_time:
                     out[step_name] = np.timedelta64("NaT")
                 elif isinstance(start, float | np.floating):
-                    out[step_name] = np.NaN
+                    out[step_name] = np.nan
         return out

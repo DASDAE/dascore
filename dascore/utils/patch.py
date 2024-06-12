@@ -1,4 +1,5 @@
 """Utilities for working with the Patch class."""
+
 from __future__ import annotations
 
 import functools

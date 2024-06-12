@@ -1,6 +1,7 @@
 """
 IO module for reading Febus data.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -30,9 +31,9 @@ class FebusPatchAttrs(dc.PatchAttrs):
         The zone designations
     """
 
-    gauge_length: float = np.NaN
+    gauge_length: float = np.nan
     gauge_length_units: str = "m"
-    pulse_width: float = np.NaN
+    pulse_width: float = np.nan
     pulse_width_units: str = "m"
 
     group: str = ""

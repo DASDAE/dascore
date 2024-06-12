@@ -1,4 +1,5 @@
 """Tests for indexing local file systems."""
+
 from __future__ import annotations
 
 import os

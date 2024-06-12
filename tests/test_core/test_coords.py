@@ -1,4 +1,5 @@
 """Tests for coordinate object."""
+
 from __future__ import annotations
 
 import pickle
@@ -13,6 +14,7 @@ import rich.text
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.compat import random_state
 from dascore.core.coords import (
     BaseCoord,
     CoordMonotonicArray,
@@ -81,7 +83,7 @@ def evenly_sampled_time_delta_coord():
 @register_func(COORDS)
 def monotonic_float_coord():
     """Create coordinates which are not evenly sampled."""
-    ar = np.cumsum(np.abs(np.random.rand(100)))
+    ar = np.cumsum(np.abs(random_state.rand(100)))
     return get_coord(data=ar)
 
 
@@ -89,7 +91,7 @@ def monotonic_float_coord():
 @register_func(COORDS)
 def reverse_monotonic_float_coord():
     """Create coordinates which are evenly sampled."""
-    ar = np.cumsum(np.abs(np.random.rand(100)))[::-1]
+    ar = np.cumsum(np.abs(random_state.rand(100)))[::-1]
     return get_coord(data=ar)
 
 
@@ -97,7 +99,7 @@ def reverse_monotonic_float_coord():
 @register_func(COORDS)
 def monotonic_datetime_coord():
     """Create coordinates which are evenly sampled."""
-    ar = np.cumsum(np.abs(np.random.rand(100) * 1_000))
+    ar = np.cumsum(np.abs(random_state.rand(100) * 1_000))
     return get_coord(data=dc.to_datetime64(ar))
 
 
@@ -105,7 +107,7 @@ def monotonic_datetime_coord():
 @register_func(COORDS)
 def reverse_monotonic_datetime_coord():
     """Create coordinates which are evenly sampled."""
-    ar = -np.cumsum(np.abs(np.random.rand(100) * 1_000))
+    ar = -np.cumsum(np.abs(random_state.rand(100) * 1_000))
     return get_coord(data=dc.to_datetime64(ar))
 
 
@@ -113,7 +115,7 @@ def reverse_monotonic_datetime_coord():
 @register_func(COORDS)
 def random_coord():
     """Create coordinates which are evenly sampled."""
-    ar = np.random.rand(100) * 1_000
+    ar = random_state.rand(100) * 1_000
     return get_coord(data=ar)
 
 
@@ -121,7 +123,7 @@ def random_coord():
 @register_func(COORDS)
 def random_date_coord():
     """Create coordinates which are evenly sampled."""
-    ar = np.random.rand(100) * 1_000
+    ar = random_state.rand(100) * 1_000
     return get_coord(data=dc.to_datetime64(ar))
 
 
@@ -501,7 +503,7 @@ class TestSelect:
         assert (new_max <= args[1]) or np.isclose(new_max, args[1])
         # There can often be a bit of "slop" in float indices. We may
         # need to rethink this but this is good enough for now.
-        if not np.issubdtype(new.dtype, np.float_):
+        if not np.issubdtype(new.dtype, np.float64):
             assert {values[3], values[-3]}.issubset(value_set)
 
     def test_select_bounds(self, long_coord):
@@ -515,7 +517,7 @@ class TestSelect:
         new_min, new_max = np.min(new_values), np.max(new_values)
         assert (new_min >= val1) or np.isclose(new_min, val1)
         assert (new_max <= val2) or np.isclose(new_max, val2)
-        if not np.issubdtype(new.dtype, np.float_):
+        if not np.issubdtype(new.dtype, np.float64):
             assert set(values).issuperset(set(new.values))
 
     def test_select_out_of_bounds_too_early(self, coord):
@@ -669,7 +671,7 @@ class TestSelect:
     def test_values_not_in_coord(self, long_coord):
         """Ensure using values not in coord results in an empty coordinate."""
         values1 = long_coord.values[: len(long_coord) // 2]
-        rand = np.random.rand(len(values1))
+        rand = random_state.rand(len(values1))
         # try to make values that won't be in the coordinate.
         values2 = long_coord._get_compatible_value(-to_float(values1) + rand)
         # if by some chance there are any overlaps just bail out.
@@ -785,7 +787,7 @@ class TestOrder:
     def test_values_no_in_coord(self, long_coord):
         """Ensure using values not in coord results in an empty coordinate."""
         values1 = long_coord.values[: len(long_coord) // 2]
-        rand = np.random.rand(len(values1))
+        rand = random_state.rand(len(values1))
         # try to make values that won't be in the coordinate.
         values2 = long_coord._get_compatible_value(-to_float(values1) + rand)
         # if by some chance there are any overlaps just bail out.
@@ -1166,7 +1168,7 @@ class TestMonotonicCoord:
 
     def test_reverse_monotonic(self):
         """Ensure reverse monotonic values can be handled."""
-        ar = np.cumsum(np.abs(np.random.rand(100)))[::-1]
+        ar = np.cumsum(np.abs(random_state.rand(100)))[::-1]
         coord = get_coord(data=ar)
         assert np.allclose(coord.values, ar)
         new, sliced = coord.select((ar[10], ar[20]))
@@ -1465,7 +1467,7 @@ class TestPartialCoord:
     def test_uptype_with_data(self):
         """Ensure adding a data array converts to Coord Array."""
         coord = get_coord(shape=10)
-        data = np.random.rand(10)
+        data = random_state.rand(10)
         out = coord.update(data=data)
         assert np.all(out.data == data)
 

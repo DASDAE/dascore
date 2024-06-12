@@ -1,4 +1,5 @@
 """Misc. tests for xml binary."""
+
 from __future__ import annotations
 
 import shutil

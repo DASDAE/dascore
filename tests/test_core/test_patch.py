@@ -1,4 +1,5 @@
 """Tests for Trace2D object."""
+
 from __future__ import annotations
 
 import operator
@@ -10,6 +11,7 @@ import pytest
 from rich.text import Text
 
 import dascore as dc
+from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.exceptions import CoordError
@@ -26,7 +28,7 @@ def get_simple_patch() -> Patch:
     """
     attrs = {"time_step": 1}
     pa = Patch(
-        data=np.random.random((100, 100)),
+        data=random_state.random((100, 100)),
         coords={"time": np.arange(100) * 0.01, "distance": np.arange(100) * 0.2},
         attrs=attrs,
         dims=("time", "distance"),
@@ -75,7 +77,7 @@ class TestInit:
     @pytest.fixture(scope="class")
     def test_conflicting_attrs_coords_raises(self):
         """Patch for testing conflicting coordinates/attributes."""
-        array = np.random.random((10, 10))
+        array = random_state.random((10, 10))
         # create attrs, these should all get overwritten by coords.
         attrs = dict(
             distance_step=10,
@@ -87,8 +89,8 @@ class TestInit:
         )
         # create coords
         coords = dict(
-            time=dc.to_datetime64(np.cumsum(np.random.random(10))),
-            distance=np.random.random(10),
+            time=dc.to_datetime64(np.cumsum(random_state.random(10))),
+            distance=random_state.random(10),
         )
         # assemble and output.
         dims = ("distance", "time")
@@ -136,8 +138,11 @@ class TestInit:
     def test_no_attrs(self):
         """Ensure a patch with no attrs can be created."""
         pa = Patch(
-            data=np.random.random((100, 100)),
-            coords={"time": np.random.random(100), "distance": np.random.random(100)},
+            data=random_state.random((100, 100)),
+            coords={
+                "time": random_state.random(100),
+                "distance": random_state.random(100),
+            },
             dims=("time", "distance"),
         )
         assert isinstance(pa, Patch)
@@ -209,14 +214,14 @@ class TestInit:
 
     def test_new_patch_non_standard_dims(self):
         """Ensure a non-standard dimension has matching dims in attrs and coords."""
-        data = np.random.rand(10, 5)
+        data = random_state.rand(10, 5)
         coords = {"time": np.arange(10), "can": np.arange(5)}
         patch = dc.Patch(data=data, coords=coords, dims=("time", "can"))
         assert patch.dims == patch.attrs.dim_tuple
 
     def test_non_coord_dims(self):
         """Ensure non-coordinate dimensions can work and create non-coord."""
-        data = np.random.rand(10, 5)
+        data = random_state.rand(10, 5)
         coords = {"time": np.arange(10)}
         patch = dc.Patch(data=data, coords=coords, dims=("time", "money"))
         assert patch.dims == ("time", "money")
@@ -358,7 +363,7 @@ class TestEquals:
     def test_both_attrs_nan(self, random_patch):
         """If Both Attrs are some type of NaN the patches should be equal."""
         attrs1 = dict(random_patch.attrs)
-        attrs1["label"] = np.NaN
+        attrs1["label"] = np.nan
         patch1 = random_patch.new(attrs=attrs1)
         attrs2 = dict(attrs1)
         attrs2["label"] = None
@@ -695,7 +700,7 @@ class TestSetDims:
     def test_doctest_example(self, random_patch):
         """Ensure the doctest example works."""
         patch = random_patch
-        my_coord = np.random.random(patch.coord_shapes["time"])
+        my_coord = random_state.random(patch.coord_shapes["time"])
         out = patch.update_coords(my_coord=("time", my_coord)).set_dims(  # add my_coord
             time="my_coord"
         )  # set mycoord as dim (rather than time)

@@ -7,6 +7,7 @@ tests should go in their respective test modules. Tests for *how* specific
 IO functions (i.e., not that they work on various files) should go in
 test_io_core.py
 """
+
 from __future__ import annotations
 
 from contextlib import suppress
@@ -31,6 +32,7 @@ from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.segy import SegyV2
 from dascore.io.sentek import SentekV5
+from dascore.io.silixah5 import SilixaH5V1
 from dascore.io.tdms import TDMSFormatterV4713
 from dascore.io.terra15 import (
     Terra15FormatterV4,
@@ -50,22 +52,25 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
-    APSensingV10(): ("ap_sensing_1.hdf5",),
-    Febus2(): ("febus_1.h5",),
-    OptoDASV8(): ("opto_das_1.hdf5",),
-    DASDAEV1(): ("example_dasdae_event_1.h5",),
-    H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
+    SilixaH5V1(): ("silixa_h5_1.hdf5",),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",
         "iDAS005_hdf5_example.626.h5",
     ),
+    H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
+    DASDAEV1(): ("example_dasdae_event_1.h5",),
+    APSensingV10(): ("ap_sensing_1.hdf5",),
+    Febus2(): ("febus_1.h5",),
+    OptoDASV8(): ("opto_das_1.hdf5",),
+    DASDAEV1(): ("example_dasdae_event_1.h5",),
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
     Terra15FormatterV4(): (
         "terra15_das_1_trimmed.hdf5",
         "terra15_das_unfinished.hdf5",
     ),
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
+    Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     SegyV2(): ("conoco_segy_1.sgy",),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),

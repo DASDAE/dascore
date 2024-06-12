@@ -1,4 +1,5 @@
 """Module for testing units."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -186,7 +187,7 @@ class TestDTypeCompatible:
     """Ensure dtype compatibility check works."""
 
     quants = ("degC", "m/s", get_quantity("kg"))
-    non_dt_dtypes = (np.float_, np.int_, np.float32)
+    non_dt_dtypes = (np.float64, np.int_, np.float32)
 
     def test_non_datetime(self):
         """Any non-datetime should be compatible."""

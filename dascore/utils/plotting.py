@@ -1,4 +1,5 @@
 """Utilities for plotting with matplotlib."""
+
 from __future__ import annotations
 
 import matplotlib.dates as mdates

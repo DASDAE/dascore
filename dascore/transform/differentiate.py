@@ -1,4 +1,5 @@
 """Module for performing differentiation on patches."""
+
 from __future__ import annotations
 
 from operator import truediv

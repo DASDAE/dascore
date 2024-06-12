@@ -4,6 +4,7 @@ Utilities for working with HDF5 files.
 Pytables should only be imported in this module in case we need to switch
 out the hdf5 backend in the future.
 """
+
 from __future__ import annotations
 
 import time

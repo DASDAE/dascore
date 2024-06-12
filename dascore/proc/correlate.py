@@ -1,4 +1,5 @@
 """Module for calculating cross-correlation over time or distance."""
+
 from __future__ import annotations
 
 import numpy as np

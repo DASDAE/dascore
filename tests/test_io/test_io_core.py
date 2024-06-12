@@ -1,4 +1,5 @@
 """Test for basic IO and related functions."""
+
 from __future__ import annotations
 
 import copy
@@ -191,6 +192,18 @@ class TestFormatManager:
         file_format = _FiberFormatTestV1.name
         out = list(format_manager.yield_fiberio(format=file_format))
         assert len(out) == 2
+
+    def test_unique_values_extensions(self, format_manager):
+        """Ensure unique FiberIO are returned for an extension."""
+        out = list(format_manager.yield_fiberio(extension="h5"))
+        name_ver = [(x.name, x.version) for x in out]
+        assert len(name_ver) == len(set(name_ver))
+
+    def test_unique_values_no_extensions(self, format_manager):
+        """Ensure unique FiberIO are returned when nothing specified."""
+        out = list(format_manager.yield_fiberio())
+        name_ver = [(x.name, x.version) for x in out]
+        assert len(name_ver) == len(set(name_ver))
 
 
 class TestFormatter:

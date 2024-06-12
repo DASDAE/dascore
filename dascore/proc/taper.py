@@ -1,4 +1,5 @@
 """Processing for applying a taper."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

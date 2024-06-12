@@ -1,4 +1,5 @@
 """Constants used throughout obsplus."""
+
 from __future__ import annotations
 
 from pathlib import Path

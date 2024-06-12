@@ -1,4 +1,5 @@
 """A module for loading examples."""
+
 from __future__ import annotations
 
 import tempfile
@@ -11,6 +12,7 @@ import pandas as pd
 
 import dascore as dc
 import dascore.core
+from dascore.compat import random_state
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
@@ -120,10 +122,10 @@ def patch_with_null(**kwargs):
     """
     patch = random_patch(**kwargs)
     data = np.array(patch.data)
-    data[data > 0.9] = np.NaN
+    data[data > 0.9] = np.nan
     # also set the first row and column to NaN
-    data[:, 0] = np.NaN
-    data[0, :] = np.NaN
+    data[:, 0] = np.nan
+    data[0, :] = np.nan
     return patch.new(data=data)
 
 
@@ -153,9 +155,9 @@ def wacky_dim_coord_patch():
     """
     shape = (100, 1_000)
     # distance is neither monotonic nor evenly sampled.
-    dist_ar = np.random.random(100) + np.arange(100) * 0.3
+    dist_ar = random_state.random(100) + np.arange(100) * 0.3
     # time is monotonic, not evenly sampled.
-    time_ar = dc.to_datetime64(np.cumsum(np.random.random(1_000)))
+    time_ar = dc.to_datetime64(np.cumsum(random_state.random(1_000)))
     patch = random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
     # check attrs
     attrs = patch.attrs
