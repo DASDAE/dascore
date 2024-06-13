@@ -684,20 +684,21 @@ def check_coords(
 
 def _merge_aligned_coords(cm1, cm2):
     """Merge aligned coordinates removing non coords."""
-    assert cm1.dims == cm2.dims, "coordinates are not aligned"
+    assert cm1.dims == cm2.dims, "dimensions are not aligned"
     out = {}
     for name in set(cm1.coord_map) & set(cm2.coord_map):
         coord1 = cm1.coord_map[name]
         coord2 = cm2.coord_map[name]
+        dim1, dim2 = cm1.dim_map.get(name), cm2.dim_map.get(name)
         # Coords already equal, just use first.
-        if coord1.approx_equal(coord2):
-            out[name] = coord1
+        if coord1.approx_equal(coord2) and dim1 == dim2:
+            out[name] = (dim1, coord1)
         # Deal with Non coords
         non_count = sum([coord1._partial, coord2._partial])
         if non_count == 1:
-            out[name] = coord1 if coord2._partial else coord2
+            out[name] = (dim1, coord1 if coord2._partial else coord2)
         elif non_count == 2:
-            out[name] = coord1 if coord1.size > coord2.size else coord2
+            out[name] = (dim1, coord1 if coord1.size > coord2.size else coord2)
         assert name in out
     return cm1.update(**out)
 

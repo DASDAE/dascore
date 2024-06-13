@@ -133,6 +133,9 @@ def convert_units(
     to_units, from_units = get_quantity(to_units), get_quantity(from_units)
     if from_units is None:
         return data
+    elif to_units is None:
+        msg = "Cannot convert units to_units are not specified"
+        raise UnitError(msg)
     try:
         mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
     except DimensionalityError as e:

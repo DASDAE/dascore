@@ -127,8 +127,7 @@ def dft(
     - Non-dimensional coordiantes associated with transformed coordinates
       will be dropped in the output.
 
-    - See the [FFT note](`notes/dft_notes.qmd`) in the Notes section
-      of DASCore's documentation for more details.
+    - See the [FFT notes](`docs/notes/dft_notes.qmd`) for more details.
 
     See Also
     --------

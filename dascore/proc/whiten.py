@@ -21,7 +21,7 @@ def whiten(
     patch: PatchType,
     smooth_size: float | None = None,
     tukey_alpha: float = 0.1,
-    ifft: bool = True,
+    idft: bool = True,
     **kwargs,
 ) -> PatchType:
     """
@@ -42,7 +42,7 @@ def whiten(
         its value is 0.1.
         See more details at https://docs.scipy.org/doc/scipy/reference
         /generated/scipy.signal.windows.tukey.html
-    ifft
+    idft
         If False, returns the whitened result in the frequency domain without
         converting it back to the time domain. Defaults to True.
     **kwargs
@@ -62,7 +62,7 @@ def whiten(
 
     3) Amplitude is NOT preserved
 
-    4) If ifft = False, since for the purely real input data the negative
+    4) If idft = False, since for the purely real input data the negative
        frequency terms are just the complex conjugates of the corresponding
        positive-frequency terms, the output does not include the negative
        frequency terms, and therefore the length of the transformed axis
@@ -227,7 +227,7 @@ def whiten(
 
     norm_amp *= tiled_win
 
-    if ifft:
+    if idft:
         # revert back to time-domain, using the phase of the original signal
         whitened_data = np.real(
             nft.irfft(norm_amp * np.exp(1j * phase), n=comp_nsamp, axis=dim_ind)

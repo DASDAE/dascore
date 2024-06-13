@@ -10,6 +10,7 @@ from scipy.signal import decimate as scipy_decimate
 import dascore as dc
 import dascore.compat as compat
 from dascore.constants import PatchType
+from dascore.exceptions import FilterValueError
 from dascore.units import get_filter_units
 from dascore.utils.patch import (
     get_dim_value_from_kwargs,
@@ -17,6 +18,22 @@ from dascore.utils.patch import (
     patch_function,
 )
 from dascore.utils.time import to_int, to_timedelta64
+
+
+def _apply_scipy_decimation(patch, factor, ftype, axis):
+    """
+    Apply decimation along axis.
+    """
+    try:
+        data = scipy_decimate(patch.data, factor, ftype=ftype, axis=axis)
+    except ValueError as e:
+        msg = (
+            "Scipy decimation failed. This can happen for dimensions with"
+            "few elements. Consider setting filter_type to False. The raised "
+            f"exception was {e}"
+        )
+        raise FilterValueError(msg)
+    return data
 
 
 @patch_function()
@@ -46,8 +63,12 @@ def decimate(
 
     Notes
     -----
-    Simply uses scipy.signal.decimate if filter_type is specified. Otherwise,
-    just slice data long specified dimension only including every n samples.
+    - Simply uses scipy.signal.decimate if filter_type is specified.
+      Otherwise,just slice data long specified dimension only including
+      every n samples.
+
+    - If the decimation dimension is small, this can fail due to lack of
+      padding values.
 
     Examples
     --------
@@ -62,7 +83,7 @@ def decimate(
     coords, slices = patch.coords.decimate(**{dim: int(factor)})
     # Apply scipy.signal.decimate and get new coords
     if filter_type:
-        data = scipy_decimate(patch.data, factor, ftype=filter_type, axis=axis)
+        data = _apply_scipy_decimation(patch.data, factor, ftype=filter_type, axis=axis)
     else:  # No filter, simply slice along specified dimension.
         data = patch.data[slices]
         # Need to copy so array isn't a slice and holds onto reference of parent

@@ -473,8 +473,7 @@ class TestSelect:
 
     def test_intra_sample_select(self, coord):
         """
-        Selecting ranges that fall within samples should raise.
-
+        Selecting ranges that fall within samples should become de-generate.
         This is consistent with pandas indices.
         """
         values = coord.values
@@ -522,7 +521,7 @@ class TestSelect:
             assert set(values).issuperset(set(new.values))
 
     def test_select_out_of_bounds_too_early(self, coord):
-        """Applying a select out of bounds (too early) should raise an Error."""
+        """Applying a select out of bounds (too early) should return partial."""
         diff = (coord.max() - coord.min()) / (len(coord) - 1)
         # get a range which is for sure before data.
         v1 = coord.min() - np.abs(100 * diff)
@@ -540,7 +539,7 @@ class TestSelect:
         assert new == coord
 
     def test_select_out_of_bounds_too_late(self, coord):
-        """Applying a select out of bounds (too late) should raise an Error."""
+        """Applying a select out of bounds (too late) should return partial."""
         diff = (coord.max() - coord.min()) / (len(coord) - 1)
         # get a range which is for sure after data.
         v1 = coord.max() + np.abs(100 * diff)
@@ -932,6 +931,7 @@ class TestCoordRange:
     def test_select_tuple_ints(self, evenly_sampled_coord):
         """Ensure a tuple works as a limit."""
         assert evenly_sampled_coord.select((50, None))[1] == slice(50, None)
+        evenly_sampled_coord.select((0, None))
         assert evenly_sampled_coord.select((0, None))[1] == slice(None, None)
         assert evenly_sampled_coord.select((-10, None))[1] == slice(None, None)
         assert evenly_sampled_coord.select((None, None))[1] == slice(None, None)
@@ -1676,11 +1676,46 @@ class TestGetNextIndex:
     def test_units(self, evenly_sampled_float_coord_with_units):
         """Ensure values with units work."""
         coord = evenly_sampled_float_coord_with_units
+        val1 = np.array([10, 20]) * get_quantity("m")
+        val2 = val1.to(get_quantity("ft"))
+        ind1 = coord.get_next_index(val1)
+        ind2 = coord.get_next_index(val2)
+        assert len(val1) == len(ind1)
+        assert np.all(ind1 == ind2)
+
+    def test_unit_array(self, evenly_sampled_float_coord_with_units):
+        """Ensure an array of units returns inds of equal shape."""
+        coord = evenly_sampled_float_coord_with_units.set_units("m")
         val1 = 10 * get_quantity("m")
         val2 = val1.to(get_quantity("ft"))
         ind1 = coord.get_next_index(val1)
         ind2 = coord.get_next_index(val2)
         assert ind1 == ind2
+
+    def test_array_input(self, coord):
+        """Get next coord should work with an array."""
+        inds = np.array([1, 2, 3, 4])
+        try:
+            out1 = coord.get_next_index(inds, samples=True)
+        except CoordError:
+            pytest.skip(f"{coord} doesn't support get_next_index.")
+        values = coord.values[inds]
+        out2 = coord.get_next_index(values)
+        assert np.all(out1 == inds) and np.all(out2 == out1)
+
+    def test_out_of_bounds_array_range_coord(self, evenly_sampled_coord):
+        """Ensure get index works with array that has out of bounds values."""
+        coord = evenly_sampled_coord
+        values = coord.values
+        inputs = np.arange(3) + np.max(values)
+        out = coord.get_next_index(inputs, allow_out_of_bounds=True)
+        assert np.allclose(out, 99)
+
+    def test_non_sorted_coord_raises(self, random_coord):
+        """Ensure a non-sorted coord raises."""
+        msg = "Coords must be sorted"
+        with pytest.raises(CoordError, match=msg):
+            random_coord.get_next_index(10)
 
 
 class TestUpdate:
@@ -1844,3 +1879,16 @@ class TestIssues:
         """Ensure off by one error don't occur with snap."""
         out = awkward_off_by_one.snap()
         assert out.shape == awkward_off_by_one.shape
+
+    def test_dtype_start_int_others_float(self):
+        """
+        Ensure the correct dtype is given when the start value is an int
+        but the other values are not.
+        """
+        coord = get_coord(
+            start=0,
+            step=1.1,
+            stop=11.2,
+            units="m",
+        )
+        assert np.issubdtype(coord.dtype, np.floating)
