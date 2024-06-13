@@ -41,14 +41,16 @@ def velocity_to_strain_rate(
     patch
         A patch object containing DAS data. Note: attrs['data_type'] should be
         velocity.
-    gauge_multiple
+    step_multiple
         The multiples of spatial sampling to make the simulated gauge length.
+    gauge_multiple
+        Deprecated name for step_multiple. Use that instead.
     order
         The order for the finite difference 1st derivative stencil (accuracy).
 
     See Also
     --------
-    - [staggered](`dascore.Patch.staggered_velocity_to_strain_rate_fd`) version
+    - [staggered](`dascore.Patch.staggered_velocity_to_strain_rate`) version
       of this function.
     """
     if gauge_multiple is not None:
