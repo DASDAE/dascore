@@ -77,7 +77,7 @@ def differentiate(
     order: int = 2,
     step: int = 1,
 ) -> PatchType:
-    """
+    r"""
     Calculate first derivative along dimension(s) using centeral diferences.
 
     The shape of the output patch is the same as the input patch. Derivative
@@ -103,9 +103,19 @@ def differentiate(
     Notes
     -----
     For order=2 (the default) numpy's gradient function is used. When
-    order != the optional package findiff must be installed in which case
+    order != 2, the optional package findiff must be installed in which case
     order is interpreted as accuracy ("order" means order of differention
     in that package).
+
+    The second order first derivate, for an evenly spaced coordiante,
+    is defined as:
+
+    $$
+    \hat{f}(x) = \frac{f(x + dx) - f(x - dx)}{2dx} + O({dx}^2)
+    $$
+
+    Where $\hat{f}(x)$ is the estiamted derivative of $f$ at $x$, $dx$ is
+    the sample spacing, and $O$ is the error term.
 
     Examples
     --------

@@ -331,7 +331,7 @@ class Patch:
     integrate = transform.integrate
     spectrogram = transform.spectrogram
     velocity_to_strain_rate = transform.velocity_to_strain_rate
-    velocity_to_strain_rate_fd = transform.velocity_to_strain_rate_fd
+    staggered_velocity_to_strain_rate = transform.staggered_velocity_to_strain_rate
     dispersion_phase_shift = transform.dispersion_phase_shift
 
     # --- Method Namespaces
