@@ -70,9 +70,7 @@ def correlate_shift(patch, dim, undo_weighting=True):
     data = np.fft.fftshift(patch.data, axes=axis)
     if undo_weighting:
         data = data / to_float(coord.step)
-    # so it appears (from testing) there is one lest sample on the positive
-    # side.
-    step = to_float(coord.step)
+    step = coord.step
     new_start = -np.ceil((len(coord) - 1) / 2) * step
     new_end = np.ceil((len(coord) - 1) / 2) * step
     new_coord = dc.get_coord(start=new_start, stop=new_end, step=step)
@@ -182,8 +180,9 @@ def correlate(
     -----
     1 - The cross-correlation is performed in the frequency domain.
 
-    2 - The output dimension is opposite of the one specified in kwargs, has
-    the units of float, and the string "lag_" prepended. For example, "lag_time".
+    2 - The output dimension is opposite of the one specified in kwargs and
+      shares a name with the original coord except the string "lag_" is
+      prepended. For example, "lag_time".
     """
     if lag is not None:
         msg = "Correlate lag is deprecated. Simply use on the output patch."

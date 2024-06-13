@@ -24,7 +24,7 @@ class TestCorrelateShift:
         # ensure the max value happens at zero lag time.
         time_ax = auto_patch.dims.index("lag_time")
         argmax = np.argmax(random_dft_patch.data, axis=time_ax)
-        assert np.allclose(coord_array[argmax], 0)
+        assert np.all(coord_array[argmax] == dc.to_timedelta64(0))
 
 
 class TestCorrelateInternal:
