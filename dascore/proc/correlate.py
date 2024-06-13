@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 import dascore as dc
@@ -85,6 +87,7 @@ def correlate_shift(patch, dim, undo_weighting=True):
 def correlate(
     patch: PatchType,
     samples=False,
+    lag=None,
     **kwargs,
 ) -> PatchType:
     """
@@ -110,6 +113,8 @@ def correlate(
     samples : bool, optional (default = False)
         If True, the argument specified in kwargs refers to the *sample* not
         value along that axis. See examples for details.
+    lag
+        Deprecated, just use select on the output patch instead.
     **kwargs
         Specifies correlation dimension and the master source(s), to which
         we want to cross-correlate all other channels/time samples.If the
@@ -180,6 +185,9 @@ def correlate(
     2 - The output dimension is opposite of the one specified in kwargs, has
     the units of float, and the string "lag_" prepended. For example, "lag_time".
     """
+    if lag is not None:
+        msg = "Correlate lag is deprecated. Simply use on the output patch."
+        warnings.warn(msg, DeprecationWarning)
     assert len(patch.dims) == 2, "must be a 2D patch."
     dim, source_axis, source = get_dim_value_from_kwargs(patch, kwargs)
     # Get the axis and coord over which fft should be calculated.
