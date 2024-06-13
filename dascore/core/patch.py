@@ -279,6 +279,7 @@ class Patch:
         return self.select(*args, samples=True, **kwargs)
 
     correlate = dascore.proc.correlate
+    correlate_shift = dascore.proc.correlate_shift
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
@@ -289,6 +290,7 @@ class Patch:
     savgol_filter = dascore.proc.savgol_filter
     gaussian_filter = dascore.proc.gaussian_filter
     abs = dascore.proc.abs
+    conj = dascore.proc.conj
     real = dascore.proc.real
     imag = dascore.proc.imag
     angle = dascore.proc.angle

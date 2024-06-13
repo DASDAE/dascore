@@ -7,10 +7,11 @@ import operator
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import PatchBroadcastError, UnitError
+from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
 from dascore.utils.misc import _merge_tuples
@@ -325,6 +326,11 @@ class TestApplyUfunc:
         assert np.allclose(out.data, 1)
         assert out.shape == patch_2.shape
 
+    def test_non_dim_coords(self, random_dft_patch):
+        """Ensure ufuncs can still be applied to coords with non dim coords."""
+        out = random_dft_patch * random_dft_patch
+        assert set(out.coords.coord_map) == set(random_dft_patch.coords.coord_map)
+
 
 class TestPatchBroadcasting:
     """Tests for patches broadcasting to allow operations on each other."""
@@ -592,10 +598,66 @@ class TestPad:
             atol=1e-6,
         )
 
+    @pytest.mark.parametrize("length", [10, 13, 200, 293])
+    def test_fft_pad(self, random_patch, length):
+        """Tests for padding to next fast length."""
+        # First trim patch to match length
+        patch_in = random_patch.select(time=(0, length), samples=True)
+        axis = patch_in.dims.index("time")
+        length_old = patch_in.shape[axis]
+        next_fast = next_fast_len(length_old)
+        out = patch_in.pad(time="fft")
+        assert out.dims == patch_in.dims, "dims should not have changed."
+        assert out.shape[axis] == next_fast
+
+    def test_correlate_pad(self, random_patch):
+        """Ensure the fft correlate pad returns sensible values."""
+        axis = random_patch.dims.index("time")
+        length_old = random_patch.shape[axis]
+        next_fast = next_fast_len(length_old * 2 - 1)
+        out = random_patch.pad(time="correlate")
+        assert out.shape[axis] == next_fast
+
+    def test_pad_no_expand(self, random_patch):
+        """Ensure we can pad without expanding dimensions."""
+        out = random_patch.pad(time=10, samples=True, expand_coords=False)
+        coord_array = out.get_array("time")
+        # Check the first and last nans
+        assert np.all(pd.isnull(coord_array[:10]))
+        assert np.all(pd.isnull(coord_array[-10:]))
+        # Check the middle values are equal to old values.
+        old_array = random_patch.get_array("time")
+        # The datatype should not have changed
+        assert coord_array.dtype == old_array.dtype
+        assert np.all(old_array == coord_array[10:-10])
+
+    def test_pad_no_expand_int_coord(self, random_patch):
+        """Ensure we can pad an integer coordinate."""
+        # Ensure distances in an in coordinate.
+        coord = random_patch.get_coord("distance")
+        new_vals = np.arange(len(coord), dtype=np.int64)
+        patch = random_patch.update_coords(distance=new_vals)
+        # Apply padding, ensure NaN values appear.
+        padded = patch.pad(distance=4, expand_coords=False)
+        coord_array = padded.get_array("distance")
+        assert np.all(pd.isnull(coord_array[:4]))
+        assert np.all(pd.isnull(coord_array[-4:]))
+
     def test_error_on_sequence_constant_values(self, random_patch):
         """Test that providing a sequence for constant_values raises a TypeError."""
-        with pytest.raises(TypeError):
+        with pytest.raises(ParameterError):
             random_patch.pad(time=(0, 5), constant_values=(0, 0))
+
+
+class TestConj:
+    """Tests for complex conjugate."""
+
+    def test_imaginary_part_reversed(self, random_dft_patch):
+        """Ensure the imaginary part of the array is reversed."""
+        imag1 = np.imag(random_dft_patch.data)
+        conj = random_dft_patch.conj()
+        imag2 = np.imag(conj.data)
+        assert np.allclose(imag1, -imag2)
 
 
 class TestRoll:

@@ -7,14 +7,16 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import PatchBroadcastError, UnitError
+from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.utils.misc import _get_nullish
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
     _merge_aligned_coords,
@@ -203,6 +205,23 @@ def abs(patch: PatchType) -> PatchType:
     >>> out = pa.abs() # take absolute value of generated example patch data
     """
     return patch.new(data=np.abs(patch.data))
+
+
+@patch_function()
+def conj(patch: PatchType) -> PatchType:
+    """
+    Apply the complex conjugate of the patch data.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+    >>>
+    >>> # Example 1
+    >>> dft = pa.dft(None)  # multi-dim dft
+    >>> conj = dft.conj()
+    """
+    return patch.new(data=np.conj(patch.data))
 
 
 @patch_function()
@@ -551,7 +570,7 @@ def pad(
     patch: PatchType,
     mode: Literal["constant"] = "constant",
     constant_values: Any = 0,
-    expand_coords=False,
+    expand_coords=True,
     samples=False,
     **kwargs,
 ) -> PatchType:
@@ -568,27 +587,74 @@ def pad(
     expand_coords : bool, optional
         Determines how coordinates are adjusted when padding is applied.
         If set to True, the coordinates will be expanded to maintain their
-        order and even sampling (if originally evenly sampled), by extrapolating
-        based on the coordinate's step size.
-        If set to False, the new coordinates introduced by padding will be
-        filled with NaN values, preserving the original coordinate values but
-        not the order or sampling rate.
+        order and even sampling (if evenly sampled), by extrapolating
+        based on the coordinate's step size. If set to False, or coordinate
+        is not evenly sampled, the new coordinates introduced by padding
+        will be padded with NaN values.
     **kwargs:
         Used to specify dimension and number of elements,
         either an integer or a tuple (before, after).
+        In addition, the following strings are supported:
+
+        "fft" - pad to the next fast fft length along the given dimension by
+        adding values to the end of the axis.
+
+        "correlate" - prepare the coordinate for correlation/convolution in
+        the frequency domain by pading to the next fast fft length after
+        2*n - 1 where n is the current dimension length by adding values
+        to the end of the axis.
 
     Examples
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> # zero pad `time` dimension with 2 patch's time unit (e.g., sec)
+    >>> # Zero pad `time` dimension with 2 patch's time unit (e.g., sec)
     >>> # zeros before and 3 zeros after
-    >>> padded_patch_1 = patch.pad(time = (2, 3))
-    >>> # zero pad `distance` dimension with 4 unit values before and after
-    >>> padded_patch_3 = patch.pad(distance = 4, constant_values = 1, samples=True)
+    >>> padded_patch_1 = patch.pad(time=(2, 3))
+    >>> # Pad `distance` dimension with 1s 4 samples before and 4 after.
+    >>> padded_patch_3 = patch.pad(distance=4, constant_values=1, samples=True)
+    >>> # Get patch ready for fast fft along time dimension.
+    >>> padded_fft = patch.pad(time="fft")
     """
-    if isinstance(constant_values, list | tuple):
-        raise TypeError("constant_values must be a scalar, not a sequence.")
+
+    def _get_pad_tuple(value, samples, coord):
+        """
+        Get a tuple, in samples, of (pad_to_start, pad_to_end).
+        """
+        if value in {"fft", "correlate"}:
+            target_length = len(coord) if value == "fft" else 2 * len(coord) - 1
+            # Determine value so that the output dim will be a fast length.
+            value = (0, next_fast_len(target_length) - len(coord))
+            samples = True  # ensure padding isn't interpreted as coord units.
+        elif not isinstance(value, Sequence):
+            value = (value, value)
+        if not samples:  # Ensure values are in samples.
+            value = tuple(coord.get_sample_count(x) for x in value)
+        return value
+
+    def _get_new_coord(coord, pad_tuple, expand_coords):
+        """Get the new coordinate along the expanded axis."""
+        if expand_coords and coord.evenly_sampled:
+            new_start = coord.min() - pad_tuple[0] * coord.step
+            new_end = coord.max() + (pad_tuple[1] + 1) * coord.step
+            assert coord.evenly_sampled, "expand_coords requires evenly sampled."
+            new_coord = get_coord(
+                start=new_start, stop=new_end, step=coord.step, units=coord.units
+            )
+        else:
+            old_values = coord.values
+            # Need to convert ints to float so NaN can be used.
+            if np.issubdtype(old_values.dtype, np.integer):
+                old_values = old_values.astype(np.float64)
+            null_value = _get_nullish(old_values.dtype)
+            added_nan_values = np.pad(
+                old_values, pad_width=pad_tuple, constant_values=null_value
+            )
+            new_coord = coord.update(data=added_nan_values)
+        return new_coord
+
+    if isinstance(constant_values, Sequence):
+        raise ParameterError("constant_values must be a scalar, not a sequence.")
 
     pad_width = [(0, 0)] * len(patch.shape)
     dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
@@ -596,44 +662,14 @@ def pad(
 
     for _, info in dimfo.items():
         axis, dim, value = info["axis"], info["dim"], info["value"]
+        coord = patch.get_coord(dim, require_evenly_sampled=not samples)
+        pad_tuple = _get_pad_tuple(value, samples, coord)
+        pad_width[axis] = pad_tuple
+        new_coords[dim] = _get_new_coord(coord, pad_tuple, expand_coords)
 
-        # Ensure pad_width is a tuple, even if a single integer is provided
-        if isinstance(value, int):
-            value = (value, value)
-
-        # Ensure kwargs are in samples
-        if not samples:
-            coord = patch.get_coord(dim, require_evenly_sampled=True)
-            value = (
-                coord.get_sample_count(value[0], samples=samples),
-                coord.get_sample_count(value[1], samples=samples),
-            )
-        pad_width[axis] = value
-
-        # Get new coordinate
-        if expand_coords:
-            new_start = coord.min() - value[0] * coord.step
-            new_end = coord.max() + (value[1] + 1) * coord.step
-            coord = patch.get_coord(dim, require_evenly_sampled=True)
-            old_values = coord.values
-            new_coord = get_coord(
-                start=new_start, stop=new_end, step=coord.step, units=coord.units
-            )
-        else:
-            coord = patch.get_coord(dim)
-            old_values = coord.values.astype(np.float64)
-            added_nan_values = np.pad(
-                old_values, pad_width=value, constant_values=np.nan
-            )
-            new_coord = coord.update(data=added_nan_values)
-        new_coords[dim] = new_coord
-
-    # Pad patch's data
+    # Pad data, update coord manager, and return.
     new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
-
-    # Update coord manager
     new_coords = patch.coords.update(**new_coords)
-
     return patch.new(data=new_data, coords=new_coords)
 
 
