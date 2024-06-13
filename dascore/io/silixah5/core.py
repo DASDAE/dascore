@@ -1,6 +1,7 @@
 """
 Core modules for Silixa H5 support.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -16,9 +17,9 @@ from .utils import _get_attr, _get_patch, _get_version_string
 class SilixaPatchAttrs(dc.PatchAttrs):
     """Patch Attributes for Silixa hdf5 format."""
 
-    gauge_length: float = np.NaN
+    gauge_length: float = np.nan
     gauge_length_units: str = "m"
-    pulse_width: float = np.NaN
+    pulse_width: float = np.nan
     pulse_width_units: str = "ns"
 
 
