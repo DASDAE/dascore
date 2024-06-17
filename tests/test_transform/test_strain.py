@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pytest
 
@@ -22,30 +24,6 @@ def linear_velocity_patch(random_patch):
     dist = random_patch.get_array("distance")
     out = random_patch.new(data=new_data, attrs=new_attrs)
     return out.update_coords(distance=dist * 1.23)
-
-
-@pytest.fixture(scope="class")
-def small_velocity_patch():
-    """A small velocity patch with known values."""
-    # This is useful for comparing output to easily validated results.
-    # ar = np.arrange(100).reshape(10, 10)
-    ar = np.array(
-        [
-            [8, 6, 7, 5],
-            [3, 0, 9, 8],
-            [5, 4, 4, 4],
-            [9, 1, 1, 4],
-        ]
-    )
-
-    dist = np.arange(4)
-    time = np.arange(4)
-    coords = {"time": time, "distance": dist}
-    dims = ("time", "distance")
-    attrs = {"data_type": "velocity", "data_units": "m/s"}
-
-    patch = dc.Patch(data=ar, coords=coords, dims=dims, attrs=attrs)
-    return patch
 
 
 class TestStrainRateConversion:
@@ -96,9 +74,28 @@ class TestStrainRateConversion:
         out2 = terra15_das_patch.velocity_to_strain_rate(step_multiple=1)
         assert out1.equals(out2)
 
+    def test_no_data_units(self, terra15_das_patch):
+        """Ensure a patch with no data units still works."""
+        patch = terra15_das_patch.update_attrs(data_units="").velocity_to_strain_rate()
+        assert not patch.attrs.data_units
 
-class TestFdStrainRateConversion:
-    """Tests for converting velocity to strain-rate in the forward diff function."""
+    def test_linear_patch(self, linear_velocity_patch):
+        """Test conversion of analytical function."""
+        step_mults = [1, 2, 3]
+        order = [2, 4, 6]
+        for step_mult, order in itertools.product(step_mults, order):
+            if order > 2:  # Need findiff for orders > 2
+                pytest.importorskip("findiff")
+            step = linear_velocity_patch.get_coord("distance").step
+            expected = 1.0 / step
+            out1 = linear_velocity_patch.velocity_to_strain_rate(
+                step_multiple=step_mult, order=order
+            )
+            assert np.allclose(out1.data, expected)
+
+
+class TestStaggeredStrainRateConversion:
+    """Tests for converting velocity to strain-rate with staggered function."""
 
     @pytest.fixture(scope="class")
     def patch_strain_rate_default(self, terra15_das_patch):
@@ -122,33 +119,16 @@ class TestFdStrainRateConversion:
         assert new_units != old_units
         assert new_units == old_units / get_quantity("m")
 
-    def test_even_step_multiple(self, terra15_das_patch):
-        """Compare output shape with coord shape for even gauge multiple."""
-        strain_rate_patch = terra15_das_patch.staggered_velocity_to_strain_rate(4)
-        assert strain_rate_patch.data.shape == strain_rate_patch.coords.shape
+    def test_no_data_units(self, terra15_das_patch):
+        """Ensure a patch with no data units still works."""
+        patch = terra15_das_patch.update_attrs(
+            data_units=""
+        ).staggered_velocity_to_strain_rate()
+        assert not patch.attrs.data_units
 
-    def test_odd_step_multiple(self, terra15_das_patch):
-        """Compare output shape with coord shape for odd gauge multiple."""
-        strain_rate_patch = terra15_das_patch.staggered_velocity_to_strain_rate(5)
-        assert strain_rate_patch.data.shape == strain_rate_patch.coords.shape
-
-    @pytest.mark.parametrize("sample", (1, 2, 3, 4, 5))
-    def test_shape_different(self, terra15_das_patch, sample):
-        """Ensure shape of the output is correctly changed."""
-        strain_rate_patch = terra15_das_patch.staggered_velocity_to_strain_rate(sample)
-        shape_1 = len(strain_rate_patch.coords.get_array("distance"))
-        shape_2 = len(terra15_das_patch.coords.get_array("distance"))
-        assert shape_1 == shape_2 - sample
-
-
-class TestCompareStrainRateConversion:
-    """Tests for comparing the two strain-rate functions."""
-
-    def test_compare_linear_patch(self, linear_velocity_patch):
-        """For a simple analytical function, both functions have equal results."""
+    def test_linear_patch(self, linear_velocity_patch):
+        """Test conversion of analytical function."""
         step = linear_velocity_patch.get_coord("distance").step
         expected = 1.0 / step
         out1 = linear_velocity_patch.staggered_velocity_to_strain_rate()
         assert np.allclose(out1.data, expected)
-        out2 = linear_velocity_patch.velocity_to_strain_rate()
-        assert np.allclose(out2.data, expected)
