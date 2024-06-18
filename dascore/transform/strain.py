@@ -31,7 +31,9 @@ def velocity_to_strain_rate(
     \hat{f}(x) = \frac{f(x + (n/2)dx) - f(x - (n/2)dx)}{n dx}
     $$
 
-    Where $dx$ is the distance step and $n$ is the step_multiple. The equation
+    Where $dx$ is the distance step and $n$ is the step_multiple. Values for
+    edges are estimate with the appropriate forward/backward stencils so that
+    the shape of the output data match the input data. The equation
     becomes more complicated for higher order stencils.
 
     Parameters
@@ -77,12 +79,10 @@ def velocity_to_strain_rate(
     [patch.differentiate](`dascore.transform.differentiate.differentiate`)
     under the hood to calculate spatial derivatives.
 
-    The output gauge length is equal to the step_multiple, although the concept
-    of gauge_length is more complex with higher oder filters. See
+    The output gauge length is equal to the step_multiple multuplied by the
+    spacing along the distance coordinate, although the concept of
+    gauge_length is more complex with higher oder filters. See
     @yang2022filtering for more info.
-
-    This function doesn't change the shape of the array since edge derivatives
-    are estimated with forward or backward differences of the specified order.
 
     See the [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
     for more details on step_multiple and order effects.
@@ -134,7 +134,7 @@ def velocity_to_strain_rate_edgeless(
 
     Where $dx$ is the spatial sampling and $n$ is the step_multiple. As a result
     the strain-rate between existing samples is estimated when $n$ is odd. Edges
-    (points where a full central difference are not possible) are discarded in
+    (points where full central differences are not possible) are discarded in
     the output.
 
     Parameters
@@ -163,7 +163,11 @@ def velocity_to_strain_rate_edgeless(
     See [velocity_to_strain_rate](`dascore.Patch.velocity_to_strain_rate`)
     for a similar function which does not change the shape of the patch.
 
-    See the [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
+    The resulting gauge length is equal to the step_multiple multiplied by
+    the sampling along the distance dimension.
+
+    See the
+    [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
     for more details on step_multiple and order effects.
     """
     coord = patch.get_coord("distance", require_evenly_sampled=True)
