@@ -24,7 +24,7 @@ authors = [
   { name="Derrick Chambers", email="chambers.ja.derrick@gmail.com" },
 ]
 
-description = "A python library distributed fiber optic sensing"
+description = "A python library for distributed fiber optic sensing"
 readme = "readme.md"
 license = { file="docs/LICENSE" }
 requires-python = ">=3.10"
