@@ -65,13 +65,13 @@ def velocity_to_strain_rate(
     >>> # Estimate the strain rate with a 10th order filter. This will raise
     >>> # an exception if the package findiff is not installed.
     >>> with suppress(MissingOptionalDependencyError):
-    >>>     patch_strain = patch.velocity_to_strain_rate(order=10)
+    ...     patch_strain = patch.velocity_to_strain_rate(order=10)
     >>>
     >>> # Example 3
     >>> # Estimate strain rate with a 4th order filter and gauge length 4 times
     >>> # the distance step.
     >>> with suppress(MissingOptionalDependencyError):
-    >>>     patch_strain = patch.velocity_to_strain_rate(step_multiple=4, order=4)
+    ...     patch_strain = patch.velocity_to_strain_rate(step_multiple=4, order=4)
 
     Notes
     -----
