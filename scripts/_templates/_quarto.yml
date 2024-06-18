@@ -197,6 +197,9 @@ website:
         - text: Fourier Transforms
           href: notes/dft_notes.qmd
 
+        - text: Velocity to Strain Rate
+          href: notes/velocity_to_strain_rate.qmd
+
     - id: API
       title: "API"
       href: api/dascore.qmd

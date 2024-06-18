@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import PatchAttributeError
+from dascore.exceptions import ParameterError, PatchAttributeError
 from dascore.units import get_quantity
 
 
@@ -57,8 +57,14 @@ class TestStrainRateConversion:
         assert new_units != old_units
         assert new_units == old_units / get_quantity("m")
 
+    def test_odd_step_multiple_raise(self, terra15_das_patch):
+        """Ensure odd step multiples raise a parameter error."""
+        msg = "must be even"
+        with pytest.raises(ParameterError, match=msg):
+            terra15_das_patch.velocity_to_strain_rate(step_multiple=1)
+
     def test_step_multiple(self, terra15_das_patch):
-        """Ensure strain rate multiples > 1 are supported."""
+        """Ensure strain rate multiples > 2 are supported."""
         # Note: this is a bit of a weak test. However, since we just call
         # Patch.differentiate under the hood, and that is better tested
         # for supporting different step sizes, its probably sufficient.
@@ -71,7 +77,7 @@ class TestStrainRateConversion:
         """Ensure using gauge_multiple issues deprecation warning."""
         with pytest.warns(DeprecationWarning):
             out1 = terra15_das_patch.velocity_to_strain_rate(gauge_multiple=1)
-        out2 = terra15_das_patch.velocity_to_strain_rate(step_multiple=1)
+        out2 = terra15_das_patch.velocity_to_strain_rate(step_multiple=2)
         assert out1.equals(out2)
 
     def test_no_data_units(self, terra15_das_patch):
@@ -81,7 +87,7 @@ class TestStrainRateConversion:
 
     def test_linear_patch(self, linear_velocity_patch):
         """Test conversion of analytical function."""
-        step_mults = [1, 2, 3]
+        step_mults = [2, 4, 6]
         order = [2, 4, 6]
         for step_mult, order in itertools.product(step_mults, order):
             if order > 2:  # Need findiff for orders > 2
@@ -100,17 +106,35 @@ class TestStaggeredStrainRateConversion:
     @pytest.fixture(scope="class")
     def patch_strain_rate_default(self, terra15_das_patch):
         """Return the default terra15 converted to strain rate."""
-        return terra15_das_patch.staggered_velocity_to_strain_rate()
+        return terra15_das_patch.velocity_to_strain_rate_edgeless()
 
     def test_attrs(self, patch_strain_rate_default):
         """Ensure the attributes were updated with strain_rate."""
         attrs = patch_strain_rate_default.attrs
         assert attrs["data_type"] == "strain_rate"
 
+    def test_coords_odd_step(self, terra15_das_patch):
+        """Ensure coords are staggered when step multiple is odd."""
+        pre_dist = terra15_das_patch.get_array("distance")
+        out = terra15_das_patch.velocity_to_strain_rate_edgeless(step_multiple=1)
+        post_dist = out.get_array("distance")
+        assert len(pre_dist) == len(post_dist) + 1
+        expected = (pre_dist[1:] + pre_dist[:-1]) / 2
+        assert np.allclose(post_dist, expected)
+
+    def test_coords_even_step(self, terra15_das_patch):
+        """The coords should be a subset of original when step is even."""
+        pre_dist = terra15_das_patch.get_array("distance")
+        out = terra15_das_patch.velocity_to_strain_rate_edgeless(step_multiple=2)
+        post_dist = out.get_array("distance")
+        assert len(pre_dist) == len(post_dist) + 2
+        expected = pre_dist[1:-1]
+        assert np.allclose(post_dist, expected)
+
     def test_raises_on_strain_rate(self, patch_strain_rate_default):
         """It does not make sense to apply this twice."""
         with pytest.raises(PatchAttributeError, match="velocity"):
-            _ = patch_strain_rate_default.staggered_velocity_to_strain_rate()
+            _ = patch_strain_rate_default.velocity_to_strain_rate_edgeless()
 
     def test_update_units(self, patch_strain_rate_default, terra15_das_patch):
         """Ensure units are updated. See issue #144."""
@@ -123,12 +147,26 @@ class TestStaggeredStrainRateConversion:
         """Ensure a patch with no data units still works."""
         patch = terra15_das_patch.update_attrs(
             data_units=""
-        ).staggered_velocity_to_strain_rate()
+        ).velocity_to_strain_rate_edgeless()
         assert not patch.attrs.data_units
 
     def test_linear_patch(self, linear_velocity_patch):
         """Test conversion of analytical function."""
         step = linear_velocity_patch.get_coord("distance").step
         expected = 1.0 / step
-        out1 = linear_velocity_patch.staggered_velocity_to_strain_rate()
+        out1 = linear_velocity_patch.velocity_to_strain_rate_edgeless()
         assert np.allclose(out1.data, expected)
+
+    def test_functions_equal(self, terra15_das_patch):
+        """Ensure the functions are equal for even steps."""
+        patch = terra15_das_patch
+        for mult in [2, 4, 6, 8]:
+            # Get function 1 output and trim off edges.
+            strain1 = patch.velocity_to_strain_rate(step_multiple=mult).select(
+                distance=(mult // 2, -mult // 2), samples=True
+            )
+
+            # Function 2's output should match function 1.
+            strain2 = patch.velocity_to_strain_rate_edgeless(step_multiple=mult)
+
+            assert np.allclose(strain1.data, strain2.data)

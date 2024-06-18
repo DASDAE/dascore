@@ -6,6 +6,7 @@ import warnings
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.transform.differentiate import differentiate
 from dascore.utils.patch import patch_function
 
@@ -16,19 +17,22 @@ from dascore.utils.patch import patch_function
 )
 def velocity_to_strain_rate(
     patch: PatchType,
-    step_multiple: int = 1,
-    gauge_multiple: None = None,
+    step_multiple: int = 2,
+    gauge_multiple: None | int = None,
     order: int = 2,
 ) -> PatchType:
     r"""
     Convert velocity DAS data to strain rate using central differences.
 
-    When order=2 and step_multiple=1 the derivative for non-edge values
+    When order=2 and step_multiple=2 the derivative for non-edge values
     is estimated by:
 
     $$
-    f'(x) = \frac{f(x + dx) - f(x - dx)}{2 dx}
+    \hat{f}(x) = \frac{f(x + (n/2)dx) - f(x - (n/2)dx)}{n dx}
     $$
+
+    Where $dx$ is the distance step and $n$ is the step_multiple. The equation
+    becomes more complicated for higher order stencils.
 
     Parameters
     ----------
@@ -36,12 +40,31 @@ def velocity_to_strain_rate(
         A patch object containing DAS data. Note: attrs['data_type'] should be
         velocity.
     step_multiple
-        The multiples of spatial sampling to make the simulated gauge length.
+        The multiples of spatial sampling for the central averaging stencil.
+        Must be even as odd values result in a staggered grid.
     gauge_multiple
         Deprecated name for step_multiple. Use that instead.
     order
         The order for the finite difference 1st derivative stencil (accuracy).
         It must be a multiple of 2
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch("deformation_rate_event_1")
+    >>>
+    >>> # Example 1
+    >>> # Estimate the strain rate with a gauge length twice the distance step.
+    >>> patch_strain = patch.velocity_to_strain_rate(step_multiple=2)
+    >>>
+    >>> # Example 2
+    >>> # Estimate the strain rate with a 10th order filter.
+    >>> patch_strain = patch.velocity_to_strain_rate(order=10)
+    >>>
+    >>> # Example 3
+    >>> # Estimate strain rate with a 4th order filter and gauge length 4 times
+    >>> # the distance step.
+    >>> patch_strain = patch.velocity_to_strain_rate(step_multiple=4, order=4)
 
     Notes
     -----
@@ -49,29 +72,40 @@ def velocity_to_strain_rate(
     [patch.differentiate](`dascore.transform.differentiate.differentiate`)
     under the hood to calculate spatial derivatives.
 
-    The output gauge length is step_multiple x 2, although the concept of
-    gauge_length is more complex with higher oder filters. See
+    The output gauge length is equal to the step_multiple, although the concept
+    of gauge_length is more complex with higher oder filters. See
     @yang2022filtering for more details.
 
     This function doesn't change the shape of the array since edge derivatives
     are estimated with forward or backward differences of the specified order.
 
-    See Also
-    --------
-    - [staggered](`dascore.Patch.staggered_velocity_to_strain_rate`) version
-      of this function.
-    - [patch.differentiate](`dascore.transform.differentiate.differentiate`)
+    See the [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
+    for more details on step_multiple and order effects.
+
+    See the [edgeless](`dascore.Patch.velocity_to_strain_rate_edgeless`) version
+    of this function.
+
+    See also [patch.differentiate](`dascore.transform.differentiate.differentiate`).
     """
     if gauge_multiple is not None:
-        msg = "gauge_multiple has been renamed to step_multiple"
+        msg = "gauge_multiple will be removed in the future. Use step_multiple."
         warnings.warn(msg, DeprecationWarning)
-        step_multiple = gauge_multiple
+        step_multiple = gauge_multiple * 2
+
+    if step_multiple % 2 != 0:
+        msg = (
+            "Step_multiple must be even. Use velocity_to_strain_rate_edgeless "
+            "if odd step multiples are required."
+        )
+        raise ParameterError(msg)
 
     coord = patch.get_coord("distance", require_evenly_sampled=True)
     step = coord.step
-    patch = differentiate.func(patch, dim="distance", order=order, step=step_multiple)
+    patch = differentiate.func(
+        patch, dim="distance", order=order, step=step_multiple // 2
+    )
     new_attrs = patch.attrs.update(
-        data_type="strain_rate", gauge_length=2 * step * step_multiple
+        data_type="strain_rate", gauge_length=step * step_multiple
     )
     return patch.update(attrs=new_attrs)
 
@@ -80,34 +114,54 @@ def velocity_to_strain_rate(
     required_dims=("distance",),
     required_attrs={"data_type": "velocity"},
 )
-def staggered_velocity_to_strain_rate(
+def velocity_to_strain_rate_edgeless(
     patch: PatchType,
+    step_multiple: int = 1,
 ) -> PatchType:
     r"""
-    Estimate strain-rate between spatial points using central differences.
+    Estimate strain-rate using central differences.
 
-    This function estimates the strain by taking a staggered central
-    difference according to:
+    For odd step_multiple values this function estimates strain by taking a
+    staggered central difference according to:
 
     $$
-    f'(x) = \frac{f(x + dx/2) - f(x - dx/2)}{dx}
+    \hat{f} = \frac{f(x + n * dx/2) - f(x - n * dx/2)}{dx}
     $$
 
-    The returned distance coordinates are different from the input
-    coordinates because the strain is estimated *between* existing points.
-
-    See [velocity_to_strain_rate](`dascore.Patch.velocity_to_strain_rate`)
-    for a similar function that supports more gauge lengths and higher order
-    differentiation stencils.
+    Where $dx$ is the spatial sampling and $n$ is the step_multiple. As a result
+    the strain-rate between existing samples is estimated when $n$ is odd. Edges
+    (points where a full central difference are not possible) are discarded in
+    the output.
 
     Parameters
     ----------
     patch
         A patch object containing DAS data. Note: attrs['data_type'] should be
         velocity.
+    step_multiple
+        The number of spatial sampling steps to use in the central averaging.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch("deformation_rate_event_1")
+    >>>
+    >>> # Example 1
+    >>> # Estimate strain rate with a gauge length equal to distance step.
+    >>> patch_strain = patch.velocity_to_strain_rate_edgeless(step_multiple=1)
+    >>>
+    >>> # Example 2
+    >>> # Estimate strain rate with a gauge length 5 times the distance step.
+    >>> patch_strain = patch.velocity_to_strain_rate_edgeless(step_multiple=5)
+
+    Notes
+    -----
+    See [velocity_to_strain_rate](`dascore.Patch.velocity_to_strain_rate`)
+    for a similar function which does not change the shape of the patch.
+
+    See the [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
+    for more details on step_multiple and order effects.
     """
-    # See #399 for a discussion of why the step_multiple is fixed.
-    step_multiple: int = 1
     coord = patch.get_coord("distance", require_evenly_sampled=True)
     distance_step = coord.step
     gauge_length = step_multiple * distance_step
@@ -118,7 +172,7 @@ def staggered_velocity_to_strain_rate(
 
     # Need to get distance values between current ones.
     dists = patch.get_array("distance")
-    new_dist = (dists[step_multiple:] - dists[:-step_multiple]) / 2
+    new_dist = (dists[step_multiple:] + dists[:-step_multiple]) / 2
     new_coords = patch.coords.update(distance=new_dist)
 
     # Handle unit conversions.
