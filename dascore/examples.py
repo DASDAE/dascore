@@ -240,6 +240,15 @@ def example_event_2():
     return out
 
 
+@register_func(EXAMPLE_PATCHES, key="deformation_rate_event_1")
+def deformation_rate_event_1():
+    """
+    An event recorded in an underground mine by a Terra15 unit.
+    """
+    path = fetch("deformation_rate_event_1.hdf5")
+    return dc.spool(path)[0]
+
+
 @register_func(EXAMPLE_PATCHES, key="ricker_moveout")
 def ricker_moveout(
     frequency=15,
