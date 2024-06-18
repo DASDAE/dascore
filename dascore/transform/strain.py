@@ -50,7 +50,9 @@ def velocity_to_strain_rate(
 
     Examples
     --------
+    >>> from contextlib import suppress
     >>> import dascore as dc
+    >>> from dascore.exceptions import MissingOptionalDependencyError
     >>> patch = dc.get_example_patch("deformation_rate_event_1")
     >>>
     >>> # Example 1
@@ -58,13 +60,16 @@ def velocity_to_strain_rate(
     >>> patch_strain = patch.velocity_to_strain_rate(step_multiple=2)
     >>>
     >>> # Example 2
-    >>> # Estimate the strain rate with a 10th order filter.
-    >>> patch_strain = patch.velocity_to_strain_rate(order=10)
+    >>> # Estimate the strain rate with a 10th order filter. This will raise
+    >>> # an exception if the package findiff is not installed.
+    >>> with suppress(MissingOptionalDependencyError):
+    >>>     patch_strain = patch.velocity_to_strain_rate(order=10)
     >>>
     >>> # Example 3
     >>> # Estimate strain rate with a 4th order filter and gauge length 4 times
     >>> # the distance step.
-    >>> patch_strain = patch.velocity_to_strain_rate(step_multiple=4, order=4)
+    >>> with suppress(MissingOptionalDependencyError):
+    >>>     patch_strain = patch.velocity_to_strain_rate(step_multiple=4, order=4)
 
     Notes
     -----
@@ -74,7 +79,7 @@ def velocity_to_strain_rate(
 
     The output gauge length is equal to the step_multiple, although the concept
     of gauge_length is more complex with higher oder filters. See
-    @yang2022filtering for more details.
+    @yang2022filtering for more info.
 
     This function doesn't change the shape of the array since edge derivatives
     are estimated with forward or backward differences of the specified order.
@@ -82,10 +87,9 @@ def velocity_to_strain_rate(
     See the [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
     for more details on step_multiple and order effects.
 
-    See the [edgeless](`dascore.Patch.velocity_to_strain_rate_edgeless`) version
-    of this function.
-
-    See also [patch.differentiate](`dascore.transform.differentiate.differentiate`).
+    The [edgeless](`dascore.Patch.velocity_to_strain_rate_edgeless`) version
+    of this function removes potential edge effects and supports even and odd
+    `step_multiple` values.
     """
     if gauge_multiple is not None:
         msg = "gauge_multiple will be removed in the future. Use step_multiple."

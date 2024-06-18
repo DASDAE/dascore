@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.examples import EXAMPLE_PATCHES
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.time import to_float
 
@@ -23,25 +24,16 @@ class TestGetExamplePatch:
         with pytest.raises(UnknownExampleError, match="No example patch"):
             dc.get_example_patch("NotAnExampleRight????")
 
-    def test_example_1(self):
-        """Ensure example 1 returns a Patch."""
-        out = dc.get_example_patch("example_event_1")
-        assert isinstance(out, dc.Patch)
-
-    def test_example_2(self):
-        """Ensure example 2 returns a Patch."""
-        out = dc.get_example_patch("example_event_2")
-        assert isinstance(out, dc.Patch)
-
-    def test_sin_wav(self):
-        """Ensure the sin wave example can be loaded. See issee 229."""
-        out = dc.get_example_patch("sin_wav")
-        assert isinstance(out, dc.Patch)
-
     def test_data_file_name(self):
         """Ensure get_example_spool works on a datafile."""
         spool = dc.get_example_spool("dispersion_event.h5")
         assert isinstance(spool, dc.BaseSpool)
+
+    @pytest.mark.parametrize("name", EXAMPLE_PATCHES)
+    def test_load_example_patch(self, name):
+        """Ensure the registered example patches can all be loaded."""
+        patch = dc.get_example_patch(name)
+        assert isinstance(patch, dc.Patch)
 
 
 class TestGetExampleSpool:
