@@ -81,7 +81,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
             assert padded.shape == self.patch.data.shape
         if self.center:
             # roll array along axis to center
-            padded = np.roll(padded, -self.window // 2, axis=self.axis)
+            padded = np.roll(padded, -(self.window // 2), axis=self.axis)
         return padded
 
     def apply(self, function):
@@ -231,10 +231,10 @@ def rolling(
     step
         The window is evaluated at every step result, equivalent to slicing
         at every step. If the step argument is not None, the result will
-        have a different shape than the input.
+        have a different shape than the input. Default None.
     center
         If False, set the window labels as the right edge of the window index.
-        If True, set the window labels as the center of the window index.
+        If True, set the window labels as the center of the window index. Default False.
     engine
         Determines how the rolling operations are applied. If None, try to
         determine which will be fastest for a given step. Options are:
