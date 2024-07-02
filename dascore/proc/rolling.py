@@ -81,7 +81,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
             assert padded.shape == self.patch.data.shape
         if self.center:
             # roll array along axis to center
-            padded = np.roll(padded, -(self.window // 2), axis=self.axis)
+            padded = np.roll(padded, -(num_nans // 2), axis=self.axis)
         return padded
 
     def apply(self, function):
@@ -105,9 +105,8 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         step_slice.append(slice(None, None))
         # this accounts for NaNs that pad the start of the array.
         start = self.get_start_index()
-        # start = (self.window - 1) % self.step
         step_slice[self.axis] = slice(start, None, self.step)
-        # apply function, then pad with zeros and roll
+        # apply function, then pad with NaNs and roll
         kwargs = self.func_kwargs
         trimmed_slide_view = slide_view[tuple(step_slice)]
         raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float64)

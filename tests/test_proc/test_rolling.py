@@ -248,6 +248,21 @@ class TestNumpyVsPandasRolling:
             np.equal(numpy_isnan, pandas_isnan)
         ), "The NaN indices do not match"
 
+    def test_center_same_stepped(self, range_patch):
+        """Ensure center values are handled the same."""
+        dt = range_patch.get_coord("time").step
+        numpy_out = range_patch.rolling(
+            time=13 * dt, step=3 * dt, center=True, engine="numpy"
+        ).sum()
+        pandas_out = range_patch.rolling(
+            time=13 * dt, step=3 * dt, center=True, engine="pandas"
+        ).sum()
+        numpy_isnan = np.isnan(numpy_out.data)
+        pandas_isnan = np.isnan(pandas_out.data)
+        assert np.all(
+            np.equal(numpy_isnan, pandas_isnan)
+        ), "The NaN indices do not match"
+
     def test_dimension_order(self, range_patch):
         """Ensure the dimension order doesn't matter."""
         for patch in [range_patch, range_patch.transpose()]:
