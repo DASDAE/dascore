@@ -300,7 +300,7 @@ def rolling(
         engines = {"numpy": _NumpyPatchRoller, "pandas": _PandasPatchRoller}
         if cls := engines.get(engine):
             return cls
-        if step < 10 and len(patch.dims) < 2:
+        if step < 10 and len(patch.squeeze().dims) < 2:
             return _PandasPatchRoller
         return _NumpyPatchRoller
 
