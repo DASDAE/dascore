@@ -336,9 +336,29 @@ class TestConcatenate:
         assert len(out) == 1
         patch = out[0]
         assert "zoolou" in patch.dims
+        coord = patch.get_coord("zoolou")
+        assert len(coord) == len(patches)
+
+    def test_concat_chunk_to_new_dimension(self, random_patch):
+        """Ensure the new dimension can be chunked by an int value."""
+        # When new_dim = 1 it should only add a new dimension to each patch
+        # and not change the original shape.
+        spool = dc.spool([random_patch] * 6)
+        # Test for single values along new dimension
+        new = spool.concatenate(new_dim=1)
+        assert len(new) == len(spool)
+        for patch in new:
+            coord = patch.get_coord("new_dim")
+            assert len(coord) == 1
+        # Test for concatenating two patches together
+        new = spool.concatenate(new_dim=2)
+        assert len(new) == len(spool) // 2
+        for patch in new:
+            coord = patch.get_coord("new_dim")
+            assert len(coord) == 2
 
     def test_spool_up(self, random_patch):
-        """Ensure a patch is returned in the wrapper is used."""
+        """Ensure a patch is returned if the wrapper is used."""
         func = _spool_up(concatenate_patches)
         out = func([random_patch] * 3, time=None)
         assert isinstance(out, dc.BaseSpool)
@@ -347,7 +367,10 @@ class TestConcatenate:
         """Ensure a patch with new dim can be retrieved from spool."""
         spool = dc.spool([random_patch, random_patch])
         spool_concat = spool.concatenate(wave_rank=None)
-        assert "wave_rank" in spool_concat[0].dims
+        assert len(spool_concat) == 1
+        patch = spool_concat[0]
+        assert "wave_rank" in patch.dims
+        assert len(patch.get_coord("wave_rank")) == len(spool)
 
     def test_patch_with_gap(self, random_patch):
         """Ensure a patch with a time gap still concats."""
@@ -356,7 +379,6 @@ class TestConcatenate:
         one_hour = dc.to_timedelta64(3600)
         patch2 = random_patch.update_coords(time_min=time.max() + one_hour)
         spool = dc.spool([random_patch, patch2])
-
         # chunk rightfully wouldn't merge these patches, but concatenate will.
         merged = spool.concatenate(time=None)
         assert len(merged) == 1
