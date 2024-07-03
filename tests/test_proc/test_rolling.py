@@ -238,11 +238,30 @@ class TestNumpyVsPandasRolling:
     def test_center_same(self, range_patch):
         """Ensure center values are handled the same."""
         dt = range_patch.get_coord("time").step
-        numpy_out = range_patch.rolling(time=13 * dt, center=True).sum()
-        pandas_out = range_patch.rolling(time=13 * dt, center=True).sum()
+        numpy_out = range_patch.rolling(time=13 * dt, center=True, engine="numpy").sum()
+        pandas_out = range_patch.rolling(
+            time=13 * dt, center=True, engine="pandas"
+        ).sum()
         numpy_isnan = np.isnan(numpy_out.data)
         pandas_isnan = np.isnan(pandas_out.data)
-        assert np.all(np.equal(numpy_isnan, pandas_isnan))
+        assert np.all(
+            np.equal(numpy_isnan, pandas_isnan)
+        ), "The NaN indices do not match"
+
+    def test_center_same_stepped(self, range_patch):
+        """Ensure center values are handled the same."""
+        dt = range_patch.get_coord("time").step
+        numpy_out = range_patch.rolling(
+            time=13 * dt, step=3 * dt, center=True, engine="numpy"
+        ).sum()
+        pandas_out = range_patch.rolling(
+            time=13 * dt, step=3 * dt, center=True, engine="pandas"
+        ).sum()
+        numpy_isnan = np.isnan(numpy_out.data)
+        pandas_isnan = np.isnan(pandas_out.data)
+        assert np.all(
+            np.equal(numpy_isnan, pandas_isnan)
+        ), "The NaN indices do not match"
 
     def test_dimension_order(self, range_patch):
         """Ensure the dimension order doesn't matter."""
@@ -251,7 +270,16 @@ class TestNumpyVsPandasRolling:
                 coord = patch.get_coord(dim)
                 step = coord.step
                 total_len = len(coord) - 2
-                kwargs = {dim: step * total_len, "step": total_len * step}
-                pandas_out = patch.rolling(**kwargs).mean().dropna(dim)
-                numpy_out = patch.rolling(**kwargs).mean().dropna(dim)
+                kwargs_pandas = {
+                    dim: step * total_len,
+                    "step": total_len * step,
+                    "engine": "pandas",
+                }
+                kwargs_numpy = {
+                    dim: step * total_len,
+                    "step": total_len * step,
+                    "engine": "numpy",
+                }
+                pandas_out = patch.rolling(**kwargs_pandas).mean().dropna(dim)
+                numpy_out = patch.rolling(**kwargs_numpy).mean().dropna(dim)
                 assert pandas_out == numpy_out
