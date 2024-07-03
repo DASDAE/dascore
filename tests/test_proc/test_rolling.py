@@ -270,7 +270,16 @@ class TestNumpyVsPandasRolling:
                 coord = patch.get_coord(dim)
                 step = coord.step
                 total_len = len(coord) - 2
-                kwargs = {dim: step * total_len, "step": total_len * step}
-                pandas_out = patch.rolling(**kwargs).mean().dropna(dim)
-                numpy_out = patch.rolling(**kwargs).mean().dropna(dim)
+                kwargs_pandas = {
+                    dim: step * total_len,
+                    "step": total_len * step,
+                    "engine": "pandas",
+                }
+                kwargs_numpy = {
+                    dim: step * total_len,
+                    "step": total_len * step,
+                    "engine": "numpy",
+                }
+                pandas_out = patch.rolling(**kwargs_pandas).mean().dropna(dim)
+                numpy_out = patch.rolling(**kwargs_numpy).mean().dropna(dim)
                 assert pandas_out == numpy_out
