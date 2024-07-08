@@ -439,9 +439,11 @@ class TestConcatenate:
             pa_dft_dropped_time = pa_dft.update(coords=cm.update(time=None))
             pa_list.append(pa_dft_dropped_time)
         sp_dft = dc.spool(pa_list)
-        # time_min_coord = sp_dft.get_contents()["time_min"]
+        time_min_coord = sp_dft.get_contents()["time_min"]
         sp_concat = sp_dft.concatenate(time_min=None)
         pa_concat = sp_concat[0]
+        updated_coord = pa_concat.coords.update(time_min=time_min_coord)
+        pa_concat = pa_concat.update(coords=updated_coord)
         assert pa_concat.shape[-1] == len(sp)
         assert "time_min" in pa_concat.dims
 
