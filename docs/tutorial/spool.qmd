@@ -161,7 +161,7 @@ merged_spool = spool.chunk(time=None)
 ```
 
 # concatenate
-Similar to `chunk`, [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) is used to combine patches together. However, `concatenate doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. 
+Similar to `chunk`, [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. 
 
 :::{.callout-warning}
 However, unlike [`chunk`](`dascore.BaseSpool.chunk`), not all `Spool` types implement [`concatenate`](`dascore.BaseSpool.concatenate`). 

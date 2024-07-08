@@ -412,7 +412,7 @@ class TestConcatenate:
         old_times = np.concatenate([p1.get_array("time"), p2.get_array("time")])
         assert np.all(new_time == old_times)
 
-    def test_concatenate_normal_with_non_dim(self, spool_with_non_coords):
+    def test_concat_normal_with_non_dim(self, spool_with_non_coords):
         """Ensure normal and non-dim patches can be concatenated together."""
         old_arrays = [x.get_array("time") for x in spool_with_non_coords]
         old_array = np.concatenate(old_arrays)
@@ -430,6 +430,20 @@ class TestConcatenate:
             nearly_eq = old_array == new_array
         assert np.all(both_nan | nearly_eq)
 
+    def test_concat_dropped_coord(self, random_spool):
+        sp = random_spool
+        pa_list = []
+        for pa in sp:
+            pa_dft = pa.dft("time")
+            cm = pa_dft.coords
+            pa_dft_dropped_time = pa_dft.update(coords=cm.update(time=None))
+            pa_list.append(pa_dft_dropped_time)
+        sp_dft = dc.spool(pa_list)
+        # time_min_coord = sp_dft.get_contents()["time_min"]
+        sp_concat = sp_dft.concatenate(time_min=None)
+        pa_concat = sp_concat[0]
+        assert pa_concat.shape[-1] == len(sp)
+        assert "time_min" in pa_concat.dims
 
 class TestStackPatches:
     """Tests for stacking (adding) spool content."""

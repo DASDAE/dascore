@@ -862,7 +862,7 @@ def concatenate_patches(
 
     Notes
     -----
-    - [`Spool.chunk `](`dascore.BaseSpool.chunk`) performs a similar operation
+    - [`Spool.chunk`](`dascore.BaseSpool.chunk`) performs a similar operation
       but accounts for coordinate values.
     - See also the
       [chunk section of the spool tutorial](`docs/tutorial/spool`#concatenate)
