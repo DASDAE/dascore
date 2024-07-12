@@ -47,7 +47,7 @@ def _get_distance_coord(acq):
         name_v2_0 = "SpatialSamplingIntervalUnit"
         name_v2_1 = "SpatialSamplingInterval.uom"
         ustr = attrs.get(name_v2_0, attrs.get(name_v2_1, ""))
-        return ustr
+        return unbyte(ustr)
 
     attrs = acq.attrs
     step = attrs["SpatialSamplingInterval"]
