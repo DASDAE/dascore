@@ -431,6 +431,8 @@ class TestConcatenate:
         assert np.all(both_nan | nearly_eq)
 
     def test_concat_dropped_coord(self, random_spool):
+        """Ensure patches after dropping a coordinate can be concatenated together 
+        and the concatenated patch can have a new dimension."""
         sp = random_spool
         pa_list = []
         for pa in sp:
