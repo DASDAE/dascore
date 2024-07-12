@@ -828,6 +828,9 @@ def concatenate_patches(
     """
     Concatenate the patches together.
 
+    Only patches which are compatible with the first patch are concatenated
+    together.
+
     Parameters
     ----------
     {check_bev}
@@ -846,18 +849,20 @@ def concatenate_patches(
     >>> spool_concat = spool.concatenate(time=None)
     >>> assert len(spool_concat) == 1
     >>>
-    >>> # Concatenate patches along a new dimension
+    >>> # Concatenate patches along a new dimension.
+    >>> # Note: This will only include the first patch if existing
+    >>> # dimensions are not identical.
     >>> spool_concat = spool.concatenate(wave_rank=None)
     >>> assert "wave_rank" in spool_concat[0].dims
     >>>
-    >>> # concatenate patches in groups of 3.
+    >>> # Concatenate patches in groups of 3.
     >>> big_spool = dc.spool([patch] * 12)
     >>> spool_concat = big_spool.concatenate(time=3)
     >>> assert len(spool_concat) == 4
 
     Notes
     -----
-    - [`Spool.chunk `](`dascore.BaseSpool.chunk`) performs a similar operation
+    - [`Spool.chunk`](`dascore.BaseSpool.chunk`) performs a similar operation
       but accounts for coordinate values.
     - See also the
       [chunk section of the spool tutorial](`docs/tutorial/spool`#concatenate)
