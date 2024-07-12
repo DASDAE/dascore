@@ -47,7 +47,7 @@ def _get_distance_coord(acq):
         name_v2_0 = "SpatialSamplingIntervalUnit"
         name_v2_1 = "SpatialSamplingInterval.uom"
         ustr = attrs.get(name_v2_0, attrs.get(name_v2_1, ""))
-        return ustr
+        return unbyte(ustr)
 
     attrs = acq.attrs
     step = attrs["SpatialSamplingInterval"]
@@ -98,7 +98,7 @@ def _get_prodml_attrs(fi, extras=None) -> list[dict]:
         "schemaVersion": "schema_version",
     }
     acq = fi["Acquisition"]
-    base_info = maybe_get_items(acq, _root_attrs)
+    base_info = maybe_get_items(acq.attrs, _root_attrs)
     d_coord = _get_distance_coord(acq)
     raw_nodes = _get_raw_node_dict(acq)
 
