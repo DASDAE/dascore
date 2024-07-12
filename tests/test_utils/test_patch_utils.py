@@ -431,8 +431,9 @@ class TestConcatenate:
         assert np.all(both_nan | nearly_eq)
 
     def test_concat_dropped_coord(self, random_spool):
-        """Ensure patches after dropping a coordinate can be concatenated together 
-        and the concatenated patch can have a new dimension."""
+        """Ensure patches after dropping a coordinate can be concatenated together
+        and the concatenated patch can have a new dimension.
+        """
         sp = random_spool
         pa_list = []
         for pa in sp:
@@ -448,6 +449,7 @@ class TestConcatenate:
         pa_concat = pa_concat.update(coords=updated_coords)
         assert pa_concat.shape[-1] == len(sp)
         assert "time_min" in pa_concat.dims
+
 
 class TestStackPatches:
     """Tests for stacking (adding) spool content."""
