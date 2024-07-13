@@ -23,3 +23,5 @@ febus_1.h5 73eba2b6e183b3bca51f8a1448c3b423c979d05ce6c18bfd7fb76b4f9bda5c0b http
 ap_sensing_1.hdf5 322429f2c44bed5dc72fb9a02f79bb0d3cb71048e93d906d3d24b0605b431b12 https://github.com/dasdae/test_data/raw/master/das/ap_sensing_1.hdf5
 silixa_h5_1.hdf5 d3f1b92b17ae2d00f900426e80d48964fb5a33b9480ef9805721ac756acd4a21 https://github.com/dasdae/test_data/raw/master/das/silixa_h5_1.hdf5
 deformation_rate_event_1.hdf5 be8574ae523de9b17d2a0f9e847f30301e1607e2076366e005cdb3a46b79f172 https://github.com/dasdae/test_data/raw/master/das/deformation_rate_event_1.hdf5
+neubrex_dss_forge.h5 49e501e16d880b22c5d9d8997223f0c1aceb942386efb09aae938b9d97eb51ed https://github.com/dasdae/test_data/raw/master/dss/neubrex_dss_forge.h5
+neubrex_dts_forge.h5 940f7bea6dd4c8a1340b4936b8eb7f9edc577cbcaf77c1f5ac295890f88c9ba5 https://github.com/dasdae/test_data/raw/master/dts/neubrex_dts_forge.h5
