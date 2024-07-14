@@ -12,9 +12,8 @@ def _is_neubrex(h5fi):
         return False
     expected_attrs = {"DataUnitLabel", "StartDateTime", "EndDateTime"}
     data_attrs = set(h5fi["data"].attrs)
-    if not expected_attrs.issubset(data_attrs):
-        return False
-    return True
+    if expected_attrs.issubset(data_attrs):
+        return True
 
 
 def _get_coord_manager(h5fi, snap=True):
