@@ -28,10 +28,11 @@ def get_registry():
     ureg.define("RADIANS=radians")
     ureg.define("Radians=radians")
     ureg.define("Radian=radians")
-
+    # define strain
+    ureg.define("strain=[]=ϵ")
     # allow multiplication with offset units.
     ureg.autoconvert_offset_to_baseunit = True
-    # set shortest display for units.
+    # set the shortest display for units.
     ureg.default_format = "~"
     pint.set_application_registry(ureg)
     return ureg

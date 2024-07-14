@@ -58,7 +58,7 @@ def _get_attr_dict(header):
     attr_map = {
         "gaugeLength": "gauge_length",
         "unit": "data_units",
-        "instrument": "intrument_id",
+        "instrument": "instrument_id",
         "experiment": "acquisition_id",
     }
     out = {"data_category": "DAS"}
