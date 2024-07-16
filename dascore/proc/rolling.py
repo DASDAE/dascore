@@ -251,6 +251,10 @@ def rolling(
 
     Notes
     -----
+    Here we have included some useful notes for the rolling function.
+
+    #### Note 1: Length of the output and NaN values
+
     Rolling is designed to behaves like Pandas [DataFrame.rolling](
     https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html)
     which has some important implications:
@@ -280,6 +284,31 @@ def rolling(
 
     - if time = 3 * dt and step = 3 * dt
         [NaN, 2.0]
+
+
+    #### Note 2: Applying custom functions with rolling operation
+    When `apply` is the desired rolling operation and we are interested to use our
+    own function over a desired window, we need to define our finction the way that
+    it performs the operation on the last axis of the sliced matrix
+
+    Below is an example of applying a custom zero crossing rate function (zcr_std) with
+    rolling operation for a window size of 100 samples and skipping every other samples.
+    It applys the desired operation (which is multiplying every sample to its next
+    sample to determine the zero crossings) on the last axis of the sliced
+    frame (from rolling).
+
+
+    ```python
+    def zcr_std(frame, axis=-1):
+        '''Compute standard deviation of zero crossing rate using rolling function.'''
+        zero_crossings = (frame[..., :-1] * frame[..., 1:]) < 0
+        return np.std(zero_crossings, axis=axis)
+
+    import dascore as dc
+
+    patch = dc.get_example_patch()
+    zcr_patch = patch.rolling(time=100, step=2, samples=True).apply(zcr_std)
+    ```
 
     Examples
     --------
