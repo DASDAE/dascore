@@ -391,7 +391,6 @@ def gaussian_filter(
 def ft_slope_filter(
     patch: PatchType,
     fil_para,
-    dims=("time", "distance"),
     directional=False,
     notch=False,
 ) -> PatchType:
@@ -408,16 +407,14 @@ def ft_slope_filter(
         The patch to filter.
     filt
         A length 4 sequence of the form [va, vb, vc, vd]. If notch is False,
-    the filter selects the apparent velocites
+        the filter selects the apparent velocites
         between 'vb' and 'vc' with tapering boundaries from 'va' to 'vb'
-    and from 'vc' to 'vd'.
-    dims
-        The dimensions to filter/transform which
+        and from 'vc' to 'vd'.
     directional
         If True, the filter should be considered direction. That is to say,
-    the sign of the values in `fil_para` indicate the
+        the sign of the values in `fil_para` indicate the
         direction (towards or away) with increasing coordinate values.
-    This can be used for up-down/left-right separation.
+        This can be used for up-down/left-right separation.
     notch
         If True, the filter represents a notch.
 
@@ -443,18 +440,18 @@ def ft_slope_filter(
     >>> ax2.set_title('Filtered')
     """
     # Perform dft if needed.
-    dft_patch = patch.pad(time="fft", distance="fft").dft(patch.dims)
+    dft_patch = patch.pad(distance="fft", time="fft").dft(patch.dims)
 
     transformed = (
         dft_patch is not patch
     )  # if dft didn't create a new patch it was already in dft.
 
     # Get slope array for specified dimensions
-    assert len(dims) == 2, "dims must be a length 2 tuple"
-    coord1 = dft_patch.get_array(f"ft_{dims[0]}")
-    coord2 = dft_patch.get_array(f"ft_{dims[1]}")
+    assert len(patch.dims) == 2, "patch.dims must be a length 2 tuple"
+    coord1 = dft_patch.get_array("ft_distance")
+    coord2 = dft_patch.get_array("ft_time")
 
-    vel = coord1 / (coord2[:, None] + sys.float_info.epsilon)
+    vel = coord2 / (coord1[:, None] + sys.float_info.epsilon)
     if not directional:
         vel = np.abs(vel)
 
@@ -477,8 +474,8 @@ def ft_slope_filter(
     new_data = dft_patch.data * fac
     out = dft_patch.update(data=new_data)
 
-    # # Undo transformation if an un-transformed patch was passed in.
     if transformed:
         out = out.idft().real()
-
-    return patch.update(data=out)
+        return patch.update(data=out.data[: patch.data.shape[0], : patch.data.shape[1]])
+    else:
+        return out

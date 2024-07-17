@@ -306,7 +306,6 @@ class TestFtSlopeFilter:
         )
 
         assert isinstance(filtered_patch, dc.Patch)
-        # Add more specific assertions based on expected behavior of directional filtering
 
     def test_notch_filter(self, example_patch):
         filtered_patch = example_patch.ft_slope_filter(
@@ -314,21 +313,6 @@ class TestFtSlopeFilter:
         )
 
         assert isinstance(filtered_patch, dc.Patch)
-        # Add more specific assertions based on expected behavior of notch filtering
-
-    def test_custom_dimensions(self, example_patch):
-        filtered_patch = example_patch.ft_slope_filter(
-            fil_para=[2e3, 2.2e3, 8e3, 2e4], dims=("distance", "time")
-        )
-
-        assert isinstance(filtered_patch, dc.Patch)
-        # Add assertions to check if the dimensions were correctly applied
-
-    def test_invalid_dimensions(self, example_patch):
-        with pytest.raises(AssertionError):
-            example_patch.ft_slope_filter(
-                fil_para=[2e3, 2.2e3, 8e3, 2e4], dims=("time", "distance", "extra")
-            )
 
     def test_filter_parameters(self, example_patch):
         filtered_patch1 = example_patch.ft_slope_filter(fil_para=[1e3, 1.5e3, 5e3, 1e4])
