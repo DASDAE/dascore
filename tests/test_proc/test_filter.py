@@ -282,3 +282,56 @@ class TestGaussianFilter:
         out = event_patch_2.gaussian_filter(time=5, distance=5, samples=True)
         assert isinstance(out, dc.Patch)
         assert out.shape == event_patch_2.shape
+
+
+class TestFtSlopeFilter:
+    @pytest.fixture
+    def example_patch(self):
+        return (
+            dc.get_example_patch("example_event_1")
+            .taper(time=0.05)
+            .pass_filter(time=(1, 500))
+        )
+
+    def test_basic_functionality(self, example_patch):
+        filtered_patch = example_patch.ft_slope_filter(fil_para=[2e3, 2.2e3, 8e3, 2e4])
+
+        assert isinstance(filtered_patch, dc.Patch)
+        assert filtered_patch.shape == example_patch.shape
+        assert not np.array_equal(filtered_patch.data, example_patch.data)
+
+    def test_directional_filter(self, example_patch):
+        filtered_patch = example_patch.ft_slope_filter(
+            fil_para=[2e3, 2.2e3, 8e3, 2e4], directional=True
+        )
+
+        assert isinstance(filtered_patch, dc.Patch)
+        # Add more specific assertions based on expected behavior of directional filtering
+
+    def test_notch_filter(self, example_patch):
+        filtered_patch = example_patch.ft_slope_filter(
+            fil_para=[2e3, 2.2e3, 8e3, 2e4], notch=True
+        )
+
+        assert isinstance(filtered_patch, dc.Patch)
+        # Add more specific assertions based on expected behavior of notch filtering
+
+    def test_custom_dimensions(self, example_patch):
+        filtered_patch = example_patch.ft_slope_filter(
+            fil_para=[2e3, 2.2e3, 8e3, 2e4], dims=("distance", "time")
+        )
+
+        assert isinstance(filtered_patch, dc.Patch)
+        # Add assertions to check if the dimensions were correctly applied
+
+    def test_invalid_dimensions(self, example_patch):
+        with pytest.raises(AssertionError):
+            example_patch.ft_slope_filter(
+                fil_para=[2e3, 2.2e3, 8e3, 2e4], dims=("time", "distance", "extra")
+            )
+
+    def test_filter_parameters(self, example_patch):
+        filtered_patch1 = example_patch.ft_slope_filter(fil_para=[1e3, 1.5e3, 5e3, 1e4])
+        filtered_patch2 = example_patch.ft_slope_filter(fil_para=[2e3, 2.2e3, 8e3, 2e4])
+
+        assert not np.array_equal(filtered_patch1.data, filtered_patch2.data)

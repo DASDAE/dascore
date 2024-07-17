@@ -7,6 +7,9 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 
 from __future__ import annotations
 
+import sys
+
+import numpy as np
 import pandas as pd
 from scipy import ndimage
 from scipy.ndimage import gaussian_filter as np_gauss
@@ -304,7 +307,8 @@ def savgol_filter(
     >>>
     >>> # Apply Savgol filter over distance dimension using a 5 sample
     >>> # distance window.
-    >>> filtered_pa_2 = pa.median_filter(distance=5, samples=True, polyorder=2)
+    >>> filtered_pa_2 = pa.median_filter(distance=5, samples=True,
+    polyorder=2)
     >>>
     >>> # Combine distance and time filter
     >>> filtered_pa_3 = pa.savgol_filter(distance=10, time=0.1, polyorder=4)
@@ -382,42 +386,54 @@ def gaussian_filter(
     return patch.update(data=data)
 
 
-
-@dc.patch_function()
-def ft_slope_filter(patch, fil_para, dims=("time", "distance"), directional=False, notch=False):
+@patch_function()
+@compose_docstring(sample_explination=samples_arg_description)
+def ft_slope_filter(
+    patch: PatchType,
+    fil_para,
+    dims=("time", "distance"),
+    directional=False,
+    notch=False,
+) -> PatchType:
     """
     Filter the patch over certain slopes in the 2D Fourier domain.
 
-    Most commonly this used as an F-K (frequency wavenumber) filter to attenuate energy with specified
+    Most commonly this used as an F-K (frequency wavenumber)
+    filter to attenuate energy with specified
     apparent velocities.
-    
+
     Parameters
-    -----------------
+    ----------
     patch
         The patch to filter.
     filt
-        A length 4 sequence of the form [va, vb, vc, vd]. If notch is False, the filter selects the apparent velocites 
-        between 'vb' and 'vc' with tapering boundaries from 'va' to 'vb' and from 'vc' to 'vd'. 
+        A length 4 sequence of the form [va, vb, vc, vd]. If notch is False,
+    the filter selects the apparent velocites
+        between 'vb' and 'vc' with tapering boundaries from 'va' to 'vb'
+    and from 'vc' to 'vd'.
     dims
-        The dimensions to filter/transform which 
+        The dimensions to filter/transform which
     directional
-        If True, the filter should be considered direction. That is to say, the sign of the values in `fil_para` indicate the 
-        direction (towards or away) with increasing coordinate values. This can be used for up-down/left-right
-        separation. 
+        If True, the filter should be considered direction. That is to say,
+    the sign of the values in `fil_para` indicate the
+        direction (towards or away) with increasing coordinate values.
+    This can be used for up-down/left-right separation.
     notch
-        If True, the filter represents a notch. 
+        If True, the filter represents a notch.
 
     Examples
-    -----------------
-    >>> # Apply 
-    >>> import dascore as dc 
+    --------
+    >>> import dascore as dc
     >>> from dascore.units import Hz
-    >>> import sys 
+    >>> import sys
+    >>> # Apply taper function and bandpass filter along time axis from 1 to 500 Hz
     >>> patch_raw = (dc.get_example_patch('example_event_1')
              .taper(time=0.05)
-             .pass_filter(time=(1*Hz, 500*Hz))            
+             .pass_filter(time=(1*Hz, 500*Hz))
             )
-    >>> patch_filtered = ft_slope_filter(patch_raw, fil_para=[2e3,2.2e3,8e3,2e4], directional=False, notch=False)
+    >>> # Apply fk filter
+    >>> patch_filtered = patch_raw.ft_slope_filter(fil_para=[2e3,2.2e3,8e3,2e4],
+                                        directional=False, notch=False)
     >>> plt.figure(figsize=(12, 8))
     >>> ax1 = plt.subplot(221)
     >>> patch_raw.viz.waterfall(ax=ax1,show=False, scale=0.5);
@@ -427,26 +443,36 @@ def ft_slope_filter(patch, fil_para, dims=("time", "distance"), directional=Fals
     >>> ax2.set_title('Filtered')
     """
     # Perform dft if needed.
-    dft_patch = patch.pad(time="fft",distance="fft").dft(patch_raw.dims)
+    dft_patch = patch.pad(time="fft", distance="fft").dft(patch.dims)
 
-    transformed = dft_patch is not patch  # if dft didn't create a new patch it was already in dft.   
+    transformed = (
+        dft_patch is not patch
+    )  # if dft didn't create a new patch it was already in dft.
 
     # Get slope array for specified dimensions
     assert len(dims) == 2, "dims must be a length 2 tuple"
     coord1 = dft_patch.get_array(f"ft_{dims[0]}")
     coord2 = dft_patch.get_array(f"ft_{dims[1]}")
-    
+
     vel = coord1 / (coord2[:, None] + sys.float_info.epsilon)
     if not directional:
         vel = np.abs(vel)
-    
-    # Apply filter with tapering function 
-    fac = np.where((vel >= fil_para[0]) & (vel <= fil_para[1]), 1.0 - np.sin(0.5 * np.pi * (vel - fil_para[0]) / (fil_para[1] - fil_para[0])), 1.0)
+
+    # Apply filter with tapering function
+    fac = np.where(
+        (vel >= fil_para[0]) & (vel <= fil_para[1]),
+        1.0 - np.sin(0.5 * np.pi * (vel - fil_para[0]) / (fil_para[1] - fil_para[0])),
+        1.0,
+    )
     fac = np.where((vel >= fil_para[1]) & (vel <= fil_para[2]), 0.0, fac)
-    fac = np.where((vel >= fil_para[2]) & (vel <= fil_para[3]), np.sin(0.5 * np.pi * (vel - fil_para[2]) / (fil_para[3] - fil_para[2])), fac)
-    
+    fac = np.where(
+        (vel >= fil_para[2]) & (vel <= fil_para[3]),
+        np.sin(0.5 * np.pi * (vel - fil_para[2]) / (fil_para[3] - fil_para[2])),
+        fac,
+    )
+
     fac = fac if notch else 1.0 - fac
-    
+
     # Apply filter
     new_data = dft_patch.data * fac
     out = dft_patch.update(data=new_data)
@@ -454,7 +480,5 @@ def ft_slope_filter(patch, fil_para, dims=("time", "distance"), directional=Fals
     # # Undo transformation if an un-transformed patch was passed in.
     if transformed:
         out = out.idft().real()
-    
-    return out
 
-
+    return patch.update(data=out)
