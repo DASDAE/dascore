@@ -307,8 +307,7 @@ def savgol_filter(
     >>>
     >>> # Apply Savgol filter over distance dimension using a 5 sample
     >>> # distance window.
-    >>> filtered_pa_2 = pa.median_filter(distance=5, samples=True,
-    polyorder=2)
+    >>> filtered_pa_2 = pa.median_filter(distance=5, samples=True,polyorder=2)
     >>>
     >>> # Combine distance and time filter
     >>> filtered_pa_3 = pa.savgol_filter(distance=10, time=0.1, polyorder=4)
@@ -420,24 +419,25 @@ def ft_slope_filter(
 
     Examples
     --------
+    >>> import matplotlib.pyplot as plt
     >>> import dascore as dc
     >>> from dascore.units import Hz
     >>> import sys
     >>> # Apply taper function and bandpass filter along time axis from 1 to 500 Hz
     >>> patch_raw = (dc.get_example_patch('example_event_1')
-             .taper(time=0.05)
-             .pass_filter(time=(1*Hz, 500*Hz))
-            )
+    ... 	.taper(time=0.05)
+    ... 	.pass_filter(time=(1*Hz, 500*Hz))
+    ... 	)
     >>> # Apply fk filter
     >>> patch_filtered = patch_raw.ft_slope_filter(fil_para=[2e3,2.2e3,8e3,2e4],
-                                        directional=False, notch=False)
-    >>> plt.figure(figsize=(12, 8))
+    ... 					directional=False, notch=False)
+    >>> fig=plt.figure(figsize=(12, 8))
     >>> ax1 = plt.subplot(221)
-    >>> patch_raw.viz.waterfall(ax=ax1,show=False, scale=0.5);
-    >>> ax1.set_title('Raw')
+    >>> ax1 = patch_raw.viz.waterfall(ax=ax1,show=False, scale=0.5)
+    >>> _ = ax1.set_title('Raw')
     >>> ax2 = plt.subplot(222)
-    >>> patch_filtered.viz.waterfall(ax=ax2,show=False, scale=0.5);
-    >>> ax2.set_title('Filtered')
+    >>> ax2 = patch_filtered.viz.waterfall(ax=ax2,show=False, scale=0.5)
+    >>> _ = ax2.set_title('Filtered')
     """
     # Perform dft if needed.
     dft_patch = patch.pad(distance="fft", time="fft").dft(patch.dims)
