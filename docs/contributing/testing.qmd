@@ -38,6 +38,13 @@ Pytest is highly configurable and has some rather useful flags such as
 -s, -x, and --pdb (especially with [pdbpp](https://github.com/pdbpp/pdbpp)).
 
 
+To run the docstring tests use the following:
+
+<!--pytest-codeblocks:skip-->
+```bash
+pytest dascore --doctest-modules
+```
+
 ## Writing Tests
 
 Tests should go into the `tests/` folder, which mirrors the structure of the main package.
