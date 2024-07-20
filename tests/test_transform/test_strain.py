@@ -56,6 +56,9 @@ class TestStrainRateConversion:
         old_units = get_quantity(terra15_das_patch.attrs.data_units)
         assert new_units != old_units
         assert new_units == old_units / get_quantity("m")
+        # Ensure strain is in units
+        strain = dc.get_unit("strain")
+        assert str(strain) in str(new_units)
 
     def test_odd_step_multiple_raise(self, terra15_das_patch):
         """Ensure odd step multiples raise a parameter error."""
@@ -67,7 +70,7 @@ class TestStrainRateConversion:
         """Ensure strain rate multiples > 2 are supported."""
         # Note: this is a bit of a weak test. However, since we just call
         # Patch.differentiate under the hood, and that is better tested
-        # for supporting different step sizes, its probably sufficient.
+        # for supporting different step sizes, it's probably sufficient.
         out1 = terra15_das_patch.velocity_to_strain_rate(step_multiple=2)
         assert isinstance(out1, dc.Patch)
         out2 = terra15_das_patch.velocity_to_strain_rate(step_multiple=4)
@@ -142,6 +145,9 @@ class TestStaggeredStrainRateConversion:
         old_units = get_quantity(terra15_das_patch.attrs.data_units)
         assert new_units != old_units
         assert new_units == old_units / get_quantity("m")
+        # Ensure strain is in units
+        strain = dc.get_unit("strain")
+        assert str(strain) in str(new_units)
 
     def test_no_data_units(self, terra15_das_patch):
         """Ensure a patch with no data units still works."""

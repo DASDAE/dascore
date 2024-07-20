@@ -108,8 +108,15 @@ def velocity_to_strain_rate(
     patch = differentiate.func(
         patch, dim="distance", order=order, step=step_multiple // 2
     )
+
+    dunits = None
+    if patch.attrs.data_units is not None:
+        dunits = dc.get_quantity(patch.attrs.data_units) * dc.get_quantity("strain")
+
     new_attrs = patch.attrs.update(
-        data_type="strain_rate", gauge_length=step * step_multiple
+        data_type="strain_rate",
+        gauge_length=step * step_multiple,
+        data_units=dunits,
     )
     return patch.update(attrs=new_attrs)
 
@@ -188,8 +195,7 @@ def velocity_to_strain_rate_edgeless(
     data_units = dc.get_quantity(patch.attrs.data_units)
     dist_units = dc.get_quantity(patch.get_coord("distance").units)
     if data_units and dist_units:
-        new_data_units = data_units / dist_units
-
+        new_data_units = (data_units * dc.get_unit("strain")) / dist_units
     new_attrs = patch.attrs.update(
         data_type="strain_rate",
         gauge_length=distance_step * step_multiple,
