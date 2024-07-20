@@ -120,7 +120,7 @@ def _get_prodml_attrs(fi, extras=None) -> list[dict]:
 
 def _get_dims(node):
     """Get the dimension names in the form of a tuple."""
-    # we use distance rather than locus, setup mapping to relect this.
+    # we use distance rather than locus, setup mapping to rename this.
     map_ = {"locus": "distance", "Locus": "distance", "Time": "time"}
     data_attrs = node["RawData"].attrs
     dims = unbyte(data_attrs.get("Dimensions", "time, distance"))

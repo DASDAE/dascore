@@ -249,6 +249,28 @@ def deformation_rate_event_1():
     return dc.spool(path)[0]
 
 
+@register_func(EXAMPLE_PATCHES, key="forge_dss")
+def forge_dss():
+    """
+    A DSS file from the Forge dataset collected by Neubrex.
+
+    https://gdr.openei.org/submissions/1565
+    """
+    path = fetch("neubrex_dss_forge.h5")
+    return dc.spool(path)[0]
+
+
+@register_func(EXAMPLE_PATCHES, key="forge_dts")
+def forge_dts():
+    """
+    A DTS file from the Forge dataset collected by Neubrex.
+
+    https://gdr.openei.org/submissions/1565
+    """
+    path = fetch("neubrex_dts_forge.h5")
+    return dc.spool(path)[0]
+
+
 @register_func(EXAMPLE_PATCHES, key="ricker_moveout")
 def ricker_moveout(
     frequency=15,
