@@ -289,6 +289,7 @@ class Patch:
     median_filter = dascore.proc.median_filter
     savgol_filter = dascore.proc.savgol_filter
     gaussian_filter = dascore.proc.gaussian_filter
+    slope_filter = dascore.proc.slope_filter
     abs = dascore.proc.abs
     conj = dascore.proc.conj
     real = dascore.proc.real
