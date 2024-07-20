@@ -475,7 +475,7 @@ def slope_filter(
         fac = fac if notch else 1.0 - fac
         return fac
 
-    def _get_slope(dft_patch, directional, freq_dims):
+    def _get_slope_array(dft_patch, directional, freq_dims):
         """Get an array which specifies slope."""
         # Get slope array for specified dimensions
         coord1 = dft_patch.get_array(freq_dims[0])
@@ -522,7 +522,7 @@ def slope_filter(
     _check_inputs(patch, filt, dims)
     freq_dims = tuple(f"ft_{x}" for x in dims)
     dft_patch, transformed = _get_transformed_patch(patch, freq_dims, dims)
-    slope = _get_slope(dft_patch, directional, freq_dims)
+    slope = _get_slope_array(dft_patch, directional, freq_dims)
     mask = _get_taper_mask(filt, slope, notch)
     new_data = dft_patch.data * mask
     dft_attenuated = dft_patch.update(data=new_data)
