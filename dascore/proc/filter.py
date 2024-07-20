@@ -8,6 +8,7 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -19,7 +20,7 @@ from scipy.signal import savgol_filter as np_savgol_filter
 
 import dascore
 from dascore.constants import PatchType, samples_arg_description
-from dascore.exceptions import FilterValueError
+from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import get_filter_units
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import check_filter_kwargs, check_filter_range
@@ -387,18 +388,18 @@ def gaussian_filter(
 
 @patch_function()
 @compose_docstring(sample_explination=samples_arg_description)
-def ft_slope_filter(
+def slope_filter(
     patch: PatchType,
-    fil_para,
-    directional=False,
-    notch=False,
+    filt: Sequence[float],
+    dims: tuple[str, str] = ("time", "distance"),
+    directional: bool = False,
+    notch: bool = False,
 ) -> PatchType:
     """
     Filter the patch over certain slopes in the 2D Fourier domain.
 
     Most commonly this used as an F-K (frequency wavenumber)
-    filter to attenuate energy with specified
-    apparent velocities.
+    filter to attenuate energy with specified apparent velocities.
 
     Parameters
     ----------
@@ -409,13 +410,17 @@ def ft_slope_filter(
         the filter selects the apparent velocites
         between 'vb' and 'vc' with tapering boundaries from 'va' to 'vb'
         and from 'vc' to 'vd'.
+    dims
+        The dimensions used to determine slope.
     directional
         If True, the filter should be considered direction. That is to say,
-        the sign of the values in `fil_para` indicate the
-        direction (towards or away) with increasing coordinate values.
-        This can be used for up-down/left-right separation.
+        the sign of the values in `filt` indicate the direction (towards or
+        away) with increasing coordinate values.
+        This can be used for up-down/left-right separation, assuming a
+        near-linear fiber layoyt.
     notch
-        If True, the filter represents a notch.
+        If True, the filter represents a notch, meaning the slopes
+        specified by `filt` are attenuated rather than those outside of them.
 
     Examples
     --------
@@ -424,13 +429,18 @@ def ft_slope_filter(
     >>> from dascore.units import Hz
     >>> import sys
     >>> # Apply taper function and bandpass filter along time axis from 1 to 500 Hz
-    >>> patch_raw = (dc.get_example_patch('example_event_1')
+    >>> patch_raw = (
+    ...     dc.get_example_patch('example_event_1')
     ... 	.taper(time=0.05)
     ... 	.pass_filter(time=(1*Hz, 500*Hz))
-    ... 	)
+    ... )
     >>> # Apply fk filter
-    >>> patch_filtered = patch_raw.ft_slope_filter(fil_para=[2e3,2.2e3,8e3,2e4],
-    ... 					directional=False, notch=False)
+    >>> patch_filtered = patch_raw.slope_filter(
+    ...     filt=[2e3,2.2e3,8e3,2e4],
+    ... 	directional=False,
+    ...     notch=False
+    ... )
+    >>> # Plot results
     >>> fig=plt.figure(figsize=(12, 8))
     >>> ax1 = plt.subplot(221)
     >>> ax1 = patch_raw.viz.waterfall(ax=ax1,show=False, scale=0.5)
@@ -439,43 +449,82 @@ def ft_slope_filter(
     >>> ax2 = patch_filtered.viz.waterfall(ax=ax2,show=False, scale=0.5)
     >>> _ = ax2.set_title('Filtered')
     """
-    # Perform dft if needed.
-    dft_patch = patch.pad(distance="fft", time="fft").dft(patch.dims)
 
-    transformed = (
-        dft_patch is not patch
-    )  # if dft didn't create a new patch it was already in dft.
+    def _check_inputs(patch, filt, dims):
+        """Ensure inputs are valid."""
+        if not isinstance(filt, Sequence) or not len(filt) == 4:
+            msg = "filt param must be a length 4 sequence."
+            raise ParameterError(msg)
+        if missing := set(dims) - set(patch.coords.coord_map):
+            msg = f"Cant apply slope filter. {missing} are missing from patch."
+            raise ParameterError(msg)
 
-    # Get slope array for specified dimensions
-    assert len(patch.dims) == 2, "patch.dims must be a length 2 tuple"
-    coord1 = dft_patch.get_array("ft_distance")
-    coord2 = dft_patch.get_array("ft_time")
+    def _get_taper_mask(filt, slope, notch):
+        """Get a mask for applying taper and attenuation."""
+        fac = np.where(
+            (slope >= filt[0]) & (slope <= filt[1]),
+            1.0 - np.sin(0.5 * np.pi * (slope - filt[0]) / (filt[1] - filt[0])),
+            1.0,
+        )
+        fac = np.where((slope >= filt[1]) & (slope <= filt[2]), 0.0, fac)
+        fac = np.where(
+            (slope >= filt[2]) & (slope <= filt[3]),
+            np.sin(0.5 * np.pi * (slope - filt[2]) / (filt[3] - filt[2])),
+            fac,
+        )
+        fac = fac if notch else 1.0 - fac
+        return fac
 
-    vel = coord2 / (coord1[:, None] + sys.float_info.epsilon)
-    if not directional:
-        vel = np.abs(vel)
+    def _get_slope(dft_patch, directional, freq_dims):
+        """Get an array which specifies slope."""
+        # Get slope array for specified dimensions
+        coord1 = dft_patch.get_array(freq_dims[0])
+        coord2 = dft_patch.get_array(freq_dims[1])
+        slope = coord1[:, None] / (coord2 + sys.float_info.epsilon)
+        if not directional:
+            slope = np.abs(slope)
+        return slope
 
-    # Apply filter with tapering function
-    fac = np.where(
-        (vel >= fil_para[0]) & (vel <= fil_para[1]),
-        1.0 - np.sin(0.5 * np.pi * (vel - fil_para[0]) / (fil_para[1] - fil_para[0])),
-        1.0,
-    )
-    fac = np.where((vel >= fil_para[1]) & (vel <= fil_para[2]), 0.0, fac)
-    fac = np.where(
-        (vel >= fil_para[2]) & (vel <= fil_para[3]),
-        np.sin(0.5 * np.pi * (vel - fil_para[2]) / (fil_para[3] - fil_para[2])),
-        fac,
-    )
+    def _get_transformed_patch(patch, freq_dims, dims):
+        """Get the patch transformed to 2d fourier domain if needed."""
+        transformed = True
+        if not set(freq_dims).issubset(patch.coords.coord_map):
+            pad_kwargs = {x: "fft" for x in dims}
+            dft_patch = patch.pad(**pad_kwargs).dft(dims)
+        else:
+            dft_patch = patch
+            transformed = False
+        # Ensure the transformed dimensions are the first 2 so un-padding
+        # can be done later.
+        out = dft_patch.transpose(*freq_dims, ...)
+        return out, transformed
 
-    fac = fac if notch else 1.0 - fac
+    def _get_output_patch(dft_attenuated, patch, transformed, dims):
+        """Get the appropriate output patch based on input domain."""
+        # Convert back to time domain if patch wasn't already in FK domain.
+        if transformed:
+            # Get pad values to trim
+            shape = {
+                i: (0, patch.coord_shapes[i][0] - dft_attenuated.coord_shapes[i][0])
+                for i in dims
+            }
+            out = (
+                dft_attenuated.idft()
+                .real()
+                .select(**shape, samples=True)
+                .transpose(*patch.dims)
+                .update(attrs=patch.attrs)
+            )
+            return out
+        else:
+            return dft_attenuated
 
-    # Apply filter
-    new_data = dft_patch.data * fac
-    out = dft_patch.update(data=new_data)
-
-    if transformed:
-        out = out.idft().real()
-        return patch.update(data=out.data[: patch.data.shape[0], : patch.data.shape[1]])
-    else:
-        return out
+    _check_inputs(patch, filt, dims)
+    freq_dims = tuple(f"ft_{x}" for x in dims)
+    dft_patch, transformed = _get_transformed_patch(patch, freq_dims, dims)
+    slope = _get_slope(dft_patch, directional, freq_dims)
+    mask = _get_taper_mask(filt, slope, notch)
+    new_data = dft_patch.data * mask
+    dft_attenuated = dft_patch.update(data=new_data)
+    out = _get_output_patch(dft_attenuated, patch, transformed, dims)
+    return out

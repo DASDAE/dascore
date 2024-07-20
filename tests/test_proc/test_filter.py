@@ -10,6 +10,7 @@ import dascore as dc
 from dascore.exceptions import (
     CoordDataError,
     FilterValueError,
+    ParameterError,
     PatchDimError,
     UnitError,
 )
@@ -285,37 +286,74 @@ class TestGaussianFilter:
 
 
 class TestFtSlopeFilter:
+    """Test suite for slope filter."""
+
     @pytest.fixture
     def example_patch(self):
+        """Return the example patch ready for slope filter."""
         return (
             dc.get_example_patch("example_event_1")
             .taper(time=0.05)
             .pass_filter(time=(1, 500))
         )
 
-    def test_basic_functionality(self, example_patch):
-        filtered_patch = example_patch.ft_slope_filter(fil_para=[2e3, 2.2e3, 8e3, 2e4])
-
+    def test_basic(self, example_patch):
+        """Ensure the basic filter works."""
+        filtered_patch = example_patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4])
         assert isinstance(filtered_patch, dc.Patch)
         assert filtered_patch.shape == example_patch.shape
         assert not np.array_equal(filtered_patch.data, example_patch.data)
 
     def test_directional_filter(self, example_patch):
-        filtered_patch = example_patch.ft_slope_filter(
-            fil_para=[2e3, 2.2e3, 8e3, 2e4], directional=True
+        """Ensure directional logic runs."""
+        filtered_patch = example_patch.slope_filter(
+            filt=[2e3, 2.2e3, 8e3, 2e4], directional=True
         )
 
         assert isinstance(filtered_patch, dc.Patch)
 
     def test_notch_filter(self, example_patch):
-        filtered_patch = example_patch.ft_slope_filter(
-            fil_para=[2e3, 2.2e3, 8e3, 2e4], notch=True
+        """Ensure notching can be performed with slope filter."""
+        filtered_patch = example_patch.slope_filter(
+            filt=[2e3, 2.2e3, 8e3, 2e4], notch=True
         )
-
         assert isinstance(filtered_patch, dc.Patch)
 
-    def test_filter_parameters(self, example_patch):
-        filtered_patch1 = example_patch.ft_slope_filter(fil_para=[1e3, 1.5e3, 5e3, 1e4])
-        filtered_patch2 = example_patch.ft_slope_filter(fil_para=[2e3, 2.2e3, 8e3, 2e4])
-
+    def test_different_params_not_equal(self, example_patch):
+        """Ensure filter is sensitive to different parameters."""
+        filtered_patch1 = example_patch.slope_filter(filt=[1e3, 1.5e3, 5e3, 1e4])
+        filtered_patch2 = example_patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4])
         assert not np.array_equal(filtered_patch1.data, filtered_patch2.data)
+
+    def test_fk_input_patch(self, example_patch):
+        """Ensure an input fk patch is returned in the fk domain."""
+        fk_patch = example_patch.dft(dim=("time", "distance"), real="time")
+        out = fk_patch.slope_filter(filt=[1e3, 1.5e3, 5e3, 1e4])
+        # Ensure the output is still in the fk domain
+        dims = set(out.dims)
+        assert "ft_time" in dims
+        assert "ft_distance" in dims
+
+    def test_other_dims(self, example_patch):
+        """Ensure dims other than time and distance work."""
+        patch = example_patch.rename_coords(time="money")
+        out = patch.slope_filter(
+            filt=[2e3, 2.2e3, 8e3, 2e4],
+            dims=("money", "distance"),
+        )
+        assert out.dims == patch.dims
+
+    def test_bad_filt_raises(self, example_patch):
+        """Bad filter params should raise Parameter error."""
+        msg = "filt param must be a length 4 sequence"
+        filt = [1e3, 1.5e3, 5e3]
+        with pytest.raises(ParameterError, match=msg):
+            example_patch.slope_filter(filt=filt)
+
+    def test_bad_dims(self, example_patch):
+        """Ensure passing dimensions not in patch raises."""
+        patch = example_patch.rename_coords(time="money")
+        msg = "are missing from patch"
+        filt = [1e3, 1.5e3, 5e3, 10e3]
+        with pytest.raises(ParameterError, match=msg):
+            patch.slope_filter(filt=filt, dims=("time", "distance"))
