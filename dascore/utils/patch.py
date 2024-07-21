@@ -894,7 +894,8 @@ def concatenate_patches(
 
     def get_compatible_patches(patches, dim, check_behavior):
         """Get the patches which can be concatenated, dim names, and new dim."""
-        patches = list(patches)
+        # We need to drop private coords for dft concats to work.
+        patches = list(x.drop_private_coords() for x in patches)
         first_patch = patches[0]
         compat_patches = []
         # Ensure patch dimensions are compatible.

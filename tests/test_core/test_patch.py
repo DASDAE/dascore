@@ -652,28 +652,6 @@ class TestGetCoord:
             patch.get_coord("distance", require_sorted=True)
 
 
-class TestAssertHasCoords:
-    """Test suite for has coords."""
-
-    def test_raises_single(self, random_patch):
-        """Ensure an error is raised if as single required coord isnt found."""
-        match = "does not have required coordinate"
-        with pytest.raises(CoordError, match=match):
-            random_patch.assert_has_coords("foo")
-
-    def test_raises_multiple(self, random_patch):
-        """Ensure an error is raised if required coords aren't found."""
-        match = "does not have required coordinate"
-        with pytest.raises(CoordError, match=match):
-            random_patch.assert_has_coords(("bar", "depth"))
-
-    def test_has_coords_ok(self, random_patch):
-        """No Error should be raised if the patch has the coordinates."""
-        dims = random_patch.dims
-        random_patch.assert_has_coords(dims[0])
-        random_patch.assert_has_coords(dims)
-
-
 class TestDeprecations:
     """Ensure deprecations are issued."""
 

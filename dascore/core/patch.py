@@ -255,6 +255,7 @@ class Patch:
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
     drop_coords = dascore.proc.drop_coords
+    drop_private_coords = dascore.proc.drop_private_coords
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
     apply_ufunc = dascore.proc.apply_ufunc

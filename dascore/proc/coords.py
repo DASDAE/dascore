@@ -222,6 +222,31 @@ def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
 
 
 @patch_function()
+def drop_private_coords(self: PatchType) -> PatchType:
+    """
+    Drop any provate coords in the patch.
+
+    Parameters
+    ----------
+    self
+        Patch
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> pa = (
+    ...     dc.get_example_patch("random_patch")
+    ...     .update_coords(_private=np.array([1,2,3]))
+    ... )
+    >>> pa_no_priv = pa.drop_private_coords()
+    >>> assert "_private" not in pa.coords.coord_map
+    """
+    new_coord, data = self.coords.drop_private_coords(array=self.data)
+    return self.new(coords=new_coord, dims=new_coord.dims, data=data)
+
+
+@patch_function()
 def make_broadcastable_to(
     self: PatchType,
     shape: tuple[int, ...],

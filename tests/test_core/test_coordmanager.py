@@ -356,6 +356,21 @@ class TestDrop:
             assert coord not in set(cm_new.coord_map)
 
 
+class TestDropPrivateCoords:
+    """Tests for dropping private coordinates."""
+
+    def test_drop_private(self, cm_basic):
+        """Ensure private coords are removed."""
+        cm = cm_basic.update_coords(_bad=(None, np.array([1, 2, 3])))
+        out = cm.drop_private_coords()[0]
+        assert "_bad" not in out.coord_map
+
+    def test_no_private_coords(self, cm_basic):
+        """Ensure this does nothing when no private attrs are found."""
+        out = cm_basic.drop_private_coords()[0]
+        assert out is cm_basic
+
+
 class TestSelect:
     """Tests for filtering coordinates."""
 

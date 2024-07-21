@@ -449,6 +449,15 @@ class TestConcatenate:
             nearly_eq = old_array == new_array
         assert np.all(both_nan | nearly_eq)
 
+    def test_private_coords_dropped(self, random_patch):
+        """Ensure private coords don't interfere with concat along new dim."""
+        pa1 = random_patch.update_coords(_private_1=(None, np.array([1, 2, 3])))
+        pa2 = random_patch.update_coords(_private_1=(None, np.array([2, 2, 2])))
+        spool = dc.spool([pa1, pa2])
+        out = spool.concatenate(time_new=None)
+        assert len(out) == 1
+        assert out[0].shape[-1] == 2
+
     def test_concat_dropped_coord(self, random_spool):
         """Ensure patches after dropping a coordinate can be concatenated together
         and the concatenated patch can have a new dimension.
