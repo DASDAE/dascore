@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection
 
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
-from typing_extensions import Self
 
 from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord
 from dascore.exceptions import CoordError, ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import get_parent_code_name, iterate
+from dascore.utils.misc import get_parent_code_name
 from dascore.utils.patch import patch_function
 
 
@@ -142,16 +141,6 @@ def get_array(
         require_evenly_sampled=require_evenly_sampled,
     )
     return coord.data
-
-
-def assert_has_coords(self: PatchType, coord_names: Sequence[str] | str) -> Self:
-    """Raise an error if patch doesn't have required coordinates."""
-    required_coords = set(iterate(coord_names))
-    current_coords = set(self.coords.coord_map)
-    if missing := required_coords - current_coords:
-        msg = f"Patch does not have required coordinate(s): {missing}"
-        raise CoordError(msg)
-    return self
 
 
 @patch_function()

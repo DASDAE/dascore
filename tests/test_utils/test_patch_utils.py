@@ -11,7 +11,7 @@ from dascore.exceptions import (
     IncompatiblePatchError,
     ParameterError,
     PatchAttributeError,
-    PatchDimError,
+    PatchCoordinateError,
 )
 from dascore.utils.patch import (
     _spool_up,
@@ -26,7 +26,13 @@ from dascore.utils.patch import (
 
 
 @dc.patch_function(required_dims=("time", "distance"))
-def time_dist_func(patch):
+def time_dist_dims(patch):
+    """A dummy function to test time, distance dim requirement."""
+    return patch
+
+
+@dc.patch_function(required_coords=("time", "distance"))
+def time_dist_coord(patch):
     """A dummy function to test time, distance coord requirement."""
     return patch
 
@@ -66,14 +72,27 @@ class TestPatchFunction:
     def test_has_required_dims(self, random_patch):
         """Test that the required dimension check works."""
         # passes if this doesn't raise
-        time_dist_func(random_patch)
+        time_dist_dims(random_patch)
 
     def test_doesnt_have_required_dims(self, random_patch):
         """Raises if patch doesn't have required dimensions."""
         pa = random_patch.rename_coords(time="for_a_hug")
 
-        with pytest.raises(PatchDimError):
-            time_dist_func(pa)
+        with pytest.raises(PatchCoordinateError):
+            time_dist_dims(pa)
+
+    def test_has_required_coords(self, random_patch, random_dft_patch):
+        """Test that the required coord check works."""
+        # if the coords are dimensions it should work
+        time_dist_coord(random_patch)
+        # or if they are only coordinates it should work
+        time_dist_coord(random_dft_patch)
+
+    def test_doesnt_have_required_coords(self, random_patch):
+        """Raises if patch doesn't have required coords."""
+        pa = random_patch.rename_coords(time="for_a_hug")
+        with pytest.raises(PatchCoordinateError):
+            time_dist_coord(pa)
 
     def test_required_attrs(self, random_patch):
         """Tests for requiring certain attrs."""
@@ -110,15 +129,15 @@ class TestHistory:
 
     def test_simple_history(self, random_patch):
         """Just make sure function is logged."""
-        out = time_dist_func(random_patch)
+        out = time_dist_dims(random_patch)
         history = out.attrs["history"]
         assert len(history) == 1
-        assert "time_dist_func" in history[0]
+        assert "time_dist_dim" in history[0]
 
     def test_original_history_unchanged(self, random_patch):
         """Ensure logging history only occurs on new Patch."""
         first_history = list(random_patch.attrs["history"])
-        _ = time_dist_func(random_patch)
+        _ = time_dist_dims(random_patch)
         last_history = list(random_patch.attrs["history"])
         assert first_history == last_history
 
@@ -140,7 +159,7 @@ class TestGetDimValueFromKwargs:
     def test_raises_no_overlap(self, random_patch):
         """Test that an exception is raised when key doesn't exist."""
         kwargs = {}
-        with pytest.raises(PatchDimError):
+        with pytest.raises(PatchCoordinateError):
             get_dim_value_from_kwargs(random_patch, kwargs)
 
 
@@ -219,7 +238,7 @@ class TestAlignPatches:
         """Patches with no common dims should not be align-able."""
         new = random_patch.rename_coords(time="money", distance="gold")
         msg = "align patches with no shared dimensions."
-        with pytest.raises(PatchDimError, match=msg):
+        with pytest.raises(PatchCoordinateError, match=msg):
             align_patch_coords(new, random_patch)
 
     def test_new_dims_each_patch(self, random_patch):
@@ -306,7 +325,7 @@ class TestConcatenate:
         p1 = random_patch
         p2 = random_patch.rename_coords(time="money")
         msg = "Cannot concatenate"
-        with pytest.raises(PatchDimError, match=msg):
+        with pytest.raises(PatchCoordinateError, match=msg):
             concatenate_patches([p1, p2], time=None)
 
     def test_duplicate_patches_existing_dim(self, random_patch):
@@ -493,7 +512,7 @@ class TestStackPatches:
 
     def test_bad_dim_vary(self, random_spool):
         """Ensure when dim_vary is not in patch an error is raised."""
-        with pytest.raises(PatchDimError):
+        with pytest.raises(PatchCoordinateError):
             stack_patches(random_spool, dim_vary="money")
 
     def test_stack_coords(self):

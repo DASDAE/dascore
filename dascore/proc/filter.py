@@ -391,7 +391,7 @@ def gaussian_filter(
 def slope_filter(
     patch: PatchType,
     filt: Sequence[float],
-    dims: tuple[str, str] = ("time", "distance"),
+    dims: tuple[str, str] = ("distance", "time"),
     directional: bool = False,
     notch: bool = False,
 ) -> PatchType:
@@ -411,7 +411,10 @@ def slope_filter(
         between 'vb' and 'vc' with tapering boundaries from 'va' to 'vb'
         and from 'vc' to 'vd'.
     dims
-        The dimensions used to determine slope.
+        The dimensions used to determine slope. The first dim is in the
+        numerator and the second in the denominator. (eg distance, time)
+        represents a velocity since distance/time has units of |L|/|T|
+        (commonly m/s).
     directional
         If True, the filter should be considered direction. That is to say,
         the sign of the values in `filt` indicate the direction (towards or
@@ -477,54 +480,26 @@ def slope_filter(
 
     def _get_slope_array(dft_patch, directional, freq_dims):
         """Get an array which specifies slope."""
-        # Get slope array for specified dimensions
-        coord1 = dft_patch.get_array(freq_dims[0])
-        coord2 = dft_patch.get_array(freq_dims[1])
-        slope = coord1[:, None] / (coord2 + sys.float_info.epsilon)
+        coord1 = dft_patch.get_array(freq_dims[-1])
+        coord2 = dft_patch.get_array(freq_dims[-2])
+        slope = np.divide.outer(coord1, (coord2 + sys.float_info.epsilon))
         if not directional:
             slope = np.abs(slope)
-        return slope
-
-    def _get_transformed_patch(patch, freq_dims, dims):
-        """Get the patch transformed to 2d fourier domain if needed."""
-        transformed = True
-        if not set(freq_dims).issubset(patch.coords.coord_map):
-            pad_kwargs = {x: "fft" for x in dims}
-            dft_patch = patch.pad(**pad_kwargs).dft(dims)
-        else:
-            dft_patch = patch
-            transformed = False
-        # Ensure the transformed dimensions are the first 2 so un-padding
-        # can be done later.
-        out = dft_patch.transpose(*freq_dims, ...)
-        return out, transformed
-
-    def _get_output_patch(dft_attenuated, patch, transformed, dims):
-        """Get the appropriate output patch based on input domain."""
-        # Convert back to time domain if patch wasn't already in FK domain.
-        if transformed:
-            # Get pad values to trim
-            shape = {
-                i: (0, patch.coord_shapes[i][0] - dft_attenuated.coord_shapes[i][0])
-                for i in dims
-            }
-            out = (
-                dft_attenuated.idft()
-                .real()
-                .select(**shape, samples=True)
-                .transpose(*patch.dims)
-                .update(attrs=patch.attrs)
-            )
-            return out
-        else:
-            return dft_attenuated
+        # reshape slope array so it broadcasts with patch.
+        new_shape = tuple(
+            dft_patch.coord_shapes[x][0] if x in freq_dims else 1
+            for x in dft_patch.dims
+        )
+        return slope.reshape(*new_shape)
 
     _check_inputs(patch, filt, dims)
     freq_dims = tuple(f"ft_{x}" for x in dims)
-    dft_patch, transformed = _get_transformed_patch(patch, freq_dims, dims)
+    dft_patch = patch.dft.func(patch, dims)
+    transformed = patch is not dft_patch
     slope = _get_slope_array(dft_patch, directional, freq_dims)
     mask = _get_taper_mask(filt, slope, notch)
     new_data = dft_patch.data * mask
-    dft_attenuated = dft_patch.update(data=new_data)
-    out = _get_output_patch(dft_attenuated, patch, transformed, dims)
+    out = dft_patch.update(data=new_data)
+    if transformed:
+        out = out.idft()
     return out

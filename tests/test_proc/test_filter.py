@@ -11,7 +11,7 @@ from dascore.exceptions import (
     CoordDataError,
     FilterValueError,
     ParameterError,
-    PatchDimError,
+    PatchCoordinateError,
     UnitError,
 )
 
@@ -201,7 +201,7 @@ class TestMedianFilter:
     def test_median_no_kwargs_raises(self, random_patch):
         """Apply default values."""
         msg = "You must specify one or more dimension in keyword args."
-        with pytest.raises(PatchDimError, match=msg):
+        with pytest.raises(PatchCoordinateError, match=msg):
             random_patch.median_filter()
 
     def test_median_filter_time(self, random_patch):
@@ -228,7 +228,7 @@ class TestSavgolFilter:
     def test_savgol_no_kwargs_raises(self, random_patch):
         """Apply default values."""
         msg = "You must specify one or more"
-        with pytest.raises(PatchDimError, match=msg):
+        with pytest.raises(PatchCoordinateError, match=msg):
             random_patch.savgol_filter(polyorder=2)
 
     def test_savgol_filter_time(self, random_patch):

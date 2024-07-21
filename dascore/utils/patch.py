@@ -27,7 +27,7 @@ from dascore.exceptions import (
     IncompatiblePatchError,
     ParameterError,
     PatchAttributeError,
-    PatchDimError,
+    PatchCoordinateError,
 )
 from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs
@@ -111,26 +111,33 @@ def _get_history_str(patch: PatchType, func, *args, _history="full", **kwargs) -
     return history_str
 
 
-def check_patch_dims(
-    patch: PatchType, required_dims: tuple[str, ...] | None
-) -> PatchType:
+def check_patch_coords(
+    patch: PatchType,
+    dims: Sequence[str] | None = None,
+    coords: Sequence[str] | None = None,
+):
     """
-    Check if a patch object has required dimensions, else raise PatchDimError.
+    Check if a patch object has required coordinates, else raise PatchDimError.
 
     Parameters
     ----------
     patch
         The input patch
-    required_dims
-        A tuple of required dimensions.
+    dims
+        A tuple of required dimension names.
+    coords
+        A tuple of required coordinate names.
     """
-    if required_dims is None:
-        return patch
-    dim_set = set(patch.dims)
-    missing_dims = set(required_dims) - set(patch.dims)
-    if not set(required_dims).issubset(dim_set):
-        msg = f"patch is missing required dims: {tuple(missing_dims)}"
-        raise PatchDimError(msg)
+    missing = set()
+    if dims is not None:
+        dim_set = set(patch.dims)
+        missing |= set(dims) - dim_set
+    if coords is not None:
+        coord_set = set(patch.coords.coord_map)
+        missing |= set(coords) - coord_set
+    if missing:
+        msg = f"patch is missing required coordinates: {tuple(missing)}"
+        raise PatchCoordinateError(msg)
     return patch
 
 
@@ -165,6 +172,7 @@ def check_patch_attrs(patch: PatchType, required_attrs: attr_type) -> PatchType:
 
 def patch_function(
     required_dims: tuple[str, ...] | Callable | None = None,
+    required_coords: tuple[str, ...] | None = None,
     required_attrs: attr_type = None,
     history: Literal["full", "method_name", None] = "full",
 ):
@@ -175,6 +183,8 @@ def patch_function(
     ----------
     required_dims
         A tuple of dimensions which must be found in the Patch.
+    required_coords
+        A tuple of coordinates which must be found in the Patch.
     required_attrs
         A dict of attributes which must be found in the Patch and whose
         values must be equal to those provided.
@@ -210,7 +220,11 @@ def patch_function(
     def _wrapper(func):
         @functools.wraps(func)
         def _func(patch, *args, **kwargs):
-            check_patch_dims(patch, required_dims)
+            check_patch_coords(
+                patch,
+                dims=required_dims,
+                coords=required_coords,
+            )
             check_patch_attrs(patch, required_attrs)
             hist_str = _get_history_str(patch, func, *args, _history=history, **kwargs)
             out: PatchType = func(patch, *args, **kwargs)
@@ -428,7 +442,7 @@ def get_dim_value_from_kwargs(patch, kwargs):
             f"You passed the following kwargs: {kwargs} to a patch with "
             f"dimensions {patch.dims}"
         )
-        raise PatchDimError(msg)
+        raise PatchCoordinateError(msg)
     dim = next(iter(overlap))
     axis = dims.index(dim)
     return dim, axis, kwargs[dim]
@@ -440,7 +454,7 @@ def get_multiple_dim_value_from_kwargs(patch, kwargs):
     overlap = set(dims) & set(kwargs)
     if not overlap:
         msg = "You must specify one or more dimension in keyword args."
-        raise PatchDimError(msg)
+        raise PatchCoordinateError(msg)
     out = {}
     for dim in overlap:
         axis = patch.dims.index(dim)
@@ -556,7 +570,7 @@ def align_patch_coords(
             "Cannot align patches with no shared dimensions. Dimensions are "
             f"patch1: {patch1.dims}, patch2: {patch2.dims}"
         )
-        raise PatchDimError(msg)
+        raise PatchCoordinateError(msg)
     # First ensure the patches have the same dims
     dims = _merge_tuples(patch1.dims, patch2.dims)
     dim_dict = {x: num for num, x in enumerate(dims)}
@@ -887,7 +901,7 @@ def concatenate_patches(
         dim_set = {x.dims for x in patches}
         if not len(dim_set) == 1:
             msg = "Cannot concatenate patches with different dimensions."
-            raise PatchDimError(msg)
+            raise PatchCoordinateError(msg)
         # Get dim name and such
         first_dims = next(iter(dim_set))
         new_dim = dim not in first_dims
@@ -962,7 +976,7 @@ def stack_patches(
     # ensure dim_vary is in dims
     if dim_vary is not None and dim_vary not in init_patch.dims:
         msg = f"Dimension {dim_vary} is not in first patch."
-        raise PatchDimError(msg)
+        raise PatchCoordinateError(msg)
 
     for p in patches:
         # check dimensions of patch compared to init_patch

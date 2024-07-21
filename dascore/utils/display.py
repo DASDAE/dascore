@@ -138,6 +138,9 @@ def attrs_to_text(attrs) -> Text:
     txt = Text("➤ ") + Text("Attributes", style=dascore_styles["dc_yellow"])
     txt += Text("\n")
     for name, attr in dict(attrs).items():
+        # skip private coords for display
+        if name.startswith("_"):
+            continue
         # determine styles here based on keys
         style = dascore_styles.get(name, None)
         if name.endswith("units"):
