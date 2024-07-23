@@ -223,8 +223,10 @@ def _get_idft_dims_steps_axis(patch, dim):
 def _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real):
     """Get the new coords for the idft and expected sizes to pass to numpy."""
     shapes = patch.shape
+    padded = patch.attrs.get("_dft_padded", False)
     coord_map = patch.coords.disassociate_coord(*dims).get_coord_tuple_map()
     sizes = []
+    padding = {}
     for old_dim, new_dim, ax in zip(dims, new_dims, axes):
         # if old dim is stored
         ax_len = shapes[ax]
@@ -238,17 +240,24 @@ def _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real):
         if (len(potential_coord) == ax_len) or (real and old_dim == dims[-1]):
             sizes.append(len(potential_coord))
         coord_map[new_dim] = (new_dim, potential_coord)
+        if not padded:  # No padding, go to next dim.
+            continue
+        old_len = len(coord_map.pop(f"_{new_dim}_unpadded")[1])
+        diff = old_len - len(coord_map[new_dim][1])
+        if diff < 0:
+            padding[new_dim] = (0, diff)
     ft = FourierTransformatter()
     new_dims = ft.rename_dims(patch.dims, index=axes, forward=False)
     cm = get_coord_manager(coord_map, dims=new_dims).drop_coords(*dims)[0]
     out_size = np.asarray(sizes) if len(sizes) else None
-    return cm, out_size
+    return cm, out_size, padding
 
 
 def _get_idft_attrs(patch, dims, new_coords):
     """Get new attributes for transformed patch."""
     # add all {dim}_min to new coords to ensure reverse ft can restore dims.
     new = dict(patch.attrs)
+    new.pop("coords", None)
     new["dims"] = new_coords.dims
     new["data_units"] = _get_data_units_from_dims(patch, dims, mul)
     # Restore the pre-dft datatype.
@@ -256,17 +265,6 @@ def _get_idft_attrs(patch, dims, new_coords):
         new["data_type"] = new.pop("_pre_dft_data_type", None)
     new.pop("_dft_padded", None)
     return PatchAttrs(**new)
-
-
-def _undo_dft_padding(out, patch, dims):
-    """Undo the padding from dft by trimming values from end of dims"""
-    cmap = patch.coords.coord_map
-    trims = {}
-    for dim in dims:
-        diff = len(cmap[f"_{dim}_unpadded"]) - len(cmap[dim])
-        if diff < 0:
-            trims[dim] = (0, diff)
-    return out.select.func(out, **trims, samples=True)
 
 
 @patch_function()
@@ -314,7 +312,10 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     dims, steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
     new_dims = FourierTransformatter().rename_dims(dims, forward=False)
     func = nft.irfftn if real else nft.ifftn
-    coords, sizes = _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real)
+    # Get new coords, fft sizes, and padding to remove.
+    coords, sizes, padding = _get_idft_coords_and_sizes(
+        patch, dims, new_dims, axes, real
+    )
     # now unshift data and undo scaling
     ax_slice = slice(None, -1) if real else slice(None)
     scale_factor = np.prod([to_float(coords.coord_map[x].step) for x in new_dims])
@@ -322,6 +323,6 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     data = func(_preped, s=sizes, axes=axes)
     attrs = _get_idft_attrs(patch, dims, coords)
     out = patch.new(data=data, attrs=attrs, coords=coords)
-    if patch.attrs.get("_dft_padded"):  # need to undo padding.
-        out = _undo_dft_padding(out, patch, new_dims)
+    if padding:
+        out = out.select(**padding, samples=True)
     return out

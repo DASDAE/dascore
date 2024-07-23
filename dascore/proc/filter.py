@@ -23,7 +23,11 @@ from dascore.constants import PatchType, samples_arg_description
 from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import get_filter_units
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import check_filter_kwargs, check_filter_range
+from dascore.utils.misc import (
+    broadcast_for_index,
+    check_filter_kwargs,
+    check_filter_range,
+)
 from dascore.utils.patch import (
     get_dim_sampling_rate,
     get_multiple_dim_value_from_kwargs,
@@ -406,10 +410,9 @@ def slope_filter(
     patch
         The patch to filter.
     filt
-        A length 4 sequence of the form [va, vb, vc, vd]. If notch is False,
-        the filter selects the apparent velocites
-        between 'vb' and 'vc' with tapering boundaries from 'va' to 'vb'
-        and from 'vc' to 'vd'.
+        A length 4 array of the form [va, vb, vc, vd]. If notch is False,
+        the filter selects the apparent velocites between 'vb' and 'vc'
+        with tapering boundaries from 'va' to 'vb' and from 'vc' to 'vd'.
     dims
         The dimensions used to determine slope. The first dim is in the
         numerator and the second in the denominator. (eg distance, time)
@@ -423,7 +426,8 @@ def slope_filter(
         near-linear fiber layoyt.
     notch
         If True, the filter represents a notch, meaning the slopes
-        specified by `filt` are attenuated rather than those outside of them.
+        specified by the inner `filt` parameterse are attenuated rather
+        than those outside of them.
 
     Examples
     --------
@@ -444,12 +448,10 @@ def slope_filter(
     ...     notch=False
     ... )
     >>> # Plot results
-    >>> fig=plt.figure(figsize=(12, 8))
-    >>> ax1 = plt.subplot(221)
-    >>> ax1 = patch_raw.viz.waterfall(ax=ax1,show=False, scale=0.5)
+    >>> fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 8))
+    >>> ax1 = patch_raw.viz.waterfall(ax=ax1, scale=0.5)
     >>> _ = ax1.set_title('Raw')
-    >>> ax2 = plt.subplot(222)
-    >>> ax2 = patch_filtered.viz.waterfall(ax=ax2,show=False, scale=0.5)
+    >>> ax2 = patch_filtered.viz.waterfall(ax=ax2, scale=0.5)
     >>> _ = ax2.set_title('Filtered')
     """
 
@@ -480,17 +482,20 @@ def slope_filter(
 
     def _get_slope_array(dft_patch, directional, freq_dims):
         """Get an array which specifies slope."""
-        coord1 = dft_patch.get_array(freq_dims[-1])
-        coord2 = dft_patch.get_array(freq_dims[-2])
-        slope = np.divide.outer(coord1, (coord2 + sys.float_info.epsilon))
+        dim1, dim2 = freq_dims[-1], freq_dims[-2]
+        dims = dft_patch.dims
+        ndims = dft_patch.ndim
+        coord1 = dft_patch.get_array(dim1)
+        coord2 = dft_patch.get_array(dim2) + sys.float_info.epsilon
+        # Need to add appropriate blank dims to keep overall shape of patch.
+        ax1, ax2 = dims.index(dim1), dims.index(dim2)
+        shape_1 = broadcast_for_index(ndims, ax1, value=slice(None), fill=None)
+        shape_2 = broadcast_for_index(ndims, ax2, value=slice(None), fill=None)
+        # Then just allow broadcasting to do its magic
+        slope = coord1[shape_1] / coord2[shape_2]
         if not directional:
             slope = np.abs(slope)
-        # reshape slope array so it broadcasts with patch.
-        new_shape = tuple(
-            dft_patch.coord_shapes[x][0] if x in freq_dims else 1
-            for x in dft_patch.dims
-        )
-        return slope.reshape(*new_shape)
+        return slope
 
     _check_inputs(patch, filt, dims)
     freq_dims = tuple(f"ft_{x}" for x in dims)
@@ -501,5 +506,5 @@ def slope_filter(
     new_data = dft_patch.data * mask
     out = dft_patch.update(data=new_data)
     if transformed:
-        out = out.idft()
+        out = out.idft().real()
     return out

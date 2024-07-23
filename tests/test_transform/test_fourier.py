@@ -243,3 +243,15 @@ class TestInverseDiscreteFourierTransform:
         idft = dft_patch.idft()
         assert idft.shape == sin_patch_trimmed.shape
         assert np.allclose(np.real(idft.data), sin_patch_trimmed.data)
+
+    def test_no_extra_attrs_or_coords(self, sin_patch):
+        """Ensure no extra attrs or coords remain after round trip."""
+        dft = sin_patch.dft(dim=None)
+        idft = dft.idft()
+        old_attrs = set(dict(sin_patch.attrs).keys())
+        new_attrs = set(dict(idft.attrs).keys())
+        # Before, there were a lot of ft_* keys added from extra coords.
+        diff = new_attrs - old_attrs
+        assert not diff, "attr keys shouldn't change"
+        # Test no extra coords
+        assert set(sin_patch.coords.coord_map) == set(idft.coords.coord_map)

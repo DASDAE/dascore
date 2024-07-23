@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,6 +16,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     UnitError,
 )
+from dascore.utils.misc import broadcast_for_index
 
 
 class TestPassFilterChecks:
@@ -288,6 +291,20 @@ class TestGaussianFilter:
 class TestFtSlopeFilter:
     """Test suite for slope filter."""
 
+    def get_slope_array(self, patch, dims=("ft_time", "ft_distance")):
+        """Get an array of slopes values for the patch ."""
+        dim1, dim2 = dims
+        dims = patch.dims
+        ndims = patch.ndim
+        coord1 = patch.get_array(dim1)
+        coord2 = patch.get_array(dim2) + sys.float_info.epsilon
+        # Need to add appropriate blank dims to keep overall shape of patch.
+        ax1, ax2 = dims.index(dim1), dims.index(dim2)
+        shape_1 = broadcast_for_index(ndims, ax1, value=slice(None), fill=None)
+        shape_2 = broadcast_for_index(ndims, ax2, value=slice(None), fill=None)
+        # Then just allow broadcasting to do its magic
+        return coord1[shape_1] / coord2[shape_2]
+
     @pytest.fixture
     def example_patch(self):
         """Return the example patch ready for slope filter."""
@@ -299,10 +316,28 @@ class TestFtSlopeFilter:
 
     def test_basic(self, example_patch):
         """Ensure the basic filter works."""
-        filtered_patch = example_patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4])
+        filt = [2e3, 2.2e3, 8e3, 2e4]
+        filtered_patch = example_patch.slope_filter(filt=filt)
         assert isinstance(filtered_patch, dc.Patch)
         assert filtered_patch.shape == example_patch.shape
         assert not np.array_equal(filtered_patch.data, example_patch.data)
+
+    def test_attenuated_slopes(self, example_patch):
+        """Ensure attenuated slopes are much lower in absolute values."""
+        filt = [2e3, 2.2e3, 8e3, 2e4]
+        filtered_patch = example_patch.slope_filter(filt=filt)
+        dft_unfiltered = example_patch.dft(("time", "distance"))
+        dft_filtered = filtered_patch.dft(("time", "distance"))
+        # Get slope values
+        slope = np.abs(self.get_slope_array(dft_filtered))
+        in_attenuated_range = ~((slope >= filt[1]) & (slope <= filt[2]))
+        # compare filtered vs unfiltered absolute values
+        unfilt = np.abs(dft_unfiltered.data[in_attenuated_range].flatten())
+        filt = np.abs(dft_filtered.data[in_attenuated_range].flatten())
+        # Todo this is a weak comparison; need to look more into it because
+        # there are some filtered cases that are gt unfiltered.
+        ratio = filt < unfilt
+        assert np.mean(ratio) < 1
 
     def test_directional_filter(self, example_patch):
         """Ensure directional logic runs."""

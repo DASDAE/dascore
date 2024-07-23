@@ -236,11 +236,11 @@ def drop_private_coords(self: PatchType) -> PatchType:
     >>> import numpy as np
     >>> import dascore as dc
     >>> pa = (
-    ...     dc.get_example_patch("random_patch")
-    ...     .update_coords(_private=np.array([1,2,3]))
+    ...     dc.get_example_patch("random_das")
+    ...     .update_coords(_private=(None, np.array([1,2,3])))
     ... )
-    >>> pa_no_priv = pa.drop_private_coords()
-    >>> assert "_private" not in pa.coords.coord_map
+    >>> pa_no_private = pa.drop_private_coords()
+    >>> assert "_private" not in pa_no_private.coords.coord_map
     """
     new_coord, data = self.coords.drop_private_coords(array=self.data)
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
