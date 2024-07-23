@@ -287,6 +287,7 @@ def rolling(
 
 
     #### Note 2: Applying custom functions with rolling operation
+
     When `apply` is the desired rolling operation and we are interested to use our
     own function over a desired window, we need to define our finction the way that
     it performs the operation on the last axis of the sliced matrix
@@ -299,12 +300,15 @@ def rolling(
 
 
     ```python
+    import numpy as np
+    import dascore as dc
+
+
     def zcr_std(frame, axis=-1):
         '''Compute standard deviation of zero crossing rate using rolling function.'''
         zero_crossings = (frame[..., :-1] * frame[..., 1:]) < 0
         return np.std(zero_crossings, axis=axis)
 
-    import dascore as dc
 
     patch = dc.get_example_patch()
     zcr_patch = patch.rolling(time=100, step=2, samples=True).apply(zcr_std)
