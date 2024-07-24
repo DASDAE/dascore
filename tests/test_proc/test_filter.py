@@ -306,13 +306,9 @@ class TestFtSlopeFilter:
         return coord1[shape_1] / coord2[shape_2]
 
     @pytest.fixture
-    def example_patch(self):
+    def example_patch(self, event_patch_1):
         """Return the example patch ready for slope filter."""
-        return (
-            dc.get_example_patch("example_event_1")
-            .taper(time=0.05)
-            .pass_filter(time=(1, 500))
-        )
+        return event_patch_1.taper(time=0.05).pass_filter(time=(1, 500))
 
     def test_basic(self, example_patch):
         """Ensure the basic filter works."""
@@ -322,22 +318,27 @@ class TestFtSlopeFilter:
         assert filtered_patch.shape == example_patch.shape
         assert not np.array_equal(filtered_patch.data, example_patch.data)
 
-    def test_attenuated_slopes(self, example_patch):
+    def test_attenuated_slopes(self, event_patch_1):
         """Ensure attenuated slopes are much lower in absolute values."""
+        # For some reason when padding isn't performed the attenation can
+        # be slightly off, need to look into thos.
+        example_patch = event_patch_1.pad(time="fft", distance="fft")
         filt = [2e3, 2.2e3, 8e3, 2e4]
         filtered_patch = example_patch.slope_filter(filt=filt)
         dft_unfiltered = example_patch.dft(("time", "distance"))
         dft_filtered = filtered_patch.dft(("time", "distance"))
+        dft_ft_filtered = dft_filtered.slope_filter(filt=filt)
         # Get slope values
         slope = np.abs(self.get_slope_array(dft_filtered))
-        in_attenuated_range = ~((slope >= filt[1]) & (slope <= filt[2]))
+        # Get values that should be zeroed by filter.
+        in_attenuated_range = (slope <= filt[0]) | (slope >= filt[3])
+        # Ensure the patch filtered in ft domain is nearly 0
+        assert np.allclose(dft_ft_filtered.data[in_attenuated_range], 0)
+        assert np.allclose(dft_filtered.data[in_attenuated_range], 0)
         # compare filtered vs unfiltered absolute values
         unfilt = np.abs(dft_unfiltered.data[in_attenuated_range].flatten())
         filt = np.abs(dft_filtered.data[in_attenuated_range].flatten())
-        # Todo this is a weak comparison; need to look more into it because
-        # there are some filtered cases that are gt unfiltered.
-        ratio = filt < unfilt
-        assert np.mean(ratio) < 1
+        assert np.all(filt < unfilt)
 
     def test_directional_filter(self, example_patch):
         """Ensure directional logic runs."""
