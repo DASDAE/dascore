@@ -16,6 +16,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     UnitError,
 )
+from dascore.units import convert_units, get_unit
 from dascore.utils.misc import broadcast_for_index
 
 
@@ -288,7 +289,7 @@ class TestGaussianFilter:
         assert out.shape == event_patch_2.shape
 
 
-class TestFtSlopeFilter:
+class TestSlopeFilter:
     """Test suite for slope filter."""
 
     def get_slope_array(self, patch, dims=("ft_time", "ft_distance")):
@@ -308,7 +309,12 @@ class TestFtSlopeFilter:
     @pytest.fixture
     def example_patch(self, event_patch_1):
         """Return the example patch ready for slope filter."""
-        return event_patch_1.taper(time=0.05).pass_filter(time=(1, 500))
+        out = (
+            event_patch_1.taper(time=0.05)
+            .pass_filter(time=(1, 500))
+            .set_units(time="s", distance="m")
+        )
+        return out
 
     def test_basic(self, example_patch):
         """Ensure the basic filter works."""
@@ -381,7 +387,7 @@ class TestFtSlopeFilter:
 
     def test_bad_filt_raises(self, example_patch):
         """Bad filter params should raise Parameter error."""
-        msg = "filt param must be a length 4 sequence"
+        msg = "filt must be a sorted length 4 sequence"
         filt = [1e3, 1.5e3, 5e3]
         with pytest.raises(ParameterError, match=msg):
             example_patch.slope_filter(filt=filt)
@@ -393,3 +399,30 @@ class TestFtSlopeFilter:
         filt = [1e3, 1.5e3, 5e3, 10e3]
         with pytest.raises(ParameterError, match=msg):
             patch.slope_filter(filt=filt, dims=("time", "distance"))
+
+    def test_units_raise_no_unit_coords(self, example_patch):
+        """Ensure A UnitError is raised if one of hte coords does't have units."""
+        patch = example_patch.set_units(distance="")
+        filt = np.array([1e3, 1.5e3, 5e3, 10e3]) * get_unit("m/s")
+        with pytest.raises(UnitError):
+            patch.slope_filter(filt=filt)
+
+    def test_units(self, example_patch):
+        """Ensure units can be specified on filt."""
+        filt1 = np.array([1e3, 1.5e3, 5e3, 10e3])
+        filt2 = convert_units(filt1, "ft/s", "m/s")
+        # All these should provide the same filter.
+        out1 = example_patch.slope_filter(filt=filt1)
+        out2 = example_patch.slope_filter(filt=filt1 * get_unit("m / s"))
+        out3 = example_patch.slope_filter(filt=filt2 * get_unit("ft / s"))
+
+        assert np.allclose(out1.data, out2.data)
+        assert np.allclose(out2.data, out3.data)
+
+    def test_inverted_units(self, example_patch):
+        """Ensure units are automatically inverted (eg slowness should work)"""
+        filt = np.array([1e3, 1.5e3, 5e3, 10e3])
+        slowness = np.sort(1 / filt * get_unit("s/m"))
+        out1 = example_patch.slope_filter(filt=slowness)
+        out2 = example_patch.slope_filter(filt=filt * get_unit("m/s"))
+        assert np.allclose(out1.data, out2.data)
