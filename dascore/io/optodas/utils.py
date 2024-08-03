@@ -27,10 +27,13 @@ def _get_opto_das_version_str(hdf_fi) -> str:
     return version_str
 
 
-def _get_coord_manager(header):
+def _get_coord_manager(fi):
     """Get the distance ranges and spacing."""
+    header = fi["header"]
     dims = tuple(unbyte(x) for x in header["dimensionNames"])
     units = tuple(unbyte(x) for x in header["dimensionUnits"])
+
+    distance_decimation = unpack_scalar_h5_dataset(fi["demodSpec"]["roiDec"])
 
     coords = {}
     for index, (dim, unit) in enumerate(zip(dims, units)):
@@ -46,6 +49,7 @@ def _get_coord_manager(header):
         else:
             # The min/max values appear to be int ranges so we need to
             # multiply by step.
+            step = step * distance_decimation
             start = unpack_scalar_h5_dataset(crange["min"]) * step
             stop = (unpack_scalar_h5_dataset(crange["max"]) + 1) * step
 
@@ -72,9 +76,8 @@ def _get_attr_dict(header):
 
 def _get_opto_das_attrs(fi) -> dict:
     """Scan a OptoDAS file, return metadata."""
-    header = fi["header"]
-    cm = _get_coord_manager(header)
-    attrs = _get_attr_dict(header)
+    cm = _get_coord_manager(fi)
+    attrs = _get_attr_dict(fi["header"])
     attrs["coords"] = cm
     return attrs
 
