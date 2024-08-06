@@ -224,7 +224,7 @@ def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
 @patch_function()
 def drop_private_coords(self: PatchType) -> PatchType:
     """
-    Drop any provate coords in the patch.
+    Drop all private coords in the patch.
 
     Parameters
     ----------
