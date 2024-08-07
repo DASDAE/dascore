@@ -32,9 +32,6 @@ def _get_coord_manager(fi):
     header = fi["header"]
     dims = tuple(unbyte(x) for x in header["dimensionNames"])
     units = tuple(unbyte(x) for x in header["dimensionUnits"])
-
-    distance_decimation = unpack_scalar_h5_dataset(fi["demodSpec"]["roiDec"])
-
     coords = {}
     for index, (dim, unit) in enumerate(zip(dims, units)):
         crange = header["dimensionRanges"][f"dimension{index}"]
@@ -46,16 +43,13 @@ def _get_coord_manager(fi):
             t1 = dc.to_datetime64(unpack_scalar_h5_dataset(header["time"]))
             start = t1 + unpack_scalar_h5_dataset(crange["min"]) * step
             stop = t1 + (unpack_scalar_h5_dataset(crange["max"]) + 1) * step
+            coord = get_coord(min=start, max=stop, step=step, units=unit)
         else:  # and distance
-            # The min/max values appear to be int ranges so we need to
-            # multiply by step.
-            start = unpack_scalar_h5_dataset(crange["min"]) * step
-            stop = (unpack_scalar_h5_dataset(crange["max"]) + 1) * step
-
-        coords[dim] = get_coord(min=start, max=stop, step=step, units=unit)
+            # The channels are ints so we multiply by step to get distance.
+            distance = fi["/header/channels"][:] * step
+            coord = get_coord(values=distance)
+        coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
-    if distance_decimation > 1:  # perform decimation along distance.
-        out, _ = out.decimate(distance=distance_decimation)
     return out
 
 
