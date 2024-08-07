@@ -9,7 +9,7 @@ from scipy.io.wavfile import write
 
 from dascore.constants import ONE_SECOND, SpoolType
 from dascore.io.core import FiberIO
-from dascore.utils.patch import check_patch_dims
+from dascore.utils.patch import check_patch_coords
 
 
 class WavIO(FiberIO):
@@ -71,7 +71,7 @@ class WavIO(FiberIO):
     @staticmethod
     def _get_wav_data(patch, resample):
         """Pre-condition patch data for writing. Return array and sample rate."""
-        check_patch_dims(patch, ("time", "distance"))
+        check_patch_coords(patch, ("time", "distance"))
         assert len(patch.dims) == 2, "only 2D patches supported for this function."
         # handle resampling and normalization
         pat = patch.transpose("time", "distance")

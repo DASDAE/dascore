@@ -19,6 +19,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
+from dascore.utils.patch import check_patch_attrs, check_patch_coords
 from dascore.utils.time import to_float
 from dascore.viz import VizPatchNameSpace
 
@@ -240,7 +241,8 @@ class Patch:
     new = dascore.proc.update
     equals = dascore.proc.equals
     update_attrs = dascore.proc.update_attrs
-    assert_has_coords = dascore.proc.assert_has_coords
+    check_coords = check_patch_coords
+    check_attrs = check_patch_attrs
     get_coord = dascore.proc.get_coord
     get_array = dascore.proc.get_array
     pipe = dascore.proc.pipe
@@ -253,6 +255,7 @@ class Patch:
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
     drop_coords = dascore.proc.drop_coords
+    drop_private_coords = dascore.proc.drop_private_coords
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
     apply_ufunc = dascore.proc.apply_ufunc

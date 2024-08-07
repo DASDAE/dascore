@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection
 
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
-from typing_extensions import Self
 
 from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord
 from dascore.exceptions import CoordError, ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import get_parent_code_name, iterate
+from dascore.utils.misc import get_parent_code_name
 from dascore.utils.patch import patch_function
 
 
@@ -144,16 +143,6 @@ def get_array(
     return coord.data
 
 
-def assert_has_coords(self: PatchType, coord_names: Sequence[str] | str) -> Self:
-    """Raise an error if patch doesn't have required coordinates."""
-    required_coords = set(iterate(coord_names))
-    current_coords = set(self.coords.coord_map)
-    if missing := required_coords - current_coords:
-        msg = f"Patch does not have required coordinate(s): {missing}"
-        raise CoordError(msg)
-    return self
-
-
 @patch_function()
 def rename_coords(self: PatchType, **kwargs) -> PatchType:
     """
@@ -229,6 +218,31 @@ def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
         msg = f"Cannot drop dimensional coordinates: {dim_coords}"
         raise ParameterError(msg)
     new_coord, data = self.coords.drop_coords(*coords, array=self.data)
+    return self.new(coords=new_coord, dims=new_coord.dims, data=data)
+
+
+@patch_function()
+def drop_private_coords(self: PatchType) -> PatchType:
+    """
+    Drop all private coords in the patch.
+
+    Parameters
+    ----------
+    self
+        Patch
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> pa = (
+    ...     dc.get_example_patch("random_das")
+    ...     .update_coords(_private=(None, np.array([1,2,3])))
+    ... )
+    >>> pa_no_private = pa.drop_private_coords()
+    >>> assert "_private" not in pa_no_private.coords.coord_map
+    """
+    new_coord, data = self.coords.drop_private_coords(array=self.data)
     return self.new(coords=new_coord, dims=new_coord.dims, data=data)
 
 

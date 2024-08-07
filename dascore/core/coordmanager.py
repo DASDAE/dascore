@@ -508,6 +508,12 @@ class CoordManager(DascoreBaseModel):
         no_dim_coords = [x for x in cmap if dim_map[x] == ()]
         return self.drop_coords(*no_dim_coords)
 
+    def drop_private_coords(self, array=None) -> Self:
+        """Drop all coordinates whose name begin with an underscore."""
+        cmap = self.coord_map
+        private = tuple(x for x in cmap.keys() if x.startswith("_"))
+        return self.drop_coords(*private, array=array)
+
     def set_dims(self, **kwargs: str) -> Self:
         """
         Set dimension to non-dimensional coordinate.
@@ -702,6 +708,9 @@ class CoordManager(DascoreBaseModel):
         non_dim_coords = sorted(set(self.coord_map) - set(self.dims))
         names = list(self.dims) + non_dim_coords
         for name in names:
+            # skip private coords for display
+            if name.startswith("_"):
+                continue
             coord = self.coord_map[name]
             coord_dims = self.dim_map[name]
             if name in self.dims:

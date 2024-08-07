@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore.transform.fourier import dft, idft
@@ -21,6 +22,12 @@ def sin_patch():
         .update_attrs(data_type="strain_rate")
     )
     return patch
+
+
+@pytest.fixture(scope="session")
+def sin_patch_trimmed(sin_patch):
+    """Get the sine wave patch trimmed to a non-fast len along time dim."""
+    return sin_patch.select(time=(0, -2), samples=True)
 
 
 @pytest.fixture(scope="session")
@@ -157,6 +164,22 @@ class TestDiscreteFourierTransform:
         assert sin_patch.attrs.data_type == "strain_rate"
         assert fft_sin_patch_time.attrs.data_type == ""
 
+    def test_pad(self, sin_patch_trimmed):
+        """Ensure patch is padded when requested and not otherwise."""
+        trimmed = sin_patch_trimmed
+        old_time_len = trimmed.coord_shapes["time"][0]
+        dft_pad = trimmed.dft("time")
+        dft_no_pad = trimmed.dft("time", pad=False)
+        assert dft_pad.shape != dft_no_pad.shape
+        assert dft_pad.coord_shapes["ft_time"][0] == next_fast_len(old_time_len)
+        assert dft_no_pad.coord_shapes["ft_time"] == trimmed.coord_shapes["time"]
+
+    def test_display(self, fft_sin_patch_time):
+        """Ensure a transformed patch returns a str rep."""
+        out = str(fft_sin_patch_time)
+        assert isinstance(out, str)
+        assert out
+
 
 class TestInverseDiscreteFourierTransform:
     """Inverse DFT suite."""
@@ -206,3 +229,29 @@ class TestInverseDiscreteFourierTransform:
         """Ensure data_type attr is restored."""
         out = fft_sin_patch_time.idft("time")
         assert out.attrs.data_type == sin_patch.attrs.data_type
+
+    def test_undo_padding(self, sin_patch_trimmed):
+        """Ensure the padding is undone in idft."""
+        dft_patch = sin_patch_trimmed.dft("time")
+        idft = dft_patch.idft()
+        assert idft.shape == sin_patch_trimmed.shape
+        assert np.allclose(np.real(idft.data), sin_patch_trimmed.data)
+
+    def test_undo_padding_rft(self, sin_patch_trimmed):
+        """Ensure padded rft still works."""
+        dft_patch = sin_patch_trimmed.dft("time", real=True)
+        idft = dft_patch.idft()
+        assert idft.shape == sin_patch_trimmed.shape
+        assert np.allclose(np.real(idft.data), sin_patch_trimmed.data)
+
+    def test_no_extra_attrs_or_coords(self, sin_patch):
+        """Ensure no extra attrs or coords remain after round trip."""
+        dft = sin_patch.dft(dim=None)
+        idft = dft.idft()
+        old_attrs = set(dict(sin_patch.attrs).keys())
+        new_attrs = set(dict(idft.attrs).keys())
+        # Before, there were a lot of ft_* keys added from extra coords.
+        diff = new_attrs - old_attrs
+        assert not diff, "attr keys shouldn't change"
+        # Test no extra coords
+        assert set(sin_patch.coords.coord_map) == set(idft.coords.coord_map)

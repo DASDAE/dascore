@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,9 +13,11 @@ from dascore.exceptions import (
     CoordDataError,
     FilterValueError,
     ParameterError,
-    PatchDimError,
+    PatchCoordinateError,
     UnitError,
 )
+from dascore.units import convert_units, get_unit
+from dascore.utils.misc import broadcast_for_index
 
 
 class TestPassFilterChecks:
@@ -201,7 +205,7 @@ class TestMedianFilter:
     def test_median_no_kwargs_raises(self, random_patch):
         """Apply default values."""
         msg = "You must specify one or more dimension in keyword args."
-        with pytest.raises(PatchDimError, match=msg):
+        with pytest.raises(PatchCoordinateError, match=msg):
             random_patch.median_filter()
 
     def test_median_filter_time(self, random_patch):
@@ -228,7 +232,7 @@ class TestSavgolFilter:
     def test_savgol_no_kwargs_raises(self, random_patch):
         """Apply default values."""
         msg = "You must specify one or more"
-        with pytest.raises(PatchDimError, match=msg):
+        with pytest.raises(PatchCoordinateError, match=msg):
             random_patch.savgol_filter(polyorder=2)
 
     def test_savgol_filter_time(self, random_patch):
@@ -285,24 +289,62 @@ class TestGaussianFilter:
         assert out.shape == event_patch_2.shape
 
 
-class TestFtSlopeFilter:
+class TestSlopeFilter:
     """Test suite for slope filter."""
 
+    def get_slope_array(self, patch, dims=("ft_time", "ft_distance")):
+        """Get an array of slopes values for the patch ."""
+        dim1, dim2 = dims
+        dims = patch.dims
+        ndims = patch.ndim
+        coord1 = patch.get_array(dim1)
+        coord2 = patch.get_array(dim2) + sys.float_info.epsilon
+        # Need to add appropriate blank dims to keep overall shape of patch.
+        ax1, ax2 = dims.index(dim1), dims.index(dim2)
+        shape_1 = broadcast_for_index(ndims, ax1, value=slice(None), fill=None)
+        shape_2 = broadcast_for_index(ndims, ax2, value=slice(None), fill=None)
+        # Then just allow broadcasting to do its magic
+        return coord1[shape_1] / coord2[shape_2]
+
     @pytest.fixture
-    def example_patch(self):
+    def example_patch(self, event_patch_1):
         """Return the example patch ready for slope filter."""
-        return (
-            dc.get_example_patch("example_event_1")
-            .taper(time=0.05)
+        out = (
+            event_patch_1.taper(time=0.05)
             .pass_filter(time=(1, 500))
+            .set_units(time="s", distance="m")
         )
+        return out
 
     def test_basic(self, example_patch):
         """Ensure the basic filter works."""
-        filtered_patch = example_patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4])
+        filt = [2e3, 2.2e3, 8e3, 2e4]
+        filtered_patch = example_patch.slope_filter(filt=filt)
         assert isinstance(filtered_patch, dc.Patch)
         assert filtered_patch.shape == example_patch.shape
         assert not np.array_equal(filtered_patch.data, example_patch.data)
+
+    def test_attenuated_slopes(self, event_patch_1):
+        """Ensure attenuated slopes are much lower in absolute values."""
+        # For some reason when padding isn't performed the attenation can
+        # be slightly off, need to look into thos.
+        example_patch = event_patch_1.pad(time="fft", distance="fft")
+        filt = [2e3, 2.2e3, 8e3, 2e4]
+        filtered_patch = example_patch.slope_filter(filt=filt)
+        dft_unfiltered = example_patch.dft(("time", "distance"))
+        dft_filtered = filtered_patch.dft(("time", "distance"))
+        dft_ft_filtered = dft_filtered.slope_filter(filt=filt)
+        # Get slope values
+        slope = np.abs(self.get_slope_array(dft_filtered))
+        # Get values that should be zeroed by filter.
+        in_attenuated_range = (slope <= filt[0]) | (slope >= filt[3])
+        # Ensure the patch filtered in ft domain is nearly 0
+        assert np.allclose(dft_ft_filtered.data[in_attenuated_range], 0)
+        assert np.allclose(dft_filtered.data[in_attenuated_range], 0)
+        # compare filtered vs unfiltered absolute values
+        unfilt = np.abs(dft_unfiltered.data[in_attenuated_range].flatten())
+        filt = np.abs(dft_filtered.data[in_attenuated_range].flatten())
+        assert np.all(filt < unfilt)
 
     def test_directional_filter(self, example_patch):
         """Ensure directional logic runs."""
@@ -345,7 +387,7 @@ class TestFtSlopeFilter:
 
     def test_bad_filt_raises(self, example_patch):
         """Bad filter params should raise Parameter error."""
-        msg = "filt param must be a length 4 sequence"
+        msg = "filt must be a sorted length 4 sequence"
         filt = [1e3, 1.5e3, 5e3]
         with pytest.raises(ParameterError, match=msg):
             example_patch.slope_filter(filt=filt)
@@ -357,3 +399,30 @@ class TestFtSlopeFilter:
         filt = [1e3, 1.5e3, 5e3, 10e3]
         with pytest.raises(ParameterError, match=msg):
             patch.slope_filter(filt=filt, dims=("time", "distance"))
+
+    def test_units_raise_no_unit_coords(self, example_patch):
+        """Ensure A UnitError is raised if one of hte coords does't have units."""
+        patch = example_patch.set_units(distance="")
+        filt = np.array([1e3, 1.5e3, 5e3, 10e3]) * get_unit("m/s")
+        with pytest.raises(UnitError):
+            patch.slope_filter(filt=filt)
+
+    def test_units(self, example_patch):
+        """Ensure units can be specified on filt."""
+        filt1 = np.array([1e3, 1.5e3, 5e3, 10e3])
+        filt2 = convert_units(filt1, "ft/s", "m/s")
+        # All these should provide the same filter.
+        out1 = example_patch.slope_filter(filt=filt1)
+        out2 = example_patch.slope_filter(filt=filt1 * get_unit("m / s"))
+        out3 = example_patch.slope_filter(filt=filt2 * get_unit("ft / s"))
+
+        assert np.allclose(out1.data, out2.data)
+        assert np.allclose(out2.data, out3.data)
+
+    def test_inverted_units(self, example_patch):
+        """Ensure units are automatically inverted (eg slowness should work)"""
+        filt = np.array([1e3, 1.5e3, 5e3, 10e3])
+        slowness = np.sort(1 / filt * get_unit("s/m"))
+        out1 = example_patch.slope_filter(filt=slowness)
+        out2 = example_patch.slope_filter(filt=filt * get_unit("m/s"))
+        assert np.allclose(out1.data, out2.data)
