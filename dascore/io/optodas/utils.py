@@ -40,21 +40,23 @@ def _get_coord_manager(fi):
         crange = header["dimensionRanges"][f"dimension{index}"]
         step = unpack_scalar_h5_dataset(crange["unitScale"])
 
-        # special case for time.
+        # Special case for time.
         if dim == "time":
             step = dc.to_timedelta64(step)
             t1 = dc.to_datetime64(unpack_scalar_h5_dataset(header["time"]))
             start = t1 + unpack_scalar_h5_dataset(crange["min"]) * step
             stop = t1 + (unpack_scalar_h5_dataset(crange["max"]) + 1) * step
-        else:
+        else:  # and distance
             # The min/max values appear to be int ranges so we need to
             # multiply by step.
-            step = step * distance_decimation
             start = unpack_scalar_h5_dataset(crange["min"]) * step
             stop = (unpack_scalar_h5_dataset(crange["max"]) + 1) * step
 
         coords[dim] = get_coord(min=start, max=stop, step=step, units=unit)
-    return dascore.core.get_coord_manager(coords=coords, dims=dims)
+    out = dascore.core.get_coord_manager(coords=coords, dims=dims)
+    if distance_decimation > 1:  # perform decimation along distance.
+        out, _ = out.decimate(distance=distance_decimation)
+    return out
 
 
 def _get_attr_dict(header):
