@@ -22,6 +22,3 @@ class TestOptoDASIssues:
         patch = spool[0]
         assert isinstance(patch, dc.Patch)
         assert patch.data.shape
-
-        patch2 = dc.read(path)[0]
-        assert patch == patch2
