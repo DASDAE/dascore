@@ -683,3 +683,20 @@ class TestSetDims:
             time="my_coord"
         )  # set mycoord as dim (rather than time)
         assert "my_coord" in out.dims
+
+
+class TestHistory:
+    """Specific tests for tracking history of Patches."""
+
+    def test_history_is_tuple(self, random_patch):
+        """The history attribute should be immutable. See #417."""
+        assert isinstance(random_patch.attrs.history, tuple)
+
+    def test_history_tuple_after_operation(self, random_patch):
+        """Ensure the history tuple remains after a patch operation."""
+        patch = random_patch.pass_filter(time=(..., 20))
+        assert isinstance(patch.attrs.history, tuple)
+
+        old_len = len(random_patch.attrs.history)
+        new_len = len(patch.attrs.history)
+        assert old_len == new_len - 1
