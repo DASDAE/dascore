@@ -10,9 +10,10 @@ import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
 
+import dascore as dc
 from dascore.exceptions import UnitError
 from dascore.utils.misc import unbyte
-from dascore.utils.time import dtype_time_like
+from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
 str_or_none = TypeVar("str_or_none", None, str)
 numeric = TypeVar("numeric", np.ndarray, int, float)
@@ -76,12 +77,16 @@ def get_quantity(value: str_or_none) -> Quantity | None:
     >>> import dascore as dc
     >>> meters = dc.get_quantity("m")
     >>> accel = dc.get_quantity("m/s^2")
+    >>> # This can also convert date times.
+    >>> many_seconds = dc.get_quantity(dc.to_timedelta64(200))
     """
     value = unbyte(value)
     if value is None or value is ... or value == "":
         return None
     if isinstance(value, Quantity):
         return value
+    elif is_datetime64(value) | is_timedelta64(value):
+        return to_float(value) * dc.get_unit("s")
     return _str_to_quant(value)
 
 

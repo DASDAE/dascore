@@ -9,6 +9,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.units import m
+from dascore.utils.misc import all_close
 from dascore.utils.pd import rolling_df
 
 
@@ -56,6 +57,14 @@ class TestRolling:
         trans = range_patch.transpose()
         out = trans.rolling(time=time_step * self.window).sum()
         assert np.allclose(out.dropna("time").data, expected.transpose())
+
+    def test_rolling_timdelta(self, random_patch):
+        """Ensure rolling works with timedeltas."""
+        time_step = random_patch.get_coord("time").step
+        time = time_step * self.window
+        out1 = random_patch.rolling(time=dc.to_timedelta64(time)).sum()
+        out2 = random_patch.rolling(time=time * dc.get_quantity("s")).sum()
+        assert all_close(out1, out2)
 
     def test_apply_with_step(self, range_patch):
         """Ensure apply works with various step sizes."""

@@ -166,8 +166,12 @@ def all_close(ar1, ar2):
     ar1, ar2 = np.asarray(ar1), np.asarray(ar2)
     if not ar1.shape == ar2.shape:
         return False
+    ar1_null = pd.isnull(ar1)
+    ar2_null = pd.isnull(ar2)
     try:
-        return np.allclose(ar1, ar2)
+        close = np.isclose(ar1, ar2)
+        bools = close | ar1_null | ar2_null
+        return np.all(bools)
     except TypeError:
         return np.all(ar1 == ar2)
 

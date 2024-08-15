@@ -114,3 +114,11 @@ class TestTaperBasics:
         assert np.allclose(
             data_new[mid_dim - 10 : mid_dim + 10], data_old[mid_dim - 10 : mid_dim + 10]
         )
+
+    def test_timedelta_taper(self, random_patch):
+        """Test that a timedelta works for the taper argument. See #379."""
+        time1 = dc.to_timedelta64(2)
+        time2 = 2 * dc.get_quantity("seconds")
+        patch1 = random_patch.taper(time=time1)
+        patch2 = random_patch.taper(time=time2)
+        assert patch1 == patch2

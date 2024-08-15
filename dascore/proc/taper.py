@@ -39,8 +39,9 @@ def _get_taper_slices(patch, kwargs):
         start, stop = value, value
     dur = coord.max() - coord.min()
     # either let units pass through or multiply by d_len
-    start = start if isinstance(start, Quantity) or start is None else start * dur
-    stop = stop if isinstance(stop, Quantity) or stop is None else stop * dur
+    clses = (Quantity, np.timedelta64)
+    start = start if isinstance(start, clses) or start is None else start * dur
+    stop = stop if isinstance(stop, clses) or stop is None else stop * dur
     stop = -stop if stop is not None else stop
     _, inds_1 = coord.select((None, start), relative=True)
     _, inds_2 = coord.select((stop, None), relative=True)
@@ -61,7 +62,7 @@ def _get_window_function(window_type):
 
 
 def _validate_windows(samps, start_slice, end_slice, shape, axis):
-    """Validate the the windows don't overlap or exceed dim len."""
+    """Validate the windows don't overlap or exceed dim len."""
     max_len = shape[axis]
     start_ind = start_slice.stop
     end_ind = end_slice.start
