@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 import numpy as np
@@ -118,8 +118,9 @@ class PatchAttrs(DascoreBaseModel):
     network: str = Field(
         default="", max_length=max_lens["network"], description="A network code."
     )
-    history: str | Sequence[str] = Field(
-        default_factory=list, description="A list of processing performed on the patch."
+    history: str | tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="A list of processing performed on the patch.",
     )
 
     dims: CommaSeparatedStr = Field(

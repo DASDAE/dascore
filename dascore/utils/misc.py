@@ -179,8 +179,7 @@ def all_close(ar1, ar2):
 def _all_null(maybe_ar):
     """Return True if values is nullish, or all sub-values nullish if sequence."""
     out = pd.isnull(maybe_ar)
-    if hasattr(out, "all"):
-        out = out.all()
+    out = out.all() if hasattr(out, "all") else out
     return out
 
 
