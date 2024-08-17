@@ -13,3 +13,7 @@ A python library for distributed fiber optic sensing.
 [Code](https://github.com/DASDAE/dascore)
 
 Documentation [[stable](https://dascore.org), [development](https://dascore.netlify.app/)]
+
+[Citation](https://seismica.library.mcgill.ca/article/view/1184)
+
+> Chambers, D., Jin, G., Tourei, A., Issah, A. H. S., Lellouch, A., Martin, E., Zhu, D., Girard, A., Yuan, S., Cullison, T., Snyder, T., Kim, S., Danes, N., Pnithan, N., Boltz, M. S. & Mendoza, M. M. (2024). DASCore: a Python Library for Distributed Fiber Optic Sensing. Seismica, 3(2).
