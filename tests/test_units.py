@@ -65,10 +65,22 @@ class TestGetQuantStr:
         quant = get_quantity("m/s")
         out = get_quantity_str(quant)
         assert out == "m / s"
-        # with magnitude it should be included.
+        # with magnitude, it should be included.
         quant = get_quantity("10 m /s")
         out = get_quantity_str(quant)
         assert "10.0" in out
+
+    def test_timedelta_to_quantity(self):
+        """Ensure a timedelta can be converted to a quantity."""
+        dt = dc.to_timedelta64(20)
+        quant = dc.get_quantity(dt)
+        assert quant == (20 * dc.get_unit("s"))
+
+    def test_datetime_to_quantity(self):
+        """Ensure a datetime can be converted to a quantity."""
+        td = dc.to_datetime64("1970-01-01T00:00:20")
+        quant = dc.get_quantity(td)
+        assert quant == (20 * dc.get_unit("s"))
 
 
 class TestUnitAndFactor:
@@ -93,6 +105,20 @@ class TestUnitAndFactor:
         assert factor == 1
         assert unit is None
 
+    def test_timedelta64(self):
+        """Ensure timedeltas can be separated."""
+        td = dc.to_timedelta64(20)
+        (factor, unit) = get_factor_and_unit(td)
+        assert factor == 20.00
+        assert unit == "s"
+
+    def test_datetime64(self):
+        """Ensure datetime64 can be separated."""
+        td = dc.to_datetime64(20)
+        (factor, unit) = get_factor_and_unit(td)
+        assert factor == 20.00
+        assert unit == "s"
+
 
 class TestGetQuantity:
     """Tests for getting a quantity."""
@@ -110,6 +136,16 @@ class TestGetQuantity:
         """Get quantity should work with temperatures."""
         quant1 = get_quantity("degC")
         assert "°C" in str(quant1)
+
+    def test_timedelta64(self):
+        """Ensure time deltas can be converted to quantity"""
+        quant = get_quantity(dc.to_timedelta64(20))
+        assert quant == (20 * dc.get_unit("s"))
+
+    def test_datetime64(self):
+        """Ensure time deltas can be converted to quantity"""
+        quant = get_quantity(dc.to_datetime64(20))
+        assert quant == (20 * dc.get_unit("s"))
 
 
 class TestConvenientImport:
