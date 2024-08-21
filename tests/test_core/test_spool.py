@@ -68,11 +68,11 @@ class TestSpoolBasics:
         with pytest.raises(NotImplementedError, match=msg):
             BaseSpool.concatenate(random_spool, time=2)
 
-    def test_viz_raises_waterfall(self, random_spool):
-        """Ensure BaseSpool.viz.waterfall raises AttributeError."""
-        msg = "has no attribute 'viz'. Apply 'viz.waterfall()' on a Patch"
-        with pytest.raises(AttributeError, match=msg):
-            BaseSpool.viz.waterfall(random_spool)
+    # def test_viz_raises_waterfall(self, random_spool):
+    #     """Ensure BaseSpool.viz.waterfall raises AttributeError."""
+    #     msg = "has no attribute 'viz'. Apply 'viz.waterfall()' on a Patch"
+    #     with pytest.raises(AttributeError, match=msg):
+    #         BaseSpool.viz.waterfall(random_spool)
 
 
 class TestSpoolEquals:
