@@ -45,7 +45,6 @@ from dascore.utils.pd import (
     get_dim_names_from_columns,
     split_df_query,
 )
-from dascore.viz import VizSpoolNameSpace
 
 T = TypeVar("T")
 
@@ -329,9 +328,15 @@ class BaseSpool(abc.ABC):
     stack = stack_patches
 
     @property
-    def viz(self) -> VizSpoolNameSpace:
-        """The visualization namespace."""
-        return VizSpoolNameSpace(self)
+    def viz(self):
+        """Raise AttributeError when Spool.viz is accessed."""
+        msg = (
+            "'Spool' has no 'viz' namespace. "
+            "Apply 'viz' on a Patch object. "
+            "(you can merge a subset of the spool into a single patch using "
+            "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
+        )
+        raise AttributeError(msg)
 
 
 class DataFrameSpool(BaseSpool):
