@@ -17,3 +17,11 @@ class VizPatchNameSpace(MethodNameSpace):
     spectrogram = spectrogram
     wiggle = wiggle
     map_fiber = map_fiber
+
+class VizSpoolNameSpace(MethodNameSpace):
+    """A class for storing visualization namespace."""
+
+    waterfall = waterfall
+    spectrogram = spectrogram
+    wiggle = wiggle
+    map_fiber = map_fiber

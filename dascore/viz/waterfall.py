@@ -114,3 +114,23 @@ def waterfall(
     if show:
         plt.show()
     return ax
+
+
+# @spool_function()
+# def waterfall(
+#     spool: SpoolType,
+#     ax: plt.Axes | None = None,
+#     cmap="bwr",
+#     scale: float | Sequence[float] | None = None,
+#     scale_type: Literal["relative", "absolute"] = "relative",
+#     log=False,
+#     show=False,
+# ) -> plt.Axes:
+#     """Raise an AttributeError for Spool.viz.waterfall()."""
+#     msg = (
+#         "'Spool' object has no attribute 'viz'. "
+#         "Apply 'viz.waterfall()' on a Patch object."
+#         "(you can select a subset of the spool and merge it "
+#         "into a single patch using the Chunk function.)"
+#     )
+#     raise AttributeError(msg)

@@ -45,6 +45,7 @@ from dascore.utils.pd import (
     get_dim_names_from_columns,
     split_df_query,
 )
+from dascore.viz import VizSpoolNameSpace
 
 T = TypeVar("T")
 
@@ -326,6 +327,11 @@ class BaseSpool(abc.ABC):
 
     # Add method for stacking (adding the data arrays) patches in spool.
     stack = stack_patches
+
+    @property
+    def viz(self) -> VizSpoolNameSpace:
+        """The visualization namespace."""
+        return VizSpoolNameSpace(self)
 
 
 class DataFrameSpool(BaseSpool):
