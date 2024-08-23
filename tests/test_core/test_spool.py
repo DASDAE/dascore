@@ -63,10 +63,16 @@ class TestSpoolBasics:
         assert "Spool" in spool_str
 
     def test_base_concat_raises(self, random_spool):
-        """Ensure baseSpool.concatenate raises NotImplementedError."""
+        """Ensure BaseSpool.concatenate raises NotImplementedError."""
         msg = "has no concatenate implementation"
         with pytest.raises(NotImplementedError, match=msg):
             BaseSpool.concatenate(random_spool, time=2)
+
+    def test_viz_raises(self, random_spool):
+        """Ensure Spool.viz raises AttributeError."""
+        msg = "Apply 'viz' on a Patch object"
+        with pytest.raises(AttributeError, match=msg):
+            random_spool.viz.waterfall(random_spool)
 
 
 class TestSpoolEquals:

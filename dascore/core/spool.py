@@ -327,6 +327,17 @@ class BaseSpool(abc.ABC):
     # Add method for stacking (adding the data arrays) patches in spool.
     stack = stack_patches
 
+    @property
+    def viz(self):
+        """Raise AttributeError when Spool.viz is accessed."""
+        msg = (
+            "'Spool' has no 'viz' namespace. "
+            "Apply 'viz' on a Patch object. "
+            "(you can merge a subset of the spool into a single patch using "
+            "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
+        )
+        raise AttributeError(msg)
+
 
 class DataFrameSpool(BaseSpool):
     """An abstract class for spools whose contents are managed by a dataframe."""
