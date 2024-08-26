@@ -343,6 +343,23 @@ class TestScan:
         with pytest.raises(NotImplementedError):
             fio.scan(bad_input)
 
+    def test_bad_checksum(self, monkeypatch, terra15_v6_path):
+        """Test for when format is identified but can't read part of file #346"""
+        # Monkey patch scan to raise OSError. This simulates observed behavior.
+        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
+
+        def raise_os_error(*args, **kwargs):
+            raise OSError("Simulated OS issue")
+
+        monkeypatch.setattr(fiber_io, "scan", raise_os_error)
+
+        # Ensure scanning doesn't raise and warns
+        msg = "Failed to scan"
+        with pytest.warns(UserWarning, match=msg):
+            scan = dc.scan(terra15_v6_path)
+        assert not len(scan)
+
 
 class TestCastType:
     """Test suite to ensure types are intelligently cast to type hints."""
