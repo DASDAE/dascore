@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import os.path
+import warnings
 from collections import defaultdict
 from collections.abc import Generator
 from functools import cache, cached_property, wraps
@@ -712,7 +713,7 @@ def _get_fiber_io_and_req_type(
 
     Raises
     ------
-    UnkownFileFormatError if no format is determinable from the
+    UnknownFileFormatError if no format is determinable from the
     patch_source
 
     """
@@ -837,7 +838,11 @@ def scan(
                 # contents should be returned.
                 source = fiber_io.scan(resource, timestamp=timestamp, _pre_cast=True)
             else:
-                source = fiber_io.scan(resource, _pre_cast=True)
+                try:
+                    source = fiber_io.scan(resource, _pre_cast=True)
+                except OSError:  # This happens if the file is corrupt see #346.
+                    warnings.warn(f"Failed to scan {resource}", UserWarning)
+                    continue
             for attr in source:
                 out.append(dc.PatchAttrs.from_dict(attr))
     return out
