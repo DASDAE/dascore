@@ -132,7 +132,7 @@ def patch_with_null(**kwargs):
 @register_func(EXAMPLE_PATCHES, key="random_patch_with_lat_lon")
 def random_patch_lat_lon(**kwargs):
     """
-    Create a patch with latitude/longitude coords on distance dim.
+    Create a patch with latitude/longitude coords on distance dimension.
 
     Parameters
     ----------
@@ -145,6 +145,26 @@ def random_patch_lat_lon(**kwargs):
     lon = np.arange(0, len(dist)) * 0.001 + 41.544654
     # add a single coord
     out = patch.update_coords(latitude=("distance", lat), longitude=("distance", lon))
+    return out
+
+
+@register_func(EXAMPLE_PATCHES, key="random_patch_with_xyz")
+def random_patch_xyz(**kwargs):
+    """
+    Create a patch with x, y, and z coords on distance dimension.
+
+    Parameters
+    ----------
+    **kwargs
+        Parameters passed to [`random_patch`](`dascore.examples.random_patch`).
+    """
+    patch = random_patch(**kwargs)
+    dist = patch.coords.get_array("distance")
+    x = np.arange(0, len(dist)) * 5
+    y = np.arange(0, len(dist)) * 5
+    z = np.zeros_like(dist)
+    # add a single coord
+    out = patch.update_coords(x=("distance", x), y=("distance", y), z=("distance", z))
     return out
 
 

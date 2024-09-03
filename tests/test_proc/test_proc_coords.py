@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
 from dascore.compat import is_array
 from dascore.core.coords import BaseCoord
-from dascore.exceptions import CoordError, ParameterError, PatchBroadcastError
+from dascore.exceptions import (
+    CoordError,
+    ParameterError,
+    PatchBroadcastError,
+    PatchError,
+)
 from dascore.units import get_quantity
 
 
@@ -501,3 +507,42 @@ class TestGetArray:
         for dim in random_patch.dims:
             array = random_patch.get_array(dim)
             assert is_array(array)
+
+
+class TestDistanceTo:
+    """Tests for getting distance to coords."""
+
+    @pytest.fixture(scope="class")
+    def shot_series(self):
+        """Get the shot series."""
+        shot = pd.Series({"x": 1000, "y": 42, "z": 15})
+        return shot
+
+    def test_coord_and_attrs(self, random_patch_with_xyz, shot_series):
+        """Ensure coord and attrs have been added."""
+        out = random_patch_with_xyz.add_distance_to(shot_series)
+        assert "origin_distance" in out.coords.coord_map
+        attr_set = set(out.attrs.model_dump())
+        for name in shot_series.index:
+            assert f"origin_{name}" in attr_set
+
+    def test_bad_name_raises(self, random_patch_with_xyz):
+        """Ensure a PatchError is raised when index are not coords."""
+        ser = pd.Series({"x": 1000, "y": 42, "q": 15})
+        msg = "not patch coordinates"
+        with pytest.raises(PatchError, match=msg):
+            random_patch_with_xyz.add_distance_to(ser)
+
+    def test_bad_association_raises(self, random_patch_with_xyz):
+        """Ensure a PatchError is raised if coords dont share a dimension."""
+        ser = pd.Series({"x": 1000, "y": 42, "time": 15})
+        msg = "must be associated with the same dimension"
+        with pytest.raises(PatchError, match=msg):
+            random_patch_with_xyz.add_distance_to(ser)
+
+    def test_sorting(self, random_patch_with_xyz, shot_series):
+        """Ensure sorting can be done on the new patch."""
+        out = random_patch_with_xyz.add_distance_to(shot_series)
+        sorted_patch = out.sort_coords("origin_distance")
+        coord = sorted_patch.get_array("origin_distance")
+        assert np.all(np.sort(coord) == coord)

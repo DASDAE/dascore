@@ -34,7 +34,7 @@ def get_registry():
     # allow multiplication with offset units.
     ureg.autoconvert_offset_to_baseunit = True
     # set the shortest display for units.
-    ureg.default_format = "~"
+    ureg.formatter.default_format = "~"
     pint.set_application_registry(ureg)
     return ureg
 

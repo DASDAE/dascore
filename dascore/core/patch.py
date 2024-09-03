@@ -250,6 +250,7 @@ class Patch:
     squeeze = dascore.proc.coords.squeeze
     append_dims = dascore.proc.coords.append_dims
     transpose = dascore.proc.coords.transpose
+    add_distance_to = dascore.proc.coords.add_distance_to
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_coords
     rename_coords = dascore.proc.rename_coords

@@ -301,6 +301,14 @@ def random_patch_with_lat_lon(random_patch):
 
 @pytest.fixture(scope="class")
 @register_func(PATCH_FIXTURES)
+def random_patch_with_xyz(random_patch):
+    """Get a random patch with added x, y, and z coordinates."""
+    out = dc.get_example_patch("random_patch_with_xyz")
+    return out
+
+
+@pytest.fixture(scope="class")
+@register_func(PATCH_FIXTURES)
 def multi_dim_coords_patch(random_patch):
     """A patch with a multiple dimensional coord."""
     quality = np.ones(random_patch.shape)
