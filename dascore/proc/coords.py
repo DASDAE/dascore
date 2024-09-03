@@ -646,7 +646,6 @@ def add_distance_to(
     >>>
     >>> # Of course, the new coordinate can be used for sorting.
     >>> sorted_patch = patch_with_distance.sort_coords("origin_distance")
-
     """
     # Ensure all index values are represented in coord map.
     if missing_coords := (set(origin.index) - set(patch.coords.coord_map)):
