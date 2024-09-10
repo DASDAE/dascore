@@ -5,7 +5,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError
-from dascore.transform.taup import tau_p
+from dascore.transform.taup import _make_jit_taup_general, tau_p
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_timedelta64
 
@@ -62,6 +62,13 @@ class TestTauP:
         with suppress_warnings(DeprecationWarning):
             out = tau_p(random_patch, test_vels)
         return out
+
+    def test_func_defs(self):
+        """Check that numba function definitions return a function"""
+        pytest.importorskip("numba")
+        f1 = _make_jit_taup_general()
+        f2 = _make_jit_taup_general()
+        assert callable(f1) and callable(f2)
 
     def test_tau_p_consistency(self, tau_p_patch):
         """Checks consistency of tau_p module."""
