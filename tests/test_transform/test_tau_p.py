@@ -56,6 +56,7 @@ class TestTauP:
     @pytest.fixture(scope="class")
     def tau_p_patch(self, random_patch):
         """Returns the random patched transformed to tau-p."""
+        pytest.importorskip("numba")
         test_vels = np.linspace(1500, 5000, 351)
 
         with suppress_warnings(DeprecationWarning):
@@ -64,6 +65,7 @@ class TestTauP:
 
     def test_tau_p_consistency(self, tau_p_patch):
         """Checks consistency of tau_p module."""
+        pytest.importorskip("numba")
         # assert time dimension
         assert "time" in tau_p_patch.dims
         # assert slowness dimension
@@ -102,6 +104,7 @@ class TestTauP:
 
     def test_slowness_vals(self):
         """Ensures correct slowness and tau values are computed"""
+        pytest.importorskip("numba")
         test_vels = np.linspace(1000, 3000, 201)
         nch = 1000
         nt = 2000
