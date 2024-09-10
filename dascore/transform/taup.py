@@ -19,7 +19,7 @@ def _make_jit_taup_uniform():
     numba = optional_import("numba")
 
     @numba.jit(nopython=True)
-    def jit_taup_uniform(data, dx, dt, p_vals):
+    def _jit_taup_uniform(data, dx, dt, p_vals):
         (nx, nt) = data.shape
         n_slo = p_vals.size
         two_sided_p_vals = np.concatenate((-np.flip(p_vals), p_vals))
@@ -40,7 +40,7 @@ def _make_jit_taup_uniform():
                         ] + (samp_val - ind) * data[nx - 1 - ix, ind + 1]
         return two_sided_p_vals, taup
 
-    return jit_taup_uniform
+    return _jit_taup_uniform
 
 
 @cache
@@ -48,7 +48,7 @@ def _make_jit_taup_general():
     numba = optional_import("numba")
 
     @numba.jit(nopython=True)
-    def jit_taup_general(data, distance, dt, p_vals):
+    def _jit_taup_general(data, distance, dt, p_vals):
         (nx, nt) = data.shape
         n_slo = p_vals.size
         two_sided_p_vals = np.concatenate((-np.flip(p_vals), p_vals))
@@ -77,7 +77,7 @@ def _make_jit_taup_general():
                         ) * data[nx - 1 - ix, ind_neg + 1]
         return two_sided_p_vals, taup
 
-    return jit_taup_general
+    return _jit_taup_general
 
 
 @patch_function(required_dims=("time", "distance"))
