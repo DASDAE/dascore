@@ -112,8 +112,8 @@ def tau_p(
     ...     .tau_p(np.arange(1000,6000,10))
     ...     .transpose('time','slowness')
     ... )
-    >>> taup_patch.viz.waterfall(show=True, ax=ax)
-    ```
+    >>> ax = taup_patch.viz.waterfall(show=False,cmap=None)
+    >>> _ = taup_patch.viz.waterfall(ax=ax)
     """
     patch_cop = patch.convert_units(distance="m", time="s").transpose(
         "distance", "time"
