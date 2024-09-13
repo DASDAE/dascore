@@ -89,18 +89,18 @@ class TestTauP:
         msg = "Input velocities must be positive."
         velocities = np.array([1000, 1100, -200, 1000])
         with pytest.raises(ParameterError, match=msg):
-            random_patch.tau_p(velocity_array=velocities)
+            random_patch.tau_p(velocities=velocities)
 
     def test_non_monotonic_vel_raises(self, random_patch):
         """Ensures non monotonic velocities raise an error"""
         msg = "Input velocities must be monotonically increasing."
         velocities = np.array([1000, 1100, 300, 1200])
         with pytest.raises(ParameterError, match=msg):
-            random_patch.tau_p(velocity_array=velocities)
+            random_patch.tau_p(velocities=velocities)
 
         velocities = np.array([1000, 1100, 1100, 1200])
         with pytest.raises(ParameterError, match=msg):
-            random_patch.tau_p(velocity_array=velocities)
+            random_patch.tau_p(velocities=velocities)
 
     def test_slowness_vals(self):
         """Ensures correct slowness and tau values are computed"""
