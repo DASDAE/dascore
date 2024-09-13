@@ -77,7 +77,7 @@ def _jit_taup_general(data, distance, dt, p_vals):
 @patch_function(required_dims=("time", "distance"))
 def tau_p(
     patch: PatchType,
-    velocity_array: NDArray[np.floating],
+    velocities: NDArray[np.floating],
 ) -> PatchType:
     """
     Compute linear tau-p transform.
@@ -86,7 +86,7 @@ def tau_p(
     ----------
     patch
         Patch to transform. Has to have dimensions of time and distance.
-    velocity_array
+    velocities
         NumPY array of velocities, in m/s, for which to compute slowness (p).
 
     Notes
@@ -122,11 +122,11 @@ def tau_p(
     time = patch_cop.get_coord("time", require_evenly_sampled=True)
     dt = to_float(time.step)
 
-    if np.any(velocity_array <= 0):
+    if np.any(velocities <= 0):
         msg = "Input velocities must be positive."
         raise ParameterError(msg)
 
-    if not np.all(np.diff(velocity_array) > 0):
+    if not np.all(np.diff(velocities) > 0):
         raise ParameterError("Input velocities must be monotonically increasing.")
 
     # Chooses code version based on whether distance between channels
@@ -138,7 +138,7 @@ def tau_p(
         func = _jit_taup_general
         dist_val = dist.values
 
-    slowness, tau_p_data = func(patch.data, dist_val, dt, 1.0 / velocity_array)
+    slowness, tau_p_data = func(patch.data, dist_val, dt, 1.0 / velocities)
 
     attrs = patch.attrs.update(category="taup")
     coords = dict(slowness=slowness, time=time)
