@@ -46,9 +46,9 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
     for dxs_or_val, ax in zip(dxs_or_vals, axes):
         indexer = broadcast_for_index(ndims, ax, None, fill=slice(None))
         if is_array(dxs_or_val):
-            array = np.trapz(array, x=dxs_or_val, axis=ax)[indexer]
+            array = np.trapezoid(array, x=dxs_or_val, axis=ax)[indexer]
         else:
-            array = np.trapz(array, dx=dxs_or_val, axis=ax)[indexer]
+            array = np.trapezoid(array, dx=dxs_or_val, axis=ax)[indexer]
     array, coords = _get_new_coords_and_array(patch, array, dims)
     return array, coords
 

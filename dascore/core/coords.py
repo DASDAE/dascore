@@ -429,7 +429,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     __repr__ = __str__
 
-    def __array__(self):
+    def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""
         return self.data
 

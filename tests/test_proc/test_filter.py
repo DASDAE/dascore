@@ -38,7 +38,7 @@ class TestPassFilterChecks:
     def test_all_null_kwarg_raises(self, random_patch):
         """There must be one Non-null kwarg."""
         with pytest.raises(FilterValueError, match="at least one filter"):
-            _ = random_patch.pass_filter(time=[None, np.NAN])
+            _ = random_patch.pass_filter(time=[None, np.nan])
 
     def test_unordered_params(self, random_patch):
         """Ensure a low parameter greater than a high parameter raises."""

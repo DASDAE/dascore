@@ -18,7 +18,7 @@ from .utils import _load_patches, _paths_to_attrs, _read_xml_metadata
 class BinaryPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Binary."""
 
-    pulse_width_ns: float = np.NAN
+    pulse_width_ns: float = np.nan
     gauge_length: float = np.nan
     instrument_id: UTF8Str = ""
     distance_units: UTF8Str = ""
