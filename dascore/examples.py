@@ -302,11 +302,11 @@ def ricker_moveout(
     source_channel
         The index of the source.
     velocity
-        The aparent velocity in m/s.
+        The apparent velocity in m/s.
 
     Notes
     -----
-    Based on https://github.com/lijunzh/ricker/
+    Based on https://github.com/lijunzh/ricker/.
     """
 
     def _ricker(time, delay):

@@ -55,7 +55,7 @@ patch = dc.get_example_patch()
 
 # Create a patch with nan values
 data = np.array(patch.data)
-data[:, 0] = np.NaN
+data[:, 0] = np.nan
 patch_with_nan = patch.new(data=data)
 
 # Drop Nan along axis 1
@@ -168,4 +168,4 @@ smoothed = patch.rolling(time=50*dt).mean()
 smoothed.viz.waterfall(scale=.1);
 ```
 
-Notice the NaN values at the start of the time axis. These can be trimmed with [`Patch`.dropna](`dascore.Patch.dropna`).
+Notice the nan values at the start of the time axis. These can be trimmed with [`Patch`.dropna](`dascore.Patch.dropna`).
