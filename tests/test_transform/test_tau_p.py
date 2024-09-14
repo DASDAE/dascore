@@ -167,6 +167,7 @@ class TestTauP:
         """
         A small test of the jit'ed functions in python mode for coverage reasons.
         """
+        pytest.importorskip("numba")
         data = np.zeros((10, 10))
         dx = 1
         dt = 1
