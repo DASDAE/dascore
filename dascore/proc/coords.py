@@ -615,9 +615,11 @@ def add_distance_to(
     """
     Calculate the distance to "origin" and create new coordinate.
 
-    A new coordinate called `origin_distance` is added to the output patch
-    to specify the exact distance, and the original location is added to
-    the patch attrs (e.g, patch.attrs.origin_x, patch.attrs.origin_y, ...)
+    A new coordinate called `origin_distance` (or another name controlled
+    by the pre-fix argument) is added to the output patch to specify the
+    exact distance. Coordinates representing the origin location
+    (eg origin_x, origin_y, origin_z) are also added as non-associated
+    coordinates.
 
     Parameters
     ----------
@@ -626,8 +628,8 @@ def add_distance_to(
         index names in origin.
     origin
         A series which contains index names that overlap with patch coordinates.
-        All of the referenced coordinates must be associated with the
-        same dimension.
+        All the referenced coordinates must be associated with the same
+        dimension.
     ord
         Controls the norm type. Default is Frobenius norm, see the norm
         function of numpy.linalg for supported options.
@@ -640,9 +642,13 @@ def add_distance_to(
     >>>
     >>> import dascore as dc
     >>>
+    >>> # Add a coordinate specifying the distance to a theoretical shot.
     >>> shot = pd.Series({"x": 10, "y": 10, "z": 0})
     >>> patch = dc.get_example_patch("random_patch_with_xyz")
     >>> patch_with_distance = patch.add_distance_to(shot)
+    >>> # Now the new coordinates of distance and shot origin exist.
+    >>> dist = patch_with_distance.get_array("origin_distance")
+    >>> origin_x = patch_with_distance.get_array("origin_x")
     >>>
     >>> # Of course, the new coordinate can be used for sorting.
     >>> sorted_patch = patch_with_distance.sort_coords("origin_distance")
@@ -667,7 +673,7 @@ def add_distance_to(
     distance = np.linalg.norm(origin_array - coord_array, axis=1, ord=ord)
     # Add attrs and coords to new patch
     dims = next(iter(associated_dims))
-    new_attrs = {f"{prefix}_{i}": v for i, v in origin.items()}
-    new_coord = {f"{prefix}_distance": (dims, distance)}
-    out = patch.update_coords.func(patch, **new_coord).update_attrs(**new_attrs)
+    new_coords = {f"{prefix}_{i}": (None, np.atleast_1d(v)) for i, v in origin.items()}
+    new_coords[f"{prefix}_distance"] = (dims, distance)
+    out = patch.update_coords.func(patch, **new_coords)
     return out

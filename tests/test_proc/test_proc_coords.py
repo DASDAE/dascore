@@ -509,8 +509,8 @@ class TestGetArray:
             assert is_array(array)
 
 
-class TestDistanceTo:
-    """Tests for getting distance to coords."""
+class TestAddDistanceTo:
+    """Tests for adding distance from a point to coords."""
 
     @pytest.fixture(scope="class")
     def shot_series(self):
@@ -518,13 +518,12 @@ class TestDistanceTo:
         shot = pd.Series({"x": 1000, "y": 42, "z": 15})
         return shot
 
-    def test_coord_and_attrs(self, random_patch_with_xyz, shot_series):
-        """Ensure coord and attrs have been added."""
+    def test_coord(self, random_patch_with_xyz, shot_series):
+        """Ensure coords have been added."""
         out = random_patch_with_xyz.add_distance_to(shot_series)
         assert "origin_distance" in out.coords.coord_map
-        attr_set = set(out.attrs.model_dump())
         for name in shot_series.index:
-            assert f"origin_{name}" in attr_set
+            assert f"origin_{name}" in out.coords.coord_map
 
     def test_bad_name_raises(self, random_patch_with_xyz):
         """Ensure a PatchError is raised when index are not coords."""
