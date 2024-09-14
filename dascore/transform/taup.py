@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.units import convert_units
 from dascore.utils.jit import maybe_numba_jit
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_float
@@ -87,7 +88,8 @@ def tau_p(
     patch
         Patch to transform. Has to have dimensions of time and distance.
     velocities
-        NumPY array of velocities, in m/s, for which to compute slowness (p).
+        NumPY array of velocities, in m/s if units are not attached,
+        for which to compute slowness (p).
 
     Notes
     -----
@@ -128,6 +130,9 @@ def tau_p(
 
     if not np.all(np.diff(velocities) > 0):
         raise ParameterError("Input velocities must be monotonically increasing.")
+
+    # Handle unit conversions if needed.
+    velocities = convert_units(velocities, to_units="m/s")
 
     # Chooses code version based on whether distance between channels
     # is uniform or not

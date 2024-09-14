@@ -297,3 +297,9 @@ class TestConvertUnits:
         msg = "are not specified"
         with pytest.raises(UnitError, match=msg):
             convert_units(1, from_units="m", to_units=None)
+
+    def test_array_quantity(self):
+        """Test that an array quantity works."""
+        array = np.arange(10) * get_quantity("m")
+        out = convert_units(array, to_units="ft")
+        np.allclose(array.magnitude, out * 3.28084)

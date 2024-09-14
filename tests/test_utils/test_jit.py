@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from dascore.utils.jit import maybe_numba_jit
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import optional_import, suppress_warnings
 
 
 class TestMaybeNumbaJit:
@@ -83,4 +83,23 @@ class TestMaybeNumbaJit:
 
         array = np.array([1, 2, 3])
         out = _my_jit(array)
+        assert np.all(out == array)
+
+    def test_prange_no_numba(self):
+        """
+        In order to make the doctests work, we had to implement a dummy
+        numba module. It doesn't support everything, (barely anything) but
+        should be enough for now.
+        """
+
+        @maybe_numba_jit(_missing_numba=True)
+        def _my_jit(array):
+            for sub in numba.prange(len(array)):  # noqa
+                pass
+            return array
+
+        array = np.array([1, 2, 3])
+
+        with suppress_warnings(UserWarning):
+            out = _my_jit(array)
         assert np.all(out == array)

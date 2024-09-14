@@ -8,6 +8,16 @@ import warnings
 from functools import wraps
 
 
+class _DummyNumba:
+    """A simple class for acting like numba when numba is not installed."""
+
+    # This isn't intended to make everything work, only basic stuff needed
+    # for tests to pass when numba isn't installed.
+    def prange(self, count):
+        """A mock of numba's prange."""
+        yield from range(count)
+
+
 def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
     """
     Use numba to apply JIT compilation to the decorated function.
@@ -55,13 +65,23 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
     if callable(required):
         return maybe_numba_jit()(required)
 
-    def _wraper(func):
-        try:
-            import numba
+    has_numba = True
+    try:
+        import numba
 
-            if _missing_numba:
-                raise ImportError("Simulating missing numba.")
-        except ImportError:
+        if _missing_numba:
+            raise ImportError("Simulating missing numba.")
+    except ImportError:
+        numba = _DummyNumba()
+        has_numba = False
+
+    def _wraper(func):
+        # Add numba to the functions global namespace so that it can be used
+        # within the function without having to import it.
+        globs = getattr(func, "__globals__", {})
+        globs["numba"] = numba
+
+        if not has_numba:
 
             @wraps(func)
             def decorated(*args, **kwargs):
@@ -79,14 +99,10 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
                     warnings.warn(msg, UserWarning)
                 return func(*args, **kwargs)
 
-            decorated.func = func
-            return decorated
-        # Add numba to the functions global namespace so that it can be used
-        # within the function without having to import it.
-        globs = getattr(func, "__globals__", {})
-        globs["numba"] = numba
-        jitted_func = numba.jit(**compiler_kwargs)(func)
-        jitted_func.func = func
-        return jitted_func
+            out_func = decorated
+        else:
+            out_func = numba.jit(**compiler_kwargs)(func)
+        out_func.func = func  # make original func accessible via .func
+        return out_func
 
     return _wraper
