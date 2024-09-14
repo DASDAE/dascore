@@ -10,7 +10,7 @@ from scipy.interpolate import interp1d
 
 from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import CoordError, ParameterError, PatchError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_parent_code_name
 from dascore.utils.patch import patch_function
@@ -606,3 +606,74 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     axis = None if dim is None else self.coords.dims.index(dim)
     data = np.squeeze(self.data, axis=axis)
     return self.new(data=data, coords=coords)
+
+
+@patch_function()
+def add_distance_to(
+    patch: PatchType, origin: pd.Series, ord=None, prefix: str = "origin"
+) -> PatchType:
+    """
+    Calculate the distance to "origin" and create new coordinate.
+
+    A new coordinate called `origin_distance` (or another name controlled
+    by the pre-fix argument) is added to the output patch to specify the
+    exact distance. Coordinates representing the origin location
+    (eg origin_x, origin_y, origin_z) are also added as non-associated
+    coordinates.
+
+    Parameters
+    ----------
+    patch
+        The patch object which contains some overlap in coordiantes as
+        index names in origin.
+    origin
+        A series which contains index names that overlap with patch coordinates.
+        All the referenced coordinates must be associated with the same
+        dimension.
+    ord
+        Controls the norm type. Default is Frobenius norm, see the norm
+        function of numpy.linalg for supported options.
+    prefix
+        The prefix name for the added coordinates and attributes.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>>
+    >>> import dascore as dc
+    >>>
+    >>> # Add a coordinate specifying the distance to a theoretical shot.
+    >>> shot = pd.Series({"x": 10, "y": 10, "z": 0})
+    >>> patch = dc.get_example_patch("random_patch_with_xyz")
+    >>> patch_with_origin_dist = patch.add_distance_to(shot)
+    >>> # Now the new coordinates of distance and shot origin exist.
+    >>> dist = patch_with_origin_dist.get_array("origin_distance")
+    >>> origin_x = patch_with_origin_dist.get_array("origin_x")
+    >>>
+    >>> # Of course, the new coordinate can be used for sorting.
+    >>> sorted_patch = patch_with_origin_dist.sort_coords("origin_distance")
+    """
+    # Ensure all index values are represented in coord map.
+    if missing_coords := (set(origin.index) - set(patch.coords.coord_map)):
+        msg = f"Indices {missing_coords} are not patch coordinates."
+        raise PatchError(msg)
+    # Ensure all coordinates have the same associated dimension.
+    associated_dims = {patch.coords.dim_map[x] for x in origin.index}
+    if len(associated_dims) > 1:
+        dims = {i: v for i, v in patch.coords.dim_map.items() if i in origin.index}
+        msg = (
+            "All coordinate must be associated with the same dimension to "
+            f"calculate distance. Relevant dimension mappings are {dims}"
+        )
+        raise PatchError(msg)
+    # Create 2d arrays from coords and origin.
+    coord_array = np.stack([patch.get_array(x) for x in origin.index], axis=1)
+    origin_array = np.atleast_2d(origin.values)
+    # Translate coords to origin and take norm.
+    distance = np.linalg.norm(origin_array - coord_array, axis=1, ord=ord)
+    # Add attrs and coords to new patch
+    dims = next(iter(associated_dims))
+    new_coords = {f"{prefix}_{i}": (None, np.atleast_1d(v)) for i, v in origin.items()}
+    new_coords[f"{prefix}_distance"] = (dims, distance)
+    out = patch.update_coords.func(patch, **new_coords)
+    return out
