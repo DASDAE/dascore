@@ -151,7 +151,7 @@ class TestTauP:
         assert np.abs(1.0 / p_vals[p_ind] - vel) < 20
         assert np.abs((t_vals[t_ind] - t_vals[0]) / np.timedelta64(1, "s") - t0) < 0.02
 
-        # begative slope, non-equal distance
+        # negative slope, non-equal distance
         vel = -1700
         t0 = 0.1
         linear_patch = linear_slope_patch(nch, nt, vel, t0, dist)
