@@ -645,13 +645,13 @@ def add_distance_to(
     >>> # Add a coordinate specifying the distance to a theoretical shot.
     >>> shot = pd.Series({"x": 10, "y": 10, "z": 0})
     >>> patch = dc.get_example_patch("random_patch_with_xyz")
-    >>> patch_with_distance = patch.add_distance_to(shot)
+    >>> patch_with_origin_dist = patch.add_distance_to(shot)
     >>> # Now the new coordinates of distance and shot origin exist.
-    >>> dist = patch_with_distance.get_array("origin_distance")
-    >>> origin_x = patch_with_distance.get_array("origin_x")
+    >>> dist = patch_with_origin_dist.get_array("origin_distance")
+    >>> origin_x = patch_with_origin_dist.get_array("origin_x")
     >>>
     >>> # Of course, the new coordinate can be used for sorting.
-    >>> sorted_patch = patch_with_distance.sort_coords("origin_distance")
+    >>> sorted_patch = patch_with_origin_dist.sort_coords("origin_distance")
     """
     # Ensure all index values are represented in coord map.
     if missing_coords := (set(origin.index) - set(patch.coords.coord_map)):
