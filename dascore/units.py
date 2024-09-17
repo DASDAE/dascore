@@ -136,6 +136,8 @@ def convert_units(
     or if the datatype is not compatible (e.g., datetime must always be
     [time])
     """
+    if isinstance(data, Quantity):  # an existing quantity
+        from_units, data = data.units, data.magnitude
     to_units, from_units = get_quantity(to_units), get_quantity(from_units)
     if from_units is None:
         return data

@@ -340,6 +340,7 @@ class Patch:
     velocity_to_strain_rate = transform.velocity_to_strain_rate
     velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
     dispersion_phase_shift = transform.dispersion_phase_shift
+    tau_p = transform.tau_p
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references

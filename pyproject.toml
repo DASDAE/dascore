@@ -63,6 +63,7 @@ extras = [
     "xarray",
     "findiff",
     "obspy",
+    "numba",
 ]
 
 docs = [

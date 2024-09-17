@@ -1443,7 +1443,7 @@ class CoordMonotonicArray(CoordArray):
 
 def get_coord(
     *,
-    data: ArrayLike | None | np.ndarray = None,
+    data: ArrayLike | None | np.ndarray | BaseCoord = None,
     values: ArrayLike | None | np.ndarray = None,
     start=None,
     min=None,
