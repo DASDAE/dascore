@@ -44,11 +44,13 @@ def _get_definite_integral(patch, dxs_or_vals, dims, axes):
     array = patch.data
     ndims = len(patch.shape)
     for dxs_or_val, ax in zip(dxs_or_vals, axes):
+        # Numpy 2/3 compat code
+        trap = getattr(np, "trapezoid", getattr(np, "trapz"))
         indexer = broadcast_for_index(ndims, ax, None, fill=slice(None))
         if is_array(dxs_or_val):
-            array = np.trapezoid(array, x=dxs_or_val, axis=ax)[indexer]
+            array = trap(array, x=dxs_or_val, axis=ax)[indexer]
         else:
-            array = np.trapezoid(array, dx=dxs_or_val, axis=ax)[indexer]
+            array = trap(array, dx=dxs_or_val, axis=ax)[indexer]
     array, coords = _get_new_coords_and_array(patch, array, dims)
     return array, coords
 
