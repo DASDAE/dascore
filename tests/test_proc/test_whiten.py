@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore import get_example_patch
 from dascore.exceptions import ParameterError
 from dascore.units import Hz
@@ -207,3 +208,10 @@ class TestWhiten:
         assert np.iscomplexobj(
             whitened_patch_freq_domain.data
         ), "Expected the output to be complex, indicating freq. domain representation."
+
+    def test_whiten_dft_patch(self, test_patch):
+        """Ensure whiten can be applied on a dft patch."""
+        padded_patch = test_patch.pad(time="correlate")
+        dft_patch = padded_patch.dft("time", real=True)
+        whitened_pa = dft_patch.whiten(smooth_size=0.5, ft_time=(1, 100), idft=False)
+        assert isinstance(whitened_pa, dc.Patch)

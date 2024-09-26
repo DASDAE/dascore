@@ -14,7 +14,45 @@ from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.transform.fourier import _get_dft_attrs, _get_dft_new_coords
 from dascore.utils.misc import check_filter_kwargs, check_filter_range
-from dascore.utils.patch import _get_dx_or_spacing_and_axes, get_dim_sampling_rate
+from dascore.utils.patch import (
+    _get_dx_or_spacing_and_axes,
+    get_dim_sampling_rate,
+)
+
+
+def _check_whiten_inputs(patch, smooth_size, tukey_alpha, kwargs):
+    if kwargs:
+        dim, (rang_min, rang_max) = check_filter_kwargs(kwargs)
+        dim_ind = patch.dims.index(dim)
+        dsamp = 1.0 / get_dim_sampling_rate(patch, dim)
+        nyquist = 0.5 / dsamp
+    else:
+        dim_ind = -1
+        dsamp = 1.0 / get_dim_sampling_rate(patch, patch.dims[dim_ind])
+        nyquist = 0.5 / dsamp
+
+        rang_min = 0
+        rang_max = nyquist
+
+    low = None if pd.isnull(rang_min) else rang_min / nyquist
+    high = None if pd.isnull(rang_max) else rang_max / nyquist
+    check_filter_range(nyquist, low, high, rang_min, rang_max)
+
+    if smooth_size is None:
+        smooth_size = rang_max - rang_min
+    else:
+        if smooth_size <= 0:
+            msg = "Frequency smoothing size must be positive"
+            raise ParameterError(msg)
+        if smooth_size >= nyquist:
+            msg = "Frequency smoothing size is larger than Nyquist"
+            raise ParameterError(msg)
+
+    if tukey_alpha < 0 or tukey_alpha > 1:
+        msg = "Tukey alpha needs to be between 0 and 1"
+        raise ParameterError(msg)
+
+    return dim_ind, dsamp, nyquist, rang_min, rang_max
 
 
 def whiten(
@@ -48,7 +86,7 @@ def whiten(
     **kwargs
         Used to specify the dimension and frequency, wavelength, or equivalent
         limits. If no input is provided, whitening is also the last axis
-        with frequency band of [0,Nyquist]
+        with frequency band of [0, Nyquist]
 
     Notes
     -----
@@ -120,36 +158,15 @@ def whiten(
     plt.show()
     ```
     """
-    if kwargs:
-        dim, (rang_min, rang_max) = check_filter_kwargs(kwargs)
-        dim_ind = patch.dims.index(dim)
-        dsamp = 1.0 / get_dim_sampling_rate(patch, dim)
-        nyquist = 0.5 / dsamp
-    else:
-        dim_ind = -1
-        dsamp = 1.0 / get_dim_sampling_rate(patch, patch.dims[dim_ind])
-        nyquist = 0.5 / dsamp
+    # dim, dim_ax, _ = get_dim_value_from_kwargs(patch, kwargs)
+    # Get the axis and coord over which fft should be calculated.
+    # fft_dim = patch.dims[dim_ax]
+    # Determine if the input patch has already been transformed.
+    # input_dft = fft_dim.startswith("ft_")
 
-        rang_min = 0
-        rang_max = nyquist
-
-    low = None if pd.isnull(rang_min) else rang_min / nyquist
-    high = None if pd.isnull(rang_max) else rang_max / nyquist
-    check_filter_range(nyquist, low, high, rang_min, rang_max)
-
-    if smooth_size is None:
-        smooth_size = rang_max - rang_min
-    else:
-        if smooth_size <= 0:
-            msg = "Frequency smoothing size must be positive"
-            raise ParameterError(msg)
-        if smooth_size >= nyquist:
-            msg = "Frequency smoothing size is larger than Nyquist"
-            raise ParameterError(msg)
-
-    if tukey_alpha < 0 or tukey_alpha > 1:
-        msg = "Tukey alpha needs to be between 0 and 1"
-        raise ParameterError(msg)
+    dim_ind, dsamp, nyquist, rang_min, rang_max = _check_whiten_inputs(
+        patch, smooth_size, tukey_alpha, kwargs
+    )
 
     nsamp = patch.data.shape[dim_ind]
     temp = nft.rfftfreq(nsamp, d=dsamp)  # Compute default frequency resolution
