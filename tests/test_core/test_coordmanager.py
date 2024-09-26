@@ -62,6 +62,16 @@ class TestGetCoordManager:
         assert out.shape == (10, 2)
         assert out.dims == ("time", "money")
 
+    def test_not_associated_coord_1(self):
+        """Ensure a not associated coord works as only input."""
+        coords = {"time": (None, np.arange(10))}
+        assert isinstance(get_coord_manager(coords), CoordManager)
+
+    def test_not_associated_coord_2(self):
+        """Ensure an empty string not associated coord works as only input."""
+        coords = {"time": ("", np.arange(10))}
+        assert isinstance(get_coord_manager(coords), CoordManager)
+
 
 class TestBasicCoordManager:
     """Ensure basic things work with coord managers."""

@@ -48,6 +48,18 @@ def written_dascore_v1_empty(tmp_path_factory):
     return path
 
 
+@pytest.fixture(scope="class")
+@register_func(WRITTEN_FILES)
+def written_dascore_correlate(tmp_path_factory, random_patch):
+    """Write a correlate patch to the dascore format."""
+    path = tmp_path_factory.mktemp("correlate_patcc") / "correlate.hdf5"
+    padded_pa = random_patch.pad(time="correlate")
+    dft_pa = padded_pa.dft("time", real=True)
+    cc_pa = dft_pa.correlate(distance=[0, 1, 2], samples=True)
+    dc.write(cc_pa, path, "DASDAE", file_version="1")
+    return path
+
+
 @pytest.fixture(params=WRITTEN_FILES, scope="class")
 def dasdae_v1_file_path(request):
     """Gatherer fixture to iterate through each written dasedae format."""
@@ -100,6 +112,11 @@ class TestWriteDASDAE:
         random_patch.io.write(written_dascore_v1_random, "dasdae")
         read_patch = dc.spool(written_dascore_v1_random)[0]
         assert random_patch == read_patch
+
+    def test_write_cc_patch(self, written_dascore_correlate):
+        """Ensure cross correlated patches can be writen and read."""
+        sp_cc = dc.spool(written_dascore_correlate)
+        assert isinstance(sp_cc[0], dc.Patch)
 
 
 class TestReadDASDAE:
