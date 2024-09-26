@@ -961,6 +961,7 @@ def stack_patches(
     dim_vary
         The name of the dimension which can be different in values
         (but not shape) and patches still added together.
+        If None, all dimension values must be equal.
     {check_desc}
 
     Examples

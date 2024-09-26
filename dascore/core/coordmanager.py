@@ -1102,7 +1102,7 @@ def get_coord_manager(
     # from dict keys.
     if dims is None:
         if isinstance(coords, Mapping) and all(isinstance(x, str) for x in coords):
-            dims = tuple(coords.keys())
+            dims = tuple(i for i, v in coords.items() if not isinstance(v, tuple))
         elif attrs is not None and "dims" in attrs or hasattr(attrs, "dims"):
             dims = tuple(attrs["dims"].split(","))
         else:
@@ -1160,7 +1160,7 @@ def _get_coord_dim_map(coords, dims):
                 " (dimension, coord) or ((dimensions,...), coord)"
             )
             raise CoordError(msg)
-        dim_names = iterate(coord[0])
+        dim_names = tuple(i for i in iterate(coord[0]) if i)
         # # all dims must be in the input dims or a new coord.
         d1, d2 = set(dim_names), set(dims)
         if (not d1.issubset(d2)) and d1 != {name}:
