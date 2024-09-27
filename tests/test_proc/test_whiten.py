@@ -137,7 +137,6 @@ class TestWhiten:
         """Ensures correct behavior on monochromatic signal."""
         patch = get_example_patch("sin_wav", frequency=100, sample_rate=500)
         dft_pre = patch.dft("time", real=True)
-
         white_patch = patch.whiten(smooth_size=5, time=[80, 120])
         dft_post = white_patch.dft("time", real=True)
 

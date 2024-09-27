@@ -3,56 +3,111 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 import numpy as np
-import numpy.fft as nft
 import pandas as pd
 from scipy.ndimage import convolve1d
 from scipy.signal.windows import tukey
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
-from dascore.transform.fourier import _get_dft_attrs, _get_dft_new_coords
-from dascore.utils.misc import check_filter_kwargs, check_filter_range
-from dascore.utils.patch import (
-    _get_dx_or_spacing_and_axes,
-    get_dim_sampling_rate,
+from dascore.utils.misc import (
+    broadcast_for_index,
+    check_filter_kwargs,
+    check_filter_range,
 )
+from dascore.utils.patch import (
+    get_dim_value_from_kwargs,
+)
+from dascore.utils.transformatter import FourierTransformatter
 
 
-def _check_whiten_inputs(patch, smooth_size, tukey_alpha, kwargs):
-    if kwargs:
-        dim, (rang_min, rang_max) = check_filter_kwargs(kwargs)
-        dim_ind = patch.dims.index(dim)
-        dsamp = 1.0 / get_dim_sampling_rate(patch, dim)
-        nyquist = 0.5 / dsamp
-    else:
-        dim_ind = -1
-        dsamp = 1.0 / get_dim_sampling_rate(patch, patch.dims[dim_ind])
-        nyquist = 0.5 / dsamp
-
-        rang_min = 0
-        rang_max = nyquist
-
-    low = None if pd.isnull(rang_min) else rang_min / nyquist
-    high = None if pd.isnull(rang_max) else rang_max / nyquist
-    check_filter_range(nyquist, low, high, rang_min, rang_max)
-
-    if smooth_size is None:
-        smooth_size = rang_max - rang_min
-    else:
-        if smooth_size <= 0:
-            msg = "Frequency smoothing size must be positive"
-            raise ParameterError(msg)
-        if smooth_size >= nyquist:
-            msg = "Frequency smoothing size is larger than Nyquist"
-            raise ParameterError(msg)
+def _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range, kwargs):
+    coord = patch.get_coord(dim, require_evenly_sampled=True)
+    step = coord.step
+    nyquist = 2 / step
 
     if tukey_alpha < 0 or tukey_alpha > 1:
         msg = "Tukey alpha needs to be between 0 and 1"
         raise ParameterError(msg)
 
-    return dim_ind, dsamp, nyquist, rang_min, rang_max
+    if freq_range is None:
+        return nyquist
+
+    check_filter_kwargs(kwargs)  # does checks on range len/types
+
+    range_min, range_max = freq_range
+
+    low = None if pd.isnull(range_min) else range_min / nyquist
+    high = None if pd.isnull(range_max) else range_max / nyquist
+    check_filter_range(nyquist, low, high, range_min, range_max)
+
+    if smooth_size is None:
+        smooth_size = range_max - range_min
+    elif smooth_size <= 0:
+        msg = "Frequency smoothing size must be positive"
+        raise ParameterError(msg)
+    elif smooth_size >= nyquist:
+        msg = "Frequency smoothing size is larger than Nyquist"
+        raise ParameterError(msg)
+
+    return smooth_size
+
+
+def _normalize_spectral_amplitudes(
+    fft_patch,
+    dim,
+    smooth_size,
+    freq_range,
+):
+    """Apply normalization to the spectra."""
+    fft_coord = fft_patch.get_coord(dim)
+    index = fft_patch.dims.index(dim)
+    freq_step = fft_coord.step
+    mean_window = math.floor(smooth_size / freq_step)
+    if freq_range and mean_window > fft_coord.select(freq_range)[0]:
+        msg = "Frequency smoothing size is larger than frequency range"
+        raise ParameterError(msg)
+
+    conv_window = np.arange(mean_window) / mean_window
+
+    # convolve original spectrum with smoothing window
+    amp = np.abs(fft_patch.data)
+    sm_amp = convolve1d(amp, conv_window, axis=index, mode="constant")
+
+    # divide original spectrum by smoothed spectrum
+    norm_amp = np.divide(
+        fft_patch.data,
+        np.abs(sm_amp),
+        out=np.zeros_like(sm_amp),
+        where=abs(sm_amp) != 0,
+    )
+    return norm_amp
+
+
+def _filter_array(array, fft_patch, dim, freq_range, tukey_alpha):
+    """Apply Tukey window to filter array for frequencies of interest."""
+    fft_coord = fft_patch.get_coord(dim)
+    fft_ind = fft_patch.dims.index(dim)
+    assert isinstance(freq_range, Sequence) and len(freq_range) == 2
+
+    first_freq_ind = fft_coord.get_next_index(freq_range[0])
+    last_freq_ind = fft_coord.get_next_index(freq_range[1])
+
+    if (freq_win_size := (last_freq_ind - first_freq_ind)) < 2:
+        msg = "Frequency range is too narrow"
+        raise ParameterError(msg)
+
+    taper_win = np.zeros(array.shape[fft_ind])
+    taper_win[first_freq_ind:last_freq_ind] = tukey(freq_win_size, alpha=tukey_alpha)
+
+    broadcast_inds = broadcast_for_index(
+        array.ndims, fft_ind, value=Ellipsis, fill=None
+    )
+    taper_array = taper_win[broadcast_inds]
+    array *= taper_array
+    return array
 
 
 def whiten(
@@ -64,6 +119,7 @@ def whiten(
 ) -> PatchType:
     """
     Band-limited signal whitening.
+
     The whitened signal is returned in either frequency or time domains.
 
     Parameters
@@ -81,12 +137,12 @@ def whiten(
         See more details at https://docs.scipy.org/doc/scipy/reference
         /generated/scipy.signal.windows.tukey.html
     idft
-        If False, returns the whitened result in the frequency domain without
-        converting it back to the time domain. Defaults to True.
+        Deprecated, output domain is now the same as input domain.
     **kwargs
         Used to specify the dimension and frequency, wavelength, or equivalent
-        limits. If no input is provided, whitening is also the last axis
-        with frequency band of [0, Nyquist]
+        limits. Can also be None which defaults to [0, Nyquist]. If no input is
+        provided, whitening is also the last axis with frequency band of
+        [0, Nyquist].
 
     Notes
     -----
@@ -158,106 +214,28 @@ def whiten(
     plt.show()
     ```
     """
-    # dim, dim_ax, _ = get_dim_value_from_kwargs(patch, kwargs)
-    # Get the axis and coord over which fft should be calculated.
-    # fft_dim = patch.dims[dim_ax]
-    # Determine if the input patch has already been transformed.
-    # input_dft = fft_dim.startswith("ft_")
-
-    dim_ind, dsamp, nyquist, rang_min, rang_max = _check_whiten_inputs(
-        patch, smooth_size, tukey_alpha, kwargs
+    # Set default kwargs if not set, check inputs.
+    kwargs = {patch.dims[-1]: None} if not kwargs else kwargs
+    dim, _, freq_range = get_dim_value_from_kwargs(patch, kwargs)
+    smooth_size = _check_whiten_inputs(
+        patch, smooth_size, tukey_alpha, dim, freq_range, kwargs
     )
 
-    nsamp = patch.data.shape[dim_ind]
-    temp = nft.rfftfreq(nsamp, d=dsamp)  # Compute default frequency resolution
-    default_df = temp[1] - temp[0]
-    # RFFT does not compute nyquist itself, so we stop one discrete frequency earlier
-    if rang_max == nyquist:
-        rang_max -= default_df
+    # Get patch in dft form.
+    fft_patch = patch.dft(dim, real=dim)
+    input_patch_fft = fft_patch is patch  # if input patch had fft
+    fft_dim = FourierTransformatter().rename_dims(dim)[0]
 
-    # Virtually increase computation resolution so that the smoothing window
-    # contains 5 discrete frequencies. However, if the input value is smaller
-    # than the default resolution, raise a parameter error because the
-    # computational cost would go up
-    if smooth_size < default_df:
-        msg = "Frequency smoothing size is smaller than default frequency resolution"
-        raise ParameterError(msg)
+    # First apply normalization to amplitude spectra.
+    array = _normalize_spectral_amplitudes(fft_patch, fft_dim, freq_range, smooth_size)
 
-    if math.floor(smooth_size / default_df) < 5:
-        comp_nsamp = math.floor(nsamp * 5 / (smooth_size / default_df))
-    else:
-        comp_nsamp = nsamp
+    # Then apply tukey window around frequencies of interest which acts
+    # as a filter.
+    if freq_range is not None:
+        array = _filter_array(array, fft_patch, dim, freq_range, tukey_alpha)
 
-    freqs = nft.rfftfreq(comp_nsamp, d=dsamp)
-    df = freqs[1] - freqs[0]
-    nf = np.size(freqs)
-    fft_size = np.asarray(np.shape(patch.data))
-    fft_size[dim_ind] = comp_nsamp
-
-    fft_d = np.zeros(shape=fft_size, dtype=complex)
-    whitened_data = np.zeros(np.shape(patch.data))
-
-    first_freq_ind = np.argmax((np.abs(freqs) - rang_min) >= 0.0)
-    last_freq_ind = np.argmax((np.abs(freqs) - rang_max) >= 0.0)
-    freq_win_size = last_freq_ind - first_freq_ind
-
-    mean_window = math.floor(smooth_size / df)
-
-    if freq_win_size < 2:
-        msg = "Frequency range is too narrow"
-        raise ParameterError(msg)
-    if mean_window > last_freq_ind - first_freq_ind + 1:
-        msg = "Frequency smoothing size is larger than frequency range"
-        raise ParameterError(msg)
-
-    assert np.all(np.isreal(patch.data)), "Input data needs to be real"
-
-    fft_d = nft.rfft(patch.data, n=comp_nsamp, axis=dim_ind)
-    amp = np.abs(fft_d)  # Original spectrum
-    phase = np.angle(fft_d)  # Original phase
-
-    conv_window = np.arange(mean_window) / mean_window
-
-    # Define tapering window
-    taper_win = np.zeros(nf)
-    taper_win[first_freq_ind:last_freq_ind] = tukey(freq_win_size, alpha=tukey_alpha)
-
-    # convolve original spectrum with smoothing window
-    sm_amp = convolve1d(amp, conv_window, axis=dim_ind, mode="constant")
-
-    # divide original spectrum by smoothed spectrum
-    norm_amp = np.divide(
-        amp, np.abs(sm_amp), out=np.zeros_like(sm_amp), where=abs(sm_amp) != 0
-    )
-
-    # Generate N-D tapering window and multiply normalize spectrum to get desired
-    # frequency range.
-    exp_dims = np.asarray(norm_amp.shape)
-    exp_dims[dim_ind] = 1
-    tiled_win = taper_win
-
-    for d in exp_dims:
-        if d > 1:
-            tiled_win = np.tile(np.expand_dims(tiled_win, axis=-1), (1, d))
-
-    tiled_win = np.transpose(tiled_win, np.roll(np.arange(len(exp_dims)), dim_ind))
-
-    norm_amp *= tiled_win
-
-    if idft:
-        # revert back to time-domain, using the phase of the original signal
-        whitened_data = np.real(
-            nft.irfft(norm_amp * np.exp(1j * phase), n=comp_nsamp, axis=dim_ind)
-        )
-        whitened_data = np.take(whitened_data, np.arange(nsamp), axis=dim_ind)
-        return patch.new(data=whitened_data)
-    else:
-        dims = list(patch.dims)
-        dxs, axes = _get_dx_or_spacing_and_axes(patch, dims, require_evenly_spaced=True)
-        # get new coordinates
-        real = dims[dim_ind]
-        new_coords = _get_dft_new_coords(patch, dxs, dims, axes, real)
-        # get attributes
-        attrs = _get_dft_attrs(patch, dims, new_coords)
-        # return the frequency domain data directly without taking the inverse FFT
-        return patch.new(norm_amp * np.exp(1j * phase), coords=new_coords, attrs=attrs)
+    # Package up output and return.
+    out = fft_patch.new(data=array)
+    if not input_patch_fft:
+        out = out.idft()
+    return out

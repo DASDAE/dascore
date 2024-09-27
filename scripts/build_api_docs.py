@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import sys
+
 from _index_api import get_alias_mapping, parse_project
 from _qmd_builder import create_quarto_qmd
 from _render_api import render_project
 from _validate_links import validate_all_links
 
 import dascore as dc
+
+sys.stdout.encoding = "utf-8"
+
 
 if __name__ == "__main__":
     print("Building documentation")  # noqa
