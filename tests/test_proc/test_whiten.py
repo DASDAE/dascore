@@ -204,6 +204,25 @@ class TestWhiten:
         # check if the returned data is in the frequency domain
         assert np.iscomplexobj(
             whitened_patch_freq_domain.data
-        ), "Expected the output to be complex, indicating freq. domain representation."
+        ), "Expected the output to be complex, indicating freq. domain patch."
 
         assert "ft_time" in dft.coords.coord_map
+
+    def test_no_time_no_kwargs_raises(self, random_patch):
+        """Ensure if no kwargs and patch doesn't have time an error is raised."""
+        patch = random_patch.rename_coords(time="money")
+        msg = "and patch has no time dimension"
+        with pytest.raises(ParameterError, match=msg):
+            patch.whiten()
+
+    def test_bad_dim_name_in_kwargs_raises(self, random_patch):
+        """Ensure a bad dimension name raises."""
+        msg = "whiten but it is not in patch dimensions"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.whiten(bad_dim=(1, 10))
+
+    def test_multiple_kwargs_raises(self, random_patch):
+        """Ensure passing multiple kwargs raises error."""
+        msg = "must specify a single patch dimension"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.whiten(time=None, distance=None)

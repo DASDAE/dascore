@@ -125,7 +125,7 @@ def _get_dim_freq_range_from_kwargs(patch, kwargs):
     if not kwargs:
         expected = {"time", "ft_time"} & dim_set
         if not expected:
-            msg = "No dim name provided in kwargs and patch has no time axis."
+            msg = "No dim name provided in kwargs and patch has no time dimension."
             raise ParameterError(msg)
         dim = next(iter(expected))
         freq_range = None
@@ -134,7 +134,7 @@ def _get_dim_freq_range_from_kwargs(patch, kwargs):
         dim, freq_range = next(iter(kwargs.items()))
         fft_dim = FourierTransformatter().rename_dims(dim)[0]
         if dim not in dim_set and fft_dim not in dim_set:
-            msg = f"passed dim of {dim} to whiten is not in patch dimensions."
+            msg = f"passed dim of {dim} to whiten but it is not in patch dimensions."
             raise ParameterError(msg)
     else:  # Something when wrong.
         msg = "Whiten kwargs must specify a single patch dimension."
