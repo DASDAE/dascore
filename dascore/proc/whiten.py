@@ -28,7 +28,8 @@ def _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range, kwarg
     """Ensure inputs to whiten function are ok."""
     coord = patch.get_coord(dim, require_evenly_sampled=True)
     step = to_float(coord.step)
-    nyquist = 2 / step
+    nyquist = 1 / (2 * step)
+    fft_step = nyquist / len(coord)
 
     if tukey_alpha < 0 or tukey_alpha > 1:
         msg = "Tukey alpha needs to be between 0 and 1"
@@ -54,6 +55,18 @@ def _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range, kwarg
         msg = "Frequency smoothing size is larger than Nyquist"
         raise ParameterError(msg)
 
+    if ((range_max - range_min) / step) < 2:
+        msg = "Frequency range is too narrow"
+        raise ParameterError(msg)
+
+    # We need at least 5 smoothing points. Before, we could increase fft resolution
+    # so that smooth size could be smaller, but now that whiten can accept fft
+    # patches this is no longer practical. The user will have to resample to
+    # higher resolutions before whitening.
+    if smooth_size < (fft_step * 5):
+        msg = "Frequency smoothing size is smaller than 5x frequency resolution"
+        raise ParameterError(msg)
+
     return smooth_size
 
 
@@ -63,7 +76,7 @@ def _get_amplitude_envelope(
     smooth_size,
     freq_range,
 ):
-    """Apply normalization to the spectra."""
+    """Calculate a normalization envelope for the spectra."""
     fft_coord = fft_patch.get_coord(dim)
     index = fft_patch.dims.index(dim)
     freq_step = fft_coord.step
@@ -94,10 +107,7 @@ def _filter_array(envelope, fft_patch, dim, freq_range, tukey_alpha):
 
     freq_ind1 = fft_coord.get_next_index(freq_range[0])
     freq_ind2 = fft_coord.get_next_index(freq_range[1])
-
-    if (freq_win_size := (freq_ind2 - freq_ind1)) < 2:
-        msg = "Frequency range is too narrow"
-        raise ParameterError(msg)
+    freq_win_size = freq_ind2 - freq_ind1
 
     # Get indexer to make 1D array broadcastable along fft
     tuk_bcast_inds = broadcast_for_index(

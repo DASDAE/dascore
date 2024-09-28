@@ -113,7 +113,7 @@ class TestWhiten:
         with pytest.raises(ParameterError, match=msg):
             test_patch.whiten(smooth_size=3, time=[10.02, 10.03])
 
-        msg = "Frequency smoothing size is smaller than default frequency resolution"
+        msg = "Frequency smoothing size is smaller than"
         with pytest.raises(ParameterError, match=msg):
             test_patch.whiten(smooth_size=0.001, time=[10, 40])
 
