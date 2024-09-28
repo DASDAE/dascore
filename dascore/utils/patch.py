@@ -226,13 +226,16 @@ def patch_function(
                 coords=required_coords,
             )
             check_patch_attrs(patch, required_attrs)
-            hist_str = _get_history_str(patch, func, *args, _history=history, **kwargs)
             out: PatchType = func(patch, *args, **kwargs)
             # attach history string. Consider something a bit less hacky.
-            if hist_str and hasattr(out, "attrs"):
-                hist = list(out.attrs.history)
-                hist.append(hist_str)
-                out = out.update_attrs(history=hist)
+            if out is not patch and hasattr(out, "attrs"):
+                hist_str = _get_history_str(
+                    patch, func, *args, _history=history, **kwargs
+                )
+                if hist_str:
+                    hist = list(out.attrs.history)
+                    hist.append(hist_str)
+                    out = out.update_attrs(history=hist)
             return out
 
         _func.func = func  # attach original function

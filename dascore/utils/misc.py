@@ -611,13 +611,8 @@ def sanitize_range_param(select) -> tuple:
     return select
 
 
-def check_filter_kwargs(kwargs):
-    """Check filter kwargs and return dim name and filter range."""
-    if len(kwargs) != 1:
-        msg = "pass filter requires you specify one dimension and filter range."
-        raise FilterValueError(msg)
-    dim = next(iter(kwargs.keys()))
-    filt_range = kwargs[dim]
+def check_filter_sequence(filt_range):
+    """Ensure the filter sequence is the right shape."""
     # strip out units if used.
     mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
     if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
@@ -629,7 +624,16 @@ def check_filter_kwargs(kwargs):
             f"you passed {filt_range}"
         )
         raise FilterValueError(msg)
+    return filt_range
 
+
+def check_filter_kwargs(kwargs):
+    """Check filter kwargs and return dim name and filter range."""
+    if len(kwargs) != 1:
+        msg = "pass filter requires you specify one dimension and filter range."
+        raise FilterValueError(msg)
+    dim = next(iter(kwargs.keys()))
+    filt_range = check_filter_sequence(kwargs[dim])
     return dim, filt_range
 
 

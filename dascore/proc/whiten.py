@@ -14,17 +14,14 @@ from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import (
     broadcast_for_index,
-    check_filter_kwargs,
     check_filter_range,
-)
-from dascore.utils.patch import (
-    get_dim_value_from_kwargs,
+    check_filter_sequence,
 )
 from dascore.utils.time import to_float
 from dascore.utils.transformatter import FourierTransformatter
 
 
-def _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range, kwargs):
+def _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range):
     """Ensure inputs to whiten function are ok."""
     coord = patch.get_coord(dim, require_evenly_sampled=True)
     step = to_float(coord.step)
@@ -38,8 +35,7 @@ def _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range, kwarg
     if freq_range is None:
         return nyquist
 
-    check_filter_kwargs(kwargs)  # does checks on range len/types
-
+    check_filter_sequence(freq_range)
     range_min, range_max = freq_range
 
     low = None if pd.isnull(range_min) else range_min / nyquist
@@ -55,7 +51,7 @@ def _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range, kwarg
         msg = "Frequency smoothing size is larger than Nyquist"
         raise ParameterError(msg)
 
-    if ((range_max - range_min) / step) < 2:
+    if ((range_max - range_min) / fft_step) < 2:
         msg = "Frequency range is too narrow"
         raise ParameterError(msg)
 
@@ -121,6 +117,32 @@ def _filter_array(envelope, fft_patch, dim, freq_range, tukey_alpha):
     return envelope
 
 
+def _get_dim_freq_range_from_kwargs(patch, kwargs):
+    """Get the dimension and frequency range."""
+    # No kwargs provided, look for time / ft_time.
+    dim_set = set(patch.dims)
+    # Handles the default case when no kwargs passed.
+    if not kwargs:
+        expected = {"time", "ft_time"} & dim_set
+        if not expected:
+            msg = "No dim name provided in kwargs and patch has no time axis."
+            raise ParameterError(msg)
+        dim = next(iter(expected))
+        freq_range = None
+    # A single kwarg was passed.
+    elif len(kwargs) == 1:
+        dim, freq_range = next(iter(kwargs.items()))
+        fft_dim = FourierTransformatter().rename_dims(dim)[0]
+        if dim not in dim_set and fft_dim not in dim_set:
+            msg = f"passed dim of {dim} to whiten is not in patch dimensions."
+            raise ParameterError(msg)
+    else:  # Something when wrong.
+        msg = "Whiten kwargs must specify a single patch dimension."
+        raise ParameterError(msg)
+
+    return dim, freq_range
+
+
 def whiten(
     patch: PatchType,
     smooth_size: float | None = None,
@@ -152,8 +174,8 @@ def whiten(
     **kwargs
         Used to specify the dimension and frequency, wavelength, or equivalent
         limits. Can also be None which defaults to [0, Nyquist]. If no input is
-        provided, whitening is also the last axis with frequency band of
-        [0, Nyquist].
+        provided, whitening will be applied to a dimension called "time" or
+        "ft_time" if one exists, otherwise a ParameterError is raised.
 
     Notes
     -----
@@ -226,14 +248,10 @@ def whiten(
     ```
     """
     # Set default kwargs if not set, check inputs.
-    kwargs = {patch.dims[-1]: None} if not kwargs else kwargs
-    dim, _, freq_range = get_dim_value_from_kwargs(patch, kwargs)
-    smooth_size = _check_whiten_inputs(
-        patch, smooth_size, tukey_alpha, dim, freq_range, kwargs
-    )
-
+    dim, freq_range = _get_dim_freq_range_from_kwargs(patch, kwargs)
+    smooth_size = _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range)
     # Get patch in dft form.
-    fft_patch = patch.dft(dim, real=dim)
+    fft_patch = patch.dft(dim, real=np.isrealobj(patch.data))
     input_patch_fft = fft_patch is patch  # if input patch had fft
     fft_dim = FourierTransformatter().rename_dims(dim)[0]
 

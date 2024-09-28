@@ -3,7 +3,6 @@
 import numpy as np
 import pytest
 
-import dascore as dc
 from dascore import get_example_patch
 from dascore.exceptions import ParameterError
 from dascore.units import Hz
@@ -184,7 +183,7 @@ class TestWhiten:
 
     def test_whiten_along_distance(self, test_patch):
         """Ensure whitening runs along other axis."""
-        whitened_patch = test_patch.whiten(distance=(0.01, 0.03))
+        whitened_patch = test_patch.whiten(distance=(0.001, 0.03))
         assert "distance" in whitened_patch.dims
         assert "time" in whitened_patch.dims
         assert np.array_equal(
@@ -195,22 +194,16 @@ class TestWhiten:
             whitened_patch.coords.get_array("distance"),
         )
 
-    def test_whiten_idft_false(self, test_patch):
+    def test_whiten_dft_input(self, test_patch):
         """
-        Ensure whiten function can return the result in the frequency domain
-        when the idft flag is set to Flase.
+        Ensure whiten function returns dft patch when dft patch is input.
         """
-        # whiten the patch and return in frequency domain
-        whitened_patch_freq_domain = test_patch.whiten(smooth_size=5, idft=False)
+        dft = test_patch.dft("time", real=True)
+        whitened_patch_freq_domain = dft.whiten(smooth_size=5, time=None)
 
         # check if the returned data is in the frequency domain
         assert np.iscomplexobj(
             whitened_patch_freq_domain.data
         ), "Expected the output to be complex, indicating freq. domain representation."
 
-    def test_whiten_dft_patch(self, test_patch):
-        """Ensure whiten can be applied on a dft patch."""
-        padded_patch = test_patch.pad(time="correlate")
-        dft_patch = padded_patch.dft("time", real=True)
-        whitened_pa = dft_patch.whiten(smooth_size=0.5, ft_time=(1, 100), idft=False)
-        assert isinstance(whitened_pa, dc.Patch)
+        assert "ft_time" in dft.coords.coord_map
