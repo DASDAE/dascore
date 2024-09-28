@@ -20,12 +20,14 @@ from dascore.utils.misc import (
 from dascore.utils.patch import (
     get_dim_value_from_kwargs,
 )
+from dascore.utils.time import to_float
 from dascore.utils.transformatter import FourierTransformatter
 
 
 def _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range, kwargs):
+    """Ensure inputs to whiten function are ok."""
     coord = patch.get_coord(dim, require_evenly_sampled=True)
-    step = coord.step
+    step = to_float(coord.step)
     nyquist = 2 / step
 
     if tukey_alpha < 0 or tukey_alpha > 1:
@@ -55,7 +57,7 @@ def _check_whiten_inputs(patch, smooth_size, tukey_alpha, dim, freq_range, kwarg
     return smooth_size
 
 
-def _normalize_spectral_amplitudes(
+def _get_amplitude_envelope(
     fft_patch,
     dim,
     smooth_size,
@@ -66,7 +68,7 @@ def _normalize_spectral_amplitudes(
     index = fft_patch.dims.index(dim)
     freq_step = fft_coord.step
     mean_window = math.floor(smooth_size / freq_step)
-    if freq_range and mean_window > fft_coord.select(freq_range)[0]:
+    if freq_range and mean_window > len(fft_coord.select(freq_range)[0]):
         msg = "Frequency smoothing size is larger than frequency range"
         raise ParameterError(msg)
 
@@ -74,40 +76,39 @@ def _normalize_spectral_amplitudes(
 
     # convolve original spectrum with smoothing window
     amp = np.abs(fft_patch.data)
-    sm_amp = convolve1d(amp, conv_window, axis=index, mode="constant")
-
-    # divide original spectrum by smoothed spectrum
-    norm_amp = np.divide(
-        fft_patch.data,
-        np.abs(sm_amp),
-        out=np.zeros_like(sm_amp),
-        where=abs(sm_amp) != 0,
+    conv = convolve1d(amp, conv_window, axis=index, mode="constant")
+    sm_amp = np.divide(
+        1,
+        conv,
+        out=np.zeros_like(conv),
+        where=~np.isclose(conv, 0),
     )
-    return norm_amp
+    return sm_amp
 
 
-def _filter_array(array, fft_patch, dim, freq_range, tukey_alpha):
+def _filter_array(envelope, fft_patch, dim, freq_range, tukey_alpha):
     """Apply Tukey window to filter array for frequencies of interest."""
     fft_coord = fft_patch.get_coord(dim)
     fft_ind = fft_patch.dims.index(dim)
     assert isinstance(freq_range, Sequence) and len(freq_range) == 2
 
-    first_freq_ind = fft_coord.get_next_index(freq_range[0])
-    last_freq_ind = fft_coord.get_next_index(freq_range[1])
+    freq_ind1 = fft_coord.get_next_index(freq_range[0])
+    freq_ind2 = fft_coord.get_next_index(freq_range[1])
 
-    if (freq_win_size := (last_freq_ind - first_freq_ind)) < 2:
+    if (freq_win_size := (freq_ind2 - freq_ind1)) < 2:
         msg = "Frequency range is too narrow"
         raise ParameterError(msg)
 
-    taper_win = np.zeros(array.shape[fft_ind])
-    taper_win[first_freq_ind:last_freq_ind] = tukey(freq_win_size, alpha=tukey_alpha)
-
-    broadcast_inds = broadcast_for_index(
-        array.ndims, fft_ind, value=Ellipsis, fill=None
+    # Get indexer to make 1D array broadcastable along fft
+    tuk_bcast_inds = broadcast_for_index(
+        fft_patch.ndim, fft_ind, value=Ellipsis, fill=None
     )
-    taper_array = taper_win[broadcast_inds]
-    array *= taper_array
-    return array
+    env_bcast_inds = broadcast_for_index(
+        fft_patch.ndim, fft_ind, value=slice(freq_ind1, freq_ind2), fill=slice(0)
+    )
+    tuk = tukey(freq_win_size, alpha=tukey_alpha)[tuk_bcast_inds]
+    envelope[env_bcast_inds] *= tuk
+    return envelope
 
 
 def whiten(
@@ -226,13 +227,17 @@ def whiten(
     input_patch_fft = fft_patch is patch  # if input patch had fft
     fft_dim = FourierTransformatter().rename_dims(dim)[0]
 
-    # First apply normalization to amplitude spectra.
-    array = _normalize_spectral_amplitudes(fft_patch, fft_dim, freq_range, smooth_size)
+    # Get an envelope which can be used to normalize the spectra so each freq
+    # has roughly the same amplitude (but phase remains unchanged).
+    envelope = _get_amplitude_envelope(fft_patch, fft_dim, smooth_size, freq_range)
 
-    # Then apply tukey window around frequencies of interest which acts
-    # as a filter.
+    # Apply the tukey window to the original envelope so only the freqs
+    # in the selected range are used.
     if freq_range is not None:
-        array = _filter_array(array, fft_patch, dim, freq_range, tukey_alpha)
+        envelope = _filter_array(envelope, fft_patch, fft_dim, freq_range, tukey_alpha)
+
+    # Now use calculated envelope to normalize spectra
+    array = fft_patch.data * envelope
 
     # Package up output and return.
     out = fft_patch.new(data=array)

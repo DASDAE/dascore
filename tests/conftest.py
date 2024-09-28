@@ -4,14 +4,8 @@ from __future__ import annotations
 
 import os
 import shutil
-import collections
-from typing import Callable
 from contextlib import suppress
 from pathlib import Path
-
-# This line is needed to ensure some older debugging packages work.
-# It shouldn't really hurt anything so we leave it here for now.
-collections.Callable = Callable  # noqa
 
 import matplotlib
 import numpy as np
