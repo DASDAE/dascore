@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.signal import chirp as spy_chirp
 
 import dascore as dc
 import dascore.core
@@ -193,7 +194,7 @@ def sin_wave_patch(
     time_min="2020-01-01",
     channel_count=3,
     duration=1,
-    amplitude=10,
+    amplitude: Sequence[float] | float = 10.0,
 ):
     """
     A Patch composed of sine waves.
@@ -210,24 +211,84 @@ def sin_wave_patch(
     channel_count
         The number of  distance channels to include.
     duration
-        Duration of signal in seconds.
+        Signal duration in seconds.
     amplitude
-        The amplitude of the sin wave.
+        The amplitude of the sin wave. If a sequence is provided it represents
+        the amplitude of each frequency.
     """
-    t_array = np.linspace(0.0, duration, sample_rate * duration)
+    t_array = np.linspace(0.0, duration, int(sample_rate * duration))
     # Get time and distance coords
     distance = np.arange(1, channel_count + 1, 1)
     time = to_timedelta64(t_array) + np.datetime64(time_min)
-    freqs = [frequency] if isinstance(frequency, float | int) else frequency
+    freqs = np.atleast_1d(frequency)
+    amps = np.broadcast_to(np.atleast_1d(amplitude), shape=freqs.shape)
     # init empty data and add frequencies.
     data = np.zeros((len(time), len(distance)))
-    for freq in freqs:
-        sin_data = amplitude * np.sin(2.0 * np.pi * freq * t_array)
+    for amp, freq in zip(amps, freqs):
+        sin_data = amp * np.sin(2.0 * np.pi * freq * t_array)
         data += sin_data[..., np.newaxis]
     patch = dc.Patch(
         data=data,
         coords={"time": time, "distance": distance},
         dims=("time", "distance"),
+    )
+    return patch
+
+
+@register_func(EXAMPLE_PATCHES, key="chirp")
+def chirp(
+    sample_rate=150,
+    time_min="2020-01-01",
+    channel_count: int = 1,
+    duration: float = 10.0,
+    f0: float = 5.0,
+    t1: float | None = None,
+    f1: float = 25.0,
+    method="linear",
+    phi: float = 0.0,
+    **kwargs,
+):
+    """
+    Create a patch from a chirp signal.
+
+    Simply uses scipy.signal.chirp under the hood.
+
+    Parameters
+    ----------
+    sample_rate
+        The sample rate in Hz.
+    time_min
+        The start time in the metadata.
+    channel_count
+        The number of  distance channels to include.
+    duration
+        The duration, in seconds, of the signal.
+    f0
+        The frequency of the chirp at the start of the signal.
+    f1
+        The frequency of the chirp at the end of the signal.
+    t1
+        The time (relative from signal start) corresponding to f1. If None,
+        use the end of the signal.
+    method
+        The kind of the frequency sweep. See scipy.signal.chirp for
+        more details.
+    phi
+        Phase offset in degrees.
+    **kwargs
+        Passed directly to scipy.signal.chirp.
+    """
+    t_array = np.linspace(0.0, duration, int(sample_rate * duration))
+    t1 = t1 if t1 is not None else np.max(t_array)
+    array = spy_chirp(t_array, f0=f0, t1=t1, f1=f1, method=method, phi=phi, **kwargs)
+    # Get time and distance coords
+    distance = np.arange(1, channel_count + 1, 1)
+    time = to_timedelta64(t_array) + np.datetime64(time_min)
+    data = np.array([array for _ in range(len(distance))])
+    patch = dc.Patch(
+        data=data,
+        coords={"time": time, "distance": distance},
+        dims=("distance", "time"),
     )
     return patch
 
