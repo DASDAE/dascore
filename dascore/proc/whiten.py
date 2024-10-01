@@ -259,8 +259,8 @@ def whiten(
     # has roughly the same amplitude (but phase remains unchanged).
     envelope = _get_amplitude_envelope(fft_patch, fft_dim, smooth_size, freq_range)
 
-    # Apply the tukey window to the original envelope so only the freqs
-    # in the selected range are used.
+    # If a frequency range was specified, we can simply modify the envelope
+    # array so that only frequencies outside of it are attenuated.
     if freq_range is not None:
         envelope = _filter_array(envelope, fft_patch, fft_dim, freq_range, tukey_alpha)
 
