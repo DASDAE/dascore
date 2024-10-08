@@ -31,6 +31,12 @@ def time_dist_dims(patch):
     return patch
 
 
+@dc.patch_function()
+def add_one(patch):
+    """A simple function which modifies the patch."""
+    return patch.new(data=patch.data + 1)
+
+
 @dc.patch_function(required_coords=("time", "distance"))
 def time_dist_coord(patch):
     """A dummy function to test time, distance coord requirement."""
@@ -129,17 +135,26 @@ class TestHistory:
 
     def test_simple_history(self, random_patch):
         """Just make sure function is logged."""
-        out = time_dist_dims(random_patch)
+        out = add_one(random_patch)
         history = out.attrs["history"]
         assert len(history) == 1
-        assert "time_dist_dim" in history[0]
+        assert "add_one" in history[0]
 
     def test_original_history_unchanged(self, random_patch):
         """Ensure logging history only occurs on new Patch."""
         first_history = list(random_patch.attrs["history"])
-        _ = time_dist_dims(random_patch)
+        _ = add_one(random_patch)
         last_history = list(random_patch.attrs["history"])
         assert first_history == last_history
+
+    def test_no_history_unchanged_patch(self, random_patch):
+        """
+        Ensure no new history is created by a function that returns the same patch.
+        """
+        out = time_dist_dims(random_patch)
+        assert out.attrs.history == random_patch.attrs.history
+        # No new patch should have been created.
+        assert out is random_patch
 
 
 class TestMergePatches:
