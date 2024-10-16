@@ -15,7 +15,7 @@ import pandas as pd
 from scipy import ndimage
 from scipy.ndimage import gaussian_filter as np_gauss
 from scipy.ndimage import median_filter as nd_median_filter
-from scipy.signal import iirfilter, sosfilt, sosfiltfilt, zpk2sos
+from scipy.signal import filtfilt, iirfilter, iirnotch, sosfilt, sosfiltfilt, zpk2sos
 from scipy.signal import savgol_filter as np_savgol_filter
 
 import dascore as dc
@@ -94,7 +94,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     Parameters
     ----------
     corners
-        The number of corners for the filter.
+        The number of corners for the filter. Default is 4.
     zerophase
         If True, apply the filter twice.
     **kwargs
@@ -172,28 +172,6 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
     return dc.Patch(data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims)
 
 
-#
-# @patch_function()
-# def stop_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchType:
-#     """
-#     Apply a Butterworth band stop filter or (highpass, or lowpass).
-#
-#     Parameters
-#     ----------
-#     corners
-#         The number of corners for the filter.
-#     zerophase
-#         If True, apply the filter twice.
-#     **kwargs
-#         Used to specify the dimension and frequency, wavenumber, or equivalent
-#         limits.
-#
-#
-#     """
-#     # get nyquist and low/high in terms of nyquist
-#     if zerophase:
-
-
 def _create_size_and_axes(patch, kwargs, samples):
     """
     Return a tuple of (size) and (axes).
@@ -208,6 +186,20 @@ def _create_size_and_axes(patch, kwargs, samples):
         axis = info["axis"]
         coord = patch.get_coord(dim)
         window = coord.get_sample_count(info["value"], samples=samples)
+        size[axis] = window
+    return tuple(size), tuple(axes)
+
+
+def _create_size_fw_and_axes(patch, kwargs):
+    """
+    Return a tuple of size (freq. and/or wavelength) and axes.
+    """
+    dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
+    axes = [x["axis"] for x in dimfo.values()]
+    size = [1] * len(patch.dims)
+    for _, info in dimfo.items():
+        axis = info["axis"]
+        window = info["value"]
         size[axis] = window
     return tuple(size), tuple(axes)
 
@@ -266,6 +258,66 @@ def median_filter(
 
 
 @patch_function()
+def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
+    """
+    Design and apply a second-order IIR notch digital filter on patch's data.
+
+    A notch filter is a band-stop filter with a narrow bandwidth (high quality factor).
+    It rejects a narrow frequency band and leaves the rest of the spectrum
+    little changed.
+
+    Parameters
+    ----------
+    patch
+        The patch to filter
+    samples
+        {sample_explination}
+    q
+        Quality factor (float). See [scipy.signal.iirnotch]
+        (https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.
+        iirnotch.html#scipy.signal.iirnotch)
+        for more information.
+    **kwargs
+        Used to specify the dimension(s) and associated frequency and/or wavelength
+        (or equivalent values) for the filter.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+
+    >>>  # Apply a notch filter along time axis to remove 60 Hz
+    >>> filtered = pa.notch_filter(time=60)
+
+    >>>  # Apply a notch filter along distance axis to remove 0.2 m wavelength
+    >>> filtered = pa.notch_filter(distance=0.2)
+
+    >>>  # Apply a notch filter along both time and distance axes
+    >>> filtered = pa.notch_filter(time=60, distance=0.2)
+
+    >>> # Optionally, units can be specified for a more expressive API.
+    >>> from dascore.units import m, ft, s, Hz
+    >>> # Apply a notch filter along time axis to remove 60 Hz
+    >>> filtered = pa.notch_filter(time=60 * Hz)
+    >>> # Apply a notch filter along distance axis to remove 0.2 m wavelength
+    >>> filtered = pa.notch_filter(distance=0.2 * m)
+    """
+    size, axes = _create_size_fw_and_axes(patch, kwargs)
+    data = patch.data
+    for ax in axes:
+        dim = patch.dims[ax]
+        w0 = size[ax]
+        sr = get_dim_sampling_rate(patch, dim)
+        nyquist = 0.5 * sr
+        if w0 > nyquist:
+            msg = f"possible filter values are in [0, {nyquist}] you passed {w0}"
+            raise FilterValueError(msg)
+        b, a = iirnotch(w0, Q=q, fs=sr)
+        data = filtfilt(b, a, data, axis=ax)
+    return dc.Patch(data=data, coords=patch.coords, attrs=patch.attrs, dims=patch.dims)
+
+
+@patch_function()
 @compose_docstring(sample_explination=samples_arg_description)
 def savgol_filter(
     patch: PatchType, polyorder, samples=False, mode="interp", cval=0.0, **kwargs
@@ -308,7 +360,7 @@ def savgol_filter(
     >>>
     >>> # Apply Savgol filter over distance dimension using a 5 sample
     >>> # distance window.
-    >>> filtered_pa_2 = pa.median_filter(distance=5, samples=True,polyorder=2)
+    >>> filtered_pa_2 = pa.savgol_filter(distance=5, samples=True, polyorder=2)
     >>>
     >>> # Combine distance and time filter
     >>> filtered_pa_3 = pa.savgol_filter(distance=10, time=0.1, polyorder=4)
@@ -430,8 +482,11 @@ def slope_filter(
     >>> # Example 1: Compare slope filtered patch to Non-filtered.
     >>> import matplotlib.pyplot as plt
     >>> import numpy as np
+    >>>
     >>> import dascore as dc
     >>> from dascore.units import Hz
+    >>>
+    >>>
     >>> # Apply taper function and bandpass filter along time axis from 1 to 500 Hz
     >>> patch = (
     ...     dc.get_example_patch('example_event_1')
