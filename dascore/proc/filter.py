@@ -21,7 +21,12 @@ from scipy.signal import savgol_filter as np_savgol_filter
 import dascore as dc
 from dascore.constants import PatchType, samples_arg_description
 from dascore.exceptions import FilterValueError, ParameterError, UnitError
-from dascore.units import convert_units, get_filter_units, invert_quantity
+from dascore.units import (
+    convert_units,
+    get_filter_units,
+    get_inverted_quant,
+    invert_quantity,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     broadcast_for_index,
@@ -33,6 +38,7 @@ from dascore.utils.patch import (
     get_multiple_dim_value_from_kwargs,
     patch_function,
 )
+from dascore.utils.time import to_float
 
 
 def _check_sobel_args(dim, mode, cval):
@@ -190,20 +196,6 @@ def _create_size_and_axes(patch, kwargs, samples):
     return tuple(size), tuple(axes)
 
 
-def _create_size_fw_and_axes(patch, kwargs):
-    """
-    Return a tuple of size (freq. and/or wavelength) and axes.
-    """
-    dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
-    axes = [x["axis"] for x in dimfo.values()]
-    size = [1] * len(patch.dims)
-    for _, info in dimfo.items():
-        axis = info["axis"]
-        window = info["value"]
-        size[axis] = window
-    return tuple(size), tuple(axes)
-
-
 @patch_function()
 @compose_docstring(sample_explination=samples_arg_description)
 def median_filter(
@@ -260,7 +252,7 @@ def median_filter(
 @patch_function()
 def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
     """
-    Design and apply a second-order IIR notch digital filter on patch's data.
+    Apply a second-order IIR notch digital filter on patch's data.
 
     A notch filter is a band-stop filter with a narrow bandwidth (high quality factor).
     It rejects a narrow frequency band and leaves the rest of the spectrum
@@ -270,16 +262,20 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
     ----------
     patch
         The patch to filter
-    samples
-        {sample_explination}
     q
-        Quality factor (float). See [scipy.signal.iirnotch]
-        (https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.
-        iirnotch.html#scipy.signal.iirnotch)
-        for more information.
+        Quality factor (float). A higher Q value means a narrower notch,
+        which targets the specific frequency more precisely.
+        A lower Q results in a wider notch, meaning a broader range of
+        frequencies around the specific frequency will be attenuated.
     **kwargs
         Used to specify the dimension(s) and associated frequency and/or wavelength
         (or equivalent values) for the filter.
+
+    Notes
+    -----
+    See [scipy.signal.iirnotch]
+        (https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.iirnotch.html)
+        for more information.
 
     Examples
     --------
@@ -302,11 +298,21 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
     >>> # Apply a notch filter along distance axis to remove 0.2 m wavelength
     >>> #filtered = pa.notch_filter(distance=0.2 * m, q=30)
     """
-    size, axes = _create_size_fw_and_axes(patch, kwargs)
     data = patch.data
-    for ax in axes:
-        dim = patch.dims[ax]
-        w0 = size[ax]
+    for coord_name, info in get_multiple_dim_value_from_kwargs(patch, kwargs).items():
+        dim, ax, value = info["dim"], info["axis"], info["value"]
+        coord = patch.get_coord(coord_name)
+
+        inverted_units = True
+        # Invert units if needed
+        if isinstance(value, dc.units.Quantity) and coord.units is not None:
+            value, inverted_units = get_inverted_quant(value, coord.units)
+
+        # Check valid parameters
+        if inverted_units:
+            w0 = to_float(value)
+        else:
+            w0 = to_float(1 / value)
         sr = get_dim_sampling_rate(patch, dim)
         nyquist = 0.5 * sr
         if w0 > nyquist:

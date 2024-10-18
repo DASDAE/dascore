@@ -17,7 +17,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     UnitError,
 )
-from dascore.units import convert_units, get_unit
+from dascore.units import Hz, convert_units, get_unit, m
 from dascore.utils.misc import broadcast_for_index
 
 
@@ -228,7 +228,7 @@ class TestMedianFilter:
 
 
 class TestNotchFilter:
-    """Tests on the notch filter."""
+    """Tests for the notch filter."""
 
     def test_notch_no_kwargs_raises(self, random_patch):
         """Test that no dimension raises an appropriate error."""
@@ -254,20 +254,6 @@ class TestNotchFilter:
         assert isinstance(filtered_patch, dc.Patch)
         assert not np.any(np.isnan(filtered_patch.data))
 
-    # def test_notch_filter_time_units(self, random_patch):
-    #     """Test notch filter with time dimension and frequency in Hz."""
-    #     from dascore.units import Hz
-    #     filtered_patch = random_patch.notch_filter(time=60 * Hz, q=40)
-    #     assert isinstance(filtered_patch, dc.Patch)
-    #     assert not np.any(np.isnan(filtered_patch.data))
-
-    # def test_notch_filter_distance_units(self, random_patch):
-    #     """Test notch filter with distance dimension in meters."""
-    #     from dascore.units import m
-    #     filtered_patch = random_patch.notch_filter(distance=0.4 * m, q=25)
-    #     assert isinstance(filtered_patch, dc.Patch)
-    #     assert not np.any(np.isnan(filtered_patch.data))
-
     def test_notch_filter_high_frequency_error(self, random_patch):
         """Test notch filter raises error for frequency beyond Nyquist."""
         sr = dc.utils.patch.get_dim_sampling_rate(random_patch, "time")
@@ -276,6 +262,18 @@ class TestNotchFilter:
         msg = f"possible filter values are in [0, {nyquist}] you passed {too_high_freq}"
         with pytest.raises(FilterValueError, match=re.escape(msg)):
             random_patch.notch_filter(time=too_high_freq, q=30)
+
+    def test_notch_filter_time_units(self, random_patch):
+        """Test notch filter with time dimension and frequency in Hz."""
+        filtered_patch = random_patch.notch_filter(time=60 * Hz, q=40)
+        assert isinstance(filtered_patch, dc.Patch)
+        assert not np.any(np.isnan(filtered_patch.data))
+
+    def test_notch_filter_distance_units(self, random_patch):
+        """Test notch filter with distance dimension in meters."""
+        filtered_patch = random_patch.notch_filter(distance=0.4 * m, q=25)
+        assert isinstance(filtered_patch, dc.Patch)
+        assert not np.any(np.isnan(filtered_patch.data))
 
 
 class TestSavgolFilter:
