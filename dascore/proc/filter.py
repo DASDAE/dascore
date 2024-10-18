@@ -292,11 +292,11 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
     >>> filtered = pa.notch_filter(time=60, distance=0.2, q=40)
 
     >>> # Optionally, units can be specified for a more expressive API.
-    >>> #from dascore.units import m, ft, s, Hz
+    >>> from dascore.units import m, ft, s, Hz
     >>> # Apply a notch filter along time axis to remove 60 Hz
-    >>> #filtered = pa.notch_filter(time=60 * Hz, q=30)
+    >>> filtered = pa.notch_filter(time=60 * Hz, q=30)
     >>> # Apply a notch filter along distance axis to remove 0.2 m wavelength
-    >>> #filtered = pa.notch_filter(distance=0.2 * m, q=30)
+    >>> filtered = pa.notch_filter(distance=0.2 * m, q=30)
     """
     data = patch.data
     for coord_name, info in get_multiple_dim_value_from_kwargs(patch, kwargs).items():
