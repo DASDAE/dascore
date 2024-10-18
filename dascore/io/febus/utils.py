@@ -128,22 +128,26 @@ def _get_time_coord(feb):
     total_time_rows = (data_shape[1] - excess_rows) * n_blocks
     # Get origin info, these are offsets from time to get to the first simple
     # of the block. These should always be non-positive.
-    time_origin = feb.zone.attrs["Origin"][1] / 1_000  # also convert to s
-    assert time_origin <= 0, "time origin must be non positive"
+    time_offset = feb.zone.attrs["Origin"][1] / 1_000  # also convert to s
+    assert time_offset <= 0, "time offset must be non positive"
     # Get the start/stop indices for the zone. We assume zones never sub-slice
     # time (only distance) but assert that here.
     extent = feb.zone.attrs["Extent"]
     assert (extent[3] - extent[2] + 1) == data_shape[1], "Cant handle sub time zones"
     # Create time coord
     # Need to account for removing overlap times.
-    total_start = t_0 + time_origin + (excess_rows // 2) * time_step
+    total_start = t_0 + time_offset + (excess_rows // 2) * time_step
     total_end = total_start + total_time_rows * time_step
     time_coord = get_coord(
-        start=dc.to_datetime64(t_0 + total_start),
-        stop=dc.to_datetime64(t_0 + total_end),
+        start=dc.to_datetime64(total_start),
+        stop=dc.to_datetime64(total_end),
         step=dc.to_timedelta64(time_step),
     )
-    return time_coord.change_length(total_time_rows)
+    # Note: we have found some files in which the sampling rate is 1/3e-4
+    # because we use datetime64 we lose some precision which has caused
+    # slight differences in shape of the patch.
+    out = time_coord.change_length(total_time_rows)
+    return out
 
 
 def _get_distance_coord(feb):
