@@ -32,7 +32,12 @@ class TestFebus:
 
         with h5py.File(febus_path, "r") as f:
             feb = _flatten_febus_info(f)[0]
+            # First check total time extent
             n_blocks = feb.zone[feb.data_name].shape[0]
             block_time = 1 / (feb.zone.attrs["BlockRate"] / 1_000)
             expected_time_span = block_time * n_blocks
             assert np.isclose(expected_time_span, time_span)
+            # Then check absolute time
+            time_offset = feb.zone.attrs["Origin"][1] / 1_000
+            time_start = feb.source["time"][0] + time_offset
+            assert np.isclose(to_float(time.min()), time_start)
