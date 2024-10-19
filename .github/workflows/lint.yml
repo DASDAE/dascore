@@ -12,8 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "get tags"
+        run: |
+          git fetch --tags --force # Retrieve annotated tags.
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: install linting packages
-        run: pip install pre-commit --break-system-packages
+        run: uv tool install pre-commit
 
       - name: run all precommits
-        run: pre-commit run --files dascore/**/*
+        run: uv run pre-commit run --all
