@@ -286,7 +286,7 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
     >>> filtered = pa.notch_filter(time=60, q=30)
 
     >>>  # Apply a notch filter along distance axis to remove 0.2 m wavelength
-    >>> filtered = pa.notch_filter(distance=0.2, q=10)
+    >>> filtered = pa.notch_filter(distance=5, q=10)
 
     >>>  # Apply a notch filter along both time and distance axes
     >>> filtered = pa.notch_filter(time=60, distance=0.2, q=40)
@@ -296,23 +296,19 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
     >>> # Apply a notch filter along time axis to remove 60 Hz
     >>> filtered = pa.notch_filter(time=60 * Hz, q=30)
     >>> # Apply a notch filter along distance axis to remove 0.2 m wavelength
-    >>> filtered = pa.notch_filter(distance=0.2 * m, q=30)
+    >>> filtered = pa.notch_filter(distance=0.2 * 1/m, q=30)
     """
     data = patch.data
     for coord_name, info in get_multiple_dim_value_from_kwargs(patch, kwargs).items():
         dim, ax, value = info["dim"], info["axis"], info["value"]
         coord = patch.get_coord(coord_name)
 
-        inverted_units = True
         # Invert units if needed
         if isinstance(value, dc.units.Quantity) and coord.units is not None:
-            value, inverted_units = get_inverted_quant(value, coord.units)
+            value, _ = get_inverted_quant(value, coord.units)
 
         # Check valid parameters
-        if inverted_units:
-            w0 = to_float(value)
-        else:
-            w0 = to_float(1 / value)
+        w0 = to_float(value)
         sr = get_dim_sampling_rate(patch, dim)
         nyquist = 0.5 * sr
         if w0 > nyquist:

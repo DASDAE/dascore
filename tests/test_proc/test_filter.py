@@ -271,7 +271,7 @@ class TestNotchFilter:
 
     def test_notch_filter_distance_units(self, random_patch):
         """Test notch filter with distance dimension in meters."""
-        filtered_patch = random_patch.notch_filter(distance=0.4 * m, q=25)
+        filtered_patch = random_patch.notch_filter(distance=0.4 * 1 / m, q=25)
         assert isinstance(filtered_patch, dc.Patch)
         assert not np.any(np.isnan(filtered_patch.data))
 
