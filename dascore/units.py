@@ -208,6 +208,29 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     return str(quant_value)
 
 
+def get_inverted_quant(quant, data_units):
+    """Convert to inverted units."""
+    if quant is None:
+        return quant, True
+    if quant.units == get_unit("dimensionless"):
+        msg = (
+            "Both inputs must be quantities to get filter parameters. "
+            f"You passed ({quant}, {data_units})"
+        )
+        raise UnitError(msg)
+    data_units = get_unit(data_units)
+    inverted_units = (1 / data_units).units
+    units_inversed = True
+    if data_units.dimensionality == quant.units.dimensionality:
+        quant, units_inversed = 1 / quant, False
+    # try to get invert units, otherwise raise.
+    try:
+        mag = quant.to(inverted_units).magnitude
+    except DimensionalityError as e:
+        raise UnitError(str(e))
+    return mag, units_inversed
+
+
 def get_filter_units(
     arg1: Quantity | float,
     arg2: Quantity | float,
@@ -249,28 +272,6 @@ def get_filter_units(
         if not_none and quant1.units != quant2.units:
             msg = f"Units must match, {quant1} and {quant2} were provided."
             raise UnitError(msg)
-
-    def get_inverted_quant(quant, data_units):
-        """Convert to inverted units."""
-        if quant is None:
-            return quant, True
-        if quant.units == get_unit("dimensionless"):
-            msg = (
-                "Both inputs must be quantities to get filter parameters. "
-                f"You passed ({arg1}, {arg2})"
-            )
-            raise UnitError(msg)
-        data_units = get_unit(data_units)
-        inverted_units = (1 / data_units).units
-        units_inversed = True
-        if data_units.dimensionality == quant.units.dimensionality:
-            quant, units_inversed = 1 / quant, False
-        # try to get invert units, otherwise raise.
-        try:
-            mag = quant.to(inverted_units).magnitude
-        except DimensionalityError as e:
-            raise UnitError(str(e))
-        return mag, units_inversed
 
     def _check_to_units(to_unit, dim):
         """Ensure to units are valid."""
