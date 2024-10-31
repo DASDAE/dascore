@@ -291,6 +291,7 @@ class Patch:
     pass_filter = dascore.proc.pass_filter
     sobel_filter = dascore.proc.sobel_filter
     median_filter = dascore.proc.median_filter
+    notch_filter = dascore.proc.notch_filter
     savgol_filter = dascore.proc.savgol_filter
     gaussian_filter = dascore.proc.gaussian_filter
     slope_filter = dascore.proc.slope_filter
