@@ -314,7 +314,7 @@ def example_event_2():
     delta_time = patch.coords.get_array("time") - patch.coords.min("time")
     out = (
         patch.update_coords(time=delta_time / np.timedelta64(1, "s"))
-        .set_units("1/s", distance="m", time="s")
+        .set_units("strain/s", distance="m", time="s")
         .taper(time=0.05)
         .pass_filter(time=(..., 300))
     )
