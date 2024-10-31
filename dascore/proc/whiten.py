@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.ndimage import convolve1d
+from scipy.ndimage import uniform_filter1d
 
+from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
 from dascore.utils.transformatter import FourierTransformatter
@@ -37,21 +38,22 @@ def _get_dim_freq_range_from_kwargs(patch, kwargs):
 
 def _get_amp_envelope(fft_patch, axis, window_len, water_level):
     """Get a smoothed amplitude envelope."""
-    conv_window = np.ones(int(window_len)) / float(window_len)
-    # convolve original spectrum with smoothing window
     amp = np.abs(fft_patch.data)
-    conv = convolve1d(amp, conv_window, axis=axis, mode="wrap")
-    # Enforce water level to avoid instability in dividing small numbers
-    conv[conv < water_level * conv.max()] = water_level * conv.max()
-    # Then smooth once more to take the edge off the values that were flattened
-    # by the water-level clip.
-    conv = convolve1d(conv, conv_window, axis=axis, mode="wrap")
-    smoothed_amp = amp / conv
+    # Uniform filter is *much* faster than convolve
+    uni = uniform_filter1d(amp, window_len, axis=axis, mode="wrap")
+    if water_level is not None:
+        # Enforce water level to avoid instability in dividing small numbers
+        uni[uni < water_level * uni.max()] = water_level * uni.max()
+    smoothed_amp = amp / uni
     return smoothed_amp
 
 
-def _check_smooth(fft_coord, smooth_size):
+def _check_smooth(fft_coord, smooth_size, water_level):
     """Check the smooth size."""
+    if water_level is not None:
+        if not isinstance(water_level, float) or water_level < 0 or water_level > 1:
+            msg = "water_level must be a float between 0 and 1."
+            raise ParameterError(msg)
     if smooth_size <= 0:
         msg = "Frequency smoothing size must be positive"
         raise ParameterError(msg)
@@ -73,27 +75,31 @@ def _check_freq_range(fft_coord, freq_range):
 
 
 @patch_function()
-def whiten(patch, smooth_size=None, samples=False, water_level=0.05, **kwargs):
+def whiten(
+    patch: PatchType,
+    smooth_size: None | float = None,
+    water_level: None | float = None,
+    **kwargs,
+) -> PatchType:
     """
     Spectral whitening of a signal.
 
     The whitened signal is returned in the same domain (eq frequency or
     time domain) as the input signal.
 
-
     Parameters
     ----------
     patch
-        Patch to transform. Has to have dimensions of time and distance.
+        The patch to transform.
     smooth_size
         Size in transformed domain units (eg Hz) or samples of moving average
         window, used to compute the spectrum before whitening.
         If None, don't smooth signal which results in a uniform amplitude.
-    samples
-        If True, the `smooth_size` parameter is in samples not coordinate
         units.
     water_level
-        Water level for stability in the smoothing.
+        If used, float between 0 and 1 to stabilize frequencies with near
+        zero amplitude. Does nothing if smooth_size is None.
+        Values between 0.01 and 0.05 usually work well.
     **kwargs
         Used to specify the dimension range in transformed units (e.g, Hz)
         of the smoothing. Can either be a sequence of two values or
@@ -118,18 +124,16 @@ def whiten(patch, smooth_size=None, samples=False, water_level=0.05, **kwargs):
     # Get frequency domain patch
     fft_patch = patch.dft(dim, real=np.isrealobj(patch.data))
     input_patch_fft = fft_patch is patch  # if input patch had fft
-    # Get amplitude spectra if smoothing, otherwise use ones.
     fft_coord = fft_patch.get_coord(fft_dim)
+    # Get amplitude spectra if smoothing, otherwise use ones.
     if smooth_size is None:
         amp = np.ones_like(fft_patch.data)
     else:
-        _check_smooth(fft_coord, smooth_size)
+        _check_smooth(fft_coord, smooth_size, water_level)
         axis = fft_patch.dims.index(fft_dim)
-        window_len = fft_coord.get_sample_count(
-            smooth_size, samples=samples, enforce_lt_coord=True
-        )
+        window_len = fft_coord.get_sample_count(smooth_size, enforce_lt_coord=True)
         amp = _get_amp_envelope(fft_patch, axis, window_len, water_level)
-    # Init new output using only phase data.
+    # Init new output from new amplitudes and old phases.
     out = fft_patch.new(data=amp * np.exp(1j * np.angle(fft_patch.data)))
     # Apply band-limited taper to remove some frequencies.
     if freq_range:

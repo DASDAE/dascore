@@ -112,10 +112,26 @@ class TestWhiten:
         with pytest.raises(ParameterError, match=msg):
             test_patch.whiten(smooth_size=3, time=[10.02, 10.03])
 
+    def test_bad_water_level_raises(self, test_patch):
+        """Ensure bad water level values raise ParameterError."""
+        msg = "water_level must be a float"
+
+        with pytest.raises(ParameterError, match=msg):
+            test_patch.whiten(water_level=[1, 2, 3], smooth_size=10)
+        with pytest.raises(ParameterError, match=msg):
+            test_patch.whiten(water_level=np.array([1, 2, 3]), smooth_size=10)
+        with pytest.raises(ParameterError, match=msg):
+            test_patch.whiten(water_level=-0.1, smooth_size=10)
+
     def test_whiten_monochromatic_input(self):
         """Ensures correct behavior on monochromatic signal."""
         patch = get_example_patch("sin_wav", frequency=100, sample_rate=500)
         dft_pre = patch.dft("time", real=True)
+
+        import dascore as dc
+
+        dc._bob = True
+
         white_patch = patch.whiten(smooth_size=5, time=[80, 120])
         dft_post = white_patch.dft("time", real=True)
 
