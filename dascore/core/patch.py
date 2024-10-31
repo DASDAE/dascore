@@ -316,6 +316,7 @@ class Patch:
     normalize = dascore.proc.normalize
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
+    taper_range = dascore.proc.taper_range
     rolling = dascore.proc.rolling
     whiten = dascore.proc.whiten
 

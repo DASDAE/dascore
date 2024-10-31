@@ -11,6 +11,8 @@ from dascore.proc.taper import TAPER_FUNCTIONS, taper
 from dascore.units import m
 from dascore.utils.misc import broadcast_for_index
 
+gen = np.random.default_rng(32)
+
 
 @pytest.fixture(scope="session")
 def patch_ones(random_patch):
@@ -122,3 +124,112 @@ class TestTaperBasics:
         patch1 = random_patch.taper(time=time1)
         patch2 = random_patch.taper(time=time2)
         assert patch1 == patch2
+
+
+class TestTaperRange:
+    """Test for tapering a range of values."""
+
+    @pytest.fixture(scope="class")
+    def patch_sorted_time(self, random_patch):
+        """Return a patch with sorted but not evenly spaced time dim."""
+        times = gen.random(len(random_patch.get_coord("time")))
+        new_times = dc.to_datetime64(np.sort(times))
+        return random_patch.update_coords(time=new_times)
+
+    def test_dims(self, patch_ones):
+        """Ensure both dimensions work."""
+        for ax, dim in enumerate(patch_ones.dims):
+            coord = patch_ones.get_coord(dim)
+            clen = len(coord)
+            ind1 = int(clen / 3)
+            ind2 = int(2 * clen / 3)
+            val1, val2 = coord[ind1], coord[ind2]
+            out = patch_ones.taper_range(**{dim: (val1, val2)})
+            data = out.data
+            # Ensure the center of the envelope are untouched
+            tapered_inds = broadcast_for_index(data.ndim, ax, slice(ind1, ind2))
+            tapered = data[tapered_inds]
+            assert np.allclose(tapered, 1)
+            # Ensure the edges are near 0
+            start_vals = data[broadcast_for_index(data.ndim, ax, 0)]
+            assert np.allclose(start_vals, 0)
+            end_vals = data[broadcast_for_index(data.ndim, ax, -1)]
+            assert np.allclose(end_vals, 0)
+
+    def test_invert(self, patch_ones):
+        """Ensure inverting results in 0s near the peaks of taper."""
+        dim, ax = "time", patch_ones.dims.index("time")
+        coord = patch_ones.get_coord(dim)
+        clen = len(coord)
+        ind1 = int(clen / 3)
+        ind2 = int(2 * clen / 3)
+        val1, val2 = coord[ind1], coord[ind2]
+        out = patch_ones.taper_range(**{dim: (val1, val2)}, invert=True)
+        data = out.data
+        # Ensure the center of the envelope are untouched
+        tapered_inds = broadcast_for_index(data.ndim, ax, slice(ind1, ind2))
+        tapered = data[tapered_inds]
+        assert np.allclose(tapered, 0)
+        # Ensure the edges are near 0
+        start_vals = data[broadcast_for_index(data.ndim, ax, 0)]
+        assert np.allclose(start_vals, 1)
+        end_vals = data[broadcast_for_index(data.ndim, ax, -1)]
+        assert np.allclose(end_vals, 1)
+
+    def test_four_value_taper(self, patch_ones):
+        """Ensure the range works with 4 values specifying taper limits."""
+        dim = "time"
+        coord = patch_ones.get_coord(dim)
+        clen = len(coord)
+        inds = int(clen / 6), int(2 * clen / 6), int(4 * clen / 6), int(5 * clen / 6)
+        vals = [coord[x] for x in inds]
+        out = patch_ones.taper_range(**{dim: vals}, invert=False)
+
+        in_taper = out.select(time=(vals[1], vals[2]))
+        assert np.allclose(in_taper.data, 1, rtol=1e-4)
+
+        right_of_taper = out.select(time=(vals[3], ...))
+        assert np.allclose(right_of_taper.data, 0)
+        left_of_taper = out.select(time=(..., vals[0]))
+        assert np.allclose(left_of_taper.data, 0)
+
+    def test_samples_and_relative(self, random_patch):
+        """Ensure samples and relative work with coord."""
+        coord = random_patch.get_coord("time")
+        values = coord.values
+        ind = 200
+        # normal style taper
+        p1 = random_patch.taper_range(time=(values[ind], values[-ind]))
+        # relative taper
+        time_range = (values[ind] - values[0], values[-ind] - values[-1])
+        p2 = random_patch.taper_range(time=time_range, relative=True)
+        # samples taper
+        p3 = random_patch.taper_range(time=(ind, -ind), samples=True)
+        assert p1.equals(p2) and p2.equals(p3)
+
+    def test_poorly_shaped_sequence_raises(self, random_patch):
+        """Ensure sequences of wrong shape raise."""
+        with pytest.raises(ParameterError, match="sequence is required"):
+            random_patch.taper_range(time=1)
+        with pytest.raises(ParameterError, match="sequence is required"):
+            random_patch.taper_range(time=[1])
+        with pytest.raises(ParameterError, match="sequence is required"):
+            random_patch.taper_range(time=[1] * 10)
+
+    def test_bad_use_of_none(self, random_patch):
+        """Ensure bad use of None raises."""
+        with pytest.raises(ParameterError, match="Cannot use ... or None"):
+            random_patch.taper_range(time=(1, None), relative=True)
+
+    def test_use_none(self, random_patch):
+        """Ensure use of None specifies proper limits."""
+        coord = random_patch.get_coord("time")
+        time_span = coord.max() - coord.min()
+        out1 = random_patch.taper_range(time=(None, 1, 4, None), relative=True)
+        out2 = random_patch.taper_range(time=(0, 1, 4, time_span), relative=True)
+        assert out1.equals(out2)
+
+    def test_uneven_coords(self, patch_sorted_time):
+        """Ensure uneven coords also work for tapering."""
+        out = patch_sorted_time.taper_range(time=(0.4, 0.6), relative=True)
+        assert isinstance(out, dc.Patch)

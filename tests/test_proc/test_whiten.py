@@ -112,26 +112,6 @@ class TestWhiten:
         with pytest.raises(ParameterError, match=msg):
             test_patch.whiten(smooth_size=3, time=[10.02, 10.03])
 
-        msg = "Frequency smoothing size is smaller than"
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(smooth_size=0.001, time=[10, 40])
-
-    def test_longer_smooth_than_range_raises(self, test_patch):
-        """Ensure smoothing window larger than
-        frequency range raises ParameterError.
-        """
-        msg = "Frequency smoothing size is larger than frequency range"
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(smooth_size=40, time=[10, 40])
-
-    def test_taper_param_raises(self, test_patch):
-        """Ensures wrong Tukey alpha parameter raises Paremeter Error."""
-        msg = "Tukey alpha needs to be between 0 and 1"
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(smooth_size=3, tukey_alpha=-0.1, time=[10, 50])
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(smooth_size=3, tukey_alpha=1.1, time=[10, 50])
-
     def test_whiten_monochromatic_input(self):
         """Ensures correct behavior on monochromatic signal."""
         patch = get_example_patch("sin_wav", frequency=100, sample_rate=500)

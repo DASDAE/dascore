@@ -13,6 +13,7 @@ from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_value_from_kwargs, patch_function
+from dascore.utils.time import to_float
 
 TAPER_FUNCTIONS = dict(
     barthann=windows.barthann,
@@ -108,14 +109,21 @@ def taper(
     -------
     The tapered patch.
 
+    See Also
+    --------
+    [Patch.taper_range](`dascore.Patch.taper_range`)
+
     Examples
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch() # generate example patch
+    >>>
     >>> # Apply an Hanning taper to 5% of each end for time dimension.
     >>> patch_taper1 = patch.taper(time=0.05, window_type="hann")
+    >>>
     >>> # Apply a triangular taper to 10% of the start of the distance dimension.
     >>> patch_taper2 = patch.taper(distance=(0.10, None), window_type='triang')
+    >>>
     >>> # Apply taper on first and last 15 m along distance axis.
     >>> from dascore.units import m
     >>> patch_taper3 = patch.taper(distance=15 * m)
@@ -141,3 +149,148 @@ def taper(
         window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
         out[data_inds] = out[data_inds] * window[window_inds]
     return patch.new(data=out)
+
+
+def _get_taper_coord_inds(coord, values, relative, samples):
+    """Get the index of the referenced coord inds."""
+    if not isinstance(values, (Sequence | np.ndarray)) or len(values) not in {2, 4}:
+        msg = "A len 2 or 4 sequence is required for taper values"
+        raise ParameterError(msg)
+    out = [None] * len(values)
+    for num, val in enumerate(values):
+        if val is None or val == ...:
+            if len(values) == 2:
+                msg = "Cannot use ... or None when only two values provided"
+                raise ParameterError(msg)
+            # None or ... means min_val in first half of list else max_val
+            out[num] = 0 if (num / len(out)) < 0.5 else len(coord) - 1
+        else:
+            out[num] = coord.get_next_index(val, samples=samples, relative=relative)
+    # Always need a len 4 sequence
+    if len(out) == 2:
+        out = [0, *out, len(coord)]
+    return out
+
+
+def _get_taper_curve(coord, ind_1, ind_2, window_type, reverse=False):
+    """Get the taper curve between index1 and index2."""
+    func = _get_window_function(window_type)
+    samps = ind_2 - ind_1
+    taper = func(samps * 2 + 1)[:samps]
+    if reverse:
+        taper = taper[::-1]
+    # Need to extrapolate to get correct values for non evenly sampled coords.
+    if not coord.evenly_sampled:
+        # The current window represents the snapped (evenly sampled) coords
+        old_coord = coord.select((ind_1, ind_2), samples=True)[0]
+        new_coord = old_coord.snap().change_length(len(old_coord))
+        old_x, new_x = to_float(old_coord.values), to_float(new_coord.values)
+        assert len(old_x) == len(new_x) == len(taper)
+        taper = np.interp(new_x, old_x, taper)
+    return taper
+
+
+def _get_range_envelope(coord, inds, window_type, invert):
+    """Create a broadcast envelope for taper."""
+    out = np.ones(len(coord))
+    assert len(inds) == 4
+    i1, i2, i3, i4 = inds
+    left_taper = _get_taper_curve(coord, i1, i2, window_type)
+    right_taper = _get_taper_curve(coord, i3, i4, window_type, reverse=True)
+    out[i1:i2] = left_taper
+    out[i3:i4] = right_taper
+    # Need to zero values outside of taper
+    out[i4:] = 0
+    out[:i1] = 0
+    if invert:
+        out = np.abs(out - 1)
+    return out
+
+
+@patch_function()
+@compose_docstring(taper_type=sorted(TAPER_FUNCTIONS))
+def taper_range(
+    patch: PatchType,
+    window_type: str = "hann",
+    invert=False,
+    samples=False,
+    relative=False,
+    **kwargs,
+) -> PatchType:
+    """
+    Taper a range inside the patch.
+
+    Parameters
+    ----------
+    patch
+        A patch instance.
+    window_type
+        The type of window to use For tapering. Supported Options are:
+            {taper_type}.
+    invert
+        If True, the values inside the specified range are set to zero
+        and gradually tapered to 1.
+    samples
+        If True, the values specified by the kwargs indicate samples
+        rather than values along the indicated dimension.
+    relative
+        If True, the values specified in kwargs are relateive to the
+        start (if positive) or end (if negative) of the indicated
+        dimension.
+    **kwargs
+        Used to specify the dimension along which to taper. Values can be
+        either a length 2 sequence or a length 4 sequence. If len == 2
+        then the left taper starts at [0] and ends at the start of
+        the coordinate. The left taper starts at [1] and ends at
+        the end of the coordinate. If len == 4, values between [1] and [2]
+        are left alone, values between [0] and [1] as well as values between
+        [2] and [3] are gradually tapered. Values outside of this range are
+        set to 0.
+
+    Returns
+    -------
+    The tapered patch.
+
+    See Also
+    --------
+    [Patch.taper](`dascore.Patch.taper`)
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>>
+    >>> epatch = dc.get_example_patch()
+    >>> patch = epatch.new(data=np.ones_like(epatch.data))
+    >>>
+    >>> # Taper values outside of specified times to zero
+    >>> t1 = dc.to_datetime64("2017-09-18T00:00:04")
+    >>> t2 = dc.to_datetime64("2017-09-18T00:00:07")
+    >>> patch_tapered_1 = patch.taper_range(time=(t1, t2))
+    >>>
+    >>> # Taper values inside specified range to 0
+    >>> patch_tapered_2 = patch.taper_range(time=(t1, t2), invert=True)
+    >>>
+    >>> # Specify taper range (4 values) such that values outside
+    >>> # that range are 0, between [0] and [1] as well as
+    >>> # [2] and [3] are tapered and values inside [1] and [2] are
+    >>> # not effected.
+    >>> patch_tapered_3 = patch.taper_range(
+    ...     time=(1, 2, 5, 5),
+    ...     relative=True,
+    ... )
+    >>>
+    >>> # Use samples rather than absolute time values.
+    >>> patch_tapered_4 = patch.taper_range(
+    ...     distance=(10, 80),
+    ...     samples=True
+    ... )
+    """
+    dim, ax, values = get_dim_value_from_kwargs(patch, kwargs)
+    coord = patch.get_coord(dim, require_sorted=True)
+    inds = _get_taper_coord_inds(coord, values, relative, samples)
+    env = _get_range_envelope(coord, inds, window_type, invert)
+    # Ensure envelope broadcasts to index
+    indexer = broadcast_for_index(patch.ndim, ax, value=slice(None), fill=None)
+    env_broadcastable = env[indexer]
+    return patch.new(data=patch.data * env_broadcastable)

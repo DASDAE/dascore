@@ -651,7 +651,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def _get_relative_values(self, value):
         """Get relative values based on start (pos) or stop (neg)."""
-        pos = value >= 0
+        pos = np.sign(value).astype(np.int_) >= 0
         return self.min() + value if pos else self.max() + value
 
     def empty(self, axes=None) -> Self:
@@ -763,7 +763,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             raise ParameterError(msg)
         return samples
 
-    def get_next_index(self, value, samples=False, allow_out_of_bounds=False) -> int:
+    def get_next_index(
+        self, value, samples=False, allow_out_of_bounds=False, relative=False
+    ) -> int:
         """
         Get the index a value would have in a coordinate.
 
@@ -780,6 +782,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             If True, allow the value to be out of bounds of the coordinate
             and just return an index referring to the end
             (len(coords) - 1) or beginning (0).
+        relative
+            If True, the provided values are relative to the start (if possitve)
+            or end (if negative) of the coordinate.
 
         Examples
         --------
@@ -795,6 +800,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             raise CoordError(msg)
         input_array_like = isinstance(value, Sized)
         array = np.atleast_1d(value)
+
         # handle samples
         if samples:
             min_val, max_val = 0, len(self) - 1
@@ -803,8 +809,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             # account for negative indexing
             array[wrap_around] = array[wrap_around] + max_val + 1
         else:
-            array = self._get_compatible_value(array)
             min_val, max_val = self.min(), self.max()
+            array = self._get_compatible_value(array, relative=relative)
         # handle out of bounds cases
         is_gt, is_lt = array > max_val, array < min_val
         if not allow_out_of_bounds and np.any(is_gt | is_lt):
