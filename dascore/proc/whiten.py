@@ -30,7 +30,11 @@ def _get_dim_freq_range_from_kwargs(patch, kwargs):
             msg = f"passed dim of {dim} to whiten but it is not in patch dimensions."
             raise ParameterError(msg)
     else:  # Something when wrong.
-        msg = "Whiten kwargs must specify a single patch dimension."
+        msg = (
+            "Whiten kwargs must specify a single patch dimension. "
+            "Double check the supported input parameters as these may have "
+            f"changed. You passed {kwargs}."
+        )
         raise ParameterError(msg)
 
     return dim, freq_range
@@ -85,7 +89,8 @@ def whiten(
     Spectral whitening of a signal.
 
     The whitened signal is returned in the same domain (eq frequency or
-    time domain) as the input signal.
+    time domain) as the input signal. See also the
+    [Whiten Processing Section](`docs/tutorial/processing.qmd`#whiten).
 
     Parameters
     ----------
@@ -116,8 +121,21 @@ def whiten(
 
     Example
     -------
+    >>> import dascore as dc
     >>>
-
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Whiten along time dimension
+    >>> white_patch = patch.whiten(time=None)
+    >>>
+    >>> # Band limited whitening
+    >>> white_patch = patch.whiten(time=(20, 40))
+    >>>
+    >>> # Band limited with taper ends
+    >>> white_patch = patch.whiten(time=(10, 20, 40, 60))
+    >>>
+    >>> # Whitening along distance with amplitude smoothing (0.1/m))
+    >>> white_patch = patch.whiten(smooth_size=0.1, distance=None)
     """
     dim, freq_range = _get_dim_freq_range_from_kwargs(patch, kwargs)
     fft_dim = FourierTransformatter().rename_dims(dim)[0]

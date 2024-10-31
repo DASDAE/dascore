@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore import get_example_patch
 from dascore.exceptions import ParameterError
 from dascore.units import Hz
@@ -204,6 +205,15 @@ class TestWhiten:
 
         assert "ft_time" in dft.coords.coord_map
 
+    def test_whiten_df_all_parameters(self, test_patch):
+        """Ensure whiten accepts all args in dft form."""
+        fft_patch = test_patch.dft("time", real=True)
+
+        whitened_patch_freq_domain = fft_patch.whiten(
+            smooth_size=5, time=(30, 60), water_level=.01
+        )
+        assert isinstance(whitened_patch_freq_domain, dc.Patch)
+
     def test_no_time_no_kwargs_raises(self, random_patch):
         """Ensure if no kwargs and patch doesn't have time an error is raised."""
         patch = random_patch.rename_coords(time="money")
@@ -222,3 +232,7 @@ class TestWhiten:
         msg = "must specify a single patch dimension"
         with pytest.raises(ParameterError, match=msg):
             random_patch.whiten(time=None, distance=None)
+
+    def test_helpful_error_message(self, random_patch):
+        """Ensure helpful error message is used when a bad kwarg is passed."""
+
