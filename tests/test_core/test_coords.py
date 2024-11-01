@@ -1892,3 +1892,10 @@ class TestIssues:
             units="m",
         )
         assert np.issubdtype(coord.dtype, np.floating)
+
+    def test_array_units_preserved(self):
+        """Ensure the units attached to an array are preserved."""
+        ft = dc.get_quantity("ft")
+        array = np.array([1, 2, 3])
+        out = get_coord(data=array * ft)
+        assert dc.get_quantity(out.units) == ft

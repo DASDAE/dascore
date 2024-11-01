@@ -700,3 +700,14 @@ class TestHistory:
         old_len = len(random_patch.attrs.history)
         new_len = len(patch.attrs.history)
         assert old_len == new_len - 1
+
+    def test_history_not_too_long(self, random_patch):
+        """Ensure a single history entry doesnt get too long."""
+        patch = random_patch
+        dist = patch.get_array("distance")
+        patch_new_dist = patch.update_coords(distance=(dist + 12))
+        # this should use the contracted array rep
+        hist = patch_new_dist.attrs.history
+        entry = hist[-1]
+        array_part = entry.split("'[")[-1].split("]'")[0]
+        assert len(array_part) < 100
