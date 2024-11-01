@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from functools import reduce
+from operator import add
 
 import numpy as np
 from scipy.signal import windows  # the best operating system?
@@ -23,9 +25,11 @@ TAPER_FUNCTIONS = dict(
     bohman=windows.bohman,
     hamming=windows.hamming,
     hann=windows.hann,
+    cos=windows.hann,
     nuttall=windows.nuttall,
     parzen=windows.parzen,
     triang=windows.triang,
+    ramp=windows.triang,
 )
 
 
@@ -153,9 +157,16 @@ def taper(
 
 def _get_taper_coord_inds(coord, values, relative, samples):
     """Get the index of the referenced coord inds."""
-    if not isinstance(values, (Sequence | np.ndarray)) or len(values) not in {2, 4}:
-        msg = "A len 2 or 4 sequence is required for taper values"
-        raise ParameterError(msg)
+    error_msg = "A len 2 or 4 sequence is required for taper values"
+    if not isinstance(values, (Sequence | np.ndarray)) or not len(values):
+        raise ParameterError(error_msg)
+    # More than 1 sequence was passed, recurse to flatten out.
+    elif isinstance(values[0], (Sequence | np.ndarray)):
+        out = [_get_taper_coord_inds(coord, x, relative, samples) for x in values]
+        return reduce(add, out)
+    elif len(values) not in {2, 4}:
+        raise ParameterError(error_msg)
+    # Ok inputs, convert to index along coordinate.
     out = [None] * len(values)
     for num, val in enumerate(values):
         if val is None or val == ...:
@@ -169,7 +180,7 @@ def _get_taper_coord_inds(coord, values, relative, samples):
     # Always need a len 4 sequence
     if len(out) == 2:
         out = [0, *out, len(coord)]
-    return out
+    return [out]  # return a list of len4 sequences.
 
 
 def _get_taper_curve(coord, ind_1, ind_2, window_type, reverse=False):
@@ -192,18 +203,18 @@ def _get_taper_curve(coord, ind_1, ind_2, window_type, reverse=False):
 
 def _get_range_envelope(coord, inds, window_type, invert):
     """Create a broadcast envelope for taper."""
-    out = np.ones(len(coord))
-    assert len(inds) == 4
-    i1, i2, i3, i4 = inds
-    left_taper = _get_taper_curve(coord, i1, i2, window_type)
-    right_taper = _get_taper_curve(coord, i3, i4, window_type, reverse=True)
-    out[i1:i2] = left_taper
-    out[i3:i4] = right_taper
-    # Need to zero values outside of taper
-    out[i4:] = 0
-    out[:i1] = 0
+    out = np.zeros(len(coord))
+    for ind_set in inds:
+        assert len(ind_set) == 4
+        i1, i2, i3, i4 = ind_set
+        left_taper = _get_taper_curve(coord, i1, i2, window_type)
+        right_taper = _get_taper_curve(coord, i3, i4, window_type, reverse=True)
+        out[i1:i2] += left_taper
+        out[i3:i4] += right_taper
+        out[i2:i3] += 1
     if invert:
-        out = np.abs(out - 1)
+        out = np.abs(out - np.max(out))
+
     return out
 
 
@@ -213,8 +224,8 @@ def taper_range(
     patch: PatchType,
     window_type: str = "hann",
     invert=False,
-    samples=False,
     relative=False,
+    samples=False,
     **kwargs,
 ) -> PatchType:
     """
@@ -285,6 +296,11 @@ def taper_range(
     ...     distance=(10, 80),
     ...     samples=True
     ... )
+    >>>
+    >>> # Apply two non-overlapping tapers
+    >>> taper_range = ((25,50,100,125), (150,175,200,225))
+    >>> patch_tapered_5 = patch.taper_range(distance=taper_range)
+
     """
     dim, ax, values = get_dim_value_from_kwargs(patch, kwargs)
     coord = patch.get_coord(dim, require_sorted=True)

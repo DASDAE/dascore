@@ -229,7 +229,28 @@ class TestTaperRange:
         out2 = random_patch.taper_range(time=(0, 1, 4, time_span), relative=True)
         assert out1.equals(out2)
 
+    def test_multiple_taper_values(self, patch_ones):
+        """Ensure multiple values in taper are possible."""
+        taper_range = ((25, 50, 100, 125), (150, 175, 200, 225))
+        out = patch_ones.taper_range(distance=taper_range)
+
+        # Check a few points inside and outside of the taper bounds
+        assert np.allclose(out.select(distance=(..., 22)).data, 0)
+        assert np.allclose(out.select(distance=(55, 90)).data, 1)
+        assert np.allclose(out.select(distance=(126, 149)).data, 0)
+        assert np.allclose(out.select(distance=(225, ...)).data, 0)
+
     def test_uneven_coords(self, patch_sorted_time):
         """Ensure uneven coords also work for tapering."""
         out = patch_sorted_time.taper_range(time=(0.4, 0.6), relative=True)
         assert isinstance(out, dc.Patch)
+
+    def test_non_cosine_window(self, patch_ones):
+        """Ensure other window funcs also work."""
+        taper_range = ((25, 50, 100, 125), (150, 175, 200, 225))
+        out = patch_ones.taper_range(distance=taper_range, window_type="ramp")
+        # Check a few points inside and outside of the taper bounds
+        assert np.allclose(out.select(distance=(..., 22)).data, 0)
+        assert np.allclose(out.select(distance=(55, 90)).data, 1)
+        assert np.allclose(out.select(distance=(126, 149)).data, 0)
+        assert np.allclose(out.select(distance=(225, ...)).data, 0)
