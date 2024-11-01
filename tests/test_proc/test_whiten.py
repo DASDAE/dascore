@@ -210,7 +210,7 @@ class TestWhiten:
         fft_patch = test_patch.dft("time", real=True)
 
         whitened_patch_freq_domain = fft_patch.whiten(
-            smooth_size=5, time=(30, 60), water_level=.01
+            smooth_size=5, time=(30, 60), water_level=0.01
         )
         assert isinstance(whitened_patch_freq_domain, dc.Patch)
 
@@ -235,4 +235,3 @@ class TestWhiten:
 
     def test_helpful_error_message(self, random_patch):
         """Ensure helpful error message is used when a bad kwarg is passed."""
-
