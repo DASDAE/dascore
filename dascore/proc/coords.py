@@ -110,7 +110,7 @@ def get_coord(
     Examples
     --------
     >>> import dascore as dc
-    >>> patch = dc.get_example_patch("patch_with_lat_lon")
+    >>> patch = dc.get_example_patch()
     >>>
     >>> # Get the the distance coordinate from the patch.
     >>> distance = patch.get_coord("distance")
@@ -165,7 +165,7 @@ def get_array(
     Examples
     --------
     >>> import dascore as dc
-    >>> patch = dc.get_example_patch("patch_with_lat_lon")
+    >>> patch = dc.get_example_patch()
     >>>
     >>> # Get the patch data array.
     >>> data = patch.get_array()  # same as patch.data
