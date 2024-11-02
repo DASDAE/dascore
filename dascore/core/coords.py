@@ -1593,6 +1593,10 @@ def get_coord(
     _check_data_compatibility(data, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
     if data is not None:
+        # Handle attached units.
+        if isinstance(data, dc.units.Quantity):
+            data, maybe_units = data.magnitude, data.units
+            units = units if units is not None else maybe_units
         if isinstance(data, (int | np.integer)):
             shape = _get_shape(data)
             attrs = dict(

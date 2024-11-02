@@ -946,6 +946,14 @@ class TestUpdate:
             assert cm.ndim == (coord_manager.ndim + 1)
             assert cm.dims[-1] == "bob"
 
+    def test_update_with_units(self, coord_manager):
+        """Ensure units stick around when updated."""
+        ft = dc.get_quantity("ft")
+        dist = coord_manager.get_array("distance")
+        new = coord_manager.update(distance=(dist * 2) * ft)
+        new_coord = new.coord_map["distance"]
+        assert dc.get_quantity(new_coord.units) == ft
+
 
 class TestSqueeze:
     """Tests for squeezing degenerate dimensions."""
