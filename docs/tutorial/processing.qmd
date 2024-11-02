@@ -169,3 +169,115 @@ smoothed.viz.waterfall(scale=.1);
 ```
 
 Notice the nan values at the start of the time axis. These can be trimmed with [`Patch`.dropna](`dascore.Patch.dropna`).
+
+
+# Whiten
+
+The [`Patch.whiten`](`dascore.Patch.whiten`) function performs spectral whitening by balancing the amplitude spectra of the patch while leaving the phase (largely) unchanged. Spectral whitening is often a pre-processing step in ambient noise correlation workflows.
+
+To demonstrate, we create some plotting code and an example patch.
+
+```{python}
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+import dascore as dc
+from dascore.utils.time import to_float
+
+
+rng = np.random.default_rng()
+
+
+def plot_time_and_frequency(patch, channel=0):
+    """ Make plots of time and frequency of patch with single channel."""
+    sq_patch = patch.select(distance=channel, samples=True).squeeze()
+    time_array = to_float(patch.get_array("time"))
+    time = time_array - np.min(time_array)
+
+    fig, (td_ax, fd_ax, phase_ax) = plt.subplots(1, 3, figsize=(9, 2.5))
+
+    # Plot in time domain
+    td_ax.plot(time, sq_patch.data, color="tab:blue")
+    td_ax.set_title("Time Domain")
+    td_ax.set_xlabel("time (s)")
+
+    # Plot freq amplitdue
+    ft_patch = sq_patch.dft("time", real=True)
+    freq = ft_patch.get_array("ft_time")
+    fd_ax.plot(freq, ft_patch.abs().data, color="tab:red")
+    fd_ax.set_xlabel("Frequency (Hz)")
+    fd_ax.set_title("Amplitude Spectra")
+
+    # plot freq phase
+    phase_ax.plot(freq, np.angle(ft_patch.data), color="tab:cyan")
+    phase_ax.set_xlabel("Frequency (Hz)")
+    phase_ax.set_title("Phase Angle")
+
+    # fd_ax.set_xlim(0, 1000)
+    return fig
+
+
+def make_noisy_sine_patch():
+    """Make a noisy sine wave patch."""
+    patch = dc.get_example_patch(
+        "sin_wav",
+        frequency=[1, 10, 20, 54, 66],
+        amplitude=[1, 2, 3, 4, 9],
+        duration=1,
+        sample_rate=200,
+    )
+    rand_noise = (rng.random(patch.data.shape) - 0.5) * 10
+    patch = patch.new(data = patch.data + rand_noise)
+    return patch
+```
+
+```{python}
+patch = make_noisy_sine_patch()
+plot_time_and_frequency(patch);
+```
+
+The default whitening makes all spectral amplitudes equal.
+
+```{python}
+white_patch = patch.whiten()
+plot_time_and_frequency(white_patch);
+```
+
+The whitening can be restricted to certain frequency bands by specifying the dimension and a frequency range.
+
+```{python}
+white_patch = patch.whiten(time=(20, 80))
+plot_time_and_frequency(white_patch);
+```
+
+Four values can be used to control the start/end of the taper.
+
+```{python}
+white_patch = patch.whiten(time=(20, 40, 60, 80))
+plot_time_and_frequency(white_patch);
+```
+
+Whiten also supports using a smoothed amplitude for normalization which causes less drastic changes to the amplitude spectrum.
+
+```{python}
+white_patch = patch.whiten(smooth_size=1)
+_ = plot_time_and_frequency(white_patch)
+```
+
+
+```{python}
+white_patch = patch.whiten(smooth_size=2, time=(10, 20, 80, 90))
+_ = plot_time_and_frequency(white_patch)
+```
+
+`Whiten` also accepts patches in the frequency domain, in which case a frequency patches are returned. This might be useful if whiten is only a part of a frequency domain workflow.
+
+```{python}
+fft_patch = patch.dft("time", real=True)
+dft_white = fft_patch.whiten(smooth_size=1, time=(20, 40, 60, 80))
+td_patch = dft_white.idft()
+plot_time_and_frequency(td_patch);
+```
+
+The `water_level` parameter can be useful for stabilizing frequencies that may have near-zero values.

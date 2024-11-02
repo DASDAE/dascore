@@ -668,6 +668,13 @@ class TestSelect:
         assert len(coord) == len(np.unique(array))
         assert np.all(array == second_value)
 
+    def test_monotonic_select_by_samples(self, monotonic_float_coord):
+        """Ensure we can select by samples with monotonic coord."""
+        i1, i2 = 15, 50
+        values = monotonic_float_coord.values
+        out = monotonic_float_coord.select((i1, i2), samples=True)[0]
+        assert np.all(values[i1:i2] == out.values)
+
     def test_values_not_in_coord(self, long_coord):
         """Ensure using values not in coord results in an empty coordinate."""
         values1 = long_coord.values[: len(long_coord) // 2]
@@ -1613,6 +1620,13 @@ class TestGetSampleCount:
 class TestGetNextIndex:
     """Tests for finding the next index after a value."""
 
+    relative_test_fixture_names: ClassVar = [
+        "evenly_sampled_coord",
+        "evenly_sampled_date_coord",
+        "evenly_sampled_time_delta_coord",
+        "monotonic_float_coord",
+    ]
+
     def test_samples(self, evenly_sampled_coord):
         """Ensure samples argument allows samples to be passed in."""
         coord = evenly_sampled_coord
@@ -1716,6 +1730,22 @@ class TestGetNextIndex:
         msg = "Coords must be sorted"
         with pytest.raises(CoordError, match=msg):
             random_coord.get_next_index(10)
+
+    @pytest.mark.parametrize("fixture_name", relative_test_fixture_names)
+    def test_relative(self, request, fixture_name):
+        """Ensure relative selects work."""
+        coord = request.getfixturevalue(fixture_name)
+        values = coord.values
+        start_val, end_val = coord.min(), coord.max()
+        test_index = 10
+        val = values[test_index] - start_val
+        # positive case
+        pos_out = coord.get_next_index(val, relative=True)
+        assert pos_out == test_index
+        # negative case
+        val = values[-test_index] - end_val
+        neg_out = coord.get_next_index(val, relative=True)
+        assert neg_out == len(coord) - test_index
 
 
 class TestUpdate:
