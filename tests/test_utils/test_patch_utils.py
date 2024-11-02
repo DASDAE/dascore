@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Annotated, Literal
+
 import numpy as np
 import pandas as pd
+import pydantic
 import pytest
+from pydantic import Field
 
 import dascore as dc
+from dascore import patch_function
+from dascore.constants import PatchType
 from dascore.exceptions import (
     IncompatiblePatchError,
     ParameterError,
@@ -17,7 +23,7 @@ from dascore.utils.patch import (
     _spool_up,
     align_patch_coords,
     concatenate_patches,
-    get_dim_value_from_kwargs,
+    get_dim_axis_value,
     merge_compatible_coords_attrs,
     patches_to_df,
     scan_patches,
@@ -129,6 +135,27 @@ class TestPatchFunction:
         hist2 = ",".join(out.attrs["history"])
         assert hist1 == hist2
 
+    def test_type_checking(self, random_patch):
+        """Ensure the type-checking for validate_call works."""
+
+        @patch_function(validate_call=True)
+        def some_func(
+            patch: PatchType,
+            some_int: int,
+            specific_float: Annotated[float, Field(ge=0, le=1)],
+            lit_str: Literal["bob", "bill", "marely"] = "bill",
+        ):
+            """A test function for type checking"""
+            return patch
+
+        patch = dc.get_example_patch()
+        ok = some_func(patch, some_int=23, specific_float=0.2, lit_str="bob")
+        assert isinstance(ok, dc.Patch)
+        assert ok is patch
+
+        with pytest.raises(pydantic.ValidationError):
+            some_func(patch, some_int=10, specific_float=20.0)
+
 
 class TestHistory:
     """Tests for tracking patch processing history."""
@@ -168,14 +195,47 @@ class TestMergePatches:
             merge_patches(random_patch)
 
 
-class TestGetDimValueFromKwargs:
-    """Tests for getting dimensional values."""
+class TestGetDimAxisValue:
+    """Tests for getting the dimension name, axis, and value."""
 
     def test_raises_no_overlap(self, random_patch):
         """Test that an exception is raised when key doesn't exist."""
         kwargs = {}
-        with pytest.raises(PatchCoordinateError):
-            get_dim_value_from_kwargs(random_patch, kwargs)
+        msg = "exactly one dimension"
+        with pytest.raises(PatchCoordinateError, match=msg):
+            get_dim_axis_value(random_patch, kwargs=kwargs)
+
+    def test_raises_extra(self, random_patch):
+        """Ensure extra args/kwargs raise."""
+        msg = "not found in the patch"
+        with pytest.raises(PatchCoordinateError, match=msg):
+            get_dim_axis_value(random_patch, kwargs={"bob": 10, "time": None})
+        with pytest.raises(PatchCoordinateError, match=msg):
+            get_dim_axis_value(random_patch, args=("bob", "distance"))
+
+    def test_get_single(self, random_patch):
+        """Ensure a single kwarg works."""
+        value = 10
+        for axis, dim in enumerate(random_patch.dims):
+            # test kwargs
+            out = get_dim_axis_value(random_patch, kwargs={dim: value})
+            assert len(out) == 1
+            assert out[0] == (dim, axis, value)
+            # test args
+            out = get_dim_axis_value(random_patch, args=(dim,))
+            assert len(out) == 1
+            assert out[0] == (dim, axis, None)
+
+    def test_multiple(self, random_patch):
+        """Ensure multiple kwargs works."""
+        kwargs = {x: 10 for x in random_patch.dims}
+        # Allow multiple should return a tuple.
+        out = get_dim_axis_value(random_patch, kwargs=kwargs, allow_multiple=True)
+        assert len(out) == len(random_patch.dims)
+        # But if not it should raise
+        msg = "exactly one dimension"
+        with pytest.raises(PatchCoordinateError, match=msg):
+            get_dim_axis_value(random_patch, kwargs=kwargs, allow_multiple=False)
 
 
 class TestPatchesToDF:

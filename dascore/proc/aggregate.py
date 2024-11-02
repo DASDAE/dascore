@@ -1,16 +1,18 @@
-"""Module for applying aggregations along a specified axis."""
+"""Module for applying aggregations (reductions) along a specified axis."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from functools import partial
+from typing import Literal
 
 import numpy as np
 
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate
-from dascore.utils.patch import patch_function
+from dascore.utils.patch import get_dim_axis_value, patch_function
 
 _AGG_FUNCS = {
     "mean": np.nanmean,
@@ -31,6 +33,11 @@ dim
     The dimension along which aggregations are to be performed.
     If None, apply aggregation to all dimensions sequentially.
     If a sequence, apply sequentially in order provided.
+dim_reduce
+    How to reduce the dimensional coordinate associated with the 
+    aggregated axis. Can be the name of any valid aggregator, a callable,
+    or "empty" - which returns and empty coord, or "squeeze" which drops
+    the coordinate.
 """
 
 AGG_NOTES = """
@@ -40,12 +47,46 @@ See [`Patch.aggregate`](`dascore.Patch.aggregate`) for examples
 and more details.
 """
 
+COORD_MODE_DOC_STR = """
+coord_mode
+    Controls the behavior of the aggregated coordinate.
+    Options are: 
+        empty - empty the coordinate values but keep it in output.
+        squeeze - remove the aggregated dimension.
+        min - keep the min value of the aggregated dimension. 
+        mean - keep the mean value of the aggregated dimension.
+"""
+
+_COORD_MODE_TYPE_HINT = Literal[
+    "empty",
+    "squeeze",
+    "min",
+    "mean",
+    "max",
+]
+
+
+def _get_new_coord(coord, dim_reduce):
+    """Get the new coordinate."""
+    if dim_reduce == "empty":
+        new_coord = coord.update(shape=(1,), start=None, stop=None, data=None)
+    elif dim_reduce == "squeeze":
+        return None
+    elif (func := _AGG_FUNCS.get(dim_reduce)) or callable(dim_reduce):
+        func = dim_reduce if callable(dim_reduce) else func
+        new_coord = coord.update(data=func(coord.data))
+    else:
+        msg = "dim_reduce must be 'empty', 'squeeze' or valid aggregator."
+        raise ParameterError(msg)
+    return new_coord
+
 
 @patch_function()
 @compose_docstring(params=AGG_DOC_STR, options=list(_AGG_FUNCS))
 def aggregate(
     patch: PatchType,
     dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
     method: str | Callable = "mean",
 ) -> PatchType:
     """
@@ -74,22 +115,26 @@ def aggregate(
     >>> import dascore as dc
 
     >>> patch = dc.get_example_patch()
+    >>>
     >>> # Calculate mean along time axis
     >>> patch_time = patch.aggregate("time", method=np.nanmean)
+    >>>
     >>> # Calculate median distance along distance dimension
     >>> patch_dist = patch.aggregate("distance", method=np.nanmedian)
     """
     func = _AGG_FUNCS.get(method, method)
     data = patch.data
-    # iterate all
-    for current_dim in iterate(patch.dims if dim is None else dim):
-        axis = patch.dims.index(current_dim)
-        new_coord = patch.get_coord(current_dim).update(
-            shape=(1,), start=None, stop=None, data=None
-        )
-        # Use expand dims
-        data = np.expand_dims(func(data, axis=axis), axis)
-        coords = patch.coords.update(**{current_dim: new_coord})
+    dims = tuple(iterate(patch.dims if dim is None else dim))
+    dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
+    # Iter all specified dimensions.
+    for dim, axis, value in dfo:
+        new_coord = _get_new_coord(patch.get_coord(dim), dim_reduce=dim_reduce)
+        if new_coord is None:
+            coords = patch.coords
+            data = func(data, axis=axis)
+        else:
+            coords = patch.coords.update(**{dim: new_coord})
+            data = np.expand_dims(func(data, axis=axis), axis)
         patch = patch.new(data=data, coords=coords)
     return patch
 
@@ -98,7 +143,8 @@ def aggregate(
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def min(
     patch: PatchType,
-    dim: str | None = None,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
 ) -> PatchType:
     """
     Calculate the minimum along one or more dimensions.
@@ -109,14 +155,15 @@ def min(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanmin)
+    return aggregate.func(patch, dim=dim, method=np.nanmin, dim_reduce=dim_reduce)
 
 
 @patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def max(
     patch: PatchType,
-    dim: str | None = None,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
 ) -> PatchType:
     """
     Calculate the maximum along one or more dimensions.
@@ -127,14 +174,15 @@ def max(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanmax)
+    return aggregate.func(patch, dim=dim, method=np.nanmax, dim_reduce=dim_reduce)
 
 
 @patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def mean(
     patch: PatchType,
-    dim: str | None = None,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
 ) -> PatchType:
     """
     Calculate the mean along one or more dimensions.
@@ -145,14 +193,15 @@ def mean(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanmean)
+    return aggregate.func(patch, dim=dim, method=np.nanmean, dim_reduce=dim_reduce)
 
 
 @patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def median(
     patch: PatchType,
-    dim: str | None = None,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
 ) -> PatchType:
     """
     Calculate the median along one or more dimensions.
@@ -163,14 +212,15 @@ def median(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanmedian)
+    return aggregate.func(patch, dim=dim, method=np.nanmedian, dim_reduce=dim_reduce)
 
 
 @patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def std(
     patch: PatchType,
-    dim: str | None = None,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
 ) -> PatchType:
     """
     Calculate the standard deviation along one or more dimensions.
@@ -181,14 +231,15 @@ def std(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanstd)
+    return aggregate.func(patch, dim=dim, method=np.nanstd, dim_reduce=dim_reduce)
 
 
 @patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def first(
     patch: PatchType,
-    dim: str | None = None,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
 ) -> PatchType:
     """
     Get the first value along one or more dimensions.
@@ -200,14 +251,15 @@ def first(
     {notes}
     """
     func = _AGG_FUNCS["first"]
-    return aggregate.func(patch, dim=dim, method=func)
+    return aggregate.func(patch, dim=dim, method=func, dim_reduce=dim_reduce)
 
 
 @patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def last(
     patch: PatchType,
-    dim: str | None = None,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
 ) -> PatchType:
     """
     Get the last value along one or more dimensions.
@@ -219,14 +271,15 @@ def last(
     {notes}
     """
     func = _AGG_FUNCS["last"]
-    return aggregate.func(patch, dim=dim, method=func)
+    return aggregate.func(patch, dim=dim, method=func, dim_reduce=dim_reduce)
 
 
 @patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
 def sum(
     patch: PatchType,
-    dim: str | None = None,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
 ) -> PatchType:
     """
     Sum the values along one or more dimensions.
@@ -237,4 +290,4 @@ def sum(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nansum)
+    return aggregate.func(patch, dim=dim, method=np.nansum, dim_reduce=dim_reduce)

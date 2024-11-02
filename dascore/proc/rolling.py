@@ -13,7 +13,7 @@ from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DascoreBaseModel
-from dascore.utils.patch import get_dim_value_from_kwargs
+from dascore.utils.patch import get_dim_axis_value
 from dascore.utils.pd import rolling_df
 
 
@@ -338,7 +338,7 @@ def rolling(
         return _NumpyPatchRoller
 
     # get window sizes in samples
-    dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
+    dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
     roll_hist = f"rolling({dim}={value}, step={step}, center={center}, engine={engine})"
     coord = patch.get_coord(dim)
     window = coord.get_sample_count(value, samples=samples, enforce_lt_coord=True)

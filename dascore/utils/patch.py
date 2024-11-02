@@ -6,11 +6,13 @@ import functools
 import inspect
 import sys
 import warnings
+from collections import namedtuple
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+import pydantic
 
 import dascore as dc
 from dascore.constants import (
@@ -33,6 +35,7 @@ from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.docs import compose_docstring
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
     _merge_tuples,
@@ -46,6 +49,8 @@ from dascore.utils.misc import (
 from dascore.utils.time import to_datetime64, to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
+
+DimAxisValue = namedtuple("DimAxisValue", ["dim", "axis", "value"])
 
 
 def _format_values(val):
@@ -175,6 +180,7 @@ def patch_function(
     required_coords: tuple[str, ...] | None = None,
     required_attrs: attr_type = None,
     history: Literal["full", "method_name", None] = "full",
+    validate_call: bool = False,
 ):
     """
     Decorator to mark a function as a patch method.
@@ -193,31 +199,51 @@ def patch_function(
             Full - Records function name and str version of input arguments.
             method_name - Only records method name. Useful if args are long.
             None - Function call is not recorded in history attribute.
+    validate_call
+        If True, use pydantic to validate the function call. This can save
+        quite a lot of code in validation checks, does have some overhead.
+        See: https://docs.pydantic.dev/latest/api/validate_call/.
 
     Examples
     --------
-    1. A patch method which requires dimensions (time, distance)
     >>> import dascore as dc
+    >>>
+    >>> # 1. A patch method which requires dimensions (time, distance)
     >>> @dc.patch_function(required_dims=('time', 'distance'))
     ... def do_something(patch):
     ...     ...   # raises a PatchCoordsError if patch doesn't have time,
     ...     #  distance
-
-    2. A patch method which requires an attribute 'data_type' == 'DAS'
-    >>> import dascore as dc
+    >>>
+    >>> # 2. A patch method which requires an attribute 'data_type' == 'DAS'
     >>> @dc.patch_function(required_attrs={'data_type': 'DAS'})
     ... def do_another_thing(patch):
     ...     ...  # raise PatchAttributeError if patch doesn't have attribute
     ...     # called "data_type" or its values is not equal to "DAS".
+    >>>
+    >>> # 3. A patch method which does type checking on inputs.
+    >>> # The `Field` allows enforces various properties (like ranges)
+    >>> from typing_extensions import Annotated, Literal
+    >>> from pydantic import Field
+    >>> @dc.patch_function(validate_call=True)
+    ... def do_type_thing(
+    ...     patch,
+    ...     int_le_10_ge_1: int = Field(ge=1, le=10, default=1),
+    ...     option: Literal["min", "max", None] = None,
+    ... ):
+    ...     pass
 
     Notes
     -----
-    The original function can still be accessed with the .func attribute.
-    This may be useful for avoiding calling the patch_func machinery
-    multiple times from within another patch function.
+    The original function can still be accessed with the raw_function
+    attribute. This may be useful for avoiding calling the patch_func
+    machinery multiple times from within another patch function.
     """
 
     def _wrapper(func):
+        if validate_call:
+            config = dict(arbitrary_types_allowed=True)
+            func = pydantic.validate_call(func, config=config)
+
         @functools.wraps(func)
         def _func(patch, *args, **kwargs):
             check_patch_coords(
@@ -227,7 +253,7 @@ def patch_function(
             )
             check_patch_attrs(patch, required_attrs)
             out: PatchType = func(patch, *args, **kwargs)
-            # attach history string. Consider something a bit less hacky.
+            # attach history string. Need to consider something a bit less hacky.
             if out is not patch and hasattr(out, "attrs"):
                 hist_str = _get_history_str(
                     patch, func, *args, _history=history, **kwargs
@@ -238,7 +264,10 @@ def patch_function(
                     out = out.update_attrs(history=hist)
             return out
 
-        _func.func = func  # attach original function
+        # attach original function
+        _func.func = getattr(func, "raw_function", func)
+        # matches pydantic behavior.
+        _func.raw_function = getattr(func, "raw_function", func)
         _func.__wrapped__ = func
 
         return _func
@@ -428,40 +457,83 @@ def get_default_patch_name(patch):
     return f"DAS__{net}__{sta}__{tag}__{start}__{end}"
 
 
-def get_dim_value_from_kwargs(patch, kwargs):
+def get_dim_axis_value(
+    patch: PatchType,
+    *,
+    args: tuple = tuple(),
+    kwargs: dict = FrozenDict(),
+    arg_keys: tuple[str] = ("dim", "coord", "dims", "coords"),
+    allow_multiple: bool = False,
+    allow_extra: bool = False,
+) -> tuple[DimAxisValue, ...]:
     """
-    Assert that kwargs contain one value and it is a dimension of patch.
+    Get dimension nane, index, and values from args/kwargs for a patch.
 
-    Several patch functions allow passing values via kwargs which are dimension
-    specific. This function allows for some sane validation of such functions.
+    This is helpful for implementing flexible fetching of dimension name,
+    corresponding patch axis, and function specific values from args and
+    kwargs as inputs.
 
-    Return the name of the dimension, its axis position, and its value.
+    Parameters
+    ----------
+    patch
+        The patch which contains desired dimensions.
+    args
+        A tuple of possible dimension names.
+    kwargs
+        A dict of dimension_name: value
+    arg_keys
+        Keys in the dictionary that indicate
+    allow_multiple
+        If True, allow multiple dimensions to be selected.
+    allow_extra
+        If True, do not raise if extra kwargs found.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.patch import get_dim_axis_value
+    >>>
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Get tuple of dimension name, axis, and value from dict (eg kwargs)
+    >>> (dim, ax, val) = get_dim_axis_value(patch, kwargs={"time": 10})[0]
+    >>> assert dim == "time" and ax == patch.dims.index("time") and val == 10
+    >>>
+    >>> # Get dim name and axis from tuple (eg args)
+    >>> (dim, ax, val) = get_dim_axis_value(patch, args=("time",))[0]
+    >>> assert dim == "time" and ax == patch.dims.index("time") and val is None
+    >>>
+    >>> # Get list of dim, ax val from multiple kwargs and args
+    >>> info = get_dim_axis_value(
+    ...     patch, args=("time", ), kwargs={"distance": 10}, allow_multiple=True,
+    ... )
+    >>> assert len(info) == 2
     """
-    dims = patch.dims
-    overlap = set(dims) & set(kwargs)
-    if len(kwargs) != 1 or not overlap:
+    kwargs = dict(kwargs)  # copy kwargs to avoid modifying the input dict
+    dims: tuple[str, ...] = patch.dims
+    # Pop out any args implicit in kwargs.
+    args = args + tuple(kwargs.pop(x) for x in arg_keys if x in kwargs)
+    input_set = set(args) | set(kwargs)
+    patch_dim_set = set(dims)
+    overlap = patch_dim_set & input_set
+    # Determine if there is the right number of overlaps.
+    if not overlap or (len(overlap) > 1 and not allow_multiple):
         msg = (
-            "You must use exactly one dimension name in kwargs. "
-            f"You passed the following kwargs: {kwargs} to a patch with "
-            f"dimensions {patch.dims}"
+            "You must use exactly one dimension name in args or kwargs. "
+            f"You passed the following kwargs: {kwargs} args: {args } "
+            f"to a patch with dimensions {patch.dims}"
         )
         raise PatchCoordinateError(msg)
-    dim = next(iter(overlap))
-    axis = dims.index(dim)
-    return dim, axis, kwargs[dim]
-
-
-def get_multiple_dim_value_from_kwargs(patch, kwargs):
-    """Get multiple dim, axis and values from kwargs."""
-    dims = patch.dims
-    overlap = set(dims) & set(kwargs)
-    if not overlap:
-        msg = "You must specify one or more dimension in keyword args."
+    # Handle the case of extra inputs
+    if (remaining := input_set - patch_dim_set) and not allow_extra:
+        msg = (
+            "The following input dimensions are not found in the patch. " f"{remaining}"
+        )
         raise PatchCoordinateError(msg)
-    out = {}
-    for dim in overlap:
-        axis = patch.dims.index(dim)
-        out[dim] = {"dim": dim, "axis": axis, "value": kwargs[dim]}
+    # Ensure order is preserved (eg args, then kwargs)
+    dim_out = tuple(x for x in args + tuple(kwargs) if x in overlap)
+    # Package everything up and return
+    out = tuple(DimAxisValue(x, dims.index(x), kwargs.get(x)) for x in dim_out)
     return out
 
 
@@ -472,7 +544,7 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
     Parameters
     ----------
     patch
-        The imput patch.
+        The input patch.
     dim
         Dimension to extract.
 

@@ -22,8 +22,7 @@ from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
     align_patch_coords,
-    get_dim_value_from_kwargs,
-    get_multiple_dim_value_from_kwargs,
+    get_dim_axis_value,
     patch_function,
 )
 
@@ -657,11 +656,10 @@ def pad(
         raise ParameterError("constant_values must be a scalar, not a sequence.")
 
     pad_width = [(0, 0)] * len(patch.shape)
-    dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
+    dimfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
     new_coords = {}
 
-    for _, info in dimfo.items():
-        axis, dim, value = info["axis"], info["dim"], info["value"]
+    for dim, axis, value in dimfo:
         coord = patch.get_coord(dim, require_evenly_sampled=not samples)
         pad_tuple = _get_pad_tuple(value, samples, coord)
         pad_width[axis] = pad_tuple
@@ -700,7 +698,7 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     >>> # roll time dimension 5 elements and update coordinates
     >>> rolled_patch3 = patch.roll(time=5, samples=True, update_coord=True)
     """
-    dim, axis, input_value = get_dim_value_from_kwargs(patch, kwargs)
+    dim, axis, input_value = get_dim_axis_value(patch, kwargs=kwargs)[0]
     arr = patch.data
     coord = patch.get_coord(dim)
     value = coord.get_sample_count(input_value, samples=samples)
