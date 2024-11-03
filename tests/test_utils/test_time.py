@@ -295,6 +295,12 @@ class TestToTimeDelta64:
         out = to_timedelta64(ar)
         assert np.all(pd.isnull(out))
 
+    def test_array_of_datetimes(self, random_patch):
+        """Ensure datetime64 array can be converted to timedelta array."""
+        dt_array = random_patch.get_coord("time").values
+        out = to_timedelta64(dt_array)
+        assert np.all(out.astype(np.int64) == dt_array.astype(np.int64))
+
 
 class TestToInt:
     """Tests for converting time-like types to ints, or passing through reals."""

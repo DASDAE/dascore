@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import ParameterError
 from dascore.proc.aggregate import _AGG_FUNCS
 from dascore.utils.misc import broadcast_for_index
 
@@ -56,6 +57,21 @@ class TestBasicAggregations:
         out = random_patch.aggregate(dim="time", method="mean", dim_reduce="mean")
         new_time = out.get_coord("time")
         assert len(new_time) == 1
+
+    def test_dim_reduce_mean_time_delta(self, random_patch):
+        """Ensure the mean value can be left on the coord."""
+        time = random_patch.get_coord("time")
+        dt = dc.to_timedelta64(time.values)
+        patch = random_patch.update_coords(time=dt)
+        out = patch.aggregate(dim="time", method="mean", dim_reduce="mean")
+        new_time = out.get_coord("time")
+        assert len(new_time) == 1
+
+    def test_invalid_dim_reduce(self, random_patch):
+        """Ensure an invalid dim_reduce argument raises."""
+        msg = "dim_reduce must be"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.aggregate(dim="time", dim_reduce="invalid")
 
     def test_dim_reduce_first(self, random_patch):
         """Ensure first takes the first value"""

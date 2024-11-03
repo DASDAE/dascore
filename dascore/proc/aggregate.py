@@ -85,7 +85,7 @@ def _get_new_coord(coord, dim_reduce):
                 out = dc.to_datetime64(out)
             if is_timedelta64(data):
                 out = dc.to_timedelta64(out)
-        return out
+        return np.atleast_1d(out)
 
     if dim_reduce == "empty":
         new_coord = coord.update(shape=(1,), start=None, stop=None, data=None)
