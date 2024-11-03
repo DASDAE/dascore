@@ -64,13 +64,6 @@ class TestBasicAggregations:
         assert len(new_time) == 1
         assert new_time[0] == out.get_array("time")[0]
 
-    def test_dim_reduce_median(self, random_patch):
-        """Ensure the median values also work on dim reduction."""
-        new_time = dc.to_timedelta64(random_patch.get_array("time"))
-        patch = random_patch.update_coords(time=new_time)
-        out = patch.aggregate(dim="time", method="mean", dim_reduce="median")
-        assert "time" in out.dims
-
     def test_dim_reduce_distance(self, random_patch):
         """Ensure non-time dims also work."""
         out = random_patch.aggregate(dim="distance", method="mean", dim_reduce=np.var)

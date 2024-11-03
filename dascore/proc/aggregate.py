@@ -110,8 +110,8 @@ def _get_new_coord(coord, dim_reduce):
 def aggregate(
     patch: PatchType,
     dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
     method: str | Callable = "mean",
+    dim_reduce: str | Callable = "empty",
 ) -> PatchType:
     """
     Aggregate values along a specified dimension.
