@@ -46,6 +46,38 @@ class TestBasicAggregations:
         patch = getattr(random_patch, method)(dim="distance")
         assert isinstance(patch, dc.Patch)
 
+    def test_dim_reduce_squeeze(self, random_patch):
+        """Ensure the old dimension can be squeezed out."""
+        out = random_patch.aggregate(dim="time", method="mean", dim_reduce="squeeze")
+        assert "time" not in out.dims
+
+    def test_dim_reduce_mean(self, random_patch):
+        """Ensure the mean value can be left on the coord."""
+        out = random_patch.aggregate(dim="time", method="mean", dim_reduce="mean")
+        new_time = out.get_coord("time")
+        assert len(new_time) == 1
+
+    def test_dim_reduce_first(self, random_patch):
+        """Ensure first takes the first value"""
+        out = random_patch.aggregate(dim="time", method="mean", dim_reduce="first")
+        new_time = out.get_coord("time")
+        assert len(new_time) == 1
+        assert new_time[0] == out.get_array("time")[0]
+
+    def test_dim_reduce_median(self, random_patch):
+        """Ensure the median values also work on dim reduction."""
+        new_time = dc.to_timedelta64(random_patch.get_array("time"))
+        patch = random_patch.update_coords(time=new_time)
+        out = patch.aggregate(dim="time", method="mean", dim_reduce="median")
+        assert "time" in out.dims
+
+    def test_dim_reduce_distance(self, random_patch):
+        """Ensure non-time dims also work."""
+        out = random_patch.aggregate(dim="distance", method="mean", dim_reduce=np.var)
+        assert "distance" in out.dims
+        expected = np.var(random_patch.get_array("distance"))
+        assert out.get_coord("distance").values == expected
+
 
 class TestApplyOperators:
     """Ensure aggregated patches can be used as operators for arithmetic."""

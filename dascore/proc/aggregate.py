@@ -8,11 +8,13 @@ from typing import Literal
 
 import numpy as np
 
+import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate
 from dascore.utils.patch import get_dim_axis_value, patch_function
+from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64
 
 _AGG_FUNCS = {
     "mean": np.nanmean,
@@ -55,6 +57,9 @@ coord_mode
         squeeze - remove the aggregated dimension.
         min - keep the min value of the aggregated dimension. 
         mean - keep the mean value of the aggregated dimension.
+    If the operation fails and the coords are a time-type it will be tried
+    again converting to, then back, from floats. This can cause a small 
+    loss of precision.
 """
 
 _COORD_MODE_TYPE_HINT = Literal[
@@ -68,13 +73,32 @@ _COORD_MODE_TYPE_HINT = Literal[
 
 def _get_new_coord(coord, dim_reduce):
     """Get the new coordinate."""
+
+    def _maybe_handle_datatypes(func, data):
+        """Maybe handle the complexity of date times here."""
+        try:  # First try function directly
+            out = func(data)
+        except Exception:  # Fall back to floats and re-packing.
+            float_data = dc.to_float(data)
+            out = func(float_data)
+            if is_datetime64(data):
+                out = dc.to_datetime64(out)
+            if is_timedelta64(data):
+                out = dc.to_timedelta64(out)
+        return out
+
     if dim_reduce == "empty":
         new_coord = coord.update(shape=(1,), start=None, stop=None, data=None)
     elif dim_reduce == "squeeze":
         return None
     elif (func := _AGG_FUNCS.get(dim_reduce)) or callable(dim_reduce):
         func = dim_reduce if callable(dim_reduce) else func
-        new_coord = coord.update(data=func(coord.data))
+        coord_data = coord.data
+        if dtype_time_like(coord_data):
+            result = _maybe_handle_datatypes(func, coord_data)
+        else:
+            result = func(coord.data)
+        new_coord = coord.update(data=result)
     else:
         msg = "dim_reduce must be 'empty', 'squeeze' or valid aggregator."
         raise ParameterError(msg)
@@ -121,6 +145,16 @@ def aggregate(
     >>>
     >>> # Calculate median distance along distance dimension
     >>> patch_dist = patch.aggregate("distance", method=np.nanmedian)
+    >>>
+    >>> # Calculate the mean, and remove the associated dimension
+    >>> patch_mean_no_dim = patch.aggregate(
+    ...     "time", method="mean", dim_reduce="squeeze"
+    ... )
+    >>>
+    >>> # Aggregate by the min value and keep the mean of the dimension
+    >>> patch_mean_min = patch.aggregate(
+    ...     "distance", method="min", dim_reduce="mean",
+    ... )
     """
     func = _AGG_FUNCS.get(method, method)
     data = patch.data
@@ -130,7 +164,7 @@ def aggregate(
     for dim, axis, value in dfo:
         new_coord = _get_new_coord(patch.get_coord(dim), dim_reduce=dim_reduce)
         if new_coord is None:
-            coords = patch.coords
+            coords = patch.coords.drop_coords(dim)[0]
             data = func(data, axis=axis)
         else:
             coords = patch.coords.update(**{dim: new_coord})
