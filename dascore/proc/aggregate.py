@@ -14,7 +14,12 @@ from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate
 from dascore.utils.patch import get_dim_axis_value, patch_function
-from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64
+from dascore.utils.time import (
+    dtype_time_like,
+    is_datetime64,
+    to_datetime64,
+    to_timedelta64,
+)
 
 _AGG_FUNCS = {
     "mean": np.nanmean,
@@ -80,11 +85,8 @@ def _get_new_coord(coord, dim_reduce):
             out = func(data)
         except Exception:  # Fall back to floats and re-packing.
             float_data = dc.to_float(data)
-            out = func(float_data)
-            if is_datetime64(data):
-                out = dc.to_datetime64(out)
-            if is_timedelta64(data):
-                out = dc.to_timedelta64(out)
+            dfunc = to_datetime64 if is_datetime64(data) else to_timedelta64
+            out = dfunc(func(float_data))
         return np.atleast_1d(out)
 
     if dim_reduce == "empty":
