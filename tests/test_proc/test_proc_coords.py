@@ -450,6 +450,12 @@ class TestGetCoord:
         coord = wacky_dim_patch.get_coord("time", require_sorted=True)
         assert isinstance(coord, BaseCoord)
 
+    def test_non_existent_coord_raises(self, random_patch):
+        """Ensure requesting non-existent coordinates raises CoordError."""
+        msg = "not found in Patch"
+        with pytest.raises(CoordError, match=msg):
+            random_patch.get_coord("fire_house")
+
     def test_require_evenly_sampled(self, wacky_dim_patch):
         """Test required evenly sampled raises if coord isn't."""
         msg = "is not evenly sampled"

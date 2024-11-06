@@ -91,18 +91,43 @@ def get_coord(
     require_evenly_sampled: bool = False,
 ) -> BaseCoord:
     """
-    Get a managed coordinate, raising if it doesn't meet requirements.
+    Get a managed coordinate from the patch.
 
     Parameters
     ----------
     name
-        Name of the coordinate to fetch.
+        The name of the coordinate to fetch from the patch.
     require_sorted
         If True, require the coordinate to be sorted or raise Error.
     require_evenly_sampled
         If True, require the coordinate to be evenly sampled or raise Error.
+
+    Raises
+    ------
+    [`CoordError`](`dascore.exceptions.CoordError`) if the coordinate does
+    not exist or does not meet the imposed requirements.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Get the the distance coordinate from the patch.
+    >>> distance = patch.get_coord("distance")
+    >>>
+    >>> # Get the time coordinate from the patch, raise CoordError if it
+    >>> # is not evenly sampled.
+    >>> time = patch.get_coord("time", require_evenly_sampled=True)
+
+    See Also
+    --------
+    [get_array](`dascore.Patch.get_array`).
+
     """
-    coord = self.coords.coord_map[name]
+    if (coord := self.coords.coord_map.get(name)) is None:
+        coords = sorted(self.coords.coord_map)
+        msg = f"Coordinate '{name}' not found in Patch coordinates: {coords}"
+        raise CoordError(msg)
     if require_evenly_sampled and coord.step is None:
         extra = f"as required by {get_parent_code_name()}"  # adds caller name
         msg = f"Coordinate {name} is not evenly sampled {extra}"
@@ -131,6 +156,29 @@ def get_array(
         If True, require the coordinate to be sorted or raise Error.
     require_evenly_sampled
         If True, require the coordinate to be evenly sampled or raise Error.
+
+    Raises
+    ------
+    [`CoordError`](`dascore.exceptions.CoordError`) if the coordinate does
+    not exist or does not meet the imposed requirements.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Get the patch data array.
+    >>> data = patch.get_array()  # same as patch.data
+    >>>
+    >>> # Get an array of distance values
+    >>> distance_array = patch.get_array("distance")
+    >>>
+    >>> # Get an array of time values. Raise an error if they arent sorted.
+    >>> time_array = patch.get_array("time", require_sorted=True)
+
+    See Also
+    --------
+    [Patch.get_coord](`dascore.Patch.get_coord`)
     """
     if name is None:
         return self.data
@@ -185,6 +233,7 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
     >>> import numpy as np
     >>> import dascore as dc
     >>> pa = dc.get_example_patch()
+    >>>
     >>> # Add 1 to all distance coords
     >>> new_dist = pa.coords.get_array('distance') + 1
     >>> pa2 = pa.update_coords(distance=new_dist)

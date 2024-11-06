@@ -24,6 +24,7 @@ fetcher = pooch.create(
 fetcher.load_registry(REGISTRY_PATH)
 
 
+@cache
 def get_registry_df() -> pd.DataFrame:
     """Returns a dataframe of all files in the data registry."""
     names = (
