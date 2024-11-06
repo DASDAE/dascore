@@ -43,7 +43,7 @@ class NeubrexRFSV1(FiberIO):
     See #411.
     """
 
-    name = "Neubrex"
+    name = "NeubrexRFS"
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
