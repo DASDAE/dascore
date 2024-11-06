@@ -201,8 +201,8 @@ def patch_function(
             None - Function call is not recorded in history attribute.
     validate_call
         If True, use pydantic to validate the function call. This can save
-        quite a lot of code in validation checks, does have some overhead.
-        See: https://docs.pydantic.dev/latest/api/validate_call/.
+        quite a lot of code in validation checks, but does have some overhead.
+        See [validate_call](https://docs.pydantic.dev/latest/api/validate_call/).
 
     Examples
     --------
@@ -221,7 +221,7 @@ def patch_function(
     ...     # called "data_type" or its values is not equal to "DAS".
     >>>
     >>> # 3. A patch method which does type checking on inputs.
-    >>> # The `Field` allows enforces various properties (like ranges)
+    >>> # The `Field` instance can require various data properties (like ranges)
     >>> from typing_extensions import Annotated, Literal
     >>> from pydantic import Field
     >>> @dc.patch_function(validate_call=True)
@@ -230,7 +230,7 @@ def patch_function(
     ...     int_le_10_ge_1: int = Field(ge=1, le=10, default=1),
     ...     option: Literal["min", "max", None] = None,
     ... ):
-    ...     pass
+    ...     ...
 
     Notes
     -----
@@ -264,9 +264,10 @@ def patch_function(
                     out = out.update_attrs(history=hist)
             return out
 
-        # attach original function
+        # attach original function. Although we want to encourage raw_function
+        # for consistency with pydantic, we leave this to not break old code.
         _func.func = getattr(func, "raw_function", func)
-        # matches pydantic behavior.
+        # matches pydantic naming.
         _func.raw_function = getattr(func, "raw_function", func)
         _func.__wrapped__ = func
 
@@ -486,7 +487,14 @@ def get_dim_axis_value(
     allow_multiple
         If True, allow multiple dimensions to be selected.
     allow_extra
-        If True, do not raise if extra kwargs found.
+        If True, do not raise an error if extra args or kwargs are found.
+
+    Returns
+    -------
+    Returns a tuple of:
+        ((dim, axis, value), (dim, axis, value), ...)
+    To support retreiving multiple values from the same inputs. If dim name
+    is found in args, its corresponding values is `None`.
 
     Examples
     --------

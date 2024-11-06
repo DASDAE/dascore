@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Literal
 
 import numpy as np
 
@@ -43,8 +42,11 @@ dim
 dim_reduce
     How to reduce the dimensional coordinate associated with the 
     aggregated axis. Can be the name of any valid aggregator, a callable,
-    or "empty" - which returns and empty coord, or "squeeze" which drops
-    the coordinate.
+    "empty" - which returns and empty coord, or "squeeze" which drops
+    the coordinate. For dimensions with datetime or timedelta datatypes, 
+    if the operation fails it will automatically be applied to the
+    coordinates converted to floats then the output converted back 
+    to the appropriate time type.
 """
 
 AGG_NOTES = """
@@ -53,27 +55,6 @@ Notes
 See [`Patch.aggregate`](`dascore.Patch.aggregate`) for examples
 and more details.
 """
-
-COORD_MODE_DOC_STR = """
-coord_mode
-    Controls the behavior of the aggregated coordinate.
-    Options are: 
-        empty - empty the coordinate values but keep it in output.
-        squeeze - remove the aggregated dimension.
-        min - keep the min value of the aggregated dimension. 
-        mean - keep the mean value of the aggregated dimension.
-    If the operation fails and the coords are a time-type it will be tried
-    again converting to, then back, from floats. This can cause a small 
-    loss of precision.
-"""
-
-_COORD_MODE_TYPE_HINT = Literal[
-    "empty",
-    "squeeze",
-    "min",
-    "mean",
-    "max",
-]
 
 
 def _get_new_coord(coord, dim_reduce):
