@@ -27,7 +27,7 @@ from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus2
 from dascore.io.h5simple import H5Simple
-from dascore.io.neubrex import NeubrexDASV1, NeubrexV1
+from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
@@ -54,7 +54,7 @@ from dascore.utils.misc import all_close, iterate
 # for more details.
 COMMON_IO_READ_TESTS = {
     NeubrexDASV1(): ("neubrex_das_1.h5",),
-    NeubrexV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
+    NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
     SilixaH5V1(): ("silixa_h5_1.hdf5",),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (

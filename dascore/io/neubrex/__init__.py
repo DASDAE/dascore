@@ -13,4 +13,4 @@ Retrieved from https://dx.doi.org/10.15121/2222469.
 """
 from __future__ import annotations
 
-from .core import NeubrexV1, NeubrexDASV1
+from .core import NeubrexRFSV1, NeubrexDASV1

@@ -7,14 +7,14 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-import dascore.io.neubrex.utils as nb_utils
 import dascore.io.neubrex.utils_das as das_utils
+import dascore.io.neubrex.utils_rfs as rfs_utils
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
 
-class NeubrexPatchAttrs(dc.PatchAttrs):
+class NeubrexRFSPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Neubrex files."""
 
     api: str | None = None
@@ -35,15 +35,13 @@ class NeubrexDASPatchAttrs(dc.PatchAttrs):
     instrument_model: str = ""
 
 
-class NeubrexV1(FiberIO):
+class NeubrexRFSV1(FiberIO):
     """
-    Support for Neubrex DSS/DTS version 1.
+    Support for Neubrex Rayleigh Frequency Shift (DSS/DTS) version 1.
 
     This specifically supports DTS/DSS files recorded at the Forge cite.
     See #411.
     """
-
-    # Note: this
 
     name = "Neubrex"
     preferred_extensions = ("hdf5", "h5")
@@ -51,7 +49,7 @@ class NeubrexV1(FiberIO):
 
     def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """Determine if the resource belongs to this format."""
-        if nb_utils._is_neubrex(resource):
+        if rfs_utils._is_neubrex(resource):
             return self.name, self.version
         return False
 
@@ -68,16 +66,16 @@ class NeubrexV1(FiberIO):
         **kwargs
             Passed to filtering coordinates.
         """
-        attr_dict, cm, data = nb_utils._get_attrs_coords_and_data(resource, snap)
+        attr_dict, cm, data = rfs_utils._get_attrs_coords_and_data(resource, snap)
         if kwargs:
-            cm, data = nb_utils._maybe_trim_data(cm, data, **kwargs)
-        attrs = NeubrexPatchAttrs(**attr_dict)
+            cm, data = rfs_utils._maybe_trim_data(cm, data, **kwargs)
+        attrs = NeubrexRFSPatchAttrs(**attr_dict)
         patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
         return dc.spool([patch])
 
     def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[dc.PatchAttrs]:
         """Get the attributes of a resource belong to this type."""
-        attrs, cm, data = nb_utils._get_attrs_coords_and_data(resource, snap)
+        attrs, cm, data = rfs_utils._get_attrs_coords_and_data(resource, snap)
         attrs["coords"] = cm.to_summary_dict()
         attrs["path"] = resource.filename
         attrs["file_format"] = self.name
@@ -116,7 +114,7 @@ class NeubrexDASV1(FiberIO):
         attr_dict, cm, data = das_utils._get_attrs_coords_and_data(resource)
         if kwargs:
             cm, data = das_utils._maybe_trim_data(cm, data, **kwargs)
-        attrs = NeubrexPatchAttrs(**attr_dict)
+        attrs = NeubrexRFSPatchAttrs(**attr_dict)
         patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
         return dc.spool([patch])
 
