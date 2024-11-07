@@ -48,7 +48,7 @@ jobs:
 
       - uses: mamba-org/setup-micromamba@v1
         with:
-          micromamba-version: '1.5.8-0' # versions: https://github.com/mamba-org/micromamba-releases
+          micromamba-version: '2.0.2-1' # versions: https://github.com/mamba-org/micromamba-releases
           environment-file: environment.yml
           init-shell: >-
             bash
