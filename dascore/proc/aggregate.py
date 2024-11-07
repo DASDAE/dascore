@@ -42,11 +42,11 @@ dim
 dim_reduce
     How to reduce the dimensional coordinate associated with the 
     aggregated axis. Can be the name of any valid aggregator, a callable,
-    "empty" - which returns and empty coord, or "squeeze" which drops
-    the coordinate. For dimensions with datetime or timedelta datatypes, 
-    if the operation fails it will automatically be applied to the
-    coordinates converted to floats then the output converted back 
-    to the appropriate time type.
+    "empty" (the default) - which returns and empty coord, or "squeeze" 
+    which drops the coordinate. For dimensions with datetime or timedelta 
+    datatypes, if the operation fails it will automatically be applied 
+    to the coordinates converted to floats then the output converted back 
+    to the appropriate time type. 
 """
 
 AGG_NOTES = """
@@ -106,13 +106,8 @@ def aggregate(
         The aggregation to apply along dimension. Options are:
             {options}
 
-    Notes
-    -----
-    - The old dimension is kept but its coordiante values are removed.
-      use [`Patch.squeeze`](`dascore.Patch.squeeze`) to remove them or
-      [`Patch.update_coords`](`dascore.Patch.update_coords`) to set a
-      coordinate value.
-
+    See Also
+    --------
     - See also the aggregation shortcut methods in the
       [aggregate module](`dascore.proc.aggregate`).
 
