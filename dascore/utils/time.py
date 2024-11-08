@@ -196,6 +196,11 @@ def _array_to_timedelta64(array: np.ndarray) -> np.datetime64:
             return np.timedelta64(array)
         else:
             return array.astype("timedelta64[ns]")
+    # Need to just get the ns form datetime64
+    elif np.issubdtype(array.dtype, np.datetime64):
+        int_array = array.view(np.int64)
+        return np.array(int_array).astype("timedelta64[ns]")
+
     assert np.isreal(array[0])
     nans = pd.isnull(array)
     array[nans] = 0

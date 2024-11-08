@@ -205,7 +205,7 @@ class TestMedianFilter:
 
     def test_median_no_kwargs_raises(self, random_patch):
         """Apply default values."""
-        msg = "You must specify one or more dimension in keyword args."
+        msg = "You must use exactly one"
         with pytest.raises(PatchCoordinateError, match=msg):
             random_patch.median_filter()
 
@@ -232,7 +232,7 @@ class TestNotchFilter:
 
     def test_notch_no_kwargs_raises(self, random_patch):
         """Test that no dimension raises an appropriate error."""
-        msg = "You must specify one or more"
+        msg = "You must use exactly one"
         with pytest.raises(PatchCoordinateError, match=msg):
             random_patch.notch_filter(q=30)
 
@@ -281,7 +281,7 @@ class TestSavgolFilter:
 
     def test_savgol_no_kwargs_raises(self, random_patch):
         """Apply default values."""
-        msg = "You must specify one or more"
+        msg = "You must use exactly one"
         with pytest.raises(PatchCoordinateError, match=msg):
             random_patch.savgol_filter(polyorder=2)
 
@@ -321,7 +321,7 @@ class TestGaussianFilter:
     """Test the Guassian Filter."""
 
     def test_filter_time(self, event_patch_2):
-        """Test for simple filter along time axis."""
+        """Test for simple filter along the time axis."""
         out = event_patch_2.gaussian_filter(time=0.001)
         assert isinstance(out, dc.Patch)
         assert out.shape == event_patch_2.shape

@@ -34,8 +34,8 @@ from dascore.utils.misc import (
     check_filter_range,
 )
 from dascore.utils.patch import (
+    get_dim_axis_value,
     get_dim_sampling_rate,
-    get_multiple_dim_value_from_kwargs,
     patch_function,
 )
 from dascore.utils.time import to_float
@@ -185,13 +185,12 @@ def _create_size_and_axes(patch, kwargs, samples):
     Note: size will always have the same size as the patch, but
     1s will be used if axis is not used.
     """
-    dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
-    axes = [x["axis"] for x in dimfo.values()]
+    dimfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
+    axes = [x.axis for x in dimfo]
     size = [1] * len(patch.dims)
-    for dim, info in dimfo.items():
-        axis = info["axis"]
+    for dim, axis, value in dimfo:
         coord = patch.get_coord(dim)
-        window = coord.get_sample_count(info["value"], samples=samples)
+        window = coord.get_sample_count(value, samples=samples)
         size[axis] = window
     return tuple(size), tuple(axes)
 
@@ -299,14 +298,12 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
     >>> filtered = pa.notch_filter(distance=5 * m, q=30)
     """
     data = patch.data
-    for coord_name, info in get_multiple_dim_value_from_kwargs(patch, kwargs).items():
-        dim, ax, value = info["dim"], info["axis"], info["value"]
-        coord = patch.get_coord(coord_name)
-
+    dinfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
+    for dim, axis, value in dinfo:
+        coord = patch.get_coord(dim)
         # Invert units if needed
         if isinstance(value, dc.units.Quantity) and coord.units is not None:
             value, _ = get_inverted_quant(value, coord.units)
-
         # Check valid parameters
         w0 = to_float(value)
         sr = get_dim_sampling_rate(patch, dim)
@@ -315,7 +312,7 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
             msg = f"possible filter values are in [0, {nyquist}] you passed {w0}"
             raise FilterValueError(msg)
         b, a = iirnotch(w0, Q=q, fs=sr)
-        data = filtfilt(b, a, data, axis=ax)
+        data = filtfilt(b, a, data, axis=axis)
     return dc.Patch(data=data, coords=patch.coords, attrs=patch.attrs, dims=patch.dims)
 
 

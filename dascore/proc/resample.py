@@ -13,7 +13,7 @@ from dascore.constants import PatchType
 from dascore.exceptions import FilterValueError
 from dascore.units import get_filter_units
 from dascore.utils.patch import (
-    get_dim_value_from_kwargs,
+    get_dim_axis_value,
     get_start_stop_step,
     patch_function,
 )
@@ -79,7 +79,7 @@ def decimate(
     >>> # Example using fir along distance dimension
     >>> decimated_fir = patch.decimate(distance=10, filter_type='fir')
     """
-    dim, axis, factor = get_dim_value_from_kwargs(patch, kwargs)
+    dim, axis, factor = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coords, slices = patch.coords.decimate(**{dim: int(factor)})
     # Apply scipy.signal.decimate and get new coords
     if filter_type:
@@ -133,7 +133,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     >>> patch = dc.get_example_patch("wacky_dim_coords_patch")
     >>> patch_time_even = patch.interpolate(time=None)
     """
-    dim, axis, samples = get_dim_value_from_kwargs(patch, kwargs)
+    dim, axis, samples = get_dim_axis_value(patch, kwargs=kwargs)[0]
     # if samples is None, get evenly sampled coords along dimension.
     if samples is None:
         coord = patch.coords.coord_map[dim]
@@ -212,7 +212,7 @@ def resample(
     [decimate](`dascore.proc.resample.decimate`)
     [interpolate](`dascore.proc.resample.interpolate`)
     """
-    dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
+    dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coord = patch.get_coord(dim, require_sorted=True, require_evenly_sampled=True)
     new_step = None
     if not samples:

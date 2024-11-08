@@ -14,7 +14,7 @@ from dascore.exceptions import ParameterError
 from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
-from dascore.utils.patch import get_dim_value_from_kwargs, patch_function
+from dascore.utils.patch import get_dim_axis_value, patch_function
 from dascore.utils.time import to_float
 
 TAPER_FUNCTIONS = dict(
@@ -35,7 +35,7 @@ TAPER_FUNCTIONS = dict(
 
 def _get_taper_slices(patch, kwargs):
     """Get slice for start/end of patch."""
-    dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
+    dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coord = patch.coords.coord_map[dim]
     if isinstance(value, Sequence | np.ndarray):
         assert len(value) == 2, "Length 2 sequence required."
@@ -302,7 +302,7 @@ def taper_range(
     >>> patch_tapered_5 = patch.taper_range(distance=taper_range)
 
     """
-    dim, ax, values = get_dim_value_from_kwargs(patch, kwargs)
+    dim, ax, values = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coord = patch.get_coord(dim, require_sorted=True)
     inds = _get_taper_coord_inds(coord, values, relative, samples)
     env = _get_range_envelope(coord, inds, window_type, invert)

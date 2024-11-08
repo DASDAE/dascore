@@ -9,7 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.utils.patch import (
-    get_dim_value_from_kwargs,
+    get_dim_axis_value,
     patch_function,
 )
 from dascore.utils.time import to_float
@@ -188,7 +188,7 @@ def correlate(
         msg = "Correlate lag is deprecated. Simply use on the output patch."
         warnings.warn(msg, DeprecationWarning)
     assert len(patch.dims) == 2, "must be a 2D patch."
-    dim, source_axis, source = get_dim_value_from_kwargs(patch, kwargs)
+    dim, source_axis, source = get_dim_axis_value(patch, kwargs=kwargs)[0]
     # Get the axis and coord over which fft should be calculated.
     fft_axis = next(iter(set(range(len(patch.dims))) - {source_axis}))
     fft_dim = patch.dims[fft_axis]
