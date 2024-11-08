@@ -50,7 +50,7 @@ from dascore.utils.time import to_datetime64, to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
 
-DimAxisValue = namedtuple("DimAxisValue", ["dim", "axis", "value"])
+_DimAxisValue = namedtuple("DimAxisValue", ["dim", "axis", "value"])
 
 
 def _format_values(val):
@@ -466,7 +466,7 @@ def get_dim_axis_value(
     arg_keys: tuple[str] = ("dim", "coord", "dims", "coords"),
     allow_multiple: bool = False,
     allow_extra: bool = False,
-) -> tuple[DimAxisValue, ...]:
+) -> tuple[_DimAxisValue, ...]:
     """
     Get dimension nane, index, and values from args/kwargs for a patch.
 
@@ -541,7 +541,7 @@ def get_dim_axis_value(
     # Ensure order is preserved (eg args, then kwargs)
     dim_out = tuple(x for x in args + tuple(kwargs) if x in overlap)
     # Package everything up and return
-    out = tuple(DimAxisValue(x, dims.index(x), kwargs.get(x)) for x in dim_out)
+    out = tuple(_DimAxisValue(x, dims.index(x), kwargs.get(x)) for x in dim_out)
     return out
 
 
