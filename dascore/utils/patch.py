@@ -239,9 +239,9 @@ def patch_function(
       machinery multiple times from within another patch function.
 
     - If using `PatchType` or `SpoolType` type variables from the
-      [constants module](`dascore.constants`), you may need to import
-      dascore (not import dascore as dc) in the same file the patch function
-      is defined.
+      [constants module](`dascore.constants`), make sure dascore is imported
+      as dc at the top of the file where the patch function is defined so
+      the forward refs can be resolved properly for type checking.
     """
 
     def _wrapper(func):
