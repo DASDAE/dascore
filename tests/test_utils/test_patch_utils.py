@@ -10,6 +10,7 @@ import pydantic
 import pytest
 from pydantic import Field
 
+import dascore  # noqa needed for PatchType
 import dascore as dc
 from dascore import patch_function
 from dascore.constants import PatchType

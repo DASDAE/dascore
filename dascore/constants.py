@@ -8,11 +8,11 @@ from typing import Literal, Protocol, TypeVar, runtime_checkable
 import numpy as np
 import pandas as pd
 
-import dascore as dc
+import dascore
 
-PatchType = TypeVar("PatchType", bound="dc.Patch")
+PatchType = TypeVar("PatchType", bound="dascore.Patch")
 
-SpoolType = TypeVar("SpoolType", bound="dc.BaseSpool")
+SpoolType = TypeVar("SpoolType", bound="dascore.BaseSpool")
 
 
 @runtime_checkable
