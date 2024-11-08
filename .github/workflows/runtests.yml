@@ -54,6 +54,7 @@ jobs:
             bash
             powershell
           cache-environment: true
+          cache-environment-key: environment-${{ steps.date.outputs.date }}
           post-cleanup: 'all'
 
       # Not sure why this is needed but it appears to be the case
