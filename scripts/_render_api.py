@@ -93,6 +93,9 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
         # just assume the bound string is resolvable
         key = str(obj).split("('")[-1].replace("')", "")
         name = key.split(".")[-1]
+        # dc. is the same as dascore.
+        if key.startswith("dc."):
+            key = f"dascore.{key[3:]}"
         return f"[{name}](`{key}`)"
     # Array-like thing from numpy #TODO improve this
     elif "numpy.typing" in str_rep:

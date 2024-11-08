@@ -234,9 +234,14 @@ def patch_function(
 
     Notes
     -----
-    The original function can still be accessed with the raw_function
-    attribute. This may be useful for avoiding calling the patch_func
-    machinery multiple times from within another patch function.
+    - The original function can still be accessed with the raw_function
+      attribute. This may be useful for avoiding calling the patch_func
+      machinery multiple times from within another patch function.
+
+    - If using `PatchType` or `SpoolType` type variables from the
+      [constants module](`dascore.constants`), make sure dascore is imported
+      as dc at the top of the file where the patch function is defined so
+      the forward refs can be resolved properly for type checking.
     """
 
     def _wrapper(func):
