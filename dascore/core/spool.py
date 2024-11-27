@@ -602,7 +602,7 @@ class DataFrameSpool(BaseSpool):
         """{doc}."""
         return self._df[filter_df(self._df, **self._select_kwargs)]
 
-    def patch_name(self, patch_number):
+    def patch_name(self, patch_number, file_format=False):
         """
         Return the name of the patch at the specified index.
 
@@ -627,7 +627,10 @@ class DataFrameSpool(BaseSpool):
             path = df["path"].iloc[patch_number]
         except IndexError:
             raise IndexError(f"Patch number {patch_number} is out of bounds.")
-        name = os.path.splitext(Path(path).name)[0]
+        if file_format:
+            name = Path(path).name
+        else:
+            name = os.path.splitext(Path(path).name)[0]
         return name
 
 

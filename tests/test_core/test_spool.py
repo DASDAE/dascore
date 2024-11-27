@@ -555,6 +555,19 @@ class TestPatchName:
         ):
             empty_spool.patch_name(patch_number=0)
 
+    def test_patch_name_with_file_format_true(
+        self, random_directory_spool, file_format=True
+    ):
+        """Test patch_name returns name with extension when file_format is True."""
+        patch_number = 0
+        name = random_directory_spool.patch_name(patch_number, file_format=file_format)
+
+        df = random_directory_spool.get_contents()
+        expected_path = df["path"].iloc[patch_number]
+        expected_name = Path(expected_path).name  # Includes the extension
+
+        assert name == expected_name
+
 
 class TestMisc:
     """Tests for misc. spool cases."""
