@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -12,6 +14,7 @@ import pytest
 import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
+from dascore.examples import spool_to_directory
 from dascore.exceptions import (
     InvalidSpoolError,
     ParameterError,
@@ -36,6 +39,13 @@ class _SerialClient:
 def random_spool_len_10():
     """Return a spool of length 10."""
     return dc.examples.get_example_spool(length=10)
+
+
+@pytest.fixture(scope="session")
+def random_directory_spool():
+    """Return a directory spool from the random_spool."""
+    random_spool = dc.examples.random_spool()
+    return dc.spool(spool_to_directory(random_spool))
 
 
 class TestSpoolBasics:
@@ -495,6 +505,55 @@ class TestGetSpool:
 
         pickle_spool = dc.spool(pickle_path)
         assert isinstance(pickle_spool, MemorySpool)
+
+
+class TestPatchName:
+    """Tests for the patch_name method in DataFrameSpool."""
+
+    def test_patch_name_valid_index(self, random_directory_spool, patch_number=0):
+        """Test patch_name returns correct name for a valid index."""
+        # Get the name using the method
+        name = random_directory_spool.patch_name(patch_number=patch_number)
+
+        # Get the expected name directly
+        df = random_directory_spool.get_contents()
+        expected_path = df["path"].iloc[patch_number]
+        expected_name = os.path.splitext(Path(expected_path).name)[0]
+
+        assert name == expected_name
+
+    def test_patch_name_invalid_index(self, random_directory_spool):
+        """Test patch_name raises IndexError for an out-of-bounds index."""
+        invalid_index = len(random_directory_spool) + 10  # Out-of-bounds index
+        with pytest.raises(IndexError, match="Patch number .* is out of bounds"):
+            random_directory_spool.patch_name(patch_number=invalid_index)
+
+    def test_patch_name_no_path_column(self, random_spool):
+        """Test patch_name raises ValueError when 'path' column is missing."""
+        with pytest.raises(ValueError, match="The 'path' column is not available"):
+            random_spool.patch_name(patch_number=0)
+
+    def test_patch_name_negative_index(self, random_directory_spool):
+        """Test patch_name works with negative indices."""
+        # Use a negative index
+        patch_number = -1  # Last patch
+        name = random_directory_spool.patch_name(patch_number=patch_number)
+
+        # Get the expected name directly
+        df = random_directory_spool.get_contents()
+        expected_path = df["path"].iloc[patch_number]
+        expected_name = os.path.splitext(Path(expected_path).name)[0]
+
+        assert name == expected_name
+
+    def test_patch_name_on_empty_spool(self):
+        """Test patch_name raises IndexError on an empty spool."""
+        empty_spool = dc.spool([])  # Create an empty spool
+
+        with pytest.raises(
+            IndexError, match="Cannot get patch name from an empty spool"
+        ):
+            empty_spool.patch_name(patch_number=0)
 
 
 class TestMisc:

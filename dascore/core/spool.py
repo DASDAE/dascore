@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import os
 from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
@@ -600,6 +601,34 @@ class DataFrameSpool(BaseSpool):
     def get_contents(self) -> pd.DataFrame:
         """{doc}."""
         return self._df[filter_df(self._df, **self._select_kwargs)]
+
+    def patch_name(self, patch_number):
+        """
+        Return the name of the patch at the specified index.
+
+        Parameters
+        ----------
+        patch_number : int
+            The index of the patch.
+
+        Returns
+        -------
+        name : str
+            The original name of the patch.
+        """
+        df = self.get_contents()
+        if len(self) == 0:
+            raise IndexError("Cannot get patch name from an empty spool.")
+        if "path" not in df.columns:
+            raise ValueError(
+                "The 'path' column is not available in the spool contents."
+            )
+        try:
+            path = df["path"].iloc[patch_number]
+        except IndexError:
+            raise IndexError(f"Patch number {patch_number} is out of bounds.")
+        name = os.path.splitext(Path(path).name)[0]
+        return name
 
 
 class MemorySpool(DataFrameSpool):
