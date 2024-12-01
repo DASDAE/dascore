@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import cache
 from typing import TypeVar
 
@@ -11,6 +12,7 @@ import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
 
 import dascore as dc
+from dascore.compat import is_array
 from dascore.exceptions import UnitError
 from dascore.utils.misc import unbyte
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
@@ -302,6 +304,41 @@ def get_filter_units(
     if not (inverted1 or inverted2):
         out1, out2 = out2, out1
     return out1, out2
+
+
+def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
+    """
+    Convert a sequence of Quantities (eg list) to a Quantity array.
+
+    Will simplify all quantities. Raises an error if not all elements have
+    the same units.
+
+    Parameters
+    ----------
+    sequence
+        A sequence of Quantities.
+
+    Notes
+    -----
+    This is probably not efficient for large lists.
+    """
+    if is_array(sequence):
+        # This is a numpy array, just return multiplied by quantity.
+        return sequence * get_quantity("dimensionless")
+    # iterate the sequence and manually convert to base units.
+    try:
+        base_unit_sequence = [x.to_base_units() for x in sequence]
+    except AttributeError:
+        msg = "Not all values in sequence are quantities."
+        raise UnitError(msg)
+    if not len(base_unit_sequence):
+        return np.array([]) * get_quantity("dimensionless")
+    units = {x.units for x in base_unit_sequence}
+    if len(units) != 1:
+        msg = "Not all values in sequence have compatible units."
+        raise UnitError(msg)
+    array = np.array([x.magnitude for x in base_unit_sequence])
+    return array * next(iter(units))
 
 
 def __getattr__(name):
