@@ -451,7 +451,7 @@ class TestSlopeFilter:
             patch.slope_filter(filt=filt, dims=("time", "distance"))
 
     def test_units_raise_no_unit_coords(self, example_patch):
-        """Ensure A UnitError is raised if one of hte coords does't have units."""
+        """Ensure A UnitError is raised if one of the coords doesn't have units."""
         patch = example_patch.set_units(distance="")
         filt = np.array([1e3, 1.5e3, 5e3, 10e3]) * get_unit("m/s")
         with pytest.raises(UnitError):
@@ -476,3 +476,11 @@ class TestSlopeFilter:
         out1 = example_patch.slope_filter(filt=slowness)
         out2 = example_patch.slope_filter(filt=filt * get_unit("m/s"))
         assert np.allclose(out1.data, out2.data)
+
+    def test_units_list(self, example_patch):
+        """Ensure units as a list still work (see #463)."""
+        speed = 5_000 * dc.get_quantity("m/s")
+        filt = [speed * 0.90, speed * 0.95, speed * 1.05, speed * 1.1]
+        # The test passes if this line doesn't raise an error.
+        out = example_patch.slope_filter(filt)
+        assert isinstance(out, dc.Patch)
