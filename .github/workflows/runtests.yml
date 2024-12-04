@@ -57,8 +57,7 @@ jobs:
           cache-environment-key: environment-${{ steps.date.outputs.date }}
           post-cleanup: 'all'
           create-args: >-
-            python=${{ matrix.python_version }}
-            numpy
+            python=${{ matrix.python-version }}
 
       # Not sure why this is needed but it appears to be the case
       - name: fix env
@@ -67,6 +66,11 @@ jobs:
           micromamba shell init --shell bash --root-prefix=~/micromamba
           eval "$(micromamba shell hook --shell bash)"
           micromamba activate dascore
+
+      - name: print python version
+        shell: bash -el {0}
+        run: |
+          python --version
 
       - name: install dascore
         shell: bash -el {0}
