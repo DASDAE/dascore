@@ -75,6 +75,8 @@ def _get_attr_dict(acoustic):
         "PhaseToStrainConversion(MicroStrainPerRadian)": "phase_to_strain",
         "NEUBRESCOPE.DAS.SerialNum": "instrument_id",
         "NEUBRESCOPE.DAS.Model": "instrument_model",
+        "DistanceDecimationFilter": "distance_decimation_filter",
+        "TimeDecimationFilter": "time_decimation_filter",
     }
     attrs = dict(acoustic.attrs)
     out = maybe_get_items(attrs, mapping)
