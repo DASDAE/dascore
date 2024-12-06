@@ -27,7 +27,8 @@ def _get_coord_manager(acoustic):
         """Get the time coordinate."""
         attrs = acoustic.attrs
 
-        assert attrs["TimeDecimationFilter"] == 0, "not yet implemented"
+        # We havent encountered a time decimated file yet; raise over guess
+        assert attrs["TimeDecimationFilter"] in {0, 1}, "not implemented"
 
         gps = unbyte(attrs["GPSTimeStamp(UTC)"])
         cpu = unbyte(attrs["CPUTimeStamp(UTC)"])
@@ -42,7 +43,8 @@ def _get_coord_manager(acoustic):
         dist_len = acoustic.shape[1]
         attrs = acoustic.attrs
 
-        assert attrs["DistanceDecimationFilter"] == 0, "not yet implemented"
+        # We havent encountered a distance decimated file yet; raise over guess
+        assert attrs["DistanceDecimationFilter"] in {0, 1}, "not yet implemented"
 
         step = attrs["SpatialSamplingInterval"]
         units = dc.get_quantity(attrs["StartStopPositionUnit"])
@@ -73,6 +75,8 @@ def _get_attr_dict(acoustic):
         "PhaseToStrainConversion(MicroStrainPerRadian)": "phase_to_strain",
         "NEUBRESCOPE.DAS.SerialNum": "instrument_id",
         "NEUBRESCOPE.DAS.Model": "instrument_model",
+        "DistanceDecimationFilter": "distance_decimation_filter",
+        "TimeDecimationFilter": "time_decimation_filter",
     }
     attrs = dict(acoustic.attrs)
     out = maybe_get_items(attrs, mapping)

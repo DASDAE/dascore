@@ -33,6 +33,8 @@ class NeubrexDASPatchAttrs(dc.PatchAttrs):
     triggered_time: np.datetime64 | None = None
     phase_to_strain: float | None = None
     instrument_model: str = ""
+    distance_decimation_filter: int = 0
+    time_decimation_filter: int = 0
 
 
 class NeubrexRFSV1(FiberIO):
