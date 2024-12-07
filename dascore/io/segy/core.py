@@ -7,7 +7,7 @@ import segyio
 import dascore as dc
 from dascore.io.core import FiberIO
 
-from .utils import _get_attrs, _get_coords, _get_filtered_data_and_coords
+from .utils import _get_attrs, _get_coords, _get_filtered_data_and_coords, _is_segy
 
 
 class SegyV2(FiberIO):
@@ -21,11 +21,13 @@ class SegyV2(FiberIO):
 
     def get_format(self, path, **kwargs) -> tuple[str, str] | bool:
         """Make sure input is segy."""
-        try:
-            with segyio.open(path, ignore_geometry=True):
-                return self.name, self.version
-        except Exception:
-            return False
+        with open(path, "rb") as fp:
+            return _is_segy(fp)
+        # try:
+        #     with segyio.open(path, ignore_geometry=True):
+        #         return self.name, self.version
+        # except Exception:
+        #     return False
 
     def read(self, path, time=None, channel=None, **kwargs):
         """
