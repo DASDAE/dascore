@@ -24,4 +24,4 @@ path = fetch("conoco_segy_1.sgy")
 segy_patch = dc.spool(path)[0]
 """
 
-from .core import SegyV2
+from .core import SegyV1_0, SegyV2_0, SegyV2_1

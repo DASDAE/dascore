@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import datetime
 
-# --- Getting format/version
 import numpy as np
-from segyio import TraceField
+
+# --- Getting format/version
+import pandas as pd
 
 import dascore as dc
+from dascore import to_float
 from dascore.core import get_coord_manager
+from dascore.exceptions import InvalidSpoolError, PatchError
+from dascore.utils.misc import optional_import
+from dascore.utils.patch import check_patch_coords
 
 # Valid data format codes as specified in the SEGY rev1 manual.
 VALID_FORMATS = [1, 2, 3, 4, 5, 8]
@@ -31,7 +36,7 @@ def twos_comp(bytes_):
     return val  # return positive value as is
 
 
-def _is_segy(fp):
+def _get_segy_version(fp):
     """
     Return True if file pointer contains segy formatted data.
 
@@ -39,34 +44,34 @@ def _is_segy(fp):
     https://github.com/obspy/obspy/blob/master/obspy/io/segy/core.py
     """
     # # Read 400byte header into byte string.
-    # fp.seek(3200)
-    # header = fp.read(400)
-    # data_trace_count = twos_comp(header[12:14])
-    # auxiliary_trace_count = twos_comp(header[14:16])
-    # sample_interval = twos_comp(header[16:18])
-    # samples_per_trace = twos_comp(header[20:22])
-    # data_format_code = twos_comp(header[24:26])
-    # format_number_major = int.from_bytes(header[300:301])
-    # format_number_minor = int.from_bytes(header[301:302])
-    # fixed_len_flag = twos_comp(header[302:304])
-    #
-    #
-    # if _format_number not in (0x0000, 0x0100, 0x0010, 0x0001):
-    #     return False
-    #
-    # _fixed_length = unpack(fmt, _fixed_length)[0]
-    # _extended_number = unpack(fmt, _extended_number)[0]
-    # # Make some sanity checks and return False if they fail.
-    # if (
-    #     _sample_interval <= 0
-    #     or _samples_per_trace <= 0
-    #     or _number_of_data_traces < 0
-    #     or _number_of_auxiliary_traces < 0
-    #     or _fixed_length < 0
-    #     or _extended_number < 0
-    # ):
-    #     return False
-    return True
+    fp.seek(3200)
+    header = fp.read(400)
+    data_trace_count = twos_comp(header[12:14])
+    auxiliary_trace_count = twos_comp(header[14:16])
+    sample_interval = twos_comp(header[16:18])
+    samples_per_trace = twos_comp(header[20:22])
+    data_format_code = twos_comp(header[24:26])
+    format_number_major = int.from_bytes(header[300:301])
+    format_number_minor = int.from_bytes(header[301:302])
+    fixed_len_flag = twos_comp(header[302:304])
+
+    checks = (
+        # First check that some samples and a sampling rate is defined.
+        samples_per_trace > 0 and sample_interval > 0,
+        # Ensure the data sample format code is valid using range in 2,1 standard
+        1 <= data_format_code <= 16,
+        # Check version code
+        format_number_major in {0, 1, 2, 3},
+        # Sanity checks for other values.
+        data_trace_count >= 0,
+        auxiliary_trace_count >= 0,
+        format_number_minor in {0, 1, 2, 3},
+        fixed_len_flag in {0, 1},
+    )
+    if all(checks):
+        return "segy", f"{format_number_major}.{format_number_minor}"
+    else:
+        return False
 
 
 def _get_filtered_data_and_coords(segy_fi, coords, time=None, channel=None):
@@ -109,12 +114,14 @@ def _get_coords(fi):
     If a user knows the dx, change from channel to distance using
     patch.update_coords after reading
     """
+    segyio = optional_import("segyio")
+    trace_field = segyio.TraceField
     header_0 = fi.header[0]
 
     # get time array from SEGY headers
     starttime = _get_time_from_header(header_0)
-    dt = dc.to_timedelta64(header_0[TraceField.TRACE_SAMPLE_INTERVAL] / 1000)
-    ns = header_0[TraceField.TRACE_SAMPLE_COUNT]
+    dt = dc.to_timedelta64(header_0[trace_field.TRACE_SAMPLE_INTERVAL] / 1000)
+    ns = header_0[trace_field.TRACE_SAMPLE_COUNT]
     time_array = starttime + dt * np.arange(ns)
 
     # Get distance array from SEGY header
@@ -139,13 +146,62 @@ def _get_attrs(fi, coords, path, file_io):
 
 def _get_time_from_header(header):
     """Creates a datetime64 object from SEGY header date information."""
-    year = header[TraceField.YearDataRecorded]
-    julday = header[TraceField.DayOfYear]
-    hour = header[TraceField.HourOfDay]
-    minute = header[TraceField.MinuteOfHour]
-    second = header[TraceField.SecondOfMinute]
+    segyio = optional_import("segyio")
+    trace_field = segyio.TraceField
+
+    year = header[trace_field.YearDataRecorded]
+    julday = header[trace_field.DayOfYear]
+    hour = header[trace_field.HourOfDay]
+    minute = header[trace_field.MinuteOfHour]
+    second = header[trace_field.SecondOfMinute]
     # make those timedate64
     fmt = "%Y.%j.%H.%M.%S"
     s = f"{year}.{julday}.{hour}.{minute}.{second}"
     time = datetime.datetime.strptime(s, fmt)
     return dc.to_datetime64(time)
+
+
+def _get_segy_compatible_patch(spool):
+    """
+    Get a patch that will be writable as a segy file.
+    Ensure coords are distance time.
+    """
+    # Ensure we have a single patch with coordinates time and distance.
+    spool = [spool] if isinstance(spool, dc.Patch) else spool
+    if len(spool) != 1:
+        msg = "Can only write a spool with as single patch as segy."
+        raise InvalidSpoolError(msg)
+    patch = spool[0]
+    check_patch_coords(patch, dims=("time", "distance"))
+    # Ensure there will be no loss in the time sampling.
+    # segy supports us precision
+    time_step = dc.to_float(patch.get_coord("time").step)
+    new_samp = np.round(time_step, 6)
+    if np.abs(new_samp - time_step).max() > 1e-7:
+        msg = (
+            f"The segy format support us precision for temporal sampling. "
+            f"The input patch has a time step of {time_step} which will result "
+            "in a loss or precision. Either manually set the time step with "
+            "patch.update_coords or resample the time axis with patch.resample"
+        )
+        raise PatchError(msg)
+    return patch.transpose("distance", "time")
+
+
+def _make_time_header_dict(time_coord):
+    """Make the time header dict from a time coordinate."""
+    header = {}
+    timestamp = pd.Timestamp(dc.to_datetime64(time_coord.min()))
+    time_step_us = to_float(time_coord.step) * 1_000_000
+
+    segyio = optional_import("segyio")
+    trace_field = segyio.TraceField
+
+    header[trace_field.YearDataRecorded] = timestamp.year
+    header[trace_field.DayOfYear] = timestamp.day_of_year
+    header[trace_field.HourOfDay] = timestamp.hour
+    header[trace_field.MinuteOfHour] = timestamp.minute
+    header[trace_field.SecondOfMinute] = timestamp.second
+    header[trace_field.TRACE_SAMPLE_INTERVAL] = time_step_us
+
+    return header

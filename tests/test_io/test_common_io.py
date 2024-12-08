@@ -31,7 +31,7 @@ from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
-from dascore.io.segy import SegyV2
+from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
 from dascore.io.silixah5 import SilixaH5V1
 from dascore.io.tdms import TDMSFormatterV4713
@@ -75,7 +75,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
-    SegyV2(): ("conoco_segy_1.sgy",),
+    SegyV1_0(): ("conoco_segy_1.sgy",),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
     SentekV5(): ("DASDMSShot00_20230328155653619.das",),
 }
@@ -83,7 +83,7 @@ COMMON_IO_READ_TESTS = {
 # This tuple is for fiber io which support a write method and can write
 # generic patches. If the patch has to be in some special form, for example
 # only flat patches can be written to WAV, don't put it here.
-COMMON_IO_WRITE_TESTS = (PickleIO(), DASDAEV1())
+COMMON_IO_WRITE_TESTS = (PickleIO(), DASDAEV1(), SegyV1_0())
 
 # Specifies data registry entries which should not be tested.
 SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv"}
