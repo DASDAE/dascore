@@ -24,9 +24,12 @@ spool1 = dc.spool(patch_list)
 
 ```{python}
 import dascore as dc
+# Import fetch to read DASCore example files 
 from dascore.utils.downloader import fetch
 
 path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
+# To read DAS data stored locally on your machine, simply replace the above line with:
+# path_to_das_file = "/path/to/data/directory/data.EXT"
 
 spool2 = dc.spool(path_to_das_file)
 ```
@@ -35,12 +38,14 @@ spool2 = dc.spool(path_to_das_file)
 
 ```{python}
 import dascore as dc
+# Import fetch to read DASCore example files 
 from dascore.utils.downloader import fetch
 
-# We use fetch to make sure the file is downloaded. You would
-# just need to replace directory_path with your data directory path.
-path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
-directory_path = path_to_das_file.parent
+# Fetch a sample file path from DASCore (just to get a usable path for the rest of the cell)
+directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
+# To read a directory of DAS data stored locally on your machine, 
+# simply replace the above line with:
+# directory_path = "/path/to/data/directory/"
 
 # Update will create an index of the contents for fast querying/access
 spool3 = dc.spool(directory_path).update()
