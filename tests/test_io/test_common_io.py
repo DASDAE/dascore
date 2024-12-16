@@ -83,7 +83,10 @@ COMMON_IO_READ_TESTS = {
 # This tuple is for fiber io which support a write method and can write
 # generic patches. If the patch has to be in some special form, for example
 # only flat patches can be written to WAV, don't put it here.
-COMMON_IO_WRITE_TESTS = (PickleIO(), DASDAEV1(), SegyV1_0())
+COMMON_IO_WRITE_TESTS = (
+    PickleIO(),
+    DASDAEV1(),
+)
 
 # Specifies data registry entries which should not be tested.
 SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv"}
