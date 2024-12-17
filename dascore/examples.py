@@ -415,6 +415,98 @@ def ricker_moveout(
     return dc.Patch(data=data, coords=coords, dims=dims)
 
 
+@register_func(EXAMPLE_PATCHES, key="delta_patch")
+def delta_patch(
+    dim="time",
+    shape=(10, 200),
+    time_min="2020-01-01",
+    time_step=1 / 250,
+    distance_min=0,
+    distance_step=1,
+    patch=None,
+):
+    """
+    Create a delta function patch (zeros everywhere except for
+    a unit value at the center) along the specified dimension.
+
+    Parameters
+    ----------
+    dim : {"time", "distance"}
+        The dimension along which to place the delta line.
+    shape : tuple of int
+        The shape of the data as (distance, time). Defaults to (10, 200).
+    time_min : str or datetime64
+        The start time of the patch.
+    time_step : float
+        The time step in seconds between samples.
+    distance_min : float
+        The minimum distance coordinate.
+    distance_step : float
+        The distance step in meters between samples.
+    """
+    if dim not in ["time", "distance"]:
+        raise ValueError(
+            "The delta patch is a 2D patch with 'time' and 'distance' dimensions."
+        )
+
+    if patch is None:
+        dims = ("distance", "time")
+        dist_len, time_len = shape
+
+        # Create a zeroed data array
+        data = np.zeros((dist_len, time_len))
+
+        # Compute the center indices
+        dist_mid = dist_len // 2
+        time_mid = time_len // 2
+
+        # Create coordinates
+        time_step_td = to_timedelta64(time_step)
+        t0 = np.datetime64(time_min)
+        time_coord = dascore.core.get_coord(
+            data=t0 + np.arange(time_len) * time_step_td, step=time_step_td, units="s"
+        )
+        dist_coord = dascore.core.get_coord(
+            data=distance_min + np.arange(dist_len) * distance_step,
+            step=distance_step,
+            units="m",
+        )
+
+        coords = {"distance": dist_coord, "time": time_coord}
+        attrs = dict(
+            time_min=t0,
+            time_step=time_step_td,
+            distance_min=distance_min,
+            distance_step=distance_step,
+            category="DAS",
+            network="",
+            station="",
+            tag="delta",
+            time_units="s",
+            distance_units="m",
+        )
+
+        # Depending on the selected dimension, place a line of ones at the midpoint
+        if dim == "time":
+            # unit value at center time index
+            data[:, time_mid] = 1
+            delta_patch = dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+            return delta_patch.select(distance=0, samples=True)
+        else:
+            # unit value at center distance index
+            data[dist_mid, :] = 1
+            delta_patch = dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+            return delta_patch.select(time=0, samples=True)
+    else:
+        if dim == "time":
+            patch = patch.select(distance=0, samples=True)
+        else:
+            patch = patch.select(time=0, samples=True)
+        data = np.zeros(patch.data.size)
+        data[len(data) // 2] = 1
+        return patch.update(data=data.reshape(patch.shape))
+
+
 @register_func(EXAMPLE_PATCHES, key="dispersion_event")
 def dispersion_event():
     """

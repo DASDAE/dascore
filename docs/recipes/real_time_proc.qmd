@@ -12,12 +12,11 @@ This recipe serves as an example to showcase the real-time processing capability
 
 ```{python}
 # Import libraries
+import numpy as np
 import os
 import time
 
 import dascore as dc
-import numpy as np
-
 from dascore.units import s 
 
 
@@ -25,7 +24,10 @@ from dascore.units import s
 output_data_dir = '/path/to/desired/output/directory'
 
 # Get a spool to work on
-sp = dc.get_example_spool().update().sort("time")
+sp = dc.get_example_spool().update()
+
+# sort the spool
+sp = sp.sort("time")
 ```
 
 ## Set real-time processing parameters (if needed)

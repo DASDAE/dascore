@@ -68,3 +68,66 @@ class TestRickerMoveout:
         distances = patch.get_coord("distance").values
         expected_moveout = distances / velocity
         assert np.allclose(moveout, expected_moveout)
+
+
+class TestDeltaPatch:
+    """Tests for the delta_patch example."""
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_delta_patch_structure(self, dim):
+        """Test that the delta_patch returns a Patch with correct structure."""
+        patch = dc.get_example_patch("delta_patch", dim=dim)
+        assert isinstance(patch, dc.Patch), "delta_patch should return a Patch instance"
+
+        dims = patch.dims
+        assert (
+            "time" in dims and "distance" in dims
+        ), "Patch must have 'time' and 'distance' dimensions"
+        assert len(patch.shape) == 2, "Data should be 2D"
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_delta_patch_delta_location(self, dim):
+        """
+        Ensures the delta is at the center of the chosen dimension and zeros elsewhere.
+        """
+        # The default shape from the function signature: shape=(10, 200)
+        # If dim="time", we end up with a single (distance=0) trace => shape (200,)
+        # If dim="distance", we end up with a single (time=0) trace => shape (10,)
+        patch = dc.get_example_patch("delta_patch", dim=dim)
+        data = patch.squeeze().data
+
+        # The expected midpoint and verify single delta at center
+        mid_idx = len(data) // 2
+
+        assert data[mid_idx] == 1.0, "Expected a unit delta at the center"
+        # Check all other samples are zero
+        # Replace the center value with zero and ensure all zeros remain
+        test_data = np.copy(data)
+        test_data[mid_idx] = 0
+        assert np.allclose(
+            test_data, 0
+        ), "All other samples should be zero except the center"
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_delta_patch_with_patch(self, dim):
+        """Test passing an existing patch to delta_patch and ensure delta is applied."""
+        # Create a base patch
+        base_patch = dc.get_example_patch("random_das", shape=(5, 50))
+        # Apply the delta_patch function with the existing patch
+        delta_applied_patch = dc.get_example_patch(
+            "delta_patch", dim=dim, patch=base_patch
+        )
+
+        assert isinstance(delta_applied_patch, dc.Patch), "Should return a Patch"
+        data = delta_applied_patch.squeeze().data
+
+        # Ensure data is 1D after operation if that is the intended behavior
+        assert len(delta_applied_patch.shape) == 2, "Data should be 2D"
+        mid_idx = len(data) // 2
+        # Check that only the center value is one and others are zero
+        assert data[mid_idx] == 1.0, "Center sample should be 1.0"
+        test_data = np.copy(data)
+        test_data[mid_idx] = 0
+        assert np.allclose(
+            test_data, 0
+        ), "All other samples should be zero except the center"
