@@ -10,7 +10,10 @@ This recipe demonstrates how DASCore can be used to apply low-frequency (LF) pro
 ## Get a spool and define parameters 
 ```{python}
 ## Load libraries and get a spool to work on
+import numpy as np
+
 import dascore as dc
+
 
 # Define path for saving results
 output_data_dir = '/path/to/desired/output/directory/'
@@ -37,7 +40,7 @@ filter_safety_factor = 0.9
 memory_limit_MB = 10_000
 
 # Define a tolerance for determining edge effects (used in next step)
-tol = 1e-3
+tolerance = 1e-3
 ```
 
 ## Calculate chunk size and determine edge effects
@@ -64,29 +67,29 @@ memory_size_per_second_MB = memory_size_per_second / 1e6
 chunk_size = memory_limit_MB / memory_size_per_second_MB 
 ```
 
-Next, we need to determine the extent of artifacts introduced by LF processing routine at the edges of each patch. To achieve this, we apply LF processing to a delta function patch, which contains a unit value at the center and zeros elsewhere. The distorted edges are then identified based on a defined threshold.
+Next, we need to determine the extent of artifacts introduced by low-pass filtering at the edges of each patch. To achieve this, we apply LF processing to a delta function patch, which contains a unit value at the center and zeros elsewhere. The distorted edges are then identified based on a defined threshold.
 
 ```{python}
 # Retrieve a patch of appropriate size for LF processing that fits into memory
 pa_chunked_sp = sp.chunk(time=chunk_size)[0] 
 # Create a delta patch based on new patch size
-delta_pa = dc.get_example_patch("delta_patch", dim=dim, patch=pa_chunked_sp)
+delta_pa = dc.get_example_patch("delta_patch", dim="time", patch=pa_chunked_sp)
 
 # Apply the low-pass filter on the delta patch
 delta_pa_low_passed = delta_pa.pass_filter(time=(None, cutoff_freq * filter_safety_factor))
 # Resample the low-passed filter patch
-new_time_ax = np.arange(delta_pa.attrs["time_min"], delta_pa.attrs["time_max"], dt)
+new_time_ax = np.arange(delta_pa.attrs["time_min"], delta_pa.attrs["time_max"], np.timedelta64(dt, "s"))
 delta_pa_lfp = delta_pa_low_passed.interpolate(time=new_time_ax)
 
 # Identify the indices where the absolute value of the data exceeds the threshold
-data = delta_pa_lfp.data
-threshold = np.max(np.abs(data)) * tol
-ind = np.abs(data) > threshold
-ind_1 = np.where(ind)[0][0]
-ind_2 = np.where(ind)[0][-1]
+data_abs = np.abs(delta_pa_lfp.data)
+threshold = np.max(data_abs) * tolerance
+ind = data_abs > threshold
+ind_1 = np.where(ind)[1][0]
+ind_2 = np.where(ind)[1][-1]
 
 # Get the total duration of the processed delta function patch in seconds
-delta_pa_lfp_seconds = delta_pa_lfp.seconds  
+delta_pa_lfp_seconds = (delta_pa_lfp.attrs["time_max"] - delta_pa_lfp.attrs["time_min"]) / np.timedelta64(1, "s")
 # Convert the new time axis to absolute seconds, relative to the first timestamp
 time_ax_abs = (new_time_ax - new_time_ax[0]) / np.timedelta64(1, "s")
 # Center the time axis 
@@ -94,6 +97,15 @@ time_ax_centered = time_ax_abs - delta_pa_lfp_seconds // 2
 
 # Calculate the maximum of edges in both sides (in seconds) where artifacts are present
 edge = max(np.abs(time_ax_centered[ind_1]), np.abs(time_ax_centered[ind_2]))
+
+# Validate the `edge` value to ensure sufficient processing patch size
+if np.ceil(edge) >= chunk_size / 2:
+    raise ValueError(
+        f"The calculated `edge` value ({edge:.2f} seconds) is greater than half of the processing patch size "
+        f"({chunk_size:.2f} seconds). To resolve this and increase efficiency, consider one of the following:\n"
+        "- Increase `memory_size` to allow for a larger processing window.\n"
+        "- Increase `tolerance` to reduce the sensitivity of artifact detection."
+    )
 ```
 
 
@@ -141,7 +153,7 @@ for patch in sp_chunked_overlap:
     # Apply the low-pass filter on the delta patch
     pa_low_passed = patch.pass_filter(time=(None, cutoff_freq * filter_safety_factor))
     # Resample the low-passed filter patch
-    new_time_ax = np.arange(pa_low_passed.attrs["time_min"], pa_low_passed.attrs["time_max"], dt)
+    new_time_ax = np.arange(pa_low_passed.attrs["time_min"], pa_low_passed.attrs["time_max"], np.timedelta64(dt, "s"))
     pa_lfp = pa_low_passed.interolate(time=new_time_ax)
     # Update processed patch's sampling interval 
     pa_lfp = pa_lfp.update_attrs(time_step=dt)
