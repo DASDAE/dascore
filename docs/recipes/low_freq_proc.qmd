@@ -4,7 +4,7 @@ execute:
   eval: false
 ---
 
-This recipe demonstrates how DASCore can be used to apply low-frequency processing to a spool of DAS data.
+This recipe demonstrates how DASCore can be used to apply low-frequency (LF) processing to a spool of DAS data.
 
 
 ## Get a spool and define parameters 
@@ -42,9 +42,10 @@ tol = 1e-3
 
 ## Calculate chunk size and determine edge effects
 
-To chunk the spool, first we need to figure out the chunk size based on machine's memory size so we ensure we can load and process patches of the chunked spool with no memory issues. Longer chunk size (longer patches) increases computation efficiency. 
+To chunk the spool, first we need to figure out the chunk size based on machine's memory size so we ensure we can load and process patches with no memory issues. Longer chunk size (longer patches) increases computation efficiency. 
 
 Notes: 
+
 1. The `processing_factor` is required because certain processing routines involve making copies of the data during the processing steps. It should be determined by performing memory profiling on an example dataset for the specific processing routine. For instance, the combination of low-pass filtering and interpolation, discussed in the next section, requires a processing factor of approximately 5.
 2. The `memory_safety_factor` is optional and helps prevent getting too close to the memory limit.
 
@@ -59,14 +60,14 @@ memory_safety_factor = 1.2
 memory_size_per_second = pa_bytes_per_second * processing_factor * memory_safety_factor
 memory_size_per_second_MB = memory_size_per_second / 1e6
 
-# Calculate chunk size can be loaded (in seconds)
+# Calculate chunk size that can be loaded (in seconds)
 chunk_size = memory_limit_MB / memory_size_per_second_MB 
 ```
 
-Next, we need to determine the extent of artifacts introduced by the low-frequency processing routine at the edges of each patch. To achieve this, we apply low-frequency processing to a delta function patch, which contains a unit value at the center and zeros elsewhere. The distorted edges are then identified based on a defined threshold.
+Next, we need to determine the extent of artifacts introduced by LF processing routine at the edges of each patch. To achieve this, we apply LF processing to a delta function patch, which contains a unit value at the center and zeros elsewhere. The distorted edges are then identified based on a defined threshold.
 
 ```{python}
-# Retrieve a patch of appropriate size for low-frequency processing that fits into memory
+# Retrieve a patch of appropriate size for LF processing that fits into memory
 pa_chunked_sp = sp.chunk(time=chunk_size)[0] 
 # Create a delta patch based on new patch size
 delta_pa = dc.get_example_patch("delta_patch", dim=dim, patch=pa_chunked_sp)
@@ -91,14 +92,14 @@ time_ax_abs = (new_time_ax - new_time_ax[0]) / np.timedelta64(1, "s")
 # Center the time axis 
 time_ax_centered = time_ax_abs - delta_pa_lfp_seconds // 2 
 
-# Calculate the maximum edge (in seconds) where artifacts are present
+# Calculate the maximum of edges in both sides (in seconds) where artifacts are present
 edge = max(np.abs(time_ax_centered[ind_1]), np.abs(time_ax_centered[ind_2]))
 ```
 
 
 ## Perform low-frequency processing and save results on disk
 ```{python}
-# Helper functions to handle the name of the low-frequency processed patches 
+# Helper functions to handle the name of LF processed patches 
 def _format_time_as_string(timestamp: np.datetime64) -> str:
     """
     Converts a datetime64 object to a formatted string suitable for file naming.
@@ -156,7 +157,7 @@ for patch in sp_chunked_overlap:
 
 ## Visualize the results
 ```{python}
-# Create a spool of low-frequency results
+# Create a spool of LF processed results
 sp_lf = dc.spool(output_data_dir)
 
 # Merge the spool and create a single patch. May need to sub-select before merging to prevent exceeding the memory limit.
@@ -164,5 +165,7 @@ sp_lf_merged = sp_lf.chunk(time=None)
 pa_lf_merged = sp_lf_merged[0]
 
 # Visualize the results. Try different scale values for better Visualization.
-pa_lf_merged.viz.waterfall(scale = 0.1)
+pa_lf_merged.viz.waterfall(scale=0.1)
 ```
+
+#### For any questions, please contact Ahmad Tourei: [GitHub Profile](https://github.com/ahmadtourei).
