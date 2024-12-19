@@ -2,30 +2,35 @@
 
 from __future__ import annotations
 
-import segyio
+import numpy as np
 
 import dascore as dc
 from dascore.io.core import FiberIO
+from dascore.utils.io import BinaryReader
+from dascore.utils.misc import optional_import
 
-from .utils import _get_attrs, _get_coords, _get_filtered_data_and_coords
+from .utils import (
+    _get_attrs,
+    _get_coords,
+    _get_filtered_data_and_coords,
+    _get_segy_compatible_patch,
+    _get_segy_version,
+    _make_time_header_dict,
+)
 
 
-class SegyV2(FiberIO):
-    """An IO class supporting version 2 of the SEGY format."""
+class SegyV1_0(FiberIO):  # noqa
+    """An IO class supporting version 1.0 of the SEGY format."""
 
     name = "segy"
     preferred_extensions = ("segy", "sgy")
     # also specify a version so when version 2 is released you can
     # just make another class in the same module named JingleV2.
-    version = "2"
+    version = "1.0"
 
-    def get_format(self, path, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, fp: BinaryReader, **kwargs) -> tuple[str, str] | bool:
         """Make sure input is segy."""
-        try:
-            with segyio.open(path, ignore_geometry=True):
-                return self.name, self.version
-        except Exception:
-            return False
+        return _get_segy_version(fp)
 
     def read(self, path, time=None, channel=None, **kwargs):
         """
@@ -35,6 +40,7 @@ class SegyV2(FiberIO):
         accept kwargs. If the format supports partial reads, these should
         be implemented as well.
         """
+        segyio = optional_import("segyio")
         with segyio.open(path, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
             attrs = _get_attrs(fi, coords, path, self)
@@ -55,7 +61,75 @@ class SegyV2(FiberIO):
         from the [dascore.core.attrs](`dascore.core.attrs`) module, or a
         format-specific subclass.
         """
+        segyio = optional_import("segyio")
         with segyio.open(path, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
             attrs = _get_attrs(fi, coords, path, self)
         return [attrs]
+
+    def write(self, spool, resource, **kwargs):
+        """
+        Create a segy file from length 1 spool.
+
+        Based on the example from segyio:
+        https://github.com/equinor/segyio/blob/master/python/examples/make-file.py
+        """
+        patch = _get_segy_compatible_patch(spool)
+        time, channel = patch.get_coord("time"), patch.get_coord("channel")
+        chanel_step = channel.step
+
+        time_dict = _make_time_header_dict(time)
+
+        segyio = optional_import("segyio")
+        bin_field = segyio.BinField
+
+        spec = segyio.spec()
+        version = self.version
+
+        # spec.sorting = 2
+        spec.format = 1  # 1 means float32 TODO look into supporting more
+        spec.samples = np.ones(len(time)) * len(channel)
+        spec.ilines = range(len(channel))
+        spec.xlines = [1]
+        # breakpoint()
+
+        # For 32 bit float for now.
+        data = patch.data.astype(np.float32)
+
+        with segyio.create(resource, spec) as f:
+            # Update the file header info.
+            f.bin.update(tsort=segyio.TraceSortingFormat.INLINE_SORTING)
+            f.bin.update(
+                {
+                    bin_field.Samples: time_dict[segyio.TraceField.TRACE_SAMPLE_COUNT],
+                    bin_field.Interval: time_dict[
+                        segyio.TraceField.TRACE_SAMPLE_INTERVAL
+                    ],
+                    bin_field.SEGYRevision: int(version.split(".")[0]),
+                    bin_field.SEGYRevisionMinor: int(version.split(".")[1]),
+                }
+            )
+            # Then iterate each channel and dump to segy.
+            for num, data in enumerate(data):
+                header = dict(time_dict)
+                header.update(
+                    {
+                        segyio.su.offset: chanel_step,
+                        segyio.su.iline: num,
+                        segyio.su.xline: 1,
+                    }
+                )
+                f.header[num] = header
+                f.trace[num] = data
+
+
+class SegyV2_0(SegyV1_0):  # noqa
+    """An IO class supporting version 2.0 of the SEGY format."""
+
+    version = "2.0"
+
+
+class SegyV2_1(SegyV1_0):  # noqa
+    """An IO class supporting version 2.1 of the SEGY format."""
+
+    version = "2.1"
