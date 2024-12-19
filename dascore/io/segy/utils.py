@@ -38,7 +38,9 @@ def twos_comp(bytes_):
 
 def _get_segy_version(fp):
     """
-    Return True if file pointer contains segy formatted data.
+    Determine if file handle contains segy data.
+
+    Returns (segy, version) if so else False.
 
     Based on ObsPy's implementation writen by Lion Krischer.
     https://github.com/obspy/obspy/blob/master/obspy/io/segy/core.py

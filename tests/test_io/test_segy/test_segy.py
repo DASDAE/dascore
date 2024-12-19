@@ -64,6 +64,8 @@ class TestSegyWrite:
     def test_channel_patch_round_trip(self, channel_patch_path, channel_patch):
         """The channel patch should round trip."""
         patch1 = channel_patch
-        patch2 = dc.spool(channel_patch_path)[0]
-
+        patch2 = dc.spool(channel_patch_path)[0].transpose(*patch1.dims)
+        # We really don't have a way to transport attributes yet, so we
+        # just check that data and coords are equal.
         assert np.allclose(patch1.data, patch2.data)
+        assert patch1.coords == patch2.coords
