@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io.segy.core import SegyV1_0
 
 
@@ -51,7 +52,10 @@ class TestSegyWrite:
     def channel_patch_path(self, channel_patch, test_segy_directory):
         """Write the channel patch to disk."""
         path = test_segy_directory / "patch_with_channel_coord.segy"
-        channel_patch.io.write(path, "segy")
+        try:
+            channel_patch.io.write(path, "segy")
+        except MissingOptionalDependencyError:
+            pytest.skip("Test requires segyio to be installed.")
         return path
 
     def test_can_get_format(self, channel_patch_path):

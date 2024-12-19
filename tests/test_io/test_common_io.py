@@ -10,7 +10,7 @@ test_io_core.py
 
 from __future__ import annotations
 
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from functools import cache
 from io import BytesIO
 from operator import eq, ge, le
@@ -21,6 +21,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
@@ -99,8 +100,12 @@ def _cached_read(path, io=None):
     This ensures each files is read at most twice.
     """
     if io is None:
-        return dc.read(path)
-    return io.read(path)
+        read = dc.read
+    else:
+        read = io.read
+    with skip_missing_dependency():
+        out = read(path)
+    return out
 
 
 def _get_flat_io_test():
@@ -110,6 +115,15 @@ def _get_flat_io_test():
         for fetch_name in iterate(fetch_name_list):
             flat_io.append([io, fetch_name])
     return flat_io
+
+
+@contextmanager
+def skip_missing_dependency():
+    """Skip if missing dependencies found."""
+    try:
+        yield
+    except MissingOptionalDependencyError:
+        pytest.skip("Missing optional dep to read file.")
 
 
 @pytest.fixture(scope="session", params=list(COMMON_IO_READ_TESTS))
@@ -141,14 +155,16 @@ def data_file_path(request):
 @pytest.fixture(scope="session")
 def read_spool(data_file_path):
     """Read each file into a spool."""
-    out = dc.read(data_file_path)
+    with skip_missing_dependency():
+        out = dc.read(data_file_path)
     return out
 
 
 @pytest.fixture(scope="session")
 def scanned_attrs(data_file_path):
     """Read each file into a spool."""
-    out = dc.scan(data_file_path)
+    with skip_missing_dependency():
+        out = dc.scan(data_file_path)
     return out
 
 
@@ -273,7 +289,8 @@ class TestRead:
         a patch containing the requested data is returned.
         """
         io, path = io_path_tuple
-        attrs_from_file = dc.scan(path)
+        with skip_missing_dependency():
+            attrs_from_file = dc.scan(path)
         assert len(attrs_from_file)
         # skip files that have more than one patch for now
         # TODO just write better test logic to handle this case.
@@ -320,7 +337,8 @@ class TestScan:
 
     def test_scan_basics(self, data_file_path):
         """Ensure each file can be scanned."""
-        attrs_list = dc.scan(data_file_path)
+        with skip_missing_dependency():
+            attrs_list = dc.scan(data_file_path)
         assert len(attrs_list)
 
         for attrs in attrs_list:
@@ -330,7 +348,8 @@ class TestScan:
     def test_scan_has_version_and_format(self, io_path_tuple):
         """Scan output should contain version and format."""
         io, path = io_path_tuple
-        attr_list = io.scan(path)
+        with skip_missing_dependency():
+            attr_list = io.scan(path)
         for attrs in attr_list:
             assert attrs.file_format == io.name
             assert attrs.file_version == io.version
@@ -399,7 +418,8 @@ class TestIntegration:
             "tag",
             "network",
         )
-        scan_attrs_list = dc.scan(data_file_path)
+        with skip_missing_dependency():
+            scan_attrs_list = dc.scan(data_file_path)
         patch_attrs_list = [x.attrs for x in _cached_read(data_file_path)]
         assert len(scan_attrs_list) == len(patch_attrs_list)
         for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
