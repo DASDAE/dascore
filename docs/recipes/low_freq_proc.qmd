@@ -1,0 +1,168 @@
+---
+title: "Low-Frequency Processing"
+execute:
+  eval: false
+---
+
+This recipe demonstrates how DASCore can be used to apply low-frequency processing to a spool of DAS data.
+
+
+## Get a spool and define parameters 
+```{python}
+## Load libraries and get a spool to work on
+import dascore as dc
+
+# Define path for saving results
+output_data_dir = '/path/to/desired/output/directory/'
+
+# Get a spool to work on
+sp = dc.get_example_spool().update()
+
+# Sort the spool
+sp = sp.sort("time")
+# You may also want to sub-select the spool for the desired distance or time samples before proceeding.
+
+# Get the first patch
+pa = sp[0]
+
+# Define the target sampling interval (in sec.)
+dt = 10 
+# With a sampling interval of 10 seconds, the cutoff frequency (Nyquist frequency) is determined to be 0.05 Hz 
+cutoff_freq = 1 / (2*dt)
+
+# Safety factor for the low-pass filter to avoid ailiasing 
+filter_safety_factor = 0.9
+
+# Enter memory size to be dedicated for processing (in MB)
+memory_limit_MB = 10_000
+
+# Define a tolerance for determining edge effects (used in next step)
+tol = 1e-3
+```
+
+## Calculate chunk size and determine edge effects
+
+To chunk the spool, first we need to figure out the chunk size based on machine's memory size so we ensure we can load and process patches of the chunked spool with no memory issues. Longer chunk size (longer patches) increases computation efficiency. 
+
+Notes: 
+1. The `processing_factor` is required because certain processing routines involve making copies of the data during the processing steps. It should be determined by performing memory profiling on an example dataset for the specific processing routine. For instance, the combination of low-pass filtering and interpolation, discussed in the next section, requires a processing factor of approximately 5.
+2. The `memory_safety_factor` is optional and helps prevent getting too close to the memory limit.
+
+```{python}
+# Get patch's number of bytes per seconds (based on patch's data type) 
+pa_bytes_per_second = pa.data.nbytes / pa.seconds
+# Define processing factor and safety factor 
+processing_factor = 5  
+memory_safety_factor = 1.2 
+
+# Calculate memory size required for each second of data to get processed
+memory_size_per_second = pa_bytes_per_second * processing_factor * memory_safety_factor
+memory_size_per_second_MB = memory_size_per_second / 1e6
+
+# Calculate chunk size can be loaded (in seconds)
+chunk_size = memory_limit_MB / memory_size_per_second_MB 
+```
+
+Next, we need to determine the extent of artifacts introduced by the low-frequency processing routine at the edges of each patch. To achieve this, we apply low-frequency processing to a delta function patch, which contains a unit value at the center and zeros elsewhere. The distorted edges are then identified based on a defined threshold.
+
+```{python}
+# Retrieve a patch of appropriate size for low-frequency processing that fits into memory
+pa_chunked_sp = sp.chunk(time=chunk_size)[0] 
+# Create a delta patch based on new patch size
+delta_pa = dc.get_example_patch("delta_patch", dim=dim, patch=pa_chunked_sp)
+
+# Apply the low-pass filter on the delta patch
+delta_pa_low_passed = delta_pa.pass_filter(time=(None, cutoff_freq * filter_safety_factor))
+# Resample the low-passed filter patch
+new_time_ax = np.arange(delta_pa.attrs["time_min"], delta_pa.attrs["time_max"], dt)
+delta_pa_lfp = delta_pa_low_passed.interpolate(time=new_time_ax)
+
+# Identify the indices where the absolute value of the data exceeds the threshold
+data = delta_pa_lfp.data
+threshold = np.max(np.abs(data)) * tol
+ind = np.abs(data) > threshold
+ind_1 = np.where(ind)[0][0]
+ind_2 = np.where(ind)[0][-1]
+
+# Get the total duration of the processed delta function patch in seconds
+delta_pa_lfp_seconds = delta_pa_lfp.seconds  
+# Convert the new time axis to absolute seconds, relative to the first timestamp
+time_ax_abs = (new_time_ax - new_time_ax[0]) / np.timedelta64(1, "s")
+# Center the time axis 
+time_ax_centered = time_ax_abs - delta_pa_lfp_seconds // 2 
+
+# Calculate the maximum edge (in seconds) where artifacts are present
+edge = max(np.abs(time_ax_centered[ind_1]), np.abs(time_ax_centered[ind_2]))
+```
+
+
+## Perform low-frequency processing and save results on disk
+```{python}
+# Helper functions to handle the name of the low-frequency processed patches 
+def _format_time_as_string(timestamp: np.datetime64) -> str:
+    """
+    Converts a datetime64 object to a formatted string suitable for file naming.
+
+    Args:
+        timestamp (np.datetime64): The timestamp to format.
+
+    Returns:
+        str: A formatted string in 'YYYY-MM-DDTHHMMSS.mmm' format, 
+             compatible with Windows file naming.
+    """
+    formatted_time = str(timestamp.astype("datetime64[ms]"))[:21]
+    return formatted_time.replace(":", "")  # Remove colons for Windows compatibility
+
+def generate_file_name(start_time: np.datetime64, end_time: np.datetime64) -> str:
+    """
+    Generates a standardized file name for low-frequency DAS data.
+
+    Args:
+        start_time (np.datetime64): The start time of the data range.
+        end_time (np.datetime64): The end time of the data range.
+
+    Returns:
+        str: A file name in the format 'LFDAS_<start_time>_<end_time>.h5'.
+    """
+    start_time_str = _format_time_as_string(start_time)
+    end_time_str = _format_time_as_string(end_time)
+    return f"LFDAS_{start_time_str}_{end_time_str}.h5"
+
+
+# First we chunk the spool based on the `chunk_size' and `edge` calculated before.
+sp_chunked_overlaped = sp.chunk(time=chunk_size, overlap=2*edge)
+
+# Process each patch in the spool and save the result patch
+for patch in sp_chunked_overlap:
+    # Apply any pre-processing you may need (such as velocity to strain rate transformation, detrending, etc.)
+    # ...
+
+    # Apply the low-pass filter on the delta patch
+    pa_low_passed = patch.pass_filter(time=(None, cutoff_freq * filter_safety_factor))
+    # Resample the low-passed filter patch
+    new_time_ax = np.arange(pa_low_passed.attrs["time_min"], pa_low_passed.attrs["time_max"], dt)
+    pa_lfp = pa_low_passed.interolate(time=new_time_ax)
+    # Update processed patch's sampling interval 
+    pa_lfp = pa_lfp.update_attrs(time_step=dt)
+
+    # Remove distorted edges from the data at both ends using the calculated `edge` value
+    pa_lfp_edgeless = pa_lfp.select(time=(edge, -edge), relative=True)
+
+    # Save processed patch 
+    pa_lf_name = generate_file_name(pa_lfp_edgeless.attrs["time_min"], pa_lfp_edgeless.attrs["time_max"])
+    pa_lf_path = output_data_dir + pa_lf_name
+    pa_lfp_edgeless.io.write(pa_lf_path, "dasdae")
+```
+
+## Visualize the results
+```{python}
+# Create a spool of low-frequency results
+sp_lf = dc.spool(output_data_dir)
+
+# Merge the spool and create a single patch. May need to sub-select before merging to prevent exceeding the memory limit.
+sp_lf_merged = sp_lf.chunk(time=None)
+pa_lf_merged = sp_lf_merged[0]
+
+# Visualize the results. Try different scale values for better Visualization.
+pa_lf_merged.viz.waterfall(scale = 0.1)
+```
