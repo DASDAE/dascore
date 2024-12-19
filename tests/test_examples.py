@@ -73,6 +73,14 @@ class TestRickerMoveout:
 class TestDeltaPatch:
     """Tests for the delta_patch example."""
 
+    @pytest.mark.parametrize("invalid_dim", ["invalid_dimension", "", None, 123])
+    def test_delta_patch_invalid_dim(self, invalid_dim):
+        """
+        Test that passing an invalid dimension value raises a ValueError.
+        """
+        with pytest.raises(ValueError, match="The delta patch is a 2D patch"):
+            dc.get_example_patch("delta_patch", dim=invalid_dim)
+
     @pytest.mark.parametrize("dim", ["time", "distance"])
     def test_delta_patch_structure(self, dim):
         """Test that the delta_patch returns a Patch with correct structure."""
