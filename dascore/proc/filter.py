@@ -26,6 +26,7 @@ from dascore.units import (
     get_filter_units,
     get_inverted_quant,
     invert_quantity,
+    quant_sequence_to_quant_array,
 )
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
@@ -562,6 +563,14 @@ def slope_filter(
 
     def _maybe_transform_units(filt, dft_patch, freq_dims):
         """Handle units on filter."""
+        # Hand the units/partial units in sequence.
+        units = getattr(filt, "units", None)
+        try:
+            filt = np.array(filt)
+        except ValueError:
+            filt = quant_sequence_to_quant_array(filt)
+        if units:
+            filt = filt * dc.get_quantity(units)
         if not isinstance(filt, dc.units.Quantity):
             return filt
         array, units = filt.magnitude, filt.units
