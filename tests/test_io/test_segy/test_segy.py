@@ -4,7 +4,10 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError, PatchError
+from dascore.exceptions import (
+    InvalidSpoolError,
+    PatchError,
+)
 from dascore.io.segy.core import SegyV1_0
 from dascore.utils.misc import suppress_warnings
 
@@ -52,11 +55,9 @@ class TestSegyWrite:
     @pytest.fixture(scope="class")
     def channel_patch_path(self, channel_patch, test_segy_directory):
         """Write the channel patch to disk."""
+        pytest.importorskip("segyio")
         path = test_segy_directory / "patch_with_channel_coord.segy"
-        try:
-            channel_patch.io.write(path, "segy")
-        except MissingOptionalDependencyError:
-            pytest.skip("Test requires segyio to be installed.")
+        channel_patch.io.write(path, "segy")
         return path
 
     def test_can_get_format(self, channel_patch_path):
@@ -77,6 +78,7 @@ class TestSegyWrite:
 
     def test_write_non_channel_path(self, random_patch, tmp_path_factory):
         """Ensure a 'normal' patch can be written."""
+        pytest.importorskip("segyio")
         path = tmp_path_factory.mktemp("test_write_segy") / "temppath.segy"
         match = "non-time dimension"
         with pytest.warns(match=match):
@@ -87,9 +89,24 @@ class TestSegyWrite:
 
     def test_loss_of_precision_raises(self, random_patch, tmp_path_factory):
         """Ensure that loss of precision raises a PatchError."""
+        pytest.importorskip("segyio")
         path = tmp_path_factory.mktemp("test_loss_of_precision") / "temppath.segy"
         patch = random_patch.update_coords(time_step=np.timedelta64(10, "ns"))
         match = "will result in a loss of precision"
         with pytest.raises(PatchError, match=match):
             with suppress_warnings():
                 patch.io.write(path, "segy")
+
+    def test_bad_dims_raises(self, random_patch, tmp_path):
+        """Ensure a bad dimension name raises."""
+        pytest.importorskip("segyio")
+        patch = random_patch.rename_coords(distance="bad_dim")
+        with pytest.raises(PatchError, match="Can only save 2D patches"):
+            patch.io.write(tmp_path, "segy")
+
+    def test_multi_patch_spool_raises(self, random_spool, tmp_path):
+        """Spools with more than one patch cant be written."""
+        pytest.importorskip("segyio")
+        segy = SegyV1_0()
+        with pytest.raises(InvalidSpoolError):
+            segy.write(random_spool, tmp_path)
