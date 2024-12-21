@@ -17,6 +17,7 @@ from dascore.units import (
     get_quantity_str,
     get_unit,
     invert_quantity,
+    quant_sequence_to_quant_array,
 )
 
 
@@ -303,3 +304,52 @@ class TestConvertUnits:
         array = np.arange(10) * get_quantity("m")
         out = convert_units(array, to_units="ft")
         np.allclose(array.magnitude, out * 3.28084)
+
+
+class TestQuantSequenceToQuantArray:
+    """Ensure we can convert a quantity sequence to an array."""
+
+    def test_valid_sequence_same_units(self):
+        """Test with a valid sequence of quantities with the same units."""
+        meter = get_quantity("m")
+        sequence = [1 * meter, 2 * meter, 3 * meter]
+        result = quant_sequence_to_quant_array(sequence)
+        expected = np.array([1, 2, 3]) * meter
+        np.testing.assert_array_equal(result.magnitude, expected.magnitude)
+        assert result.units == expected.units
+
+    def test_valid_sequence_different_units(self):
+        """Test sequence of quantities with compatible but different units."""
+        m, cm, km = get_quantity("m"), get_quantity("cm"), get_quantity("km")
+
+        sequence = [1 * m, 100 * cm, 0.001 * km]
+        result = quant_sequence_to_quant_array(sequence)
+        expected = np.array([1, 1, 1]) * m
+        assert np.allclose(result.magnitude, expected.magnitude)
+        assert result.units == expected.units
+
+    def test_incompatible_units(self):
+        """Test with a sequence of quantities with incompatible units."""
+        sequence = [1 * get_quantity("m"), 1 * get_quantity("s")]
+        msg = "Not all values in sequence have compatible units."
+        with pytest.raises(UnitError, match=msg):
+            quant_sequence_to_quant_array(sequence)
+
+    def test_non_quantity_elements(self):
+        """Test with a sequence containing non-quantity elements."""
+        sequence = [1 * get_quantity("m"), 5]
+        msg = "Not all values in sequence are quantities."
+        with pytest.raises(UnitError, match=msg):
+            quant_sequence_to_quant_array(sequence)
+
+    def test_empty_sequence(self):
+        """Test with an empty sequence."""
+        sequence = []
+        out = quant_sequence_to_quant_array(sequence)
+        assert isinstance(out, Quantity)
+
+    def test_numpy_array_input(self):
+        """Test with a numpy array input."""
+        sequence = np.array([1, 2, 3])
+        out = quant_sequence_to_quant_array(sequence)
+        assert isinstance(out, Quantity)
