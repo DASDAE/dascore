@@ -16,16 +16,6 @@ from dascore.core import get_coord_manager
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.utils.misc import optional_import
 
-# Valid data format codes as specified in the SEGY rev1 manual.
-VALID_FORMATS = [1, 2, 3, 4, 5, 8]
-
-# This is the maximum possible interval between two samples due to the nature
-# of the SEG Y format.
-MAX_INTERVAL_IN_SECONDS = 0.065535
-
-# largest number possible with int16
-MAX_NUMBER_OF_SAMPLES = 32767
-
 
 def twos_comp(bytes_):
     """Get twos complement of bytestring."""
@@ -53,8 +43,8 @@ def _get_segy_version(fp):
     sample_interval = twos_comp(header[16:18])
     samples_per_trace = twos_comp(header[20:22])
     data_format_code = twos_comp(header[24:26])
-    format_number_major = int.from_bytes(header[300:301])
-    format_number_minor = int.from_bytes(header[301:302])
+    format_number_major = twos_comp(header[300:301])
+    format_number_minor = twos_comp(header[301:302])
     fixed_len_flag = twos_comp(header[302:304])
 
     checks = (
@@ -123,7 +113,7 @@ def _get_coords(fi):
     trace_field = segyio.TraceField
     header_0 = fi.header[0]
 
-    # get time array from SEGY headers
+    # Get time array from SEGY headers
     starttime = _get_time_from_header(header_0)
     dt = dc.to_timedelta64(header_0[trace_field.TRACE_SAMPLE_INTERVAL] / 1_000_000)
     ns = header_0[trace_field.TRACE_SAMPLE_COUNT]
@@ -171,17 +161,19 @@ def _get_patch_with_channel_coord(patch):
     dims = set(patch.dims)
     non_time = next(iter(dims - {"time"}))
     msg = (
-        "Currently to segy only handles channels as non-time dimension "
-        f"this results in a loss of the {non_time} dimension."
+        "Currently the segy writer only handles 'channel' as the non-time "
+        "dimension this results in a loss of the '{non_time}' dimension."
     )
     warnings.warn(msg)
     coord = patch.get_coord(non_time)
     array = np.arange(len(coord))
-    patch = patch.rename_coords(time=non_time).update_coords(**{non_time: array})
+    patch = patch.update_coords(**{non_time: array}).rename_coords(
+        **{non_time: "channel"}
+    )
     return patch
 
 
-def _get_segy_compatible_patch(spool):
+def _get_segy_compatible_patch(spool, round_error_max=3e-9):
     """
     Get a patch that will be writable as a segy file.
     Ensure coords are ("channel", "time").
@@ -193,8 +185,12 @@ def _get_segy_compatible_patch(spool):
         raise InvalidSpoolError(msg)
     patch = spool[0]
     dims = set(patch.dims)
-    if len(dims) != 2 or "time" not in dims:
-        msg = "Can only save 2D patches to SEGY with a time dimension."
+    has_distance_or_channel = dims & {"distance", "channel"}
+    if len(dims) != 2 or "time" not in dims or not has_distance_or_channel:
+        msg = (
+            "Can only save 2D patches to SEGY with a time dimension and "
+            "either channel or distance dimensions."
+        )
         raise PatchError(msg)
     # Currently we only support channels not distance dimension.
     if "channel" not in dims:
@@ -203,11 +199,12 @@ def _get_segy_compatible_patch(spool):
     # segy supports us precision
     time_step = dc.to_float(patch.get_coord("time").step)
     new_samp = np.round(time_step, 6)
-    if np.abs(new_samp - time_step).max() > 1e-7:
+    round_error = np.abs(new_samp - time_step).max()
+    if round_error > round_error_max:
         msg = (
             f"The segy format support us precision for temporal sampling. "
             f"The input patch has a time step of {time_step} which will result "
-            "in a loss or precision. Either manually set the time step with "
+            "in a loss of precision. Either manually set the time step with "
             "patch.update_coords or resample the time axis with patch.resample"
         )
         raise PatchError(msg)
@@ -232,3 +229,48 @@ def _make_time_header_dict(time_coord):
     header[trace_field.TRACE_SAMPLE_COUNT] = len(time_coord)
 
     return header
+
+
+def _write_segy(spool, resource, version, segyio):
+    """
+    Private function for writing a patch/spool as SEGY.
+    """
+    patch = _get_segy_compatible_patch(spool)
+    time, channel = patch.get_coord("time"), patch.get_coord("channel")
+    chanel_step = channel.step
+
+    time_dict = _make_time_header_dict(time)
+    bin_field = segyio.BinField
+    spec = segyio.spec()
+
+    spec.format = 1  # 1 means float32 TODO look into supporting more
+    spec.samples = np.ones(len(time)) * len(channel)
+    spec.ilines = range(len(channel))
+    spec.xlines = [1]
+
+    # For 32 bit float for now.
+    data = patch.data.astype(np.float32)
+
+    with segyio.create(resource, spec) as f:
+        # Update the file header info.
+        f.bin.update(tsort=segyio.TraceSortingFormat.INLINE_SORTING)
+        f.bin.update(
+            {
+                bin_field.Samples: time_dict[segyio.TraceField.TRACE_SAMPLE_COUNT],
+                bin_field.Interval: time_dict[segyio.TraceField.TRACE_SAMPLE_INTERVAL],
+                bin_field.SEGYRevision: int(version.split(".")[0]),
+                bin_field.SEGYRevisionMinor: int(version.split(".")[1]),
+            }
+        )
+        # Then iterate each channel and dump to segy.
+        for num, data in enumerate(data):
+            header = dict(time_dict)
+            header.update(
+                {
+                    segyio.su.offset: chanel_step,
+                    segyio.su.iline: num,
+                    segyio.su.xline: 1,
+                }
+            )
+            f.header[num] = header
+            f.trace[num] = data

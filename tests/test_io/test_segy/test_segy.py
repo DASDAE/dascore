@@ -4,8 +4,9 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import MissingOptionalDependencyError, PatchError
 from dascore.io.segy.core import SegyV1_0
+from dascore.utils.misc import suppress_warnings
 
 
 class TestSegyGetFormat:
@@ -73,3 +74,22 @@ class TestSegyWrite:
         # just check that data and coords are equal.
         assert np.allclose(patch1.data, patch2.data)
         assert patch1.coords == patch2.coords
+
+    def test_write_non_channel_path(self, random_patch, tmp_path_factory):
+        """Ensure a 'normal' patch can be written."""
+        path = tmp_path_factory.mktemp("test_write_segy") / "temppath.segy"
+        match = "non-time dimension"
+        with pytest.warns(match=match):
+            random_patch.io.write(path, "segy")
+        assert path.exists()
+        patch2 = dc.spool(path)[0]
+        assert set(random_patch.shape) == set(patch2.shape)
+
+    def test_loss_of_precision_raises(self, random_patch, tmp_path_factory):
+        """Ensure that loss of precision raises a PatchError."""
+        path = tmp_path_factory.mktemp("test_loss_of_precision") / "temppath.segy"
+        patch = random_patch.update_coords(time_step=np.timedelta64(10, "ns"))
+        match = "will result in a loss of precision"
+        with pytest.raises(PatchError, match=match):
+            with suppress_warnings():
+                patch.io.write(path, "segy")

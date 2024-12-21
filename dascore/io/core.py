@@ -30,10 +30,14 @@ from dascore.constants import (
     timeable_types,
 )
 from dascore.core.attrs import str_validator
-from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
+from dascore.exceptions import (
+    InvalidFiberIOError,
+    MissingOptionalDependencyError,
+    UnknownFiberFormatError,
+)
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import _iter_filesystem, cached_method, iterate
+from dascore.utils.misc import _iter_filesystem, cached_method, iterate, warn_or_raise
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,
@@ -748,6 +752,27 @@ def _count_generator(generator):
     return entity_count
 
 
+def _handle_missing_optionals(outputs, optional_dep_dict):
+    """
+    Inform the user there are files that can be read but the proper
+    dependencies are not installed.
+
+    If there are other readable files that were found, raise a warning.
+    Otherwise, raise a MissingOptionalDependencyError.
+    """
+    msg = (
+        f"DASCore found files that can be read if additional packages are "
+        f"installed. The needed packages and the found number of files are: "
+        f"{dict(optional_dep_dict)}"
+    )
+    warn_or_raise(
+        msg,
+        exception=MissingOptionalDependencyError,
+        warning=UserWarning,
+        behavior="warn" if len(outputs) else "raise",
+    )
+
+
 def scan(
     path: Path | str | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
@@ -796,6 +821,8 @@ def scan(
     """
     out = []
     fiber_io_hint: dict[str, FiberIO] = {}
+    # A dict for keeping track of missing optional dependencies.
+    missing_optional_deps = defaultdict(lambda: 0)
     # Unfortunately, we have to iterate the scan candidates twice to get
     # an estimate for the progress bar length. Maybe there is a better way...
     _generator = _iterate_scan_inputs(
@@ -826,6 +853,7 @@ def scan(
             except UnknownFiberFormatError:  # skip bad entities
                 continue
             # Cache this fiber io to given preferential treatment next iteration.
+            # This speeds up the common case of many files with the same format.
             fiber_io_hint[fiber_io.input_type] = fiber_io
             # Special handling of directory FiberIOs.
             if fiber_io.input_type == "directory":
@@ -843,8 +871,13 @@ def scan(
                 except OSError:  # This happens if the file is corrupt see #346.
                     warnings.warn(f"Failed to scan {resource}", UserWarning)
                     continue
+                except MissingOptionalDependencyError as ex:
+                    missing_optional_deps[ex.msg.split(" ")[0]] += 1
+                    continue
             for attr in source:
                 out.append(dc.PatchAttrs.from_dict(attr))
+    if missing_optional_deps:
+        _handle_missing_optionals(out, missing_optional_deps)
     return out
 
 
