@@ -24,9 +24,9 @@ from dascore.utils.patch import (
     align_patch_coords,
     concatenate_patches,
     get_dim_axis_value,
+    get_patch_name,
     merge_compatible_coords_attrs,
     patches_to_df,
-    scan_patches,
     stack_patches,
 )
 
@@ -261,16 +261,6 @@ class TestPatchesToDF:
         df = random_spool.get_contents().drop(columns="history", errors="ignore")
         out = patches_to_df(df)
         assert "history" in out.columns
-
-
-class TestScanPaches:
-    """Tests for scanning patches to get metadata."""
-
-    def test_single_patch(self, random_patch):
-        """Ensure a single patch works."""
-        out = scan_patches(random_patch)
-        assert len(out) == 1
-        assert isinstance(out[0], dc.PatchAttrs)
 
 
 class TestAlignPatches:
@@ -619,3 +609,23 @@ class TestStackPatches:
         assert dist_coords.stop == orig_dist_coords.stop
         assert dist_coords.step == orig_dist_coords.step
         assert dist_coords.units == orig_dist_coords.units
+
+
+class TestGetDefaultName:
+    """Tests for getting the default name of patches/spools."""
+
+    def test_single_patch(self, random_patch):
+        """Ensure the random patch can have a name."""
+        out = get_patch_name(random_patch)
+        assert isinstance(out, pd.Series)
+        assert len(out) == 1
+
+    def test_spool(self, random_spool):
+        """Ensure names can be generated from a spool as well."""
+        out = get_patch_name(random_spool)
+        assert len(out) == len(random_spool)
+
+    def test_empty(self):
+        """Ensure an empty thing returns a series of the right type."""
+        out = get_patch_name([])
+        assert isinstance(out, pd.Series)

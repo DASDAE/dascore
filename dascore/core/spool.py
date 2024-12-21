@@ -33,6 +33,7 @@ from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
     concatenate_patches,
+    get_patch_name,
     patches_to_df,
     stack_patches,
 )
@@ -601,6 +602,8 @@ class DataFrameSpool(BaseSpool):
         """{doc}."""
         return self._df[filter_df(self._df, **self._select_kwargs)]
 
+    get_name = get_patch_name
+
 
 class MemorySpool(DataFrameSpool):
     """A Spool for storing patches in memory."""
@@ -617,10 +620,14 @@ class MemorySpool(DataFrameSpool):
         base = super().__rich__()
         df = self._df
         if len(df):
-            t1, t2 = df["time_min"].min(), df["time_max"].max()
+            t1 = df["time_min"].min() if "time_min" in df.columns else ""
+            t2 = df["time_min"].max() if "time_min" in df.columns else ""
             tmin = get_nice_text(t1)
             tmax = get_nice_text(t2)
-            duration = get_nice_text(t2 - t1)
+            if t1 != "" and t2 != "":
+                duration = get_nice_text(t2 - t1)
+            else:
+                duration = ""
             base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
         return base
 

@@ -46,7 +46,7 @@ from dascore.utils.misc import (
     warn_or_raise,
     yield_sub_sequences,
 )
-from dascore.utils.time import to_datetime64, to_float
+from dascore.utils.time import to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
 
@@ -306,7 +306,10 @@ def patches_to_df(
     elif isinstance(patches, pd.DataFrame):
         df = patches
     else:
-        df = pd.DataFrame([x.flat_dump() for x in scan_patches(patches)])
+        df = dc.scan_to_df(
+            patches,
+            exclude=(),
+        )
         if df.empty:  # create empty df with appropriate columns
             cols = list(dc.PatchAttrs().model_dump())
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
@@ -418,24 +421,6 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     return [new_dict]
 
 
-def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[dc.PatchAttrs]:
-    """
-    Scan a sequence of patches and return a list of summaries.
-
-    The summary dicts have the following fields:
-        {fields}
-
-    Parameters
-    ----------
-    patches
-        A single patch or a sequence of patches.
-    """
-    if isinstance(patches, dc.Patch):
-        patches = [patches]  # make sure we have an iterable
-    out = [pa.attrs for pa in patches]
-    return out
-
-
 def get_start_stop_step(patch: PatchType, dim):
     """Convenience method for getting start, stop, step for a given coord."""
     assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"
@@ -446,21 +431,74 @@ def get_start_stop_step(patch: PatchType, dim):
     return start, stop, step
 
 
-def get_default_patch_name(patch):
-    """Generates the name of the node."""
+def get_patch_name(
+    patch_data: pd.DataFrame | dc.Patch | dc.BaseSpool,
+    prefix="DAS",
+    attrs=("network", "station", "tag"),
+    coords=("time",),
+    sep="__",
+    name_columns=("path", "name"),
+) -> pd.Series:
+    """
+    Generates the default name of patch data.
 
-    def _format_datetime64(dt):
+    Parameters
+    ----------
+    prefix
+        A string to prefix the names.
+    patch_data
+        A container with patch data.
+    coords
+        The coordinate ranges to use for names.
+    sep
+        The separator for the strings.
+    name_columns
+        The name of columns which may already contain names.
+        In all cases, the column is split on '.' to get rid
+        of extentions.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.patch import get_patch_name
+    >>> patch = dc.get_example_patch()
+    >>> name = get_patch_name(patch)
+    """
+
+    def _format_time_column(ser):
+        """Format the time column."""
+        ser = ser.astype(str).str.split(".", expand=True)[0]
+        chars_to_replace = (":", "-")
+        for char in chars_to_replace:
+            ser = ser.str.replace(char, "_")
+        ser = ser.str.replace(" ", "T")
+        return ser
+
+    def _format_time_columns(df):
         """Format the datetime string in a sensible way."""
-        out = str(to_datetime64(dt))
-        return out.replace(":", "_").replace("-", "_").replace(".", "_")
+        sub = df.select_dtypes(include=["datetime64", "timedelta64"])
+        out = {}
+        for col in sub.columns:
+            out[col] = _format_time_column(df[col])
+        return df.assign(**out)
 
-    attrs = patch.attrs
-    start = _format_datetime64(attrs.get("time_min", ""))
-    end = _format_datetime64(attrs.get("time_max", ""))
-    net = attrs.get("network", "")
-    sta = attrs.get("station", "")
-    tag = attrs.get("tag", "")
-    return f"DAS__{net}__{sta}__{tag}__{start}__{end}"
+    # Ensure we are working with a dataframe.
+    df = dc.scan_to_df(patch_data)
+    if df.empty:
+        return pd.Series(dtype=str)
+    col_set = set(df.columns)
+    # If the name columns are there just use one of those.
+    if overlap := (set(name_columns) & col_set):
+        return df[next(iter(overlap))].str.split(".", expand=True)[0]
+    # Determine the requested fields and get the ones that are there.
+    coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
+    requested_fields = list(attrs) + list(*coord_fields)
+    current = set(df.columns)
+    fields = [x for x in requested_fields if x in current]
+    # Get a sub dataframe and convert any datetime things to strings.
+    sub = df[fields].pipe(_format_time_columns).fillna("").astype(str)
+    out = f"{prefix}_{sep}" + sub[fields[0]].str.cat(sub[fields[1:]], sep=sep)
+    return out
 
 
 def get_dim_axis_value(

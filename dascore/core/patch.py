@@ -19,7 +19,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
-from dascore.utils.patch import check_patch_attrs, check_patch_coords
+from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_name
 from dascore.utils.time import to_float
 from dascore.viz import VizPatchNameSpace
 
@@ -260,6 +260,7 @@ class Patch:
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
     apply_ufunc = dascore.proc.apply_ufunc
+    get_name = get_patch_name
 
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords."""
