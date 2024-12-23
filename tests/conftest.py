@@ -385,6 +385,15 @@ def one_file_dir(tmp_path_factory, random_patch):
     return ex.spool_to_directory(spool, path=out)
 
 
+@pytest.fixture(scope="session")
+def random_spool_directory(tmp_path_factory):
+    """A directory with a few patch files."""
+    out = Path(tmp_path_factory.mktemp("one_file_file_spool"))
+    spool = ex.get_example_spool("random_das")
+    out_path = ex.spool_to_directory(spool, path=out)
+    return dc.spool(out_path).update()
+
+
 @pytest.fixture(scope="class")
 def two_patch_directory(tmp_path_factory, terra15_das_example_path, random_patch):
     """Create a directory of DAS files for testing."""

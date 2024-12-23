@@ -35,6 +35,8 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     UnknownFiberFormatError,
 )
+from dascore.core.spool import DataFrameSpool
+from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import _iter_filesystem, cached_method, iterate, warn_or_raise
@@ -684,6 +686,8 @@ def scan_to_df(
     """
     if isinstance(path, pd.DataFrame):
         return path
+    if isinstance(path, DataFrameSpool):
+        return path.get_contents()
     info = scan(
         path=path,
         file_format=file_format,

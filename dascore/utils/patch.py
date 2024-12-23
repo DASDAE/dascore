@@ -437,7 +437,6 @@ def get_patch_name(
     attrs=("network", "station", "tag"),
     coords=("time",),
     sep="__",
-    name_columns=("path", "name"),
 ) -> pd.Series:
     """
     Generates the default name of patch data.
@@ -452,10 +451,16 @@ def get_patch_name(
         The coordinate ranges to use for names.
     sep
         The separator for the strings.
-    name_columns
-        The name of columns which may already contain names.
-        In all cases, the column is split on '.' to get rid
-        of extentions.
+
+    Notes
+    -----
+    There are two special cases where the default logic is overwritten.
+    The first one, is when a column called "name" already exists. This
+    will simply be returned.
+
+    The second is when a column called "path" exists. In this case, the
+    output will be the file name with the extension removed. The path must
+    use / as a delinater.
 
     Examples
     --------
@@ -482,14 +487,25 @@ def get_patch_name(
             out[col] = _format_time_column(df[col])
         return df.assign(**out)
 
+    def _get_filename(path_ser):
+        """Get the file name from a path series."""
+        ser = path_ser.astype(str)
+        file_names = [x[-1].split(".")[0] for x in ser.str.split("/")]
+        return pd.Series(file_names)
+
     # Ensure we are working with a dataframe.
-    df = dc.scan_to_df(patch_data)
+    df = dc.scan_to_df(
+        patch_data,
+        exclude=(),
+    )
     if df.empty:
         return pd.Series(dtype=str)
     col_set = set(df.columns)
-    # If the name columns are there just use one of those.
-    if overlap := (set(name_columns) & col_set):
-        return df[next(iter(overlap))].str.split(".", expand=True)[0]
+    # Handle special cases.
+    if "name" in col_set:
+        return df["name"].astype(str)
+    if "path" in col_set:
+        return _get_filename(df["path"])
     # Determine the requested fields and get the ones that are there.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
     requested_fields = list(attrs) + list(*coord_fields)

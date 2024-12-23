@@ -611,8 +611,8 @@ class TestStackPatches:
         assert dist_coords.units == orig_dist_coords.units
 
 
-class TestGetDefaultName:
-    """Tests for getting the default name of patches/spools."""
+class TestGetPatchName:
+    """Tests for getting the default name from patch sources."""
 
     def test_single_patch(self, random_patch):
         """Ensure the random patch can have a name."""
@@ -629,3 +629,17 @@ class TestGetDefaultName:
         """Ensure an empty thing returns a series of the right type."""
         out = get_patch_name([])
         assert isinstance(out, pd.Series)
+
+    def test_name_column_exists(self, random_spool):
+        """If the name or path field already exist this should be used."""
+        df = random_spool.get_contents().assign(name=lambda x: np.arange(len(x)))
+        # This should convert to string type and return.
+        names = get_patch_name(df)
+        assert np.all(names.values == np.arange(len(df)).astype(str))
+
+    def test_path_column(self, random_spool_directory):
+        """Ensure the path column works."""
+        names = get_patch_name(random_spool_directory)
+        df = random_spool_directory.get_contents()
+        expected = pd.Series([x[-1].split(".")[0] for x in df["path"].str.split("/")])
+        assert np.all(names == expected)
