@@ -99,4 +99,4 @@ jobs:
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
-        run: uv run --extra test --python ${{ matrix.python-version }} pytest $args || exit_code=$?
+        run: uv run --extra test --python ${{ matrix.python-version }} pytest dascore --doctest-modules
