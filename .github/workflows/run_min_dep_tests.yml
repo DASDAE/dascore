@@ -10,7 +10,7 @@ on:
     paths:
       - 'pyproject.toml'
       - '**.py'
-      - '.github/workflows/runtests.yml'
+      - '.github/workflows/run_min_dep_tests.yml'
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
@@ -51,14 +51,11 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: sync
-        run: uv sync
-
       - name: set data cache path
         shell: bash -l {0}
         run: |
           export PATH="$pythonLocation:$PATH"
-          echo "DATA_CACHE_PATH=$(python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
+          echo "DATA_CACHE_PATH=$(uv run --extra test python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
 
       - name: cache test data
         uses: actions/cache@v3
@@ -69,9 +66,9 @@ jobs:
 
       - name: run test suite
         shell: bash -l {0}
-        run: uv run ./.github/test_code.sh
+        run: uv run --extra test --python ${{ matrix.python-version }} ./.github/test_code.sh
 
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
-        run: uv run ./.github/test_code.sh doctest
+        run: uv run --extra test --python ${{ matrix.python-version }} ./.github/test_code.sh doctest
