@@ -28,3 +28,4 @@ neubrex_dts_forge.h5 940f7bea6dd4c8a1340b4936b8eb7f9edc577cbcaf77c1f5ac295890f88
 decimated_optodas.hdf5 48ce9c2ab4916d5536faeef0bd789f326ec4afc232729d32014d4d835a9fb74e https://github.com/dasdae/test_data/raw/master/das/decimated_optodas.hdf5
 neubrex_das_1.h5 48a97e27c56e66cc2954ba4eaaadd2169919bb8f897d78e95ef6ab50abb5027b https://github.com/dasdae/test_data/raw/master/das/neubrex_das_1.h5
 UoU_lf_urban.hdf5 d3f8fa6ff3d8ae993484b3fbf9b39505e2cf15cb3b39925a3519b27d5fbe7b5b https://github.com/dasdae/test_data/raw/master/das/UoU_lf_urban.hdf5
+small_channel_patch.sgy 31e551aadb361189c1c9325d504c883114ba9a7bb75fe4791e5089fabccef704 https://github.com/dasdae/test_data/raw/master/das/small_channel_patch.sgy

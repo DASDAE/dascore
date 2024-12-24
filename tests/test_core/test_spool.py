@@ -1,8 +1,9 @@
-"""Test for spool functions."""
+"""Tests for spool function."""
 
 from __future__ import annotations
 
 import copy
+import shutil
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import numpy as np
@@ -14,8 +15,10 @@ from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
 from dascore.exceptions import (
     InvalidSpoolError,
+    MissingOptionalDependencyError,
     ParameterError,
 )
+from dascore.utils.downloader import fetch
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -495,6 +498,64 @@ class TestGetSpool:
 
         pickle_spool = dc.spool(pickle_path)
         assert isinstance(pickle_spool, MemorySpool)
+
+
+class TestSpoolBehaviorOptionalImports:
+    """
+    Tests for spool behavior when handling optional formats which require
+    optional dependencies.
+
+    Essentially, if the spool is specific to the file (eg spool("file"))
+    it should raise. If it is applied on a directory with such files
+    (eg spool("directory/with/bad/files")) it should give a warning.
+    """
+
+    # The string to match against the warning/error.
+    _msg = "found files that can be read if additional"
+
+    @pytest.fixture(scope="function", autouse=True)
+    def monkey_patch_segy(self, monkeypatch):
+        """Monkey patch the name of the imported library for segy."""
+        # TODO we should find a cleaner way to do this in the future.
+        from dascore.io.segy import SegyV1_0
+
+        monkeypatch.setattr(SegyV1_0, "_package_name", "not_segyio_clearly")
+
+    @pytest.fixture(scope="class")
+    def segy_file_path(self, tmp_path_factory):
+        """
+        Create a directory structure like this:
+
+        optional_import_test
+        - h5_simple_1.h5
+        - segy_only
+          - small_channel_patch.sgy
+        """
+        dir_path = tmp_path_factory.mktemp("optional_import_test")
+        simple_path = fetch("h5_simple_1.h5")
+        shutil.copy(simple_path, dir_path)
+
+        segy_only_path = dir_path / "segy_only"
+        segy_only_path.mkdir(exist_ok=True, parents=True)
+        segy_path = fetch("small_channel_patch.sgy")
+        shutil.copy(segy_path, segy_only_path)
+        return segy_only_path / segy_path.name
+
+    def test_spool_on_directory_no_other_files(self, segy_file_path):
+        """Ensure a directory with no other readable files raises."""
+        with pytest.raises(MissingOptionalDependencyError, match=self._msg):
+            dc.spool(segy_file_path.parent).update()
+
+    def test_spool_on_single_file(self, segy_file_path):
+        """Ensure a single file also raises."""
+        with pytest.raises(MissingOptionalDependencyError, match=self._msg):
+            dc.spool(segy_file_path).update()
+
+    def test_spool_on_multiple_files(self, segy_file_path):
+        """Ensure if other files exist the warning is issued."""
+        top_level = segy_file_path.parent.parent
+        with pytest.warns(UserWarning, match=self._msg):
+            dc.spool(top_level).update()
 
 
 class TestMisc:

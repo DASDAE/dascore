@@ -269,7 +269,7 @@ def patch_function(
                     out = out.update_attrs(history=hist)
             return out
 
-        # attach original function. Although we want to encourage raw_function
+        # Attach original function. Although we want to encourage raw_function
         # for consistency with pydantic, we leave this to not break old code.
         _func.func = getattr(func, "raw_function", func)
         # matches pydantic naming.

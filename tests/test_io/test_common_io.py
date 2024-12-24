@@ -10,7 +10,7 @@ test_io_core.py
 
 from __future__ import annotations
 
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from functools import cache
 from io import BytesIO
 from operator import eq, ge, le
@@ -21,6 +21,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
@@ -31,7 +32,7 @@ from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
-from dascore.io.segy import SegyV2
+from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
 from dascore.io.silixah5 import SilixaH5V1
 from dascore.io.tdms import TDMSFormatterV4713
@@ -75,7 +76,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
-    SegyV2(): ("conoco_segy_1.sgy",),
+    SegyV1_0(): ("conoco_segy_1.sgy",),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
     SentekV5(): ("DASDMSShot00_20230328155653619.das",),
 }
@@ -83,7 +84,10 @@ COMMON_IO_READ_TESTS = {
 # This tuple is for fiber io which support a write method and can write
 # generic patches. If the patch has to be in some special form, for example
 # only flat patches can be written to WAV, don't put it here.
-COMMON_IO_WRITE_TESTS = (PickleIO(), DASDAEV1())
+COMMON_IO_WRITE_TESTS = (
+    PickleIO(),
+    DASDAEV1(),
+)
 
 # Specifies data registry entries which should not be tested.
 SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv"}
@@ -96,8 +100,12 @@ def _cached_read(path, io=None):
     This ensures each files is read at most twice.
     """
     if io is None:
-        return dc.read(path)
-    return io.read(path)
+        read = dc.read
+    else:
+        read = io.read
+    with skip_missing_dependency():
+        out = read(path)
+    return out
 
 
 def _get_flat_io_test():
@@ -107,6 +115,15 @@ def _get_flat_io_test():
         for fetch_name in iterate(fetch_name_list):
             flat_io.append([io, fetch_name])
     return flat_io
+
+
+@contextmanager
+def skip_missing_dependency():
+    """Skip if missing dependencies found."""
+    try:
+        yield
+    except MissingOptionalDependencyError:
+        pytest.skip("Missing optional dep to read file.")
 
 
 @pytest.fixture(scope="session", params=list(COMMON_IO_READ_TESTS))
@@ -138,14 +155,16 @@ def data_file_path(request):
 @pytest.fixture(scope="session")
 def read_spool(data_file_path):
     """Read each file into a spool."""
-    out = dc.read(data_file_path)
+    with skip_missing_dependency():
+        out = dc.read(data_file_path)
     return out
 
 
 @pytest.fixture(scope="session")
 def scanned_attrs(data_file_path):
     """Read each file into a spool."""
-    out = dc.scan(data_file_path)
+    with skip_missing_dependency():
+        out = dc.scan(data_file_path)
     return out
 
 
@@ -270,7 +289,8 @@ class TestRead:
         a patch containing the requested data is returned.
         """
         io, path = io_path_tuple
-        attrs_from_file = dc.scan(path)
+        with skip_missing_dependency():
+            attrs_from_file = dc.scan(path)
         assert len(attrs_from_file)
         # skip files that have more than one patch for now
         # TODO just write better test logic to handle this case.
@@ -317,7 +337,8 @@ class TestScan:
 
     def test_scan_basics(self, data_file_path):
         """Ensure each file can be scanned."""
-        attrs_list = dc.scan(data_file_path)
+        with skip_missing_dependency():
+            attrs_list = dc.scan(data_file_path)
         assert len(attrs_list)
 
         for attrs in attrs_list:
@@ -327,7 +348,8 @@ class TestScan:
     def test_scan_has_version_and_format(self, io_path_tuple):
         """Scan output should contain version and format."""
         io, path = io_path_tuple
-        attr_list = io.scan(path)
+        with skip_missing_dependency():
+            attr_list = io.scan(path)
         for attrs in attr_list:
             assert attrs.file_format == io.name
             assert attrs.file_version == io.version
@@ -396,7 +418,8 @@ class TestIntegration:
             "tag",
             "network",
         )
-        scan_attrs_list = dc.scan(data_file_path)
+        with skip_missing_dependency():
+            scan_attrs_list = dc.scan(data_file_path)
         patch_attrs_list = [x.attrs for x in _cached_read(data_file_path)]
         assert len(scan_attrs_list) == len(patch_attrs_list)
         for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
