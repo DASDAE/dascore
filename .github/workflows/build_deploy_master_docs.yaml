@@ -62,7 +62,7 @@ jobs:
         shell: bash -l {0}
         run: |
           conda install -c conda-forge pandoc
-          python -m pip install -e .[docs]
+          python -m pip install -e .[docs,all]
 
       - name: Install quarto
         uses: quarto-dev/quarto-actions/setup@v2

@@ -48,6 +48,30 @@ jobs:
         run: |
           git fetch --tags --force # Retrieve annotated tags.
 
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          micromamba-version: '2.0.2-1' # versions: https://github.com/mamba-org/micromamba-releases
+          environment-file: environment.yml
+          init-shell: >-
+            bash
+            powershell
+          cache-environment: true
+          cache-environment-key: environment-${{ steps.date.outputs.date }}
+          post-cleanup: 'all'
+          create-args: >-
+            python=${{ matrix.python-version }}
+
+      # Not sure why this is needed but it appears to be the case.
+      # Also installs pytables so hdf5 gets installed on windows
+      - name: fix env
+        shell: bash -l {0}
+        run: | 
+          micromamba shell init --shell bash --root-prefix=~/micromamba
+          eval "$(micromamba shell hook --shell bash)"
+          micromamba activate dascore
+          mamba install pytables
+
+      # Then switch over to uv. We can use this exclusively once we drop pytables.
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
