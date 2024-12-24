@@ -51,7 +51,9 @@ class TestDocsting:
         assert "Parameters" in testfun1.__doc__
         line = next(x for x in testfun1.__doc__.split("\n") if "Parameters" in x)
         base_spaces = line.split("Parameters")[0]
-        assert len(base_spaces) == 12
+        # py3.13+ automatically strips white space from docstrings so 12
+        # and 0 are valid lengths.
+        assert len(base_spaces) in {12, 0}
 
     def test_list_indent(self):
         """Ensure lists are indented equally."""
