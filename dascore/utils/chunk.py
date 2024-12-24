@@ -248,7 +248,7 @@ class ChunkManager:
             if len(vals) > 1:
                 msg = (
                     f"Cannot merge on dim {self._name} because all values for "
-                    f"{col} are not equal. Consider using the `attr_conflict` "
+                    f"{col} are not equal. Consider using the `conflict` "
                     f"argument to loosen this restriction."
                 )
                 raise CoordMergeError(msg)

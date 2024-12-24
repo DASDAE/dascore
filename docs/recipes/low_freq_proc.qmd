@@ -68,10 +68,10 @@ chunk_size = memory_limit_MB / memory_size_per_second_MB
 # Ensure `chunk_size` does not exceed the spool length
 merged_sp = sp.chunk(time=None)[0]
 if chunk_size > merged_sp.seconds:
-    print(
-        f"Warning: Specified `chunk_size` ({chunk_size:.2f} seconds) exceeds the spool length "
-        f"({merged_sp.seconds:.2f} seconds). Adjusting `chunk_size` to match spool length."
-    )
+   print(
+   f"Warning: Specified `chunk_size` ({chunk_size:.2f} seconds) exceeds the spool length "
+   f"({merged_sp.seconds:.2f} seconds). Adjusting `chunk_size` to match spool length."
+   )
    chunk_size = merged_sp.seconds 
 ```
 
@@ -125,7 +125,7 @@ sp_chunked_overlaped = sp.chunk(time=chunk_size, overlap=2*edge)
 
 # Process each patch in the spool and save the result patch
 lf_patches = []
-for patch in sp_chunked_overlap:
+for patch in sp_chunked_overlaped:
     # Apply any pre-processing you may need (such as velocity to strain rate transformation, detrending, etc.)
     # ...
 
@@ -133,7 +133,7 @@ for patch in sp_chunked_overlap:
     pa_low_passed = patch.pass_filter(time=(None, cutoff_freq * filter_safety_factor))
     # Resample the low-passed filter patch
     new_time_ax = np.arange(pa_low_passed.attrs["time_min"], pa_low_passed.attrs["time_max"], np.timedelta64(dt, "s"))
-    pa_lfp = pa_low_passed.interolate(time=new_time_ax)
+    pa_lfp = pa_low_passed.interpolate(time=new_time_ax)
     # Update processed patch's sampling interval 
     pa_lfp = pa_lfp.update_attrs(time_step=dt)
 
@@ -141,12 +141,12 @@ for patch in sp_chunked_overlap:
     pa_lfp_edgeless = pa_lfp.select(time=(edge, -edge), relative=True)
 
     # Save processed patch 
-    pa_lf_name = get_patch_name(pa_lfp_edgeless)
+    pa_lf_name = get_patch_names(pa_lfp_edgeless)[0]
     pa_lf_path = os.path.join("/path/to/output/dir", pa_lf_name)
     # pa_lfp_edgeless.io.write(pa_lf_path, "dasdae") # commented to make this doc executable 
 
     # Add the processed patch to a list (so later we can create a spool). No need if patches are being written to a directory
-    lf_patches = lf_patches.append(pa_lfp_edgeless)
+    lf_patches.append(pa_lfp_edgeless)
 ```
 
 ## Visualize the results
@@ -156,7 +156,7 @@ for patch in sp_chunked_overlap:
 sp_lf = dc.spool(lf_patches)
 
 # Merge the spool and create a single patch. May need to sub-select before merging to prevent exceeding the memory limit.
-sp_lf_merged = sp_lf.chunk(time=None)
+sp_lf_merged = sp_lf.chunk(time=None, conflict="keep_first")
 pa_lf_merged = sp_lf_merged[0]
 
 # Visualize the results. Try different scale values for better visualization.
