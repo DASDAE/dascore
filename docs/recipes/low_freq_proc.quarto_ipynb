@@ -18,7 +18,7 @@
         "\n",
         "## Get a spool and define parameters \n"
       ],
-      "id": "8063122b"
+      "id": "cc4b0696"
     },
     {
       "cell_type": "code",
@@ -56,7 +56,7 @@
         "# Define a tolerance for determining edge effects (used in next step)\n",
         "tolerance = 1e-3"
       ],
-      "id": "a58bee6d",
+      "id": "97d2df99",
       "execution_count": null,
       "outputs": []
     },
@@ -73,7 +73,7 @@
         "1. The `processing_factor` is required because certain processing routines involve making copies of the data during the processing steps. It should be determined by performing memory profiling on an example dataset for the specific processing routine. For instance, the combination of low-pass filtering and interpolation, discussed in the next section, requires a processing factor of approximately 5.\n",
         "2. The `memory_safety_factor` is optional and helps prevent getting too close to the memory limit.\n"
       ],
-      "id": "58d9b269"
+      "id": "fdd0110e"
     },
     {
       "cell_type": "code",
@@ -101,7 +101,7 @@
         "    )\n",
         "   chunk_size = merged_sp.seconds "
       ],
-      "id": "70618659",
+      "id": "79cdf6c5",
       "execution_count": null,
       "outputs": []
     },
@@ -111,7 +111,7 @@
       "source": [
         "Next, we need to determine the extent of artifacts introduced by low-pass filtering at the edges of each patch. To achieve this, we apply LF processing to a delta function patch, which contains a unit value at the center and zeros elsewhere. The distorted edges are then identified based on a defined threshold.\n"
       ],
-      "id": "90ff54c3"
+      "id": "36f75274"
     },
     {
       "cell_type": "code",
@@ -155,7 +155,7 @@
         "        \"- Increase `tolerance` to reduce the sensitivity of artifact detection.\"\n",
         "    )"
       ],
-      "id": "b1cf2188",
+      "id": "5c2c3ae0",
       "execution_count": null,
       "outputs": []
     },
@@ -165,7 +165,7 @@
       "source": [
         "## Perform low-frequency processing and save results on disk\n"
       ],
-      "id": "0ab13e63"
+      "id": "48a0ceae"
     },
     {
       "cell_type": "code",
@@ -199,7 +199,7 @@
         "    # Add the processed patch to a list (so later we can create a spool). No need if patches are being written to a directory\n",
         "    lf_patches = lf_patches.append(pa_lfp_edgeless)"
       ],
-      "id": "4f7f672b",
+      "id": "0ffafd83",
       "execution_count": null,
       "outputs": []
     },
@@ -209,7 +209,7 @@
       "source": [
         "## Visualize the results\n"
       ],
-      "id": "d0569001"
+      "id": "dfdb5dd6"
     },
     {
       "cell_type": "code",
@@ -226,7 +226,7 @@
         "# Visualize the results. Try different scale values for better visualization.\n",
         "pa_lf_merged.viz.waterfall(scale=0.1)"
       ],
-      "id": "1b9c9bd4",
+      "id": "ec405a70",
       "execution_count": null,
       "outputs": []
     },
@@ -236,7 +236,7 @@
       "source": [
         "#### For any questions, please contact Ahmad Tourei: [GitHub Profile](https://github.com/ahmadtourei)."
       ],
-      "id": "dddf79dd"
+      "id": "3ce44358"
     }
   ],
   "metadata": {
