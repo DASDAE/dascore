@@ -70,10 +70,10 @@ jobs:
           eval "$(micromamba shell hook --shell bash)"
           micromamba activate dascore
 
-      - name: install pytables
+      - name: install hdf5
         shell: bash -l {0}
         run: |
-          mamba install pytables
+          micromamba install pytables
 
       # Then switch over to uv. We can use this exclusively once we drop pytables.
       - name: Install uv
