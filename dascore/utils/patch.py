@@ -46,7 +46,7 @@ from dascore.utils.misc import (
     warn_or_raise,
     yield_sub_sequences,
 )
-from dascore.utils.time import to_datetime64, to_float
+from dascore.utils.time import to_float
 
 attr_type = dict[str, Any] | str | Sequence[str] | None
 
@@ -269,7 +269,7 @@ def patch_function(
                     out = out.update_attrs(history=hist)
             return out
 
-        # attach original function. Although we want to encourage raw_function
+        # Attach original function. Although we want to encourage raw_function
         # for consistency with pydantic, we leave this to not break old code.
         _func.func = getattr(func, "raw_function", func)
         # matches pydantic naming.
@@ -306,7 +306,10 @@ def patches_to_df(
     elif isinstance(patches, pd.DataFrame):
         df = patches
     else:
-        df = pd.DataFrame([x.flat_dump() for x in scan_patches(patches)])
+        df = dc.scan_to_df(
+            patches,
+            exclude=(),
+        )
         if df.empty:  # create empty df with appropriate columns
             cols = list(dc.PatchAttrs().model_dump())
             df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
@@ -418,24 +421,6 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     return [new_dict]
 
 
-def scan_patches(patches: PatchType | Sequence[PatchType]) -> list[dc.PatchAttrs]:
-    """
-    Scan a sequence of patches and return a list of summaries.
-
-    The summary dicts have the following fields:
-        {fields}
-
-    Parameters
-    ----------
-    patches
-        A single patch or a sequence of patches.
-    """
-    if isinstance(patches, dc.Patch):
-        patches = [patches]  # make sure we have an iterable
-    out = [pa.attrs for pa in patches]
-    return out
-
-
 def get_start_stop_step(patch: PatchType, dim):
     """Convenience method for getting start, stop, step for a given coord."""
     assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"
@@ -446,21 +431,90 @@ def get_start_stop_step(patch: PatchType, dim):
     return start, stop, step
 
 
-def get_default_patch_name(patch):
-    """Generates the name of the node."""
+def get_patch_names(
+    patch_data: pd.DataFrame | dc.Patch | dc.BaseSpool,
+    prefix="DAS",
+    attrs=("network", "station", "tag"),
+    coords=("time",),
+    sep="__",
+) -> pd.Series:
+    """
+    Generates the default name of patch data.
 
-    def _format_datetime64(dt):
+    Parameters
+    ----------
+    prefix
+        A string to prefix the names.
+    patch_data
+        A container with patch data.
+    coords
+        The coordinate ranges to use for names.
+    sep
+        The separator for the strings.
+
+    Notes
+    -----
+    There are two special cases where the default logic is overwritten.
+    The first one, is when a column called "name" already exists. This
+    will simply be returned.
+
+    The second is when a column called "path" exists. In this case, the
+    output will be the file name with the extension removed. The path must
+    use / as a delinater.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.patch import get_patch_names
+    >>> patch = dc.get_example_patch()
+    >>> name = get_patch_names(patch)
+    """
+
+    def _format_time_column(ser):
+        """Format the time column."""
+        ser = ser.astype(str).str.split(".", expand=True)[0]
+        chars_to_replace = (":", "-")
+        for char in chars_to_replace:
+            ser = ser.str.replace(char, "_")
+        ser = ser.str.replace(" ", "T")
+        return ser
+
+    def _format_time_columns(df):
         """Format the datetime string in a sensible way."""
-        out = str(to_datetime64(dt))
-        return out.replace(":", "_").replace("-", "_").replace(".", "_")
+        sub = df.select_dtypes(include=["datetime64", "timedelta64"])
+        out = {}
+        for col in sub.columns:
+            out[col] = _format_time_column(df[col])
+        return df.assign(**out)
 
-    attrs = patch.attrs
-    start = _format_datetime64(attrs.get("time_min", ""))
-    end = _format_datetime64(attrs.get("time_max", ""))
-    net = attrs.get("network", "")
-    sta = attrs.get("station", "")
-    tag = attrs.get("tag", "")
-    return f"DAS__{net}__{sta}__{tag}__{start}__{end}"
+    def _get_filename(path_ser):
+        """Get the file name from a path series."""
+        ser = path_ser.astype(str)
+        file_names = [x[-1].split(".")[0] for x in ser.str.split("/")]
+        return pd.Series(file_names)
+
+    # Ensure we are working with a dataframe.
+    df = dc.scan_to_df(
+        patch_data,
+        exclude=(),
+    )
+    if df.empty:
+        return pd.Series(dtype=str)
+    col_set = set(df.columns)
+    # Handle special cases.
+    if "name" in col_set:
+        return df["name"].astype(str)
+    if "path" in col_set:
+        return _get_filename(df["path"])
+    # Determine the requested fields and get the ones that are there.
+    coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
+    requested_fields = list(attrs) + list(*coord_fields)
+    current = set(df.columns)
+    fields = [x for x in requested_fields if x in current]
+    # Get a sub dataframe and convert any datetime things to strings.
+    sub = df[fields].pipe(_format_time_columns).fillna("").astype(str)
+    out = f"{prefix}_{sep}" + sub[fields[0]].str.cat(sub[fields[1:]], sep=sep)
+    return out
 
 
 def get_dim_axis_value(
