@@ -41,15 +41,16 @@ jobs:
       - name: Get tags
         run: git fetch --tags origin
 
-      - uses: mamba-org/setup-micromamba@v1
+      - uses: mamba-org/setup-micromamba@v2
         with:
-          micromamba-version: '1.5.8-0' # versions: https://github.com/mamba-org/micromamba-releases
+          micromamba-version: '2.0.2-1' # versions: https://github.com/mamba-org/micromamba-releases
           environment-file: ./.github/doc_environment.yml
           init-shell: >-
             bash
             powershell
           cache-environment: true
           post-cleanup: 'all'
+          cache-environment-key: environment-${{ steps.date.outputs.date }}
 
       # Not sure why this is needed but it appears to be the case
       - name: fix env
@@ -63,7 +64,7 @@ jobs:
         shell: bash -l {0}
         run: |
           conda install -c conda-forge pandoc
-          python -m pip install -e .[docs]
+          python -m pip install -e .[docs,all]
 
       - name: Install quarto
         uses: quarto-dev/quarto-actions/setup@v2
