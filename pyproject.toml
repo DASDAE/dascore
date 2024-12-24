@@ -63,7 +63,7 @@ extras = [
     "findiff",
     "obspy",
     "numba",
-     "segyio",
+    "segyio",
 ]
 
 docs = [
