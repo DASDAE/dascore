@@ -69,6 +69,10 @@ jobs:
           micromamba shell init --shell bash --root-prefix=~/micromamba
           eval "$(micromamba shell hook --shell bash)"
           micromamba activate dascore
+
+      - name: install pytables
+        shell: bash -l {0}
+        run: |
           mamba install pytables
 
       # Then switch over to uv. We can use this exclusively once we drop pytables.
