@@ -66,9 +66,9 @@ jobs:
 
       - name: run test suite
         shell: bash -l {0}
-        run: uv run --extra test --python ${{ matrix.python-version }} ./.github/test_code.sh
+        run: uv run --extra test --python ${{ matrix.python-version }} pytest -s --cov dascore --cov-append --cov-report=xml
 
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
-        run: uv run --extra test --python ${{ matrix.python-version }} ./.github/test_code.sh doctest
+        run: uv run --extra test --python ${{ matrix.python-version }} pytest $args || exit_code=$?
