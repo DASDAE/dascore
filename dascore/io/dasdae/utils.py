@@ -10,7 +10,6 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.utils.misc import suppress_warnings
-from dascore.utils.patch import get_default_patch_name
 from dascore.utils.time import to_int
 
 # --- Functions for writing DASDAE format
@@ -80,9 +79,8 @@ def _save_coords(patch, patch_group, h5):
         patch_group._v_attrs[save_name] = ",".join(dims)
 
 
-def _save_patch(patch, wave_group, h5):
+def _save_patch(patch, wave_group, h5, name):
     """Save the patch to disk."""
-    name = get_default_patch_name(patch)
     patch_group = _create_or_get_group(h5, wave_group, name)
     _save_attrs_and_dims(patch, patch_group)
     _save_coords(patch, patch_group, h5)

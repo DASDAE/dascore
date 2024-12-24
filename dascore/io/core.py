@@ -30,6 +30,7 @@ from dascore.constants import (
     timeable_types,
 )
 from dascore.core.attrs import str_validator
+from dascore.core.spool import DataFrameSpool
 from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,
@@ -648,7 +649,7 @@ def read(
 
 
 def scan_to_df(
-    path: Path | str | PatchType | SpoolType | IOResourceManager,
+    path: Path | str | PatchType | SpoolType | IOResourceManager | pd.DataFrame,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -665,7 +666,7 @@ def scan_to_df(
     Parameters
     ----------
     path
-        The path the to file to scan
+        The path to the to file to scan
     file_format
         Format of the file. If not provided DASCore will try to determine it.
     file_version
@@ -682,6 +683,10 @@ def scan_to_df(
     >>>
     >>> df = dc.scan_to_df(file_path)
     """
+    if isinstance(path, pd.DataFrame):
+        return path
+    if isinstance(path, DataFrameSpool):
+        return path.get_contents()
     info = scan(
         path=path,
         file_format=file_format,
