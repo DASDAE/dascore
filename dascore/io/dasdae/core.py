@@ -17,7 +17,7 @@ from dascore.utils.hdf5 import (
     PyTablesWriter,
 )
 from dascore.utils.misc import unbyte
-from dascore.utils.patch import get_patch_name
+from dascore.utils.patch import get_patch_names
 
 from .utils import (
     _get_contents_from_patch_groups,
@@ -78,7 +78,7 @@ class DASDAEV1(FiberIO):
             resource.create_group(resource.root, "waveforms")
         waveforms = resource.get_node("/waveforms")
         # write new patches to file
-        patch_names = get_patch_name(patches).values
+        patch_names = get_patch_names(patches).values
         for patch, name in zip(patches, patch_names):
             _save_patch(patch, waveforms, resource, name)
         indexer = HDFPatchIndexManager(resource)
@@ -91,7 +91,7 @@ class DASDAEV1(FiberIO):
         df = (
             dc.scan_to_df(patches)
             .assign(
-                path=lambda x: get_patch_name(x),
+                path=lambda x: get_patch_names(x),
                 file_format=self.name,
                 file_version=self.version,
             )

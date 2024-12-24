@@ -33,7 +33,7 @@ from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
     concatenate_patches,
-    get_patch_name,
+    get_patch_names,
     patches_to_df,
     stack_patches,
 )
@@ -602,7 +602,7 @@ class DataFrameSpool(BaseSpool):
         """{doc}."""
         return self._df[filter_df(self._df, **self._select_kwargs)]
 
-    get_name = get_patch_name
+    get_patch_names = get_patch_names
 
 
 class MemorySpool(DataFrameSpool):

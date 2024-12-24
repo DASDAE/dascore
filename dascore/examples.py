@@ -18,7 +18,7 @@ from dascore.exceptions import UnknownExampleError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
-from dascore.utils.patch import get_patch_name
+from dascore.utils.patch import get_patch_names
 from dascore.utils.time import to_timedelta64
 
 EXAMPLE_PATCHES = {}
@@ -506,7 +506,7 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5")
         path = Path(tempfile.mkdtemp())
         assert path.exists()
     for patch in spool:
-        name = get_patch_name(patch).iloc[0]
+        name = get_patch_names(patch).iloc[0]
         out_path = path / (f"{name}.{extention}")
         patch.io.write(out_path, file_format=file_format)
     return path

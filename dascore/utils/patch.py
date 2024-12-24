@@ -431,7 +431,7 @@ def get_start_stop_step(patch: PatchType, dim):
     return start, stop, step
 
 
-def get_patch_name(
+def get_patch_names(
     patch_data: pd.DataFrame | dc.Patch | dc.BaseSpool,
     prefix="DAS",
     attrs=("network", "station", "tag"),
@@ -465,9 +465,9 @@ def get_patch_name(
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.patch import get_patch_name
+    >>> from dascore.utils.patch import get_patch_names
     >>> patch = dc.get_example_patch()
-    >>> name = get_patch_name(patch)
+    >>> name = get_patch_names(patch)
     """
 
     def _format_time_column(ser):

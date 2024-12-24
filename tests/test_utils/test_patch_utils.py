@@ -24,7 +24,7 @@ from dascore.utils.patch import (
     align_patch_coords,
     concatenate_patches,
     get_dim_axis_value,
-    get_patch_name,
+    get_patch_names,
     merge_compatible_coords_attrs,
     patches_to_df,
     stack_patches,
@@ -616,30 +616,30 @@ class TestGetPatchName:
 
     def test_single_patch(self, random_patch):
         """Ensure the random patch can have a name."""
-        out = get_patch_name(random_patch)
+        out = get_patch_names(random_patch)
         assert isinstance(out, pd.Series)
         assert len(out) == 1
 
     def test_spool(self, random_spool):
         """Ensure names can be generated from a spool as well."""
-        out = get_patch_name(random_spool)
+        out = get_patch_names(random_spool)
         assert len(out) == len(random_spool)
 
     def test_empty(self):
         """Ensure an empty thing returns a series of the right type."""
-        out = get_patch_name([])
+        out = get_patch_names([])
         assert isinstance(out, pd.Series)
 
     def test_name_column_exists(self, random_spool):
         """If the name or path field already exist this should be used."""
         df = random_spool.get_contents().assign(name=lambda x: np.arange(len(x)))
         # This should convert to string type and return.
-        names = get_patch_name(df)
+        names = get_patch_names(df)
         assert np.all(names.values == np.arange(len(df)).astype(str))
 
     def test_path_column(self, random_spool_directory):
         """Ensure the path column works."""
-        names = get_patch_name(random_spool_directory)
+        names = get_patch_names(random_spool_directory)
         df = random_spool_directory.get_contents()
         expected = pd.Series([x[-1].split(".")[0] for x in df["path"].str.split("/")])
         assert np.all(names == expected)

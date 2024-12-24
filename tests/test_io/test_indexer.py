@@ -15,7 +15,7 @@ from packaging.version import parse as get_version
 import dascore as dc
 from dascore.examples import spool_to_directory
 from dascore.io.indexer import DirectoryIndexer
-from dascore.utils.patch import get_patch_name
+from dascore.utils.patch import get_patch_names
 
 
 @pytest.fixture(scope="class")
@@ -224,7 +224,7 @@ class TestUpdate:
 
     def test_add_one_patch(self, empty_index, random_patch):
         """Ensure a new patch added to the directory shows up."""
-        path = empty_index.path / get_patch_name(random_patch).iloc[0]
+        path = empty_index.path / get_patch_names(random_patch).iloc[0]
         random_patch.io.write(path, file_format="dasdae")
         new_index = empty_index.update()
         contents = new_index()
