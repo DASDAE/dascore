@@ -27,6 +27,7 @@ from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus2
+from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.optodas import OptoDASV8
@@ -54,6 +55,7 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    GDR_V1(): ("gdr_1.h5",),
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
     SilixaH5V1(): ("silixa_h5_1.hdf5",),
