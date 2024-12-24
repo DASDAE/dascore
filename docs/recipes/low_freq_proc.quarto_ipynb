@@ -1,0 +1,252 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "---\n",
+        "title: \"Low-Frequency Processing\"\n",
+        "execute:\n",
+        "  warning: false\n",
+        "---\n",
+        "\n",
+        "\n",
+        "\n",
+        "\n",
+        "This recipe demonstrates how DASCore can be used to apply low-frequency (LF) processing to a spool of DAS data. LF processing helps efficiently downsample the entire spool.\n",
+        "\n",
+        "\n",
+        "## Get a spool and define parameters \n"
+      ],
+      "id": "8063122b"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "## Load libraries and get a spool to work on\n",
+        "import numpy as np\n",
+        "import os\n",
+        "\n",
+        "import dascore as dc\n",
+        "from dascore.utils.patch import get_patch_names\n",
+        "\n",
+        "\n",
+        "# Get a spool to work on\n",
+        "sp = dc.get_example_spool().update()\n",
+        "\n",
+        "# Sort the spool\n",
+        "sp = sp.sort(\"time\")\n",
+        "# You may also want to sub-select the spool for the desired distance or time samples before proceeding.\n",
+        "\n",
+        "# Get the first patch\n",
+        "pa = sp[0]\n",
+        "\n",
+        "# Define the target sampling interval (in sec.)\n",
+        "dt = 10 \n",
+        "# With a sampling interval of 10 seconds, the cutoff frequency (Nyquist frequency) is determined to be 0.05 Hz \n",
+        "cutoff_freq = 1 / (2*dt)\n",
+        "\n",
+        "# Safety factor for the low-pass filter to avoid ailiasing \n",
+        "filter_safety_factor = 0.9\n",
+        "\n",
+        "# Enter memory size to be dedicated for processing (in MB)\n",
+        "memory_limit_MB = 75\n",
+        "\n",
+        "# Define a tolerance for determining edge effects (used in next step)\n",
+        "tolerance = 1e-3"
+      ],
+      "id": "a58bee6d",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Calculate chunk size and determine edge effects\n",
+        "\n",
+        "To chunk the spool, first we need to figure out the chunk size based on machine's memory size so we ensure we can load and process patches with no memory issues. Longer chunk size (longer patches) increases computation efficiency. \n",
+        "\n",
+        "Notes: \n",
+        "\n",
+        "1. The `processing_factor` is required because certain processing routines involve making copies of the data during the processing steps. It should be determined by performing memory profiling on an example dataset for the specific processing routine. For instance, the combination of low-pass filtering and interpolation, discussed in the next section, requires a processing factor of approximately 5.\n",
+        "2. The `memory_safety_factor` is optional and helps prevent getting too close to the memory limit.\n"
+      ],
+      "id": "58d9b269"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "# Get patch's number of bytes per seconds (based on patch's data type) \n",
+        "pa_bytes_per_second = pa.data.nbytes / pa.seconds\n",
+        "# Define processing factor and safety factor \n",
+        "processing_factor = 5  \n",
+        "memory_safety_factor = 1.2 \n",
+        "\n",
+        "# Calculate memory size required for each second of data to get processed\n",
+        "memory_size_per_second = pa_bytes_per_second * processing_factor * memory_safety_factor\n",
+        "memory_size_per_second_MB = memory_size_per_second / 1e6\n",
+        "\n",
+        "# Calculate chunk size that can be loaded (in seconds)\n",
+        "chunk_size = memory_limit_MB / memory_size_per_second_MB\n",
+        "\n",
+        "# Ensure `chunk_size` does not exceed the spool length\n",
+        "merged_sp = sp.chunk(time=None)[0]\n",
+        "if chunk_size > merged_sp.seconds:\n",
+        "    print(\n",
+        "        f\"Warning: Specified `chunk_size` ({chunk_size:.2f} seconds) exceeds the spool length \"\n",
+        "        f\"({merged_sp.seconds:.2f} seconds). Adjusting `chunk_size` to match spool length.\"\n",
+        "    )\n",
+        "   chunk_size = merged_sp.seconds "
+      ],
+      "id": "70618659",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "Next, we need to determine the extent of artifacts introduced by low-pass filtering at the edges of each patch. To achieve this, we apply LF processing to a delta function patch, which contains a unit value at the center and zeros elsewhere. The distorted edges are then identified based on a defined threshold.\n"
+      ],
+      "id": "90ff54c3"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "# Retrieve a patch of appropriate size for LF processing that fits into memory\n",
+        "pa_merged_sp = sp.chunk(time=chunk_size)[0] \n",
+        "# Create a delta patch based on new patch size\n",
+        "delta_pa = dc.get_example_patch(\"delta_patch\", dim=\"time\", patch=pa_merged_sp)\n",
+        "\n",
+        "# Apply the low-pass filter on the delta patch\n",
+        "delta_pa_low_passed = delta_pa.pass_filter(time=(None, cutoff_freq * filter_safety_factor))\n",
+        "# Resample the low-passed filtered patch\n",
+        "new_time_ax = np.arange(delta_pa.attrs[\"time_min\"], delta_pa.attrs[\"time_max\"], np.timedelta64(dt, \"s\"))\n",
+        "delta_pa_lfp = delta_pa_low_passed.interpolate(time=new_time_ax)\n",
+        "\n",
+        "# Identify the indices where the absolute value of the data exceeds the threshold\n",
+        "data_abs = np.abs(delta_pa_lfp.data)\n",
+        "threshold = np.max(data_abs) * tolerance\n",
+        "ind = data_abs > threshold\n",
+        "ind_1 = np.where(ind)[1][0]\n",
+        "ind_2 = np.where(ind)[1][-1]\n",
+        "\n",
+        "# Get the total duration of the processed delta function patch in seconds\n",
+        "time_coord = delta_pa_lfp.get_coord('time')\n",
+        "delta_pa_lfp_seconds = dc.to_float((time_coord.max() - time_coord.min()))\n",
+        "# Convert the new time axis to absolute seconds, relative to the first timestamp\n",
+        "time_ax_abs = (new_time_ax - new_time_ax[0]) / np.timedelta64(1, \"s\")\n",
+        "# Center the time axis \n",
+        "time_ax_centered = time_ax_abs - delta_pa_lfp_seconds // 2 \n",
+        "\n",
+        "# Calculate the maximum of edges in both sides (in seconds) where artifacts are present\n",
+        "edge = max(np.abs(time_ax_centered[ind_1]), np.abs(time_ax_centered[ind_2]))\n",
+        "\n",
+        "# Validate the `edge` value to ensure sufficient processing patch size\n",
+        "if np.ceil(edge) >= chunk_size / 2:\n",
+        "    raise ValueError(\n",
+        "        f\"The calculated `edge` value ({edge:.2f} seconds) is greater than half of the processing patch size \"\n",
+        "        f\"({chunk_size:.2f} seconds). To resolve this and increase efficiency, consider one of the following:\\n\"\n",
+        "        \"- Increase `memory_size` to allow for a larger processing window.\\n\"\n",
+        "        \"- Increase `tolerance` to reduce the sensitivity of artifact detection.\"\n",
+        "    )"
+      ],
+      "id": "b1cf2188",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Perform low-frequency processing and save results on disk\n"
+      ],
+      "id": "0ab13e63"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "# Chunk the spool based on the `chunk_size' and `edge` calculated before.\n",
+        "sp_chunked_overlaped = sp.chunk(time=chunk_size, overlap=2*edge)\n",
+        "\n",
+        "# Process each patch in the spool and save the result patch\n",
+        "lf_patches = []\n",
+        "for patch in sp_chunked_overlap:\n",
+        "    # Apply any pre-processing you may need (such as velocity to strain rate transformation, detrending, etc.)\n",
+        "    # ...\n",
+        "\n",
+        "    # Apply the low-pass filter on the delta patch\n",
+        "    pa_low_passed = patch.pass_filter(time=(None, cutoff_freq * filter_safety_factor))\n",
+        "    # Resample the low-passed filter patch\n",
+        "    new_time_ax = np.arange(pa_low_passed.attrs[\"time_min\"], pa_low_passed.attrs[\"time_max\"], np.timedelta64(dt, \"s\"))\n",
+        "    pa_lfp = pa_low_passed.interolate(time=new_time_ax)\n",
+        "    # Update processed patch's sampling interval \n",
+        "    pa_lfp = pa_lfp.update_attrs(time_step=dt)\n",
+        "\n",
+        "    # Remove distorted edges from the data at both ends using the calculated `edge` value\n",
+        "    pa_lfp_edgeless = pa_lfp.select(time=(edge, -edge), relative=True)\n",
+        "\n",
+        "    # Save processed patch \n",
+        "    pa_lf_name = get_patch_name(pa_lfp_edgeless)\n",
+        "    pa_lf_path = os.path.join(\"/path/to/output/dir\", pa_lf_name)\n",
+        "    # pa_lfp_edgeless.io.write(pa_lf_path, \"dasdae\") # commented to make this doc executable \n",
+        "\n",
+        "    # Add the processed patch to a list (so later we can create a spool). No need if patches are being written to a directory\n",
+        "    lf_patches = lf_patches.append(pa_lfp_edgeless)"
+      ],
+      "id": "4f7f672b",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Visualize the results\n"
+      ],
+      "id": "d0569001"
+    },
+    {
+      "cell_type": "code",
+      "metadata": {},
+      "source": [
+        "# Create a spool of LF processed results\n",
+        "# sp_lf = dc.spool(output_data_dir) # commented to make this doc executable \n",
+        "sp_lf = dc.spool(lf_patches)\n",
+        "\n",
+        "# Merge the spool and create a single patch. May need to sub-select before merging to prevent exceeding the memory limit.\n",
+        "sp_lf_merged = sp_lf.chunk(time=None)\n",
+        "pa_lf_merged = sp_lf_merged[0]\n",
+        "\n",
+        "# Visualize the results. Try different scale values for better visualization.\n",
+        "pa_lf_merged.viz.waterfall(scale=0.1)"
+      ],
+      "id": "1b9c9bd4",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "#### For any questions, please contact Ahmad Tourei: [GitHub Profile](https://github.com/ahmadtourei)."
+      ],
+      "id": "dddf79dd"
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "name": "python3",
+      "language": "python",
+      "display_name": "Python 3 (ipykernel)",
+      "path": "/Users/tourei@mines.edu/miniconda3/envs/dascore/share/jupyter/kernels/python3"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}

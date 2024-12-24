@@ -73,12 +73,14 @@ class TestRickerMoveout:
 class TestDeltaPatch:
     """Tests for the delta_patch example."""
 
-    @pytest.mark.parametrize("invalid_dim", ["invalid_dimension", "", None, 123])
+    @pytest.mark.parametrize("invalid_dim", ["inv_dim", "", None, 123, 1.1])
     def test_delta_patch_invalid_dim(self, invalid_dim):
         """
         Test that passing an invalid dimension value raises a ValueError.
         """
-        with pytest.raises(ValueError, match="The delta patch is a 2D patch"):
+        with pytest.raises(
+            ValueError, match="no patch is provided, the delta patch will be a 2D"
+        ):
             dc.get_example_patch("delta_patch", dim=invalid_dim)
 
     @pytest.mark.parametrize("dim", ["time", "distance"])
@@ -91,7 +93,6 @@ class TestDeltaPatch:
         assert (
             "time" in dims and "distance" in dims
         ), "Patch must have 'time' and 'distance' dimensions"
-        assert len(patch.shape) == 2, "Data should be 2D"
 
     @pytest.mark.parametrize("dim", ["time", "distance"])
     def test_delta_patch_delta_location(self, dim):
@@ -129,10 +130,29 @@ class TestDeltaPatch:
         assert isinstance(delta_applied_patch, dc.Patch), "Should return a Patch"
         data = delta_applied_patch.squeeze().data
 
-        # Ensure data is 1D after operation if that is the intended behavior
-        assert len(delta_applied_patch.shape) == 2, "Data should be 2D"
-        mid_idx = len(data) // 2
         # Check that only the center value is one and others are zero
+        mid_idx = len(data) // 2
+        assert data[mid_idx] == 1.0, "Center sample should be 1.0"
+        test_data = np.copy(data)
+        test_data[mid_idx] = 0
+        assert np.allclose(
+            test_data, 0
+        ), "All other samples should be zero except the center"
+
+    @pytest.mark.parametrize("dim", ["lag_time", "distance"])
+    def test_delta_patch_with_3d_patch(self, dim):
+        """Test passing a 3D patch."""
+        # Create a base patch
+        base_patch = dc.get_example_patch("sin_wav")
+        base_patch_3d = base_patch.correlate(distance=[2], samples=True)
+        # Apply the delta_patch function with the existing patch
+        delta_applied_patch = dc.get_example_patch(
+            "delta_patch", dim=dim, patch=base_patch_3d
+        )
+        assert isinstance(delta_applied_patch, dc.Patch), "Should return a Patch"
+        data = delta_applied_patch.squeeze().data
+        # Check that only the center value is one and others are zero
+        mid_idx = len(data) // 2
         assert data[mid_idx] == 1.0, "Center sample should be 1.0"
         test_data = np.copy(data)
         test_data[mid_idx] = 0
