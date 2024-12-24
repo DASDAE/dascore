@@ -30,13 +30,12 @@ from dascore.constants import (
     timeable_types,
 )
 from dascore.core.attrs import str_validator
+from dascore.core.spool import DataFrameSpool
 from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     UnknownFiberFormatError,
 )
-from dascore.core.spool import DataFrameSpool
-from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import _iter_filesystem, cached_method, iterate, warn_or_raise
