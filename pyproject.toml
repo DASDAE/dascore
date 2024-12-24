@@ -125,6 +125,7 @@ SEGY__V2_1 = "dascore.io.segy.core:SegyV2_1"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
 XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
+GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
 
 
 # --- External tool configuration

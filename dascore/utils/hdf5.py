@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 import warnings
+from collections.abc import Sequence
 from contextlib import contextmanager, suppress
 from functools import partial
 from pathlib import Path
@@ -30,8 +31,10 @@ from dascore.io.core import PatchFileSummary
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
+    _maybe_unpack,
     cached_method,
     suppress_warnings,
+    unbyte,
 )
 from dascore.utils.pd import (
     _remove_base_path,
@@ -469,3 +472,66 @@ def unpack_scalar_h5_dataset(dataset):
     if isinstance(value, np.ndarray):
         value = value[0]
     return value
+
+
+def h5_matches_structure(h5file: H5pyFile, structure: Sequence[str]):
+    """
+    Check if an H5 file matches a spec given by a structure.
+
+    Parameters
+    ----------
+    h5file
+        A an open h5file as returned by h5py.File.
+    structure
+        A sequence of strings which indicates required groups/datasets/attrs.
+        For example ("data", "data/raw", "data/raw.sampling") would require
+        the 'data' group to exist, the data/raw group/dataset to exist and
+        that raw has an attributed called 'sampling'.
+    """
+    for address in structure:
+        split = address.split(".")
+        assert len(split) in {1, 2}, "address can have at most one '.'"
+        if len(split) == 2:
+            base, attr = split
+        else:
+            base, attr = split[0], None
+        try:
+            obj = h5file[base]
+        except KeyError:
+            return False
+        if attr is not None and attr not in set(obj.attrs):
+            return False
+    return True
+
+
+def extract_h5_attrs(
+    h5file: H5pyFile,
+    name_map: dict[str, str],
+    fill_values=None,
+):
+    """
+    Extract attributes from h5 file based on structure.
+
+    Parameters
+    ----------
+    h5file
+        A an open h5file as returned by h5py.File.
+    name_map
+        A mapping from {old_name: new_name}. Old name must include one
+        dot which separates the path from the attribute name.
+        eg {"DasData.SamplingRate": "sampling_rate"}.
+
+    Raises
+    ------
+    KeyError if any datasets/attributes are missing.
+    """
+    fill_values = fill_values or {}
+    out = {}
+    for address, out_name in name_map.items():
+        split = address.split(".")
+        assert len(split) == 2, "Struct must have exactly one '.'"
+        base, attr = split
+        obj = h5file[base]
+        value = _maybe_unpack(unbyte(obj.attrs[attr]))
+        out[out_name] = fill_values.get(value, value)
+    return out
