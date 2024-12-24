@@ -451,6 +451,24 @@ def random_spool(time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), **k
     return dc.spool(out)
 
 
+@register_func(EXAMPLE_SPOOLS, key="radom_directory_das")
+def random_directory_spool(path=None, **kwargs):
+    """
+    Create a random spool, then save to specified path.
+
+    Parameters
+    ----------
+    path
+        If provided, the path to save the directory spool. If None, use
+        a temporary path.
+
+    kwargs are passed to [`random_spool`](`dascore.examples.random_spool`)
+    """
+    spool = random_spool(**kwargs)
+    path = spool_to_directory(spool, path)
+    return dc.spool(path)
+
+
 @register_func(EXAMPLE_SPOOLS, key="diverse_das")
 def diverse_spool():
     """

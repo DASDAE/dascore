@@ -13,6 +13,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 import pydantic
+from pydantic import TypeAdapter
 
 import dascore as dc
 from dascore.constants import (
@@ -437,20 +438,26 @@ def get_patch_names(
     attrs=("network", "station", "tag"),
     coords=("time",),
     sep="__",
+    strip_extension=True,
 ) -> pd.Series:
     """
     Generates the default name of patch data.
 
     Parameters
     ----------
-    prefix
-        A string to prefix the names.
     patch_data
         A container with patch data.
+    prefix
+        A string to prefix the names.
+    attrs
+        The Patch attrs to include in the name.
     coords
-        The coordinate ranges to use for names.
+        The coordinate ranges to use in the names.
     sep
-        The separator for the strings.
+        The separator for each value.
+    strip_extension
+        If True, remove extensions when getting name from a file path.
+        See the notes section for more details.
 
     Notes
     -----
@@ -459,15 +466,28 @@ def get_patch_names(
     will simply be returned.
 
     The second is when a column called "path" exists. In this case, the
-    output will be the file name with the extension removed. The path must
-    use / as a delinater.
+    output will be the file name with the extension removed (if
+    strip_extension). The path must use '/' as a delinater.
+
+    See Also
+    --------
+    - [`Patch.get_patch_name`](`dascore.Patch.get_patch_name`)
+    - [`Spool.get_patch_names`](`dascore.BaseSpool.get_patch_names`)
 
     Examples
     --------
     >>> import dascore as dc
     >>> from dascore.utils.patch import get_patch_names
+    >>>
+    >>> # Get a series of names from a patch or spool
     >>> patch = dc.get_example_patch()
-    >>> name = get_patch_names(patch)
+    >>> spool = dc.get_example_spool()
+    >>> patch_name = get_patch_names(patch)
+    >>> spool_name = get_patch_names(patch)
+    >>>
+    >>> # Use the Patch/Spool methods
+    >>> spool_series = spool.get_patch_names()
+    >>> patch_name = patch.get_patch_name() # a str w/ name.
     """
 
     def _format_time_column(ser):
@@ -487,11 +507,22 @@ def get_patch_names(
             out[col] = _format_time_column(df[col])
         return df.assign(**out)
 
-    def _get_filename(path_ser):
+    def _get_filename(path_ser, strip_extension):
         """Get the file name from a path series."""
         ser = path_ser.astype(str)
-        file_names = [x[-1].split(".")[0] for x in ser.str.split("/")]
+        split_ser = ser.str.split("/")
+        if strip_extension:
+            file_names = [x[-1].split(".")[0] for x in split_ser]
+        else:
+            file_names = [x[-1] for x in split_ser]
         return pd.Series(file_names)
+
+    # Validate inputs. Note we cannot use the validation decorator or
+    # it introduces a circular import.
+    prefix = TypeAdapter(str).validate_python(prefix)
+    attrs = TypeAdapter(tuple[str, ...]).validate_python(attrs)
+    coords = TypeAdapter(tuple[str, ...]).validate_python(coords)
+    sep = TypeAdapter(str).validate_python(sep)
 
     # Ensure we are working with a dataframe.
     df = dc.scan_to_df(
@@ -505,7 +536,7 @@ def get_patch_names(
     if "name" in col_set:
         return df["name"].astype(str)
     if "path" in col_set:
-        return _get_filename(df["path"])
+        return _get_filename(df["path"], strip_extension)
     # Determine the requested fields and get the ones that are there.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
     requested_fields = list(attrs) + list(*coord_fields)

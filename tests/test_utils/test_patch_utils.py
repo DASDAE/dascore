@@ -637,9 +637,9 @@ class TestGetPatchName:
         names = get_patch_names(df)
         assert np.all(names.values == np.arange(len(df)).astype(str))
 
-    def test_path_column(self, random_spool_directory):
+    def test_path_column(self, random_directory_spool):
         """Ensure the path column works."""
-        names = get_patch_names(random_spool_directory)
-        df = random_spool_directory.get_contents()
+        names = get_patch_names(random_directory_spool)
+        df = random_directory_spool.get_contents()
         expected = pd.Series([x[-1].split(".")[0] for x in df["path"].str.split("/")])
         assert np.all(names == expected)

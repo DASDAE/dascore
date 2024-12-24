@@ -260,7 +260,15 @@ class Patch:
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
     apply_ufunc = dascore.proc.apply_ufunc
-    get_patch_names = get_patch_names
+
+    def get_patch_name(self, *args, **kwargs) -> str:
+        """
+        Return the name of the patch.
+
+        See [`get_patch_names`](`dascore.utils.patch.get_patch_names`)
+        for argument details.
+        """
+        return get_patch_names(self, *args, **kwargs).iloc[0]
 
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords."""

@@ -370,10 +370,10 @@ class TestScanToDF:
         out = dc.scan_to_df(df)
         assert out is df
 
-    def test_spool_dataframe(self, random_spool_directory):
+    def test_spool_dataframe(self, random_directory_spool):
         """Ensure scan_to_df just gets the dataframe from the spool."""
-        expected = random_spool_directory.get_contents()
-        out = dc.scan_to_df(random_spool_directory)
+        expected = random_directory_spool.get_contents()
+        out = dc.scan_to_df(random_directory_spool)
         assert out.equals(expected)
 
 

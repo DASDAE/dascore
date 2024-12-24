@@ -193,6 +193,9 @@ class BaseSpool(abc.ABC):
         >>> df = spool.get_contents()
         """
 
+    # Bind get_patch names as a spool method.
+    get_patch_names = get_patch_names
+
     # --- optional methods
 
     def sort(self, attribute) -> Self:
@@ -601,8 +604,6 @@ class DataFrameSpool(BaseSpool):
     def get_contents(self) -> pd.DataFrame:
         """{doc}."""
         return self._df[filter_df(self._df, **self._select_kwargs)]
-
-    get_patch_names = get_patch_names
 
 
 class MemorySpool(DataFrameSpool):
