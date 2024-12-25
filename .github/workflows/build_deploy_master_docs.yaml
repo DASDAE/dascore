@@ -43,7 +43,7 @@ jobs:
       - uses: mamba-org/setup-micromamba@v1
         with:
           micromamba-version: '1.5.8-0' # versions: https://github.com/mamba-org/micromamba-releases
-          environment-file: environment.yml
+          environment-file: ./.github/doc_environment.yml
           init-shell: >-
             bash
             powershell

@@ -56,12 +56,18 @@ class TestSpoolBasics:
         assert len(out) == 0
 
     def test_updated_spool_eq(self, random_spool):
-        """Ensure updating the spool doesnt change equality."""
+        """Ensure updating the spool doesn't change equality."""
         assert random_spool == random_spool.update()
 
     def test_empty_spool_str(self):
         """Ensure and empty spool has a string rep. See #295."""
         spool = dc.spool([])
+        spool_str = str(spool)
+        assert "Spool" in spool_str
+
+    def test_spool_with_empty_patch_str(self):
+        """A spool with an empty patch should have a str."""
+        spool = dc.spool(dc.Patch())
         spool_str = str(spool)
         assert "Spool" in spool_str
 

@@ -711,3 +711,12 @@ class TestHistory:
         entry = hist[-1]
         array_part = entry.split("'[")[-1].split("]'")[0]
         assert len(array_part) < 100
+
+
+class TestGetPatchName:
+    """Tests for getting the name of a patch."""
+
+    def test_simple_get_name(self, random_patch):
+        """Happy path test."""
+        name = random_patch.get_patch_name()
+        assert isinstance(name, str)
