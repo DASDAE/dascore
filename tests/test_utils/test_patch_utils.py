@@ -644,7 +644,7 @@ class TestGetPatchName:
         expected = pd.Series([x[-1].split(".")[0] for x in df["path"].str.split("/")])
         assert np.all(names == expected)
 
-    def tet_path_column_leave_extension(self, random_directory_spool):
+    def test_path_column_leave_extension(self, random_directory_spool):
         """If extension is false the file extension should remain."""
         names = get_patch_names(random_directory_spool, strip_extension=False)
         assert "." in names.iloc[0]
