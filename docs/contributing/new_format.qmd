@@ -199,7 +199,7 @@ path.unlink()  # cleanup test file
 
 ## Writing Tests
 
-Next we need to write tests for the format (you weren't thinking of skipping this step were you!?). The hardest part of testing new file formats is finding a *small* (typically no more than 10 ish mb) file to include in the test suite. Once you have such a file, [Adding test data](adding_test_data.qmd) details how to add it to the registry.
+Next we need to write tests for the format (you weren't thinking of skipping this step were you!?). The hardest part of testing new file formats is finding a *small* (typically no more than 10 ish mb) file to include in the test suite. The `modify_h5_file.py` script in DASCore's scripts folder can help downsize an existing hdf5 file. Once you have a small test file, [Adding test data](adding_test_data.qmd) details how to add it to DASCore's registry.
 
 Once the test file is added to the data registry, you can register the new format so a suite of tests run automatically. This is done by adding the format to the appropriate data structures in `tests/test_io/test_common_io.py`. The comments at the top of the file will guide you through this process.
 

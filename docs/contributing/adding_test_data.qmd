@@ -45,7 +45,7 @@ If, in the test code, the example patch or spool is used only once, just call th
 
 Of course, not all data can easily be generated in python. For example, testing [support for new file formats](./new_format.qmd) typically requires a test file.
 
-If you have a small file that isn't already hosted on a permanent site, you can put it into [dasdae's data repo](https://github.com/DASDAE/test_data). Simply clone the repo, add you file format, and push back to master or open a PR on a separate branch and someone will merge it in.
+If you have a small file that isn't already hosted on a permanent site, you can put it into [dasdae's data repo](https://github.com/DASDAE/test_data). Simply clone the repo, add you file format, and push back to master or open a PR on a separate branch and someone will merge it.
 
 Next, add your file to dascore's data registry (dascore/data_registry.txt).
 You will have to get the sha256 hash of your test file, for that you can simply use [Pooch's hash_file function](https://www.fatiando.org/pooch/latest/api/generated/pooch.file_hash.html), and you can create the proper download url using the other entries as examples.
@@ -62,3 +62,5 @@ https://github.com/dasdae/test_data/raw/master/das/jingle_test_file.jgl
 from dascore.utils.downloader import fetch
 path = fetch("jingle_test_file.jgl")
 ```
+
+If you need to create a smaller version of an existing hdf5 file you can use the `modify_h5_file.py` in DASCore's scripts directory. It will require some modifications, but shows how to copy and modify datasets and attributes. 
