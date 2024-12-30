@@ -325,7 +325,7 @@ def optional_import(package_name: str) -> ModuleType:
     except ImportError:
         msg = (
             f"{package_name} is not installed but is required for the "
-            f"requested functionality"
+            f"requested functionality."
         )
         raise MissingOptionalDependencyError(msg)
     return mod

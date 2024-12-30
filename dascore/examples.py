@@ -18,7 +18,7 @@ from dascore.exceptions import UnknownExampleError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
-from dascore.utils.patch import get_default_patch_name
+from dascore.utils.patch import get_patch_names
 from dascore.utils.time import to_timedelta64
 
 EXAMPLE_PATCHES = {}
@@ -543,6 +543,24 @@ def random_spool(time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), **k
     return dc.spool(out)
 
 
+@register_func(EXAMPLE_SPOOLS, key="random_directory_das")
+def random_directory_spool(path=None, **kwargs):
+    """
+    Create a random spool, then save to specified path.
+
+    Parameters
+    ----------
+    path
+        If provided, the path to save the directory spool. If None, use
+        a temporary path.
+
+    kwargs are passed to [`random_spool`](`dascore.examples.random_spool`)
+    """
+    spool = random_spool(**kwargs)
+    path = spool_to_directory(spool, path)
+    return dc.spool(path)
+
+
 @register_func(EXAMPLE_SPOOLS, key="diverse_das")
 def diverse_spool():
     """
@@ -598,7 +616,8 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5")
         path = Path(tempfile.mkdtemp())
         assert path.exists()
     for patch in spool:
-        out_path = path / (f"{get_default_patch_name(patch)}.{extention}")
+        name = get_patch_names(patch).iloc[0]
+        out_path = path / (f"{name}.{extention}")
         patch.io.write(out_path, file_format=file_format)
     return path
 

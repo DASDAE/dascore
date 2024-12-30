@@ -10,7 +10,7 @@ on:
     paths:
       - 'pyproject.toml'
       - '**.py'
-      - '.github/workflows/runtests.yml'
+      - '.github/workflows/run_min_dep_tests.yml'
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
@@ -29,10 +29,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-#        os: [ubuntu-latest, macos-latest, windows-latest]
         os: [ubuntu-latest, macos-latest, windows-latest]
-
-        python-version: ['3.12']
+        python-version: ['3.12', '3.13']
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
@@ -50,7 +48,6 @@ jobs:
         run: |
           git fetch --tags --force # Retrieve annotated tags.
 
-      # Have to use conda to install hdf5 so mac (I guess m1/2) runners work.
       - uses: mamba-org/setup-micromamba@v2
         with:
           micromamba-version: '2.0.2-1' # versions: https://github.com/mamba-org/micromamba-releases
@@ -64,7 +61,8 @@ jobs:
           create-args: >-
             python=${{ matrix.python-version }}
 
-      # Not sure why this is needed but it appears to be the case
+      # Not sure why this is needed but it appears to be the case.
+      # Also installs pytables so hdf5 gets installed on windows
       - name: fix env
         shell: bash -l {0}
         run: | 
@@ -72,27 +70,20 @@ jobs:
           eval "$(micromamba shell hook --shell bash)"
           micromamba activate dascore
 
-      - name: print python version
-        shell: bash -el {0}
-        run: |
-          python --version
-
       - name: install hdf5
-        if: matrix.os=='macos-latest'
         shell: bash -l {0}
         run: |
           micromamba install pytables
 
-      - name: install dascore
-        shell: bash -l {0}
-        run: |
-          python -m pip install -e .[test]
+      # Then switch over to uv. We can use this exclusively once we drop pytables.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
 
       - name: set data cache path
         shell: bash -l {0}
         run: |
           export PATH="$pythonLocation:$PATH"
-          echo "DATA_CACHE_PATH=$(python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
+          echo "DATA_CACHE_PATH=$(uv run --extra test python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
 
       - name: cache test data
         uses: actions/cache@v3
@@ -103,9 +94,9 @@ jobs:
 
       - name: run test suite
         shell: bash -l {0}
-        run: ./.github/test_code.sh
+        run: uv run --extra test --python ${{ matrix.python-version }} pytest -s --cov dascore --cov-append --cov-report=xml
 
       # Runs examples in docstrings
       - name: test docstrings
         shell: bash -l {0}
-        run: ./.github/test_code.sh doctest
+        run: uv run --extra test --python ${{ matrix.python-version }} pytest dascore --doctest-modules

@@ -43,7 +43,7 @@ jobs:
       - uses: mamba-org/setup-micromamba@v1
         with:
           micromamba-version: '1.5.8-0' # versions: https://github.com/mamba-org/micromamba-releases
-          environment-file: environment.yml
+          environment-file: ./.github/doc_environment.yml
           init-shell: >-
             bash
             powershell
@@ -62,7 +62,7 @@ jobs:
         shell: bash -l {0}
         run: |
           conda install -c conda-forge pandoc
-          python -m pip install -e .[docs]
+          python -m pip install -e .[docs,all]
 
       - name: Install quarto
         uses: quarto-dev/quarto-actions/setup@v2

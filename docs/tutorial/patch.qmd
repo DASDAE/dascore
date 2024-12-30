@@ -227,6 +227,18 @@ print(patch.channel_count) # to get the number of channels in the patch.
 
 These only work for patches with dimensions "time" and "distance" but can help new users who may be unfamiliar datetimes and coordinates. 
 
+The "name" of the patch, which is the filename that would be used if the patch were saved to disk by DASCore, can be generated via the [`Spool.get_patch_names`](`dascore.BaseSpool.get_patch_names`) to get a series of the names of the managed patches, or [`Patch.get_patch_name`](`dascore.Patch.get_patch_name`) to get a string of the patch name.
+
+```python 
+import dascore as dc
+
+patch = dc.get_example_patch()
+spool = dc.get_example_spool()
+
+patch_name = patch.get_patch_name()
+patch_names = spool.get_patch_names()
+```
+
 # Trim and Reshape
 
 The following methods help trim, reshape, and manipulate coordinates.

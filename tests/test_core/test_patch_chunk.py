@@ -166,6 +166,23 @@ class TestChunk:
         with pytest.raises(ParameterError, match=msg):
             diverse_spool.chunk(time=10, overlap=11)
 
+    def test_issue_474(self, random_spool):
+        """Ensure spools can be chunked with the duration reported by coord."""
+        # See #474
+        patch1 = random_spool.chunk(time=...)[0]
+        duration = patch1.coords.coord_range("time")
+        merged2 = random_spool.chunk(time=duration)
+        patch2 = merged2[0]
+        assert patch1.equals(patch2)
+
+    def test_issue_475(self, diverse_spool):
+        """Ensure the partially chunked spool can be merged."""
+        # See #475
+        spool = diverse_spool.chunk(time=3, overlap=1, keep_partial=True)
+        merged_spool = spool.chunk(time=None)
+        assert isinstance(merged_spool, dc.BaseSpool)
+        assert len(merged_spool)
+
 
 class TestChunkMerge:
     """Tests for merging patches together using chunk method."""

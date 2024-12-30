@@ -87,6 +87,7 @@ docs/**/*.ipynb
 # misc
 scratch/**
 .ruff_cache
+uv.lock
 
 docs/index_files
 docs/index.quarto_ipynb
