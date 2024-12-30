@@ -361,6 +361,22 @@ class TestScan:
         assert not len(scan)
 
 
+class TestScanToDF:
+    """Tests for scanning to dataframes."""
+
+    def test_input_dataframe(self, random_spool):
+        """Ensure a dataframe returns a dataframe."""
+        df = random_spool.get_contents()
+        out = dc.scan_to_df(df)
+        assert out is df
+
+    def test_spool_dataframe(self, random_directory_spool):
+        """Ensure scan_to_df just gets the dataframe from the spool."""
+        expected = random_directory_spool.get_contents()
+        out = dc.scan_to_df(random_directory_spool)
+        assert out.equals(expected)
+
+
 class TestCastType:
     """Test suite to ensure types are intelligently cast to type hints."""
 

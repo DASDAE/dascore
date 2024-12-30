@@ -38,18 +38,19 @@ jobs:
         run: |
           git fetch --tags --force # Retrieve annotated tags.
 
+      - name: Get tags
+        run: git fetch --tags origin
+
       - uses: mamba-org/setup-micromamba@v2
         with:
           micromamba-version: '2.0.2-1' # versions: https://github.com/mamba-org/micromamba-releases
-          environment-file: environment.yml
+          environment-file: ./.github/doc_environment.yml
           init-shell: >-
             bash
             powershell
           cache-environment: true
-          cache-environment-key: environment-${{ steps.date.outputs.date }}
           post-cleanup: 'all'
-          create-args: >-
-            python=${{ matrix.python-version }}
+          cache-environment-key: environment-${{ steps.date.outputs.date }}
 
       # Not sure why this is needed but it appears to be the case
       - name: fix env
