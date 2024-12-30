@@ -78,7 +78,11 @@ def get_intervals(
     if overlap > length:
         msg = "Cant chunk when overlap is greater than chunk size"
         raise ParameterError(msg)
-    if (stop - start) < length and not keep_partials:
+    # If the step is known, we need to account for it in the total duration
+    # See 474.
+    _raw_duration = stop - start
+    duration = _raw_duration + step if step is not None else _raw_duration
+    if duration < length and not keep_partials:
         msg = "Cant chunk when data interval is less than chunk size. "
         raise ChunkError(msg)
     # reference with no overlap
@@ -93,12 +97,13 @@ def get_intervals(
     ends = reference + length - step
     starts = reference
     # trim end to not surpass stop
-    if ends[-1] > stop:
+    bad_ends = ends > stop
+    if bad_ends.any():
         if not keep_partials:
             ends_filt = ends <= stop
             ends, starts = ends[ends_filt], starts[ends_filt]
         else:
-            ends[-1] = stop
+            ends[bad_ends] = stop
     return np.stack([starts, ends]).T
 
 
@@ -263,6 +268,8 @@ class ChunkManager:
         """Get an index mapping from source to chunk."""
         chunk_starts = np.searchsorted(src1, chu1, side="right") - 1
         chunk_ends = np.searchsorted(src2, chu2, side="left")
+        # Ensure no chunks run off the end of the source.
+        assert np.all(chunk_ends < len(src1)), "Invalid chunk range found"
         # add 1 to end so it is an exclusive end range
         return np.stack([chunk_starts, chunk_ends + 1], axis=1)
 
