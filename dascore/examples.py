@@ -17,7 +17,7 @@ from dascore.compat import random_state
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
-from dascore.utils.misc import register_func
+from dascore.utils.misc import iterate, register_func
 from dascore.utils.patch import get_patch_names
 from dascore.utils.time import to_timedelta64
 
@@ -413,6 +413,107 @@ def ricker_moveout(
     coords = {"time": to_timedelta64(time), "distance": distance}
     dims = ("time", "distance")
     return dc.Patch(data=data, coords=coords, dims=dims)
+
+
+@register_func(EXAMPLE_PATCHES, key="delta_patch")
+def delta_patch(
+    dim="time",
+    shape=(10, 200),
+    time_min="2020-01-01",
+    time_step=1 / 250,
+    distance_min=0,
+    distance_step=1,
+    patch=None,
+):
+    """
+    Create a delta function patch (zeros everywhere except for
+    a unit value at the center) along the specified dimension.
+    The returned delta patch has single coordinate(s) along the
+    other dimensions.
+
+    Parameters
+    ----------
+    dim : str
+        The dimension at the center of which to place the unit value.
+        Typically ``"time"`` or ``"distance"``.
+    shape : tuple of int
+        The shape of the data as (distance, time). Defaults to (10, 200).
+        This is used only if no existing ``patch`` is provided.
+    time_min : str or datetime64
+        The start time of the patch.
+    time_step : float
+        The time step in seconds between samples.
+    distance_min : float
+        The minimum distance coordinate.
+    distance_step : float
+        The distance step in meters between samples.
+    patch : dascore.Patch
+        If provided, creates the delta patch based on this existing patch.
+        Default is None.
+    """
+    if patch is None:
+        if dim not in ["time", "distance"]:
+            raise ValueError(
+                "In case no patch is provided, the delta patch will be "
+                "a 2D patch with 'time' and 'distance' dimensions."
+            )
+
+        dims = ("distance", "time")
+        dist_len, time_len = shape
+
+        # Create coordinates
+        time_step_td = to_timedelta64(time_step)
+        t0 = np.datetime64(time_min)
+        time_coord = dascore.core.get_coord(
+            data=t0 + np.arange(time_len) * time_step_td, step=time_step_td, units="s"
+        )
+        dist_coord = dascore.core.get_coord(
+            data=distance_min + np.arange(dist_len) * distance_step,
+            step=distance_step,
+            units="m",
+        )
+
+        coords = {"distance": dist_coord, "time": time_coord}
+        attrs = dict(
+            time_min=t0,
+            time_step=time_step_td,
+            distance_min=distance_min,
+            distance_step=distance_step,
+            category="DAS",
+            network="",
+            station="",
+            tag="delta",
+            time_units="s",
+            distance_units="m",
+        )
+
+        # Depending on the selected dimension, place a line of ones at the midpoint
+        used_dims = tuple(iterate(dim))
+        unused_dims = set(dims) - set(used_dims)
+
+        # Get data with ones centered on selected dimensions.
+        index = tuple(
+            shape[dims.index(dimension)] // 2 if dimension in used_dims else 0
+            for dimension in dims
+        )
+        data = np.zeros((dist_len, time_len))
+        data[index] = 1
+        delta_patch = dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+        return delta_patch.select(**{x: 0 for x in unused_dims}, samples=True)
+    else:
+        used_dims = tuple(iterate(dim))
+        unused_dims = set(patch.dims) - set(used_dims)
+        patch = patch.select(**{x: 0 for x in unused_dims}, samples=True)
+
+        # Get data with ones centered on selected dimensions.
+        shape = patch.shape
+        index = tuple(
+            shape[patch.dims.index(dimension)] // 2 if dimension in used_dims else 0
+            for dimension in patch.dims
+        )
+        data = np.zeros_like(patch.data)
+        data[index] = 1
+        return patch.update(data=data)
 
 
 @register_func(EXAMPLE_PATCHES, key="dispersion_event")

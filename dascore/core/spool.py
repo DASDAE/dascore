@@ -605,6 +605,8 @@ class DataFrameSpool(BaseSpool):
         """{doc}."""
         return self._df[filter_df(self._df, **self._select_kwargs)]
 
+    get_patch_names = get_patch_names
+
 
 class MemorySpool(DataFrameSpool):
     """A Spool for storing patches in memory."""

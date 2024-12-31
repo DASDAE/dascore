@@ -389,7 +389,7 @@ def one_file_dir(tmp_path_factory, random_patch):
 def random_directory_spool(tmp_path_factory):
     """A directory with a few patch files."""
     path = Path(tmp_path_factory.mktemp("one_file_file_spool"))
-    return dc.examples.random_directory_spool(path)
+    return dc.examples.random_directory_spool(path=path)
 
 
 @pytest.fixture(scope="class")
