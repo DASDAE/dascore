@@ -260,6 +260,7 @@ class Patch:
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
     apply_ufunc = dascore.proc.apply_ufunc
+    get_patch_names = get_patch_names
 
     def get_patch_name(self, *args, **kwargs) -> str:
         """
