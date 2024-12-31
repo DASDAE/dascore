@@ -139,6 +139,7 @@ website:
             - recipes/real_time_proc.qmd
             - recipes/smoothing.qmd
             - recipes/parallelization.qmd
+            - recipes/low_freq_proc.qmd
 
         - section: "IO"
           contents:

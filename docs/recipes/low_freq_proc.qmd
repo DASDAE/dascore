@@ -1,7 +1,5 @@
 ---
 title: "Low-Frequency Processing"
-execute:
-  eval: false
 ---
 
 This recipe demonstrates how DASCore can be used to apply low-frequency (LF) processing to a spool of DAS data.
@@ -9,14 +7,16 @@ This recipe demonstrates how DASCore can be used to apply low-frequency (LF) pro
 
 ## Get a spool and define parameters 
 ```{python}
-## Load libraries and get a spool to work on
+import tempfile
+from pathlib import Path
+
 import numpy as np
 
 import dascore as dc
 
-
-# Define path for saving results
-output_data_dir = '/path/to/desired/output/directory/'
+## Load libraries and get a spool to work on
+# Define path for saving results (swap out with your path)
+output_data_dir = Path(tempfile.mkdtemp())
 
 # Get a spool to work on
 sp = dc.get_example_spool().update()
@@ -29,7 +29,7 @@ sp = sp.sort("time")
 pa = sp[0]
 
 # Define the target sampling interval (in sec.)
-dt = 10 
+dt = 1
 # With a sampling interval of 10 seconds, the cutoff frequency (Nyquist frequency) is determined to be 0.05 Hz 
 cutoff_freq = 1 / (2*dt)
 
@@ -71,7 +71,7 @@ Next, we need to determine the extent of artifacts introduced by low-pass filter
 
 ```{python}
 # Retrieve a patch of appropriate size for LF processing that fits into memory
-pa_chunked_sp = sp.chunk(time=chunk_size)[0] 
+pa_chunked_sp = sp.chunk(time=chunk_size, keep_partial=True)[0] 
 # Create a delta patch based on new patch size
 delta_pa = dc.get_example_patch("delta_patch", dim="time", patch=pa_chunked_sp)
 
@@ -143,7 +143,7 @@ def generate_file_name(start_time: np.datetime64, end_time: np.datetime64) -> st
 
 
 # First we chunk the spool based on the `chunk_size' and `edge` calculated before.
-sp_chunked_overlaped = sp.chunk(time=chunk_size, overlap=2*edge)
+sp_chunked_overlap = sp.chunk(time=chunk_size, overlap=2*edge, keep_partial=True)
 
 # Process each patch in the spool and save the result patch
 for patch in sp_chunked_overlap:
@@ -151,10 +151,10 @@ for patch in sp_chunked_overlap:
     # ...
 
     # Apply the low-pass filter on the delta patch
-    pa_low_passed = patch.pass_filter(time=(None, cutoff_freq * filter_safety_factor))
+    pa_low_passed = patch.pass_filter(time=(..., cutoff_freq * filter_safety_factor))
     # Resample the low-passed filter patch
     new_time_ax = np.arange(pa_low_passed.attrs["time_min"], pa_low_passed.attrs["time_max"], np.timedelta64(dt, "s"))
-    pa_lfp = pa_low_passed.interolate(time=new_time_ax)
+    pa_lfp = pa_low_passed.interpolate(time=new_time_ax)
     # Update processed patch's sampling interval 
     pa_lfp = pa_lfp.update_attrs(time_step=dt)
 
@@ -162,8 +162,8 @@ for patch in sp_chunked_overlap:
     pa_lfp_edgeless = pa_lfp.select(time=(edge, -edge), relative=True)
 
     # Save processed patch 
-    pa_lf_name = generate_file_name(pa_lfp_edgeless.attrs["time_min"], pa_lfp_edgeless.attrs["time_max"])
-    pa_lf_path = output_data_dir + pa_lf_name
+    pa_lf_name = pa_lfp_edgeless.get_patch_name()
+    pa_lf_path = output_data_dir / f"{pa_lf_name}.h5"
     pa_lfp_edgeless.io.write(pa_lf_path, "dasdae")
 ```
 
@@ -177,7 +177,8 @@ sp_lf_merged = sp_lf.chunk(time=None)
 pa_lf_merged = sp_lf_merged[0]
 
 # Visualize the results. Try different scale values for better Visualization.
-pa_lf_merged.viz.waterfall(scale=0.1)
+pa_lf_merged.viz.waterfall(scale=0.5)
+print(pa_lf_merged)
 ```
 
-#### For any questions, please contact Ahmad Tourei: [GitHub Profile](https://github.com/ahmadtourei).
+#### For any questions, please contact [Ahmad Tourei](https://github.com/ahmadtourei).
