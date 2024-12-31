@@ -78,9 +78,8 @@ class TestDeltaPatch:
         """
         Test that passing an invalid dimension value raises a ValueError.
         """
-        with pytest.raises(
-            ValueError, match="no patch is provided, the delta patch will be a 2D"
-        ):
+        msg = "with 'time' and 'distance'"
+        with pytest.raises(ValueError, match=msg):
             dc.get_example_patch("delta_patch", dim=invalid_dim)
 
     @pytest.mark.parametrize("dim", ["time", "distance"])

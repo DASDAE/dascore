@@ -454,8 +454,8 @@ def delta_patch(
     if patch is None:
         if dim not in ["time", "distance"]:
             raise ValueError(
-                "In case no patch is provided, the delta patch will be \
-                a 2D patch with 'time' and 'distance' dimensions."
+                "In case no patch is provided, the delta patch will be "
+                "a 2D patch with 'time' and 'distance' dimensions."
             )
 
         dims = ("distance", "time")

@@ -386,7 +386,7 @@ def one_file_dir(tmp_path_factory, random_patch):
 
 
 @pytest.fixture(scope="session")
-def random_spool_directory(tmp_path_factory):
+def random_directory_spool(tmp_path_factory):
     """A directory with a few patch files."""
     out = Path(tmp_path_factory.mktemp("one_file_file_spool"))
     spool = ex.get_example_spool("random_das")
