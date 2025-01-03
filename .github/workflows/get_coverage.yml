@@ -12,32 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: "get tags"
-        run: |
-          git fetch --tags --force # Retrieve annotated tags.
-
-      - uses: mamba-org/setup-micromamba@v1
+      - uses: ./.github/actions/min-deps-install-dascore
         with:
-          micromamba-version: '1.5.8-0' # versions: https://github.com/mamba-org/micromamba-releases
-          environment-file: environment.yml
-          init-shell: >-
-            bash
-            powershell
-          cache-environment: true
-          post-cleanup: 'all'
-
-      # Not sure why this is needed but it appears to be the case
-      - name: fix env
-        shell: bash -l {0}
-        run: | 
-          micromamba shell init --shell bash --root-prefix=~/micromamba
-          eval "$(micromamba shell hook --shell bash)"
-          micromamba activate dascore
-
-      - name: install dascore
-        shell: bash -l {0}
-        run: |
-          python -m pip install -e .[test]
+          python-version: ${{ matrix.python-version }}
 
       - name: run test suite
         shell: bash -l {0}
