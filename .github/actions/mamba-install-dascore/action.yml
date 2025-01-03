@@ -10,9 +10,29 @@ inputs:
     required: false
     default: "environment.yml"
 
+  install-group-str:
+    description: "The string to use for specifying install groups"
+    default: "[dev]"
+    required: false
+
+  install-package:
+    description: "If true, install dascore"
+    default: true
+    required: false
+    type: boolean
+
+  cache-number:
+    description: "Cache number. Use != 1 to reset data cache"
+    required: false
+    default: 1
+
 runs:
   using: "composite"
   steps:
+    - name: Set up environment variable with date
+      shell: bash -l {0}
+      run: echo "CURRENT_DATE=$(date '+%Y-%m-%d')" >> $GITHUB_ENV
+
     - uses: mamba-org/setup-micromamba@v2
       with:
         micromamba-version: '2.0.5-0' # versions: https://github.com/mamba-org/micromamba-releases
@@ -21,7 +41,7 @@ runs:
           bash
           powershell
         cache-environment: true
-        cache-environment-key: environment-${{ steps.date.outputs.date }}
+        cache-environment-key: environment-${{ env.CURRENT_DATE }}-${{ inputs.environment-file }}
         post-cleanup: 'all'
         create-args: >-
           python=${{ inputs.python-version }}
@@ -45,9 +65,10 @@ runs:
         git fetch --tags --force
 
     - name: install dascore
+      if: "${{ inputs.install-package == 'true' }}"
       shell: bash -l {0}
       run: |
-        pip install -e .[dev]
+        pip install -e .${{ inputs.install-group-str }}
 
     - name: set data cache path
       shell: bash -el {0}
@@ -59,7 +80,7 @@ runs:
       with:
         enableCrossOsArchive: true
         path: ${{ env.DATA_CACHE_PATH }}
-        key: DATA_${{ env.CACHE_NUMBER }}
+        key: DATA_${{ inputs.cache-number }}
 
     # Print out the package info for current environment
     - name: print package info

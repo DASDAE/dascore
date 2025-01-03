@@ -12,10 +12,6 @@ on:
       - '**.py'
       - '.github/workflows/run_min_dep_tests.yml'
 
-env:
-  # used to manually trigger cache reset. Just increment if needed.
-  CACHE_NUMBER: 1
-
 # Cancel previous runs when this one starts.
 concurrency:
   group: TestCodeMinDeps-${{ github.event.pull_request.number || github.run_id }}
@@ -35,18 +31,16 @@ jobs:
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
-    env:
-      # set conda environment file with dependencies
-      env_file: "environment.yml"
-
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-tags: 'true'
 
-      - uses: ./.github/actions/min-deps-install-dascore
+      - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ matrix.python-version }}
+          install-package: false
+          environment-file: './.github/min_deps_environment.yml'
 
       # Then switch over to uv. We can use this exclusively once we drop pytables.
       - name: Install uv
