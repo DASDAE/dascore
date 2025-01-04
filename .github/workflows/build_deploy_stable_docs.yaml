@@ -6,6 +6,10 @@ on:
   release:
     types: [created]
 
+  pull_request:
+    branches:
+      - master
+
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
