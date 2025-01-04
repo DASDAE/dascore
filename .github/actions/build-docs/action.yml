@@ -11,6 +11,7 @@ runs:
         tinytex: true
 
     - name: print quarto version
+      shell: bash -l {0}
       run: |
         quarto --version
 
