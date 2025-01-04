@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/min-deps-install-dascore
+      - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ matrix.python-version }}
 

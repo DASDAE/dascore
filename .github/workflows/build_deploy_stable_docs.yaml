@@ -37,7 +37,7 @@ jobs:
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: "3.12"
-          environment-file: '././github/doc_environment.yml'
+          environment-file: './.github/doc_environment.yml'
 
       - uses: ./.github/actions/build-docs
 
