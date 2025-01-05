@@ -367,7 +367,9 @@ class TestBasics:
         d2 = datetime.datetime.fromisoformat("2017-09-18T02")
         step = datetime.timedelta(minutes=1)
         coord = get_coord(start=d1, stop=d2, step=step)
+        assert isinstance(coord, BaseCoord)
         assert str(d1) == str(coord.min())
+        assert str(d2) == str(coord.max())
 
 
 class TestCoordSummary:
