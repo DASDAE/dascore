@@ -369,7 +369,7 @@ class TestBasics:
         coord = get_coord(start=d1, stop=d2, step=step)
         assert isinstance(coord, BaseCoord)
         assert str(d1) == str(coord.min())
-        assert str(d2) == str(coord.max())
+        assert str(d2) == str(coord.max() + coord.step)
 
 
 class TestCoordSummary:
