@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import pickle
 from functools import partial
 from io import BytesIO
@@ -359,6 +360,16 @@ class TestBasics:
         msg = "has to be called on an evenly sampled"
         with pytest.raises(CoordError, match=msg):
             monotonic_float_coord.coord_range()
+
+    def test_get_coord_datetime(self):
+        """Ensure get_coord accepts a datetime object. See #467."""
+        d1 = datetime.datetime.fromisoformat("2017-09-18T01")
+        d2 = datetime.datetime.fromisoformat("2017-09-18T02")
+        step = datetime.timedelta(minutes=1)
+        coord = get_coord(start=d1, stop=d2, step=step)
+        assert isinstance(coord, BaseCoord)
+        assert str(d1) == str(coord.min())
+        assert str(d2) == str(coord.max() + coord.step)
 
 
 class TestCoordSummary:
