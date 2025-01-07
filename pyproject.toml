@@ -55,6 +55,7 @@ dependencies = [
      "tables>=3.7",
      "typing_extensions",
      "pint",
+     "duckdb>=1.1"
 ]
 
 [project.optional-dependencies]

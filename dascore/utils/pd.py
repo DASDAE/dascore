@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+
 import fnmatch
 import os
 from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence
 from functools import cache
+from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -554,3 +556,43 @@ def rolling_df(df, window, step=None, axis=0, center=False):
     """
     df = df if not axis else df.T  # silly deprecated axis argument.
     return df.rolling(window=window, step=step, center=center)
+
+
+def get_attrs_coords_patch_table(
+        patch_or_attrs: Iterable[dc.PatchAttrs | dc.Patch | dc.BaseSpool],
+) -> tuple(pd.DataFrame, pd.DataFrame, pd.DataFrame):
+    """
+    Get seperated attributes, coordinates, and patch tables from attrs.
+
+    Parameters
+    ----------
+    patch_or_attrs
+        An iterable with patch content.
+    """
+    def get_coord_dict(attr, num):
+        """Get the coordinate information from the attrs."""
+        out = []
+        for coord in attr.values():
+            coord['id'] = num
+            out.append(coord)
+        return out
+
+    patch_info, coord_info, attr_info = [], [], []
+    for num, attr in enumerate(patch_or_attrs):
+        if isinstance(attr, dc.Patch):
+            attr = attr.attrs
+        # Make sure we are working with a dict.
+        attr = attr.model_dump() if hasattr(attr, "model_dump") else attr
+        coords = attr.pop("coords", {})
+        coord_names = tuple(coords.values())
+        breakpoint()
+        coord_info.extend(get_coord_dict(attr.pop("coords", {}), num))
+        breakpoint()
+
+
+
+
+
+
+
+

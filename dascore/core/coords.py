@@ -48,6 +48,8 @@ from dascore.utils.models import (
     ArrayLike,
     DascoreBaseModel,
     UnitQuantity,
+    IntTupleStrSerialized,
+    StrTupleStrSerialized,
 )
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
@@ -98,8 +100,11 @@ class CoordSummary(DascoreBaseModel):
     dtype: str
     min: min_max_type
     max: min_max_type
+    shape: IntTupleStrSerialized
     step: step_type | None = None
     units: UnitQuantity | None = None
+    dims: StrTupleStrSerialized = ()
+    name: str = ''
 
     @model_serializer(when_used="json")
     def ser_model(self) -> dict[str, str]:
@@ -581,7 +586,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         # Need to ensure new data is used in constructor, not old shape
         if "values" in kwargs:
             info.pop("shape", None)
-
+        # Get rid of name and dims from summary.
+        kwargs.pop("name", None)
+        kwargs.pop("dims", None)
         info.update(kwargs)
         return get_coord(**info)
 
@@ -703,7 +710,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             out[f"{name}_units"] = self.units
         return out
 
-    def to_summary(self, dims=()) -> CoordSummary:
+    def to_summary(self, dims=(), name='') -> CoordSummary:
         """Get the summary info about the coord."""
         return CoordSummary(
             min=self.min(),
@@ -711,6 +718,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             step=self.step,
             dtype=self.dtype,
             units=self.units,
+            shape = self.shape,
+            dims=dims,
+            name=name,
         )
 
     def update(self, **kwargs):
@@ -969,14 +979,17 @@ class CoordPartial(BaseCoord):
         assert self.ndim == 1, "change_length only works on 1D coords."
         return get_coord(shape=(length,))
 
-    def to_summary(self, dims=()) -> CoordSummary:
+    def to_summary(self, dims=(), name='') -> CoordSummary:
         """Get the summary info about the coord."""
         return CoordSummary(
             min=np.nan,
             max=np.nan,
             step=np.nan,
             dtype=self.dtype,
-            units=None,
+            units=self.units,
+            dims=dims,
+            shape=(),
+            name=name,
         )
 
 

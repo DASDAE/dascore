@@ -159,7 +159,7 @@ def _read_single_file(path, metadata, time, distance):
     distance_coord = attr.coords["distance"].to_coord()
     cm = get_coord_manager(
         {"time": time_coord, "distance": distance_coord},
-        dims=attr.dim_tuple,
+        dims=attr.dims,
     )
     memmap = np.memmap(path, dtype=metadata.data_type)
     size = np.prod(cm.shape)
@@ -167,7 +167,7 @@ def _read_single_file(path, metadata, time, distance):
     data = memmap.reshape(cm.shape)
     patch = dc.Patch(
         data=data,
-        dims=attr.dim_tuple,
+        dims=attr.dims,
         coords=cm,
         attrs=attr.update(coord=None),
     )

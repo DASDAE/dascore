@@ -6,17 +6,16 @@ from io import BufferedReader, BufferedWriter
 from pathlib import Path
 
 import pytest
-from tables import File
 
 import dascore as dc
 from dascore.exceptions import PatchConversionError
-from dascore.utils.hdf5 import HDF5Reader, HDF5Writer
 from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
     IOResourceManager,
     get_handle_from_resource,
 )
+from dascore.utils.hdf5 import H5Reader, H5Writer
 
 
 class _BadType:
@@ -53,18 +52,6 @@ class TestGetHandleFromResource:
         assert isinstance(handle, BufferedWriter)
         handle.close()
 
-    def test_path_to_hdf5_reader(self, generic_hdf5):
-        """Ensure we get a reader from tmp path reader."""
-        handle = get_handle_from_resource(generic_hdf5, HDF5Reader)
-        assert isinstance(handle, File)
-        handle.close()
-
-    def test_path_to_hdf5_writer(self, tmp_path):
-        """Ensure we get a reader from tmp path reader."""
-        path = tmp_path / "test_hdf_writer.h5"
-        handle = get_handle_from_resource(path, HDF5Writer)
-        assert isinstance(handle, File)
-
     def test_get_path(self, tmp_path):
         """Ensure we can get a path."""
         path = get_handle_from_resource(tmp_path, Path)
@@ -90,9 +77,9 @@ class TestGetHandleFromResource:
         with pytest.raises(NotImplementedError):
             get_handle_from_resource(bad_instance, BinaryWriter)
         with pytest.raises(NotImplementedError):
-            get_handle_from_resource(bad_instance, HDF5Writer)
+            get_handle_from_resource(bad_instance, H5Reader)
         with pytest.raises(NotImplementedError):
-            get_handle_from_resource(bad_instance, HDF5Reader)
+            get_handle_from_resource(bad_instance, H5Writer)
 
 
 class TestIOResourceManager:
@@ -107,9 +94,8 @@ class TestIOResourceManager:
             assert isinstance(my_str, str)
             path = man.get_resource(Path)
             assert isinstance(path, Path)
-            hf = man.get_resource(HDF5Writer)
+            hf = man.get_resource(H5Writer)
             fi = man.get_resource(BinaryWriter)
-            # Why didn't pytables implement the stream like pythons?
             assert hf.isopen
             assert not fi.closed
         # after the context manager exists everything should be closed.

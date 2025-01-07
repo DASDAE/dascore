@@ -839,14 +839,14 @@ class TestUpdateFromAttrs:
         attrs = {"time_max": coord.min()}
         cm, attrs = cm_basic.update_from_attrs(attrs)
         assert attrs.coords == cm.to_summary_dict()
-        assert attrs.dim_tuple == cm.dims
+        assert attrs.dims == cm.dims
 
     def test_attrs_as_patch_attr(self, cm_basic):
         """Ensure this also works when attrs is a patch attr."""
         attrs = dc.PatchAttrs(time_min=to_datetime64("2022-01-01"))
         cm, new_attrs = cm_basic.update_from_attrs(attrs)
         assert new_attrs.coords == cm.to_summary_dict()
-        assert new_attrs.dim_tuple == cm.dims
+        assert new_attrs.dims == cm.dims
 
     def test_consistent_attrs_leaves_coords_unchanged(self, random_patch):
         """Attrs which are already consistent should leave coord unchanged."""

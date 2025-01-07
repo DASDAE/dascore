@@ -16,6 +16,8 @@ from dascore.utils.misc import register_func
 
 MORE_COORDS_ATTRS = []
 
+BASE_ATTRS = {"shape": (12, 34), "dtype": "<f32"}
+
 
 @pytest.fixture(scope="class")
 def random_summary(random_patch) -> PatchAttrs:
@@ -31,20 +33,12 @@ def random_attrs(random_patch) -> PatchAttrs:
 
 @pytest.fixture(scope="session")
 @register_func(MORE_COORDS_ATTRS)
-def attrs_coords_1() -> PatchAttrs:
-    """Add non-standard coords to attrs."""
-    attrs = {"depth_min": 10.0, "depth_max": 12.0, "another_name": "FooBar"}
-    out = PatchAttrs(**attrs)
-    assert "depth" in out.coords
-    return out
-
-
-@pytest.fixture(scope="session")
-@register_func(MORE_COORDS_ATTRS)
 def attrs_coords_2() -> PatchAttrs:
     """Add non-standard coords to attrs."""
-    coords = {"depth": {"min": 10.0, "max": 12.0}}
-    attrs = {"coords": coords, "another_name": "FooBar"}
+    coords = {"depth": {"min": 10.0, "max": 12.0, "dtype": "<f8", "shape": (12,)}}
+    attrs = {
+        "coords": coords, "another_name": "FooBar", "dtype": "<i4", "shape": (12,22)
+    }
     return PatchAttrs(**attrs)
 
 
@@ -85,7 +79,8 @@ class TestPatchAttrs:
     def test_coords_with_coord_keys(self):
         """Ensure coords with base keys work."""
         coords = {"distance": get_coord(data=np.arange(100))}
-        out = PatchAttrs(**{"coords": coords})
+        info = dict(coords=coords, **dict(BASE_ATTRS))
+        out = PatchAttrs(**info)
         assert out.coords
         assert "distance" in out.coords
         for _name, val in out.coords.items():
@@ -94,13 +89,13 @@ class TestPatchAttrs:
     def test_coords_with_coord_manager(self, random_patch):
         """Ensure coords with a coord manager works."""
         cm = random_patch.coords
-        out = PatchAttrs(**{"coords": cm})
+        out = PatchAttrs(**dict(coords=cm, **BASE_ATTRS))
         assert out.coords
         assert set(cm.coord_map) == set(out.coords)
-        assert out.dims == ",".join(cm.dims)
+        assert out.dims == cm.dims
 
     def test_coords_are_coord_summary(self, more_coords_attrs):
-        """All the coordinates should be Coordinate Summarys not dict."""
+        """All the coordinates should be Coordinate Summary instances not dict."""
         for _, coord_sum in more_coords_attrs.coords.items():
             assert isinstance(coord_sum, CoordSummary)
 
@@ -115,16 +110,6 @@ class TestPatchAttrs:
                 assert val == 10.0
             if eat == "max":
                 assert val == 12.0
-
-    def test_deprecated_d_set(self):
-        """Ensure setting attributes d_whatever is deprecated."""
-        with pytest.warns(DeprecationWarning):
-            PatchAttrs(time_min=1, time_max=10, d_time=10)
-
-    def test_deprecated_d_get(self, random_attrs):
-        """Access attr.d_{whatever} is deprecated."""
-        with pytest.warns(DeprecationWarning):
-            _ = random_attrs.d_time
 
     def test_access_coords(self, more_coords_attrs):
         """Ensure coordinates can be accessed as well."""
@@ -143,9 +128,12 @@ class TestPatchAttrs:
         not_expected = {"time_min", "time_max", "time_step"}
         assert not_expected.isdisjoint(set(dump))
 
-    def test_supports_extra_attrs(self):
+    def test_supports_extra_attrs(self, random_attrs):
         """The attr dict should allow extra attributes."""
-        out = PatchAttrs(bob="doesnt", bill_min=12, bob_max="2012-01-12")
+        model_dump = random_attrs.model_dump()
+        out = PatchAttrs(
+            bob="doesnt", bill_min=12, bob_max="2012-01-12", **model_dump
+        )
         assert out.bob == "doesnt"
         assert out.bill_min == 12
 
@@ -172,15 +160,20 @@ class TestPatchAttrs:
 
     def test_coords_to_coord_summary(self):
         """Coordinates included in coords should be converted to coord summary."""
+        time = get_coord(start=0, stop=10, step=1)
+        distance = get_coord(start=10, stop=100, step=1, units="m")
         out = {
             "station": "01",
             "coords": {
-                "time": get_coord(start=0, stop=10, step=1),
-                "distance": get_coord(start=10, stop=100, step=1, units="m"),
+                "time": time,
+                "distance": distance,
             },
+            "dtype": "<i8",
+            "shape": (time.shape[0], distance.shape[0]),
+            "dims": ("time", "distance"),
         }
         attr = dc.PatchAttrs(**out)
-        assert attr.dims == ",".join(("time", "distance"))
+        assert attr.dims == out['dims']
         for name, coord in attr.coords.items():
             assert isinstance(coord, CoordSummary)
 
@@ -193,7 +186,7 @@ class TestPatchAttrs:
     def test_dims_match_attrs(self, random_patch):
         """Ensure the dims from patch attrs matches patch dims."""
         pat = random_patch.rename_coords(distance="channel")
-        assert pat.dims == pat.attrs.dim_tuple
+        assert pat.dims == pat.attrs.dims
 
 
 class TestSummaryAttrs:
@@ -235,11 +228,11 @@ class TestRenameDimension:
         """Ensure renaming a dimension works."""
         attrs = random_attrs
         new_name = "money"
-        time_ind = attrs.dim_tuple.index("time")
+        time_ind = attrs.dims.index("time")
         out = attrs.rename_dimension(time=new_name)
         assert new_name in out.dims
-        assert out.dim_tuple[time_ind] == new_name
-        assert len(out.dim_tuple) == len(attrs.dim_tuple)
+        assert out.dims[time_ind] == new_name
+        assert len(out.dims) == len(attrs.dims)
 
     def test_empty_rename(self, random_attrs):
         """Passing no kwargs should return same attrs."""
@@ -274,7 +267,7 @@ class TestMisc:
         patch = random_patch_with_lat_lon
         cm = patch.coords
         attrs = dc.PatchAttrs(coords=cm)
-        assert attrs.dim_tuple == cm.dims
+        assert attrs.dims == cm.dims
 
 
 class TestUpdateAttrs:
@@ -291,7 +284,7 @@ class TestUpdateAttrs:
         attrs = random_patch.attrs
         new_patch = random_patch.rename_coords(distance="channel")
         new = attrs.update(coords=new_patch.coords)
-        assert new.dim_tuple == new_patch.dims
+        assert new.dims == new_patch.dims
 
 
 class TestGetAttrSummary:

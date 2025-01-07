@@ -185,7 +185,7 @@ def update(
         dims = coords.dims if isinstance(coords, CoordManager) else self.dims
     coords = get_coord_manager(coords, dims)
     if attrs:
-        coords, attrs = coords.update_from_attrs(attrs)
+        coords, attrs = coords.update_from_attrs(attrs, data)
     else:
         _attrs = dc.PatchAttrs.from_dict(attrs or self.attrs)
         attrs = _attrs.update(coords=coords, dims=coords.dims)

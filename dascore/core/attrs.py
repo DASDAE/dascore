@@ -23,7 +23,8 @@ from dascore.utils.misc import (
     to_str,
 )
 from dascore.utils.models import (
-    CommaSeparatedStr,
+    StrTupleStrSerialized,
+    IntTupleStrSerialized,
     DascoreBaseModel,
     UnitQuantity,
     frozen_dict_serializer,
@@ -35,31 +36,22 @@ _coord_summary_suffixes = set(CoordSummary.model_fields)
 _coord_required = {"min", "max"}
 
 
-def _get_coords_dict(data_dict):
-    """
-    Add coords dict to data dict, pop out any coordinate attributes.
-
-    For example, if time_min, time_step are in data_dict, these will be
-    grouped into the coords sub dict under "time".
-    """
-
-    def _get_dims(data_dict):
-        """Try to get dim tuple."""
-        dims = None
-        if "dims" in data_dict:
-            dims = data_dict["dims"]
-        elif hasattr(coord := data_dict.get("coords"), "dims"):
-            dims = coord.dims
-        if isinstance(dims, str):
-            dims = tuple(dims.split(","))
-        return dims
-
-    dims = _get_dims(data_dict)
-    coord_info, new_attrs = separate_coord_info(
-        data_dict, dims, required=("min", "max")
-    )
-    new_attrs["coords"] = {i: dc.core.CoordSummary(**v) for i, v in coord_info.items()}
-    return new_attrs
+def _to_coord_summary(coord_dict) -> FrozenDict[str, CoordSummary]:
+    """Convert a dict of potential coord info to a coord summary dict."""
+    # We already have a summary dict, just return.
+    if hasattr(coord_dict, "to_summary_dict"):
+        return coord_dict.to_summary_dict()
+    # Otherwise, build up summary dict contents.
+    out = {}
+    for i, v in coord_dict.items():
+        if hasattr(v, "to_summary"):
+            v = v.to_summary()
+        elif isinstance(v,CoordSummary):
+            pass
+        else:
+            v = CoordSummary(**v)
+        out[i] = v
+    return FrozenDict(out)
 
 
 class PatchAttrs(DascoreBaseModel):
@@ -92,6 +84,12 @@ class PatchAttrs(DascoreBaseModel):
     data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = Field(
         description="Describes the quantity being measured.", default=""
     )
+    dtype: str = Field(
+        description="The data type of the patch array (e.g, f32).",
+    )
+    shape: IntTupleStrSerialized = Field(
+        description="The shape of the patch array.",
+    )
     data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = Field(
         description="Describes the type of data.",
         default="",
@@ -123,27 +121,31 @@ class PatchAttrs(DascoreBaseModel):
         description="A list of processing performed on the patch.",
     )
 
-    dims: CommaSeparatedStr = Field(
-        default="",
+    dims: StrTupleStrSerialized = Field(
+        default=(),
         max_length=max_lens["dims"],
         description="A tuple of comma-separated dimensions names.",
     )
 
     coords: Annotated[
         FrozenDict[str, CoordSummary],
-        frozen_dict_validator,
+        PlainValidator(_to_coord_summary),
         frozen_dict_serializer,
     ] = Field(default_factory=dict)
 
+
     @model_validator(mode="before")
     @classmethod
-    def parse_coord_attributes(cls, data: Any) -> Any:
+    def _get_dims(cls, data: Any) -> Any:
         """Parse the coordinate attributes into coord dict."""
-        if isinstance(data, dict):
-            data = _get_coords_dict(data)
-            # add dims as coords if dims is not included.
-            if "dims" not in data:
-                data["dims"] = tuple(data["coords"])
+        # Add dims from coords if they aren't found.
+        dims = data.get("dims")
+        if not dims:
+            coords = data.get("coords", {})
+            dims = getattr(coords, "dims", None)
+            if dims is None and isinstance(coords, dict):
+                dims = coords.get('dims', ())
+            data['dims'] = dims
         return data
 
     def __getitem__(self, item):
@@ -185,7 +187,7 @@ class PatchAttrs(DascoreBaseModel):
     def coords_from_dims(self) -> Mapping[str, BaseCoord]:
         """Return coordinates from dimensions assuming evenly sampled."""
         out = {}
-        for dim in self.dim_tuple:
+        for dim in self.dims:
             out[dim] = self.coords[dim].to_coord()
         return out
 
@@ -193,6 +195,7 @@ class PatchAttrs(DascoreBaseModel):
     def from_dict(
         cls,
         attr_map: Mapping | PatchAttrs,
+        data=None,
     ) -> Self:
         """
         Get a new instance of the PatchAttrs.
@@ -205,26 +208,22 @@ class PatchAttrs(DascoreBaseModel):
         attr_map
             Anything convertible to a dict that contains the attr info.
         """
+        data_info = {}
+        if data is not None:
+            data_info = {"dtype": data.dtype.str, "shape": data.shape}
         if isinstance(attr_map, cls):
-            return attr_map
+            return attr_map.update(**data_info)
         out = {} if attr_map is None else attr_map
+        out.update(**data_info)
         return cls(**out)
-
-    @property
-    def dim_tuple(self):
-        """Return a tuple of dimensions. The dims attr is a string."""
-        dim_str = self.dims
-        if not dim_str:
-            return tuple()
-        return tuple(self.dims.split(","))
 
     def rename_dimension(self, **kwargs):
         """Rename one or more dimensions if in kwargs. Return new PatchAttrs."""
-        if not (dims := set(kwargs) & set(self.dim_tuple)):
+        if not (dims := set(kwargs) & set(self.dims)):
             return self
         new = self.model_dump(exclude_defaults=True)
         coords = new.get("coords", {})
-        new_dims = list(self.dim_tuple)
+        new_dims = list(self.dims)
         for old_name, new_name in {x: kwargs[x] for x in dims}.items():
             new_dims[new_dims.index(old_name)] = new_name
             coords[new_name] = coords.pop(old_name, None)
@@ -233,7 +232,7 @@ class PatchAttrs(DascoreBaseModel):
 
     def update(self, **kwargs) -> Self:
         """Update an attribute in the model, return new model."""
-        coord_info, attr_info = separate_coord_info(kwargs, dims=self.dim_tuple)
+        coord_info, attr_info = separate_coord_info(kwargs, dims=self.dims)
         out = self.model_dump(exclude_unset=True)
         out.update(attr_info)
         out_coord_dict = out["coords"]

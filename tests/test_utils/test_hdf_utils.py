@@ -15,7 +15,6 @@ from dascore.exceptions import InvalidFileHandlerError
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import (
     HDFPatchIndexManager,
-    PyTablesWriter,
     extract_h5_attrs,
     h5_matches_structure,
     open_hdf5_file,
@@ -163,17 +162,6 @@ class TestHDFPatchIndexManager:
         meta = index._read_metadata()
         assert meta is not None
 
-
-class TestHDFReaders:
-    """Tests for HDF5 readers."""
-
-    def test_get_handle(self, tmp_path_factory):
-        """Ensure we can get a handle with the class."""
-        path = tmp_path_factory.mktemp("hdf_handle_test") / "test_file.h5"
-        handle = PyTablesWriter.get_handle(path)
-        assert isinstance(handle, tables.File)
-        handle_2 = PyTablesWriter.get_handle(handle)
-        assert isinstance(handle_2, tables.File)
 
 
 class TestH5MatchesStructure:

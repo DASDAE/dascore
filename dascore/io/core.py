@@ -40,7 +40,7 @@ from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import _iter_filesystem, cached_method, iterate, warn_or_raise
 from dascore.utils.models import (
-    CommaSeparatedStr,
+    StrTupleStrSerialized,
     DascoreBaseModel,
     DateTime64,
     TimeDelta64,
@@ -68,7 +68,7 @@ class PatchFileSummary(DascoreBaseModel):
     tag: str = Field("", max_length=max_lens["tag"])
     station: str = Field("", max_length=max_lens["station"])
     network: str = Field("", max_length=max_lens["network"])
-    dims: CommaSeparatedStr = Field("", max_length=max_lens["dims"])
+    dims: StrTupleStrSerialized = Field("", max_length=max_lens["dims"])
     time_min: DateTime64 = np.datetime64("NaT")
     time_max: DateTime64 = np.datetime64("NaT")
     time_step: TimeDelta64 = np.timedelta64("NaT")

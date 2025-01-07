@@ -69,42 +69,38 @@ def random_patch(
     """
     # get input data
     rand = np.random.RandomState(13)
-    array = rand.random(shape)
+    array: np.ndarray = rand.random(shape)
     # create attrs
     t1 = np.atleast_1d(np.datetime64(time_min))[0]
     d1 = np.atleast_1d(distance_min)
     attrs = dict(
-        distance_step=distance_step,
-        time_step=to_timedelta64(time_step),
         category="DAS",
-        time_min=t1,
         network=network,
         station=station,
         tag=tag,
-        time_units="s",
-        distance_units="m",
     )
     # need to pop out dim attrs if coordinates provided.
     if time_array is not None:
-        attrs.pop("time_min")
-        # need to keep time_step if time_array is len 1 to get coord range
-        if len(time_array) > 1:
-            attrs.pop("time_step")
+        time_coord = dc.get_coord(
+            data=time_array,
+            step=time_step if time_array.size <= 1 else None,
+            units='s',
+        )
     else:
-        time_array = dascore.core.get_coord(
-            data=t1 + np.arange(array.shape[1]) * attrs["time_step"],
-            step=attrs["time_step"],
-            units=attrs["time_units"],
+        time_coord = dascore.core.get_coord(
+            data=t1 + np.arange(array.shape[1]) * to_timedelta64(time_step),
+            step=to_timedelta64(time_step),
+            units="s",
         )
     if dist_array is not None:
-        attrs.pop("distance_step")
+        dist_coord = dc.get_coord(data=dist_array)
     else:
-        dist_array = dascore.core.get_coord(
-            data=d1 + np.arange(array.shape[0]) * attrs["distance_step"],
-            step=attrs["distance_step"],
-            units=attrs["distance_units"],
+        dist_coord = dascore.core.get_coord(
+            data=d1 + np.arange(array.shape[0]) * distance_step,
+            step=distance_step,
+            units="m",
         )
-    coords = dict(distance=dist_array, time=time_array)
+    coords = dict(distance=dist_coord, time=time_coord)
     # assemble and output.
     out = dict(data=array, coords=coords, attrs=attrs, dims=("distance", "time"))
     patch = dc.Patch(**out)
@@ -722,11 +718,13 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
     """
     if example_name not in EXAMPLE_SPOOLS:
         # Allow the example spool to be a data registry file.
-        with suppress(ValueError):
-            return dc.spool(fetch(example_name))
-        msg = (
-            f"No example spool registered with name {example_name} "
-            f"Registered example spools are {list(EXAMPLE_SPOOLS)}"
-        )
-        raise UnknownExampleError(msg)
+        try:
+            path = fetch(example_name)
+        except ValueError:
+            msg = (
+                f"No example spool registered with name {example_name} "
+                f"Registered example spools are {list(EXAMPLE_SPOOLS)}"
+            )
+            raise UnknownExampleError(msg)
+        return dc.spool(path)
     return EXAMPLE_SPOOLS[example_name](**kwargs)

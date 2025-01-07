@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pickle
+from contextlib import suppress
+
 import numpy as np
 from tables import NodeError
 
@@ -11,8 +14,28 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_int
+from dascore.utils.misc import unbyte
+from dascore.utils.hdf5 import Empty
 
 # --- Functions for writing DASDAE format
+
+
+def _santize_pytables(some_dict):
+    """Remove pytables names from a dict, remove any pickle-able things."""
+    pytables_names = {"CLASS", "FLAVOR", "TITLE", "VERSION"}
+    out = {}
+    for i, v in some_dict.items():
+        if i in pytables_names:
+            continue
+        try:
+            val = unbyte(v)
+        except ValueError:
+            continue
+        # Get rid of empty enum.
+        if isinstance(val, Empty):
+            val = ''
+        out[i] = val
+    return out
 
 
 def _create_or_get_group(h5, group, name):
@@ -26,6 +49,7 @@ def _create_or_get_group(h5, group, name):
 
 def _create_or_squash_array(h5, group, name, data):
     """Create a new array, if it exists delete and re-create."""
+    breakpoint()
     try:
         array = h5.create_array(group, name, data)
     except NodeError:
@@ -37,7 +61,7 @@ def _create_or_squash_array(h5, group, name, data):
 
 def _write_meta(hfile, file_version):
     """Write metadata to hdf5 file."""
-    attrs = hfile.root._v_attrs
+    attrs = hfile.attrs
     attrs["__format__"] = "DASDAE"
     attrs["__DASDAE_version__"] = file_version
     attrs["__dascore__version__"] = dc.__version__
@@ -49,8 +73,8 @@ def _save_attrs_and_dims(patch, patch_group):
     # TODO will need to test if objects are serializable
     attr_dict = patch.attrs.model_dump(exclude_unset=True)
     for i, v in attr_dict.items():
-        patch_group._v_attrs[f"_attrs_{i}"] = v
-    patch_group._v_attrs["_dims"] = ",".join(patch.dims)
+        patch_group.attrs[f"_attrs_{i}"] = v
+    patch_group.attrs["_dims"] = ",".join(patch.dims)
 
 
 def _save_array(data, name, group, h5):
@@ -61,22 +85,30 @@ def _save_array(data, name, group, h5):
     if is_dt or is_td:
         data = to_int(data)
     array_node = _create_or_squash_array(h5, group, name, data)
-    array_node._v_attrs["is_datetime64"] = is_dt
-    array_node._v_attrs["is_timedelta64"] = is_td
+    array_node.attrs["is_datetime64"] = is_dt
+    array_node.attrs["is_timedelta64"] = is_td
+    return array_node
+
+
 
 
 def _save_coords(patch, patch_group, h5):
     """Save coordinates."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
-        dims = cm.dim_map[name]
+        summary = (
+            coord.to_summary(name=name, dims=cm.dims[name])
+            .model_dump(exclude_defaults=True)
+        )
+        breakpoint()
         # First save coordinate arrays
         data = coord.values
         save_name = f"_coord_{name}"
-        _save_array(data, save_name, patch_group, h5)
-        # then save dimensions of coordinates
-        save_name = f"_cdims_{name}"
-        patch_group._v_attrs[save_name] = ",".join(dims)
+        dataset = _save_array(data, save_name, patch_group, h5)
+        dataset.attrs.update(summary)
+
+
+
 
 
 def _save_patch(patch, wave_group, h5, name):
@@ -95,7 +127,7 @@ def _save_patch(patch, wave_group, h5, name):
 def _get_attrs(patch_group):
     """Get the saved attributes form the group attrs."""
     out = {}
-    attrs = [x for x in patch_group._v_attrs._f_list() if x.startswith("_attrs_")]
+    attrs = [x for x in patch_group.attrs if x.startswith("_attrs_")]
     for attr_name in attrs:
         key = attr_name.replace("_attrs_", "")
         val = patch_group._v_attrs[attr_name]
@@ -110,9 +142,9 @@ def _get_attrs(patch_group):
 def _read_array(table_array):
     """Read an array into numpy."""
     data = table_array[:]
-    if table_array._v_attrs["is_datetime64"]:
+    if table_array.attrs["is_datetime64"]:
         data = data.view("datetime64[ns]")
-    if table_array._v_attrs["is_timedelta64"]:
+    if table_array.attrs["is_timedelta64"]:
         data = data.view("timedelta64[ns]")
     return data
 
@@ -131,10 +163,10 @@ def _get_coords(patch_group, dims, attrs2):
         )
         coord_dict[name] = coord
     # associates coordinates with dimensions
-    c_dims = [x for x in patch_group._v_attrs._f_list() if x.startswith("_cdims")]
+    c_dims = [x for x in patch_group.attrs if x.startswith("_cdims")]
     for coord_name in c_dims:
         name = coord_name.replace("_cdims_", "")
-        value = patch_group._v_attrs[coord_name]
+        value = patch_group.attrs[coord_name]
         assert name in coord_dict, "Should already have loaded coordinate array"
         coord_dim_dict[name] = (tuple(value.split(".")), coord_dict[name])
         # add dimensions to coordinates that have them.
@@ -144,7 +176,7 @@ def _get_coords(patch_group, dims, attrs2):
 
 def _get_dims(patch_group):
     """Get the dims tuple from the patch group."""
-    dims = patch_group._v_attrs["_dims"]
+    dims = patch_group.attrs["_dims"]
     if not dims:
         out = ()
     else:
@@ -170,7 +202,7 @@ def _read_patch(patch_group, **kwargs):
 def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
     """Get the contents from each patch group."""
     out = []
-    for group in h5.iter_nodes("/waveforms"):
+    for name, group in h5[("/waveforms")].items():
         contents = _get_patch_content_from_group(group)
         # populate file info
         contents["file_version"] = file_version
@@ -179,21 +211,60 @@ def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
         # suppressing warnings because old dasdae files will issue warning
         # due to d_dim rather than dim_step. TODO fix test files in the future
         with suppress_warnings(DeprecationWarning):
-            out.append(dc.PatchAttrs(**contents))
+            try:
+                out.append(dc.PatchAttrs(**contents))
+            except:
+                breakpoint()
+
     return out
+
+
+def _get_coord_info(info, group):
+    """Get the coord dictionary."""
+    coords = {}
+    coord_ds_names = tuple(x for x in group if x.startswith("_coord_"))
+    for ds_name in coord_ds_names:
+        name = ds_name.replace("_coord_", "")
+        ds = group[ds_name]
+        attrs = _santize_pytables(dict(ds.attrs))
+        # Need to get old dimensions from c_dims in attrs.
+        if "dims" not in attrs:
+            attrs['dims'] = info.get(f"_cdims_{name}", name)
+        # The summary info is not stored in attrs; need to read coord array.
+        c_info = {}
+        if 'min' not in attrs:
+            c_summary = (
+                dc.core.get_coord(data=ds[:])
+                .to_summary()
+                .model_dump(exclude_unset=True, exclude_defaults=True)
+            )
+            c_info.update(c_summary)
+
+        c_info.update({
+            "dtype": ds.dtype.str,
+            'shape': ds.shape,
+            "name": name,
+        }
+        )
+        coords[name] = c_info
+    return coords
 
 
 def _get_patch_content_from_group(group):
     """Get patch content from a single node."""
-    attrs = group._v_attrs
     out = {}
-    for key in attrs._f_list():
-        value = getattr(attrs, key)
+    attrs = _santize_pytables(dict(group.attrs))
+    for key, value in attrs.items():
         new_key = key.replace("_attrs_", "")
         # need to unpack 0 dim arrays.
         if isinstance(value, np.ndarray) and not value.shape:
             value = np.atleast_1d(value)[0]
         out[new_key] = value
+    # Add coord info.
+    out['coords'] = _get_coord_info(out, group)
+    # Add data info.
+    out['shape'] = group['data'].shape
+    out['dtype'] = group['data'].dtype.str
     # rename dims
     out["dims"] = out.pop("_dims")
     return out

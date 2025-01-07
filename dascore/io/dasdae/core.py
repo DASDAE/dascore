@@ -11,10 +11,9 @@ from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import (
     H5Reader,
+    H5Writer,
     HDFPatchIndexManager,
     NodeError,
-    PyTablesReader,
-    PyTablesWriter,
 )
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
@@ -52,7 +51,7 @@ class DASDAEV1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
 
-    def write(self, spool: SpoolType, resource: PyTablesWriter, index=False, **kwargs):
+    def write(self, spool: SpoolType, resource: H5Writer, index=False, **kwargs):
         """
         Write a collection of patches to a DASDAE file.
 
@@ -68,6 +67,7 @@ class DASDAEV1(FiberIO):
             This is recommended for files with many patches and not recommended
             for files with few patches.
         """
+        breakpoint()
         # write out patches
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
@@ -109,7 +109,7 @@ class DASDAEV1(FiberIO):
         version = unbyte(attrs.get("__DASDAE_version__", ""))
         return file_format, version
 
-    def read(self, resource: PyTablesReader, **kwargs) -> SpoolType:
+    def read(self, resource: H5Reader, **kwargs) -> SpoolType:
         """Read a dascore file."""
         patches = []
         try:
@@ -120,7 +120,7 @@ class DASDAEV1(FiberIO):
             patches.append(_read_patch(patch_group, **kwargs))
         return dc.spool(patches)
 
-    def scan(self, resource: PyTablesReader, **kwargs):
+    def scan(self, resource: H5Reader, **kwargs):
         """
         Get the patch info from the file.
 
@@ -133,20 +133,6 @@ class DASDAEV1(FiberIO):
         resource
             A path to the file.
         """
-        indexer = HDFPatchIndexManager(resource.filename)
-        if indexer.has_index:
-            # We need to change the path back to the file rather than internal
-            # HDF5 path so it works with FileSpool and such.
-            records = indexer.get_index().assign(path=str(resource)).to_dict("records")
-            return [dc.PatchAttrs(**x) for x in records]
-        else:
-            file_format = self.name
-            version = resource.root._v_attrs.__DASDAE_version__
-            return _get_contents_from_patch_groups(resource, version, file_format)
-
-    def index(self, path):
-        """Index the dasdae file."""
-        indexer = HDFPatchIndexManager(path)
-        if not indexer.has_index:
-            df = dc.scan_to_df(path)
-            indexer.write_update(df)
+        file_format = self.name
+        version = resource.attrs['__DASDAE_version__']
+        return _get_contents_from_patch_groups(resource, version, file_format)

@@ -289,7 +289,7 @@ class CoordManager(DascoreBaseModel):
     update_coords = update
 
     def update_from_attrs(
-        self, attrs: Mapping | dc.PatchAttrs
+        self, attrs: Mapping | dc.PatchAttrs, data=None,
     ) -> tuple[Self, dc.PatchAttrs]:
         """
         Update coordinates from attrs.
@@ -321,7 +321,7 @@ class CoordManager(DascoreBaseModel):
                 attr_info[f"{unused_dim}_{key}"] = val
         attr_info["coords"] = coords.to_summary_dict()
         attr_info["dims"] = coords.dims
-        attrs = dc.PatchAttrs.from_dict(attr_info)
+        attrs = dc.PatchAttrs.from_dict(attr_info, data=data)
         return coords, attrs
 
     def sort(
@@ -984,7 +984,7 @@ class CoordManager(DascoreBaseModel):
         dim_map = self.dim_map
         out = {}
         for name, coord in self.coord_map.items():
-            out[name] = coord.to_summary(dims=dim_map[name])
+            out[name] = coord.to_summary(dims=dim_map[name], name=name)
         return out
 
     def get_coord(self, coord_name: str) -> BaseCoord:

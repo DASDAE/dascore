@@ -16,6 +16,7 @@ from dascore.utils.pd import (
     filter_df,
     get_interval_columns,
     patch_to_dataframe,
+    get_attrs_coords_patch_table,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -373,3 +374,11 @@ class TestGetIntervalColumns:
         msg = "Cannot chunk spool or dataframe"
         with pytest.raises(ParameterError, match=msg):
             get_interval_columns(example_df_2, "money")
+
+
+class TestAttrsCoordPatchTables:
+    """Tests suite for getting attribute, coords, and patch table."""
+
+    def test_from_spool(self, random_spool):
+        patch_df, coord_df, attr_df = get_attrs_coords_patch_table(random_spool)
+        breakpoint()

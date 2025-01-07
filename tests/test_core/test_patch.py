@@ -217,7 +217,7 @@ class TestInit:
         data = random_state.rand(10, 5)
         coords = {"time": np.arange(10), "can": np.arange(5)}
         patch = dc.Patch(data=data, coords=coords, dims=("time", "can"))
-        assert patch.dims == patch.attrs.dim_tuple
+        assert patch.dims == patch.attrs.dims
 
     def test_non_coord_dims(self):
         """Ensure non-coordinate dimensions can work and create non-coord."""

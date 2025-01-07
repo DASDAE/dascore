@@ -60,7 +60,6 @@ class Patch:
     if there is a conflict between information contained in both, the coords
     will be recalculated.
     """
-
     data: ArrayLike
     coords: CoordManager
     dims: tuple[str, ...]
@@ -81,7 +80,7 @@ class Patch:
         if coords is None and attrs is not None:
             attrs = dc.PatchAttrs.from_dict(attrs)
             coords = attrs.coords_from_dims()
-            dims = dims if dims is not None else attrs.dim_tuple
+            dims = dims if dims is not None else attrs.dims
         # Ensure required info is here
         non_attrs = [x is None for x in [data, coords, dims]]
         if any(non_attrs) and not all(non_attrs):
@@ -93,13 +92,13 @@ class Patch:
         # the only case we allow attrs to include coords is if they are both
         # dicts, in which case attrs might have unit info for coords.
         if isinstance(attrs, Mapping) and attrs:
-            coords, attrs = coords.update_from_attrs(attrs)
+            coords, attrs = coords.update_from_attrs(attrs, data)
         else:
             # ensure attrs conforms to coords
-            attrs = dc.PatchAttrs.from_dict(attrs).update(coords=coords)
-        assert coords.dims == attrs.dim_tuple, "dim mismatch on coords and attrs"
-        self._coords = coords
+            attrs = dc.PatchAttrs.from_dict(attrs, data=data).update(coords=coords)
+        assert coords.dims == attrs.dims, "dim mismatch on coords and attrs"
         self._attrs = attrs
+        self._coords = coords
         self._data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):

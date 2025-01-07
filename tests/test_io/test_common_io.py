@@ -164,7 +164,7 @@ def read_spool(data_file_path):
 
 @pytest.fixture(scope="session")
 def scanned_attrs(data_file_path):
-    """Read each file into a spool."""
+    """Scan patch contents by extracting attributes."""
     with skip_missing_dependency():
         out = dc.scan(data_file_path)
     return out
@@ -183,8 +183,8 @@ def _assert_coords_attrs_match(patch):
     """Ensure both the coordinates and attributes match on patch."""
     attrs = patch.attrs
     coords = patch.coords
-    assert attrs.dim_tuple == coords.dims
-    for dim in attrs.dim_tuple:
+    assert attrs.dims == coords.dims
+    for dim in attrs.dims:
         coord = patch.get_coord(dim)
         assert coord.min() == getattr(attrs, f"{dim}_min")
         assert coord.max() == getattr(attrs, f"{dim}_max")
@@ -299,7 +299,7 @@ class TestRead:
         if len(attrs_from_file) > 1:
             pytest.skip("Haven't implemented test for multipatch files.")
         attrs_init = attrs_from_file[0]
-        for dim in attrs_init.dim_tuple:
+        for dim in attrs_init.dims:
             start = getattr(attrs_init, f"{dim}_min")
             stop = getattr(attrs_init, f"{dim}_max")
             duration = stop - start
@@ -427,7 +427,7 @@ class TestIntegration:
         for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
             assert pat_attrs1.dims == scan_attrs2.dims
             # first compare dimensions are related attributes
-            for dim in pat_attrs1.dim_tuple:
+            for dim in pat_attrs1.dims:
                 assert getattr(pat_attrs1, f"{dim}_min") == getattr(
                     pat_attrs1, f"{dim}_min"
                 )

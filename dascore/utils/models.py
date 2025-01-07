@@ -18,10 +18,17 @@ from dascore.utils.misc import _all_null, all_close, to_str, unbyte
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 # --- A list of custom types with appropriate serialization/deserialization
-# these can just be use with pydantic type-hints.
+# these can just be used with pydantic type-hints.
 
 frozen_dict_validator = PlainValidator(lambda x: FrozenDict(x))
 frozen_dict_serializer = PlainSerializer(lambda x: dict(x))
+
+
+def _str_to_int_tuple(value):
+    """Convert a string of ints to a tuple."""
+    if isinstance(value, str):
+        return tuple(int(x) for x in value.split(','))
+    return value
 
 # A datetime64
 DateTime64 = Annotated[
@@ -52,8 +59,18 @@ UnitQuantity = Annotated[
     PlainSerializer(get_quantity_str),
 ]
 
-CommaSeparatedStr = Annotated[
-    str, PlainValidator(lambda x: x if isinstance(x, str) else ",".join(x))
+# A str that should be parsed as a tuple but serialized as a string.
+StrTupleStrSerialized = Annotated[
+    tuple[str, ...],
+    PlainValidator(lambda x: tuple(x.split(",")) if isinstance(x, str) else tuple(x)),
+    PlainSerializer(lambda x: ",".join(x)),
+]
+
+# A tuple of ints that should serialize to CSVs.
+IntTupleStrSerialized = Annotated[
+    tuple[int, ...],
+    PlainValidator(_str_to_int_tuple),
+    PlainSerializer(lambda x: ",".join((str(y) for y in x))),
 ]
 
 FrozenDictType = Annotated[
