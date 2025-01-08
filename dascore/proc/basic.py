@@ -100,7 +100,6 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     # since we update history so often, we make a fast track for it.
     new_attrs = self.attrs.model_dump(exclude_unset=True)
     new_attrs.update(attrs)
-    # pop out coords so new coords has priority.
     if len(attrs) == 1 and "history" in attrs:
         return _fast_attr_update(self, PatchAttrs(**new_attrs))
     new_coords, new_attrs = self.coords.update_from_attrs(new_attrs)
@@ -187,7 +186,8 @@ def update(
     if attrs:
         coords, attrs = coords.update_from_attrs(attrs)
     else:
-        _attrs = dc.PatchAttrs.from_dict(attrs or self.attrs)
+        attrs = attrs if attrs else self.attrs.model_dump(exclude_unset=True)
+        _attrs = dc.PatchAttrs(**(attrs or self.attrs))
         attrs = _attrs.update(coords=coords, dims=coords.dims)
     return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
 

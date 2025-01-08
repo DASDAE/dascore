@@ -23,6 +23,23 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 frozen_dict_validator = PlainValidator(lambda x: FrozenDict(x))
 frozen_dict_serializer = PlainSerializer(lambda x: dict(x))
 
+
+def _str_to_int_tuple(value):
+    """Convert a string of ints to a tuple."""
+    if isinstance(value, str):
+        return tuple(int(x) for x in value.split(","))
+    return value
+
+
+def _str_to_str_tuple(value: str) -> tuple[str, ...]:
+    """Ensure a tuple of strings is returned."""
+    if not value:
+        return ()
+    elif isinstance(value, str):
+        return tuple(value.split(","))
+    return tuple(value)
+
+
 # A datetime64
 DateTime64 = Annotated[
     np.datetime64,
@@ -54,6 +71,19 @@ UnitQuantity = Annotated[
 
 CommaSeparatedStr = Annotated[
     str, PlainValidator(lambda x: x if isinstance(x, str) else ",".join(x))
+]
+
+StrTupleStrSerialized = Annotated[
+    tuple[str, ...],
+    PlainValidator(_str_to_str_tuple),
+    PlainSerializer(lambda x: ",".join(x)),
+]
+
+# A tuple of ints that should serialize to CSVs.
+IntTupleStrSerialized = Annotated[
+    tuple[int, ...],
+    PlainValidator(_str_to_int_tuple),
+    PlainSerializer(lambda x: ",".join(str(y) for y in x)),
 ]
 
 FrozenDictType = Annotated[
@@ -119,3 +149,18 @@ class DascoreBaseModel(BaseModel):
         return out
 
     __eq__ = sensible_model_equals
+
+
+class ArraySummary(DascoreBaseModel):
+    """
+    A class for summarizing arrays.
+    """
+
+    dtype: str
+    shape: tuple[int, ...]
+    ndim: int
+
+    @classmethod
+    def from_array(cls, array):
+        """Init the summary from an array."""
+        return cls(dtype=array.dtype, shape=array.shape, ndim=array.ndim)

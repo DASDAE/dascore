@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Mapping, Sequence
+from typing import Annotated
 
 import numpy as np
+from pydantic import PlainValidator
 from rich.text import Text
 from typing_extensions import Self
 
@@ -15,10 +17,14 @@ import dascore.utils.io
 from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coordmanager import (
+    CoordManager,
+    CoordManagerSummary,
+    get_coord_manager,
+)
 from dascore.core.coords import BaseCoord
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
-from dascore.utils.models import ArrayLike
+from dascore.utils.models import ArrayLike, ArraySummary, DascoreBaseModel
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
 from dascore.viz import VizPatchNameSpace
@@ -77,11 +83,6 @@ class Patch:
             data, attrs, coords = data.data, data.attrs, data.coords
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
-        # Try to generate coords from ranges in attrs
-        if coords is None and attrs is not None:
-            attrs = dc.PatchAttrs.from_dict(attrs)
-            coords = attrs.coords_from_dims()
-            dims = dims if dims is not None else attrs.dim_tuple
         # Ensure required info is here
         non_attrs = [x is None for x in [data, coords, dims]]
         if any(non_attrs) and not all(non_attrs):
@@ -97,7 +98,6 @@ class Patch:
         else:
             # ensure attrs conforms to coords
             attrs = dc.PatchAttrs.from_dict(attrs).update(coords=coords)
-        assert coords.dims == attrs.dim_tuple, "dim mismatch on coords and attrs"
         self._coords = coords
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
@@ -377,3 +377,51 @@ class Patch:
     def io(self) -> dc.io.PatchIO:
         """Return a patch IO object for saving patches to various formats."""
         return dc.io.PatchIO(self)
+
+    def to_summary(
+        self,
+        uri=None,
+        resource_format=None,
+        resource_version=None,
+    ) -> PatchSummary:
+        """
+        Summarize the contents of the Patch.
+        """
+        uri = uri if uri is not None else self.get_patch_name()
+        psum = PatchSummary(
+            uri=uri,
+            coords=self.coords.to_summary(),
+            attrs=self.attrs,
+            data=ArraySummary.from_array(self.data),
+            resource_format=resource_format,
+            resource_version=resource_version,
+        )
+        return psum
+
+
+class PatchSummary(DascoreBaseModel):
+    """
+    A class for summarizing the metadata of the Patch.
+    """
+
+    uri: str
+    resource_format: str = ""
+    resource_version: str = ""
+
+    data: Annotated[ArraySummary, PlainValidator(ArraySummary.from_array)]
+
+    attrs: PatchAttrs
+    coords: CoordManagerSummary
+
+    def to_summary(
+        self,
+        uri=None,
+        resource_format=None,
+        resource_version=None,
+    ):
+        """
+        Return Patch Summary.
+
+        This is here to be compatible with Patch.to_summary.
+        """
+        return self

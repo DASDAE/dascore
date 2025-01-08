@@ -1,4 +1,4 @@
-"""Utilities for terra15."""
+"""Utilities simple h5"""
 
 from __future__ import annotations
 

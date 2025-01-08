@@ -319,9 +319,7 @@ class CoordManager(DascoreBaseModel):
         for unused_dim in set(coord_info) - set(coords.dims):
             for key, val in coord_info[unused_dim].items():
                 attr_info[f"{unused_dim}_{key}"] = val
-        attr_info["coords"] = coords.to_summary_dict()
-        attr_info["dims"] = coords.dims
-        attrs = dc.PatchAttrs.from_dict(attr_info)
+        attrs = dc.PatchAttrs(**attr_info)
         return coords, attrs
 
     def sort(
@@ -984,8 +982,23 @@ class CoordManager(DascoreBaseModel):
         dim_map = self.dim_map
         out = {}
         for name, coord in self.coord_map.items():
-            out[name] = coord.to_summary(dims=dim_map[name])
+            out[name] = coord.to_summary(dims=dim_map[name], name=name)
         return out
+
+    def to_summary(self) -> Self:
+        """
+        Convert the coordinates in the coord manager to Coord summaries.
+        """
+        new_map = {}
+        for name, coord in self.coord_map.items():
+            dims = self.dim_map[name]
+            new_map[name] = coord.to_summary(dims=dims, name=name)
+        return CoordManagerSummary(
+            dim_map=self.dim_map,
+            coords=new_map,
+            dims=self.dims,
+            summary=True,
+        )
 
     def get_coord(self, coord_name: str) -> BaseCoord:
         """
@@ -1197,3 +1210,28 @@ def _get_coord_dim_map(coords, dims):
     if new_dims:
         dims = tuple(list(dims) + new_dims)
     return c_map, d_map, dims
+
+
+class CoordManagerSummary(CoordManager):
+    """A coordinate manager with summary coordinates."""
+
+    coord_map: Annotated[
+        FrozenDict[str, CoordSummary],
+        frozen_dict_validator,
+        frozen_dict_serializer,
+    ]
+
+    def to_coord_manager(self):
+        """
+        Convert the summary to a coordinate manager.
+
+        This only works if the coordinates were evenly sampled/sorted.
+        """
+        out = {}
+        for name, coord in self.coord_map.items():
+            out[name] = coord.to_coord()
+        return CoordManager(
+            coord_map=out,
+            dim_map=self.dim_map,
+            dims=self.dims,
+        )

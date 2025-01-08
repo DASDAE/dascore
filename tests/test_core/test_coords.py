@@ -385,7 +385,7 @@ class TestCoordSummary:
     @pytest.fixture(scope="session")
     def summary(self, coord) -> CoordSummary:
         """Convert each coord to a summary."""
-        return coord.to_summary()
+        return coord.to_summary(dims="distance", name="distance")
 
     def test_dtype_consistent(self, summary, coord):
         """Ensure the datatype is preserved."""
@@ -397,32 +397,33 @@ class TestCoordSummary:
 
     def test_to_summary(self, coord):
         """Ensure all coords can be converted to a summary."""
-        out = coord.to_summary()
+        out = coord.to_summary(name="time", dims="time")
         assert isinstance(out, CoordSummary)
 
     def test_coord_range_round_trip(self, coord):
         """Coord ranges should round-trip to summaries and back."""
         if not coord.evenly_sampled:
             return
-        summary = coord.to_summary()
+        summary = coord.to_summary(name="time", dims="time")
         back = summary.to_coord()
         assert back == coord
 
-        if not back.to_summary() == summary:
-            coord.to_summary()
+        if not back.to_summary(name="time", dims="time") == summary:
+            coord.to_summary(name="time", dims="time")
 
-        assert back.to_summary() == summary
+        assert back.to_summary(name="time", dims="time") == summary
 
     def test_to_summary_raises(self, random_coord):
         """Ensure to_summary raises if not evenly sampled."""
         match = "Cannot convert summary which is not evenly sampled"
         with pytest.raises(CoordError, match=match):
-            random_coord.to_summary().to_coord()
+            random_coord.to_summary(name="time", dims="time").to_coord()
 
     @pytest.mark.parametrize("data", cast_data_list)
     def test_dtype_inferred(self, data):
         """Ensure the dtypes are correctly determined if not specified."""
-        out = CoordSummary(**data)
+        augments = {"name": "time", "dims": "time", "shape": (21,), "ndim": 1}
+        out = CoordSummary(**(data | augments))
         assert np.dtype(out.dtype) == np.dtype(type(data["min"]))
 
 
@@ -1440,7 +1441,7 @@ class TestPartialCoord:
 
     def test_to_summary(self, basic_non_coord):
         """Ensure we can convert non coord to summary."""
-        summary = basic_non_coord.to_summary()
+        summary = basic_non_coord.to_summary(name="time", dims="time")
         assert isinstance(summary, CoordSummary)
 
     def test_equals_to_other_coord(self, basic_non_coord):

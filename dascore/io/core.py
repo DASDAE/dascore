@@ -477,8 +477,8 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, resource, **kwargs) -> list[dc.PatchAttrs]:
-        """Returns a list of summary info for patches contained in file."""
+    def scan(self, resource, **kwargs) -> list[dc.PatchSummary]:
+        """Returns a list of summary info for patches contained in source."""
         # default scan method reads in the file and returns required attributes
         # however, this can be very slow, so each parser should implement scan
         # when possible.
@@ -489,9 +489,10 @@ class FiberIO:
             raise NotImplementedError(msg)
         out = []
         for pa in spool:
-            new = pa.attrs.update(
-                file_format=self.name,
-                path=str(resource),
+            new = pa.to_summary(
+                resource_format=self.name,
+                resource_version=self.version,
+                uri=str(resource),
             )
             out.append(new)
         return out

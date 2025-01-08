@@ -2,7 +2,7 @@
 from __future__ import annotations
 from rich import print  # noqa
 
-from dascore.core.patch import Patch
+from dascore.core.patch import Patch, PatchSummary
 from dascore.core.attrs import PatchAttrs
 from dascore.core.spool import BaseSpool, spool
 from dascore.core.coordmanager import get_coord_manager, CoordManager

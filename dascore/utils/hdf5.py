@@ -18,6 +18,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 import tables
+from h5py import Empty  # noqa (we purposely re-import this other places)
 from h5py import File as H5pyFile
 from packaging.version import parse as get_version
 from pandas.io.common import stringify_path

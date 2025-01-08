@@ -360,7 +360,6 @@ def separate_coord_info(
     # Check if dims need to be updated.
     new_dims = _get_dims(obj)
     if new_dims and new_dims != dims:
-        obj["dims"] = new_dims
         dims = new_dims
     # this is already a dict of coord info.
     if dims and set(dims).issubset(set(obj)):
@@ -368,6 +367,4 @@ def separate_coord_info(
     _get_coords_from_coord_level(obj, coord_dict)
     _get_coords_from_top_level(obj, coord_dict, dims)
     _pop_keys(obj, coord_dict)
-    if "dims" not in obj and dims is not None:
-        obj["dims"] = dims
     return coord_dict, obj

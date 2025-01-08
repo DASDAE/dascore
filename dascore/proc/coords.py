@@ -210,8 +210,7 @@ def rename_coords(self: PatchType, **kwargs) -> PatchType:
     >>> assert 'fragrance' in pa2.dims
     """
     new_coord = self.coords.rename_coord(**kwargs)
-    attrs = self.attrs.rename_dimension(**kwargs)
-    return self.new(coords=new_coord, dims=new_coord.dims, attrs=attrs)
+    return self.new(coords=new_coord, dims=new_coord.dims)
 
 
 @patch_function()
