@@ -89,12 +89,13 @@ class SegyV1_0(FiberIO):  # noqa
 
 class SegyV0_0(SegyV1_0):  # noqa
     """
-    An IO class supporting version 0.0 of the SEGY format. 
-    
-    Or if the version is not set. 
+    An IO class supporting version 0.0 of the SEGY format.
+
+    Or if the version is not set.
     """
 
     version = "0.0"
+
 
 class SegyV2_0(SegyV1_0):  # noqa
     """An IO class supporting version 2.0 of the SEGY format."""
