@@ -380,16 +380,16 @@ class Patch:
 
     def to_summary(
         self,
-        uri=None,
+        path=None,
         resource_format=None,
         resource_version=None,
     ) -> PatchSummary:
         """
         Summarize the contents of the Patch.
         """
-        uri = uri if uri is not None else self.get_patch_name()
+        path = path if path is not None else self.get_patch_name()
         psum = PatchSummary(
-            uri=uri,
+            uri=path,
             coords=self.coords.to_summary(),
             attrs=self.attrs,
             data=ArraySummary.from_array(self.data),
@@ -404,9 +404,9 @@ class PatchSummary(DascoreBaseModel):
     A class for summarizing the metadata of the Patch.
     """
 
-    uri: str
-    resource_format: str = ""
-    resource_version: str = ""
+    path: str
+    format: str = ""
+    version: str = ""
 
     data: Annotated[ArraySummary, PlainValidator(ArraySummary.from_array)]
 
@@ -415,7 +415,7 @@ class PatchSummary(DascoreBaseModel):
 
     def to_summary(
         self,
-        uri=None,
+        path=None,
         resource_format=None,
         resource_version=None,
     ):

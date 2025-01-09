@@ -197,16 +197,13 @@ def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
     for name, group in h5[("/waveforms")].items():
         contents = _get_patch_content_from_group(group)
         # populate file info
-        contents["file_version"] = file_version
-        contents["file_format"] = file_format
+        contents["version"] = file_version
+        contents["format"] = file_format
         contents["path"] = h5.filename
         # suppressing warnings because old dasdae files will issue warning
         # due to d_dim rather than dim_step. TODO fix test files in the future
         with suppress_warnings(DeprecationWarning):
-            try:
-                out.append(dc.PatchAttrs(**contents))
-            except:
-                breakpoint()
+            out.append(dc.PatchSummary(**contents))
 
     return out
 
@@ -227,7 +224,7 @@ def _get_coord_info(info, group):
         if "min" not in attrs:
             c_summary = (
                 dc.core.get_coord(data=ds[:])
-                .to_summary()
+                .to_summary(name=name, dims=attrs["dims"])
                 .model_dump(exclude_unset=True, exclude_defaults=True)
             )
             c_info.update(c_summary)
@@ -245,19 +242,18 @@ def _get_coord_info(info, group):
 
 def _get_patch_content_from_group(group):
     """Get patch content from a single node."""
-    out = {}
-    attrs = _santize_pytables(dict(group.attrs))
-    for key, value in attrs.items():
+    attrs = {}
+    # The attributes in the table.
+    tables_attrs = _santize_pytables(dict(group.attrs))
+    for key, value in tables_attrs.items():
         new_key = key.replace("_attrs_", "")
         # need to unpack 0 dim arrays.
         if isinstance(value, np.ndarray) and not value.shape:
             value = np.atleast_1d(value)[0]
-        out[new_key] = value
+        attrs[new_key] = value
     # Add coord info.
-    out["coords"] = _get_coord_info(out, group)
+    coords = _get_coord_info(attrs, group)
     # Add data info.
-    out["shape"] = group["data"].shape
-    out["dtype"] = group["data"].dtype.str
-    # rename dims
-    out["dims"] = out.pop("_dims")
-    return out
+    data = group["data"]
+    dims = attrs.pop("_dims")
+    return dict(data=data, attrs=attrs, dims=dims, coords=coords)

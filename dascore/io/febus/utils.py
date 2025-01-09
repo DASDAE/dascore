@@ -9,6 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
+from dascore.utils.models import ArraySummary
 from dascore.utils.misc import (
     _maybe_unpack,
     broadcast_for_index,
@@ -262,11 +263,47 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
     return data, cm
 
 
-def _read_febus(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
+def _get_data_summary(febus):
+    """Get the summary of the data array."""
+    data = febus.zone[febus.data_name]
+    data_shape = data.shape
+    skip_rows = _get_time_overlap_samples(febus, data_shape) // 2
+    # Need to handle case where excess_rows == 0
+    data_slice = slice(skip_rows, -skip_rows if skip_rows else None)
+    total_slice = list(broadcast_for_index(3, 1, data_slice))
+    total_time_rows = data_shape[1] - 2 * skip_rows
+    data_3d = data[tuple(total_slice)]
+    data = data_3d.reshape(-1, data_3d.shape[2])
+    ArraySummary(ndim=2, dtype=data.dtype, shape=shape)
+    return data, cm
+
+
+
+def _read_febus(h5, distance=None, time=None, attr_cls=dc.PatchAttrs):
     """Read the febus values into a patch."""
     out = []
-    for attr, cm, febus in _yield_attrs_coords(fi):
+    for attr, cm, febus in _yield_attrs_coords(h5):
         data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
         patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls(**attr))
+        out.append(patch)
+    return out
+
+
+def _scan_febus(h5, path, attr_cls=dc.PatchAttrs):
+    """Read the febus values into a patch."""
+    out = []
+    format = "febus"
+    version = _get_febus_version_str(h5)
+    for attr, cm, febus in _yield_attrs_coords(h5):
+        data_summary = _get_data_summary(febus)
+        patch = dc.PatchSummary(
+            data=data_summary,
+            coords=cm,
+            attrs=attr_cls(**attr),
+            dims=cm.dims,
+            format=format,
+            version=version,
+            path=path,
+        )
         out.append(patch)
     return out

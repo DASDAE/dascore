@@ -50,7 +50,7 @@ class PatchAttrs(DascoreBaseModel):
     """
 
     model_config = ConfigDict(
-        title="Patch Summary",
+        title="Patch Attrs",
         extra="allow",
         frozen=True,
         arbitrary_types_allowed=True,

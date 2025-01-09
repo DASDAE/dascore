@@ -18,7 +18,7 @@ To demonstrate this process, imagine adding support for a format called `jingle`
 
 ## Adding a New IO Module
 
-First, we create a new io module called 'jingle' in DASCore's io module (dascore/io/jingle). Make sure there is a \__init__.py file in this module whose docstring describes basic use of the format and lists any non-obvious implementation details that might debug/improve the parser.
+First, we create a new io module called 'jingle' in DASCore's io module (dascore/io/jingle). Make sure there is a \__init__.py file in this module whose docstring describes the basics of the format and lists any non-obvious implementation details that might help debug/improve the parser.
 
 contents of `dascore/io/jingle/__init__.py`
 ```{python}
@@ -75,7 +75,7 @@ class JingleV1(FiberIO):
         """
         Used to determine if path is a supported jingle file.
 
-        Returns a tuple of (format_name, file_version) if the file is a
+        Returns a tuple of (format_name, version) if the file is a
         supported jingle file, else return False or raise a
         dascore.exceptions.UnknownFiberFormat exception.
         """
@@ -85,9 +85,8 @@ class JingleV1(FiberIO):
         Used to get metadata about a file without reading the whole file.
 
         This should return a list of
-        [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) objects
-        from the [dascore.core.attrs](`dascore.core.attrs`) module, or a
-        format-specific subclass.
+        [`PatchSummary`](`dascore.PatchSummary`) objects
+        from the [dascore.core.attrs](`dascore.core.attrs`) module.
         """
 
     def write(self, patch, path, **kwargs):
@@ -96,11 +95,11 @@ class JingleV1(FiberIO):
         """
 ```
 
-All 4 methods are optional; some formats will only support reading, others only writing. If `is_format` is not implemented the format will not be auto-detectable, meaning you will have to manually pass the format to [`read`](`dascore.read`) and [`spool`](`dascore.spool`).
+All 4 methods are optional; some formats will only support reading, others only writing. If `get_format` is not implemented the format will not be auto-detectable, meaning you will have to manually pass the format to [`dascore.spool`](`dascore.spool`).
 
 
 :::{.callout-note}
-Note that each of these methods should have `**kwargs` at the end. This allows certain formats to have special keywords while others are not required.
+Note that each of these methods should have `**kwargs`. This allows certain formats to have special keywords.
 :::
 
 :::{.callout-warning}
@@ -110,10 +109,10 @@ It is very important that the `scan` method returns *exactly* the same patch inf
 
 ## Support for Streams/Buffers
 
-Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of a `pytables.File` or `h5py.File` object. There are a few reasons for this:
+Rather than using paths for the IO methods as shown above, it is better practice to write a `FiberIO` which supports the [python stream interface](https://docs.python.org/3/library/io.html#io.BufferedIOBase) or an opened HDF5 file in the form of a `h5py.File` object. There are a few reasons for this:
 
 * More types of inputs can be supported, including steaming file contents from the web or in-memory streams like [`BytesIO`](https://docs.python.org/3/library/io.html#io.BytesIO).
-* It is usually more efficient since open-file handles can be automatically reused.
+* It is usually more efficient since open-file handles can be reused.
 
 To make this easy, DASCore will automatically manage and serve the right input to `FiberIO` methods based on type hints. Here are the ones currently supported, all of which are imported from [dascore.io](`dascore.io`):
 
@@ -125,14 +124,10 @@ To make this easy, DASCore will automatically manage and serve the right input t
 
 4. [H5Writer](`dascore.io.H5Writer`) - An instance of `h5py.File` which is open in append mode.
 
-5. [PyTablesReader](`dascore.io.PyTablesReader`) - An instance of `pytables.File` which is open in read mode.
-
-6. [PyTablesWriter](`dascore.io.PyTablesWriter`) - An instance of `pytables.File` which is open in append mode.
-
 Deciding which to use depends on whether the file is an HDF5-based or binary format, and which hdf5 library you want to use.
 
-:::{.callout-note}
-H5Reader should be preferred to PytablesReader, especially for the `get_format` method.
+:::{.callout-warning}
+The `PytableReader` and similar formats which were based on pytables have been dropped so that PyTables is no longer a dependency of DASCore. See [#482](https://github.com/DASDAE/dascore/discussions/482) and [#310.](https://github.com/DASDAE/dascore/pull/310)
 :::
 
 

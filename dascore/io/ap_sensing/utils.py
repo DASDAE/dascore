@@ -91,7 +91,6 @@ def _get_patch(
     time=None,
     distance=None,
     attr_cls=dc.PatchAttrs,
-    load_data=True,
     **kwargs,
 ):
     """Get a patch from ap_sensing file."""
@@ -100,7 +99,5 @@ def _get_patch(
     data = resource["DAS"]
     if time is not None or distance is not None:
         coords, data = coords.select(array=data, time=time, distance=distance)
-        attrs["coords"] = coords
     attrs = attr_cls.model_validate(attrs)
-    data = data[:] if load_data else data
     return dc.Patch(data=data, coords=coords, attrs=attrs, **kwargs)

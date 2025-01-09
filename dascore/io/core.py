@@ -492,7 +492,7 @@ class FiberIO:
             new = pa.to_summary(
                 resource_format=self.name,
                 resource_version=self.version,
-                uri=str(resource),
+                path=str(resource),
             )
             out.append(new)
         return out

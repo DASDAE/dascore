@@ -11,7 +11,7 @@ from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
-from .utils import _get_patch, _get_version_string
+from .utils import _get_attrs_dict, _get_coords, _get_patch, _get_version_string
 
 
 class APSensingPatchAttrs(dc.PatchAttrs):
@@ -43,13 +43,17 @@ class APSensingV10(FiberIO):
 
     def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchSummary]:
         """Scan an AP sensing file, return summary info about the contents."""
+        attrs = _get_attrs_dict(resource)
+        coords = _get_coords(resource)
         info = {
-            "uri": resource.filename,
-            "resource_format": self.name,
-            "resource_version": _get_version_string(resource),
+            "path": resource.filename,
+            "format": self.name,
+            "version": _get_version_string(resource),
+            "attrs": attrs,
+            "coords": coords,
+            "data": resource["DAS"],
         }
-        patch = _get_patch(resource, load_data=False)
-        return [patch.to_summary(**info)]
+        return [dc.PatchSummary(**info)]
 
     def read(
         self,

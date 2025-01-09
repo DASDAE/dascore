@@ -120,7 +120,7 @@ class DASDAEV1(FiberIO):
             patches.append(_read_patch(patch_group, **kwargs))
         return dc.spool(patches)
 
-    def scan(self, resource: H5Reader, **kwargs):
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchSummary]:
         """
         Get the patch info from the file.
 

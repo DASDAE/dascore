@@ -40,7 +40,7 @@ def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
 
     """
 
-    def _get_spatialcoord(hdf_fi, code):
+    def _get_spatial_coord(hdf_fi, code):
         """Get spatial coord."""
         return get_coord(
             data=hdf_fi[code],
@@ -51,9 +51,9 @@ def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
         "channel": get_coord(data=hdf_fi["channel"][:]),
         "trace": get_coord(data=hdf_fi["trace"][:]),
         "time": get_coord(data=dc.to_datetime64(hdf_fi["t"][:])),
-        "x": _get_spatialcoord(hdf_fi, "x"),
-        "y": _get_spatialcoord(hdf_fi, "y"),
-        "z": _get_spatialcoord(hdf_fi, "z"),
+        "x": _get_spatial_coord(hdf_fi, "x"),
+        "y": _get_spatial_coord(hdf_fi, "y"),
+        "z": _get_spatial_coord(hdf_fi, "z"),
     }
     dim_map = {
         "time": ("time",),

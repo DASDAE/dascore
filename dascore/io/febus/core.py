@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
+from dascore.constants import opt_timeable_types, attr_conflict_description
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.models import UTF8Str
@@ -15,7 +15,7 @@ from dascore.utils.models import UTF8Str
 from .utils import (
     _get_febus_version_str,
     _read_febus,
-    _yield_attrs_coords,
+    _scan_febus,
 )
 
 
@@ -66,20 +66,9 @@ class Febus2(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchSummary]:
         """Scan a febus file, return summary information about the file's contents."""
-        out = []
-        file_version = _get_febus_version_str(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
-        for attr, cm, _ in _yield_attrs_coords(resource):
-            attr["coords"] = cm.to_summary_dict()
-            attr.update(dict(extras))
-            out.append(FebusPatchAttrs(**attr))
-        return out
+        return _scan_febus(resource, resource.path, attr_cls=FebusPatchAttrs)
 
     def read(
         self,
