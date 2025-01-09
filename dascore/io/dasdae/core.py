@@ -134,5 +134,5 @@ class DASDAEV1(FiberIO):
             A path to the file.
         """
         file_format = self.name
-        version = resource.attrs['__DASDAE_version__']
+        version = resource.attrs["__DASDAE_version__"]
         return _get_contents_from_patch_groups(resource, version, file_format)

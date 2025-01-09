@@ -47,9 +47,9 @@ from dascore.utils.misc import (
 from dascore.utils.models import (
     ArrayLike,
     DascoreBaseModel,
-    UnitQuantity,
     IntTupleStrSerialized,
     StrTupleStrSerialized,
+    UnitQuantity,
 )
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
@@ -104,7 +104,7 @@ class CoordSummary(DascoreBaseModel):
     step: step_type | None = None
     units: UnitQuantity | None = None
     dims: StrTupleStrSerialized = ()
-    name: str = ''
+    name: str = ""
 
     @model_serializer(when_used="json")
     def ser_model(self) -> dict[str, str]:
@@ -710,7 +710,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             out[f"{name}_units"] = self.units
         return out
 
-    def to_summary(self, dims=(), name='') -> CoordSummary:
+    def to_summary(self, dims=(), name="") -> CoordSummary:
         """Get the summary info about the coord."""
         return CoordSummary(
             min=self.min(),
@@ -718,7 +718,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             step=self.step,
             dtype=self.dtype,
             units=self.units,
-            shape = self.shape,
+            shape=self.shape,
             dims=dims,
             name=name,
         )
@@ -979,7 +979,7 @@ class CoordPartial(BaseCoord):
         assert self.ndim == 1, "change_length only works on 1D coords."
         return get_coord(shape=(length,))
 
-    def to_summary(self, dims=(), name='') -> CoordSummary:
+    def to_summary(self, dims=(), name="") -> CoordSummary:
         """Get the summary info about the coord."""
         return CoordSummary(
             min=np.nan,

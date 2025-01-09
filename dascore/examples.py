@@ -84,7 +84,7 @@ def random_patch(
         time_coord = dc.get_coord(
             data=time_array,
             step=time_step if time_array.size <= 1 else None,
-            units='s',
+            units="s",
         )
     else:
         time_coord = dascore.core.get_coord(

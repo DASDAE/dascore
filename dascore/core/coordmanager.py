@@ -289,7 +289,9 @@ class CoordManager(DascoreBaseModel):
     update_coords = update
 
     def update_from_attrs(
-        self, attrs: Mapping | dc.PatchAttrs, data=None,
+        self,
+        attrs: Mapping | dc.PatchAttrs,
+        data=None,
     ) -> tuple[Self, dc.PatchAttrs]:
         """
         Update coordinates from attrs.

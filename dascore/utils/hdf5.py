@@ -19,7 +19,6 @@ import numpy as np
 import pandas as pd
 import tables
 from h5py import File as H5pyFile
-from h5py import Empty
 from packaging.version import parse as get_version
 from pandas.io.common import stringify_path
 from tables import ClosedNodeError
@@ -43,7 +42,6 @@ from dascore.utils.pd import (
     list_ser_to_str,
 )
 from dascore.utils.time import get_max_min_times, to_datetime64, to_int, to_timedelta64
-
 
 HDF5ExtError = tables.HDF5ExtError
 NoSuchNodeError = tables.NoSuchNodeError

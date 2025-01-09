@@ -163,7 +163,6 @@ class TestHDFPatchIndexManager:
         assert meta is not None
 
 
-
 class TestH5MatchesStructure:
     """Tests for the h5 matches structure function."""
 

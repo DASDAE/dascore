@@ -60,6 +60,7 @@ class Patch:
     if there is a conflict between information contained in both, the coords
     will be recalculated.
     """
+
     data: ArrayLike
     coords: CoordManager
     dims: tuple[str, ...]

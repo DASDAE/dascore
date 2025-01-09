@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-
 import fnmatch
 import os
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from functools import cache
-from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -559,7 +557,7 @@ def rolling_df(df, window, step=None, axis=0, center=False):
 
 
 def get_attrs_coords_patch_table(
-        patch_or_attrs: Iterable[dc.PatchAttrs | dc.Patch | dc.BaseSpool],
+    patch_or_attrs: Iterable[dc.PatchAttrs | dc.Patch | dc.BaseSpool],
 ) -> tuple(pd.DataFrame, pd.DataFrame, pd.DataFrame):
     """
     Get seperated attributes, coordinates, and patch tables from attrs.
@@ -569,11 +567,12 @@ def get_attrs_coords_patch_table(
     patch_or_attrs
         An iterable with patch content.
     """
+
     def get_coord_dict(attr, num):
         """Get the coordinate information from the attrs."""
         out = []
         for coord in attr.values():
-            coord['id'] = num
+            coord["id"] = num
             out.append(coord)
         return out
 
@@ -588,11 +587,3 @@ def get_attrs_coords_patch_table(
         breakpoint()
         coord_info.extend(get_coord_dict(attr.pop("coords", {}), num))
         breakpoint()
-
-
-
-
-
-
-
-

@@ -14,9 +14,9 @@ from dascore.utils.pd import (
     dataframe_to_patch,
     fill_defaults_from_pydantic,
     filter_df,
+    get_attrs_coords_patch_table,
     get_interval_columns,
     patch_to_dataframe,
-    get_attrs_coords_patch_table,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
 

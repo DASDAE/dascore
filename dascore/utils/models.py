@@ -27,8 +27,9 @@ frozen_dict_serializer = PlainSerializer(lambda x: dict(x))
 def _str_to_int_tuple(value):
     """Convert a string of ints to a tuple."""
     if isinstance(value, str):
-        return tuple(int(x) for x in value.split(','))
+        return tuple(int(x) for x in value.split(","))
     return value
+
 
 # A datetime64
 DateTime64 = Annotated[
@@ -70,7 +71,7 @@ StrTupleStrSerialized = Annotated[
 IntTupleStrSerialized = Annotated[
     tuple[int, ...],
     PlainValidator(_str_to_int_tuple),
-    PlainSerializer(lambda x: ",".join((str(y) for y in x))),
+    PlainSerializer(lambda x: ",".join(str(y) for y in x)),
 ]
 
 FrozenDictType = Annotated[

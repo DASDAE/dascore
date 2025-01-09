@@ -9,13 +9,13 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import PatchConversionError
+from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
     IOResourceManager,
     get_handle_from_resource,
 )
-from dascore.utils.hdf5 import H5Reader, H5Writer
 
 
 class _BadType:

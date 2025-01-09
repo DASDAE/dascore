@@ -10,7 +10,6 @@ import numpy as np
 from pydantic import ConfigDict, Field, PlainValidator, model_validator
 from typing_extensions import Self
 
-import dascore as dc
 from dascore.constants import (
     VALID_DATA_CATEGORIES,
     VALID_DATA_TYPES,
@@ -23,12 +22,11 @@ from dascore.utils.misc import (
     to_str,
 )
 from dascore.utils.models import (
-    StrTupleStrSerialized,
-    IntTupleStrSerialized,
     DascoreBaseModel,
+    IntTupleStrSerialized,
+    StrTupleStrSerialized,
     UnitQuantity,
     frozen_dict_serializer,
-    frozen_dict_validator,
 )
 
 str_validator = PlainValidator(to_str)
@@ -46,7 +44,7 @@ def _to_coord_summary(coord_dict) -> FrozenDict[str, CoordSummary]:
     for i, v in coord_dict.items():
         if hasattr(v, "to_summary"):
             v = v.to_summary()
-        elif isinstance(v,CoordSummary):
+        elif isinstance(v, CoordSummary):
             pass
         else:
             v = CoordSummary(**v)
@@ -133,7 +131,6 @@ class PatchAttrs(DascoreBaseModel):
         frozen_dict_serializer,
     ] = Field(default_factory=dict)
 
-
     @model_validator(mode="before")
     @classmethod
     def _get_dims(cls, data: Any) -> Any:
@@ -144,8 +141,8 @@ class PatchAttrs(DascoreBaseModel):
             coords = data.get("coords", {})
             dims = getattr(coords, "dims", None)
             if dims is None and isinstance(coords, dict):
-                dims = coords.get('dims', ())
-            data['dims'] = dims
+                dims = coords.get("dims", ())
+            data["dims"] = dims
         return data
 
     def __getitem__(self, item):

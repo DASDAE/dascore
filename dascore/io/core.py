@@ -40,9 +40,9 @@ from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import _iter_filesystem, cached_method, iterate, warn_or_raise
 from dascore.utils.models import (
-    StrTupleStrSerialized,
     DascoreBaseModel,
     DateTime64,
+    StrTupleStrSerialized,
     TimeDelta64,
 )
 from dascore.utils.pd import _model_list_to_df

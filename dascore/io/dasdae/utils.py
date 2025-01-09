@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import pickle
-from contextlib import suppress
-
 import numpy as np
 from tables import NodeError
 
@@ -12,10 +9,9 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import suppress_warnings
-from dascore.utils.time import to_int
-from dascore.utils.misc import unbyte
 from dascore.utils.hdf5 import Empty
+from dascore.utils.misc import suppress_warnings, unbyte
+from dascore.utils.time import to_int
 
 # --- Functions for writing DASDAE format
 
@@ -33,7 +29,7 @@ def _santize_pytables(some_dict):
             continue
         # Get rid of empty enum.
         if isinstance(val, Empty):
-            val = ''
+            val = ""
         out[i] = val
     return out
 
@@ -90,15 +86,12 @@ def _save_array(data, name, group, h5):
     return array_node
 
 
-
-
 def _save_coords(patch, patch_group, h5):
     """Save coordinates."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
-        summary = (
-            coord.to_summary(name=name, dims=cm.dims[name])
-            .model_dump(exclude_defaults=True)
+        summary = coord.to_summary(name=name, dims=cm.dims[name]).model_dump(
+            exclude_defaults=True
         )
         breakpoint()
         # First save coordinate arrays
@@ -106,9 +99,6 @@ def _save_coords(patch, patch_group, h5):
         save_name = f"_coord_{name}"
         dataset = _save_array(data, save_name, patch_group, h5)
         dataset.attrs.update(summary)
-
-
-
 
 
 def _save_patch(patch, wave_group, h5, name):
@@ -229,10 +219,10 @@ def _get_coord_info(info, group):
         attrs = _santize_pytables(dict(ds.attrs))
         # Need to get old dimensions from c_dims in attrs.
         if "dims" not in attrs:
-            attrs['dims'] = info.get(f"_cdims_{name}", name)
+            attrs["dims"] = info.get(f"_cdims_{name}", name)
         # The summary info is not stored in attrs; need to read coord array.
         c_info = {}
-        if 'min' not in attrs:
+        if "min" not in attrs:
             c_summary = (
                 dc.core.get_coord(data=ds[:])
                 .to_summary()
@@ -240,11 +230,12 @@ def _get_coord_info(info, group):
             )
             c_info.update(c_summary)
 
-        c_info.update({
-            "dtype": ds.dtype.str,
-            'shape': ds.shape,
-            "name": name,
-        }
+        c_info.update(
+            {
+                "dtype": ds.dtype.str,
+                "shape": ds.shape,
+                "name": name,
+            }
         )
         coords[name] = c_info
     return coords
@@ -261,10 +252,10 @@ def _get_patch_content_from_group(group):
             value = np.atleast_1d(value)[0]
         out[new_key] = value
     # Add coord info.
-    out['coords'] = _get_coord_info(out, group)
+    out["coords"] = _get_coord_info(out, group)
     # Add data info.
-    out['shape'] = group['data'].shape
-    out['dtype'] = group['data'].dtype.str
+    out["shape"] = group["data"].shape
+    out["dtype"] = group["data"].dtype.str
     # rename dims
     out["dims"] = out.pop("_dims")
     return out

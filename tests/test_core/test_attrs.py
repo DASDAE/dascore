@@ -37,7 +37,10 @@ def attrs_coords_2() -> PatchAttrs:
     """Add non-standard coords to attrs."""
     coords = {"depth": {"min": 10.0, "max": 12.0, "dtype": "<f8", "shape": (12,)}}
     attrs = {
-        "coords": coords, "another_name": "FooBar", "dtype": "<i4", "shape": (12,22)
+        "coords": coords,
+        "another_name": "FooBar",
+        "dtype": "<i4",
+        "shape": (12, 22),
     }
     return PatchAttrs(**attrs)
 
@@ -131,9 +134,7 @@ class TestPatchAttrs:
     def test_supports_extra_attrs(self, random_attrs):
         """The attr dict should allow extra attributes."""
         model_dump = random_attrs.model_dump()
-        out = PatchAttrs(
-            bob="doesnt", bill_min=12, bob_max="2012-01-12", **model_dump
-        )
+        out = PatchAttrs(bob="doesnt", bill_min=12, bob_max="2012-01-12", **model_dump)
         assert out.bob == "doesnt"
         assert out.bill_min == 12
 
@@ -173,7 +174,7 @@ class TestPatchAttrs:
             "dims": ("time", "distance"),
         }
         attr = dc.PatchAttrs(**out)
-        assert attr.dims == out['dims']
+        assert attr.dims == out["dims"]
         for name, coord in attr.coords.items():
             assert isinstance(coord, CoordSummary)
 
