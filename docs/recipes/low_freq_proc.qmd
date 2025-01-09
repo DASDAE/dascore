@@ -39,7 +39,7 @@ cutoff_freq = 1 / (2*dt)
 filter_safety_factor = 0.9
 
 # Enter memory size to be dedicated for processing (in MB)
-memory_limit_MB = 75
+memory_limit_MB = 1_000
 
 # Define a tolerance for determining edge effects (used in next step)
 tolerance = 1e-3
@@ -69,13 +69,16 @@ memory_size_per_second_MB = memory_size_per_second / 1e6
 chunk_size = memory_limit_MB / memory_size_per_second_MB
 
 # Ensure `chunk_size` does not exceed the spool length
-merged_sp = sp.chunk(time=None)[0]
-if chunk_size > merged_sp.seconds:
+time_step = sp[0].get_coord('time').step
+time_min = sp[0].get_coord('time').min()
+time_max = sp[-1].get_coord('time').max()
+spool_length = dc.to_float((time_max - time_min + time_step))
+if chunk_size > spool_length:
    print(
    f"Warning: Specified `chunk_size` ({chunk_size:.2f} seconds) exceeds the spool length "
-   f"({merged_sp.seconds:.2f} seconds). Adjusting `chunk_size` to match spool length."
+   f"({spool_length:.2f} seconds). Adjusting `chunk_size` to match spool length."
    )
-   chunk_size = merged_sp.seconds 
+   chunk_size = spool_length
 ```
 
 Next, we need to determine the extent of artifacts introduced by low-pass filtering at the edges of each patch. To achieve this, we apply LF processing to a delta function patch, which contains a unit value at the center and zeros elsewhere. The distorted edges are then identified based on a defined threshold.
@@ -100,12 +103,11 @@ ind_1 = np.where(ind)[1][0]
 ind_2 = np.where(ind)[1][-1]
 
 # Get the total duration of the processed delta function patch in seconds
-time_coord = delta_pa_lfp.get_coord('time')
-delta_pa_lfp_seconds = dc.to_float((time_coord.max() - time_coord.min()))
+delta_pa_lfp_length = delta_pa_lfp.seconds 
 # Convert the new time axis to absolute seconds, relative to the first timestamp
 time_ax_abs = (new_time_ax - new_time_ax[0]) / np.timedelta64(1, "s")
 # Center the time axis 
-time_ax_centered = time_ax_abs - delta_pa_lfp_seconds // 2 
+time_ax_centered = time_ax_abs - delta_pa_lfp_length // 2 
 
 # Calculate the maximum of edges in both sides (in seconds) where artifacts are present
 edge = max(np.abs(time_ax_centered[ind_1]), np.abs(time_ax_centered[ind_2]))
