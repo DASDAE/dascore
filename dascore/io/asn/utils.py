@@ -6,7 +6,7 @@ import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
 from dascore.utils.hdf5 import unpack_scalar_h5_dataset
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import get_path, unbyte
 
 # --- Getting format/version
 
@@ -53,7 +53,7 @@ def _get_coord_manager(fi):
     return out
 
 
-def _get_attr_dict(header):
+def _get_attr_dict(header, path, format_name, format_version):
     """Map header info to DAS attrs."""
     attr_map = {
         "gaugeLength": "gauge_length",
@@ -61,7 +61,12 @@ def _get_attr_dict(header):
         "instrument": "instrument_id",
         "experiment": "acquisition_id",
     }
-    out = {"data_category": "DAS"}
+    out = {
+        "data_category": "DAS",
+        "path": path,
+        "format_name": format_name,
+        "format_version": format_version,
+    }
     for head_name, attr_name in attr_map.items():
         value = header[head_name]
         if hasattr(value, "shape"):
@@ -70,20 +75,20 @@ def _get_attr_dict(header):
     return out
 
 
-def _get_opto_das_attrs(fi) -> dict:
+def _get_opto_das_coords_attrs(fi, format_name) -> tuple[dc.CoordManager, dict]:
     """Scan a OptoDAS file, return metadata."""
     cm = _get_coord_manager(fi)
-    attrs = _get_attr_dict(fi["header"])
-    attrs["coords"] = cm
-    return attrs
+    path = get_path(fi)
+    version = _get_opto_das_version_str(fi)
+    attrs = _get_attr_dict(fi["header"], path, format_name, version)
+    return cm, attrs
 
 
-def _read_opto_das(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
+def _read_opto_das(
+    fi, distance=None, time=None, attr_cls=dc.PatchAttrs, format_name=""
+):
     """Read the OptoDAS values into a patch."""
-    attrs = _get_opto_das_attrs(fi)
+    coords, attrs = _get_opto_das_coords_attrs(fi, format_name)
     data_node = fi["data"]
-    coords = attrs.pop("coords")
     cm, data = coords.select(array=data_node, distance=distance, time=time)
-    attrs["coords"] = cm.to_summary_dict()
-    attrs["dims"] = cm.dims
     return [dc.Patch(data=data, coords=cm, attrs=attr_cls(**attrs))]

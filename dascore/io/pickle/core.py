@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pickle
 
-import dascore
+import dascore as dc
 from dascore.io import BinaryReader, BinaryWriter, FiberIO
+from dascore.utils.misc import get_path
 
 
 class PickleIO(FiberIO):
@@ -49,8 +50,14 @@ class PickleIO(FiberIO):
 
     def read(self, resource: BinaryReader, **kwargs):
         """Read a Patch/Spool from disk."""
-        out = pickle.load(resource)
-        return dascore.spool(out)
+        patch: dc.Patch = pickle.load(resource)
+        # Add the relevant file info.
+        out = patch.update_attrs(
+            path=get_path(resource),
+            format_name=self.name,
+            format_version=self.version,
+        )
+        return dc.spool([out])
 
     def write(self, patch, resource: BinaryWriter, **kwargs):
         """Write a Patch/Spool to disk."""

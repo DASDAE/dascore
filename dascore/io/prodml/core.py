@@ -10,7 +10,13 @@ from dascore.io import FiberIO
 from dascore.utils.models import UnitQuantity, UTF8Str
 
 from ...utils.hdf5 import H5Reader
-from .utils import _get_prodml_attrs, _get_prodml_version_str, _read_prodml
+from .utils import (
+    _get_data_coords,
+    _get_prodml_attrs,
+    _get_prodml_version_str,
+    _get_raw_node_dict,
+    _read_prodml,
+)
 
 
 class ProdMLPatchAttrs(dc.PatchAttrs):
@@ -43,16 +49,21 @@ class ProdMLV2_0(FiberIO):  # noqa
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchSummary]:
         """Scan a prodml file, return summary information about the file's contents."""
-        file_version = _get_prodml_version_str(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
-        attrs = _get_prodml_attrs(resource, extras=extras)
-        return [ProdMLPatchAttrs(**x) for x in attrs]
+        attr_list = _get_prodml_attrs(resource, self.name, self.version)
+        acq = resource["Acquisition"]
+        nodes = list(_get_raw_node_dict(acq.values()))
+        out = []
+        for attrs, node in zip(attr_list, nodes):
+            data, coords = _get_data_coords(attrs, node)
+            summary = dc.PatchSummary(
+                data=data,
+                attrs=ProdMLPatchAttrs(**attrs),
+                coords=coords,
+            )
+            out.append(summary)
+        return out
 
     def read(
         self,
@@ -63,7 +74,12 @@ class ProdMLV2_0(FiberIO):  # noqa
     ) -> dc.BaseSpool:
         """Read a ProdML file."""
         patches = _read_prodml(
-            resource, time=time, distance=distance, attr_cls=ProdMLPatchAttrs
+            resource,
+            format_name=self.name,
+            format_version=self.version,
+            time=time,
+            distance=distance,
+            attr_cls=ProdMLPatchAttrs,
         )
         return dc.spool(patches)
 

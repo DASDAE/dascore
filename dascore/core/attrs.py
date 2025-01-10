@@ -85,6 +85,13 @@ class PatchAttrs(DascoreBaseModel):
     network: str = Field(
         default="", max_length=max_lens["network"], description="A network code."
     )
+    path: str = Field(default="", description="The origin of the patch data.")
+    format_name: str = Field(
+        default="", description="The original format of the patch data."
+    )
+    format_version: str = Field(
+        default="", description="The version of the patch data."
+    )
     history: StrTupleStrSerialized = Field(
         default_factory=tuple,
         description="A list of processing performed on the patch.",

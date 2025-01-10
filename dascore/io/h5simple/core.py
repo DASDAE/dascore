@@ -41,9 +41,12 @@ class H5Simple(FiberIO):
         patch = dc.Patch(coords=new_cm, data=new_data[:], attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[dc.PatchSummary]:
         """Get the attributes of a h5simple file."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
-        attrs["coords"] = cm.to_summary_dict()
-        attrs["path"] = resource.filename
-        return [dc.PatchAttrs(**attrs)]
+        summary = dc.PatchSummary(
+            attrs=attrs,
+            coords=cm,
+            data=data,
+        )
+        return [summary]

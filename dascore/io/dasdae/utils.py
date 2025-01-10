@@ -6,11 +6,10 @@ import numpy as np
 from tables import NodeError
 
 import dascore as dc
-from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.utils.hdf5 import Empty
-from dascore.utils.misc import suppress_warnings, unbyte
+from dascore.utils.misc import get_path, suppress_warnings, unbyte
 from dascore.utils.time import to_int
 
 # --- Functions for writing DASDAE format
@@ -114,19 +113,21 @@ def _save_patch(patch, wave_group, h5, name):
 # --- Functions for reading
 
 
-def _get_attrs(patch_group):
+def _get_attrs(patch_group, path, format_name, format_version):
     """Get the saved attributes form the group attrs."""
     out = {}
     attrs = [x for x in patch_group.attrs if x.startswith("_attrs_")]
-    for attr_name in attrs:
-        key = attr_name.replace("_attrs_", "")
-        val = patch_group._v_attrs[attr_name]
-        # need to unpack one value arrays
-        if isinstance(val, np.ndarray) and not val.shape:
-            val = np.asarray([val])[0]
-        out[key] = val
-    with suppress_warnings(DeprecationWarning):
-        return PatchAttrs(**out)
+    tables_attrs = _santize_pytables(dict(patch_group.attrs))
+    for key, value in tables_attrs.items():
+        new_key = key.replace("_attrs_", "")
+        # need to unpack 0 dim arrays.
+        if isinstance(value, np.ndarray) and not value.shape:
+            value = np.atleast_1d(value)[0]
+        attrs[new_key] = value
+    out["path"] = path
+    out["format_name"] = format_name
+    out["format_version"] = format_version
+    return out
 
 
 def _read_array(table_array):
@@ -174,34 +175,33 @@ def _get_dims(patch_group):
     return out
 
 
-def _read_patch(patch_group, load_data=True, **kwargs):
+def _read_patch(patch_group, path, format_name, format_version, **kwargs):
     """Read a patch group, return Patch."""
-    attrs = _get_attrs(patch_group)
+    attrs = _get_attrs(patch_group, path, format_name, format_version)
     dims = _get_dims(patch_group)
     coords = _get_coords(patch_group, dims, attrs)
-    # Note, previously this was wrapped with try, except (Index, KeyError)
-    # and the data = np.array(None) in except block. Not sure, why, removed
-    # try except.
     if kwargs:
         coords, data = coords.select(array=patch_group["data"], **kwargs)
     else:
         data = patch_group["data"]
-        if load_data:
-            data = data[:]
-    return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+    return dc.Patch(data=data[:], coords=coords, dims=dims, attrs=attrs)
 
 
-def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
+def _get_summary_from_patch_groups(h5, format_name="DASDAE"):
     """Get the contents from each patch group."""
+    path = get_path(h5)
+    format_version = h5.attrs["__DASDAE_version__"]
     out = []
     for name, group in h5[("/waveforms")].items():
-        contents = _get_patch_content_from_group(group)
-        # populate file info
-        contents["version"] = file_version
-        contents["format"] = file_format
-        contents["path"] = h5.filename
+        contents = _get_patch_content_from_group(
+            group,
+            path=path,
+            format_name=format_name,
+            format_version=format_version,
+        )
         # suppressing warnings because old dasdae files will issue warning
-        # due to d_dim rather than dim_step. TODO fix test files in the future
+        # due to d_dim rather than dim_step.
+        # TODO fix in parser.
         with suppress_warnings(DeprecationWarning):
             out.append(dc.PatchSummary(**contents))
 
@@ -240,20 +240,17 @@ def _get_coord_info(info, group):
     return coords
 
 
-def _get_patch_content_from_group(group):
+def _get_patch_content_from_group(group, path, format_name, format_version):
     """Get patch content from a single node."""
-    attrs = {}
     # The attributes in the table.
-    tables_attrs = _santize_pytables(dict(group.attrs))
-    for key, value in tables_attrs.items():
-        new_key = key.replace("_attrs_", "")
-        # need to unpack 0 dim arrays.
-        if isinstance(value, np.ndarray) and not value.shape:
-            value = np.atleast_1d(value)[0]
-        attrs[new_key] = value
-    # Add coord info.
+    attrs = _get_attrs(group, path, format_name, format_version)
+    # Get coord info
     coords = _get_coord_info(attrs, group)
+    # Overwrite (or add) file-specific info.
+    attrs["path"] = path
+    attrs["file_format"] = format_name
+    attrs["file_version"] = format_version
     # Add data info.
     data = group["data"]
-    dims = attrs.pop("_dims")
+    dims = attrs.pop("_dims", None)
     return dict(data=data, attrs=attrs, dims=dims, coords=coords)

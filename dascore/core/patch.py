@@ -24,7 +24,11 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import BaseCoord
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
-from dascore.utils.models import ArrayLike, ArraySummary, DascoreBaseModel
+from dascore.utils.models import (
+    ArrayLike,
+    ArraySummary,
+    DascoreBaseModel,
+)
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
 from dascore.viz import VizPatchNameSpace
@@ -380,21 +384,14 @@ class Patch:
 
     def to_summary(
         self,
-        path=None,
-        resource_format=None,
-        resource_version=None,
     ) -> PatchSummary:
         """
         Summarize the contents of the Patch.
         """
-        path = path if path is not None else self.get_patch_name()
         psum = PatchSummary(
-            uri=path,
             coords=self.coords.to_summary(),
             attrs=self.attrs,
             data=ArraySummary.from_array(self.data),
-            resource_format=resource_format,
-            resource_version=resource_version,
         )
         return psum
 
@@ -404,12 +401,7 @@ class PatchSummary(DascoreBaseModel):
     A class for summarizing the metadata of the Patch.
     """
 
-    path: str
-    format: str = ""
-    version: str = ""
-
     data: Annotated[ArraySummary, PlainValidator(ArraySummary.from_array)]
-
     attrs: PatchAttrs
     coords: CoordManagerSummary
 

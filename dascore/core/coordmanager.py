@@ -995,9 +995,8 @@ class CoordManager(DascoreBaseModel):
             new_map[name] = coord.to_summary(dims=dims, name=name)
         return CoordManagerSummary(
             dim_map=self.dim_map,
-            coords=new_map,
+            coord_map=FrozenDict(new_map),
             dims=self.dims,
-            summary=True,
         )
 
     def get_coord(self, coord_name: str) -> BaseCoord:

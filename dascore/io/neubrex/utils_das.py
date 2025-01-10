@@ -27,7 +27,7 @@ def _get_coord_manager(acoustic):
         """Get the time coordinate."""
         attrs = acoustic.attrs
 
-        # We havent encountered a time decimated file yet; raise over guess
+        # See 465 for why this is here.
         assert attrs["TimeDecimationFilter"] in {0, 1}, "not implemented"
 
         gps = unbyte(attrs["GPSTimeStamp(UTC)"])

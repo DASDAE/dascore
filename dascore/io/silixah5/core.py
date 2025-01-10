@@ -7,11 +7,11 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
+import dascore.io.silixah5.utils as util
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
-
-from .utils import _get_attr, _get_patch, _get_version_string
+from dascore.utils.misc import get_path
 
 
 class SilixaPatchAttrs(dc.PatchAttrs):
@@ -30,6 +30,14 @@ class SilixaH5V1(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
+    def _get_attr_coords(self, resource):
+        """Get attributes and coordinates of patch in file."""
+        info, coords = util._get_attr_dict(resource)
+        info["path"] = get_path(resource)
+        info["format_name"] = self.name
+        info["format_version"] = self.version
+        return SilixaPatchAttrs(**info), coords
+
     def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """
         Return name and version string if Silixa hdf5 else False.
@@ -39,20 +47,16 @@ class SilixaH5V1(FiberIO):
         resource
             A path to the file which may contain terra15 data.
         """
-        version_str = _get_version_string(resource, self.version)
+        version_str = util._get_version_string(resource, self.version)
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchSummary]:
         """Scan a Silixa HDF5 file, return summary information on the contents."""
-        file_version = _get_version_string(resource, self.version)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
-        attrs = _get_attr(resource, SilixaPatchAttrs, extras=extras)
-        return [attrs]
+        attrs, coords = self._get_attr_coords(resource)
+        data = resource["Acoustic"]
+        summary = dc.PatchSummary(data=data, attrs=attrs, coords=coords)
+        return [summary]
 
     def read(
         self,
@@ -62,7 +66,9 @@ class SilixaH5V1(FiberIO):
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a single file with Silixa H5 data inside."""
-        patches = _get_patch(
-            resource, time=time, distance=distance, attr_cls=SilixaPatchAttrs
-        )
-        return dc.spool(patches)
+        attrs, coords = self._get_attr_coords(resource)
+        data = resource["Acoustic"]
+        if time is not None or distance is not None:
+            coords, data = coords.select(array=data, time=time, distance=distance)
+        patch = dc.Patch(data=data[:], coords=coords, attrs=attrs)
+        return dc.spool([patch])

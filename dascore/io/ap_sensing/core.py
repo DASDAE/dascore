@@ -43,12 +43,9 @@ class APSensingV10(FiberIO):
 
     def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchSummary]:
         """Scan an AP sensing file, return summary info about the contents."""
-        attrs = _get_attrs_dict(resource)
+        attrs = _get_attrs_dict(resource, self.name)
         coords = _get_coords(resource)
         info = {
-            "path": resource.filename,
-            "format": self.name,
-            "version": _get_version_string(resource),
             "attrs": attrs,
             "coords": coords,
             "data": resource["DAS"],
@@ -64,6 +61,10 @@ class APSensingV10(FiberIO):
     ) -> dc.BaseSpool:
         """Read a single file with APSensing data inside."""
         patches = _get_patch(
-            resource, time=time, distance=distance, attr_cls=APSensingPatchAttrs
+            resource,
+            self.name,
+            time=time,
+            distance=distance,
+            attr_cls=APSensingPatchAttrs,
         )
         return dc.spool(patches)

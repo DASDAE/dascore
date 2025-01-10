@@ -6,8 +6,9 @@ import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.io import BinaryReader, FiberIO
+from dascore.utils.misc import get_path
 
-from .utils import _get_data, _get_default_attrs, _get_version_str
+from .utils import _get_attrs_coords, _get_data, _get_version_str
 
 
 class TDMSFormatterV4713(FiberIO):
@@ -17,6 +18,14 @@ class TDMSFormatterV4713(FiberIO):
     version = "4713"
     preferred_extensions = ("tdms",)
     lead_in_length = 28
+
+    def _get_attr_coords(self, resource):
+        """Get a PatchAttrs for the file."""
+        out, coords, _ = _get_attrs_coords(resource)
+        out["path"] = get_path(resource)
+        out["file_format"] = self.name
+        out["file_version"] = self.version
+        return dc.PatchAttrs(**out), coords
 
     def get_format(self, stream: BinaryReader, **kwargs) -> tuple[str, str] | bool:
         """
@@ -36,13 +45,10 @@ class TDMSFormatterV4713(FiberIO):
         except Exception:
             return False
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: BinaryReader, **kwargs) -> list[dc.PatchSummary]:
         """Scan a tdms file, return summary information about the file's contents."""
-        out = _get_default_attrs(resource)
-        out["path"] = getattr(resource, "name", "")
-        out["file_format"] = self.name
-        out["file_version"] = self.version
-        return [dc.PatchAttrs(**out)]
+        attrs, coords = self._get_attr_coords(resource)
+        raise Exception("ARGG!")
 
     def read(
         self,
@@ -54,10 +60,9 @@ class TDMSFormatterV4713(FiberIO):
         """Read a silixa tdms file, return a DataArray."""
         # get all data, total amount of samples and associated attributes
         data, channel_length, attrs_full = _get_data(resource, lead_in_length=28)
-        attrs = _get_default_attrs(resource, attrs_full)
-        coords = dc.core.get_coord_manager(attrs.pop("coords"))
+        attrs, coords = self._get_attr_coords(resource)
         # trim data if required
         if time is not None or distance is not None:
             coords, data = coords.select(data, time=time, distance=distance)
         patch = Patch(data=data, coords=coords, attrs=attrs)
-        return dc.spool(patch)
+        return dc.spool([patch])

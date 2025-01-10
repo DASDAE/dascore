@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.coordmanager import get_coord_manager
@@ -79,18 +78,6 @@ def _get_version_data_node(root):
     return version, data_node
 
 
-def _scan_terra15(h5_fi, data_node, extras=None):
-    """Scan a terra15 file, return metadata."""
-    out = extras
-    out.update(_get_default_attrs(h5_fi.attrs))
-    coords = {
-        "time": _get_time_coord(data_node, snap_dims=True),
-        "distance": _get_distance_coord(h5_fi),
-    }
-    out["coords"] = coords
-    return [dc.PatchAttrs(**out)]
-
-
 # --- Reading patch
 
 
@@ -98,6 +85,10 @@ def _get_raw_time_coord(data_node):
     """Read the time from the data node and return it."""
     time = _get_time_node(data_node)[:]
     return get_coord(data=to_datetime64(time))
+
+
+def _get_coord_manager(h5):
+    """Get the coordinate manager from the terra15 file."""
 
 
 def _read_terra15(
@@ -147,9 +138,6 @@ def _read_terra15(
 def _get_default_attrs(root_node_attrs):
     """
     Return the required/default attributes which can be fetched from attributes.
-
-    Note: missing time, distance absolute ranges. Downstream functions should handle
-    this.
     """
     out = {}
     _root_attrs = {

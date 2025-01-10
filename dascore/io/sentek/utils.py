@@ -8,13 +8,14 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
+from dascore.utils.misc import get_path
 
 
 def _get_version(fid):
     """Determine if Sentek file."""
-    name = fid.name
+    path = get_path(fid)
     # Sentek files cannot change the extension, or file name.
-    sw_data = name.endswith(".das")
+    sw_data = path.endswith(".das")
     fid.seek(0)
     # There isn't anything in the header particularly useful for determining
     # if it is a Sentek file, so we do what we can here.
@@ -31,7 +32,7 @@ def _get_version(fid):
     strain_rate = int(np.fromfile(fid, dtype=np.float32, count=1)[0])
     proper_strain_rate = strain_rate in {0, 1}
     # Note: We will need to modify this later for different versions of the
-    # sentek data, but for now we only support 5.
+    # Sentek data, but for now we only support 5.
     if sw_data and is_positive and proper_strain_rate and nearly_ints:
         return ("sentek", "5")
     return False
@@ -53,7 +54,7 @@ def _get_time_from_file_name(name) -> np.datetime64:
     return np.datetime64(iso)
 
 
-def _get_patch_attrs(fid, extras=None):
+def _get_patch_attrs(fid, path, format_name, format_version):
     """Extracts patch metadata.
 
     A few important fields in the header and their meaning:
@@ -92,8 +93,8 @@ def _get_patch_attrs(fid, extras=None):
     coord_manager = get_coord_manager(
         {"time": time, "distance": dist}, dims=("distance", "time")
     )
-    attrs = dc.PatchAttrs(
-        coords=coord_manager, data_type=data_type, **({} if extras is None else extras)
+    attrs = dict(
+        data_type=data_type, path=path, foram=format_name, format_version=format_version
     )
     offsets = fid.tell(), int(measurement_count), int(sensor_num)
     return attrs, coord_manager, offsets

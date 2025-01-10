@@ -7,9 +7,10 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types, attr_conflict_description
+from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import get_path
 from dascore.utils.models import UTF8Str
 
 from .utils import (
@@ -68,7 +69,13 @@ class Febus2(FiberIO):
 
     def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchSummary]:
         """Scan a febus file, return summary information about the file's contents."""
-        return _scan_febus(resource, resource.path, attr_cls=FebusPatchAttrs)
+        return _scan_febus(
+            resource,
+            path=get_path(resource),
+            format_name=self.name,
+            format_version=self.version,
+            attr_cls=FebusPatchAttrs,
+        )
 
     def read(
         self,
@@ -79,7 +86,13 @@ class Febus2(FiberIO):
     ) -> dc.BaseSpool:
         """Read a febus spool of patches."""
         patches = _read_febus(
-            resource, time=time, distance=distance, attr_cls=FebusPatchAttrs
+            resource,
+            path=get_path(resource),
+            format_name=self.name,
+            format_version=self.version,
+            time=time,
+            distance=distance,
+            attr_cls=FebusPatchAttrs,
         )
         return dc.spool(patches)
 

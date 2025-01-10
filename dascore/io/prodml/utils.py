@@ -6,7 +6,7 @@ import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import iterate, maybe_get_items, unbyte
+from dascore.utils.misc import get_path, iterate, maybe_get_items, unbyte
 
 # --- Getting format/version
 
@@ -83,7 +83,7 @@ def _get_data_unit_and_type(node):
     return out
 
 
-def _get_prodml_attrs(fi, extras=None) -> list[dict]:
+def _get_prodml_attrs(fi, format_name, format_version) -> list[dict]:
     """Scan a prodML file, return metadata."""
     _root_attrs = {
         "PulseWidth": "pulse_width",
@@ -99,21 +99,18 @@ def _get_prodml_attrs(fi, extras=None) -> list[dict]:
     }
     acq = fi["Acquisition"]
     base_info = maybe_get_items(acq.attrs, _root_attrs)
-    d_coord = _get_distance_coord(acq)
     raw_nodes = _get_raw_node_dict(acq)
+    path = get_path(fi)
 
     # Iterate each raw data node. I have only ever seen 1 in a file but since
     # it is indexed like Raw[0] there might be more.
     out = []
     for node in raw_nodes.values():
         info = dict(base_info)
-        t_coord = _get_time_coord(node)
-        info.update(t_coord.get_attrs_dict("time"))
         info.update(_get_data_unit_and_type(node))
-        info["dims"] = _get_dims(node)
-        if extras is not None:
-            info.update(extras)
-        info["coords"] = {"time": t_coord, "distance": d_coord}
+        info["path"] = path
+        info["format_name"] = format_name
+        info["format_version"] = format_version
         out.append(info)
     return out
 
@@ -133,21 +130,25 @@ def _get_dims(node):
     return dims
 
 
-def _get_data_attr(attrs, node, time, distance):
-    """Get a new attributes with adjusted time/distance and data array."""
+def _get_data_coords(attrs, node, time=None, distance=None):
+    """Get the data array with coordinates."""
     dims = _get_dims(node)
     cm = get_coord_manager(attrs["coords"], dims=dims)
-    new_cm, data = cm.select(array=node["RawData"], time=time, distance=distance)
-    return data, new_cm
+    data = node["RawData"]
+    if time is not None or distance is not None:
+        cm, data = cm.select(array=node["RawData"], time=time, distance=distance)
+    return data, cm
 
 
-def _read_prodml(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
+def _read_prodml(
+    fi, format_name, format_version, distance=None, time=None, attr_cls=dc.PatchAttrs
+):
     """Read the prodml values into a patch."""
-    attr_list = _get_prodml_attrs(fi)
+    attr_list = _get_prodml_attrs(fi, format_name, format_version)
     nodes = list(_get_raw_node_dict(fi["Acquisition"]).values())
     out = []
     for attrs, node in zip(attr_list, nodes):
-        data, coords = _get_data_attr(attrs, node, time, distance)
+        data, coords = _get_data_coords(attrs, node, time, distance)
         if data.size:
             pattrs = attr_cls(**attrs)
             out.append(dc.Patch(data=data, attrs=pattrs, coords=coords))

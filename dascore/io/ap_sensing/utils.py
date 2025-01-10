@@ -4,7 +4,7 @@ Utility functions for AP sensing module.
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.utils.misc import _maybe_unpack, unbyte
+from dascore.utils.misc import _maybe_unpack, get_path, unbyte
 
 
 def _get_version_string(resource):
@@ -73,8 +73,9 @@ def _get_coords(resource):
     return cm
 
 
-def _get_attrs_dict(resource):
+def _get_attrs_dict(resource, format_name):
     """Get attributes."""
+    version = _get_version_string(resource)
     daq = resource["DAQ"]
     pserver = resource["ProcessingServer"]
     out = dict(
@@ -82,19 +83,23 @@ def _get_attrs_dict(resource):
         instrumet_id=unbyte(_maybe_unpack(daq["SerialNumber"])),
         gauge_length=_maybe_unpack(pserver["GaugeLength"]),
         radians_to_nano_strain=_maybe_unpack(pserver["RadiansToNanoStrain"]),
+        path=get_path(resource),
+        format_name=format_name,
+        format_version=version,
     )
     return out
 
 
 def _get_patch(
     resource,
+    format_name,
     time=None,
     distance=None,
     attr_cls=dc.PatchAttrs,
     **kwargs,
 ):
     """Get a patch from ap_sensing file."""
-    attrs = _get_attrs_dict(resource)
+    attrs = _get_attrs_dict(resource, format_name)
     coords = _get_coords(resource)
     data = resource["DAS"]
     if time is not None or distance is not None:

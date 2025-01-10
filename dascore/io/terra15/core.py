@@ -2,17 +2,30 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import get_path
 
 from .utils import (
+    _get_default_attrs,
+    _get_distance_coord,
     _get_terra15_version_str,
+    _get_time_coord,
     _get_version_data_node,
     _read_terra15,
-    _scan_terra15,
 )
+
+
+class Terra15PatchAttrs(dc.PatchAttrs):
+    """Patch attributes specific to Terra15 data."""
+
+    pulse_rate: float = np.nan
+    pulse_length: float = np.nan
+    gauge_length: float = np.nan
 
 
 class Terra15FormatterV4(FiberIO):
@@ -21,6 +34,20 @@ class Terra15FormatterV4(FiberIO):
     name = "TERRA15"
     preferred_extensions = ("hdf5", "h5")
     version = "4"
+
+    def _get_attrs_coords_data_node(self, resource):
+        """Get attributes, coords, and datanode for this file."""
+        version, data_node = _get_version_data_node(resource)
+        attrs = _get_default_attrs(resource)
+        attrs["path"] = get_path(resource)
+        attrs["format_name"] = self.name
+        attrs["format_version"] = version
+        coords_dict = {
+            "time": _get_time_coord(data_node, snap_dims=True),
+            "distance": _get_distance_coord(resource),
+        }
+        cm = dc.get_coord_manager(coords_dict)
+        return attrs, cm, data_node
 
     def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """
@@ -35,15 +62,10 @@ class Terra15FormatterV4(FiberIO):
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchSummary]:
         """Scan a terra15 v2 file, return summary information."""
-        version, data_node = _get_version_data_node(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(version),
-        }
-        return _scan_terra15(resource, data_node, extras)
+        attrs, cm, data = self._get_attrs_coords_data_node(resource)
+        return [dc.PatchSummary(attrs=attrs, coords=cm, data=data)]
 
     def read(
         self,
@@ -70,7 +92,7 @@ class Terra15FormatterV4(FiberIO):
             negligible.
         """
         patch = _read_terra15(resource, time, distance, snap_dims=snap_dims)
-        return dc.spool(patch)
+        return dc.spool([patch])
 
 
 class Terra15FormatterV5(Terra15FormatterV4):

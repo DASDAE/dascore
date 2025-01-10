@@ -745,3 +745,18 @@ def to_object_array(object_sequence):
     out = np.empty(len(object_sequence), dtype=object)
     out[:] = object_sequence
     return out
+
+
+def get_path(obj) -> str:
+    """
+    Get the path string of an object.
+
+    Parameters
+    ----------
+    obj
+        An object that represents a path to a resource.
+    """
+    # Handles the case of
+    if hasattr(obj, "filename"):
+        return obj.filename
+    return str(obj)

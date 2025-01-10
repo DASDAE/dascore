@@ -10,7 +10,7 @@ from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.models import UnitQuantity, UTF8Str
 
-from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_das
+from .utils import _get_opto_das_coords_attrs, _get_opto_das_version_str, _read_opto_das
 
 
 class OptoDASPatchAttrs(dc.PatchAttrs):
@@ -41,17 +41,16 @@ class OptoDASV8(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchSummary]:
         """Scan a OptoDAS file, return summary information about the file's contents."""
-        file_version = _get_opto_das_version_str(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
-        attrs = _get_opto_das_attrs(resource)
-        attrs.update(extras)
-        return [OptoDASPatchAttrs(**attrs)]
+        attrs, coords = _get_opto_das_coords_attrs(resource, self.name)
+        data_node = resource["data"]
+        summary = dc.PatchSummary(
+            data=data_node,
+            coords=coords,
+            attrs=OptoDASPatchAttrs(**attrs),
+        )
+        return [summary]
 
     def read(
         self,
@@ -62,6 +61,10 @@ class OptoDASV8(FiberIO):
     ) -> dc.BaseSpool:
         """Read a OptoDAS spool of patches."""
         patches = _read_opto_das(
-            resource, time=time, distance=distance, attr_cls=OptoDASPatchAttrs
+            resource,
+            time=time,
+            distance=distance,
+            attr_cls=OptoDASPatchAttrs,
+            format_name=self.name,
         )
         return dc.spool(patches)

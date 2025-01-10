@@ -7,6 +7,8 @@ import numpy as np
 import dascore as dc
 from dascore.io import BinaryReader
 from dascore.io.core import FiberIO
+from dascore.utils.misc import get_path
+from dascore.utils.models import ArraySummary
 
 from .utils import _get_patch_attrs, _get_version
 
@@ -18,6 +20,17 @@ class SentekV5(FiberIO):
     version = "5"
     preferred_extensions = ("das",)
 
+    def _get_attrs_coords_offsets(self, resource):
+        """Get attributes, coordinates, and data offsets from file."""
+        attrs_dict, coords, offsets = _get_patch_attrs(
+            resource,
+            path=get_path(resource),
+            format_name=self.name,
+            format_version=self.version,
+        )
+        attrs = dc.PatchAttrs(**attrs_dict)
+        return attrs, coords, offsets
+
     def read(
         self,
         resource: BinaryReader,
@@ -26,7 +39,7 @@ class SentekV5(FiberIO):
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a Sentek das file, return a DataArray."""
-        attrs, coords, offsets = _get_patch_attrs(resource)
+        attrs, coords, offsets = self._get_attrs_coords_offsets(resource)
         resource.seek(offsets[0])
         array = np.fromfile(resource, dtype=np.float32, count=offsets[1] * offsets[2])
         array = np.reshape(array, (offsets[1], offsets[2])).T
@@ -42,10 +55,8 @@ class SentekV5(FiberIO):
 
     def scan(self, resource: BinaryReader, **kwargs):
         """Extract metadata from sentek file."""
-        extras = {
-            "file_format": self.name,
-            "file_version": self.version,
-            "path": resource.name,
-        }
-
-        return [_get_patch_attrs(resource, extras=extras)[0]]
+        attrs, coords, offsets = self._get_attrs_coords_offsets(resource)
+        shape = (offsets[2], offsets[1])
+        data_summary = ArraySummary(shape=shape, dtype=np.float32, ndim=2)
+        summary = dc.PatchSummary(coords=coords, attrs=attrs, data=data_summary)
+        return [summary]

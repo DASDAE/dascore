@@ -128,17 +128,6 @@ def _get_coords(fi):
     return coords
 
 
-def _get_attrs(fi, coords, path, file_io):
-    """Create Patch Attribute from SEGY header contents."""
-    attrs = dc.PatchAttrs(
-        path=path,
-        file_version=file_io.version,
-        file_format=file_io.name,
-        coords=coords,
-    )
-    return attrs
-
-
 def _get_time_from_header(header):
     """Creates a datetime64 object from SEGY header date information."""
     segyio = optional_import("segyio")
@@ -229,6 +218,11 @@ def _make_time_header_dict(time_coord):
     header[trace_field.TRACE_SAMPLE_COUNT] = len(time_coord)
 
     return header
+
+
+def _get_data_summary(fi):
+    """Get the data summary of the array contained in the segy file."""
+    breakpoint()
 
 
 def _write_segy(spool, resource, version, segyio):

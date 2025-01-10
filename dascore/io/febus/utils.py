@@ -9,13 +9,13 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
-from dascore.utils.models import ArraySummary
 from dascore.utils.misc import (
     _maybe_unpack,
     broadcast_for_index,
     maybe_get_items,
     unbyte,
 )
+from dascore.utils.models import ArraySummary
 
 # --- Getting format/version
 
@@ -94,7 +94,6 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     out["source"] = feb.source_name
     out["zone"] = feb.zone_name
     out["schema_version"] = out.get("folog_a1_software_version", "").split(".")[0]
-    out["dims"] = ("time", "distance")
     return out
 
 
@@ -185,11 +184,16 @@ def _get_febus_coord_manager(feb: _FebusSlice) -> CoordManager:
     return cm
 
 
-def _yield_attrs_coords(fi) -> tuple[dict, CoordManager]:
+def _yield_attrs_coords(
+    fi, path, format_name, format_version
+) -> tuple[dict, CoordManager]:
     """Scan a febus file, return metadata."""
     febuses = _flatten_febus_info(fi)
     for febus in febuses:
         attr = _get_febus_attrs(febus)
+        attr["path"] = path
+        attr["format_name"] = format_name
+        attr["format_version"] = format_version
         cm = _get_febus_coord_manager(febus)
         yield attr, cm, febus
 
@@ -265,6 +269,7 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
 
 def _get_data_summary(febus):
     """Get the summary of the data array."""
+    breakpoint()
     data = febus.zone[febus.data_name]
     data_shape = data.shape
     skip_rows = _get_time_overlap_samples(febus, data_shape) // 2
@@ -278,32 +283,35 @@ def _get_data_summary(febus):
     return data, cm
 
 
-
-def _read_febus(h5, distance=None, time=None, attr_cls=dc.PatchAttrs):
+def _read_febus(
+    h5,
+    path,
+    format_name,
+    format_version,
+    distance=None,
+    time=None,
+    attr_cls=dc.PatchAttrs,
+):
     """Read the febus values into a patch."""
     out = []
-    for attr, cm, febus in _yield_attrs_coords(h5):
+    febiter = _yield_attrs_coords(h5, path, format_name, format_version)
+    for attr, cm, febus in febiter:
         data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
         patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls(**attr))
         out.append(patch)
     return out
 
 
-def _scan_febus(h5, path, attr_cls=dc.PatchAttrs):
+def _scan_febus(h5, path, format_name, format_version, attr_cls=dc.PatchAttrs):
     """Read the febus values into a patch."""
     out = []
-    format = "febus"
-    version = _get_febus_version_str(h5)
-    for attr, cm, febus in _yield_attrs_coords(h5):
+    febiter = _yield_attrs_coords(h5, path, format_name, format_version)
+    for attr, cm, febus in febiter:
         data_summary = _get_data_summary(febus)
         patch = dc.PatchSummary(
             data=data_summary,
             coords=cm,
             attrs=attr_cls(**attr),
-            dims=cm.dims,
-            format=format,
-            version=version,
-            path=path,
         )
         out.append(patch)
     return out

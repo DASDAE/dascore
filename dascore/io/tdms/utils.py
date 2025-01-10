@@ -9,6 +9,7 @@ import struct
 
 import numpy as np
 
+import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
 from dascore.utils.time import to_datetime64, to_timedelta64
@@ -124,18 +125,6 @@ def _get_time_coord(attrs, num_samps):
     return coord
 
 
-def _get_default_attrs(tdms_file, attrs=None):
-    """Return the required/default attributes which can be fetched from attributes."""
-    all_attrs = attrs if attrs is not None else _get_all_attrs(tdms_file)[0]
-    # cull attributes to only include defaults (TODO: think about why?)
-    out = {
-        default_attr: all_attrs[default_attr]
-        for default_attr in DEFAULT_ATTRS
-        if default_attr in all_attrs
-    }
-    return out
-
-
 def _read_attr(tdms_file):
     """
     Read a single property from the TDMS file.
@@ -169,7 +158,7 @@ def _get_distance_coord(attr):
     return d_coord
 
 
-def _get_all_attrs(tdms_file, lead_in_length=28):
+def _get_attrs_coords(tdms_file, lead_in_length=28):
     """Return all the attributes which can be fetched from attributes."""
     # read leadin infomation into fileinfo
     lead_in = tdms_file.read(lead_in_length)
@@ -227,19 +216,21 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
         / np.dtype(fileinfo["data_type"]).itemsize
     )
     t_coord = _get_time_coord(out, numofsamples)
-    out["coords"] = {"time": t_coord, "distance": d_coord}
-    out.update(t_coord.get_attrs_dict("time"))
-    out.update(d_coord.get_attrs_dict("distance"))
-    return out, fileinfo
+    coord = dc.core.get_coord_manager({"time": t_coord, "distance": d_coord})
+    return out, coord, fileinfo
 
 
 def _get_fileinfo(tdms_file, lead_in_length=28):
     """Get info about file not included in the attributes."""
-    attrs, fileinfo = _get_all_attrs(tdms_file)
+    attrs, _, fileinfo = _get_attrs_coords(tdms_file)
     # Read Dimension of the raw data array (has to be 1):
     _ = struct.unpack("<i", tdms_file.read(4))[0]
     fileinfo["chunk_size"] = struct.unpack("<i", tdms_file.read(4))[0]
     return fileinfo, attrs
+
+
+def _get_data_summary(tdms_file, lead_in_length=28):
+    """Get a summary of the data array without loading it."""
 
 
 def _get_data(tdms_file, lead_in_length=28):

@@ -17,6 +17,7 @@ from dascore.io.gdr.utils_das import (
     _maybe_trim_data,
 )
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.misc import get_path
 
 
 class GDRPatchAttrs(dc.PatchAttrs):
@@ -36,6 +37,15 @@ class GDR_V1(FiberIO):  # noqa
     preferred_extensions = ("hdf5", "h5")
     version = "1"
 
+    def _get_attr_coord_data(self, resource, snap=True):
+        """Get the attributes, coordinates, and h5 dataset."""
+        attr_dict, cm, data = _get_attrs_coords_and_data(resource, snap=snap)
+        attr_dict["path"] = get_path(resource)
+        attr_dict["format_name"] = self.name
+        attr_dict["version"] = self.version
+        attr = GDRPatchAttrs(**attr_dict)
+        return attr, cm, data
+
     def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """Determine if the resource belongs to this format."""
         return _get_version(resource)
@@ -53,18 +63,18 @@ class GDR_V1(FiberIO):  # noqa
         **kwargs
             Passed to filtering coordinates.
         """
-        attr_dict, cm, data = _get_attrs_coords_and_data(resource, snap=snap)
+        attr, cm, data = self._get_attr_coord_data(resource, snap=snap)
         if kwargs:
             cm, data = _maybe_trim_data(cm, data, **kwargs)
-        attrs = GDRPatchAttrs(**attr_dict)
-        patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
+        patch = dc.Patch(coords=cm, data=data[:], attrs=attr)
         return dc.spool([patch])
 
-    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[dc.PatchSummary]:
         """Get the attributes of a resource belong to this type."""
-        attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
-        attrs["coords"] = cm.to_summary_dict()
-        attrs["path"] = resource.filename
-        attrs["file_format"] = self.name
-        attrs["file_version"] = self.version
-        return [dc.PatchAttrs(**attrs)]
+        attr, cm, data = self._get_attr_coord_data(resource, snap=snap)
+        summary = dc.PatchSummary(
+            coords=cm,
+            data=data[:],
+            attrs=attr,
+        )
+        return [summary]

@@ -5,11 +5,11 @@ from __future__ import annotations
 import dascore as dc
 from dascore.io.core import FiberIO
 from dascore.utils.io import BinaryReader
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import get_path, optional_import
 
 from .utils import (
-    _get_attrs,
     _get_coords,
+    _get_data_summary,
     _get_filtered_data_and_coords,
     _get_segy_version,
     _write_segy,
@@ -28,6 +28,15 @@ class SegyV1_0(FiberIO):  # noqa
     # subclassed and this changed for debugging reasons.
     _package_name = "segyio"
 
+    def _get_attrs(self, resource):
+        """Get the basic attributes for a segy file."""
+        info = dict(
+            path=get_path(resource),
+            format_name=self.name,
+            format_version=self.version,
+        )
+        return dc.PatchAttrs.model_validate(info)
+
     def get_format(self, fp: BinaryReader, **kwargs) -> tuple[str, str] | bool:
         """Make sure input is segy."""
         return _get_segy_version(fp)
@@ -41,18 +50,17 @@ class SegyV1_0(FiberIO):  # noqa
         be implemented as well.
         """
         segyio = optional_import(self._package_name)
+        attrs = self._get_attrs(path)
         with segyio.open(path, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path, self)
             data, coords = _get_filtered_data_and_coords(
                 fi, coords, time=time, channel=channel
             )
-
         patch = dc.Patch(coords=coords, data=data, attrs=attrs)
         patch_trimmed = patch.select(time=time, channel=channel)
         return dc.spool([patch_trimmed])
 
-    def scan(self, path, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, path, **kwargs) -> list[dc.PatchSummary]:
         """
         Used to get metadata about a file without reading the whole file.
 
@@ -62,10 +70,12 @@ class SegyV1_0(FiberIO):  # noqa
         format-specific subclass.
         """
         segyio = optional_import(self._package_name)
+        attrs = self._get_attrs(path)
         with segyio.open(path, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path, self)
-        return [attrs]
+            data_summary = _get_data_summary(fi)
+            summary = dc.PatchSummary(coords=coords, data=data_summary, attrs=attrs)
+        return [summary]
 
     def write(self, spool: dc.Patch | dc.BaseSpool, resource, **kwargs):
         """
