@@ -6,7 +6,7 @@ import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.io import BinaryReader, FiberIO
-from dascore.utils.misc import get_path
+from ...utils.fs import get_uri
 
 from .utils import _get_attrs_coords, _get_data, _get_version_str
 
@@ -22,7 +22,7 @@ class TDMSFormatterV4713(FiberIO):
     def _get_attr_coords(self, resource):
         """Get a PatchAttrs for the file."""
         out, coords, _ = _get_attrs_coords(resource)
-        out["path"] = get_path(resource)
+        out["path"] = get_uri(resource)
         out["file_format"] = self.name
         out["file_version"] = self.version
         return dc.PatchAttrs(**out), coords

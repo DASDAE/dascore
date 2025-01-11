@@ -9,7 +9,8 @@ import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.utils.hdf5 import Empty
-from dascore.utils.misc import get_path, suppress_warnings, unbyte
+from dascore.utils.misc import suppress_warnings, unbyte
+from dascore.utils.fs import get_uri
 from dascore.utils.time import to_int
 
 # --- Functions for writing DASDAE format
@@ -189,7 +190,7 @@ def _read_patch(patch_group, path, format_name, format_version, **kwargs):
 
 def _get_summary_from_patch_groups(h5, format_name="DASDAE"):
     """Get the contents from each patch group."""
-    path = get_path(h5)
+    path = get_uri(h5)
     format_version = h5.attrs["__DASDAE_version__"]
     out = []
     for name, group in h5[("/waveforms")].items():

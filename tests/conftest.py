@@ -89,7 +89,6 @@ def swap_index_map_path(tmp_path_factory):
     tmp_map_path = tmp_path_factory.mktemp("cache_paths") / "cache_paths.json"
     setattr(DirectoryIndexer, "index_map_path", tmp_map_path)
 
-
 # --- Coordinate fixtures
 
 COORD_MANAGERS = []

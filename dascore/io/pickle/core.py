@@ -6,7 +6,7 @@ import pickle
 
 import dascore as dc
 from dascore.io import BinaryReader, BinaryWriter, FiberIO
-from dascore.utils.misc import get_path
+from dascore.utils.fs import get_uri
 
 
 class PickleIO(FiberIO):
@@ -53,7 +53,7 @@ class PickleIO(FiberIO):
         patch: dc.Patch = pickle.load(resource)
         # Add the relevant file info.
         out = patch.update_attrs(
-            path=get_path(resource),
+            path=get_uri(resource),
             format_name=self.name,
             format_version=self.version,
         )

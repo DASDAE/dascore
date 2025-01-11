@@ -11,7 +11,7 @@ import dascore.io.silixah5.utils as util
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.misc import get_path
+from dascore.utils.fs import get_uri
 
 
 class SilixaPatchAttrs(dc.PatchAttrs):
@@ -33,7 +33,7 @@ class SilixaH5V1(FiberIO):
     def _get_attr_coords(self, resource):
         """Get attributes and coordinates of patch in file."""
         info, coords = util._get_attr_dict(resource)
-        info["path"] = get_path(resource)
+        info["path"] = get_uri(resource)
         info["format_name"] = self.name
         info["format_version"] = self.version
         return SilixaPatchAttrs(**info), coords

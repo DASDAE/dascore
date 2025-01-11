@@ -131,11 +131,19 @@ GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
 
 # --- External tool configuration
 
+# -- Pytest config
+# pytest marks
+[tool.pytest.ini_options]
+markers = [
+    "network: marks tests as needing the internet",
+]
+
+# -- Linter configuration
 [tool.ruff]
 
 line-length = 88
 
-# enable certain types of linting
+# Controls the categories of ruff rules applied.
 lint.select = [
     "E",
     "F",
@@ -179,24 +187,19 @@ exclude = [
 # lowest python version supported
 target-version = "py310"
 
+# Ensure ruff just fixes stuff it can safely fix.
 lint.fixable = ["ALL"]
 
-# List of codes to ignore
+# List of codes to ignore.
 lint.ignore = ["D105", "D107", "D401", "D205", "D200", "D400"]
 
 [tool.ruff.lint.mccabe]
-# Unlike Flake8, default to a complexity level of 10.
+# Controls how complex functions/methods can be.
 max-complexity = 10
 
 # config for docstring parsing
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
-
-[tool.pytest.ini_options]
-filterwarnings = [
-    # Ignore hdf5 warnings from pytables, See pytables #1035
-    'ignore::Warning:tables:'
-]
 
 [tool.ruff.format]
 # Use `\n` line endings for all files

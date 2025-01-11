@@ -18,7 +18,6 @@ from typing_extensions import Self
 import dascore as dc
 from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
-from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import iterate
 from dascore.utils.pd import filter_df
 from dascore.utils.time import get_max_min_times, to_timedelta64

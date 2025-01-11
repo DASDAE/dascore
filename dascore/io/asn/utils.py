@@ -6,7 +6,9 @@ import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
 from dascore.utils.hdf5 import unpack_scalar_h5_dataset
-from dascore.utils.misc import get_path, unbyte
+from dascore.utils.misc import unbyte
+from dascore.utils.fs import get_uri
+
 
 # --- Getting format/version
 
@@ -78,7 +80,7 @@ def _get_attr_dict(header, path, format_name, format_version):
 def _get_opto_das_coords_attrs(fi, format_name) -> tuple[dc.CoordManager, dict]:
     """Scan a OptoDAS file, return metadata."""
     cm = _get_coord_manager(fi)
-    path = get_path(fi)
+    path = get_uri(fi)
     version = _get_opto_das_version_str(fi)
     attrs = _get_attr_dict(fi["header"], path, format_name, version)
     return cm, attrs

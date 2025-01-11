@@ -12,7 +12,7 @@ import dascore.io.neubrex.utils_rfs as rfs_utils
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.misc import get_path
+from dascore.utils.fs import get_uri
 
 
 class NeubrexRFSPatchAttrs(dc.PatchAttrs):
@@ -53,7 +53,7 @@ class NeubrexRFSV1(FiberIO):
     def _get_attrs(self, resource) -> NeubrexRFSPatchAttrs:
         """Get the patch attributes."""
         attr = rfs_utils._get_attr_dict(resource)
-        attr["path"] = get_path(resource)
+        attr["path"] = get_uri(resource)
         attr["format_name"] = self.name
         attr["format_version"] = self.version
         return NeubrexRFSPatchAttrs(**attr)
@@ -106,7 +106,7 @@ class NeubrexDASV1(FiberIO):
     def _get_attr(self, resource) -> NeubrexDASPatchAttrs:
         """Get the attrs for from the file."""
         attr = das_utils._get_attr_dict(resource["Acoustic"])
-        attr["path"] = get_path(resource)
+        attr["path"] = get_uri(resource)
         attr["format_name"] = self.name
         attr["format_version"] = self.version
         return NeubrexDASPatchAttrs(**attr)

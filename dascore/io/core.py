@@ -38,7 +38,8 @@ from dascore.exceptions import (
 )
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import _iter_filesystem, cached_method, iterate, warn_or_raise
+from dascore.utils.misc import cached_method, iterate, warn_or_raise
+from dascore.utils.fs import _iter_filesystem
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,

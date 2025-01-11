@@ -6,7 +6,8 @@ import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import get_path, iterate, maybe_get_items, unbyte
+from dascore.utils.misc import iterate, maybe_get_items, unbyte
+from dascore.utils.fs import get_uri
 
 # --- Getting format/version
 
@@ -100,7 +101,7 @@ def _get_prodml_attrs(fi, format_name, format_version) -> list[dict]:
     acq = fi["Acquisition"]
     base_info = maybe_get_items(acq.attrs, _root_attrs)
     raw_nodes = _get_raw_node_dict(acq)
-    path = get_path(fi)
+    path = get_uri(fi)
 
     # Iterate each raw data node. I have only ever seen 1 in a file but since
     # it is indexed like Raw[0] there might be more.
