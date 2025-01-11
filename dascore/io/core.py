@@ -36,10 +36,10 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     UnknownFiberFormatError,
 )
+from dascore.utils.fs import _iter_filesystem
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import cached_method, iterate, warn_or_raise
-from dascore.utils.fs import _iter_filesystem
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,

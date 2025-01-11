@@ -11,8 +11,8 @@ import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
-from dascore.utils.hdf5 import H5Reader
 from dascore.utils.fs import get_uri
+from dascore.utils.hdf5 import H5Reader
 
 
 class NeubrexRFSPatchAttrs(dc.PatchAttrs):

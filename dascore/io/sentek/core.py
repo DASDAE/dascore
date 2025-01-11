@@ -7,9 +7,9 @@ import numpy as np
 import dascore as dc
 from dascore.io import BinaryReader
 from dascore.io.core import FiberIO
-from ...utils.fs import get_uri
 from dascore.utils.models import ArraySummary
 
+from ...utils.fs import get_uri
 from .utils import _get_patch_attrs, _get_version
 
 

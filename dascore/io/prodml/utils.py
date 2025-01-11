@@ -6,8 +6,8 @@ import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import iterate, maybe_get_items, unbyte
 from dascore.utils.fs import get_uri
+from dascore.utils.misc import iterate, maybe_get_items, unbyte
 
 # --- Getting format/version
 

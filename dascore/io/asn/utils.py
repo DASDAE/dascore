@@ -5,10 +5,9 @@ from __future__ import annotations
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
+from dascore.utils.fs import get_uri
 from dascore.utils.hdf5 import unpack_scalar_h5_dataset
 from dascore.utils.misc import unbyte
-from dascore.utils.fs import get_uri
-
 
 # --- Getting format/version
 

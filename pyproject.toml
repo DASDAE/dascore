@@ -81,6 +81,8 @@ test = [
     "pytest-codeblocks",
     "pytest-cov",
     "twine",
+    "fsspec[github]",
+    "fsspec[http]"
 ]
 
 profile = [
@@ -133,9 +135,14 @@ GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
 
 # -- Pytest config
 # pytest marks
+
 [tool.pytest.ini_options]
 markers = [
     "network: marks tests as needing the internet",
+]
+
+addopts = [
+    "-m not network"
 ]
 
 # -- Linter configuration

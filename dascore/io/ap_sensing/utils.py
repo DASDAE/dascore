@@ -4,8 +4,8 @@ Utility functions for AP sensing module.
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.utils.misc import _maybe_unpack, unbyte
 from dascore.utils.fs import get_uri
+from dascore.utils.misc import _maybe_unpack, unbyte
 
 
 def _get_version_string(resource):

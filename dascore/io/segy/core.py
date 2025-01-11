@@ -6,8 +6,8 @@ import dascore as dc
 from dascore.io.core import FiberIO
 from dascore.utils.io import BinaryReader
 from dascore.utils.misc import optional_import
-from ...utils.fs import get_uri
 
+from ...utils.fs import get_uri
 from .utils import (
     _get_coords,
     _get_data_summary,

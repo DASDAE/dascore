@@ -16,8 +16,8 @@ from dascore.io.gdr.utils_das import (
     _get_version,
     _maybe_trim_data,
 )
-from dascore.utils.hdf5 import H5Reader
 from dascore.utils.fs import get_uri
+from dascore.utils.hdf5 import H5Reader
 
 
 class GDRPatchAttrs(dc.PatchAttrs):

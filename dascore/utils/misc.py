@@ -685,5 +685,3 @@ def to_object_array(object_sequence):
     out = np.empty(len(object_sequence), dtype=object)
     out[:] = object_sequence
     return out
-
-

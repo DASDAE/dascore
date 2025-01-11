@@ -10,9 +10,9 @@ from dascore.utils.hdf5 import (
     H5Writer,
 )
 from dascore.utils.misc import unbyte
-from ...utils.fs import get_uri
 from dascore.utils.patch import get_patch_names
 
+from ...utils.fs import get_uri
 from .utils import (
     _get_summary_from_patch_groups,
     _read_patch,

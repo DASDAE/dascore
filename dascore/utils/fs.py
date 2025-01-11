@@ -3,26 +3,23 @@ Utilities related to working with file systems.
 
 These include actual file systems or virtual ones.
 """
+
 from __future__ import annotations
 
 import os
 import re
+from collections.abc import Generator, Iterable
 from pathlib import Path
-from typing import Iterable, Generator
-from typing_extensions import Self
 
 import fsspec
-
+from typing_extensions import Self
 
 # Detect if the string has an associated protocol.
 _PROTOCOL_DETECTION_REGEX = r"^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/"
 
 
-
 def get_fspath(obj):
-    """
-
-    """
+    """ """
     uri = get_uri(obj)
     fs = fsspec.open(uri)
     return fs
@@ -34,18 +31,18 @@ class FSPath:
 
     This helps smooth out some of the edges of fsspec.
     """
-    fs: fsspec.AbstractFileSystem
 
     def __init__(self, obj):
-        """
-
-        """
+        """ """
         if isinstance(obj, FSPath):
             self.__dict__.update(obj.__dict__)
             return
-        if isinstance(obj, fsspec.core.OpenFile):
+        elif isinstance(obj, fsspec.core.OpenFile):
             self._fs = obj.fs
             self._path = Path(obj.path)
+        elif isinstance(obj, fsspec.spec.AbstractFileSystem):
+            self._fs = obj
+            self._path = Path("/")
         else:
             fs, path = fsspec.url_to_fs(obj)
             self._fs = fs
@@ -62,6 +59,10 @@ class FSPath:
     def path(self) -> Path:
         """Get the pathlib object representing this item."""
         return self._path
+
+    @property
+    def is_local(self):
+        return self._fs.protocol == ("file", "local")
 
     @property
     def parent(self) -> Path:
@@ -88,12 +89,21 @@ class FSPath:
         """Enables division to add to string to Path."""
         return self.from_fs_path(fs=self._fs, path=self._path / other)
 
-
     def __repr__(self) -> str:
         return self._full_name()
 
-
-
+    def glob(self, arg: str) -> Generator[Self]:
+        """
+        Glob search the contents of the file system/directory.
+        """
+        # For local paths is probably better/faster to just use pathlibs glob
+        if self.is_local:
+            for item in self._path.glob(arg):
+                yield self.__class__(item)
+        # Otherwise, default to file system implementation.
+        glob_str = str(self._path / arg)
+        for obj in self._fs.glob(glob_str):
+            yield self.__class__.from_fs_path(self._fs, obj)
 
 
 def get_uri(obj) -> str:

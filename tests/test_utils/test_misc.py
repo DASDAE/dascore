@@ -56,7 +56,6 @@ class TestNamespaceClass:
         assert pc.namespace.new_method(ParentClass)
 
 
-
 class TestIterate:
     """Test case for iterate."""
 

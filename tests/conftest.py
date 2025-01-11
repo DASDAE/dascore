@@ -48,6 +48,14 @@ def pytest_addoption(parser):
         default=False,
         help="Run integration tests",
     )
+    # Note: we can't simply use marks as marks currently (jan 2025) be
+    # applied to fixtures.
+    parser.addoption(
+        "--network",
+        action="store_true",
+        default=False,
+        help="Run tests that require network connection. Can be slow.",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -88,6 +96,7 @@ def swap_index_map_path(tmp_path_factory):
     """For all tests cases, use a temporary index file."""
     tmp_map_path = tmp_path_factory.mktemp("cache_paths") / "cache_paths.json"
     setattr(DirectoryIndexer, "index_map_path", tmp_map_path)
+
 
 # --- Coordinate fixtures
 

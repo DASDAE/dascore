@@ -10,8 +10,8 @@ import dascore as dc
 import dascore.io.silixah5.utils as util
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
-from dascore.utils.hdf5 import H5Reader
 from dascore.utils.fs import get_uri
+from dascore.utils.hdf5 import H5Reader
 
 
 class SilixaPatchAttrs(dc.PatchAttrs):

@@ -11,8 +11,8 @@ from pydantic import ValidationError
 import dascore as dc
 from dascore.io import FiberIO
 from dascore.utils.models import UTF8Str
-from ...utils.fs import get_uri
 
+from ...utils.fs import get_uri
 from .utils import _load_patches, _paths_to_attrs, _read_xml_metadata
 
 

@@ -8,9 +8,9 @@ from tables import NodeError
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.utils.fs import get_uri
 from dascore.utils.hdf5 import Empty
 from dascore.utils.misc import suppress_warnings, unbyte
-from dascore.utils.fs import get_uri
 from dascore.utils.time import to_int
 
 # --- Functions for writing DASDAE format

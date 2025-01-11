@@ -8,8 +8,8 @@ import dascore as dc
 from dascore.constants import timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
-from ...utils.fs import get_uri
 
+from ...utils.fs import get_uri
 from .utils import (
     _get_default_attrs,
     _get_distance_coord,

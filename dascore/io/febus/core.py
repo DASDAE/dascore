@@ -10,9 +10,9 @@ import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
-from ...utils.fs import get_uri
 from dascore.utils.models import UTF8Str
 
+from ...utils.fs import get_uri
 from .utils import (
     _get_febus_version_str,
     _read_febus,

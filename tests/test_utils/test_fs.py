@@ -1,14 +1,18 @@
 """
 Tests for file system utilities.
 """
+
+import inspect
 import os
 import time
 from pathlib import Path
 
+import fsspec
 import h5py
 import pytest
-import fsspec
-from dascore.utils.fs import _iter_filesystem, get_uri, FSPath
+
+from dascore.utils.fs import FSPath, _iter_filesystem, get_uri
+from dascore.utils.misc import register_func
 
 
 class TestGetUri:
@@ -19,14 +23,14 @@ class TestGetUri:
         my_path = Path(__file__)
         path = get_uri(my_path)
         assert isinstance(path, str)
-        assert path == f"file://{str(my_path)}"
+        assert path == f"file://{my_path!s}"
 
     def test_str(self):
         """Ensure a string simply returns itself."""
         my_path = str(Path(__file__))
         path = get_uri(my_path)
         assert isinstance(path, str)
-        assert path == f"file://{str(my_path)}"
+        assert path == f"file://{my_path!s}"
 
     def test_fs_spec(self, tmp_path):
         """Ensure a fs spec object returns a path string."""
@@ -190,6 +194,8 @@ class TestIterFS:
 class TestFSPath:
     """Tests for the FS Path abstraction."""
 
+    fs_paths = []
+
     @pytest.fixture(scope="class")
     def complex_folder(self, tmp_path_factory):
         """Make a temp path with several sub folders and such."""
@@ -219,25 +225,49 @@ class TestFSPath:
         return path
 
     @pytest.fixture(scope="class")
-    def fspath(self, complex_folder):
-        """return the fspath object."""
+    @register_func(fs_paths)
+    def fspath_local(self, complex_folder):
+        """Get an fspath object from a local tmpdir."""
         return FSPath(complex_folder)
 
-    def test_str_and_repr(self, fspath):
+    @pytest.fixture(scope="class")
+    @register_func(fs_paths)
+    def fspath_github(self, complex_folder, request):
+        """Get a fspath object from DASCore's github test data."""
+        if not request.config.getoption("--network"):
+            pytest.skip("Network tests not selected.")
+        fs = fsspec.filesystem("github", repo="test_data", org="dasdae")
+        return FSPath(fs)
+
+    @pytest.fixture(scope="class", params=fs_paths)
+    def fspath(self, request):
+        """Meta fixture for fspaths of different types."""
+        name = request.param
+        return request.getfixturevalue(name)
+
+    def test_str_and_repr(self, fspath_local):
         """Ensure a valid repr/str exist."""
-        out_strs = [str(fspath), repr(fspath)]
+        out_strs = [str(fspath_local), repr(fspath_local)]
         for out in out_strs:
             assert isinstance(out, str)
-            assert str(fspath.path) in out
+            assert str(fspath_local.path) in out
 
-    def test_slash(self, fspath):
+    def test_slash(self, fspath_local):
         """Ensure the slash operator works."""
-        out = fspath / "text_1.txt"
+        out = fspath_local / "text_1.txt"
         assert str(out).endswith("text_1.txt")
 
+    def test_is_local(self, fspath_local):
+        """Ensure local file path indicates it is local."""
+        assert fspath_local.is_local
 
+    def test_is_not_local(self, fspath_github):
+        """Github is not local."""
+        assert not fspath_github.is_local
 
-
-
-
-
+    def test_local_glob(self, fspath):
+        """Ensure globing works."""
+        out = fspath.glob("*")
+        assert inspect.isgenerator(out)
+        for sub in out:
+            assert isinstance(sub, FSPath)

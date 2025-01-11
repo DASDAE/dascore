@@ -6,8 +6,8 @@ import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.io import BinaryReader, FiberIO
-from ...utils.fs import get_uri
 
+from ...utils.fs import get_uri
 from .utils import _get_attrs_coords, _get_data, _get_version_str
 
 
