@@ -9,10 +9,13 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Generator, Iterable
+from collections import deque
 from pathlib import Path
 
 import fsspec
-from typing_extensions import Self
+from typing_extensions import Self, Literal
+
+from dascore.utils.misc import iterate
 
 # Detect if the string has an associated protocol.
 _PROTOCOL_DETECTION_REGEX = r"^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/"
@@ -27,9 +30,15 @@ def get_fspath(obj):
 
 class FSPath:
     """
-    A class that behaves like a pathlib.Path object.
+    A pathlib-like abstraction for handling multiple filesystems.
 
     This helps smooth out some of the edges of fsspec.
+
+    Parameters
+    ----------
+    obj
+        A
+
     """
 
     def __init__(self, obj):
@@ -50,8 +59,16 @@ class FSPath:
 
     @classmethod
     def from_fs_path(cls, fs, path):
+        """Create new FSPath from file system and path."""
         out = cls.__new__(cls)
         out._fs = fs
+        out._path = path
+        return out
+
+    def from_path(self, path):
+        """Create a new FSPath from the same file system and a new path."""
+        out = self.__class__.__new__(self.__class__)
+        out._fs = self._fs
         out._path = path
         return out
 
@@ -69,7 +86,8 @@ class FSPath:
         """Get the pathlib object representing this item."""
         return self.from_fs_path(fs=self._fs, path=self._path.parent)
 
-    def _full_name(self):
+    @property
+    def full_name(self):
         """
         Return the full name.
 
@@ -83,27 +101,126 @@ class FSPath:
         """Determine if the file exists."""
         return self._fs.exists(self._path)
 
-    # --- Dunders
+    def glob(self, arg: str) -> Generator[Self, None, None]:
+        """
+        Glob search the contents of the file system/directory.
+        """
+        glob_str = str(self._path / arg)
+        for obj in self._fs.glob(glob_str):
+            yield self.from_path(obj)
+
+
+    def get_ls_details(
+            self,
+            path_str: str | None=None,
+            on_error: Literal["ignore", "raise"] | callable="ignore",
+            **kwargs
+    ):
+        """
+        Get the details of path contents.
+        """
+        path_str = str(self._path) if path_str is None else path_str
+        listing = None
+        try:
+            listing = self._fs.ls(path_str, detail=True, **kwargs)
+        except (FileNotFoundError, OSError) as e:
+            if on_error == "raise":
+                raise
+            if callable(on_error):
+                on_error(e)
+        return listing
+
+    def iter_contents(
+            self,
+            ext: str | None = None,
+            timestamp: float | None = None,
+            skip_hidden: bool = True,
+            include_directories: bool = False,
+            maxdepth: None | int = None,
+            on_error: Literal["ignore", "raise"] | callable = "omit",
+            _dir_deque=None,
+            **kwargs,
+    ):
+        """
+        Iterate over the contents of the file system.
+
+        This implements a breadth-first search of the path's contents.
+
+        Parameters
+        ----------
+        ext
+            The extension of the files to include.
+        timestamp
+            The modified time of the files to include.
+        skip_hidden
+            Whether to skip hidden (starts with '.') files and directories.
+        include_directories
+            If True, also yield directory paths.
+        maxdepth
+            The maximum traversal depth.
+        on_error
+            The behavior when contents of a directory like thing aren't
+            retrievable.
+        kwargs
+            Passed to filesystem ls call.
+        """
+        # A queue of directories to transverse through.
+        _dir_deque = _dir_deque if _dir_deque is not None else deque()
+        path_str = str(self._path)
+        listing = self.get_ls_details(path_str, on_error, **kwargs)
+        for info in iterate(listing):
+            # Don't include self in the ls.
+            if info['name'] == path_str:
+                continue
+            pathname = info["name"].rstrip("/")
+            name = pathname.rsplit("/", 1)[-1]
+            is_dir = info['type'] == "directory"
+            mtime = info['mtime']
+            good_ext = ext is None or name.endswith(ext)
+            good_mtime = timestamp is None or mtime >= timestamp
+            good_hidden = not skip_hidden or not name.startswith(".")
+            # Handle files.
+            if not is_dir and good_ext and good_hidden and good_mtime:
+                yield self.from_path(info["name"])
+            elif good_hidden:
+                dirpath = self.from_path(info["name"])
+                # If we are to also yield directories
+                if include_directories:
+                    signal = yield dirpath
+                    # Here we bail out on this directory/contents.
+                    if signal is not None and signal == "skip":
+                        continue
+                # Add the directory to the queue to be traversed.
+                _dir_deque.append(dirpath)
+        # Handle the directories that need to be traversed.
+        while _dir_deque:
+            next_fspath = _dir_deque.popleft()
+            if maxdepth is not None and maxdepth <= 1:
+                continue
+            new_iter = next_fspath.iter_contents(
+                ext=ext,
+                timestamp=timestamp,
+                skip_hidden=skip_hidden,
+                include_directories=include_directories,
+                maxdepth=maxdepth - 1 if maxdepth is not None else None,
+                on_error=on_error,
+                _dir_deque=_dir_deque,
+            )
+            yield from new_iter
+
 
     def __truediv__(self, other: str) -> Self:
         """Enables division to add to string to Path."""
         return self.from_fs_path(fs=self._fs, path=self._path / other)
 
     def __repr__(self) -> str:
-        return self._full_name()
+        return f"{self.__class__.__name__}({self.full_name})"
 
-    def glob(self, arg: str) -> Generator[Self]:
-        """
-        Glob search the contents of the file system/directory.
-        """
-        # For local paths is probably better/faster to just use pathlibs glob
-        if self.is_local:
-            for item in self._path.glob(arg):
-                yield self.__class__(item)
-        # Otherwise, default to file system implementation.
-        glob_str = str(self._path / arg)
-        for obj in self._fs.glob(glob_str):
-            yield self.__class__.from_fs_path(self._fs, obj)
+    def __hash__(self) -> int:
+        return hash(self.full_name)
+
+    def __eq__(self, other: Self) -> bool:
+        return self.full_name == other.full_name
 
 
 def get_uri(obj) -> str:
@@ -131,62 +248,3 @@ def get_uri(obj) -> str:
         obj = obj.full_name
     return obj
 
-
-def _iter_filesystem(
-    paths: str | Path | Iterable[str | Path],
-    ext: str | None = None,
-    timestamp: float | None = None,
-    skip_hidden: bool = True,
-    include_directories: bool = False,
-) -> Generator[str, str, None]:
-    """
-    Iterate contents of a filesystem like thing.
-
-    Options allow for filtering and terminating early.
-
-    Parameters
-    ----------
-    paths
-        The path to the base directory to traverse. Can also use a collection
-        of paths.
-    ext : str or None
-        The extensions of files to return.
-    timestamp : int or float
-        Time stamp indicating the minimum mtime to scan.
-    skip_hidden : bool
-        If True skip files or folders (they begin with a '.')
-    include_directories
-        If True, also yield directories. In this case, a "skip" can be
-        passed back to the generator to indicate the rest of the directory
-        contents should be skipped.
-
-    Yields
-    ------
-    Paths, as strings, meeting requirements.
-    """
-    # handle returning directories if requested.
-    if include_directories and os.path.isdir(paths):
-        if not (skip_hidden and str(paths).startswith(".")):
-            signal = yield paths
-            if signal is not None and signal == "skip":
-                yield None
-                return
-    try:  # a single path was passed
-        for entry in os.scandir(paths):
-            if entry.is_file() and (ext is None or entry.name.endswith(ext)):
-                if timestamp is None or entry.stat().st_mtime >= timestamp:
-                    if entry.name[0] != "." or not skip_hidden:
-                        yield entry.path
-            elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from _iter_filesystem(
-                    entry.path,
-                    ext=ext,
-                    timestamp=timestamp,
-                    skip_hidden=skip_hidden,
-                    include_directories=include_directories,
-                )
-    except (TypeError, AttributeError):  # multiple paths were passed
-        for path in paths:
-            yield from _iter_filesystem(path, ext, timestamp, skip_hidden)
-    except NotADirectoryError:  # a file path was passed, just return it
-        yield paths

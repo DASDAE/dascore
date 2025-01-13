@@ -36,7 +36,6 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     UnknownFiberFormatError,
 )
-from dascore.utils.fs import _iter_filesystem
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import cached_method, iterate, warn_or_raise
@@ -48,6 +47,7 @@ from dascore.utils.models import (
 )
 from dascore.utils.pd import _model_list_to_df
 from dascore.utils.progress import track
+from dascore.utils.fs import FSPath
 
 
 class PatchFileSummary(DascoreBaseModel):
@@ -781,15 +781,15 @@ def _handle_missing_optionals(outputs, optional_dep_dict):
 
 
 def scan(
-    path: Path | str | PatchType | SpoolType | IOResourceManager,
+    path: Path | FSPath | str | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS = "standard",
-) -> list[dc.PatchAttrs]:
+) -> list[dc.PatchSummary]:
     """
-    Scan a potential patch source, return a list of PatchAttrs.
+    Scan a potential patch source, return a list of PatchSummary objects.
 
     Parameters
     ----------
@@ -820,11 +820,12 @@ def scan(
     >>> import dascore as dc
     >>> from dascore.utils.downloader import fetch
     >>>
+    >>> # Replace with your file path.
     >>> file_path = fetch("prodml_2.1.h5")
     >>>
     >>> attr_list = dc.scan(file_path)
 
-    See also [`iter_fs_contents`](`dascore.utils.misc.iter_fs_contents`)
+    See also [`FSPath`](`dascore.utils.fs.FSPath`)
     """
     out = []
     fiber_io_hint: dict[str, FiberIO] = {}
