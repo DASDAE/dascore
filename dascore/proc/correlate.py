@@ -73,6 +73,8 @@ def correlate_shift(patch, dim, undo_weighting=True):
     step = coord.step
     new_start = -np.ceil((len(coord) - 1) / 2) * step
     new_end = np.ceil((len(coord) - 1) / 2) * step
+    if len(coord) % 2 != 0:  # Odd coord length
+        new_end += step
     new_coord = dc.get_coord(start=new_start, stop=new_end, step=step)
     assert len(new_coord) == len(coord)
     cm = patch.coords
@@ -214,5 +216,6 @@ def correlate(
     # Undo fft if this function did one, shift, and update coord.
     if not input_dft:
         idft = out.idft.func(out)
+        # breakpoint()
         out = idft.correlate_shift.func(idft, fft_dim)
     return out

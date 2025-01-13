@@ -12,6 +12,18 @@ from dascore.utils.time import to_float
 class TestCorrelateShift:
     """Tests for the correlation shift function."""
 
+    @pytest.fixture(scope="class")
+    def random_patch_odd(self):
+        """Create a random patch with odd number of time samples."""
+        patch = dc.get_example_patch("random_das", shape=(2, 11))
+        return patch
+
+    @pytest.fixture(scope="class")
+    def random_patch_even(self):
+        """Create a random patch with even number of time samples."""
+        patch = dc.get_example_patch("random_das", shape=(2, 10))
+        return patch
+
     def test_auto_correlation(self, random_dft_patch):
         """Perform auto correlation and undo shifting."""
         dft_conj = random_dft_patch.conj()
@@ -25,6 +37,22 @@ class TestCorrelateShift:
         time_ax = auto_patch.dims.index("lag_time")
         argmax = np.argmax(random_dft_patch.data, axis=time_ax)
         assert np.all(coord_array[argmax] == dc.to_timedelta64(0))
+
+    def test_auto_correlation_odd_coord(self, random_patch_odd):
+        """Ensure correlate_shift works when dim's coord length is odd."""
+        dft = random_patch_odd.dft(dim="time")
+        dft_conj = dft.conj()
+        dft_sq = dft * dft_conj
+        idft = dft_sq.idft()
+        assert isinstance(idft.correlate_shift(dim="time"), dc.Patch)
+
+    def test_auto_correlation_even_coord(self, random_patch_even):
+        """Ensure correlate_shift works when dim's coord length is even."""
+        dft = random_patch_even.dft(dim="time")
+        dft_conj = dft.conj()
+        dft_sq = dft * dft_conj
+        idft = dft_sq.idft()
+        assert isinstance(idft.correlate_shift(dim="time"), dc.Patch)
 
 
 class TestCorrelateInternal:
