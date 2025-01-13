@@ -216,6 +216,5 @@ def correlate(
     # Undo fft if this function did one, shift, and update coord.
     if not input_dft:
         idft = out.idft.func(out)
-        # breakpoint()
         out = idft.correlate_shift.func(idft, fft_dim)
     return out
