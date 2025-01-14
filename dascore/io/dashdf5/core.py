@@ -7,7 +7,7 @@ from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
-from ...utils.fs import get_uri
+from ...utils.fs import get_path
 from .utils import _get_cf_attrs, _get_cf_coords, _get_cf_version_str
 
 
@@ -21,7 +21,7 @@ class DASHDF5(FiberIO):
     def _get_attr(self, resource: H5Reader):
         """Get the attrs dict with path and such populated."""
         attrs = _get_cf_attrs(resource)
-        attrs["path"] = get_uri(resource)
+        attrs["path"] = get_path(resource)
         attrs["format_name"] = self.name
         attrs["format_version"] = self.version
         return dc.PatchAttrs.model_validate(attrs)

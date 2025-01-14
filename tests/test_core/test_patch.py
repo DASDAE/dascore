@@ -720,3 +720,34 @@ class TestGetPatchName:
         """Happy path test."""
         name = random_patch.get_patch_name()
         assert isinstance(name, str)
+
+
+class TestPatchSummary:
+    """Tests for Patch summaries."""
+
+    @pytest.fixture(scope="class")
+    def random_summary(self, random_patch):
+        """Convert a patch to a summary."""
+        patch = random_patch.update_attrs(data_units="strain/s")
+        return patch.to_summary()
+
+    def test_from_patch(self, random_patch):
+        """Ensure a patch summary can be created from a patch."""
+        out = random_patch.to_summary()
+        assert isinstance(out, dc.PatchSummary)
+
+    # def test_flattened_tuples(self, random_summary):
+    #     """Ensure dumping flattens tuples to strings."""
+    #     out = random_summary.model_dump(exclude_unset=True)
+    #     dims = out['coords']['dims']
+    #     assert isinstance(dims, str)
+    #     assert out['sh']
+    #     breakpoint()
+
+    def test_to_patch_coord_attrs_info(self, random_summary):
+        """Test converting to patch, coord, and attr info."""
+        patch_info, coords, attrs = random_summary.to_patch_coords_attrs_info(0)
+        breakpoint()
+        assert isinstance(patch_info, dict)
+        assert len(coords) == len(random_summary.coords.coord_map)
+        assert len(attrs)

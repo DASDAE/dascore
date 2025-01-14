@@ -36,6 +36,7 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     UnknownFiberFormatError,
 )
+from dascore.utils.fs import UPath, iter_path_contents
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import cached_method, iterate, warn_or_raise
@@ -47,7 +48,6 @@ from dascore.utils.models import (
 )
 from dascore.utils.pd import _model_list_to_df
 from dascore.utils.progress import track
-from dascore.utils.fs import FSPath
 
 
 class PatchFileSummary(DascoreBaseModel):
@@ -691,8 +691,8 @@ def scan_to_df(
         return path.get_contents()
     info = scan(
         path=path,
-        file_format=file_format,
-        file_version=file_version,
+        resource_format=file_format,
+        resource_version=file_version,
         ext=ext,
         timestamp=timestamp,
         progress=progress,
@@ -705,7 +705,7 @@ def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **k
     """Yield scan candidates."""
     for el in iterate(patch_source):
         if isinstance(el, str | Path) and (path := Path(el)).exists():
-            generator = _iter_filesystem(
+            generator = iter_path_contents(
                 path, ext=ext, timestamp=mtime, include_directories=include_directories
             )
             yield from generator
@@ -781,9 +781,9 @@ def _handle_missing_optionals(outputs, optional_dep_dict):
 
 
 def scan(
-    path: Path | FSPath | str | PatchType | SpoolType | IOResourceManager,
-    file_format: str | None = None,
-    file_version: str | None = None,
+    path: UPath | Path | str | PatchType | SpoolType | IOResourceManager,
+    resource_format: str | None = None,
+    resource_version: str | None = None,
     ext: str | None = None,
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS = "standard",
@@ -795,10 +795,10 @@ def scan(
     ----------
     path
         A resource containing Fiber data.
-    file_format
+    resource_format
         Format of the file. If not provided DASCore will try to determine it.
         Only applicable for path-like inputs.
-    file_version
+    resource_version
         Version of the file. If not provided DASCore will try to determine it.
         Only applicable for path-like inputs.
     ext : str or None
@@ -823,9 +823,9 @@ def scan(
     >>> # Replace with your file path.
     >>> file_path = fetch("prodml_2.1.h5")
     >>>
-    >>> attr_list = dc.scan(file_path)
+    >>> summary_list = dc.scan(file_path)
 
-    See also [`FSPath`](`dascore.utils.fs.FSPath`)
+    See also [`PatchSummary`](`dascore.core.patch.PatchSummary`)
     """
     out = []
     fiber_io_hint: dict[str, FiberIO] = {}
@@ -848,19 +848,19 @@ def scan(
     for patch_source in tracker:
         # just pull attrs from patch
         if isinstance(patch_source, dc.Patch):
-            out.append(patch_source.attrs)
+            out.append(patch_source.to_summary())
             continue
         with IOResourceManager(patch_source) as man:
             try:
                 fiber_io, resource = _get_fiber_io_and_req_type(
                     man,
-                    file_format=file_format,
-                    file_version=file_version,
+                    file_format=resource_format,
+                    file_version=resource_version,
                     fiber_io_hint=fiber_io_hint,
                 )
             except UnknownFiberFormatError:  # skip bad entities
                 continue
-            # Cache this fiber io to given preferential treatment next iteration.
+            # Cache this fiber io to give preferential treatment next iteration.
             # This speeds up the common case of many files with the same format.
             fiber_io_hint[fiber_io.input_type] = fiber_io
             # Special handling of directory FiberIOs.
@@ -882,8 +882,8 @@ def scan(
                 except MissingOptionalDependencyError as ex:
                     missing_optional_deps[ex.msg.split(" ")[0]] += 1
                     continue
-            for attr in source:
-                out.append(dc.PatchAttrs.from_dict(attr))
+            for summary in source:
+                out.append(dc.PatchSummary.model_validate(summary))
     if missing_optional_deps:
         _handle_missing_optionals(out, missing_optional_deps)
     return out

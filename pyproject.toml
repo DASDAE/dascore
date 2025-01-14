@@ -56,6 +56,7 @@ dependencies = [
     "typing_extensions",
     "pint",
     "universal_pathlib",
+    "fsspec>2024.2.0",
 ]
 
 [project.optional-dependencies]

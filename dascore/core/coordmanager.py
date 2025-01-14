@@ -1211,11 +1211,12 @@ def _get_coord_dim_map(coords, dims):
     return c_map, d_map, dims
 
 
-class CoordManagerSummary(CoordManager):
+class CoordManagerSummary(DascoreBaseModel):
     """A coordinate manager with summary coordinates."""
 
+    dims: tuple[str, ...]
     coord_map: Annotated[
-        FrozenDict[str, CoordSummary],
+        FrozenDict[str, BaseCoord],
         frozen_dict_validator,
         frozen_dict_serializer,
     ]
@@ -1226,11 +1227,14 @@ class CoordManagerSummary(CoordManager):
 
         This only works if the coordinates were evenly sampled/sorted.
         """
-        out = {}
+        coord_map = {}
+        dim_map = {}
         for name, coord in self.coord_map.items():
-            out[name] = coord.to_coord()
+            dim_map[name] = coord.dims
+            coord_map[name] = coord.to_coord()
+
         return CoordManager(
-            coord_map=out,
-            dim_map=self.dim_map,
+            coord_map=FrozenDict(coord_map),
+            dim_map=FrozenDict(dim_map),
             dims=self.dims,
         )

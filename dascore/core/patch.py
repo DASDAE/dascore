@@ -405,6 +405,17 @@ class PatchSummary(DascoreBaseModel):
     attrs: PatchAttrs
     coords: CoordManagerSummary
 
+    _attrs_to_patch_keys = (
+        "data_type",
+        "dtype",
+        "data_units",
+        "path",
+        "format_version",
+        "format_name",
+        "acquistion_id",
+        "tag",
+    )
+
     def to_summary(
         self,
         path=None,
@@ -417,3 +428,37 @@ class PatchSummary(DascoreBaseModel):
         This is here to be compatible with Patch.to_summary.
         """
         return self
+
+    def _attrs_to_patch_info(self, attr_info, patch_info, patch_id):
+        """Transfer some attrs to the patch info."""
+        out = []
+        for key in self._attrs_to_patch_keys:
+            if value := attr_info.pop(key, None):
+                patch_info[key] = value
+        # flatten remaining attrs
+        for item, value in attr_info.items():
+            out.append(dict(name=item, value=value, patch_id=patch_id))
+        return out
+
+    def _reshape_coords(self, patch_info, coord_info, patch_key):
+        """Move some coord info over to patch info."""
+        patch_info["dims"] = coord_info.pop("dims")
+        return list(coord_info["coord_map"].values())
+
+    def to_patch_coords_attrs_info(
+        self,
+        patch_key,
+    ) -> tuple[list[dict], list[dict], list[dict]]:
+        """
+        Convert the PatchSummary to three lists of dicts.
+
+        The lists are for patch info, coord info, and attr info.
+        """
+        attrs = self.attrs.model_dump(exclude_unset=True)
+        coords = self.coords.model_dump(exclude_unset=True)
+        patch_info = self.data.model_dump(exclude_unset=True)
+
+        patch_info["patch_key"] = patch_key
+        attrs = self._attrs_to_patch_info(attrs, patch_info, patch_key)
+        coords = self._reshape_coords(patch_info, coords, patch_key)
+        return patch_info, attrs, coords

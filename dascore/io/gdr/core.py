@@ -16,7 +16,7 @@ from dascore.io.gdr.utils_das import (
     _get_version,
     _maybe_trim_data,
 )
-from dascore.utils.fs import get_uri
+from dascore.utils.fs import get_path
 from dascore.utils.hdf5 import H5Reader
 
 
@@ -40,7 +40,7 @@ class GDR_V1(FiberIO):  # noqa
     def _get_attr_coord_data(self, resource, snap=True):
         """Get the attributes, coordinates, and h5 dataset."""
         attr_dict, cm, data = _get_attrs_coords_and_data(resource, snap=snap)
-        attr_dict["path"] = get_uri(resource)
+        attr_dict["path"] = get_path(resource)
         attr_dict["format_name"] = self.name
         attr_dict["version"] = self.version
         attr = GDRPatchAttrs(**attr_dict)

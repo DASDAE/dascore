@@ -156,11 +156,15 @@ class ArraySummary(DascoreBaseModel):
     A class for summarizing arrays.
     """
 
-    dtype: str
+    dtype: Annotated[str, PlainValidator(lambda x: np.dtype(x).str)]
     shape: tuple[int, ...]
     ndim: int
 
     @classmethod
     def from_array(cls, array):
         """Init the summary from an array."""
-        return cls(dtype=array.dtype, shape=array.shape, ndim=array.ndim)
+        return cls(
+            dtype=array.dtype,
+            shape=array.shape,
+            ndim=array.ndim,
+        )

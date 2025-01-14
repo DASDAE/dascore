@@ -7,7 +7,7 @@ from dascore.io.core import FiberIO
 from dascore.utils.io import BinaryReader
 from dascore.utils.misc import optional_import
 
-from ...utils.fs import get_uri
+from ...utils.fs import get_path
 from .utils import (
     _get_coords,
     _get_data_summary,
@@ -32,7 +32,7 @@ class SegyV1_0(FiberIO):  # noqa
     def _get_attrs(self, resource):
         """Get the basic attributes for a segy file."""
         info = dict(
-            path=get_uri(resource),
+            path=get_path(resource),
             format_name=self.name,
             format_version=self.version,
         )

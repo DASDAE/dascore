@@ -12,7 +12,7 @@ import dascore as dc
 from dascore.io import FiberIO
 from dascore.utils.models import UTF8Str
 
-from ...utils.fs import get_uri
+from ...utils.fs import get_path
 from .utils import _load_patches, _paths_to_attrs, _read_xml_metadata
 
 
@@ -39,7 +39,7 @@ class XMLBinaryV1(FiberIO):
 
     def scan(self, resource, timestamp=None, **kwargs) -> list[dc.PatchSummary]:
         """Scan the contents of the directory."""
-        path = get_uri(resource)
+        path = get_path(resource)
         metadata = _read_xml_metadata(path / self._metadata_name)
         data_files = list(path.glob(f"*{self._data_extension}"))
         extra_attrs = {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
+from dascore.utils.fs import get_path
 from dascore.utils.hdf5 import (
     H5Reader,
     H5Writer,
@@ -12,7 +13,6 @@ from dascore.utils.hdf5 import (
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
-from ...utils.fs import get_uri
 from .utils import (
     _get_summary_from_patch_groups,
     _read_patch,
@@ -89,7 +89,7 @@ class DASDAEV1(FiberIO):
     def read(self, resource: H5Reader, **kwargs) -> SpoolType:
         """Read a DASDAE file."""
         patches = []
-        path = get_uri(resource)
+        path = get_path(resource)
         format_version = unbyte(resource.attrs["__DASDAE_version__"])
         format_name = self.name
         try:

@@ -132,9 +132,8 @@ def array_to_text(data, units=None) -> Text:
 
 def attrs_to_text(attrs) -> Text:
     """Convert pydantic model to text."""
-    attrs = dc.PatchAttrs(**attrs).model_dump(exclude_defaults=True)
+    attrs = dc.PatchAttrs.model_validate(attrs).model_dump(exclude_defaults=True)
     # pop coords and dims since they show up in other places.
-    attrs.pop("coords", None), attrs.pop("dims", None)
     txt = Text("➤ ") + Text("Attributes", style=dascore_styles["dc_yellow"])
     txt += Text("\n")
     for name, attr in dict(attrs).items():

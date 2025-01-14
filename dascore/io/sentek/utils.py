@@ -8,12 +8,12 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.utils.fs import get_uri
+from dascore.utils.fs import get_path
 
 
 def _get_version(fid):
     """Determine if Sentek file."""
-    path = get_uri(fid)
+    path = get_path(fid)
     # Sentek files cannot change the extension, or file name.
     sw_data = path.endswith(".das")
     fid.seek(0)

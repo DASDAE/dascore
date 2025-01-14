@@ -9,7 +9,7 @@ from dascore.constants import timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
-from ...utils.fs import get_uri
+from ...utils.fs import get_path
 from .utils import (
     _get_default_attrs,
     _get_distance_coord,
@@ -39,7 +39,7 @@ class Terra15FormatterV4(FiberIO):
         """Get attributes, coords, and datanode for this file."""
         version, data_node = _get_version_data_node(resource)
         attrs = _get_default_attrs(resource)
-        attrs["path"] = get_uri(resource)
+        attrs["path"] = get_path(resource)
         attrs["format_name"] = self.name
         attrs["format_version"] = version
         coords_dict = {

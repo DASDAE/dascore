@@ -4,7 +4,7 @@ Utility functions for AP sensing module.
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.utils.fs import get_uri
+from dascore.utils.fs import get_path
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 
@@ -84,7 +84,7 @@ def _get_attrs_dict(resource, format_name):
         instrumet_id=unbyte(_maybe_unpack(daq["SerialNumber"])),
         gauge_length=_maybe_unpack(pserver["GaugeLength"]),
         radians_to_nano_strain=_maybe_unpack(pserver["RadiansToNanoStrain"]),
-        path=get_uri(resource),
+        path=get_path(resource),
         format_name=format_name,
         format_version=version,
     )

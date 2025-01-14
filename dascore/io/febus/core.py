@@ -12,7 +12,7 @@ from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.models import UTF8Str
 
-from ...utils.fs import get_uri
+from ...utils.fs import get_path
 from .utils import (
     _get_febus_version_str,
     _read_febus,
@@ -71,7 +71,7 @@ class Febus2(FiberIO):
         """Scan a febus file, return summary information about the file's contents."""
         return _scan_febus(
             resource,
-            path=get_uri(resource),
+            path=get_path(resource),
             format_name=self.name,
             format_version=self.version,
             attr_cls=FebusPatchAttrs,
@@ -87,7 +87,7 @@ class Febus2(FiberIO):
         """Read a febus spool of patches."""
         patches = _read_febus(
             resource,
-            path=get_uri(resource),
+            path=get_path(resource),
             format_name=self.name,
             format_version=self.version,
             time=time,

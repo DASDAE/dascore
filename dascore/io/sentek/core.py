@@ -9,7 +9,7 @@ from dascore.io import BinaryReader
 from dascore.io.core import FiberIO
 from dascore.utils.models import ArraySummary
 
-from ...utils.fs import get_uri
+from ...utils.fs import get_path
 from .utils import _get_patch_attrs, _get_version
 
 
@@ -24,7 +24,7 @@ class SentekV5(FiberIO):
         """Get attributes, coordinates, and data offsets from file."""
         attrs_dict, coords, offsets = _get_patch_attrs(
             resource,
-            path=get_uri(resource),
+            path=get_path(resource),
             format_name=self.name,
             format_version=self.version,
         )

@@ -53,6 +53,9 @@ attr_type = dict[str, Any] | str | Sequence[str] | None
 
 _DimAxisValue = namedtuple("DimAxisValue", ["dim", "axis", "value"])
 
+_str_adapter = TypeAdapter(str)
+_str_tuple_adapter = TypeAdapter(tuple[str, ...])
+
 
 def _format_values(val):
     """String formatting for values for history string."""
@@ -519,10 +522,10 @@ def get_patch_names(
 
     # Validate inputs. Note we cannot use the validation decorator or
     # it introduces a circular import.
-    prefix = TypeAdapter(str).validate_python(prefix)
-    attrs = TypeAdapter(tuple[str, ...]).validate_python(attrs)
-    coords = TypeAdapter(tuple[str, ...]).validate_python(coords)
-    sep = TypeAdapter(str).validate_python(sep)
+    prefix = _str_adapter.validate_python(prefix)
+    sep = _str_adapter.validate_python(sep)
+    attrs = _str_tuple_adapter.validate_python(attrs)
+    coords = _str_tuple_adapter.validate_python(coords)
 
     # Ensure we are working with a dataframe.
     df = dc.scan_to_df(
