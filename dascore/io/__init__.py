@@ -4,7 +4,7 @@ Modules for reading and writing fiber data.
 from __future__ import annotations
 
 import dascore.utils.pd
-from dascore.io.core import FiberIO, read, scan, scan_to_df, write, PatchFileSummary
+from dascore.io.core import FiberIO, read, scan, scan_to_df, write
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.hdf5 import (
     H5Reader,

@@ -73,8 +73,8 @@ def correlate_shift(patch, dim, undo_weighting=True):
     step = coord.step
     new_start = -np.ceil((len(coord) - 1) / 2) * step
     new_end = np.ceil((len(coord) - 1) / 2) * step
-    new_coord = dc.get_coord(start=new_start, stop=new_end, step=step)
-    assert len(new_coord) == len(coord)
+    _new_coord = dc.get_coord(start=new_start, stop=new_end, step=step)
+    _old_units = dc.get_quantity(coord.units)
     cm = patch.coords
     new_cm = cm.update(**{dim: new_coord}).rename_coord(**{dim: f"lag_{dim}"})
     out = patch.update(data=data, coords=new_cm)

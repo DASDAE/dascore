@@ -9,27 +9,22 @@ import inspect
 import os.path
 import warnings
 from collections import defaultdict
-from collections.abc import Generator
+from collections.abc import Generator, Iterable
 from functools import cache, cached_property, wraps
 from importlib.metadata import entry_points
+from itertools import chain
 from pathlib import Path
-from typing import Annotated, Literal, get_type_hints
+from typing import Literal, get_type_hints
 
-import numpy as np
 import pandas as pd
-from pydantic import ConfigDict, Field, model_validator
 
 import dascore as dc
 from dascore.constants import (
     PROGRESS_LEVELS,
-    VALID_DATA_CATEGORIES,
-    VALID_DATA_TYPES,
     PatchType,
     SpoolType,
-    max_lens,
     timeable_types,
 )
-from dascore.core.attrs import str_validator
 from dascore.core.spool import DataFrameSpool
 from dascore.exceptions import (
     InvalidFiberIOError,
@@ -40,63 +35,7 @@ from dascore.utils.fs import UPath, iter_path_contents
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import cached_method, iterate, warn_or_raise
-from dascore.utils.models import (
-    CommaSeparatedStr,
-    DascoreBaseModel,
-    DateTime64,
-    TimeDelta64,
-)
-from dascore.utils.pd import _model_list_to_df
 from dascore.utils.progress import track
-
-
-class PatchFileSummary(DascoreBaseModel):
-    """
-    The necessary attributes for indexing a fiber file.
-
-    A subset of [PatchAttributes](`dascore.core.attrs.PatchAttrs`).
-    """
-
-    model_config = ConfigDict(
-        title="Patch File Summary",
-        extra="ignore",
-    )
-
-    data_type: Annotated[Literal[VALID_DATA_TYPES], str_validator] = ""
-    data_category: Annotated[Literal[VALID_DATA_CATEGORIES], str_validator] = ""
-    instrument_id: str = Field("", max_length=max_lens["instrument_id"])
-    experiment_id: str = Field("", max_length=max_lens["experiment_id"])
-    tag: str = Field("", max_length=max_lens["tag"])
-    station: str = Field("", max_length=max_lens["station"])
-    network: str = Field("", max_length=max_lens["network"])
-    dims: CommaSeparatedStr = Field("", max_length=max_lens["dims"])
-    time_min: DateTime64 = np.datetime64("NaT")
-    time_max: DateTime64 = np.datetime64("NaT")
-    time_step: TimeDelta64 = np.timedelta64("NaT")
-    # the attributes to index on
-    file_version: str = ""
-    file_format: str = ""
-    path: str | Path = ""
-
-    @property
-    def dim_tuple(self):
-        """Return a tuple of dimensions (eg ("time", "distance"))."""
-        return tuple(self.dims.split(","))
-
-    @model_validator(mode="before")
-    @classmethod
-    def translate_d_to_step(cls, data):
-        """Translate d_time and d_distance to time_step, distance_step."""
-        if isinstance(data, dict):
-            for name in ["time", "distance"]:
-                step_name, d_name = f"{name}_step", f"d_{name}"
-                if step_name not in data and d_name in data:
-                    data[step_name] = data.pop(d_name)
-        return data
-
-    def flat_dump(self):
-        """Alias for dump, for compatibility with PatchAttrs.flat_dump."""
-        return self.model_dump()
 
 
 class _FiberIOManager:
@@ -697,8 +636,28 @@ def scan_to_df(
         timestamp=timestamp,
         progress=progress,
     )
-    df = _model_list_to_df(info, exclude=exclude)
-    return df
+    patch_df, coord_df, attr_df = _patch_summary_to_dataframes(info)
+    breakpoint()
+
+    return
+
+
+def _patch_summary_to_dataframes(
+    patch_summaries: Iterable[dc.PatchSummary],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Convert a sequence of Patch Summaries to dataframes."""
+    patch_list, coord_list, attr_list = [], [], []
+    for num, summary in enumerate(iterate(patch_summaries)):
+        patch_in, coord_in, attr_in = summary.to_patch_coords_attrs_info(num)
+        patch_list.append(patch_in)
+        coord_list.append(coord_in)
+        attr_list.append(attr_list)
+    patch_df = pd.DataFrame(patch_list)
+    # The coords and attrs are nested lists so we need to flatten them.
+    breakpoint()
+    coord_df = pd.DataFrame(list(chain.from_iterable(patch_list)))
+    attr_df = pd.DataFrame(list(chain.from_iterable(attr_list)))
+    return patch_df, coord_df, attr_df
 
 
 def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):

@@ -14,7 +14,7 @@ import pytest
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
-from dascore.io.core import FiberIO, PatchFileSummary
+from dascore.io.core import FiberIO
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.time import to_datetime64
@@ -105,26 +105,6 @@ class _FiberDirectory(FiberIO):
         if self.name in name:
             return self.name, self.version
         return False
-
-
-class TestPatchFileSummary:
-    """Tests for getting patch file information."""
-
-    def test_d_translates(self):
-        """Ensure d_{whatever} translates to step_{whatever}."""
-        out = PatchFileSummary(d_time=10)
-        assert out.time_step == dc.to_timedelta64(10)
-
-    def test_dim_typle(self):
-        """Ensure patch file summaries can be converted to tuples."""
-        out = PatchFileSummary(d_time=10, dims="time,distance")
-        assert out.dim_tuple == ("time", "distance")
-
-    def test_flat_dump(self):
-        """Simple test to show summary can be flat dumped."""
-        # flat dump is just here for compatibility with dc.PatchAttrs
-        out = PatchFileSummary(d_time=10, dims="time,distance")
-        assert isinstance(out.flat_dump(), dict)
 
 
 class TestFormatManager:

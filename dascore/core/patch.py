@@ -92,18 +92,10 @@ class Patch:
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
-
         shape = None if not hasattr(data, "shape") else data.shape
         coords = get_coord_manager(coords, dims=dims, shape=shape)
-        # the only case we allow attrs to include coords is if they are both
-        # dicts, in which case attrs might have unit info for coords.
-        if isinstance(attrs, Mapping) and attrs:
-            coords, attrs = coords.update_from_attrs(attrs)
-        else:
-            # ensure attrs conforms to coords
-            attrs = dc.PatchAttrs.from_dict(attrs).update(coords=coords)
         self._coords = coords
-        self._attrs = attrs
+        self._attrs = dc.PatchAttrs() if attrs is None else attrs
         self._data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):
@@ -461,4 +453,4 @@ class PatchSummary(DascoreBaseModel):
         patch_info["patch_key"] = patch_key
         attrs = self._attrs_to_patch_info(attrs, patch_info, patch_key)
         coords = self._reshape_coords(patch_info, coords, patch_key)
-        return patch_info, attrs, coords
+        return patch_info, coords, attrs

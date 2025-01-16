@@ -13,8 +13,6 @@ import dascore.examples
 from dascore.clients.dirspool import DirectorySpool
 from dascore.constants import ONE_SECOND
 from dascore.exceptions import ParameterError
-from dascore.io.core import PatchFileSummary
-from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import register_func
 
 DIRECTORY_SPOOLS = []
@@ -109,11 +107,6 @@ class TestDirectoryIndex:
         bank_paths = list(Path(two_patch_directory).rglob("*hdf5"))
         assert isinstance(df, pd.DataFrame)
         assert len(bank_paths) == len(df)
-
-    def test_index_columns(self, basic_index_df):
-        """Ensure expected columns show up in the index."""
-        schema_fields = list(PatchFileSummary.model_fields)
-        assert set(basic_index_df).issuperset(schema_fields)
 
     def test_patches_extracted(self, basic_file_spool):
         """Ensure the patches can be extracted."""
@@ -348,16 +341,6 @@ class TestBasicChunk:
             # because we try to avoid overlaps, the segments can be up to 2
             # samples shorter than what was asked for. Maybe revisit this?
             assert diff <= 2 * (patch.attrs.time_step / ONE_SECOND)
-
-
-class TestGetContents:
-    """Tests for getting the contents of the spool."""
-
-    def test_str_columns_in_dataframe(self, diverse_directory_spool):
-        """Ensure all the string columns are in index."""
-        df = diverse_directory_spool.get_contents()
-        expected = HDFPatchIndexManager._min_itemsize
-        assert set(df.columns).issuperset(set(expected))
 
 
 class TestIndexing:

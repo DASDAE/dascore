@@ -57,7 +57,7 @@ class TestInit:
         return Patch(**out)
 
     @pytest.fixture(scope="class")
-    def patch_complex_coords(self):
+    def patch_non_dimensional_coords(self):
         """Create a patch with 'complex' (non-dimensional) coords."""
         rand = np.random.RandomState(13)
         array = rand.random(size=(20, 100))
@@ -99,36 +99,9 @@ class TestInit:
         with pytest.raises(ValueError, match=msg):
             dc.Patch(**out)
 
-    def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
-        """Ensure the time_min and time_max attrs can be inferred from coord time."""
-        patch = random_dt_coord
-        assert patch.attrs["time_min"] == self.time1
-
-    def test_end_time_inferred_from_dt64_coords(self, random_dt_coord):
-        """Ensure the time_min and time_max attrs can be inferred from coord time."""
-        patch = random_dt_coord
-        time = patch.coords.coord_map["time"].max()
-        assert patch.attrs["time_max"] == time
-
     def test_init_from_array(self, random_patch):
         """Ensure a trace can be created from raw components; array, coords, attrs."""
         assert isinstance(random_patch, Patch)
-
-    def test_max_time_populated(self, random_patch):
-        """Ensure the time_max is populated when not explicitly given."""
-        end_time = random_patch.attrs["time_max"]
-        assert not pd.isnull(end_time)
-
-    def test_min_max_populated(self, random_patch):
-        """The min/max values of the distance attrs should have been populated."""
-        attrs = random_patch.attrs
-        expected_filled_in = [
-            x
-            for x in list(attrs.model_fields)
-            if x.startswith("distance") and "units" not in x
-        ]
-        for attr in expected_filled_in:
-            assert not pd.isnull(attrs[attr])
 
     def test_had_default_attrs(self, patch):
         """Test that all patches used in the test suite have default attrs."""
@@ -156,9 +129,9 @@ class TestInit:
         """Ensure shape returns the shape of the data array."""
         assert random_patch.shape == random_patch.data.shape
 
-    def test_init_with_complex_coordinates(self, patch_complex_coords):
+    def test_init_with_complex_coordinates(self, patch_non_dimensional_coords):
         """Ensure complex coordinates work."""
-        patch = patch_complex_coords
+        patch = patch_non_dimensional_coords
         assert isinstance(patch, Patch)
         assert "latitude" in patch.coords
         assert "quality" in patch.coords
@@ -736,18 +709,9 @@ class TestPatchSummary:
         out = random_patch.to_summary()
         assert isinstance(out, dc.PatchSummary)
 
-    # def test_flattened_tuples(self, random_summary):
-    #     """Ensure dumping flattens tuples to strings."""
-    #     out = random_summary.model_dump(exclude_unset=True)
-    #     dims = out['coords']['dims']
-    #     assert isinstance(dims, str)
-    #     assert out['sh']
-    #     breakpoint()
-
     def test_to_patch_coord_attrs_info(self, random_summary):
         """Test converting to patch, coord, and attr info."""
         patch_info, coords, attrs = random_summary.to_patch_coords_attrs_info(0)
-        breakpoint()
         assert isinstance(patch_info, dict)
         assert len(coords) == len(random_summary.coords.coord_map)
         assert len(attrs)

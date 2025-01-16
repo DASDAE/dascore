@@ -233,6 +233,7 @@ class TestGetLsDetails:
         get_ls_details(bad_file, on_error=increment)
         assert my_counter == 1
 
+
 #
 # class TestGetPath:
 #     """Tests for getting a path from various objects."""
