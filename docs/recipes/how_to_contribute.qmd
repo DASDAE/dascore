@@ -29,7 +29,6 @@ pip install -e ".[dev]"
 ```
 
 ```bash
-cd dascore
 pytest
 ```
 

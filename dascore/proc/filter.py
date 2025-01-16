@@ -271,11 +271,10 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
         Used to specify the dimension(s) and associated frequency and/or wavelength
         (or equivalent values) for the filter.
 
-    Notes
-    -----
-    See [scipy.signal.iirnotch]
-        (https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.iirnotch.html)
-        for more information.
+    See Also
+    --------
+    [scipy.signal.iirnotch](https://docs.scipy.org/doc/scipy/reference
+    /generated/scipy.signal.iirnotch.html).
 
     Examples
     --------
@@ -286,10 +285,10 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
     >>> filtered = pa.notch_filter(time=60, q=30)
 
     >>>  # Apply a notch filter along distance axis to remove 5 m wavelength
-    >>> filtered = pa.notch_filter(distance=0.2, q=10)
+    >>> filtered = pa.notch_filter(distance=0.2, q=30)
 
     >>>  # Apply a notch filter along both time and distance axes
-    >>> filtered = pa.notch_filter(time=60, distance=0.2, q=40)
+    >>> filtered = pa.notch_filter(time=60, distance=0.2, q=30)
 
     >>> # Optionally, units can be specified for a more expressive API.
     >>> from dascore.units import m, ft, s, Hz
