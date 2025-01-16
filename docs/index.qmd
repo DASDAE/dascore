@@ -135,10 +135,6 @@ See [this recipe](recipes/docker_basic.qmd) for installation with Docker.
 
 See the [contributing docs](contributing/contributing.qmd) for development installations.
 
-Please note that there is currently a fix in progress for the dependency issue with segyio,
-which does not yet support Python 3.13, so that segyio will be an optional dependency. For
-the time being, please use Python 3.12 for the environment. 
-
 # Feedback and Support
 
 Use the [project discussions](https://github.com/DASDAE/dascore/discussions) to ask a question.
