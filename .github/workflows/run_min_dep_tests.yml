@@ -44,7 +44,7 @@ jobs:
 
       - name: Install dascore (min deps)
         shell: bash -l {0}
-        run: pip install -e .
+        run: pip install -e .[test]
 
       # Runs test suite and calculates coverage
       - name: run test suite
