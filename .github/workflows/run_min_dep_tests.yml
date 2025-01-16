@@ -42,15 +42,16 @@ jobs:
           install-package: false
           environment-file: './.github/min_deps_environment.yml'
 
-      # Then switch over to uv. We can use this exclusively once we drop pytables.
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-
-      - name: run test suite
+      - name: Install dascore (min deps)
         shell: bash -l {0}
-        run: uv run --extra test --python ${{ matrix.python-version }} pytest -s --cov dascore --cov-append --cov-report=xml
+        run: pip install -e .
+
+      # Runs test suite and calculates coverage
+      - name: run test suite
+        shell: bash -el {0}
+        run: ./.github/test_code.sh
 
       # Runs examples in docstrings
       - name: test docstrings
-        shell: bash -l {0}
-        run: uv run --extra test --python ${{ matrix.python-version }} pytest dascore --doctest-modules
+        shell: bash -el {0}
+        run: ./.github/test_code.sh doctest
