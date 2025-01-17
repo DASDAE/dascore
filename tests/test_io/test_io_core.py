@@ -297,11 +297,11 @@ class TestScan:
     def test_scan_patch(self, random_patch):
         """Scan should also work on a patch."""
         out = dc.scan_to_df(random_patch)
-        attrs = random_patch.attrs
         assert len(out) == 1
         ser = out.iloc[0]
-        assert to_datetime64(ser["time_min"]) == to_datetime64(attrs["time_min"])
-        assert to_datetime64(ser["time_max"]) == to_datetime64(attrs["time_max"])
+        time = random_patch.get_coord("time")
+        assert to_datetime64(ser["time_min"]) == time.min()
+        assert to_datetime64(ser["time_max"]) == time.max()
 
     def test_scan_nested_directory(self, nested_directory_with_patches):
         """Ensure scan picks up files in nested directories."""

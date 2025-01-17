@@ -24,13 +24,13 @@ import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
+from dascore.io.asn import OptoDASV8
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus2
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
-from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.segy import SegyV1_0

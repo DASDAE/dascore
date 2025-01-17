@@ -725,4 +725,3 @@ class TestPatchSummary:
             assert key in coord
         for attr in attrs:
             assert key in attr
-

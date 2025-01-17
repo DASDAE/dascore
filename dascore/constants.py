@@ -161,6 +161,21 @@ check_behavior
 """
 
 
+# The default column names and values needed for a summary df
+summary_columns = {
+    "time_min": np.datetime64("NaT"),
+    "time_step": np.timedelta64("NaT"),
+    "time_max": np.datetime64("NaT"),
+    "distance_min": np.nan,
+    "distance_max": np.nan,
+    "distance_step": np.nan,
+    "history": "",
+    "tag": "",
+    "acquisition_id": "",
+    "instrument_id": "",
+}
+
+
 # Rich styles for various object displays.
 dascore_styles = dict(
     np_array_threshold=100,  # max number of elements to show in array

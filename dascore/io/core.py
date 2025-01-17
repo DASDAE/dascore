@@ -23,6 +23,7 @@ from dascore.constants import (
     PROGRESS_LEVELS,
     PatchType,
     SpoolType,
+    summary_columns,
     timeable_types,
 )
 from dascore.core.spool import DataFrameSpool
@@ -643,15 +644,22 @@ def scan_to_df(
 
 def _assemble_summary_df(patch_df, coord_df, attr_df):
     """Assemble a single dataframe from the separate patch components."""
+    # coordinate columns to exclude
+    coord_ex = {"name", "patch_key", "shape"}
     piv_attr = attr_df.pivot(columns="name", values="value", index="patch_key")
-
+    # Combine various columns in coordinate pivot.
     pivs = []
-    for col_name in set(coord_df.columns) - {"name", "patch_key"}:
+    for col_name in set(coord_df.columns) - coord_ex:
         sub = coord_df.pivot(columns="name", values=col_name, index="patch_key")
-
-        breakpoint()
-    coord_piv = coord_df.pivot_table(index="patch_key", columns="name")
-    breakpoint()
+        sub.columns = [f"{x}_{col_name}" for x in sub.columns]
+        pivs.append(sub)
+    piv_coords = pd.concat(pivs, axis=1)
+    # Reassemble df
+    out = pd.concat([patch_df, piv_attr, piv_coords], axis=1)
+    col_set = set(out.columns)
+    # Ensure required columns exist, otherwise fill with default values.
+    defaults = {i: v for i, v in summary_columns.items() if i not in col_set}
+    return out.assign(**defaults)
 
 
 def _patch_summary_to_dataframes(
@@ -664,7 +672,7 @@ def _patch_summary_to_dataframes(
         patch_list.append(patch_in)
         coord_list.append(coord_in)
         attr_list.append(attr_in)
-    patch_df = pd.DataFrame(patch_list)
+    patch_df = pd.DataFrame(patch_list).set_index("patch_key")
     # The coords and attrs are nested lists so we need to flatten them.
     coord_df = pd.DataFrame(list(chain.from_iterable(coord_list)))
     attr_df = pd.DataFrame(list(chain.from_iterable(attr_list)))

@@ -439,7 +439,7 @@ class PatchSummary(DascoreBaseModel):
     def _reshape_coords(self, patch_info, coord_info, patch_key):
         """Move some coord info over to patch info."""
         patch_info["dims"] = coord_info.pop("dims")
-        coord_list = list(coord_info['coord_map'].values())
+        coord_list = list(coord_info["coord_map"].values())
         for coord in coord_list:
             coord["patch_key"] = patch_key  # ensure patch key is in coord.
         return coord_list
