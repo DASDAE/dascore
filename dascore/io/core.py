@@ -637,9 +637,21 @@ def scan_to_df(
         progress=progress,
     )
     patch_df, coord_df, attr_df = _patch_summary_to_dataframes(info)
-    breakpoint()
+    out = _assemble_summary_df(patch_df, coord_df, attr_df)
+    return out
 
-    return
+
+def _assemble_summary_df(patch_df, coord_df, attr_df):
+    """Assemble a single dataframe from the separate patch components."""
+    piv_attr = attr_df.pivot(columns="name", values="value", index="patch_key")
+
+    pivs = []
+    for col_name in set(coord_df.columns) - {"name", "patch_key"}:
+        sub = coord_df.pivot(columns="name", values=col_name, index="patch_key")
+
+        breakpoint()
+    coord_piv = coord_df.pivot_table(index="patch_key", columns="name")
+    breakpoint()
 
 
 def _patch_summary_to_dataframes(
@@ -651,11 +663,10 @@ def _patch_summary_to_dataframes(
         patch_in, coord_in, attr_in = summary.to_patch_coords_attrs_info(num)
         patch_list.append(patch_in)
         coord_list.append(coord_in)
-        attr_list.append(attr_list)
+        attr_list.append(attr_in)
     patch_df = pd.DataFrame(patch_list)
     # The coords and attrs are nested lists so we need to flatten them.
-    breakpoint()
-    coord_df = pd.DataFrame(list(chain.from_iterable(patch_list)))
+    coord_df = pd.DataFrame(list(chain.from_iterable(coord_list)))
     attr_df = pd.DataFrame(list(chain.from_iterable(attr_list)))
     return patch_df, coord_df, attr_df
 

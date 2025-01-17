@@ -102,9 +102,7 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     new_attrs.update(attrs)
     if len(attrs) == 1 and "history" in attrs:
         return _fast_attr_update(self, PatchAttrs(**new_attrs))
-    new_coords, new_attrs = self.coords.update_from_attrs(new_attrs)
-    out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
-    return self.__class__(self.data, **out)
+    return self.update(attrs=new_attrs)
 
 
 def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:

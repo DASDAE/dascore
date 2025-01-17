@@ -94,8 +94,12 @@ class Patch:
             raise ValueError(msg)
         shape = None if not hasattr(data, "shape") else data.shape
         coords = get_coord_manager(coords, dims=dims, shape=shape)
+        if attrs is not None:
+            attrs = dc.PatchAttrs.model_validate(attrs)
+        else:
+            attrs = dc.PatchAttrs()
         self._coords = coords
-        self._attrs = dc.PatchAttrs() if attrs is None else attrs
+        self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
 
     def __eq__(self, other):
@@ -421,7 +425,7 @@ class PatchSummary(DascoreBaseModel):
         """
         return self
 
-    def _attrs_to_patch_info(self, attr_info, patch_info, patch_id):
+    def _attrs_to_patch_info(self, attr_info, patch_info, patch_key):
         """Transfer some attrs to the patch info."""
         out = []
         for key in self._attrs_to_patch_keys:
@@ -429,13 +433,16 @@ class PatchSummary(DascoreBaseModel):
                 patch_info[key] = value
         # flatten remaining attrs
         for item, value in attr_info.items():
-            out.append(dict(name=item, value=value, patch_id=patch_id))
+            out.append(dict(name=item, value=value, patch_key=patch_key))
         return out
 
     def _reshape_coords(self, patch_info, coord_info, patch_key):
         """Move some coord info over to patch info."""
         patch_info["dims"] = coord_info.pop("dims")
-        return list(coord_info["coord_map"].values())
+        coord_list = list(coord_info['coord_map'].values())
+        for coord in coord_list:
+            coord["patch_key"] = patch_key  # ensure patch key is in coord.
+        return coord_list
 
     def to_patch_coords_attrs_info(
         self,

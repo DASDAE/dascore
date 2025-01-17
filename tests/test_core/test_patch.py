@@ -715,3 +715,14 @@ class TestPatchSummary:
         assert isinstance(patch_info, dict)
         assert len(coords) == len(random_summary.coords.coord_map)
         assert len(attrs)
+
+    def test_patch_key(self, random_summary):
+        """The patch key should be in each dictionary."""
+        patch_info, coords, attrs = random_summary.to_patch_coords_attrs_info(0)
+        key = "patch_key"
+        assert key in patch_info
+        for coord in coords:
+            assert key in coord
+        for attr in attrs:
+            assert key in attr
+
