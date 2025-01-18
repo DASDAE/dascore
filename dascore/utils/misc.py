@@ -208,7 +208,7 @@ def iterate(obj):
 
 
 class CacheDescriptor:
-    """A descriptor for storing infor in an instance cache (mapping)."""
+    """A descriptor for storing info in an instance cache (mapping)."""
 
     def __init__(self, cache_name, func_name, args=None, kwargs=None):
         self._cache_name = cache_name

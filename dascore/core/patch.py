@@ -408,7 +408,7 @@ class PatchSummary(DascoreBaseModel):
         "path",
         "format_version",
         "format_name",
-        "acquistion_id",
+        "acquisition_id",
         "tag",
     )
 
@@ -425,7 +425,7 @@ class PatchSummary(DascoreBaseModel):
         """
         return self
 
-    def _attrs_to_patch_info(self, attr_info, patch_info, patch_key):
+    def _attrs_to_patch_info(self, attr_info, patch_info, patch_key, spool_key):
         """Transfer some attrs to the patch info."""
         out = []
         for key in self._attrs_to_patch_keys:
@@ -433,20 +433,24 @@ class PatchSummary(DascoreBaseModel):
                 patch_info[key] = value
         # flatten remaining attrs
         for item, value in attr_info.items():
-            out.append(dict(name=item, value=value, patch_key=patch_key))
+            out.append(
+                dict(name=item, value=value, patch_key=patch_key, spool_key=spool_key)
+            )
         return out
 
-    def _reshape_coords(self, patch_info, coord_info, patch_key):
+    def _reshape_coords(self, patch_info, coord_info, patch_key, spool_key):
         """Move some coord info over to patch info."""
         patch_info["dims"] = coord_info.pop("dims")
         coord_list = list(coord_info["coord_map"].values())
         for coord in coord_list:
             coord["patch_key"] = patch_key  # ensure patch key is in coord.
+            coord["spool_key"] = spool_key  # ensure spool key is in coord.
         return coord_list
 
     def to_patch_coords_attrs_info(
         self,
         patch_key,
+        spool_key=0,
     ) -> tuple[list[dict], list[dict], list[dict]]:
         """
         Convert the PatchSummary to three lists of dicts.
@@ -456,8 +460,7 @@ class PatchSummary(DascoreBaseModel):
         attrs = self.attrs.model_dump(exclude_unset=True)
         coords = self.coords.model_dump(exclude_unset=True)
         patch_info = self.data.model_dump(exclude_unset=True)
-
-        patch_info["patch_key"] = patch_key
-        attrs = self._attrs_to_patch_info(attrs, patch_info, patch_key)
-        coords = self._reshape_coords(patch_info, coords, patch_key)
+        patch_info["patch_key"], patch_info["spool_key"] = patch_key, spool_key
+        attrs = self._attrs_to_patch_info(attrs, patch_info, patch_key, spool_key)
+        coords = self._reshape_coords(patch_info, coords, patch_key, spool_key)
         return patch_info, coords, attrs

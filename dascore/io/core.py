@@ -9,10 +9,9 @@ import inspect
 import os.path
 import warnings
 from collections import defaultdict
-from collections.abc import Generator, Iterable
+from collections.abc import Generator
 from functools import cache, cached_property, wraps
 from importlib.metadata import entry_points
-from itertools import chain
 from pathlib import Path
 from typing import Literal, get_type_hints
 
@@ -36,6 +35,7 @@ from dascore.utils.fs import UPath, iter_path_contents
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import cached_method, iterate, warn_or_raise
+from dascore.utils.pd import _patch_summary_to_dataframes
 from dascore.utils.progress import track
 
 
@@ -660,23 +660,6 @@ def _assemble_summary_df(patch_df, coord_df, attr_df):
     # Ensure required columns exist, otherwise fill with default values.
     defaults = {i: v for i, v in summary_columns.items() if i not in col_set}
     return out.assign(**defaults)
-
-
-def _patch_summary_to_dataframes(
-    patch_summaries: Iterable[dc.PatchSummary],
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Convert a sequence of Patch Summaries to dataframes."""
-    patch_list, coord_list, attr_list = [], [], []
-    for num, summary in enumerate(iterate(patch_summaries)):
-        patch_in, coord_in, attr_in = summary.to_patch_coords_attrs_info(num)
-        patch_list.append(patch_in)
-        coord_list.append(coord_in)
-        attr_list.append(attr_in)
-    patch_df = pd.DataFrame(patch_list).set_index("patch_key")
-    # The coords and attrs are nested lists so we need to flatten them.
-    coord_df = pd.DataFrame(list(chain.from_iterable(coord_list)))
-    attr_df = pd.DataFrame(list(chain.from_iterable(attr_list)))
-    return patch_df, coord_df, attr_df
 
 
 def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):

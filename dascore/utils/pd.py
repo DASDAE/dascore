@@ -5,8 +5,9 @@ from __future__ import annotations
 import fnmatch
 import os
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from functools import cache
+from itertools import chain
 
 import numpy as np
 import pandas as pd
@@ -16,7 +17,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import ParameterError
-from dascore.utils.misc import sanitize_range_param
+from dascore.utils.misc import iterate, sanitize_range_param
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -554,3 +555,21 @@ def rolling_df(df, window, step=None, axis=0, center=False):
     """
     df = df if not axis else df.T  # silly deprecated axis argument.
     return df.rolling(window=window, step=step, center=center)
+
+
+def _patch_summary_to_dataframes(
+    patch_summaries: Iterable[dc.PatchSummary],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Convert a sequence of Patch Summaries to dataframes."""
+    patch_list, coord_list, attr_list = [], [], []
+    for num, summary in enumerate(iterate(patch_summaries)):
+        summary = summary.to_summary()  # Ensure we have a summary
+        patch_in, coord_in, attr_in = summary.to_patch_coords_attrs_info(num)
+        patch_list.append(patch_in)
+        coord_list.append(coord_in)
+        attr_list.append(attr_in)
+    patch_df = pd.DataFrame(patch_list).set_index("patch_key")
+    # The coords and attrs are nested lists so we need to flatten them.
+    coord_df = pd.DataFrame(list(chain.from_iterable(coord_list)))
+    attr_df = pd.DataFrame(list(chain.from_iterable(attr_list)))
+    return patch_df, coord_df, attr_df

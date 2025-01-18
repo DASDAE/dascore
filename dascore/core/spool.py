@@ -77,10 +77,8 @@ class BaseSpool(abc.ABC):
         text += Text(" Patches)") if patch_len != 1 else Text(" Patch)")
         return text
 
-    def __str__(self):
+    def __repr__(self):
         return str(self.__rich__())
-
-    __repr__ = __str__
 
     def __eq__(self, other) -> bool:
         """Simple equality checks on spools."""
@@ -338,7 +336,7 @@ class BaseSpool(abc.ABC):
             "'Spool' has no 'viz' namespace. "
             "Apply 'viz' on a Patch object. "
             "(you can merge a subset of the spool into a single patch using "
-            "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
+            "the Chunk function. e.g., spool.chunk(time=None)[0].viz.waterfall())"
         )
         raise AttributeError(msg)
 
