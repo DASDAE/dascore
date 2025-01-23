@@ -84,7 +84,7 @@ def spectrogram(
             spec = _spec.aggregate(other_dim, method="mean").squeeze()
         else:
             raise ValueError(
-                f"The aggr_domain '{aggr_domain}' should be either 'time' or 'frequency'."
+                f"The aggr_domain '{aggr_domain}' should be 'time' or 'frequency.'"
             )
     else:
         spec = patch.spectrogram(dim)
