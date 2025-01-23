@@ -51,7 +51,7 @@ class TestPlotSpectrogram:
 
     def test_invalid_aggr_domain(self, random_patch):
         """Ensure ValueError is raised for invalid aggr_domain."""
-        with pytest.raises(ValueError, match="should be either 'time' or 'frequency'"):
+        with pytest.raises(ValueError, match="should be 'time' or 'frequency'."):
             random_patch.viz.spectrogram(aggr_domain="invalid")
 
     def test_invalid_patch_dims(self, random_patch):
