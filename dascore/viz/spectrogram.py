@@ -72,7 +72,7 @@ def spectrogram(
     """
     dims = patch.dims
     if len(dims) > 2 or len(dims) < 1:
-        raise ValueError("Can only make spectogram of 1D or 2D patches.")
+        raise ValueError("Can only make spectrogram of 1D or 2D patches.")
 
     other_dim = _get_other_dim(dim, dims)
     if other_dim is not None:

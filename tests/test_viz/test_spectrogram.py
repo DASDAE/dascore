@@ -49,6 +49,11 @@ class TestPlotSpectrogram:
         with pytest.raises(ValueError, match="not in patch's dimensions"):
             random_patch.viz.spectrogram(dim="frequency")
 
+    def test_aggr_time(self, random_patch):
+        """Ensure aggr_domain=time works well."""
+        axis = random_patch.viz.spectrogram(aggr_domain="time")
+        assert isinstance(axis, plt.Axes)
+
     def test_aggr_frequency(self, random_patch):
         """Ensure aggr_domain=frequency works well."""
         axis = random_patch.viz.spectrogram(aggr_domain="frequency")
@@ -63,7 +68,7 @@ class TestPlotSpectrogram:
         """Ensure ValueError is raised for patches with invalid dimensions."""
         patch_3d = random_patch.correlate(distance=[0, 1])
         with pytest.raises(
-            ValueError, match="Can only make spectogram of 1D or 2D patches"
+            ValueError, match="Can only make spectrogram of 1D or 2D patches"
         ):
             patch_3d.viz.spectrogram(dim="distance")
 
