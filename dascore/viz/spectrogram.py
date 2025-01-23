@@ -5,14 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal
 
-import matplotlib.colors as colors
 import matplotlib.pyplot as plt
-import numpy as np
-from scipy.signal import spectrogram as scipy_spectrogram
 
 from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
-from dascore.utils.plotting import _get_ax, _get_cmap
 
 
 def _get_other_dim(dim, dims):
@@ -24,6 +20,7 @@ def _get_other_dim(dim, dims):
         return None
     else:
         return dims[0] if dims[1] == dim else dims[1]
+
 
 @patch_function()
 def spectrogram(
@@ -47,11 +44,11 @@ def spectrogram(
     ax
         A matplotlib object, if None create one.
     dim
-        Dimension along which spectogram is being plotted. 
+        Dimension along which spectogram is being plotted.
         Default is "time"
     aggr_domain
-        "time" or "frequency" in which the mean value of the other 
-        dimension is caluclated. No need to specify if other dimension's 
+        "time" or "frequency" in which the mean value of the other
+        dimension is caluclated. No need to specify if other dimension's
         coord size is 1.
         Default is "frequency"
     cmap
@@ -75,18 +72,22 @@ def spectrogram(
     """
     dims = patch.dims
     if len(dims) > 2 or len(dims) < 1:
-        raise ValueError(f"Can only make spectogram of 1D or 2D patches.")
-    
-    other_dim = _get_other_dim(dim, dims) 
+        raise ValueError("Can only make spectogram of 1D or 2D patches.")
+
+    other_dim = _get_other_dim(dim, dims)
     if other_dim is not None:
-        if aggr_domain=="time":
+        if aggr_domain == "time":
             patch_aggr = patch.aggregate(other_dim, method="mean", dim_reduce="squeeze")
             spec = patch_aggr.spectrogram(dim)
-        elif aggr_domain=="frequency":
+        elif aggr_domain == "frequency":
             _spec = patch.spectrogram(dim).squeeze()
             spec = _spec.aggregate(other_dim, method="mean").squeeze()
         else:
-            raise ValueError(f"The aggr_domain '{aggr_domain}' should be either 'time' or 'frequency'.") 
+            raise ValueError(
+                f"The aggr_domain '{aggr_domain}' should be either 'time' or 'frequency'."
+            )
     else:
         spec = patch.spectrogram(dim)
-    return spec.viz.waterfall(ax=ax, cmap=cmap, scale=scale, scale_type=scale_type, log=log, show=show)
+    return spec.viz.waterfall(
+        ax=ax, cmap=cmap, scale=scale, scale_type=scale_type, log=log, show=show
+    )

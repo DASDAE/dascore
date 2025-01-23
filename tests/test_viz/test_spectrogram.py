@@ -5,17 +5,20 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import pytest
 
-from dascore.viz.spectrogram import _get_other_dim 
+from dascore.viz.spectrogram import _get_other_dim
+
 
 def test_get_other_dim_valid():
     dims = ("time", "distance")
     assert _get_other_dim("time", dims) == "distance"
     assert _get_other_dim("distance", dims) == "time"
 
+
 def test_get_other_dim_invalid():
     dims = ("time", "distance")
     with pytest.raises(ValueError, match="not in patch's dimensions"):
         _get_other_dim("frequency", dims)
+
 
 def test_get_other_dim_invalid_dim_type():
     dims = ("time", "distance")
@@ -31,7 +34,7 @@ class TestPlotSpectrogram:
         """Return the axis from the spectrogram function."""
         patch = random_patch.aggregate(dim="distance")
         return patch.viz.spectrogram()
-    
+
     def test_axis_returned(self, random_patch):
         """Ensure a matplotlib axis is returned."""
         axis = random_patch.viz.spectrogram(dim="time")
@@ -50,8 +53,10 @@ class TestPlotSpectrogram:
 
     def test_invalid_patch_dims(self, random_patch):
         """Ensure ValueError is raised for patches with invalid dimensions."""
-        patch_3D = random_patch.correlate(distance=[0,1]) 
-        with pytest.raises(ValueError, match="Can only make spectogram of 1D or 2D patches"):
+        patch_3D = random_patch.correlate(distance=[0, 1])
+        with pytest.raises(
+            ValueError, match="Can only make spectogram of 1D or 2D patches"
+        ):
             patch_3D.viz.spectrogram(dim="distance")
 
     def test_1d_patch(self, random_patch):
