@@ -49,6 +49,11 @@ class TestPlotSpectrogram:
         with pytest.raises(ValueError, match="not in patch's dimensions"):
             random_patch.viz.spectrogram(dim="frequency")
 
+    def test_aggr_frequency(self, random_patch):
+        """Ensure aggr_domain=frequency works well."""
+        axis = random_patch.viz.spectrogram(aggr_domain="frequency")
+        assert isinstance(axis, plt.Axes)
+
     def test_invalid_aggr_domain(self, random_patch):
         """Ensure ValueError is raised for invalid aggr_domain."""
         with pytest.raises(ValueError, match="should be 'time' or 'frequency'."):
