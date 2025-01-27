@@ -33,42 +33,43 @@ def spectrogram(
     scale_type: Literal["relative", "absolute"] = "relative",
     log=False,
     show=False,
+    **kwargs
 ) -> plt.Axes:
     """
     Plot a spectrogram of a patch.
 
     Parameters
     ----------
-    patch
+    patch : PatchType
         The Patch object.
-    ax
-        A matplotlib object, if None create one.
-    dim
-        Dimension along which spectogram is being plotted.
-        Default is "time"
-    aggr_domain
+    ax : matplotlib.axes.Axes or None, optional
+        A matplotlib axis object. If None, creates a new axis.
+    dim : str, optional
+        Dimension along which the spectrogram is being plotted.
+        Default is "time".
+    aggr_domain : str, optional
         "time" or "frequency" in which the mean value of the other
-        dimension is caluclated. No need to specify if other dimension's
-        coord size is 1.
-        Default is "frequency"
-    cmap
+        dimension is calculated. No need to specify if the other
+        dimension's coordinate size is 1. Default is "frequency".
+    cmap : str or matplotlib.colors.Colormap, optional
         A matplotlib colormap string or instance. Set to None to not plot the
-        colorbar.
-    scale
+        colorbar. Default is "bwr".
+    scale : float, tuple of floats, or None, optional
         If not None, controls the saturation level of the colorbar.
-        Values can either be a float, to set upper and lower limit to the same
-        value centered around the mean of the data, or a length 2 tuple
-        specifying upper and lower limits. See `scale_type` for controlling how
-        values are scaled.
-    scale_type
-        Controls the type of scaling specified by `scale` parameter. Options
-        are:
-            relative - scale based on half the dynamic range in patch
-            absolute - scale based on absolute values provided to `scale`
-    log
+        Values can be a single float or a length-2 tuple specifying upper
+        and lower limits. See `scale_type` for more details.
+    scale_type : {"relative", "absolute"}, optional
+        Specifies the type of scaling:
+            - "relative": Scale based on half the dynamic range in the patch.
+            - "absolute": Scale based on absolute values provided to `scale`.
+        Default is "relative".
+    log : bool, optional
         If True, visualize the common logarithm of the absolute values of patch data.
-    show
-        If True, show the plot, else just return axis.
+    show : bool, optional
+        If True, show the plot. Otherwise, just return the axis.
+    **kwargs : dict, optional
+        Passed to `scipy.signal.spectrogram` to control spectrogram options.
+        See its documentation for options.
     """
     dims = patch.dims
     if len(dims) > 2 or len(dims) < 1:
@@ -87,7 +88,7 @@ def spectrogram(
                 f"The aggr_domain '{aggr_domain}' should be 'time' or 'frequency'."
             )
     else:
-        spec = patch.spectrogram(dim)
+        spec = patch.spectrogram(dim, **kwargs)
     return spec.viz.waterfall(
         ax=ax, cmap=cmap, scale=scale, scale_type=scale_type, log=log, show=show
     )
