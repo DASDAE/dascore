@@ -2,69 +2,93 @@
 
 from __future__ import annotations
 
-import matplotlib.colors as colors
+from collections.abc import Sequence
+from typing import Literal
+
 import matplotlib.pyplot as plt
-import numpy as np
-from scipy.signal import spectrogram as scipy_spectrogram
 
 from dascore.constants import PatchType
 from dascore.utils.patch import patch_function
-from dascore.utils.plotting import _get_ax, _get_cmap
 
 
-def _get_1d_array_dim_name(patch):
-    """
-    Return the flattened (1D) array and dim name.
-    Raises a Value Error array is higher than 1D.
-    """
-    data = patch.data
-    if len(data.shape) == 1:  # if array only has one dimension.
-        return data, patch.dims[0]
-    shape = np.asarray(data.shape)
-    not_one_len = shape > 1
-    if np.sum(not_one_len) != 1:
-        msg = f"Spectrogram requires 1D patch, not {data.shape}"
-        raise ValueError(msg)
-    name = patch.dims[np.argmax(not_one_len)]
-    out = data.flatten()
-    return out, name
+def _get_other_dim(dim, dims):
+    if not isinstance(dim, str):
+        raise TypeError(f"Expected 'dim' to be a string, got {type(dim).__name__}.")
+    if dim not in dims:
+        raise ValueError(f"The dimension '{dim}' is not in patch's dimensions {dims}.")
+    if len(dims) == 1:
+        return None
+    else:
+        return dims[0] if dims[1] == dim else dims[1]
 
 
 @patch_function()
 def spectrogram(
     patch: PatchType,
     ax: plt.Axes | None = None,
+    dim="time",
+    aggr_domain="frequency",
     cmap="bwr",
+    scale: float | Sequence[float] | None = None,
+    scale_type: Literal["relative", "absolute"] = "relative",
     log=False,
     show=False,
+    **kwargs,
 ) -> plt.Axes:
     """
-    Plot a spectrogram of a patch along a collapsed dimension.
+    Plot a spectrogram of a patch.
 
     Parameters
     ----------
-    ax
-        If not None, an axis on which to plot.
-    cmap
-        A matplotlob color map or code.
-    show
-        If True call plt.show() else just return axis.
+    patch : PatchType
+        The Patch object.
+    ax : matplotlib.axes.Axes or None, optional
+        A matplotlib axis object. If None, creates a new axis.
+    dim : str, optional
+        Dimension along which the spectrogram is being plotted.
+        Default is "time".
+    aggr_domain : str, optional
+        "time" or "frequency" in which the mean value of the other
+        dimension is calculated. No need to specify if the other
+        dimension's coordinate size is 1. Default is "frequency".
+    cmap : str or matplotlib.colors.Colormap, optional
+        A matplotlib colormap string or instance. Set to None to not plot the
+        colorbar. Default is "bwr".
+    scale : float, tuple of floats, or None, optional
+        If not None, controls the saturation level of the colorbar.
+        Values can be a single float or a length-2 tuple specifying upper
+        and lower limits. See `scale_type` for more details.
+    scale_type : {"relative", "absolute"}, optional
+        Specifies the type of scaling:
+            - "relative": Scale based on half the dynamic range in the patch.
+            - "absolute": Scale based on absolute values provided to `scale`.
+        Default is "relative".
+    log : bool, optional
+        If True, visualize the common logarithm of the absolute values of patch data.
+    show : bool, optional
+        If True, show the plot. Otherwise, just return the axis.
+    **kwargs : dict, optional
+        Passed to `scipy.signal.spectrogram` to control spectrogram options.
+        See its documentation for options.
     """
-    data, name = _get_1d_array_dim_name(patch)
-    d_dim = patch.attrs[f"{name}_step"]
-    if name == "time":
-        d_dim = d_dim / np.timedelta64(1, "s")
-    freqs, dim_x, spec = scipy_spectrogram(data, 1 / d_dim)
-    ax = _get_ax(ax)
-    norm_class = colors.LogNorm if log else colors.Normalize
-    norm = norm_class(vmin=np.min(spec), vmax=np.max(spec))
-    cmap = _get_cmap(cmap)
-    ax.pcolormesh(dim_x, freqs, spec, shading="gouraud", cmap=cmap, norm=norm)
-    ax.set_ylabel(f"Frequency ({name}) [Hz]")
-    ax.set_xlabel(f"{name.capitalize()}")
-    if name == "time":
-        time_str = str(patch.attrs["time_min"]).split(".")[0]
-        ax.set_xlabel(f"{name.capitalize()} from {time_str}")
-    if show:
-        plt.show()
-    return ax
+    dims = patch.dims
+    if len(dims) > 2 or len(dims) < 1:
+        raise ValueError("Can only make spectrogram of 1D or 2D patches.")
+
+    other_dim = _get_other_dim(dim, dims)
+    if other_dim is not None:
+        if aggr_domain == "time":
+            patch_aggr = patch.aggregate(other_dim, method="mean", dim_reduce="squeeze")
+            spec = patch_aggr.spectrogram(dim)
+        elif aggr_domain == "frequency":
+            _spec = patch.spectrogram(dim).squeeze()
+            spec = _spec.aggregate(other_dim, method="mean").squeeze()
+        else:
+            raise ValueError(
+                f"The aggr_domain '{aggr_domain}' should be 'time' or 'frequency'."
+            )
+    else:
+        spec = patch.spectrogram(dim, **kwargs)
+    return spec.viz.waterfall(
+        ax=ax, cmap=cmap, scale=scale, scale_type=scale_type, log=log, show=show
+    )
