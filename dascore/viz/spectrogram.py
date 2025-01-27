@@ -33,7 +33,7 @@ def spectrogram(
     scale_type: Literal["relative", "absolute"] = "relative",
     log=False,
     show=False,
-    **kwargs
+    **kwargs,
 ) -> plt.Axes:
     """
     Plot a spectrogram of a patch.
