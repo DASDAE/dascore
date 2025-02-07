@@ -9,7 +9,7 @@ from scipy.io.wavfile import read as read_wav
 
 import dascore as dc
 
-ONE_SECOND = dc.to_timedelta64(1)
+from dascore.constants import ONE_SECOND
 
 
 class TestWriteWav:
