@@ -25,6 +25,12 @@ class TestWriteWav:
         dc.write(audio_patch, new, "wav")
         return new
 
+    @pytest.fixture(scope="class")
+    def audio_patch_non_distance_dim(self, audio_patch):
+        """Create a patch that has a non-distance dimension in addition to time."""
+        patch = audio_patch.rename_coords(distance="microphone")
+        return patch
+
     def test_directory(self, wave_dir, audio_patch):
         """Sanity checks on wav directory."""
         assert wave_dir.exists()
@@ -43,3 +49,12 @@ class TestWriteWav:
         dc.write(audio_patch, path, "wav", resample_frequency=1000)
         (sr, ar) = read_wav(str(path))
         assert sr == 1000
+
+    def test_write_non_distance_dims(
+        self, audio_patch_non_distance_dim, tmp_path_factory
+    ):
+        """Ensure any non-time dimension still works."""
+        path = tmp_path_factory.mktemp("wav_resample")
+        patch = audio_patch_non_distance_dim
+        patch.io.write(path, "wav")
+        assert path.exists()
