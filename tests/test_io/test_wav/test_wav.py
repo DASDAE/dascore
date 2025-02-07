@@ -9,6 +9,8 @@ from scipy.io.wavfile import read as read_wav
 
 import dascore as dc
 
+ONE_SECOND = dc.to_timedelta64(1)
+
 
 class TestWriteWav:
     """Tests for writing wav format to disk."""
@@ -58,3 +60,12 @@ class TestWriteWav:
         patch = audio_patch_non_distance_dim
         patch.io.write(path, "wav")
         assert path.exists()
+        # Verify number of WAV files
+        wavs = list(path.rglob("*.wav"))
+        assert len(wavs) == len(patch.coords.get_array("microphone"))
+        # Verify file naming
+        for mic_val in patch.coords.get_array("microphone"):
+            assert path / f"microphone_{mic_val}.wav" in wavs
+            # Verify content of first file
+            sr, data = read_wav(str(wavs[0]))
+        assert sr == int(ONE_SECOND / patch.get_coord("time").step)

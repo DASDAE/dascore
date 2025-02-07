@@ -26,9 +26,9 @@ class WavIO(FiberIO):
         Parameters
         ----------
         resource
-            If a path that ends with .wav, write all the distance channels
-            to a single file. If not, assume the path is a directory and write
-            each distance channel to its own wav file.
+            If a path that ends with .wav, write all non-time channels
+            to a single file. If not, assume the path is a directory and
+            write each non-time channel to its own wav file.
         resample_frequency
             A resample frequency in Hz. If None, do not perform resampling.
             Often DAS has non-int sampling rates, so the default resampling
@@ -45,7 +45,7 @@ class WavIO(FiberIO):
             and normalized before writing.
 
             - If a single wavefile is specified with the path argument, and
-            the output the patch has more than one len along the distance
+            the output the patch has more than one len along the non-time
             dimension, a multi-channel wavefile is created. There may be some
             players that do not support multi-channel wavefiles.
 
@@ -62,14 +62,8 @@ class WavIO(FiberIO):
             write(filename=str(resource), rate=int(sr), data=data)
         else:  # write data to directory, one file for each non-time
             resource.mkdir(exist_ok=True, parents=True)
-            non_time_name = next(
-                iter(
-                    set(patch.dims)
-                    - {
-                        "time",
-                    }
-                )
-            )
+            non_time_set = set(patch.dims) - {"time"}
+            non_time_name = next(iter(non_time_set))
             non_time = patch.coords.get_array(non_time_name)
             for ind, val in enumerate(non_time):
                 sub_data = np.take(data, ind, axis=1)
