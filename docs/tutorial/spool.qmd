@@ -125,10 +125,10 @@ import numpy as np
 
 spool = dc.get_example_spool()
 
-# Get an array of integers which indicate the new order or patches  
+# Get an array of integers which indicate the index of included patches
 bool_array = np.array([2, 0])
 
-# create a new spool with patch 2 and patch 0 in that order.
+# create a new spool with patch 2 and patch 0.
 new = spool[bool_array]
 ```
 
