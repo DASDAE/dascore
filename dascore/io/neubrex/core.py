@@ -11,7 +11,7 @@ import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
-from dascore.utils.hdf5 import H5Reader
+from dascore.utils.hdf5 import H5Reader, H5Writer
 
 
 class NeubrexRFSPatchAttrs(dc.PatchAttrs):
@@ -83,6 +83,31 @@ class NeubrexRFSV1(FiberIO):
         attrs["file_format"] = self.name
         attrs["file_version"] = self.version
         return [dc.PatchAttrs(**attrs)]
+
+    def write(
+        self,
+        spool: SpoolType,
+        resource: H5Writer,
+        extra_attrs: dict[str, float | int | str] | None = None,
+        **kwargs,
+    ) -> None:
+        """
+        Write a Neubrex Rayleigh Frequency Shift file.
+
+        Parameters
+        ----------
+        spool
+            The spool to write.
+        resource
+            The H5file to write to.
+        extra_attrs
+            A dict of basic types to write to the Acoustic dataset's
+            attributes.
+        **kwargs
+            Un-used, only here for compat with other write methods.
+        """
+        if len(spool) > 1:
+            raise ValueError("NeubrexRFS only supports writing a single patch.")
 
 
 class NeubrexDASV1(FiberIO):
