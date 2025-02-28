@@ -7,6 +7,7 @@ import io
 from pathlib import Path
 from typing import TypeVar
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -260,6 +261,14 @@ class TestFormatter:
 class TestGetFormat:
     """Tests to ensure formats can be retrieved."""
 
+    @pytest.fixture(scope="class")
+    def empty_h5_path(self, tmpdir_factory):
+        """Create an empty HDF5 file."""
+        path = tmpdir_factory.mktemp("empty") / "empty.h5"
+        with h5py.File(path, "w"):
+            pass
+        return path
+
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
         with pytest.raises(UnknownFiberFormatError):
@@ -278,6 +287,11 @@ class TestGetFormat:
         (name, version) = dc.get_format(path)
         assert fiber_io.name == name
         assert fiber_io.version == version
+
+    def test_empty_hdf5_no_format(self, empty_h5_path):
+        """Ensure the empty hdf5 dorsen't have a format."""
+        with pytest.raises(UnknownFiberFormatError):
+            dc.get_format(empty_h5_path)
 
 
 class TestScan:
