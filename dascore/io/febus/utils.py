@@ -75,7 +75,7 @@ def _get_febus_version_str(hdf_fi) -> str:
             # Hopefully this is the file version...
             version = unbyte(source.attrs.get("Version", version)).split(".")[0]
             is_febus = is_febus and expected_source_attrs.issubset(set(source.attrs))
-    if is_febus:
+    if inst_keys and is_febus:
         return version
     return ""
 
