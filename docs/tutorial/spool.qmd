@@ -101,6 +101,37 @@ for patch in spool:
 new_spool = spool[1:]
 ```
 
+An array can also be used (just like numpy) to select/re-arrange spool contents. For example, a boolean array can be used to de-select patches:
+
+```{python}
+import dascore as dc
+import numpy as np
+
+spool = dc.get_example_spool()
+
+# Get bool array, true values indicate patch is kept, false is discarded.
+bool_array = np.ones(len(spool), dtype=np.bool_)
+bool_array[1] = False
+
+# Remove patch at position 1 from spool.
+new = spool[bool_array]
+```
+
+and an integer array can be used to deselect/rearrange patches
+
+```{python}
+import dascore as dc
+import numpy as np
+
+spool = dc.get_example_spool()
+
+# Get an array of integers which indicate the index of included patches
+bool_array = np.array([2, 0])
+
+# create a new spool with patch 2 and patch 0.
+new = spool[bool_array]
+```
+
 # get_contents
 
 The [`get_contents`](`dascore.core.spool.BaseSpool.get_contents`) method returns a dataframe listing the spool contents. This method may not be supported on all spools, especially those interfacing with large remote resources.

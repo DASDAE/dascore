@@ -14,6 +14,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.compat import is_array
 from dascore.constants import (
     PROGRESS_LEVELS,
     WARN_LEVELS,
@@ -56,7 +57,7 @@ class BaseSpool(abc.ABC):
     _rich_style = "bold"
 
     @abc.abstractmethod
-    def __getitem__(self, item: int) -> PatchType:
+    def __getitem__(self, item: int | slice | np.ndarray) -> PatchType:
         """Returns a patch from the spool."""
 
     @abc.abstractmethod
@@ -376,6 +377,27 @@ class DataFrameSpool(BaseSpool):
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
 
+    def _select_from_array(self, array) -> Self:
+        """Create new spool with contents changed from array input."""
+        if np.issubdtype(array.dtype, np.bool_):  # boolean select
+            df = self._df[array]
+        elif np.issubdtype(array.dtype, np.integer):
+            df = self._df.iloc[array]
+        else:
+            msg = "Only bool or int dtypes are supported for spool array selection."
+            raise ValueError(msg)
+        source = self._source_df
+        inst = self._instruction_df
+        select_kwargs, merge_kwargs = self._select_kwargs, self._merge_kwargs
+        new = self.new_from_df(
+            df,
+            source_df=source,
+            instruction_df=inst,
+            select_kwargs=select_kwargs,
+            merge_kwargs=merge_kwargs,
+        )
+        return new
+
     def __getitem__(self, item) -> PatchType | BaseSpool:
         if isinstance(item, slice):  # a slice was used, return a sub-spool
             new_df = self._df.iloc[item]
@@ -387,6 +409,8 @@ class DataFrameSpool(BaseSpool):
                 instruction_df=new_inst,
                 source_df=new_source,
             )
+        elif is_array(item):  # An array was passed use np type selection.
+            return self._select_from_array(np.asarray(item))
         else:  # a single index was used, should return a single patch
             out = self._unbox_patch(self._get_patches_from_index(item))
         return out

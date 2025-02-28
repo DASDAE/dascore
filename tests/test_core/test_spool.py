@@ -179,6 +179,62 @@ class TestSlicing:
         assert new_spool[1].equals(random_spool[2])
 
 
+class TestSpoolBoolArraySelect:
+    """Tests for selecting patches using a boolean array."""
+
+    def test_bool_all_true(self, random_spool):
+        """All True should return an equal spool."""
+        bool_array = np.ones(len(random_spool), dtype=np.bool_)
+        out = random_spool[bool_array]
+        assert out == random_spool
+
+    def test_bool_all_false(self, random_spool):
+        """All False should return an empty spool."""
+        bool_array = np.zeros(len(random_spool), dtype=np.bool_)
+        out = random_spool[bool_array]
+        assert len(out) == 0
+
+    def test_bool_some_true(self, random_spool):
+        """Some true values should return a spool with some values."""
+        bool_array = np.ones(len(random_spool), dtype=np.bool_)
+        bool_array[1] = False
+        out = random_spool[bool_array]
+        assert len(out) == sum(bool_array)
+        df1 = out.get_contents()
+        df2 = random_spool.get_contents()[bool_array]
+        assert df1.equals(df2)
+
+
+class TestSpoolIntArraySelect:
+    """Tests for selecting patches using an integer array."""
+
+    def test_uniform(self, random_spool):
+        """A uniform monotonic increasing array should return same spool."""
+        array = np.arange(len(random_spool))
+        spool = random_spool[array]
+        assert spool == random_spool
+
+    def test_out_of_bounds_raises(self, random_spool):
+        """Ensure int values gt the spool len raises."""
+        array = np.arange(len(random_spool))
+        array[0] = len(random_spool) + 10
+        with pytest.raises(IndexError):
+            random_spool[array]
+
+    def test_bad_array_type(self, random_spool):
+        """Ensure a non-index or int array raises."""
+        array = np.arange(len(random_spool)) + 0.01
+        with pytest.raises(ValueError, match="Only bool or int dtypes"):
+            random_spool[array]
+
+    def test_rearrange(self, random_spool):
+        """Ensure patch order can be changed."""
+        array = np.array([len(random_spool) - 1, 0])
+        out = random_spool[array]
+        assert out[0] == random_spool[-1]
+        assert out[-1] == random_spool[0]
+
+
 class TestSpoolIterable:
     """Tests for iterating Spools."""
 
