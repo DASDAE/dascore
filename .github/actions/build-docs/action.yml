@@ -19,3 +19,8 @@ runs:
       shell: bash -l {0}
       run: |
         python scripts/build_api_docs.py
+
+    - name: build quarto project
+      shell: bash -l {0}
+      run: |
+        quarto render docs
