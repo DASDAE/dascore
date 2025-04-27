@@ -162,9 +162,9 @@ def _get_distance_coord(attr):
     # is the correct way to do this, but this seems safe for now.
     multiplier = attr["Fibre Length Multiplier"]
     total_length = attr["MeasureLength[m]"] * multiplier
-    start = attr["StartPosition[m]"] + total_length
+    start = attr["StartPosition[m]"]
     step = attr["SpatialResolution[m]"] * multiplier
-    stop = start + (attr["n_channels"]) * step
+    stop = start + total_length
     d_coord = get_coord(start=start, stop=stop, step=step, units="m")
     return d_coord
 
