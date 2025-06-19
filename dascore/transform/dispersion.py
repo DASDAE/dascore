@@ -26,7 +26,7 @@ def dispersion_phase_shift(
     ----------
     patch
         Patch to transform. Has to have dimensions of time and distance.
-        It also need to be right-sided (see notes below).
+        It also needs to be right-sided (see notes below).
     phase_velocities
         NumPY array of positive velocities, monotonically increasing, for
         which the dispersion will be computed.
