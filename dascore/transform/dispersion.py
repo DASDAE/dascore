@@ -25,7 +25,7 @@ def dispersion_phase_shift(
     Parameters
     ----------
     patch
-        Patch to transform. Has to have dimensions of time and distance. 
+        Patch to transform. Has to have dimensions of time and distance.
         It also need to be right-sided (see notes below).
     phase_velocities
         NumPY array of positive velocities, monotonically increasing, for
@@ -50,8 +50,8 @@ def dispersion_phase_shift(
     distance from the source, and not "fiber distance". In other
     words, data are effectively mapped along a 2-D line.
 
-    - The input shot gather should be right-sided (i.e., wavefield 
-    traveling from smaller channel numbers to larger ones). Visualize 
+    - The input shot gather should be right-sided (i.e., wavefield
+    traveling from smaller channel numbers to larger ones). Visualize
     the patch prior to applying this function to ensure this. If it's
     left-sided, you can simply mirroring patch's data with respect
     to the distance axis (see Example 2 below).
