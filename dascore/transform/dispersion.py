@@ -50,12 +50,11 @@ def dispersion_phase_shift(
     distance from the source, and not "fiber distance". In other
     words, data are effectively mapped along a 2-D line.
 
-    - The input shot gather should be right-sided (i.e., wavefield
-    traveling from smaller channel numbers to larger ones). Visualize
-    the patch prior to applying this function to ensure this. If it's
-    left-sided, you can simply mirroring patch's data with respect
-    to the distance axis (see Example 2 below).
-
+    - The input shot gather must be right-sided meaning the
+    wavefield propagates from lower to higher channel numbers.
+    Always plot the patch first to verify its orientation.
+    If the gather is left-sided, simply mirror the patch along
+    the distance axis (see Example 2 below).
 
     Examples
     --------
