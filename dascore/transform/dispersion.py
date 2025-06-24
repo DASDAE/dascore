@@ -64,7 +64,7 @@ def dispersion_phase_shift(
     >>>
     >>> # Example 1 - Right-sided wavefield
     >>> patch = (
-        dc.get_example_patch('dispersion_event')
+    ... dc.get_example_patch('dispersion_event')
     ... )
     >>>
     >>> disp_patch = patch.dispersion_phase_shift(np.arange(100,1500,1),
@@ -75,7 +75,7 @@ def dispersion_phase_shift(
     >>> disp_patch.viz.waterfall(show=True, ax=ax)
     >>>
     >>> # Example 2 - Left-sided wavefield
-    ... patch = (
+    >>> patch = (
     ... dc.get_example_patch('dispersion_event')
     ... )
     >>> axis = patch.dims.index("distance")
