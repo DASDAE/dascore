@@ -59,31 +59,31 @@ def dispersion_phase_shift(
     Examples
     --------
     ```{python}
-    import dascore as dc
-    import numpy as np
-
-    # Example 1 - Right-sided wavefield
-    patch = (
+    >>> import dascore as dc
+    >>> import numpy as np
+    >>> 
+    >>> # Example 1 - Right-sided wavefield
+    >>> patch = (
         dc.get_example_patch('dispersion_event')
     )
 
-    disp_patch = patch.dispersion_phase_shift(np.arange(100,1500,1),
-                approx_resolution=0.1,approx_freq=[5,70])
-    ax = disp_patch.viz.waterfall(show=False,cmap=None)
-    ax.set_xlim(5, 70)
-    ax.set_ylim(1500, 100)
-    disp_patch.viz.waterfall(show=True, ax=ax)
-
-    # Example 2 - Left-sided wavefield
-    patch = (
-        dc.get_example_patch('dispersion_event')
-    )
-    axis = patch.dims.index("distance")
-    flipped_data = np.flip(patch.data, axis=axis)
-    mirrored_patch = patch.update(data=flipped_data)
-
-    disp_patch = mirrored_patch.dispersion_phase_shift(np.arange(100,1500,1),
-            approx_resolution=0.1,approx_freq=[5,70])
+    >>> disp_patch = patch.dispersion_phase_shift(np.arange(100,1500,1),
+    ...         approx_resolution=0.1,approx_freq=[5,70])
+    >>> ax = disp_patch.viz.waterfall(show=False,cmap=None)
+    >>> ax.set_xlim(5, 70)
+    >>> ax.set_ylim(1500, 100)
+    >>> disp_patch.viz.waterfall(show=True, ax=ax)
+    >>> 
+    >>> # Example 2 - Left-sided wavefield
+    ... patch = (
+    ... dc.get_example_patch('dispersion_event')
+    ... )
+    >>> axis = patch.dims.index("distance")
+    >>> flipped_data = np.flip(patch.data, axis=axis)
+    >>> mirrored_patch = patch.update(data=flipped_data)
+    >>>
+    >>> disp_patch = mirrored_patch.dispersion_phase_shift(np.arange(100,1500,1),
+    ...     approx_resolution=0.1,approx_freq=[5,70])
     ```
     """
     patch_cop = patch.convert_units(distance="m").transpose("distance", "time")
