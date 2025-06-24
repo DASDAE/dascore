@@ -70,9 +70,9 @@ def dispersion_phase_shift(
     >>> disp_patch = patch.dispersion_phase_shift(np.arange(100,1500,1),
     ...         approx_resolution=0.1,approx_freq=[5,70])
     >>> ax = disp_patch.viz.waterfall(show=False,cmap=None)
-    >>> ax.set_xlim(5, 70)
-    >>> ax.set_ylim(1500, 100)
-    >>> disp_patch.viz.waterfall(show=True, ax=ax)
+    >>> _ = ax.set_xlim(5, 70)
+    >>> _ = ax.set_ylim(1500, 100)
+    >>> _ = disp_patch.viz.waterfall(show=True, ax=ax)
     >>>
     >>> # Example 2 - Left-sided wavefield
     >>> patch = (
