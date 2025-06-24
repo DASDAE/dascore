@@ -61,7 +61,7 @@ def dispersion_phase_shift(
     ```{python}
     >>> import dascore as dc
     >>> import numpy as np
-    >>> 
+    >>>
     >>> # Example 1 - Right-sided wavefield
     >>> patch = (
         dc.get_example_patch('dispersion_event')
@@ -73,7 +73,7 @@ def dispersion_phase_shift(
     >>> ax.set_xlim(5, 70)
     >>> ax.set_ylim(1500, 100)
     >>> disp_patch.viz.waterfall(show=True, ax=ax)
-    >>> 
+    >>>
     >>> # Example 2 - Left-sided wavefield
     ... patch = (
     ... dc.get_example_patch('dispersion_event')
