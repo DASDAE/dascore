@@ -99,7 +99,7 @@ def tau_p(
     - Uses linear interpolation in time
 
     Example
-    --------
+    -------
     ```{python}
     >>> import dascore as dc
     >>> import numpy as np
@@ -114,7 +114,7 @@ def tau_p(
     ...     .tau_p(np.arange(1000,6000,10))
     ...     .transpose('time','slowness')
     ... )
-    >>> ax = taup_patch.viz.waterfall(show=False,cmap=None)
+    >>> ax = taup_patch.viz.waterfall(show=False, cmap=None)
     >>> _ = taup_patch.viz.waterfall(ax=ax)
     """
     patch_cop = patch.convert_units(distance="m", time="s").transpose(
