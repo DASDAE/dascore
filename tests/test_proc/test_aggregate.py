@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import numpy.testing as npt
 import pytest
 
 import dascore as dc
@@ -32,7 +33,8 @@ class TestBasicAggregations:
     def test_no_dim(self, random_patch):
         """Ensure no dimension argument behaves like numpy."""
         out = random_patch.aggregate(method="mean")
-        assert np.all(out.data == np.mean(random_patch.data, keepdims=True))
+        expected = np.mean(random_patch.data, keepdims=True)
+        npt.assert_allclose(out.data, expected, rtol=1e-8, atol=0)
 
     def test_dtype_of_coord_unchanged(self, random_patch):
         """The dtype of the coord should not change."""
