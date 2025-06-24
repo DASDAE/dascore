@@ -65,8 +65,8 @@ def dispersion_phase_shift(
     >>> # Example 1 - Right-sided wavefield
     >>> patch = (
         dc.get_example_patch('dispersion_event')
-    )
-
+    ... )
+    >>>
     >>> disp_patch = patch.dispersion_phase_shift(np.arange(100,1500,1),
     ...         approx_resolution=0.1,approx_freq=[5,70])
     >>> ax = disp_patch.viz.waterfall(show=False,cmap=None)
