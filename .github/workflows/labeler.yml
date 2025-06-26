@@ -11,9 +11,9 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v4 # pulls the PR code
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
+      # - uses: actions/checkout@v4 # pulls the PR code
+      #   with:
+      #     ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/labeler@v5
         with:
           repo-token: "${{ secrets.GITHUB_TOKEN }}"
