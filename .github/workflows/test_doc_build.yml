@@ -26,4 +26,41 @@ jobs:
         with:
           name: documentation_build_test
           path: ./docs/_site
-          retention-days: 1 
+          retention-days: 1
+
+      - name: Get artifact ID
+        id: artifact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          repo="${{ github.repository }}"
+          run_id="${{ github.run_id }}"
+          artifact_name="documentation_build_test"
+          
+          artifact_id=$(
+            curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+                 -H "X-GitHub-Api-Version: 2022-11-28" \
+                 "https://api.github.com/repos/${repo}/actions/runs/${run_id}/artifacts" |
+            jq --arg NAME "$artifact_name" -r '.artifacts[] | select(.name==$NAME) | .id'
+          )
+          
+          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+
+      # Post the PR comment with a clickable ZIP link
+      - name: Comment on PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pr_number="${{ github.event.pull_request.number }}"
+          repo="${{ github.repository }}"
+          artifact_id="${{ steps.artifact.outputs.artifact_id }}"
+          download_url="https://api.github.com/repos/${repo}/actions/artifacts/${artifact_id}/zip"
+          
+          body=$(printf "✅ **Documentation buld complete**\n\n[⬇️ **Download the ZIP**](%s)\n\n_This link uses the GitHub API and requires that you’re logged in; it also expires after it’s first requested (GitHub generates a fresh redirect each time)._"
+                 "$download_url")
+          
+          curl -s -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -nc --arg body "$body" '{body: $body}')" \
+            "https://api.github.com/repos/${repo}/issues/${pr_number}/comments"
