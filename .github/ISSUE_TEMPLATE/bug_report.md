@@ -23,5 +23,5 @@ Describe the expected behavior, if applicable.
 
 ## Versions
  - OS [e.g. Ubuntu 20.04]:
- - DasCore Version [e.g. 0.0.5]:
+ - DASCore Version [e.g. 0.0.5]:
  - Python Version [e.g. 3.10]:

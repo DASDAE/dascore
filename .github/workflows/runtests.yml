@@ -66,8 +66,25 @@ jobs:
           flags: unittests
           name: PR_tests
           token: ${{ secrets.CODECOV_TOKEN }}
+  
+  # Tests building the docs if the PR is labeled as documentation        
+  build-docs:
+    if: contains(github.event.pull_request.labels.*.name, 'documentation')
+    runs-on: ubuntu-latest
 
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: 'true'
 
+      - uses: ./.github/actions/mamba-install-dascore
+        with:
+          python-version: "3.12"
+          environment-file: './.github/doc_environment.yml'
+
+      - uses: ./.github/actions/build-docs
+      
+            
 # This is a very useful step for debugging, it allows you to ssh into the CI
 # machine (https://github.com/marketplace/actions/debugging-with-tmate).
 #
