@@ -1,4 +1,3 @@
-documentation:
-  - 'docs/**'
-  - '**/*.md'
-  - '**/*.qmd'
+Documentation:
+- changed-files:
+  - any-glob-to-any-file: ['docs/*', "**/*.md", "**/*.qmd"]
