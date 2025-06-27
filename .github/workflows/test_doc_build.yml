@@ -7,7 +7,7 @@ on:
 jobs:
   test_build_docs:
     if: |
-      (github.event.action == 'labeled' && contains(github.event.pull_request.labels.*.name, 'documentation'))
+      (github.event.action == 'labeled' && github.event.label.name == 'documentation')
       || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation'))
     runs-on: ubuntu-latest
     steps:
