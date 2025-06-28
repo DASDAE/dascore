@@ -30,6 +30,8 @@ jobs:
 
       - name: Generate documentation URL
         id: artifact_url
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           run_id="${{ github.run_id }}"
           artifact_name="documentation_build_test"
