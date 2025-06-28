@@ -53,3 +53,4 @@ jobs:
           body: |
             ✅ Documentation built:
             👉 [Download](${{ steps.artifact_url.outputs.url }})
+            Note: You must be logged in to github and a DASDAE member to access the link.  
