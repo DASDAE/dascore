@@ -43,9 +43,16 @@ jobs:
                  "https://api.github.com/repos/${repo}/actions/runs/${run_id}/artifacts" |
             jq --arg NAME "$artifact_name" -r '.artifacts[] | select(.name==$NAME) | .id'
           )
+          
+          if [[ -z "$artifact_id" ]]; then
+             echo "❌ Unable to find artefact \"$artifact_name\" for run $run_id" >&2
+             exit 1
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
           echo "url=https://github.com/$repo/actions/runs/$run_id/artifacts/$artifact_id" >> "$GITHUB_OUTPUT"
 
       - name: Comment with documentation link
+        if: steps.artifact_url.outputs.found == 'true'
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
