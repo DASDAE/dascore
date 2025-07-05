@@ -26,4 +26,48 @@ jobs:
         with:
           name: documentation_build_test
           path: ./docs/_site
-          retention-days: 1 
+          retention-days: 1
+
+      - name: Generate documentation URL
+        id: artifact_url
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run_id="${{ github.run_id }}"
+          artifact_name="documentation_build_test"
+          repo="${{ github.repository }}"
+
+          artifact_id=$(
+            curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+                 -H "X-GitHub-Api-Version: 2022-11-28" \
+                 "https://api.github.com/repos/${repo}/actions/runs/${run_id}/artifacts" |
+            jq --arg NAME "$artifact_name" -r '.artifacts[] | select(.name==$NAME) | .id'
+          )
+          
+          if [[ -z "$artifact_id" ]]; then
+             echo "❌ Unable to find artefact \"$artifact_name\" for run $run_id" >&2
+             exit 1
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/$repo/actions/runs/$run_id/artifacts/$artifact_id" >> "$GITHUB_OUTPUT"
+
+      # Determine if the automated documentation comment exists.
+      - name: Find Comment
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: "✅ Documentation built:"
+
+      # Create a comment with a download link to build docs
+      - name: Create or update comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ✅ Documentation built:
+            👉 [Download](${{ steps.artifact_url.outputs.url }})
+            Note: You must be logged in to github and a DASDAE member to access the link.
+          edit-mode: replace
