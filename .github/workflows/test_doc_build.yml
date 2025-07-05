@@ -51,13 +51,23 @@ jobs:
           echo "found=true" >> "$GITHUB_OUTPUT"
           echo "url=https://github.com/$repo/actions/runs/$run_id/artifacts/$artifact_id" >> "$GITHUB_OUTPUT"
 
-      - name: Comment with documentation link
-        if: steps.artifact_url.outputs.found == 'true'
+      # Determine if the automated documentation comment exists.
+      - name: Find Comment
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: "✅ Documentation built:"
+
+      # Create a comment with a download link to build docs
+      - name: Create or update comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          comment-id: ${{ steps.fc.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
           body: |
             ✅ Documentation built:
             👉 [Download](${{ steps.artifact_url.outputs.url }})
-            Note: You must be logged in to github and a DASDAE member to access the link.  
+            Note: You must be logged in to github and a DASDAE member to access the link.
+          edit-mode: replace
