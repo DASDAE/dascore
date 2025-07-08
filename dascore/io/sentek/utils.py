@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-<<<<<<< HEAD
-=======
 from pathlib import Path
 
->>>>>>> master
 import numpy as np
 
 import dascore as dc
@@ -59,22 +56,6 @@ def _get_time_from_file_name(name) -> np.datetime64:
 def _get_patch_attrs(fid, extras=None):
     """Extracts patch metadata.
 
-<<<<<<< HEAD
-    This function reads the log file (.das files) of DASnova system
-    Output:
-        Result: a dictionary containing the following fields:
-            SensorNumber: number of channels in the sensing fiber
-            MeaNumber: number of measurements in ONE single file
-            SampInt: sampling interval in nanosecond (delta t)
-            StrainRate: flag that is set when the loaded data represents strain rate
-            TrigPos: index position where the trigger occurs
-            DecFact: decimation factor (integer)
-            Position: sensor positions, in meter
-            Time: time of the measurements
-            Strain: signal in micro strain, SensorNumber x Meanumber matrix
-
-
-=======
     A few important fields in the header and their meaning:
 
     sensor_num: number of channels in the sensing fiber
@@ -83,7 +64,6 @@ def _get_patch_attrs(fid, extras=None):
     strain_rate: flag that is set when the loaded data represents strain rate
     trigger_position: index position where the trigger occurs
     decimation_factor: decimation factor (integer)
->>>>>>> master
     """
     fid.seek(0)
     sensor_num = np.fromfile(fid, dtype=np.float32, count=1)[0]
@@ -99,11 +79,7 @@ def _get_patch_attrs(fid, extras=None):
     distance_step = (distance_stop - distance_start) / sensor_num
     dist = get_coord(start=distance_start, stop=distance_stop, step=distance_step)
     # create time coord
-<<<<<<< HEAD
-    file_time = _get_time_from_file_name(fid.name)
-=======
     file_time = _get_time_from_file_name(Path(fid.name).name)
->>>>>>> master
     offset_start = np.fromfile(fid, dtype=np.float32, count=1)[0]
     fid.seek(int(measurement_count - 1) * 4)
     offset_stop = np.fromfile(fid, dtype=np.float32, count=1)[0]
