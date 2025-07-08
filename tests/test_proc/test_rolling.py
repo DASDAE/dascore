@@ -1,4 +1,5 @@
 """Tests for applying rolling functions on patch's data."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -8,6 +9,8 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.units import m
+from dascore.utils.misc import all_close
+from dascore.utils.pd import rolling_df
 
 
 @pytest.fixture(scope="class")
@@ -54,6 +57,14 @@ class TestRolling:
         trans = range_patch.transpose()
         out = trans.rolling(time=time_step * self.window).sum()
         assert np.allclose(out.dropna("time").data, expected.transpose())
+
+    def test_rolling_timdelta(self, random_patch):
+        """Ensure rolling works with timedeltas."""
+        time_step = random_patch.get_coord("time").step
+        time = time_step * self.window
+        out1 = random_patch.rolling(time=dc.to_timedelta64(time)).sum()
+        out2 = random_patch.rolling(time=time * dc.get_quantity("s")).sum()
+        assert all_close(out1, out2)
 
     def test_apply_with_step(self, range_patch):
         """Ensure apply works with various step sizes."""
@@ -147,7 +158,7 @@ class TestRolling:
         applied_result = roller.apply(np.mean).dropna("distance").data
         # do the same with pandas and compare result
         df = pd.DataFrame(patch.data)
-        rolling_mean_pandas = df.rolling(window, step=step, axis=axis).mean()
+        rolling_mean_pandas = rolling_df(df, window, step=step, axis=axis).mean()
         filtered_data_pandas = rolling_mean_pandas.dropna(axis=axis).values
         assert applied_result.shape == filtered_data_pandas.shape
         assert np.allclose(applied_result, filtered_data_pandas)
@@ -236,11 +247,30 @@ class TestNumpyVsPandasRolling:
     def test_center_same(self, range_patch):
         """Ensure center values are handled the same."""
         dt = range_patch.get_coord("time").step
-        numpy_out = range_patch.rolling(time=13 * dt, center=True).sum()
-        pandas_out = range_patch.rolling(time=13 * dt, center=True).sum()
+        numpy_out = range_patch.rolling(time=13 * dt, center=True, engine="numpy").sum()
+        pandas_out = range_patch.rolling(
+            time=13 * dt, center=True, engine="pandas"
+        ).sum()
         numpy_isnan = np.isnan(numpy_out.data)
         pandas_isnan = np.isnan(pandas_out.data)
-        assert np.all(np.equal(numpy_isnan, pandas_isnan))
+        assert np.all(
+            np.equal(numpy_isnan, pandas_isnan)
+        ), "The NaN indices do not match"
+
+    def test_center_same_stepped(self, range_patch):
+        """Ensure center values are handled the same."""
+        dt = range_patch.get_coord("time").step
+        numpy_out = range_patch.rolling(
+            time=13 * dt, step=3 * dt, center=True, engine="numpy"
+        ).sum()
+        pandas_out = range_patch.rolling(
+            time=13 * dt, step=3 * dt, center=True, engine="pandas"
+        ).sum()
+        numpy_isnan = np.isnan(numpy_out.data)
+        pandas_isnan = np.isnan(pandas_out.data)
+        assert np.all(
+            np.equal(numpy_isnan, pandas_isnan)
+        ), "The NaN indices do not match"
 
     def test_dimension_order(self, range_patch):
         """Ensure the dimension order doesn't matter."""
@@ -249,7 +279,16 @@ class TestNumpyVsPandasRolling:
                 coord = patch.get_coord(dim)
                 step = coord.step
                 total_len = len(coord) - 2
-                kwargs = {dim: step * total_len, "step": total_len * step}
-                pandas_out = patch.rolling(**kwargs).mean().dropna(dim)
-                numpy_out = patch.rolling(**kwargs).mean().dropna(dim)
+                kwargs_pandas = {
+                    dim: step * total_len,
+                    "step": total_len * step,
+                    "engine": "pandas",
+                }
+                kwargs_numpy = {
+                    dim: step * total_len,
+                    "step": total_len * step,
+                    "engine": "numpy",
+                }
+                pandas_out = patch.rolling(**kwargs_pandas).mean().dropna(dim)
+                numpy_out = patch.rolling(**kwargs_numpy).mean().dropna(dim)
                 assert pandas_out == numpy_out

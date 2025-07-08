@@ -1,4 +1,5 @@
 """Custom dascore exceptions."""
+
 from __future__ import annotations
 
 
@@ -54,8 +55,12 @@ class ChunkError(DASCoreError):
     """Raised when chunking goes awry."""
 
 
-class PatchDimError(ValueError, PatchError):
-    """Raised when something is wrong with a Patch's dimension."""
+class PatchCoordinateError(ValueError, PatchError):
+    """Raised when something is wrong with a Patch's coordinates."""
+
+
+class PatchBroadcastError(ValueError, PatchError):
+    """Raised when patch cant be broadcast to a specified shape."""
 
 
 class PatchAttributeError(ValueError, PatchError):

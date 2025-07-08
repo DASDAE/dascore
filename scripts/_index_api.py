@@ -1,4 +1,5 @@
 """A script to create an index of the structure of the DASCore package."""
+
 from __future__ import annotations
 
 import inspect

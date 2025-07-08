@@ -1,6 +1,8 @@
 """Module for handling units."""
+
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import cache
 from typing import TypeVar
 
@@ -9,9 +11,11 @@ import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
 
+import dascore as dc
+from dascore.compat import is_array
 from dascore.exceptions import UnitError
 from dascore.utils.misc import unbyte
-from dascore.utils.time import dtype_time_like
+from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
 str_or_none = TypeVar("str_or_none", None, str)
 numeric = TypeVar("numeric", np.ndarray, int, float)
@@ -27,11 +31,14 @@ def get_registry():
     ureg.define("RADIANS=radians")
     ureg.define("Radians=radians")
     ureg.define("Radian=radians")
-
+    # define strain
+    ureg.define("strain=[]=ϵ")
     # allow multiplication with offset units.
     ureg.autoconvert_offset_to_baseunit = True
-    # set shortest display for units.
-    ureg.default_format = "~"
+    # set the shortest display for units.
+    # .formatter was added in new versions of pint; this makes it work with both
+    formatter = getattr(ureg, "formatter", ureg)
+    formatter.default_format = "~"
     pint.set_application_registry(ureg)
     return ureg
 
@@ -74,12 +81,16 @@ def get_quantity(value: str_or_none) -> Quantity | None:
     >>> import dascore as dc
     >>> meters = dc.get_quantity("m")
     >>> accel = dc.get_quantity("m/s^2")
+    >>> # This can also convert date times.
+    >>> many_seconds = dc.get_quantity(dc.to_timedelta64(200))
     """
     value = unbyte(value)
     if value is None or value is ... or value == "":
         return None
     if isinstance(value, Quantity):
         return value
+    elif is_datetime64(value) | is_timedelta64(value):
+        return to_float(value) * dc.get_unit("s")
     return _str_to_quant(value)
 
 
@@ -129,9 +140,14 @@ def convert_units(
     or if the datatype is not compatible (e.g., datetime must always be
     [time])
     """
+    if isinstance(data, Quantity):  # an existing quantity
+        from_units, data = data.units, data.magnitude
     to_units, from_units = get_quantity(to_units), get_quantity(from_units)
     if from_units is None:
         return data
+    elif to_units is None:
+        msg = "Cannot convert units to_units are not specified"
+        raise UnitError(msg)
     try:
         mult1, add, mult2 = _get_conversion_factors(from_units, to_units)
     except DimensionalityError as e:
@@ -194,6 +210,29 @@ def get_quantity_str(quant_value: str | Quantity | None) -> str | None:
     return str(quant_value)
 
 
+def get_inverted_quant(quant, data_units):
+    """Convert to inverted units."""
+    if quant is None:
+        return quant, True
+    if quant.units == get_unit("dimensionless"):
+        msg = (
+            "Both inputs must be quantities to get filter parameters. "
+            f"You passed ({quant}, {data_units})"
+        )
+        raise UnitError(msg)
+    data_units = get_unit(data_units)
+    inverted_units = (1 / data_units).units
+    units_inversed = True
+    if data_units.dimensionality == quant.units.dimensionality:
+        quant, units_inversed = 1 / quant, False
+    # try to get invert units, otherwise raise.
+    try:
+        mag = quant.to(inverted_units).magnitude
+    except DimensionalityError as e:
+        raise UnitError(str(e))
+    return mag, units_inversed
+
+
 def get_filter_units(
     arg1: Quantity | float,
     arg2: Quantity | float,
@@ -236,28 +275,6 @@ def get_filter_units(
             msg = f"Units must match, {quant1} and {quant2} were provided."
             raise UnitError(msg)
 
-    def get_inverted_quant(quant, data_units):
-        """Convert to inverted units."""
-        if quant is None:
-            return quant, True
-        if quant.units == get_unit("dimensionless"):
-            msg = (
-                "Both inputs must be quantities to get filter parameters. "
-                f"You passed ({arg1}, {arg2})"
-            )
-            raise UnitError(msg)
-        data_units = get_unit(data_units)
-        inverted_units = (1 / data_units).units
-        units_inversed = True
-        if data_units.dimensionality == quant.units.dimensionality:
-            quant, units_inversed = 1 / quant, False
-        # try to get invert units, otherwise raise.
-        try:
-            mag = quant.to(inverted_units).magnitude
-        except DimensionalityError as e:
-            raise UnitError(str(e))
-        return mag, units_inversed
-
     def _check_to_units(to_unit, dim):
         """Ensure to units are valid."""
         if to_unit is None:
@@ -287,6 +304,41 @@ def get_filter_units(
     if not (inverted1 or inverted2):
         out1, out2 = out2, out1
     return out1, out2
+
+
+def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
+    """
+    Convert a sequence of Quantities (eg list) to a Quantity array.
+
+    Will simplify all quantities. Raises an error if not all elements have
+    the same units.
+
+    Parameters
+    ----------
+    sequence
+        A sequence of Quantities.
+
+    Notes
+    -----
+    This is probably not efficient for large lists.
+    """
+    if is_array(sequence):
+        # This is a numpy array, just return multiplied by quantity.
+        return sequence * get_quantity("dimensionless")
+    # iterate the sequence and manually convert to base units.
+    try:
+        base_unit_sequence = [x.to_base_units() for x in sequence]
+    except AttributeError:
+        msg = "Not all values in sequence are quantities."
+        raise UnitError(msg)
+    if not len(base_unit_sequence):
+        return np.array([]) * get_quantity("dimensionless")
+    units = {x.units for x in base_unit_sequence}
+    if len(units) != 1:
+        msg = "Not all values in sequence have compatible units."
+        raise UnitError(msg)
+    array = np.array([x.magnitude for x in base_unit_sequence])
+    return array * next(iter(units))
 
 
 def __getattr__(name):

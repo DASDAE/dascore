@@ -1,15 +1,23 @@
 """Tests for basic patch functions."""
+
 from __future__ import annotations
+
+import operator
 
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import IncompatiblePatchError, UnitError
+from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.proc.basic import apply_operator
 from dascore.units import furlongs, get_quantity, m, s
+from dascore.utils.misc import _merge_tuples
+
+OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
+TEST_OPS = tuple(getattr(operator, x) for x in OP_NAMES)
 
 
 @pytest.fixture(scope="session")
@@ -37,7 +45,7 @@ class TestAbs:
     def test_all_real(self, random_complex_patch):
         """Ensure all values are real after abs on complex data."""
         out = random_complex_patch.abs()
-        assert np.issubdtype(out.data.dtype, np.float_)
+        assert np.issubdtype(out.data.dtype, np.float64)
         assert np.allclose(np.imag(out.data), 0)
 
 
@@ -210,7 +218,7 @@ class TestStandarize:
         )
 
 
-class TestApplyOperator:
+class TestApplyUfunc:
     """Tests for applying various ufunc-type operators."""
 
     def test_scalar(self, random_patch):
@@ -225,10 +233,12 @@ class TestApplyOperator:
         assert np.allclose(new.data, ones + random_patch.data)
 
     def test_incompatible_coords(self, random_patch):
-        """Ensure incompatible dimensions raises."""
-        new = random_patch.update_attrs(time_min=random_patch.attrs.time_max)
-        with pytest.raises(IncompatiblePatchError):
-            apply_operator(new, random_patch, np.multiply)
+        """Ensure un-alignable coords returns degenerate patch."""
+        time = random_patch.get_coord("time")
+        new_time = time.max() + time.step
+        new = random_patch.update_attrs(time_min=new_time)
+        out = apply_operator(new, random_patch, np.multiply)
+        assert 0 in set(out.shape)
 
     def test_quantity_scalar(self, random_patch):
         """Ensure operators work with quantities."""
@@ -299,21 +309,115 @@ class TestApplyOperator:
         with pytest.raises(UnitError):
             apply_operator(pa1, other, np.add)
 
+    def test_patches_non_coords_len_1(self, random_patch):
+        """Ensure patches with non-coords also work."""
+        mean_patch = random_patch.mean("distance")
+        out = mean_patch / mean_patch
+        assert np.allclose(out.data, 1)
 
-class TestSqueeze:
-    """Tests for squeeze."""
+    def test_patches_non_coords_different_len(self, random_patch):
+        """Ensure patches with non-coords of different lengths work."""
+        patch_1 = random_patch.mean("distance")
+        dist_ind = patch_1.dims.index("distance")
+        old_shape = list(patch_1.shape)
+        old_shape[dist_ind] = old_shape[dist_ind] + 2
+        patch_2 = patch_1.make_broadcastable_to(tuple(old_shape))
+        out = patch_1 / patch_2
+        assert np.allclose(out.data, 1)
+        assert out.shape == patch_2.shape
 
-    def test_remove_dimension(self, random_patch):
-        """Tests for removing random dimensions."""
-        out = random_patch.aggregate("time").squeeze("time")
-        assert "time" not in out.dims
-        assert len(out.data.shape) == 1, "data should be 1d"
+    def test_non_dim_coords(self, random_dft_patch):
+        """Ensure ufuncs can still be applied to coords with non dim coords."""
+        out = random_dft_patch * random_dft_patch
+        assert set(out.coords.coord_map) == set(random_dft_patch.coords.coord_map)
 
-    def test_tutorial_example(self, random_patch):
-        """Ensure the tutorial snippet works."""
-        flat_patch = random_patch.select(distance=0, samples=True)
-        squeezed = flat_patch.squeeze()
-        assert len(squeezed.dims) < len(flat_patch.dims)
+
+class TestPatchBroadcasting:
+    """Tests for patches broadcasting to allow operations on each other."""
+
+    def test_broadcast_sub_patch(self, random_patch):
+        """Ensure a patch with a subset of dimensions broadcasts."""
+        sub_patch = random_patch.min("time")
+        out = random_patch - sub_patch
+        assert isinstance(out, dc.Patch)
+        axis = random_patch.dims.index("time")
+        to_sub = np.min(random_patch.data, axis=axis, keepdims=True)
+        # Ensure the time aggregation worked.
+        assert np.allclose(sub_patch.data, to_sub)
+        # Then test that the resulting data is as expected.
+        expected = random_patch.data - to_sub
+        assert np.allclose(expected, out.data)
+        # The reverse should also be true (after accounting for negative sign)
+        out2 = sub_patch - random_patch
+        assert out == -out2
+
+    def test_broadcast_single_shared_dim(self, random_patch):
+        """Ensure two 2d patches can get broad-casted when one dim is the same."""
+        # get two smallish patches to test multidimensional broadcasting.
+        patch1 = random_patch.select(time=(1, 10), distance=(1, 10), samples=True)
+        patch2 = patch1.transpose("distance", "time").rename_coords(distance="length")
+        expected_dims = _merge_tuples(patch1.dims, patch2.dims)
+        out = patch1 * patch2
+        assert out.dims == expected_dims
+        assert out.shape == (9, 9, 9)
+
+    def test_patches_different_coords_same_shape(self, random_patch):
+        """Ensure the intersection of coordinates in output when coords differ."""
+        distance = random_patch.get_array("distance")
+        mid = distance[len(distance) // 2]
+        shifted_patch = random_patch.update_coords(distance_min=mid)
+        out = random_patch + shifted_patch
+        # Ensure distance is equal to intersecting values
+        dist_out = out.get_array("distance")
+        overlap_dist = np.intersect1d(
+            random_patch.get_array("distance"), out.get_array("distance")
+        )
+        assert np.all(dist_out == overlap_dist)
+
+    def test_patch_broadcast_array(self, random_patch):
+        """Ensure a patch is broadcastable with an array up to the same ndims."""
+        should_work = (np.array(1), np.ones(1), np.ones((1, 1)))
+        for ar in should_work:
+            out = random_patch * ar
+            assert isinstance(out, dc.Patch)
+
+    def test_patch_broadcast_array_more_dims_raises(self, random_patch):
+        """Ensure a patch cannot broadcast to an array which has more dims."""
+        ar = np.ones((1, 1, 1))
+        with pytest.raises(PatchBroadcastError, match="Cannot broadcast"):
+            _ = random_patch * ar
+
+    def test_broadcast_up_array(self, random_patch):
+        """Ensure a patch with empty coords can broadcast up."""
+        # This patch still has empty dims of len 1
+        patch = random_patch.mean()
+        ar = np.ones(random_patch.shape)
+        for out in [patch * ar, ar * patch]:
+            assert isinstance(out, dc.Patch)
+            assert np.allclose(out.data, patch.data)
+
+    def test_broadcast_with_array(self, random_patch):
+        """Ensure a patch can broadcast up and results are correct."""
+        agg = random_patch.min(None)
+        out1 = random_patch - agg
+        out2 = random_patch.data - agg
+        assert np.allclose(out1.data, out2.data)
+
+    @pytest.mark.parametrize("test_op", TEST_OPS)
+    def test_broadcast_collapsed_patch(self, random_patch, test_op):
+        """Ensure a collapsed patch can still broadcast."""
+        collapsed_patch = random_patch.min(None)
+        scalar = 10
+        # Arrays should raise since we don't know the name of the
+        # dims that would be expanded.
+        mat1 = np.array([1, 2, 3])
+        mat2 = np.arange(4).reshape(2, 2) + 1  # + 1 to avoid divide by 0
+        # A collapsed patch should broadcast to all these things.
+        for val in (scalar, mat1, mat2, random_patch):
+            p1 = test_op(collapsed_patch, val)
+            p2 = test_op(val, collapsed_patch)
+            assert isinstance(p1, dc.Patch)
+            assert isinstance(p2, dc.Patch)
 
 
 class TestDropNa:
@@ -327,10 +431,10 @@ class TestDropNa:
     @pytest.fixture(scope="class")
     def patch_3d_with_null(self, range_patch_3d):
         """Return a patch which has nullish values."""
-        data = np.array(range_patch_3d.data).astype(np.float_)
+        data = np.array(range_patch_3d.data).astype(np.float64)
         nans = [(1, 1, 1), (0, 9, 9)]
         for nan_ind in nans:
-            data[nan_ind] = np.NaN
+            data[nan_ind] = np.nan
         patch = range_patch_3d.update(data=data)
         return patch
 
@@ -390,10 +494,10 @@ class TestFillNa:
     @pytest.fixture(scope="class")
     def patch_3d_with_null(self, range_patch_3d):
         """Return a patch which has nullish values."""
-        data = np.array(range_patch_3d.data).astype(np.float_)
+        data = np.array(range_patch_3d.data).astype(np.float64)
         nans = [(1, 1, 1), (0, 9, 9)]
         for nan_ind in nans:
-            data[nan_ind] = np.NaN
+            data[nan_ind] = np.nan
         patch = range_patch_3d.update(data=data)
         return patch
 
@@ -494,10 +598,66 @@ class TestPad:
             atol=1e-6,
         )
 
+    @pytest.mark.parametrize("length", [10, 13, 200, 293])
+    def test_fft_pad(self, random_patch, length):
+        """Tests for padding to next fast length."""
+        # First trim patch to match length
+        patch_in = random_patch.select(time=(0, length), samples=True)
+        axis = patch_in.dims.index("time")
+        length_old = patch_in.shape[axis]
+        next_fast = next_fast_len(length_old)
+        out = patch_in.pad(time="fft")
+        assert out.dims == patch_in.dims, "dims should not have changed."
+        assert out.shape[axis] == next_fast
+
+    def test_correlate_pad(self, random_patch):
+        """Ensure the fft correlate pad returns sensible values."""
+        axis = random_patch.dims.index("time")
+        length_old = random_patch.shape[axis]
+        next_fast = next_fast_len(length_old * 2 - 1)
+        out = random_patch.pad(time="correlate")
+        assert out.shape[axis] == next_fast
+
+    def test_pad_no_expand(self, random_patch):
+        """Ensure we can pad without expanding dimensions."""
+        out = random_patch.pad(time=10, samples=True, expand_coords=False)
+        coord_array = out.get_array("time")
+        # Check the first and last nans
+        assert np.all(pd.isnull(coord_array[:10]))
+        assert np.all(pd.isnull(coord_array[-10:]))
+        # Check the middle values are equal to old values.
+        old_array = random_patch.get_array("time")
+        # The datatype should not have changed
+        assert coord_array.dtype == old_array.dtype
+        assert np.all(old_array == coord_array[10:-10])
+
+    def test_pad_no_expand_int_coord(self, random_patch):
+        """Ensure we can pad an integer coordinate."""
+        # Ensure distances in an in coordinate.
+        coord = random_patch.get_coord("distance")
+        new_vals = np.arange(len(coord), dtype=np.int64)
+        patch = random_patch.update_coords(distance=new_vals)
+        # Apply padding, ensure NaN values appear.
+        padded = patch.pad(distance=4, expand_coords=False)
+        coord_array = padded.get_array("distance")
+        assert np.all(pd.isnull(coord_array[:4]))
+        assert np.all(pd.isnull(coord_array[-4:]))
+
     def test_error_on_sequence_constant_values(self, random_patch):
         """Test that providing a sequence for constant_values raises a TypeError."""
-        with pytest.raises(TypeError):
+        with pytest.raises(ParameterError):
             random_patch.pad(time=(0, 5), constant_values=(0, 0))
+
+
+class TestConj:
+    """Tests for complex conjugate."""
+
+    def test_imaginary_part_reversed(self, random_dft_patch):
+        """Ensure the imaginary part of the array is reversed."""
+        imag1 = np.imag(random_dft_patch.data)
+        conj = random_dft_patch.conj()
+        imag2 = np.imag(conj.data)
+        assert np.allclose(imag1, -imag2)
 
 
 class TestRoll:

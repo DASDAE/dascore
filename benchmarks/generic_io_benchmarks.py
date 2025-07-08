@@ -1,4 +1,5 @@
 """Benchmark for generic memory spool operations."""
+
 from __future__ import annotations
 
 from functools import cache

@@ -1,7 +1,9 @@
 """Tests for signal whiten."""
+
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore import get_example_patch
 from dascore.exceptions import ParameterError
 from dascore.units import Hz
@@ -111,30 +113,25 @@ class TestWhiten:
         with pytest.raises(ParameterError, match=msg):
             test_patch.whiten(smooth_size=3, time=[10.02, 10.03])
 
-        msg = "Frequency smoothing size is smaller than default frequency resolution"
-        with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(smooth_size=0.001, time=[10, 40])
+    def test_bad_water_level_raises(self, test_patch):
+        """Ensure bad water level values raise ParameterError."""
+        msg = "water_level must be a float"
 
-    def test_longer_smooth_than_range_raises(self, test_patch):
-        """Ensure smoothing window larger than
-        frequency range raises ParameterError.
-        """
-        msg = "Frequency smoothing size is larger than frequency range"
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(smooth_size=40, time=[10, 40])
-
-    def test_taper_param_raises(self, test_patch):
-        """Ensures wrong Tukey alpha parameter raises Paremeter Error."""
-        msg = "Tukey alpha needs to be between 0 and 1"
+            test_patch.whiten(water_level=[1, 2, 3], smooth_size=10)
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(smooth_size=3, tukey_alpha=-0.1, time=[10, 50])
+            test_patch.whiten(water_level=np.array([1, 2, 3]), smooth_size=10)
         with pytest.raises(ParameterError, match=msg):
-            test_patch.whiten(smooth_size=3, tukey_alpha=1.1, time=[10, 50])
+            test_patch.whiten(water_level=-0.1, smooth_size=10)
 
     def test_whiten_monochromatic_input(self):
         """Ensures correct behavior on monochromatic signal."""
         patch = get_example_patch("sin_wav", frequency=100, sample_rate=500)
         dft_pre = patch.dft("time", real=True)
+
+        import dascore as dc
+
+        dc._bob = True
 
         white_patch = patch.whiten(smooth_size=5, time=[80, 120])
         dft_post = white_patch.dft("time", real=True)
@@ -183,7 +180,7 @@ class TestWhiten:
 
     def test_whiten_along_distance(self, test_patch):
         """Ensure whitening runs along other axis."""
-        whitened_patch = test_patch.whiten(distance=(0.01, 0.03))
+        whitened_patch = test_patch.whiten(distance=(0.001, 0.03))
         assert "distance" in whitened_patch.dims
         assert "time" in whitened_patch.dims
         assert np.array_equal(
@@ -194,15 +191,47 @@ class TestWhiten:
             whitened_patch.coords.get_array("distance"),
         )
 
-    def test_whiten_ifft_false(self, test_patch):
+    def test_whiten_dft_input(self, test_patch):
         """
-        Ensure whiten function can return the result in the frequency domain
-        when the ifft flag is set to True.
+        Ensure whiten function returns dft patch when dft patch is input.
         """
-        # whiten the patch and return in frequency domain
-        whitened_patch_freq_domain = test_patch.whiten(smooth_size=5, ifft=False)
+        dft = test_patch.dft("time", real=True)
+        whitened_patch_freq_domain = dft.whiten(smooth_size=5, time=None)
 
         # check if the returned data is in the frequency domain
         assert np.iscomplexobj(
             whitened_patch_freq_domain.data
-        ), "Expected the data to be complex, indicating freq. domain representation."
+        ), "Expected the output to be complex, indicating freq. domain patch."
+
+        assert "ft_time" in dft.coords.coord_map
+
+    def test_whiten_df_all_parameters(self, test_patch):
+        """Ensure whiten accepts all args in dft form."""
+        fft_patch = test_patch.dft("time", real=True)
+
+        whitened_patch_freq_domain = fft_patch.whiten(
+            smooth_size=5, time=(30, 60), water_level=0.01
+        )
+        assert isinstance(whitened_patch_freq_domain, dc.Patch)
+
+    def test_no_time_no_kwargs_raises(self, random_patch):
+        """Ensure if no kwargs and patch doesn't have time an error is raised."""
+        patch = random_patch.rename_coords(time="money")
+        msg = "and patch has no time dimension"
+        with pytest.raises(ParameterError, match=msg):
+            patch.whiten()
+
+    def test_bad_dim_name_in_kwargs_raises(self, random_patch):
+        """Ensure a bad dimension name raises."""
+        msg = "whiten but it is not in patch dimensions"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.whiten(bad_dim=(1, 10))
+
+    def test_multiple_kwargs_raises(self, random_patch):
+        """Ensure passing multiple kwargs raises error."""
+        msg = "must specify a single patch dimension"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.whiten(time=None, distance=None)
+
+    def test_helpful_error_message(self, random_patch):
+        """Ensure helpful error message is used when a bad kwarg is passed."""

@@ -1,4 +1,5 @@
 """Utils for displaying dascore objects."""
+
 from __future__ import annotations
 
 import textwrap
@@ -35,7 +36,7 @@ def get_nice_text(value, style=None) -> Text:
 
 
 @get_nice_text.register(float)
-@get_nice_text.register(np.float_)
+@get_nice_text.register(np.float64)
 def _nice_float_string(value, style=None):
     """Nice print value for floats."""
     fmt_str = f".{FLOAT_PRECISION}"
@@ -137,13 +138,13 @@ def attrs_to_text(attrs) -> Text:
     txt = Text("➤ ") + Text("Attributes", style=dascore_styles["dc_yellow"])
     txt += Text("\n")
     for name, attr in dict(attrs).items():
+        # skip private coords for display
+        if name.startswith("_"):
+            continue
         # determine styles here based on keys
-        style = None
+        style = dascore_styles.get(name, None)
         if name.endswith("units"):
-            style = dascore_styles["units"]
             attr = get_quantity_str(attr)
-        if name.endswith("dtype"):
-            style = dascore_styles["dtypes"]
         # assemble text
         txt += Text("    ")
         txt += Text(f"{name}: ", dascore_styles["keys"])

@@ -3,6 +3,7 @@ A few mappings that might be useful.
 
 We can't simply use types.MappingProxyType because it can't be pickled.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping as ABCMap
@@ -33,9 +34,11 @@ class FrozenDict(ABCMap):
     def __contains__(self, key):
         return key in self._dict
 
-    def copy(self, **add_or_replace):
-        """Perform a shallow copy on the dictionaries contents."""
-        return self.__class__(self, **add_or_replace)
+    def new(self, **kwargs):
+        """Copy the contents  and update with new values."""
+        contents = dict(self._dict)
+        contents.update(kwargs)
+        return self.__class__(**contents)
 
     def __iter__(self):
         return iter(self._dict)

@@ -1,4 +1,5 @@
 """Pandas utilities."""
+
 from __future__ import annotations
 
 import fnmatch
@@ -30,8 +31,7 @@ def _remove_base_path(series: pd.Series, base="") -> pd.Series:
     Ensure paths stored in column name use unix style paths and have base
     path removed.
     """
-    if series.empty:
-        return series
+    assert not series.empty, "Series must be non-empty"
     unix_paths = series.str.replace(os.sep, "/")
     unix_base_path = (str(base) + "/").replace(os.sep, "/")
     out = unix_paths.str.replace(unix_base_path, "", regex=False)
@@ -87,6 +87,9 @@ def split_df_query(kwargs, df, ignore_bad_kwargs=False):
             # handles ... as None.
             new_val = [None if x is ... else x for x in val]
             range_query[key] = tuple(new_val)
+            out.pop(key, None)
+        # If this is an empty range query just pop out key.
+        elif val is None:
             out.pop(key, None)
         else:
             unsupported[key] = val
@@ -160,6 +163,10 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
         if val[1] is not None:
             min_too_small = min_col > val[1]
             bool_index = np.logical_and(~min_too_small, bool_index)
+        # remove null values in either end of query
+        not_null = ~(pd.isnull(df[min_key]) | pd.isnull(df[max_key]))
+        bool_index = np.logical_and(bool_index, not_null)
+
     return bool_index
 
 
@@ -184,12 +191,27 @@ def _convert_times(df, some_dict):
 
 
 def get_interval_columns(df, name, arrays=False):
-    """Return a series of start, stop, step for columns."""
+    """
+    Return a series of start, stop, step for columns.
+
+    Parameters
+    ----------
+    df
+        The input dataframe.
+    name
+        The name of the coordinate (eg time).
+    arrays
+        If True, return output as numpy arrays, else pandas series.
+    """
     names = f"{name}_min", f"{name}_max", f"{name}_step"
     missing_cols = set(names) - set(df.columns)
     if missing_cols:
-        msg = f"Dataframe is missing {missing_cols} to chunk on {name}"
-        raise KeyError(msg)
+        dims = get_dim_names_from_columns(df)
+        msg = (
+            f"Cannot chunk spool or dataframe on {missing_cols}, "
+            f"valid dimensions or columns to chunk on are {dims}"
+        )
+        raise ParameterError(msg)
     start, stop, step = df[names[0]], df[names[1]], df[names[2]]
     if not arrays:
         return start, stop, step
@@ -245,6 +267,8 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
     """
     # apply filtering, this creates a copy so we *should* be ok to update inplace.
     out = df[filter_df(df, ignore_bad_kwargs=ignore_bad_kwargs, **kwargs)]
+    # Track which rows have been modified
+    not_modified = ~_column_or_value(out, "_modified", False)
     # find slice kwargs, get series corresponding to interval columns
     for name, (val_min, val_max) in yield_range_tuple_from_kwargs(out, kwargs):
         start, stop, step = get_interval_columns(out, name)
@@ -254,10 +278,11 @@ def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
         too_large = stop > max_val
         out.loc[too_large, too_large.name] = max_val
         out.loc[too_small, too_small.name] = min_val
-    return out
+        not_modified &= ~(too_small.values | too_large.values)
+    return out.assign(_modified=~not_modified)
 
 
-def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.array:
+def filter_df(df: pd.DataFrame, ignore_bad_kwargs=False, **kwargs) -> np.ndarray:
     """
     Determine if each row of the index meets some filter requirements.
 
@@ -327,7 +352,7 @@ def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
     """
     Returns the names of columns which represent and range in the dataframe.
 
-    For example, time_min, time_max, d_time would be returned if in dataframe.
+    For example, time_min, time_max, time_step would be returned if in dataframe.
     """
     cols = set(df.columns)
     possible_dims = {
@@ -419,7 +444,37 @@ def _remove_overlaps(df, name):
     corrected_starts = _get_correct_starts(start, stop, df, step_name)
     # wrap around in roll gives wrong start value, correct it.
     corrected_starts[0] = start[0]
-    return df.assign(**{min_name: corrected_starts})
+    old_modified = _column_or_value(df, "_modified", False)
+    _modified = old_modified | (corrected_starts != start)
+    return df.assign(**{min_name: corrected_starts, "_modified": _modified})
+
+
+def _column_or_value(df, col, value):
+    """Return the values from a column, if they exist, else bool array of False."""
+    if col in df.columns:
+        return df[col].values
+    out = np.broadcast_to(np.array(value), len(df))
+    return out
+
+
+def _instructions_modified(instruct_df, sub_source):
+    """
+    Determine if the instruction df columns are the same as the source.
+
+    This is useful for determining which patches need select arguments.
+    """
+    # Get the source and desired output dfs broadcast together.
+    names = set(sub_source.columns) & set(instruct_df.columns)
+    source = sub_source.loc[instruct_df["source_index"].values]
+    # not_modified = np.ones(len(instruct_df), dtype=bool)
+    not_modified = ~_column_or_value(source, "_modified", False)
+    for name in names:
+        val1, val2 = source[name].values, instruct_df[name].values
+        eq = val1 == val2
+        null = pd.isnull(val1) & pd.isnull(val2)
+        not_modified &= eq | null
+    modified = ~not_modified
+    return modified
 
 
 def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
@@ -489,3 +544,13 @@ def dataframe_to_patch(
     dims = _get_column_names(df, attrs)
     coords = {dims[0]: df.index.to_numpy(), dims[1]: df.columns.to_numpy()}
     return dc.Patch(data=data, dims=dims, coords=coords, attrs=attrs)
+
+
+def rolling_df(df, window, step=None, axis=0, center=False):
+    """
+    A simple wrapper around pandas rolling to handle deprecated axis.
+
+    See pandas.DataFrame.rolling for more details of arguments.
+    """
+    df = df if not axis else df.T  # silly deprecated axis argument.
+    return df.rolling(window=window, step=step, center=center)

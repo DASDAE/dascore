@@ -1,4 +1,5 @@
 """Module for waterfall plotting."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -30,9 +31,9 @@ def _set_scale(im, scale, scale_type, patch):
     if scale_type == "relative":
         modifier = 0.5 * (np.nanmax(data) - np.nanmin(data))
         # only one scale parameter provided, center around mean
-    if isinstance(scale, float):
+    if isinstance(scale, float | int):
         mean = np.nanmean(patch.data)
-        scale = np.array([mean - scale * modifier, mean + scale * modifier])
+        scale = np.asarray([mean - scale * modifier, mean + scale * modifier])
     im.set_clim(scale)
 
 
@@ -43,6 +44,7 @@ def waterfall(
     cmap="bwr",
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
+    log=False,
     show=False,
 ) -> plt.Axes:
     """
@@ -68,6 +70,8 @@ def waterfall(
         are:
             relative - scale based on half the dynamic range in patch
             absolute - scale based on absolute values provided to `scale`
+    log
+        If True, visualize the common logarithm of the absolute values of patch data.
     show
         If True, show the plot, else just return axis.
 
@@ -80,7 +84,7 @@ def waterfall(
     """
     ax = _get_ax(ax)
     cmap = _get_cmap(cmap)
-    data = patch.data
+    data = np.log10(np.absolute(patch.data)) if log else patch.data
     dims = patch.dims
     assert len(dims) == 2, "Can only make waterfall plot of 2D Patch"
     dims_r = tuple(reversed(dims))
@@ -102,6 +106,8 @@ def waterfall(
         data_type = str(patch.attrs["data_type"])
         data_units = get_quantity_str(patch.attrs.data_units) or ""
         dunits = f" ({data_units})" if (data_type and data_units) else f"{data_units}"
+        if log:
+            dunits = f"{dunits} - log_10"
         label = f"{data_type}{dunits}"
         cb.set_label(label)
     ax.invert_yaxis()  # invert y axis so origin is at top

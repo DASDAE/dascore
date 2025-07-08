@@ -12,25 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: "get tags"
-        run: |
-          git fetch --tags --force # Retrieve annotated tags.
-
-      - name: Setup conda
-        uses: conda-incubator/setup-miniconda@v3
+      - uses: ./.github/actions/mamba-install-dascore
         with:
-          mamba-version: "*"
-          channels: conda-forge,defaults
-          channel-priority: true
-          python-version: "3.11"
-          activate-environment: dascore
-          environment-file: environment.yml
-          condarc-file: .github/test_condarc.yml
-
-      - name: install dascore
-        shell: bash -l {0}
-        run: |
-          python -m pip install -e .[test]
+          python-version: "3.12"
 
       - name: run test suite
         shell: bash -l {0}

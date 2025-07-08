@@ -1,11 +1,12 @@
 """Tests for Fourier transforms."""
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.fft import next_fast_len
 
 import dascore as dc
-import dascore.proc.coords
 from dascore.transform.fourier import dft, idft
 from dascore.units import get_quantity
 
@@ -15,9 +16,18 @@ F_0 = 2
 @pytest.fixture(scope="session")
 def sin_patch():
     """Get the sine wave patch, set units for testing."""
-    patch = dc.get_example_patch("sin_wav", sample_rate=100, duration=3, frequency=F_0)
-    out = patch.set_units(get_quantity("1.0 V"), time="s", distance="m")
-    return out
+    patch = (
+        dc.get_example_patch("sin_wav", sample_rate=100, duration=3, frequency=F_0)
+        .set_units(get_quantity("1.0 V"), time="s", distance="m")
+        .update_attrs(data_type="strain_rate")
+    )
+    return patch
+
+
+@pytest.fixture(scope="session")
+def sin_patch_trimmed(sin_patch):
+    """Get the sine wave patch trimmed to a non-fast len along time dim."""
+    return sin_patch.select(time=(0, -2), samples=True)
 
 
 @pytest.fixture(scope="session")
@@ -124,6 +134,52 @@ class TestDiscreteFourierTransform:
         vals2 = (pa2.abs() ** 2).integrate("ft_time", definite=True)
         assert np.allclose(vals1.data, vals2.data)
 
+    def test_idempotent_single_dim(self, fft_sin_patch_time):
+        """
+        Ensure dft is idempotent for a single dimension.
+        """
+        out = fft_sin_patch_time.dft("time")
+        assert out.equals(fft_sin_patch_time)
+
+    def test_idempotent_all_dims(self, fft_sin_patch_all):
+        """
+        Ensure dft is idempotent for transforms applied to all dims.
+        """
+        out = fft_sin_patch_all.dft(dim=("time", "distance"))
+        assert out.equals(fft_sin_patch_all)
+
+    def test_transform_single_dim(
+        self, sin_patch, fft_sin_patch_time, fft_sin_patch_all
+    ):
+        """
+        Ensure dft is idempotent for time, but untransformed axis still gets
+        transformed.
+        """
+        out = fft_sin_patch_time.dft(dim=("time", "distance"))
+        assert not out.equals(fft_sin_patch_time)
+        assert np.allclose(out.data, fft_sin_patch_all.data)
+
+    def test_datatype_removed(self, fft_sin_patch_time, sin_patch):
+        """Ensure the data_type attr is removed after transform."""
+        assert sin_patch.attrs.data_type == "strain_rate"
+        assert fft_sin_patch_time.attrs.data_type == ""
+
+    def test_pad(self, sin_patch_trimmed):
+        """Ensure patch is padded when requested and not otherwise."""
+        trimmed = sin_patch_trimmed
+        old_time_len = trimmed.coord_shapes["time"][0]
+        dft_pad = trimmed.dft("time")
+        dft_no_pad = trimmed.dft("time", pad=False)
+        assert dft_pad.shape != dft_no_pad.shape
+        assert dft_pad.coord_shapes["ft_time"][0] == next_fast_len(old_time_len)
+        assert dft_no_pad.coord_shapes["ft_time"] == trimmed.coord_shapes["time"]
+
+    def test_display(self, fft_sin_patch_time):
+        """Ensure a transformed patch returns a str rep."""
+        out = str(fft_sin_patch_time)
+        assert isinstance(out, str)
+        assert out
+
 
 class TestInverseDiscreteFourierTransform:
     """Inverse DFT suite."""
@@ -168,3 +224,34 @@ class TestInverseDiscreteFourierTransform:
         # and then if we reverse distance it should be the same as original
         full_inverse = ift.idft("distance")
         self._patches_about_equal(full_inverse, sin_patch)
+
+    def test_data_type_restored(self, fft_sin_patch_time, sin_patch):
+        """Ensure data_type attr is restored."""
+        out = fft_sin_patch_time.idft("time")
+        assert out.attrs.data_type == sin_patch.attrs.data_type
+
+    def test_undo_padding(self, sin_patch_trimmed):
+        """Ensure the padding is undone in idft."""
+        dft_patch = sin_patch_trimmed.dft("time")
+        idft = dft_patch.idft()
+        assert idft.shape == sin_patch_trimmed.shape
+        assert np.allclose(np.real(idft.data), sin_patch_trimmed.data)
+
+    def test_undo_padding_rft(self, sin_patch_trimmed):
+        """Ensure padded rft still works."""
+        dft_patch = sin_patch_trimmed.dft("time", real=True)
+        idft = dft_patch.idft()
+        assert idft.shape == sin_patch_trimmed.shape
+        assert np.allclose(np.real(idft.data), sin_patch_trimmed.data)
+
+    def test_no_extra_attrs_or_coords(self, sin_patch):
+        """Ensure no extra attrs or coords remain after round trip."""
+        dft = sin_patch.dft(dim=None)
+        idft = dft.idft()
+        old_attrs = set(dict(sin_patch.attrs).keys())
+        new_attrs = set(dict(idft.attrs).keys())
+        # Before, there were a lot of ft_* keys added from extra coords.
+        diff = new_attrs - old_attrs
+        assert not diff, "attr keys shouldn't change"
+        # Test no extra coords
+        assert set(sin_patch.coords.coord_map) == set(idft.coords.coord_map)

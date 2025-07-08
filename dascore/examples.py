@@ -1,4 +1,5 @@
 """A module for loading examples."""
+
 from __future__ import annotations
 
 import tempfile
@@ -8,14 +9,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.signal import chirp as spy_chirp
 
 import dascore as dc
 import dascore.core
+from dascore.compat import random_state
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
-from dascore.utils.misc import register_func
-from dascore.utils.patch import get_default_patch_name
+from dascore.utils.misc import iterate, register_func
+from dascore.utils.patch import get_patch_names
 from dascore.utils.time import to_timedelta64
 
 EXAMPLE_PATCHES = {}
@@ -120,17 +123,17 @@ def patch_with_null(**kwargs):
     """
     patch = random_patch(**kwargs)
     data = np.array(patch.data)
-    data[data > 0.9] = np.NaN
+    data[data > 0.9] = np.nan
     # also set the first row and column to NaN
-    data[:, 0] = np.NaN
-    data[0, :] = np.NaN
+    data[:, 0] = np.nan
+    data[0, :] = np.nan
     return patch.new(data=data)
 
 
 @register_func(EXAMPLE_PATCHES, key="random_patch_with_lat_lon")
 def random_patch_lat_lon(**kwargs):
     """
-    Create a patch with latitude/longitude coords on distance dim.
+    Create a patch with latitude/longitude coords on distance dimension.
 
     Parameters
     ----------
@@ -146,6 +149,26 @@ def random_patch_lat_lon(**kwargs):
     return out
 
 
+@register_func(EXAMPLE_PATCHES, key="random_patch_with_xyz")
+def random_patch_xyz(**kwargs):
+    """
+    Create a patch with x, y, and z coords on distance dimension.
+
+    Parameters
+    ----------
+    **kwargs
+        Parameters passed to [`random_patch`](`dascore.examples.random_patch`).
+    """
+    patch = random_patch(**kwargs)
+    dist = patch.coords.get_array("distance")
+    x = np.arange(0, len(dist)) * 5
+    y = np.arange(0, len(dist)) * 5
+    z = np.zeros_like(dist)
+    # add a single coord
+    out = patch.update_coords(x=("distance", x), y=("distance", y), z=("distance", z))
+    return out
+
+
 @register_func(EXAMPLE_PATCHES, key="wacky_dim_coords_patch")
 def wacky_dim_coord_patch():
     """
@@ -153,9 +176,9 @@ def wacky_dim_coord_patch():
     """
     shape = (100, 1_000)
     # distance is neither monotonic nor evenly sampled.
-    dist_ar = np.random.random(100) + np.arange(100) * 0.3
+    dist_ar = random_state.random(100) + np.arange(100) * 0.3
     # time is monotonic, not evenly sampled.
-    time_ar = dc.to_datetime64(np.cumsum(np.random.random(1_000)))
+    time_ar = dc.to_datetime64(np.cumsum(random_state.random(1_000)))
     patch = random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
     # check attrs
     attrs = patch.attrs
@@ -171,7 +194,7 @@ def sin_wave_patch(
     time_min="2020-01-01",
     channel_count=3,
     duration=1,
-    amplitude=10,
+    amplitude: Sequence[float] | float = 10.0,
 ):
     """
     A Patch composed of sine waves.
@@ -188,24 +211,84 @@ def sin_wave_patch(
     channel_count
         The number of  distance channels to include.
     duration
-        Duration of signal in seconds.
+        Signal duration in seconds.
     amplitude
-        The amplitude of the sin wave.
+        The amplitude of the sin wave. If a sequence is provided it represents
+        the amplitude of each frequency.
     """
-    t_array = np.linspace(0.0, duration, sample_rate * duration)
+    t_array = np.linspace(0.0, duration, int(sample_rate * duration))
     # Get time and distance coords
     distance = np.arange(1, channel_count + 1, 1)
     time = to_timedelta64(t_array) + np.datetime64(time_min)
-    freqs = [frequency] if isinstance(frequency, float | int) else frequency
+    freqs = np.atleast_1d(frequency)
+    amps = np.broadcast_to(np.atleast_1d(amplitude), shape=freqs.shape)
     # init empty data and add frequencies.
     data = np.zeros((len(time), len(distance)))
-    for freq in freqs:
-        sin_data = amplitude * np.sin(2.0 * np.pi * freq * t_array)
+    for amp, freq in zip(amps, freqs):
+        sin_data = amp * np.sin(2.0 * np.pi * freq * t_array)
         data += sin_data[..., np.newaxis]
     patch = dc.Patch(
         data=data,
         coords={"time": time, "distance": distance},
         dims=("time", "distance"),
+    )
+    return patch
+
+
+@register_func(EXAMPLE_PATCHES, key="chirp")
+def chirp(
+    sample_rate=150,
+    time_min="2020-01-01",
+    channel_count: int = 1,
+    duration: float = 10.0,
+    f0: float = 5.0,
+    t1: float | None = None,
+    f1: float = 25.0,
+    method="linear",
+    phi: float = 0.0,
+    **kwargs,
+):
+    """
+    Create a patch from a chirp signal.
+
+    Simply uses scipy.signal.chirp under the hood.
+
+    Parameters
+    ----------
+    sample_rate
+        The sample rate in Hz.
+    time_min
+        The start time in the metadata.
+    channel_count
+        The number of  distance channels to include.
+    duration
+        The duration, in seconds, of the signal.
+    f0
+        The frequency of the chirp at the start of the signal.
+    f1
+        The frequency of the chirp at the end of the signal.
+    t1
+        The time (relative from signal start) corresponding to f1. If None,
+        use the end of the signal.
+    method
+        The kind of the frequency sweep. See scipy.signal.chirp for
+        more details.
+    phi
+        Phase offset in degrees.
+    **kwargs
+        Passed directly to scipy.signal.chirp.
+    """
+    t_array = np.linspace(0.0, duration, int(sample_rate * duration))
+    t1 = t1 if t1 is not None else np.max(t_array)
+    array = spy_chirp(t_array, f0=f0, t1=t1, f1=f1, method=method, phi=phi, **kwargs)
+    # Get time and distance coords
+    distance = np.arange(1, channel_count + 1, 1)
+    time = to_timedelta64(t_array) + np.datetime64(time_min)
+    data = np.array([array for _ in range(len(distance))])
+    patch = dc.Patch(
+        data=data,
+        coords={"time": time, "distance": distance},
+        dims=("distance", "time"),
     )
     return patch
 
@@ -231,11 +314,42 @@ def example_event_2():
     delta_time = patch.coords.get_array("time") - patch.coords.min("time")
     out = (
         patch.update_coords(time=delta_time / np.timedelta64(1, "s"))
-        .set_units("1/s", distance="m", time="s")
+        .set_units("strain/s", distance="m", time="s")
         .taper(time=0.05)
         .pass_filter(time=(..., 300))
     )
     return out
+
+
+@register_func(EXAMPLE_PATCHES, key="deformation_rate_event_1")
+def deformation_rate_event_1():
+    """
+    An event recorded in an underground mine by a Terra15 unit.
+    """
+    path = fetch("deformation_rate_event_1.hdf5")
+    return dc.spool(path)[0]
+
+
+@register_func(EXAMPLE_PATCHES, key="forge_dss")
+def forge_dss():
+    """
+    A DSS file from the Forge dataset collected by Neubrex.
+
+    https://gdr.openei.org/submissions/1565
+    """
+    path = fetch("neubrex_dss_forge.h5")
+    return dc.spool(path)[0]
+
+
+@register_func(EXAMPLE_PATCHES, key="forge_dts")
+def forge_dts():
+    """
+    A DTS file from the Forge dataset collected by Neubrex.
+
+    https://gdr.openei.org/submissions/1565
+    """
+    path = fetch("neubrex_dts_forge.h5")
+    return dc.spool(path)[0]
 
 
 @register_func(EXAMPLE_PATCHES, key="ricker_moveout")
@@ -269,11 +383,11 @@ def ricker_moveout(
     source_channel
         The index of the source.
     velocity
-        The aparent velocity in m/s.
+        The apparent velocity in m/s.
 
     Notes
     -----
-    Based on https://github.com/lijunzh/ricker/
+    Based on https://github.com/lijunzh/ricker/.
     """
 
     def _ricker(time, delay):
@@ -299,6 +413,107 @@ def ricker_moveout(
     coords = {"time": to_timedelta64(time), "distance": distance}
     dims = ("time", "distance")
     return dc.Patch(data=data, coords=coords, dims=dims)
+
+
+@register_func(EXAMPLE_PATCHES, key="delta_patch")
+def delta_patch(
+    dim="time",
+    shape=(10, 200),
+    time_min="2020-01-01",
+    time_step=1 / 250,
+    distance_min=0,
+    distance_step=1,
+    patch=None,
+):
+    """
+    Create a delta function patch (zeros everywhere except for
+    a unit value at the center) along the specified dimension.
+    The returned delta patch has single coordinate(s) along the
+    other dimensions.
+
+    Parameters
+    ----------
+    dim : str
+        The dimension at the center of which to place the unit value.
+        Typically ``"time"`` or ``"distance"``.
+    shape : tuple of int
+        The shape of the data as (distance, time). Defaults to (10, 200).
+        This is used only if no existing ``patch`` is provided.
+    time_min : str or datetime64
+        The start time of the patch.
+    time_step : float
+        The time step in seconds between samples.
+    distance_min : float
+        The minimum distance coordinate.
+    distance_step : float
+        The distance step in meters between samples.
+    patch : dascore.Patch
+        If provided, creates the delta patch based on this existing patch.
+        Default is None.
+    """
+    if patch is None:
+        if dim not in ["time", "distance"]:
+            raise ValueError(
+                "In case no patch is provided, the delta patch will be "
+                "a 2D patch with 'time' and 'distance' dimensions."
+            )
+
+        dims = ("distance", "time")
+        dist_len, time_len = shape
+
+        # Create coordinates
+        time_step_td = to_timedelta64(time_step)
+        t0 = np.datetime64(time_min)
+        time_coord = dascore.core.get_coord(
+            data=t0 + np.arange(time_len) * time_step_td, step=time_step_td, units="s"
+        )
+        dist_coord = dascore.core.get_coord(
+            data=distance_min + np.arange(dist_len) * distance_step,
+            step=distance_step,
+            units="m",
+        )
+
+        coords = {"distance": dist_coord, "time": time_coord}
+        attrs = dict(
+            time_min=t0,
+            time_step=time_step_td,
+            distance_min=distance_min,
+            distance_step=distance_step,
+            category="DAS",
+            network="",
+            station="",
+            tag="delta",
+            time_units="s",
+            distance_units="m",
+        )
+
+        # Depending on the selected dimension, place a line of ones at the midpoint
+        used_dims = tuple(iterate(dim))
+        unused_dims = set(dims) - set(used_dims)
+
+        # Get data with ones centered on selected dimensions.
+        index = tuple(
+            shape[dims.index(dimension)] // 2 if dimension in used_dims else 0
+            for dimension in dims
+        )
+        data = np.zeros((dist_len, time_len))
+        data[index] = 1
+        delta_patch = dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+        return delta_patch.select(**{x: 0 for x in unused_dims}, samples=True)
+    else:
+        used_dims = tuple(iterate(dim))
+        unused_dims = set(patch.dims) - set(used_dims)
+        patch = patch.select(**{x: 0 for x in unused_dims}, samples=True)
+
+        # Get data with ones centered on selected dimensions.
+        shape = patch.shape
+        index = tuple(
+            shape[patch.dims.index(dimension)] // 2 if dimension in used_dims else 0
+            for dimension in patch.dims
+        )
+        data = np.zeros_like(patch.data)
+        data[index] = 1
+        return patch.update(data=data)
 
 
 @register_func(EXAMPLE_PATCHES, key="dispersion_event")
@@ -335,6 +550,24 @@ def random_spool(time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), **k
         diff = to_timedelta64(time_gap) + patch.attrs.coords["time"].step
         time_min = patch.attrs["time_max"] + diff
     return dc.spool(out)
+
+
+@register_func(EXAMPLE_SPOOLS, key="random_directory_das")
+def random_directory_spool(path=None, **kwargs):
+    """
+    Create a random spool, then save to specified path.
+
+    Parameters
+    ----------
+    path
+        If provided, the path to save the directory spool. If None, use
+        a temporary path.
+
+    kwargs are passed to [`random_spool`](`dascore.examples.random_spool`)
+    """
+    spool = random_spool(**kwargs)
+    path = spool_to_directory(spool, path)
+    return dc.spool(path)
 
 
 @register_func(EXAMPLE_SPOOLS, key="diverse_das")
@@ -392,7 +625,8 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5")
         path = Path(tempfile.mkdtemp())
         assert path.exists()
     for patch in spool:
-        out_path = path / (f"{get_default_patch_name(patch)}.{extention}")
+        name = get_patch_names(patch).iloc[0]
+        out_path = path / (f"{name}.{extention}")
         patch.io.write(out_path, file_format=file_format)
     return path
 

@@ -1,4 +1,5 @@
 """Create the html tables for parameters and such from dataframes."""
+
 from __future__ import annotations
 
 import hashlib
@@ -92,6 +93,9 @@ def unpact_annotation(obj, data_dict, address_dict) -> str:
         # just assume the bound string is resolvable
         key = str(obj).split("('")[-1].replace("')", "")
         name = key.split(".")[-1]
+        # dc. is the same as dascore.
+        if key.startswith("dc."):
+            key = f"dascore.{key[3:]}"
         return f"[{name}](`{key}`)"
     # Array-like thing from numpy #TODO improve this
     elif "numpy.typing" in str_rep:
@@ -362,6 +366,9 @@ def to_quarto_code(code_lines):
         for line in code_lines:
             if line.startswith(option_chars):
                 options.append(line)
+            # Strip out the python code specifier.
+            elif line.startswith("```{"):
+                continue
             else:
                 code_segments.append(line)
         return code_segments, options
@@ -535,6 +542,7 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
         # get path and ensure parents exist
         sub_dir = api_path / "/".join(data["key"].split(".")[:-1])
         path = api_path / sub_dir / f"{data['name']}.qmd"
+
         path.parent.mkdir(exist_ok=True, parents=True)
         # remove path from files to delete
         if path in files_to_delete:

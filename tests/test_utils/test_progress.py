@@ -1,4 +1,5 @@
 """Test the progress bar."""
+
 from __future__ import annotations
 
 from rich.progress import Progress

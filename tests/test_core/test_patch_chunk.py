@@ -4,6 +4,7 @@ Test file for chunk/merge.
 This is separated from spool tests because these need to be quite
 extensive.
 """
+
 from __future__ import annotations
 
 import random
@@ -164,6 +165,23 @@ class TestChunk:
         msg = "overlap is greater than chunk size"
         with pytest.raises(ParameterError, match=msg):
             diverse_spool.chunk(time=10, overlap=11)
+
+    def test_issue_474(self, random_spool):
+        """Ensure spools can be chunked with the duration reported by coord."""
+        # See #474
+        patch1 = random_spool.chunk(time=...)[0]
+        duration = patch1.coords.coord_range("time")
+        merged2 = random_spool.chunk(time=duration)
+        patch2 = merged2[0]
+        assert patch1.equals(patch2)
+
+    def test_issue_475(self, diverse_spool):
+        """Ensure the partially chunked spool can be merged."""
+        # See #475
+        spool = diverse_spool.chunk(time=3, overlap=1, keep_partial=True)
+        merged_spool = spool.chunk(time=None)
+        assert isinstance(merged_spool, dc.BaseSpool)
+        assert len(merged_spool)
 
 
 class TestChunkMerge:
@@ -436,3 +454,11 @@ class TestChunkMerge:
         # make sure we can read the patch
         patch = out[0]
         assert isinstance(patch, dc.Patch)
+
+    def test_chunk_patches_with_non_coord(self, random_patch):
+        """Tests for chunking when some patches have non coordinate dimensions."""
+        patches = [random_patch.mean("time") for _ in range(3)]
+        spool = dc.spool(patches)
+        chunked = spool.chunk(time=None)
+        # Since the time dims are NaN, this can't work.
+        assert not len(chunked)

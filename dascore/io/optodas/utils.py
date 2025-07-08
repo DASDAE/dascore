@@ -1,4 +1,5 @@
 """Utilities for OptoDAS."""
+
 from __future__ import annotations
 
 import dascore as dc
@@ -26,30 +27,30 @@ def _get_opto_das_version_str(hdf_fi) -> str:
     return version_str
 
 
-def _get_coord_manager(header):
+def _get_coord_manager(fi):
     """Get the distance ranges and spacing."""
+    header = fi["header"]
     dims = tuple(unbyte(x) for x in header["dimensionNames"])
     units = tuple(unbyte(x) for x in header["dimensionUnits"])
-
     coords = {}
     for index, (dim, unit) in enumerate(zip(dims, units)):
         crange = header["dimensionRanges"][f"dimension{index}"]
         step = unpack_scalar_h5_dataset(crange["unitScale"])
 
-        # special case for time.
+        # Special case for time.
         if dim == "time":
             step = dc.to_timedelta64(step)
             t1 = dc.to_datetime64(unpack_scalar_h5_dataset(header["time"]))
             start = t1 + unpack_scalar_h5_dataset(crange["min"]) * step
             stop = t1 + (unpack_scalar_h5_dataset(crange["max"]) + 1) * step
-        else:
-            # The min/max values appear to be int ranges so we need to
-            # multiply by step.
-            start = unpack_scalar_h5_dataset(crange["min"]) * step
-            stop = (unpack_scalar_h5_dataset(crange["max"]) + 1) * step
-
-        coords[dim] = get_coord(min=start, max=stop, step=step, units=unit)
-    return dascore.core.get_coord_manager(coords=coords, dims=dims)
+            coord = get_coord(min=start, max=stop, step=step, units=unit)
+        else:  # and distance
+            # The channels are ints so we multiply by step to get distance.
+            distance = fi["/header/channels"][:] * step
+            coord = get_coord(values=distance)
+        coords[dim] = coord
+    out = dascore.core.get_coord_manager(coords=coords, dims=dims)
+    return out
 
 
 def _get_attr_dict(header):
@@ -57,7 +58,7 @@ def _get_attr_dict(header):
     attr_map = {
         "gaugeLength": "gauge_length",
         "unit": "data_units",
-        "instrument": "intrument_id",
+        "instrument": "instrument_id",
         "experiment": "acquisition_id",
     }
     out = {"data_category": "DAS"}
@@ -71,9 +72,8 @@ def _get_attr_dict(header):
 
 def _get_opto_das_attrs(fi) -> dict:
     """Scan a OptoDAS file, return metadata."""
-    header = fi["header"]
-    cm = _get_coord_manager(header)
-    attrs = _get_attr_dict(header)
+    cm = _get_coord_manager(fi)
+    attrs = _get_attr_dict(fi["header"])
     attrs["coords"] = cm
     return attrs
 

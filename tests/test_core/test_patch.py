@@ -1,4 +1,5 @@
 """Tests for Trace2D object."""
+
 from __future__ import annotations
 
 import operator
@@ -10,6 +11,7 @@ import pytest
 from rich.text import Text
 
 import dascore as dc
+from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.exceptions import CoordError
@@ -26,7 +28,7 @@ def get_simple_patch() -> Patch:
     """
     attrs = {"time_step": 1}
     pa = Patch(
-        data=np.random.random((100, 100)),
+        data=random_state.random((100, 100)),
         coords={"time": np.arange(100) * 0.01, "distance": np.arange(100) * 0.2},
         attrs=attrs,
         dims=("time", "distance"),
@@ -75,7 +77,7 @@ class TestInit:
     @pytest.fixture(scope="class")
     def test_conflicting_attrs_coords_raises(self):
         """Patch for testing conflicting coordinates/attributes."""
-        array = np.random.random((10, 10))
+        array = random_state.random((10, 10))
         # create attrs, these should all get overwritten by coords.
         attrs = dict(
             distance_step=10,
@@ -87,8 +89,8 @@ class TestInit:
         )
         # create coords
         coords = dict(
-            time=dc.to_datetime64(np.cumsum(np.random.random(10))),
-            distance=np.random.random(10),
+            time=dc.to_datetime64(np.cumsum(random_state.random(10))),
+            distance=random_state.random(10),
         )
         # assemble and output.
         dims = ("distance", "time")
@@ -136,8 +138,11 @@ class TestInit:
     def test_no_attrs(self):
         """Ensure a patch with no attrs can be created."""
         pa = Patch(
-            data=np.random.random((100, 100)),
-            coords={"time": np.random.random(100), "distance": np.random.random(100)},
+            data=random_state.random((100, 100)),
+            coords={
+                "time": random_state.random(100),
+                "distance": random_state.random(100),
+            },
             dims=("time", "distance"),
         )
         assert isinstance(pa, Patch)
@@ -209,10 +214,17 @@ class TestInit:
 
     def test_new_patch_non_standard_dims(self):
         """Ensure a non-standard dimension has matching dims in attrs and coords."""
-        data = np.random.rand(10, 5)
+        data = random_state.rand(10, 5)
         coords = {"time": np.arange(10), "can": np.arange(5)}
         patch = dc.Patch(data=data, coords=coords, dims=("time", "can"))
         assert patch.dims == patch.attrs.dim_tuple
+
+    def test_non_coord_dims(self):
+        """Ensure non-coordinate dimensions can work and create non-coord."""
+        data = random_state.rand(10, 5)
+        coords = {"time": np.arange(10)}
+        patch = dc.Patch(data=data, coords=coords, dims=("time", "money"))
+        assert patch.dims == ("time", "money")
 
 
 class TestNew:
@@ -351,7 +363,7 @@ class TestEquals:
     def test_both_attrs_nan(self, random_patch):
         """If Both Attrs are some type of NaN the patches should be equal."""
         attrs1 = dict(random_patch.attrs)
-        attrs1["label"] = np.NaN
+        attrs1["label"] = np.nan
         patch1 = random_patch.new(attrs=attrs1)
         attrs2 = dict(attrs1)
         attrs2["label"] = None
@@ -383,6 +395,11 @@ class TestEquals:
         assert not random_patch.equals(None)
         assert not random_patch.equals(1)
         assert not random_patch.equals(random_patch.data)
+
+    def test_negative_equals(self, random_patch):
+        """Ensure negative of random patch is equal to negative of same patch."""
+        assert -random_patch == -random_patch
+        assert (-random_patch).abs() == random_patch
 
 
 class TestTranspose:
@@ -635,28 +652,6 @@ class TestGetCoord:
             patch.get_coord("distance", require_sorted=True)
 
 
-class TestAssertHasCoords:
-    """Test suite for has coords."""
-
-    def test_raises_single(self, random_patch):
-        """Ensure an error is raised if as single required coord isnt found."""
-        match = "does not have required coordinate"
-        with pytest.raises(CoordError, match=match):
-            random_patch.assert_has_coords("foo")
-
-    def test_raises_multiple(self, random_patch):
-        """Ensure an error is raised if required coords aren't found."""
-        match = "does not have required coordinate"
-        with pytest.raises(CoordError, match=match):
-            random_patch.assert_has_coords(("bar", "depth"))
-
-    def test_has_coords_ok(self, random_patch):
-        """No Error should be raised if the patch has the coordinates."""
-        dims = random_patch.dims
-        random_patch.assert_has_coords(dims[0])
-        random_patch.assert_has_coords(dims)
-
-
 class TestDeprecations:
     """Ensure deprecations are issued."""
 
@@ -683,8 +678,45 @@ class TestSetDims:
     def test_doctest_example(self, random_patch):
         """Ensure the doctest example works."""
         patch = random_patch
-        my_coord = np.random.random(patch.coord_shapes["time"])
+        my_coord = random_state.random(patch.coord_shapes["time"])
         out = patch.update_coords(my_coord=("time", my_coord)).set_dims(  # add my_coord
             time="my_coord"
         )  # set mycoord as dim (rather than time)
         assert "my_coord" in out.dims
+
+
+class TestHistory:
+    """Specific tests for tracking history of Patches."""
+
+    def test_history_is_tuple(self, random_patch):
+        """The history attribute should be immutable. See #417."""
+        assert isinstance(random_patch.attrs.history, tuple)
+
+    def test_history_tuple_after_operation(self, random_patch):
+        """Ensure the history tuple remains after a patch operation."""
+        patch = random_patch.pass_filter(time=(..., 20))
+        assert isinstance(patch.attrs.history, tuple)
+
+        old_len = len(random_patch.attrs.history)
+        new_len = len(patch.attrs.history)
+        assert old_len == new_len - 1
+
+    def test_history_not_too_long(self, random_patch):
+        """Ensure a single history entry doesnt get too long."""
+        patch = random_patch
+        dist = patch.get_array("distance")
+        patch_new_dist = patch.update_coords(distance=(dist + 12))
+        # this should use the contracted array rep
+        hist = patch_new_dist.attrs.history
+        entry = hist[-1]
+        array_part = entry.split("'[")[-1].split("]'")[0]
+        assert len(array_part) < 100
+
+
+class TestGetPatchName:
+    """Tests for getting the name of a patch."""
+
+    def test_simple_get_name(self, random_patch):
+        """Happy path test."""
+        name = random_patch.get_patch_name()
+        assert isinstance(name, str)

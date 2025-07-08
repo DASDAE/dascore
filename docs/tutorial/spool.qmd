@@ -24,9 +24,12 @@ spool1 = dc.spool(patch_list)
 
 ```{python}
 import dascore as dc
+# Import fetch to read DASCore example files 
 from dascore.utils.downloader import fetch
 
 path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
+# To read DAS data stored locally on your machine, simply replace the above line with:
+# path_to_das_file = "/path/to/data/directory/data.EXT"
 
 spool2 = dc.spool(path_to_das_file)
 ```
@@ -35,12 +38,14 @@ spool2 = dc.spool(path_to_das_file)
 
 ```{python}
 import dascore as dc
+# Import fetch to read DASCore example files 
 from dascore.utils.downloader import fetch
 
-# We use fetch to make sure the file is downloaded. You would
-# just need to replace directory_path with your data directory path.
-path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
-directory_path = path_to_das_file.parent
+# Fetch a sample file path from DASCore (just to get a usable path for the rest of the cell)
+directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
+# To read a directory of DAS data stored locally on your machine, 
+# simply replace the above line with:
+# directory_path = "/path/to/data/directory/"
 
 # Update will create an index of the contents for fast querying/access
 spool3 = dc.spool(directory_path).update()
@@ -94,6 +99,37 @@ for patch in spool:
 
 # Slice spool to create new spool which excludes first patch.
 new_spool = spool[1:]
+```
+
+An array can also be used (just like numpy) to select/re-arrange spool contents. For example, a boolean array can be used to de-select patches:
+
+```{python}
+import dascore as dc
+import numpy as np
+
+spool = dc.get_example_spool()
+
+# Get bool array, true values indicate patch is kept, false is discarded.
+bool_array = np.ones(len(spool), dtype=np.bool_)
+bool_array[1] = False
+
+# Remove patch at position 1 from spool.
+new = spool[bool_array]
+```
+
+and an integer array can be used to deselect/rearrange patches
+
+```{python}
+import dascore as dc
+import numpy as np
+
+spool = dc.get_example_spool()
+
+# Get an array of integers which indicate the index of included patches
+bool_array = np.array([2, 0])
+
+# create a new spool with patch 2 and patch 0.
+new = spool[bool_array]
 ```
 
 # get_contents
@@ -160,6 +196,29 @@ subspool = spool.chunk(time=3, overlap=1, keep_partial=True)
 merged_spool = spool.chunk(time=None)
 ```
 
+# concatenate
+Similar to `chunk`, [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) is used to combine patches together. However, `concatenate` doesn't account for coordinate values along the concatenation axis, and can even be used to create new patch dimensions. 
+
+:::{.callout-warning}
+However, unlike [`chunk`](`dascore.BaseSpool.chunk`), not all `Spool` types implement [`concatenate`](`dascore.BaseSpool.concatenate`). 
+:::
+
+```python 
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+# Create a spool with patches that have a large gap
+time = patch.get_coord("time")
+one_hour = dc.to_timedelta64(3600)
+patch2 = patch.update_coords(time_min=time.max() + one_hour)
+spool = dc.spool([patch, patch2])
+
+# chunk rightfully wouldn't merge these patches, but concatenate will.
+merged = spool.concatenate(time=None)
+print(merged[0].coords)
+```
+
 # map
 
 The [`map`](`dascore.core.spool.BaseSpool.map`) method applies a function to all patches in the spool. It provides an efficient way to process large datasets, especially when combined with clients (aka executors).
@@ -179,7 +238,7 @@ def get_dist_max(patch):
 map_out = spool.chunk(time=5, overlap=1).map(get_dist_max)
 
 # combine output back into a single patch
-agg_patch = dc.spool(map_out).chunk(time=None)[0]
+agg_patch = dc.spool(map_out).concatenate(time=None)[0]
 
 print(agg_patch)
 ```

@@ -1,4 +1,5 @@
 """Dispersion computation using the phase-shift (Park et al., 1999) method."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -25,6 +26,7 @@ def dispersion_phase_shift(
     ----------
     patch
         Patch to transform. Has to have dimensions of time and distance.
+        It also needs to be right-sided (see notes below).
     phase_velocities
         NumPY array of positive velocities, monotonically increasing, for
         which the dispersion will be computed.
@@ -48,12 +50,19 @@ def dispersion_phase_shift(
     distance from the source, and not "fiber distance". In other
     words, data are effectively mapped along a 2-D line.
 
-    Example
+    - The input shot gather must be right-sided meaning the
+    wavefield propagates from lower to higher channel numbers.
+    Always plot the patch first to verify its orientation.
+    If the gather is left-sided, simply mirror the patch along
+    the distance axis (see Example 2 below).
+
+    Examples
     --------
     ```{python}
     import dascore as dc
     import numpy as np
 
+    # Example 1 - Right-sided wavefield
     patch = (
         dc.get_example_patch('dispersion_event')
     )
@@ -64,6 +73,17 @@ def dispersion_phase_shift(
     ax.set_xlim(5, 70)
     ax.set_ylim(1500, 100)
     disp_patch.viz.waterfall(show=True, ax=ax)
+
+    # Example 2 - Left-sided wavefield
+    patch = (
+        dc.get_example_patch('dispersion_event')
+    )
+    axis = patch.dims.index("distance")
+    flipped_data = np.flip(patch.data, axis=axis)
+    mirrored_patch = patch.update(data=flipped_data)
+
+    disp_patch = mirrored_patch.dispersion_phase_shift(np.arange(100,1500,1),
+            approx_resolution=0.1,approx_freq=[5,70])
     ```
     """
     patch_cop = patch.convert_units(distance="m").transpose("distance", "time")

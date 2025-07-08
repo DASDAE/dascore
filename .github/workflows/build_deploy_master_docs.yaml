@@ -34,43 +34,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-tags: "true"
 
-      - name: "get tags"
-        run: |
-          git fetch --tags --force # Retrieve annotated tags.
-
-      - name: Setup conda
-        uses: conda-incubator/setup-miniconda@v3
+      - uses: ./.github/actions/mamba-install-dascore
         with:
-          mamba-version: "*"
-          channels: conda-forge,defaults
-          channel-priority: true
-          python-version: "3.10"
-          activate-environment: dascore
-          environment-file: environment.yml
-          condarc-file: .github/test_condarc.yml
+          python-version: "3.12"
+          environment-file: './.github/doc_environment.yml'
 
-      - name: install dascore with docbuild reqs
-        shell: bash -l {0}
-        run: |
-          conda install -c conda-forge pandoc
-          python -m pip install -e .[docs]
-
-      - name: Install quarto
-        uses: quarto-dev/quarto-actions/setup@v2
-        with:
-          version: 1.3.450
-          tinytex: true
-
-      - name: print quarto version
-        run: |
-          quarto --version
-
-      - name: render API docs
-        shell: bash -l {0}
-        run: |
-          python scripts/build_api_docs.py
+      - uses: ./.github/actions/build-docs
 
       - name: publish docs to netlify
         shell: bash -l {0}

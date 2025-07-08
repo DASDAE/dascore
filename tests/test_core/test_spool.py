@@ -1,7 +1,9 @@
-"""Test for spool functions."""
+"""Tests for spool function."""
+
 from __future__ import annotations
 
 import copy
+import shutil
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import numpy as np
@@ -12,11 +14,11 @@ import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.core.spool import BaseSpool, MemorySpool
 from dascore.exceptions import (
-    IncompatiblePatchError,
     InvalidSpoolError,
+    MissingOptionalDependencyError,
     ParameterError,
-    PatchDimError,
 )
+from dascore.utils.downloader import fetch
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 
@@ -54,7 +56,7 @@ class TestSpoolBasics:
         assert len(out) == 0
 
     def test_updated_spool_eq(self, random_spool):
-        """Ensure updating the spool doesnt change equality."""
+        """Ensure updating the spool doesn't change equality."""
         assert random_spool == random_spool.update()
 
     def test_empty_spool_str(self):
@@ -62,6 +64,24 @@ class TestSpoolBasics:
         spool = dc.spool([])
         spool_str = str(spool)
         assert "Spool" in spool_str
+
+    def test_spool_with_empty_patch_str(self):
+        """A spool with an empty patch should have a str."""
+        spool = dc.spool(dc.Patch())
+        spool_str = str(spool)
+        assert "Spool" in spool_str
+
+    def test_base_concat_raises(self, random_spool):
+        """Ensure BaseSpool.concatenate raises NotImplementedError."""
+        msg = "has no concatenate implementation"
+        with pytest.raises(NotImplementedError, match=msg):
+            BaseSpool.concatenate(random_spool, time=2)
+
+    def test_viz_raises(self, random_spool):
+        """Ensure Spool.viz raises AttributeError."""
+        msg = "Apply 'viz' on a Patch object"
+        with pytest.raises(AttributeError, match=msg):
+            random_spool.viz.waterfall(random_spool)
 
 
 class TestSpoolEquals:
@@ -157,6 +177,62 @@ class TestSlicing:
         new_spool = random_spool[::2]
         assert new_spool[0].equals(random_spool[0])
         assert new_spool[1].equals(random_spool[2])
+
+
+class TestSpoolBoolArraySelect:
+    """Tests for selecting patches using a boolean array."""
+
+    def test_bool_all_true(self, random_spool):
+        """All True should return an equal spool."""
+        bool_array = np.ones(len(random_spool), dtype=np.bool_)
+        out = random_spool[bool_array]
+        assert out == random_spool
+
+    def test_bool_all_false(self, random_spool):
+        """All False should return an empty spool."""
+        bool_array = np.zeros(len(random_spool), dtype=np.bool_)
+        out = random_spool[bool_array]
+        assert len(out) == 0
+
+    def test_bool_some_true(self, random_spool):
+        """Some true values should return a spool with some values."""
+        bool_array = np.ones(len(random_spool), dtype=np.bool_)
+        bool_array[1] = False
+        out = random_spool[bool_array]
+        assert len(out) == sum(bool_array)
+        df1 = out.get_contents()
+        df2 = random_spool.get_contents()[bool_array]
+        assert df1.equals(df2)
+
+
+class TestSpoolIntArraySelect:
+    """Tests for selecting patches using an integer array."""
+
+    def test_uniform(self, random_spool):
+        """A uniform monotonic increasing array should return same spool."""
+        array = np.arange(len(random_spool))
+        spool = random_spool[array]
+        assert spool == random_spool
+
+    def test_out_of_bounds_raises(self, random_spool):
+        """Ensure int values gt the spool len raises."""
+        array = np.arange(len(random_spool))
+        array[0] = len(random_spool) + 10
+        with pytest.raises(IndexError):
+            random_spool[array]
+
+    def test_bad_array_type(self, random_spool):
+        """Ensure a non-index or int array raises."""
+        array = np.arange(len(random_spool)) + 0.01
+        with pytest.raises(ValueError, match="Only bool or int dtypes"):
+            random_spool[array]
+
+    def test_rearrange(self, random_spool):
+        """Ensure patch order can be changed."""
+        array = np.array([len(random_spool) - 1, 0])
+        out = random_spool[array]
+        assert out[0] == random_spool[-1]
+        assert out[-1] == random_spool[0]
 
 
 class TestSpoolIterable:
@@ -274,6 +350,17 @@ class TestSelect:
         spool2 = diverse_spool.select(time=(None, "2020-01-01"))
         assert spool1 == spool2
 
+    def test_non_coord_patches(self, spool_with_non_coords):
+        """Ensure non-coords still can be selected."""
+        first = spool_with_non_coords[0]
+        time_coord = first.get_coord("time")
+        time_sel = (time_coord.min(), time_coord.max())
+        out = spool_with_non_coords.select(time=time_sel)
+        # Ensure all remaining patches have valid time coords.
+        for patch in out:
+            assert isinstance(patch, dc.Patch)
+            assert not np.any(pd.isnull(patch.get_array("time")))
+
 
 class TestSort:
     """Tests for sorting spools."""
@@ -377,7 +464,7 @@ class TestMap:
         """Ensure outputs don't have to be patches."""
         out = list(random_spool.map(lambda x: np.max(x.data)))
         for val in out:
-            assert isinstance(val, np.float_)
+            assert isinstance(val, np.float64)
 
     def test_dummy_client(self, random_spool):
         """Ensure a client arguments works."""
@@ -410,7 +497,7 @@ class TestMap:
 
         def get_dist_max(patch):
             """Function which will be mapped to each patch in spool."""
-            return patch.aggregate("time", "max")
+            return patch.select(time=10, samples=True)
 
         out = list(random_spool.chunk(time=5, overlap=1).map(get_dist_max))
         new_spool = dc.spool(out)
@@ -475,6 +562,64 @@ class TestGetSpool:
         assert isinstance(pickle_spool, MemorySpool)
 
 
+class TestSpoolBehaviorOptionalImports:
+    """
+    Tests for spool behavior when handling optional formats which require
+    optional dependencies.
+
+    Essentially, if the spool is specific to the file (eg spool("file"))
+    it should raise. If it is applied on a directory with such files
+    (eg spool("directory/with/bad/files")) it should give a warning.
+    """
+
+    # The string to match against the warning/error.
+    _msg = "found files that can be read if additional"
+
+    @pytest.fixture(scope="function", autouse=True)
+    def monkey_patch_segy(self, monkeypatch):
+        """Monkey patch the name of the imported library for segy."""
+        # TODO we should find a cleaner way to do this in the future.
+        from dascore.io.segy import SegyV1_0
+
+        monkeypatch.setattr(SegyV1_0, "_package_name", "not_segyio_clearly")
+
+    @pytest.fixture(scope="class")
+    def segy_file_path(self, tmp_path_factory):
+        """
+        Create a directory structure like this:
+
+        optional_import_test
+        - h5_simple_1.h5
+        - segy_only
+          - small_channel_patch.sgy
+        """
+        dir_path = tmp_path_factory.mktemp("optional_import_test")
+        simple_path = fetch("h5_simple_1.h5")
+        shutil.copy(simple_path, dir_path)
+
+        segy_only_path = dir_path / "segy_only"
+        segy_only_path.mkdir(exist_ok=True, parents=True)
+        segy_path = fetch("small_channel_patch.sgy")
+        shutil.copy(segy_path, segy_only_path)
+        return segy_only_path / segy_path.name
+
+    def test_spool_on_directory_no_other_files(self, segy_file_path):
+        """Ensure a directory with no other readable files raises."""
+        with pytest.raises(MissingOptionalDependencyError, match=self._msg):
+            dc.spool(segy_file_path.parent).update()
+
+    def test_spool_on_single_file(self, segy_file_path):
+        """Ensure a single file also raises."""
+        with pytest.raises(MissingOptionalDependencyError, match=self._msg):
+            dc.spool(segy_file_path).update()
+
+    def test_spool_on_multiple_files(self, segy_file_path):
+        """Ensure if other files exist the warning is issued."""
+        top_level = segy_file_path.parent.parent
+        with pytest.warns(UserWarning, match=self._msg):
+            dc.spool(top_level).update()
+
+
 class TestMisc:
     """Tests for misc. spool cases."""
 
@@ -508,70 +653,3 @@ class TestMisc:
         spool = dc.spool(random_dft_patch)
         patch = spool[0]
         assert isinstance(patch, dc.Patch)
-
-
-class TestSpoolStack:
-    """Tests for stacking (adding) spool content."""
-
-    def test_stack_data(self):
-        """
-        Try the stack method on an example spool that has repeated
-        copies of the same patch with different times. Check data.
-        """
-        # Grab the example spool which has repeats of the same patch
-        # but with different time dimensions. Stack the patches.
-        spool = dc.get_example_spool()
-        stack_patch = spool.stack(dim_vary="time")
-        # We expect the sum/stack to be same as a multiple of
-        # the first patch's data.
-        baseline = float(len(spool)) * spool[0].data
-        assert np.allclose(baseline, stack_patch.data)
-
-    def test_same_dim_different_shape(self, random_spool):
-        """Ensure when stack dimensions have different shape an error is raised."""
-        # Create a spool with two patches, each with time dim but with different
-        # lengths.
-        patch1, patch2 = random_spool[:2]
-        patch2 = patch2.select(time=(1, 30), samples=True)
-        spool = dc.spool([patch1, patch2])
-        # Check that warnings/exceptions are raised.
-        msg = "Patches are not compatible"
-        with pytest.raises(IncompatiblePatchError, match=msg):
-            spool.stack(dim_vary="time", check_behavior="raise")
-        # Or a warning issued.
-        with pytest.warns(UserWarning, match=msg):
-            spool.stack(dim_vary="time", check_behavior="warn")
-
-    def test_different_dimensions(self, random_spool):
-        """Tests for when the spool has patches with different dimensions."""
-        new_patch = random_spool[0].rename_coords(time="money")
-        spool = dc.spool([random_spool[1], new_patch])
-        msg = "because their dimensions are not equal"
-        with pytest.warns(UserWarning, match=msg):
-            spool.stack(dim_vary="time", check_behavior="warn")
-
-    def test_bad_dim_vary(self, random_spool):
-        """Ensure when dim_vary is not in patch an error is raised."""
-        with pytest.raises(PatchDimError):
-            random_spool.stack(dim_vary="money")
-
-    def test_stack_coords(self):
-        """
-        Try the stack method on an example spool that has repeated
-        copies of the same patch with different times. Check coords.
-        """
-        # Grab the example spool which has repeats of the same patch
-        # but with different time dimensions. Stack the patches.
-        spool = dc.get_example_spool()
-        stack_patch = spool.stack(dim_vary="time")
-        # check that 'time' coordinates has same step as original patch
-        time_coords = stack_patch.coords.coord_map["time"]
-        orig_time_coords = spool[0].coords.coord_map["time"]
-        assert time_coords.step == orig_time_coords.step
-        # check that distance coordinates are the same
-        dist_coords = stack_patch.coords.coord_map["distance"]
-        orig_dist_coords = spool[0].coords.coord_map["distance"]
-        assert dist_coords.start == orig_dist_coords.start
-        assert dist_coords.stop == orig_dist_coords.stop
-        assert dist_coords.step == orig_dist_coords.step
-        assert dist_coords.units == orig_dist_coords.units

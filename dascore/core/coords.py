@@ -1,7 +1,9 @@
 """Machinery for coordinates."""
+
 from __future__ import annotations
 
 import abc
+from collections.abc import Sized
 from functools import cache
 from operator import gt, lt
 from typing import Any, TypeVar
@@ -9,6 +11,8 @@ from typing import Any, TypeVar
 import numpy as np
 import pandas as pd
 from pydantic import (
+    ValidationError,
+    field_validator,
     model_serializer,
     model_validator,
 )
@@ -16,7 +20,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.compat import array
+from dascore.compat import array, is_array
 from dascore.constants import dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import (
@@ -30,6 +34,10 @@ from dascore.units import (
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
+    _get_nullish,
+    _maybe_array_to_slice,
+    _to_slice,
+    _validate_sample_values,
     all_close,
     all_diffs_close_enough,
     cached_method,
@@ -39,7 +47,6 @@ from dascore.utils.misc import (
 from dascore.utils.models import (
     ArrayLike,
     DascoreBaseModel,
-    DTypeLike,
     UnitQuantity,
 )
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
@@ -66,7 +73,7 @@ def ensure_consistent_dtype(value, name, dtype):
         value = dc.to_timedelta64(value)
     # convert numpy numerics back to python
     elif np.issubdtype(dtype, np.floating):
-        value = float(value) if value is not None else np.NaN
+        value = float(value) if value is not None else np.nan
     elif np.issubdtype(dtype, np.integer):
         value = int(value)
     return value
@@ -159,18 +166,6 @@ def _get_coord_filter_validators(dtype):
     return tuple(out)
 
 
-def _get_nullish_for_type(dtype):
-    """Returns an appropriate null value for a given numpy type."""
-    if np.issubdtype(dtype, np.datetime64):
-        return np.datetime64("NaT")
-    if np.issubdtype(dtype, np.timedelta64):
-        return np.timedelta64("NaT")
-    # everything else should be a NaN (which is a float). This is
-    # a bit of a problem for ints, which have no null rep., but upcasting
-    # to float will probably cause less damage then using None
-    return np.NaN
-
-
 def get_compatible_values(val, dtype):
     """
     Get values compatible with dtype.
@@ -206,11 +201,14 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     units: UnitQuantity = None
     step: Any = None
+    shape: tuple[int, ...] | None = None
+    dtype: Any = None
 
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False
     _sorted = False
     _reverse_sorted = False
+    _partial = False
 
     @model_validator(mode="before")
     @classmethod
@@ -227,16 +225,170 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 data["units"] = quant
         return data
 
+    @field_validator("shape", mode="before")
+    @classmethod
+    def _validate_nullish_to_nan(cls, value):
+        """Ensure shape is a tuple."""
+        # This also allows shape to be an int.
+        return tuple(iterate(value))
+
     @abc.abstractmethod
     def convert_units(self, unit) -> Self:
         """Convert from one unit to another. Set units if None are set."""
 
+    def _get_value_index(self, coord_array, values_to_find):
+        """Get the indices were values occur in array, account for duplicates."""
+        # We check insertion order from both sides to catch duplicate values.
+        inds_left = np.searchsorted(coord_array, values_to_find, side="left")
+        inds_right = np.searchsorted(coord_array, values_to_find, side="right")
+        if np.all(inds_right == (inds_left + 1)):  # Quick path for no duplicates.
+            return inds_left
+        # Each left right pair now needs to form a range so we include all
+        # elements in between.
+        ar = np.stack([inds_left, inds_right], axis=-1)
+        inds = np.concatenate([np.arange(x[0], x[1]) for x in ar])
+        return inds
+
+    def _order_by_value_array(self, values_to_find):
+        """Select values based on an array of values."""
+        coord_array = self.values
+        # First simply filter arg values to only include those in the index
+        values_to_find = values_to_find[np.isin(values_to_find, coord_array)]
+        # Handle fast cases for sorted and reverse sorted coords.
+        if self.sorted:
+            inds = self._get_value_index(coord_array, values_to_find)
+            return self[inds], inds
+        if self.reverse_sorted:
+            # Need to_float here because datetime can't be multiplied by -1.
+            inds = self._get_value_index(
+                -to_float(coord_array), -to_float(values_to_find)
+            )
+            return self[inds], inds
+        # Sort the array, then find insertion points, and map
+        # back to pre-sorted indices.
+        argsort = np.argsort(coord_array)
+        sorted_coord_array = coord_array[argsort]
+        sorted_inds = self._get_value_index(sorted_coord_array, values_to_find)
+        inds = argsort[sorted_inds]
+        return self[inds], inds
+
+    def _order_by_sample_array(self, array):
+        """Select based on index values."""
+        if not np.issubdtype(array.dtype, np.integer):
+            msg = (
+                "Using an array input for select "
+                "with samples requires integer dtype."
+            )
+            raise CoordError(msg)
+        # Filter out bad indices
+        array = array[np.abs(array) < len(self)]
+        return self[array], array
+
+    def _select_by_value_array(self, array):
+        """Select values based on an array of values."""
+        values = self.values
+        # First simply filter arg values to only include those in the index
+        valid_values = np.isin(values, array)
+        return self[valid_values], valid_values
+
+    def _select_by_sample_array(self, array):
+        """Select based on index values."""
+        if not np.issubdtype(array.dtype, np.integer):
+            msg = "Using an array input for select with samples requires integer dtype."
+            raise CoordError(msg)
+        # Filter out bad indices
+        assert self.ndim <= 1, "Select only works on 1D coords."
+        inds = np.arange(len(self))
+        valid_values = np.isin(inds, array)
+        return self[valid_values], valid_values
+
+    def _select_by_array(self, arg, samples=False, relative=False):
+        """Select based on arg being an array."""
+        if samples:
+            return self._select_by_sample_array(arg)
+        if np.issubdtype(getattr(arg, "dtype", None), np.bool_):
+            return self[arg], arg
+        arg = self._get_compatible_value(arg, relative=relative)
+        return self._select_by_value_array(arg)
+
+    def _select_by_samples(self, arg):
+        """Select using samples."""
+        _validate_sample_values(arg)
+        reductions = _to_slice(arg)
+        new = self[reductions]
+        return new, reductions
+
     @abc.abstractmethod
-    def select(self, arg, relative=False) -> tuple[Self, slice | ArrayLike]:
+    def select(
+        self, arg, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
         """
         Returns an entity that can be used in a list for numpy indexing
         and selected coord.
         """
+
+    def order(
+        self, array, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
+        """
+        Order coordinate according to array values or samples.
+
+        Parameters
+        ----------
+        array
+            A numpy array of values in coordinate or (if samples)
+            indices.
+        relative
+            If True, the values are relative to the start or end of coordinate.
+        samples
+            If True, the array is of dtype in and refers to samples in the
+            coordinate.
+        """
+        array = np.atleast_1d(array)
+        if samples:
+            coord, inds = self._order_by_sample_array(array)
+        else:
+            array_compat = self._get_compatible_value(array, relative=relative)
+            coord, inds = self._order_by_value_array(array_compat)
+        return coord, _maybe_array_to_slice(inds, len(self))
+
+    def align_to(
+        self, other: BaseCoord
+    ) -> tuple[BaseCoord, BaseCoord, slice | ArrayLike, slice | ArrayLike]:
+        """
+        Align the coordinate to another coordinate.
+
+        This returns two new coordinates which share values as well indexer's
+        needed to align corresponding arrays.
+
+        Parameters
+        ----------
+        other
+            The other coordinate.
+        """
+
+        def valid_non_coord(coord1, coord2):
+            lens = {len(x) for x in [coord1, coord2]}
+            # For compatibility one coord must have length 1 or
+            # coords must be same length.
+            if not (1 in lens or len(lens) == 1):
+                msg = (
+                    "Non coordinates must be the same length as coordinate "
+                    "or length 1 for broadcasting to work."
+                )
+                raise CoordError(msg)
+
+        if self == other:
+            return self, other, slice(None), slice(None)
+        assert self.ndim == 1, "can only align 1D arrays."
+        if isinstance(self, CoordPartial) or isinstance(other, CoordPartial):
+            valid_non_coord(self, other)
+            return self, other, slice(None), slice(None)
+        data1, data2 = self.data, other.data
+        intersection = np.intersect1d(data1, data2)
+        coord1, slice1 = self.order(intersection)
+        coord2, slice2 = other.order(intersection)
+        return coord1, coord2, slice1, slice2
 
     @abc.abstractmethod
     def __getitem__(self, item) -> Self:
@@ -245,7 +397,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     @cached_method
     def __len__(self):
         """Total number of elements."""
-        return np.prod(self.shape)
+        return self.shape[0]
 
     def __rich__(self):
         key_style = dascore_styles["keys"]
@@ -275,7 +427,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __str__(self):
         return str(self.__rich__())
 
-    def __array__(self):
+    __repr__ = __str__
+
+    def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""
         return self.data
 
@@ -294,11 +448,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Return a unit string."""
         return get_quantity_str(self.units)
 
-    @property
-    def degenerate(self):
-        """Returns true if coord is degenerate (empty)."""
-        return not bool(len(self))
-
     @abc.abstractmethod
     def _min(self):
         """Returns (or generates) the array data."""
@@ -314,14 +463,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         return self.min(), self.max()
 
     @property
-    @abc.abstractmethod
-    def dtype(self) -> DTypeLike:
-        """Returns a numpy datatype."""
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        """Return the shape of the coordinate data."""
-        return self.data.shape
+    @cached_method
+    def ndim(self) -> int:
+        """Return the number of dimensions in patch."""
+        return len(self.shape)
 
     @property
     def size(self) -> int:
@@ -342,6 +487,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def reverse_sorted(self) -> tuple[int, ...]:
         """Returns True if the coord in sorted in reverse order."""
         return self._reverse_sorted
+
+    @property
+    def degenerate(self) -> bool:
+        """Return True of the coord is degenerate."""
+        shape = self.shape
+        return not len(shape) or np.prod(shape) == 0
 
     def set_units(self, units) -> Self:
         """Set new units on coordinates."""
@@ -421,6 +572,19 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         units = kwargs.get("units")
         return get_coord(data=data, units=units)
 
+    def new(self, **kwargs):
+        """Update coordinate."""
+        info = self.model_dump(exclude_unset=True, exclude_defaults=True)
+        # Need to only pass "values" rather than data to update
+        if "data" in kwargs:
+            kwargs["values"] = kwargs.pop("data")
+        # Need to ensure new data is used in constructor, not old shape
+        if "values" in kwargs:
+            info.pop("shape", None)
+
+        info.update(kwargs)
+        return get_coord(**info)
+
     @property
     def data(self):
         """Return the internal data. Same as values attribute."""
@@ -437,7 +601,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if hasattr(value, "units"):
             value = convert_units(value.magnitude, self.units, value.units)
         # if null or ... just return None
-        if pd.isnull(value) or value is Ellipsis:
+        if not is_array(value) and (pd.isnull(value) or value is Ellipsis):
             return None
         # special case for datetime and relative
         if relative:
@@ -475,7 +639,6 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             An object for determining select range.
         """
         select_tuple = sanitize_range_param(select)
-
         p1, p2 = (
             self._get_compatible_value(x, relative=relative) for x in select_tuple
         )
@@ -488,7 +651,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def _get_relative_values(self, value):
         """Get relative values based on start (pos) or stop (neg)."""
-        pos = value >= 0
+        pos = np.sign(value).astype(np.int_) >= 0
         return self.min() + value if pos else self.max() + value
 
     def empty(self, axes=None) -> Self:
@@ -504,7 +667,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             new_shape = np.zeros(len(self.shape), dtype=np.int_)
         else:
             assert np.max(axes) <= (len(self) - 1)
-            new_shape = np.array(self.shape)
+            new_shape = np.asarray(self.shape)
             for ind in iterate(axes):
                 new_shape[ind] = 0
         data = np.empty(tuple(new_shape), dtype=self.dtype)
@@ -552,13 +715,15 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def update(self, **kwargs):
         """Update parts of the coordinate."""
+        out = self
         info = self.model_dump()
         update_fields = {
             i: v for i, v in kwargs.items() if not all_close(v, info.get(i))
         }
         units = update_fields.pop("units", None)
         _ = update_fields.pop("dtype", None)
-        out = self.update_limits(**update_fields).update_data(**update_fields)
+        if update_fields:
+            out = out.update_limits(**update_fields).update_data(**update_fields)
         if units is not None:
             out = out.convert_units(units)
         return out
@@ -577,8 +742,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         samples
             If True, value is already in units of samples.
         """
+        assert self.ndim == 1, "get sample count only works for 1D coords."
         if not self.evenly_sampled:
-            msg = "Coordinate is not evenly sampled, cant get sample count."
+            msg = "Coordinate is not evenly sampled, can't get sample count."
             raise CoordError(msg)
         if samples:
             if not isinstance(value, int | np.integer):
@@ -597,7 +763,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             raise ParameterError(msg)
         return samples
 
-    def get_next_index(self, value, samples=False, allow_out_of_bounds=False) -> int:
+    def get_next_index(
+        self, value, samples=False, allow_out_of_bounds=False, relative=False
+    ) -> int:
         """
         Get the index a value would have in a coordinate.
 
@@ -614,6 +782,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             If True, allow the value to be out of bounds of the coordinate
             and just return an index referring to the end
             (len(coords) - 1) or beginning (0).
+        relative
+            If True, the provided values are relative to the start (if possitve)
+            or end (if negative) of the coordinate.
 
         Examples
         --------
@@ -624,30 +795,189 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         >>> # The next (not closest) index is return for value not in coord.
         >>> assert coord.get_next_index(2.000001) == 3
         """
+        if not self.sorted:
+            msg = f"Coords must be sorted to use get_next_index, {self} is not."
+            raise CoordError(msg)
+        input_array_like = isinstance(value, Sized)
+        array = np.atleast_1d(value)
+
         # handle samples
         if samples:
             min_val, max_val = 0, len(self) - 1
-            value = int(np.round(value))
+            array = array.astype(np.int64)
+            wrap_around = array < 0
             # account for negative indexing
-            value = value if value >= 0 else value + max_val + 1
+            array[wrap_around] = array[wrap_around] + max_val + 1
         else:
-            value = self._get_compatible_value(value)
             min_val, max_val = self.min(), self.max()
+            array = self._get_compatible_value(array, relative=relative)
         # handle out of bounds cases
-        if (is_gt := value > max_val) or (value < min_val):
-            if not allow_out_of_bounds:
-                msg = f"Value: {value} is out of bounds for {self}"
-                raise ValueError(msg)
-            return max_val if is_gt else min_val
+        is_gt, is_lt = array > max_val, array < min_val
+        if not allow_out_of_bounds and np.any(is_gt | is_lt):
+            msg = f"Value: {array} is out of bounds for {self}"
+            raise ValueError(msg)
+        # Fix max values
+        array[is_gt] = max_val
+        array[is_lt] = min_val
         # samples should already have the answer, just return
         if samples:
-            return value
+            return array if input_array_like else array[0]
         # otherwise get forward and backward inds
-        for_index = self._get_index(value, forward=True)
-        back_index = self._get_index(value, forward=False)
-        ranges = [x for x in [for_index, back_index] if x is not None]
-        assert len(ranges)
-        return ranges[0]
+        forward_index = self._get_index(array, forward=True)
+        back_index = self._get_index(array, forward=False)
+        bad_for_index = pd.isnull(forward_index) | forward_index == -9999
+        forward_index[bad_for_index] = back_index[bad_for_index]
+        return forward_index if input_array_like else forward_index[0]
+
+    def approx_equal(self: BaseCoord, other: BaseCoord) -> bool:
+        """
+        Return True if the coordinates are approximately equal.
+
+        Parameters
+        ----------
+        other
+            Another coordinate.
+        """
+        if self.shape != other.shape:
+            return False
+        non_coords = [self._partial, other._partial]
+        if all(non_coords):
+            return self == other
+        if any(non_coords):
+            return False
+        return all_close(self.values, other.values)
+
+    def change_length(self, length: int) -> Self:
+        """
+        Adjust the length of the coordinate by changing the end value.
+
+        This is useful for floating point coordinates who frequently suffer
+        from off by one errors.
+
+        Note: Not all coordinates implement this method.
+
+        Parameters
+        ----------
+        length
+            The output length.
+        """
+        msg = f"Coordinate type {self.__class__} does not implement change_length"
+        raise NotImplementedError(msg)
+
+
+class CoordPartial(BaseCoord):
+    """
+    A coordinate which only contains partial information.
+    """
+
+    start: Any = np.nan
+    stop: Any = np.nan
+    step: Any = np.nan
+    _rich_style = dascore_styles["coord_non"]
+    _partial = True
+
+    @field_validator("start", "stop", "step", mode="before")
+    @classmethod
+    def _validate_nullish_to_nan(cls, value, info):
+        """Ensure nullish values are actually set as NaN"""
+        if pd.isnull(value):
+            return np.nan
+        return value
+
+    def __getitem__(self, item):
+        # We init a temporary array just to get numpy to do the
+        # indexing. There is probably a faster way but this is robust.
+        dummy = np.empty(self.shape)[item]
+        return self.__class__(shape=dummy.shape)
+
+    def _max(self):
+        """Dummy funct to do nothing but raise."""
+        return self.stop
+
+    def _min(self):
+        return self.start
+
+    def update(self, **kwargs):
+        """No values to change so update can just call new."""
+        return self.new(**kwargs)
+
+    # Other operations that normally modify data do not in this case.
+    update_limits = update
+    set_units = update
+    convert_units = update
+
+    def sort(self, reverse=False):
+        """Sort dummy array. Does nothing."""
+        return self, slice(None, None)
+
+    def __len__(self):
+        return self.shape[0]
+
+    @property
+    def values(self):
+        """Return the internal data. Same as values attribute."""
+        null_val = np.asarray(_get_nullish(self.dtype))
+        data = np.broadcast_to(null_val, self.shape)
+        return data
+
+    def _check_order_and_select(self, relative, samples):
+        """Check that samples is True and relative false else raise msg."""
+        if relative or not samples:
+            msg = (
+                "UnCoord does not support relative and samples must be True "
+                "for both select and order methods."
+            )
+            raise CoordError(msg)
+
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
+        """
+        Select new values inside coord.
+
+        For partial, samples==True or raise.
+        """
+        # Need to ensure relative is used OR the select has no effect.
+        try:
+            self._check_order_and_select(relative, samples)
+        except CoordError as e:
+            if not is_array(args):
+                args = self.get_slice_tuple(args, relative=False)
+                # Check if the select has no effect and return self or raise.
+                if all(pd.isnull(x) for x in args):
+                    return self, slice(None)
+            raise e
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        return self._select_by_samples(args)
+
+    @compose_docstring(doc=BaseCoord.order.__doc__)
+    def order(
+        self, array, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
+        """
+        {doc}.
+        """
+        self._check_order_and_select(relative, samples)
+        return super().order(array, relative=relative, samples=samples)
+
+    @compose_docstring(doc=BaseCoord.change_length.__doc__)
+    def change_length(self, length: int) -> Self:
+        """
+        {doc}
+        """
+        assert self.ndim == 1, "change_length only works on 1D coords."
+        return get_coord(shape=(length,))
+
+    def to_summary(self, dims=()) -> CoordSummary:
+        """Get the summary info about the coord."""
+        return CoordSummary(
+            min=np.nan,
+            max=np.nan,
+            step=np.nan,
+            dtype=self.dtype,
+            units=None,
+        )
 
 
 class CoordRange(BaseCoord):
@@ -676,36 +1006,53 @@ class CoordRange(BaseCoord):
 
     @model_validator(mode="before")
     @classmethod
-    def ensure_all_attrs_set(cls, values):
-        """If any info is neglected the coord is invalid."""
-        for name in ["start", "stop", "step"]:
-            assert values[name] is not None
+    def validate_start_stop_step_len(cls, values):
+        """Coerce the needed values from the inputs."""
+        req_values = ("start", "stop", "step", "shape")
+        _attrs = [values.get(x, None) for x in req_values]
+        valid_count = sum(not pd.isnull(x) for x in _attrs)
+        if valid_count < 3:
+            msg = (
+                f"Three of {req_values} are required to create CoordRange. "
+                f"You passed {values}"
+            )
+            raise CoordError(msg)
+        # Now get start, stop, step from length, if provided.
+        start, stop, step, shape = _attrs
+        if not pd.isnull(shape):
+            shape = tuple(iterate(shape))
+            assert len(shape) == 1, "Coord range only works for 1D coords."
+            length = shape[0]
+            if pd.isnull(start):
+                start = stop - step * length
+            if pd.isnull(stop):
+                stop = start + step * length
+            if pd.isnull(step):
+                step = (stop - start) / length
+                # handle conversion to integer if other values are ints.
+                if isinstance(start, int) and isinstance(stop, int):
+                    step = int(step) if np.isclose(np.round(step), step) else step
+        if step != 0:
+            int_val = int(np.ceil(np.round((stop - start) / step, 1)))
+            stop = start + step * int_val
+        length = 1 if start == stop else int(np.round((stop - start) / step))
+        shape = (length,)
+        values.update(dict(start=start, stop=stop, shape=shape, step=step))
         # step should have the same sign as stop-start, see #321.
-        diff = values["stop"] - values["start"]
+        diff = stop - start
         # note: we need to the to_float since np.sign(datetime64) returns a
         # datetime64 which includes precision, so even if the sign is the same
         # if the precision is different this validation fails.
         if not np.sign(to_float(values["step"])) == np.sign(to_float(diff)):
             msg = "Sign of step must match sign of stop - start"
             raise CoordError(msg)
-        return values
-
-    @model_validator(mode="before")
-    @classmethod
-    def _set_stop(cls, values):
-        """Set stop to integral value >= current stop."""
-        start, stop = values.get("start"), values.get("stop")
-        step = values.get("step")
-        assert all(x is not None for x in [start, stop, step])
-        dur = stop - start
-        if step == 0:
-            return values
-        int_val = int(np.ceil(np.round(dur / step, 1)))
-        values["stop"] = start + step * int_val
+        # Note: dtype was a property before but it messed up model
+        # serialization.
+        values["dtype"] = np.asarray(start + step).dtype
         return values
 
     def __getitem__(self, item):
-        if isinstance(item, int):
+        if isinstance(item, (int | np.integer)):
             if item >= len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
             return self.values[item]
@@ -720,12 +1067,7 @@ class CoordRange(BaseCoord):
 
     @cached_method
     def __len__(self):
-        if self.start == self.stop:
-            return 1
-        out = abs((self.stop - self.start) / self.step)
-        # due to floating point weirdness this can sometimes be very close
-        # but not exactly an int, so we need to round.
-        return int(np.round(out))
+        return self.shape[0]
 
     def convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
@@ -739,25 +1081,32 @@ class CoordRange(BaseCoord):
         out["start"], out["stop"], out["step"] = start, stop, step
         return self.__class__(**out)
 
-    def select(self, args, relative=False) -> tuple[BaseCoord, slice | ArrayLike]:
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[BaseCoord, slice | ArrayLike]:
         """
         Apply select, return selected coords and index to apply to array.
 
         Can return a CoordDegenerate if selection is outside of range.
         """
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        elif samples:
+            return self._select_by_samples(args)
         args = self.get_slice_tuple(args, relative=relative)
         start = self._get_index(args[0], forward=self.sorted)
         stop = self._get_index(args[1], forward=self.reverse_sorted)
         if self.reverse_sorted:
             start, stop = stop, start
         # we add 1 to stop in slice since its upper limit is exclusive
-        out = slice(start, (stop + 1) if stop is not None else stop)
-        if self._slice_degenerate(out):
+        start = None if start == 0 else start
+        data = slice(start, (stop + 1) if stop is not None else stop)
+        if self._slice_degenerate(data):
             return self.empty(), slice(0, 0)
         new_start = self[start] if start is not None else self.start
         new_end = self[stop] + self.step if stop is not None else self.stop
-        new = self.new(start=new_start, stop=new_end)
-        return new, out
+        new_coords = self.new(start=new_start, stop=new_end)
+        return new_coords, data
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the contents of the coord. Return new coord and slice for sorting."""
@@ -778,14 +1127,19 @@ class CoordRange(BaseCoord):
         """Get the index corresponding to a value."""
         if (value := self._get_compatible_value(value)) is None:
             return value
+        input_is_array = isinstance(value, Sized)
+        array = np.atleast_1d(value)
         func = np.ceil if forward else np.floor
-        start, _, step = self.start, self.stop, self.step
+        start, step = self.start, self.step
         # Due to float weirdness we need a little bit of a fudge factor here.
-        fraction = func(np.round((value - start) / step, decimals=10))
-        out = int(fraction)
-        if (out <= 0 and forward) or (out >= len(self) and not forward):
+        fraction = func(np.round((array - start) / step, decimals=10))
+        out = fraction.astype(np.int64)
+        lt_forward = (out < 0) & forward
+        gt_back = (out >= len(self)) & (not forward)
+        bad_values = lt_forward | gt_back
+        if not input_is_array and np.any(bad_values):
             return None
-        return out
+        return out if input_is_array else int(out[0])
 
     @compose_docstring(doc=BaseCoord.update_limits.__doc__)
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
@@ -822,15 +1176,17 @@ class CoordRange(BaseCoord):
     def values(self) -> ArrayLike:
         """Return the values of the coordinate as an array."""
         if len(self) == 1:
-            return np.array([self.start])
+            return np.asarray([self.start])
         # note: linspace works better for floats that might have slightly
         # uneven spacing. It ensures the length of the output array is robust
         # to small deviations in spacing. However, this doesnt work for datetimes.
         if is_datetime64(self.start) or is_timedelta64(self.start):
             out = np.arange(self.start, self.stop, self.step)
         else:
-            out = np.linspace(self.start, self.stop - self.step, num=len(self))
-        # again, due to roundoff error the array can one element longer than
+            out = np.linspace(
+                self.start, self.stop - self.step, num=len(self), dtype=self.dtype
+            )
+        # again, due to round-off error the array can one element longer than
         # anticipated. The slice here just ensures shape and len match.
         return array(out[: len(self)])
 
@@ -844,18 +1200,12 @@ class CoordRange(BaseCoord):
         # the min/max are needed for reverse sorted coord.
         return np.max([self.stop - self.step, self.start])
 
+    @compose_docstring(doc=BaseCoord.change_length.__doc__)
     def change_length(self, length: int) -> Self:
         """
-        Adjust the length of the coordinate by changing the end value.
-
-        This is useful for floating point coordinates who frequently suffer
-        from off by one errors.
-
-        Parameters
-        ----------
-        length
-            The output length.
+        {doc}
         """
+        assert self.ndim == 1, "Can only change length for 1D coords."
         if (current := len(self)) == length:
             return self
         diff = length - current
@@ -874,15 +1224,6 @@ class CoordRange(BaseCoord):
         """Returns true if sorted in ascending order."""
         return self.step < 0
 
-    @property
-    @cached_method
-    def dtype(self):
-        """Returns datatype."""
-        # some types are weird so we create a small array here to let
-        # numpy determine its dtype. It should only be 1 element long
-        # so not expensive to do.
-        return np.arange(self.start, self.start + self.step, self.step).dtype
-
 
 class CoordArray(BaseCoord):
     """
@@ -894,6 +1235,14 @@ class CoordArray(BaseCoord):
     values: ArrayLike
     _rich_style = dascore_styles["coord_array"]
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_start_stop_step_len(cls, values):
+        """Coerce the needed values from the inputs."""
+        values["dtype"] = values["values"].dtype
+        values["shape"] = values["values"].shape
+        return values
+
     def convert_units(self, units) -> Self:
         """Convert units, or set units if none exist."""
         is_time = np.issubdtype(self.dtype, np.datetime64)
@@ -903,8 +1252,15 @@ class CoordArray(BaseCoord):
         values = convert_units(self.values, units, self.units)
         return self.new(units=units, values=values)
 
-    def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        elif samples:
+            return self._select_by_samples(args)
+
         args = self.get_slice_tuple(args, relative=relative)
         values = self.values
         out = np.ones_like(values, dtype=np.bool_)
@@ -993,34 +1349,11 @@ class CoordArray(BaseCoord):
 
     def _min(self):
         """Return min value."""
-        try:
-            return np.min(self.values)
-        except ValueError:  # degenerate data case
-            return _get_nullish_for_type(self.dtype)
+        return np.nanmin(self.values)
 
     def _max(self):
         """Return max value in range."""
-        try:
-            return np.max(self.values)
-        except ValueError:  # degenerate data case
-            return _get_nullish_for_type(self.dtype)
-
-    @property
-    @cached_method
-    def dtype(self):
-        """Returns datatype."""
-        return self.values.dtype
-
-    @property
-    @cached_method
-    def shape(self):
-        """Return the shape of the coordinate."""
-        return np.shape(self.values)
-
-    # def __eq__(self, other):
-    #     # Frustratingly, all cose doesn't work with datetime64 so we we need
-    #     # this short-circuiting equality check.
-    #     if values_same and self_d == other_d and values_same:
+        return np.nanmax(self.values)
 
 
 class CoordMonotonicArray(CoordArray):
@@ -1030,39 +1363,63 @@ class CoordMonotonicArray(CoordArray):
     _rich_style = dascore_styles["coord_monotonic"]
     _sorted = True
 
-    def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        elif samples:
+            return self._select_by_samples(args)
+
         v1, v2 = self.get_slice_tuple(args, relative=relative)
         # reverse order if reverse monotonic. This is done so when we mult
         # by -1 in _get_index the inverted range is used.
         if self.reverse_sorted:
             v1, v2 = v2, v1
-        start = self._get_index(v1, left=True)
+        start = self._get_index(v1, forward=False)
         new_start = start if start is not None and start > 0 else None
-        stop = self._get_index(v2, left=False)
+        stop = self._get_index(v2, forward=True)
         new_stop = stop if stop is not None and stop < len(self) else None
+        # We need to add 1 to end so 1 sample get selected if start == stop
+        if new_stop is not None:
+            if self.values[new_stop] == v2:
+                new_stop = new_stop + 1
         out = slice(new_start, new_stop)
         if self._slice_degenerate(out):
             return self.empty(), slice(0, 0)
         return self.new(values=self.values[out]), out
 
-    def _get_index(self, value, left=True):
+    def _get_index(self, value, forward=True):
         """
         Get the index corresponding to a value.
 
-        Left indicates if this is the min value.
+        Forward indicates if this is the max (left) value.
         """
-        if (value := self._get_compatible_value(value)) is None:
-            return value
-        values = self.values
-        side_dict = {True: "left", False: "right"}
+        if (new_value := self._get_compatible_value(value)) is None:
+            return new_value
+        values = np.atleast_1d(self.values)
         # since search sorted only works on ascending monotonic arrays we
         # negative descending arrays to get the same effect.
         if self.reverse_sorted:
-            values = values * -1
-            value = value * -1
-        ind = np.searchsorted(values, value, side=side_dict[left])
-        return ind
+            values = to_float(values) * -1
+            new_value = to_float(new_value) * -1
+        # side = "right" if forward else "left"
+        # out = np.atleast_1d(np.searchsorted(values, new_value, side=side))
+        # Search values. Ensure the returned index is in bounds (eg values GT
+        # coord max should still have a range in coords.
+        new_value = np.atleast_1d(new_value)
+        right = np.searchsorted(values, new_value, side="right")
+        # right_ok = (right < len(self)) & (right < 0)
+        left = np.searchsorted(values, new_value, side="left")
+        left_ok = (left < len(self)) & (left > 0)
+        eq = left_ok & (values.take(left, mode="clip") == new_value)
+        out = right if forward else left
+        # where equal it should also be left values. This makes the function
+        # behavior consistent with BaseCoord._get_index.
+        if not self.reverse_sorted:
+            out[eq] = left[eq]
+        return out if is_array(value) else int(out[0])
 
     def _step_meets_requirement(self, op):
         """Return True is any data increment meets the comp. requirement."""
@@ -1090,34 +1447,9 @@ class CoordMonotonicArray(CoordArray):
         return self._step_meets_requirement(lt)
 
 
-class CoordDegenerate(CoordArray):
-    """A coordinate with degenerate (empty on one axis) data."""
-
-    values: ArrayLike
-    step: Any = None
-    _rich_style = dascore_styles["coord_degenerate"]
-
-    def select(self, args, relative=False) -> tuple[Self, slice | ArrayLike]:
-        """Select for Degenerate coords does nothing."""
-        return self, slice(None, None)
-
-    def empty(self, axes=None) -> Self:
-        """Empty simply returns self."""
-        return self
-
-    def snap(self, axes=None) -> Self:
-        """Empty simply returns self."""
-        return self
-
-    @property
-    def evenly_sampled(self):
-        """If the degenerate was evenly sampled."""
-        return self.step is not None
-
-
 def get_coord(
     *,
-    data: ArrayLike | None | np.ndarray = None,
+    data: ArrayLike | None | np.ndarray | BaseCoord = None,
     values: ArrayLike | None | np.ndarray = None,
     start=None,
     min=None,
@@ -1125,18 +1457,20 @@ def get_coord(
     max=None,
     step=None,
     units: None | Unit | Quantity | str = None,
+    shape: None | int | tuple[int, ...] = None,
     dtype: str | np.dtype = None,
 ) -> BaseCoord:
     """
-    Given multiple types of input, return a coordinate.
+    Return a coordinate from provided inputs.
 
-    This function automatically figures out which kind of Coordinate
-    should be returned for a given type of input.
+    This function figures out which kind of Coordinate should be returned
+    for provided inputs.
 
     Parameters
     ----------
     data
-        An array indicating the values.
+        An array indicating the values or an integer to specify the length
+        of a partial coordinate.
     values
         Deprecated, use data instead.
     start
@@ -1149,10 +1483,11 @@ def get_coord(
         The sampling spacing of an array.
     units
         Indication of units.
+    shape
+        If an int or tuple, the output should be a partial coord of with
+        this shape. Otherwise, leave unset.
     dtype
-        Only used for compatibility with kwargs produced by other
-        functions. Doesn't do anything as dtype is inferred from other
-        arguments.
+        Data type for coord. Often can be inferred from other arguments.
 
     Notes
     -----
@@ -1181,6 +1516,9 @@ def get_coord(
     >>> # Coordinate from random array
     >>> array = np.random.rand(20)
     >>> array_coord3 = get_coord(data=array)
+    >>>
+    >>> # Create a partial coordinate of a given shape
+    >>> partial_coord = get_coord(shape=(10,))
     """
 
     def _check_data_compatibility(data, start, stop, step):
@@ -1201,9 +1539,25 @@ def get_coord(
             max = data[-1]
         return max
 
+    def _get_shape(shape):
+        """Return proper shape tuple or None."""
+        if shape is None or isinstance(shape, Sized):
+            return shape
+        return (shape,)
+
+    def _get_array(data, values):
+        """Get the array from either data or values."""
+        # ensure data and values are not used
+        if data is not None and values is not None:
+            msg = "Cannot specify both data and values. Use only data."
+            raise CoordError(msg)
+        elif values is not None:
+            data = values
+        return data
+
     def _maybe_get_start_stop_step(data):
         """Get start, stop, step, is_monotonic."""
-        data = np.array(data)
+        data = np.asarray(data)
         view2 = data[1:]
         view1 = data[:-1]
         is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)
@@ -1220,12 +1574,17 @@ def get_coord(
                 return _min, _max + _step, _step, is_monotonic
         return None, None, None, is_monotonic
 
-    # ensure data and values are not used
-    if data is not None and values is not None:
-        msg = "Cannot specify both data and values. Use only data."
-        raise CoordError(msg)
-    elif values is not None:
-        data = values
+    data = _get_array(data, values)
+    shape = _get_shape(shape)
+    if data is None and shape is not None:
+        attrs = dict(
+            shape=shape, start=start, stop=stop, step=step, units=units, dtype=dtype
+        )
+        try:  # This could be a normal RangeCoord
+            return CoordRange(**attrs)
+        except (ValidationError, CoordError):  # If not it's a partial
+            return CoordPartial(**attrs)
+
     # maybe convert min/max to start stop.
     if start is None and min is not None:
         start = min
@@ -1234,13 +1593,23 @@ def get_coord(
     _check_data_compatibility(data, start, stop, step)
     # data array was passed; see if it is monotonic/evenly sampled
     if data is not None:
-        if not isinstance(data, np.ndarray | BaseCoord):
-            data = np.array(data)
-        # values = np.array(values)  # ensure we have a numpy array
+        # Handle attached units.
+        if isinstance(data, dc.units.Quantity):
+            data, maybe_units = data.magnitude, data.units
+            units = units if units is not None else maybe_units
+        if isinstance(data, (int | np.integer)):
+            shape = _get_shape(data)
+            attrs = dict(
+                shape=shape, start=start, stop=stop, step=step, units=units, dtype=dtype
+            )
+            return CoordPartial(**attrs)
         if isinstance(data, BaseCoord):  # just return coordinate
             return data
+        if not isinstance(data, np.ndarray):
+            data = np.atleast_1d(data)
         if np.size(data) == 0:
-            return CoordDegenerate(values=data, units=units, step=step)
+            dtype = dtype or data.dtype
+            return CoordPartial(shape=data.shape, units=units, step=step, dtype=dtype)
         # special case of len 1 array either get range, if step specified
         # or sorted monotonic array if not.
         elif len(data) == 1:
@@ -1255,6 +1624,15 @@ def get_coord(
             return out.change_length(len(data))
         elif monotonic:
             return CoordMonotonicArray(values=data, units=units)
+        elif np.all(pd.isnull(data)):
+            return CoordPartial(
+                shape=data.shape,
+                units=units,
+                start=start,
+                stop=stop,
+                step=step,
+                dtype=dtype,
+            )
         return CoordArray(values=data, units=units)
     else:
         return CoordRange(start=start, stop=stop, step=step, units=units)

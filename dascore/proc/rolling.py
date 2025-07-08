@@ -1,4 +1,5 @@
 """Processing for applying roller operations."""
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -12,7 +13,8 @@ from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DascoreBaseModel
-from dascore.utils.patch import get_dim_value_from_kwargs
+from dascore.utils.patch import get_dim_axis_value
+from dascore.utils.pd import rolling_df
 
 
 class _PatchRollerInfo(DascoreBaseModel):
@@ -74,12 +76,12 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         num_nans = 1 + (self.window - 2) // self.step
         pad_width = [(0, 0)] * len(data.shape)
         pad_width[self.axis] = (num_nans, 0)
-        padded = np.pad(data, pad_width, constant_values=np.NaN)
+        padded = np.pad(data, pad_width, constant_values=np.nan)
         if self.step == 1:
             assert padded.shape == self.patch.data.shape
         if self.center:
             # roll array along axis to center
-            padded = np.roll(padded, -self.window // 2, axis=self.axis)
+            padded = np.roll(padded, -(num_nans // 2), axis=self.axis)
         return padded
 
     def apply(self, function):
@@ -103,12 +105,11 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         step_slice.append(slice(None, None))
         # this accounts for NaNs that pad the start of the array.
         start = self.get_start_index()
-        # start = (self.window - 1) % self.step
         step_slice[self.axis] = slice(start, None, self.step)
-        # apply function, then pad with zeros and roll
+        # apply function, then pad with NaNs and roll
         kwargs = self.func_kwargs
         trimmed_slide_view = slide_view[tuple(step_slice)]
-        raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float_)
+        raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float64)
         out = self._pad_roll_array(raw)
         new_coords = self.get_coords()
         attrs = self._get_attrs_with_apply_history(function)
@@ -153,7 +154,8 @@ class _PandasPatchRoller(_PatchRollerInfo):
     def _get_rolling(self):
         """Get rolling."""
         df = self._get_df()
-        roll = df.rolling(
+        roll = rolling_df(
+            df=df,
             window=self.window,
             step=self.step,
             axis=self.axis,
@@ -163,7 +165,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
 
     def _repack_patch(self, df, attrs=None):
         """Repack patch into dataframe."""
-        data = df.values
+        data = df.values if not self.axis else df.T.values
         # get rid of extra dims if original data doesn't have them.
         if len(data.shape) != len(self.patch.data.shape):
             data = np.squeeze(data)
@@ -228,10 +230,10 @@ def rolling(
     step
         The window is evaluated at every step result, equivalent to slicing
         at every step. If the step argument is not None, the result will
-        have a different shape than the input.
+        have a different shape than the input. Default None.
     center
         If False, set the window labels as the right edge of the window index.
-        If True, set the window labels as the center of the window index.
+        If True, set the window labels as the center of the window index. Default False.
     engine
         Determines how the rolling operations are applied. If None, try to
         determine which will be fastest for a given step. Options are:
@@ -249,6 +251,10 @@ def rolling(
 
     Notes
     -----
+    Here we have included some useful notes for the rolling function.
+
+    #### Note 1: Length of the output and NaN values
+
     Rolling is designed to behaves like Pandas [DataFrame.rolling](
     https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html)
     which has some important implications:
@@ -279,6 +285,35 @@ def rolling(
     - if time = 3 * dt and step = 3 * dt
         [NaN, 2.0]
 
+
+    #### Note 2: Applying custom functions with rolling operation
+
+    When `apply` is the desired rolling operation and we are interested to use our
+    own function over a desired window, we need to define our finction the way that
+    it performs the operation on the last axis of the sliced matrix
+
+    Below is an example of applying a custom zero crossing rate function (zcr_std) with
+    rolling operation for a window size of 100 samples and skipping every other samples.
+    It applys the desired operation (which is multiplying every sample to its next
+    sample to determine the zero crossings) on the last axis of the sliced
+    frame (from rolling).
+
+
+    ```python
+    import numpy as np
+    import dascore as dc
+
+
+    def zcr_std(frame, axis=-1):
+        '''Compute standard deviation of zero crossing rate using rolling function.'''
+        zero_crossings = (frame[..., :-1] * frame[..., 1:]) < 0
+        return np.std(zero_crossings, axis=axis)
+
+
+    patch = dc.get_example_patch()
+    zcr_patch = patch.rolling(time=100, step=2, samples=True).apply(zcr_std)
+    ```
+
     Examples
     --------
     >>> import dascore as dc
@@ -298,12 +333,12 @@ def rolling(
         engines = {"numpy": _NumpyPatchRoller, "pandas": _PandasPatchRoller}
         if cls := engines.get(engine):
             return cls
-        if step < 10 and len(patch.dims) < 2:
+        if step < 10 and len(patch.squeeze().dims) < 2:
             return _PandasPatchRoller
         return _NumpyPatchRoller
 
     # get window sizes in samples
-    dim, axis, value = get_dim_value_from_kwargs(patch, kwargs)
+    dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
     roll_hist = f"rolling({dim}={value}, step={step}, center={center}, engine={engine})"
     coord = patch.get_coord(dim)
     window = coord.get_sample_count(value, samples=samples, enforce_lt_coord=True)

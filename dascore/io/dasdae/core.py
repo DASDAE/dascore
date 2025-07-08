@@ -1,4 +1,5 @@
 """Core module for reading and writing DASDAE format."""
+
 from __future__ import annotations
 
 import contextlib
@@ -9,12 +10,14 @@ import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import (
+    H5Reader,
     HDFPatchIndexManager,
     NodeError,
     PyTablesReader,
     PyTablesWriter,
 )
-from dascore.utils.patch import get_default_patch_name
+from dascore.utils.misc import unbyte
+from dascore.utils.patch import get_patch_names
 
 from .utils import (
     _get_contents_from_patch_groups,
@@ -75,8 +78,9 @@ class DASDAEV1(FiberIO):
             resource.create_group(resource.root, "waveforms")
         waveforms = resource.get_node("/waveforms")
         # write new patches to file
-        for patch in patches:
-            _save_patch(patch, waveforms, resource)
+        patch_names = get_patch_names(patches).values
+        for patch, name in zip(patches, patch_names):
+            _save_patch(patch, waveforms, resource, name)
         indexer = HDFPatchIndexManager(resource)
         if index or indexer.has_index:
             df = self._get_patch_summary(patches)
@@ -87,7 +91,7 @@ class DASDAEV1(FiberIO):
         df = (
             dc.scan_to_df(patches)
             .assign(
-                path=[f"waveforms/{get_default_patch_name(x)}" for x in patches],
+                path=lambda x: get_patch_names(x),
                 file_format=self.name,
                 file_version=self.version,
             )
@@ -95,15 +99,15 @@ class DASDAEV1(FiberIO):
         )
         return df
 
-    def get_format(self, resource: PyTablesReader) -> tuple[str, str] | bool:
+    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """Return the format from a dasdae file."""
         is_dasdae, version = False, ""  # NOQA
-        with contextlib.suppress(KeyError):
-            is_dasdae = resource.root._v_attrs["__format__"] == "DASDAE"
-            dasdae_file_version = resource.root._v_attrs["__DASDAE_version__"]
-        if is_dasdae:
-            return (self.name, dasdae_file_version)
-        return False
+        attrs = resource.attrs
+        file_format = unbyte(attrs.get("__format__", ""))
+        if file_format != self.name:
+            return False
+        version = unbyte(attrs.get("__DASDAE_version__", ""))
+        return file_format, version
 
     def read(self, resource: PyTablesReader, **kwargs) -> SpoolType:
         """Read a dascore file."""
@@ -116,7 +120,7 @@ class DASDAEV1(FiberIO):
             patches.append(_read_patch(patch_group, **kwargs))
         return dc.spool(patches)
 
-    def scan(self, resource: PyTablesReader):
+    def scan(self, resource: PyTablesReader, **kwargs):
         """
         Get the patch info from the file.
 

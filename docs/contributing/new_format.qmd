@@ -71,7 +71,7 @@ class JingleV1(FiberIO):
         be implemented as well.
         """
 
-    def get_format(self, path):
+    def get_format(self, path, **kwargs):
         """
         Used to determine if path is a supported jingle file.
 
@@ -80,7 +80,7 @@ class JingleV1(FiberIO):
         dascore.exceptions.UnknownFiberFormat exception.
         """
 
-    def scan(self, path):
+    def scan(self, path, **kwargs):
         """
         Used to get metadata about a file without reading the whole file.
 
@@ -97,6 +97,11 @@ class JingleV1(FiberIO):
 ```
 
 All 4 methods are optional; some formats will only support reading, others only writing. If `is_format` is not implemented the format will not be auto-detectable, meaning you will have to manually pass the format to [`read`](`dascore.read`) and [`spool`](`dascore.spool`).
+
+
+:::{.callout-note}
+Note that each of these methods should have `**kwargs` at the end. This allows certain formats to have special keywords while others are not required.
+:::
 
 :::{.callout-warning}
 It is very important that the `scan` method returns *exactly* the same patch information as reading the patch would, otherwise the lazy merge planning done by spool can be wrong!
@@ -125,6 +130,11 @@ To make this easy, DASCore will automatically manage and serve the right input t
 6. [PyTablesWriter](`dascore.io.PyTablesWriter`) - An instance of `pytables.File` which is open in append mode.
 
 Deciding which to use depends on whether the file is an HDF5-based or binary format, and which hdf5 library you want to use.
+
+:::{.callout-note}
+H5Reader should be preferred to PytablesReader, especially for the `get_format` method.
+:::
+
 
 :::{.callout-note}
 If a type hint other than the ones listed above is given to the relevant parameter (path, or resource in these examples) it will have no effect.
@@ -189,7 +199,7 @@ path.unlink()  # cleanup test file
 
 ## Writing Tests
 
-Next we need to write tests for the format (you weren't thinking of skipping this step were you!?). The hardest part of testing new file formats is finding a *small* (typically no more than 10 ish mb) file to include in the test suite. Once you have such a file, [Adding test data](adding_test_data.qmd) details how to add it to the registry.
+Next we need to write tests for the format (you weren't thinking of skipping this step were you!?). The hardest part of testing new file formats is finding a *small* (typically no more than 10 ish mb) file to include in the test suite. The `modify_h5_file.py` script in DASCore's scripts folder can help downsize an existing hdf5 file. Once you have a small test file, [Adding test data](adding_test_data.qmd) details how to add it to DASCore's registry.
 
 Once the test file is added to the data registry, you can register the new format so a suite of tests run automatically. This is done by adding the format to the appropriate data structures in `tests/test_io/test_common_io.py`. The comments at the top of the file will guide you through this process.
 
@@ -241,4 +251,12 @@ JINGLE__V1 = "dascore.io.jingle.core:JingleV1"
 
 :::{.callout-note}
 The name and version of the format are separated by a double underscore.
+:::
+
+## Directories as Inputs
+
+Some `FiberIO` formats may not be self-contained files, but rather must be understood in the context of an entire directory. In these cases, the `input_type` parameter on the `FiberIO` subclass should be set to "directory". See the [xml_binary](`dascore.io.xml_binary`) module for an example of a directory based `FiberIO` implementation. 
+
+:::{.callout-warning}
+DASCore assumes a directory-based `FiberIO` does not have any sub patch files of a different format. Once a valid `FiberIO` directory is found, contents of the directory are no longer searched for Patch files.  
 :::

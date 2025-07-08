@@ -1,6 +1,7 @@
 """
 IO module for reading Febus data.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -30,9 +31,9 @@ class FebusPatchAttrs(dc.PatchAttrs):
         The zone designations
     """
 
-    gauge_length: float = np.NaN
+    gauge_length: float = np.nan
     gauge_length_units: str = "m"
-    pulse_width: float = np.NaN
+    pulse_width: float = np.nan
     pulse_width_units: str = "m"
 
     group: str = ""
@@ -52,7 +53,7 @@ class Febus2(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "2"
 
-    def get_format(self, resource: H5Reader) -> tuple[str, str] | bool:
+    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """
         Return True if file contains febus version 8 data else False.
 
@@ -65,7 +66,7 @@ class Febus2(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
         """Scan a febus file, return summary information about the file's contents."""
         out = []
         file_version = _get_febus_version_str(resource)

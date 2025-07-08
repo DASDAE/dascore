@@ -1,4 +1,5 @@
 """A 2D trace object."""
+
 from __future__ import annotations
 
 import warnings
@@ -18,6 +19,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
+from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
 from dascore.viz import VizPatchNameSpace
 
@@ -85,7 +87,9 @@ class Patch:
         if any(non_attrs) and not all(non_attrs):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
-        coords = get_coord_manager(coords, dims=dims)
+
+        shape = None if not hasattr(data, "shape") else data.shape
+        coords = get_coord_manager(coords, dims=dims, shape=shape)
         # the only case we allow attrs to include coords is if they are both
         # dicts, in which case attrs might have unit info for coords.
         if isinstance(attrs, Mapping) and attrs:
@@ -103,22 +107,62 @@ class Patch:
         return dascore.proc.equals(self, other)
 
     def __add__(self, other):
-        return dascore.proc.apply_operator(self, other, np.add)
+        return dascore.proc.apply_ufunc(self, other, np.add)
 
     def __sub__(self, other):
-        return dascore.proc.apply_operator(self, other, np.subtract)
+        return dascore.proc.apply_ufunc(self, other, np.subtract)
 
     def __floordiv__(self, other):
-        return dascore.proc.apply_operator(self, other, np.floor_divide)
+        return dascore.proc.apply_ufunc(self, other, np.floor_divide)
 
     def __truediv__(self, other):
-        return dascore.proc.apply_operator(self, other, np.divide)
+        return dascore.proc.apply_ufunc(self, other, np.divide)
 
     def __mul__(self, other):
-        return dascore.proc.apply_operator(self, other, np.multiply)
+        return dascore.proc.apply_ufunc(self, other, np.multiply)
 
     def __pow__(self, other):
-        return dascore.proc.apply_operator(self, other, np.power)
+        return dascore.proc.apply_ufunc(self, other, np.power)
+
+    def __mod__(self, other):
+        return dascore.proc.apply_ufunc(self, other, np.power)
+
+    # Also add reverse operators
+
+    __radd__ = __add__
+    __rsub__ = __sub__
+    __rmul__ = __mul__
+    __rpow__ = __pow__
+    __rtruediv__ = __truediv__
+    __rfloordiv__ = __floordiv__
+    __rmod__ = __mod__
+
+    def __neg__(self):
+        return self.update(data=-self.data)
+
+    # Numpy Compatibility things
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        """
+        Called when a numpy array is ufunc'ed against a patch.
+        """
+        assert method == "__call__", "only call supported."
+        # pull out patch and other thing.
+        arg1, arg2, *extras = inputs
+        out = dascore.proc.basic.apply_ufunc(arg1, arg2, ufunc, *extras, **kwargs)
+        return out
+
+    def __array__(self, dtype=None, copy=None):
+        """Used to convert Patches to arrays."""
+        data = self.data
+        # dascore.utils.misc.to_object_array stores patch references in numpy
+        # object arrays. When that function is called it tries to make a copy
+        # of the array data with dtype == object, which takes a TON of memory.
+        # For now, just don't let this method convert to object dtype arrays.
+        if np.issubdtype(dtype, np.dtype(object)):
+            dtype = None
+        out = data.astype(dtype) if dtype is not None else data
+        out = out if not copy else np.copy(out)
+        return out
 
     def __rich__(self):
         dascore_text = get_dascore_text()
@@ -146,8 +190,13 @@ class Patch:
         return self.coords.dims
 
     @property
+    def ndim(self) -> int:
+        """Return the number of dimensions contained in patch."""
+        return len(self.coords.dims)
+
+    @property
     def coord_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Return a dict of coordinate: (shape, ...)."""
+        """Return a dict of {coordinate: (shape, ...)}."""
         return self.coords.coord_shapes
 
     @property
@@ -192,18 +241,35 @@ class Patch:
     new = dascore.proc.update
     equals = dascore.proc.equals
     update_attrs = dascore.proc.update_attrs
-    assert_has_coords = dascore.proc.assert_has_coords
+    check_coords = check_patch_coords
+    check_attrs = check_patch_attrs
     get_coord = dascore.proc.get_coord
+    get_array = dascore.proc.get_array
     pipe = dascore.proc.pipe
     set_dims = dascore.proc.set_dims
-    squeeze = dascore.proc.squeeze
-    transpose = dascore.proc.transpose
+    squeeze = dascore.proc.coords.squeeze
+    append_dims = dascore.proc.coords.append_dims
+    transpose = dascore.proc.coords.transpose
+    add_distance_to = dascore.proc.coords.add_distance_to
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_coords
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
     drop_coords = dascore.proc.drop_coords
+    drop_private_coords = dascore.proc.drop_private_coords
     coords_from_df = dascore.proc.coords_from_df
+    make_broadcastable_to = dascore.proc.make_broadcastable_to
+    apply_ufunc = dascore.proc.apply_ufunc
+    get_patch_names = get_patch_names
+
+    def get_patch_name(self, *args, **kwargs) -> str:
+        """
+        Return the name of the patch.
+
+        See [`get_patch_names`](`dascore.utils.patch.get_patch_names`)
+        for argument details.
+        """
+        return get_patch_names(self, *args, **kwargs).iloc[0]
 
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords."""
@@ -218,6 +284,7 @@ class Patch:
     # --- processing funcs
 
     select = dascore.proc.select
+    order = dascore.proc.order
 
     def iselect(self, *args, **kwargs):
         """Deprecated  form of select."""
@@ -226,6 +293,7 @@ class Patch:
         return self.select(*args, samples=True, **kwargs)
 
     correlate = dascore.proc.correlate
+    correlate_shift = dascore.proc.correlate_shift
     decimate = dascore.proc.decimate
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
@@ -233,10 +301,12 @@ class Patch:
     pass_filter = dascore.proc.pass_filter
     sobel_filter = dascore.proc.sobel_filter
     median_filter = dascore.proc.median_filter
+    notch_filter = dascore.proc.notch_filter
     savgol_filter = dascore.proc.savgol_filter
     gaussian_filter = dascore.proc.gaussian_filter
-    aggregate = dascore.proc.aggregate
+    slope_filter = dascore.proc.slope_filter
     abs = dascore.proc.abs
+    conj = dascore.proc.conj
     real = dascore.proc.real
     imag = dascore.proc.imag
     angle = dascore.proc.angle
@@ -257,8 +327,20 @@ class Patch:
     normalize = dascore.proc.normalize
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
+    taper_range = dascore.proc.taper_range
     rolling = dascore.proc.rolling
     whiten = dascore.proc.whiten
+
+    # --- Patch aggregations shortcuts.
+    aggregate = dascore.proc.agg.aggregate
+    min = dascore.proc.agg.min
+    max = dascore.proc.agg.max
+    mean = dascore.proc.agg.mean
+    median = dascore.proc.agg.median
+    std = dascore.proc.agg.std
+    first = dascore.proc.agg.first
+    last = dascore.proc.agg.last
+    sum = dascore.proc.agg.sum
 
     # --- transformation functions
     differentiate = transform.differentiate
@@ -268,7 +350,9 @@ class Patch:
     integrate = transform.integrate
     spectrogram = transform.spectrogram
     velocity_to_strain_rate = transform.velocity_to_strain_rate
+    velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
     dispersion_phase_shift = transform.dispersion_phase_shift
+    tau_p = transform.tau_p
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references

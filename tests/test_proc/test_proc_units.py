@@ -1,11 +1,11 @@
 """Tests for unit dealings on patches."""
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
 import dascore as dc
-import dascore.proc.coords
 from dascore.exceptions import UnitError
 from dascore.units import get_quantity
 from dascore.utils.time import dtype_time_like

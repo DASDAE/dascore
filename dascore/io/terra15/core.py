@@ -1,4 +1,5 @@
 """IO module for reading Terra15 DAS data."""
+
 from __future__ import annotations
 
 import dascore as dc
@@ -21,7 +22,7 @@ class Terra15FormatterV4(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "4"
 
-    def get_format(self, resource: H5Reader) -> tuple[str, str] | bool:
+    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """
         Return True if file contains terra15 version 2 data else False.
 
@@ -34,7 +35,7 @@ class Terra15FormatterV4(FiberIO):
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: H5Reader) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
         """Scan a terra15 v2 file, return summary information."""
         version, data_node = _get_version_data_node(resource)
         extras = {

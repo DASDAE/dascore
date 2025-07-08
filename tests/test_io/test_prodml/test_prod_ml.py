@@ -1,8 +1,10 @@
 """Generic tests for prodml support."""
+
 from __future__ import annotations
 
 import shutil
 
+import pandas as pd
 import pytest
 import tables
 
@@ -65,6 +67,9 @@ class TestProdMLFile:
         """Ensure gauge-length is found in patch attrs."""
         patch = silixa_h5_patch
         assert hasattr(patch.attrs, "gauge_length")
+        # The value, for this dataset, should be non-null.
+        gauge_length = getattr(patch.attrs, "gauge_length", None)
+        assert not pd.isnull(gauge_length)
 
     def test_issue_221(self, issue_221_patch_path):
         """Ensure dims are correctly ascertained."""

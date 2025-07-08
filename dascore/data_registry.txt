@@ -20,3 +20,13 @@ DASDMSShot00_20230328155653619.das 12ac53f78b32d8b0e32cc674c43ff5b4c79a6c8b19de2
 opto_das_1.hdf5 0437d1f02d93c9f00d31133388efaf6a28c21883bcfac457b97f1224464c7dca https://github.com/dasdae/test_data/raw/master/das/opto_das_1.hdf5
 whale_1.hdf5 a09922969e740307bf26dc6ffa7fb9fbb834dc7cd7d4ced02c66b159fb1ce0cd http://piweb.ooirsn.uw.edu/das/data/Optasense/NorthCable/TransmitFiber/North-C1-LR-P1kHz-GL50m-Sp2m-FS200Hz_2021-11-03T15_06_51-0700/North-C1-LR-P1kHz-GL50m-Sp2m-FS200Hz_2021-11-04T020002Z.h5
 febus_1.h5 73eba2b6e183b3bca51f8a1448c3b423c979d05ce6c18bfd7fb76b4f9bda5c0b https://github.com/dasdae/test_data/raw/master/das/febus_1.h5
+ap_sensing_1.hdf5 322429f2c44bed5dc72fb9a02f79bb0d3cb71048e93d906d3d24b0605b431b12 https://github.com/dasdae/test_data/raw/master/das/ap_sensing_1.hdf5
+silixa_h5_1.hdf5 d3f1b92b17ae2d00f900426e80d48964fb5a33b9480ef9805721ac756acd4a21 https://github.com/dasdae/test_data/raw/master/das/silixa_h5_1.hdf5
+deformation_rate_event_1.hdf5 be8574ae523de9b17d2a0f9e847f30301e1607e2076366e005cdb3a46b79f172 https://github.com/dasdae/test_data/raw/master/das/deformation_rate_event_1.hdf5
+neubrex_dss_forge.h5 49e501e16d880b22c5d9d8997223f0c1aceb942386efb09aae938b9d97eb51ed https://github.com/dasdae/test_data/raw/master/dss/neubrex_dss_forge.h5
+neubrex_dts_forge.h5 940f7bea6dd4c8a1340b4936b8eb7f9edc577cbcaf77c1f5ac295890f88c9ba5 https://github.com/dasdae/test_data/raw/master/dts/neubrex_dts_forge.h5
+decimated_optodas.hdf5 48ce9c2ab4916d5536faeef0bd789f326ec4afc232729d32014d4d835a9fb74e https://github.com/dasdae/test_data/raw/master/das/decimated_optodas.hdf5
+neubrex_das_1.h5 48a97e27c56e66cc2954ba4eaaadd2169919bb8f897d78e95ef6ab50abb5027b https://github.com/dasdae/test_data/raw/master/das/neubrex_das_1.h5
+UoU_lf_urban.hdf5 d3f8fa6ff3d8ae993484b3fbf9b39505e2cf15cb3b39925a3519b27d5fbe7b5b https://github.com/dasdae/test_data/raw/master/das/UoU_lf_urban.hdf5
+small_channel_patch.sgy 31e551aadb361189c1c9325d504c883114ba9a7bb75fe4791e5089fabccef704 https://github.com/dasdae/test_data/raw/master/das/small_channel_patch.sgy
+gdr_1.h5 aaf11a7333b720436d194e3c7f4fa66f38907bb0c9abfa1804c150e634642aa2 https://github.com/dasdae/test_data/raw/master/das/gdr_1.h5

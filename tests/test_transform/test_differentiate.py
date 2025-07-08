@@ -1,10 +1,12 @@
 """Module for testing differentiation of patches."""
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import ParameterError
 from dascore.transform.differentiate import differentiate
 from dascore.units import get_quantity
 from dascore.utils.time import to_float
@@ -38,6 +40,20 @@ def linear_patch(random_patch):
     new = np.arange(dist_len, dtype=np.float64)
     new_data: np.ndarray = np.broadcast_to(new[:, None], random_patch.shape)
     return random_patch.new(data=new_data)
+
+
+@pytest.fixture(scope="class")
+def linear_patch_monotonic_coord(random_patch):
+    """A patch increasing linearly along unevenly sampled distance dimension."""
+    state = np.random.RandomState(13)
+    x_values = np.cumsum(state.random(50))
+    dist_coord = dc.get_coord(values=x_values)
+    data = np.broadcast_to(x_values[..., None], (len(x_values), 10))
+    time = dc.get_coord(values=dc.to_datetime64(np.arange(10)))
+    dims = ("distance", "time")
+    coords = {"distance": dist_coord, "time": time}
+    patch = dc.Patch(data=data, coords=coords, dims=dims)
+    return patch
 
 
 class TestDifferentiateOrder2:
@@ -85,6 +101,46 @@ class TestDifferentiateOrder2:
         ax = patch.dims.index("time")
         expected = np.gradient(patch.data, spacing, axis=ax, edge_order=2)
         assert np.allclose(expected, out.data, rtol=0.01)
+
+
+class TestStep:
+    """Tests for step != 1."""
+
+    def test_multi_dim_raises(self, random_patch):
+        """Can only use step on a single dimension."""
+        msg = "can only be used along one axis"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.differentiate(("time", "distance"), step=2)
+
+    def test_different_steps_comparable(self, linear_patch):
+        """Ensure the values are comparable with different step sizes."""
+        out1 = linear_patch.differentiate("distance", step=1)
+        out2 = linear_patch.differentiate("distance", step=2)
+        out3 = linear_patch.differentiate("distance", step=2)
+        assert np.allclose(out1.data, out2.data)
+        assert np.allclose(out2.data, out3.data)
+
+    def test_different_steps_monotonic_coord(self, linear_patch_monotonic_coord):
+        """Ensure using different steps still gives similar results."""
+        patch = linear_patch_monotonic_coord
+        out1 = patch.differentiate("distance", step=1)
+        out2 = patch.differentiate("distance", step=2)
+        out3 = patch.differentiate("distance", step=5)
+        assert np.allclose(out1.data, out2.data)
+        assert np.allclose(out2.data, out3.data)
+
+    def test_steps_with_order(self, linear_patch):
+        """Tests combinations of step and order."""
+        pytest.importorskip("findiff")
+        values = [
+            linear_patch.differentiate("distance"),
+            linear_patch.differentiate("distance", step=2, order=2),
+            linear_patch.differentiate("distance", step=5, order=6),
+            linear_patch.differentiate("distance", step=1, order=4),
+        ]
+        for num, patch in enumerate(values[:-1]):
+            next_patch = values[num + 1]
+            assert np.allclose(patch.data, next_patch.data)
 
 
 class TestCompareOrders:

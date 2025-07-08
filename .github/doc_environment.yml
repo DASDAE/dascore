@@ -1,0 +1,19 @@
+name: dascore
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pytest
+  - pydantic>2.0
+  - pip
+  - pandas
+  - pooch>=1.2
+  - xarray
+  - pre-commit
+  - pytables
+  - h5py
+  - matplotlib
+  - scipy>=1.10.0
+  - findiff
+  - jupyter
+  - nbformat

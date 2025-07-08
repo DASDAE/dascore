@@ -1,4 +1,5 @@
 """Tests for time variables."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -7,6 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from dascore.compat import random_state
+from dascore.exceptions import TimeError
 from dascore.utils.time import (
     get_max_min_times,
     is_datetime64,
@@ -271,6 +274,33 @@ class TestToTimeDelta64:
         with pytest.raises(NotImplementedError):
             to_timedelta64(Dummy())
 
+    def test_bad_str(self):
+        """Raises if an un-parsable string is passed."""
+        msg = "Could not convert"
+        with pytest.raises(TimeError, match=msg):
+            to_timedelta64("a bad string")
+        with pytest.raises(TimeError, match=msg):
+            to_timedelta64("abadstring")
+
+    def test_nat(self):
+        """Ensure we can initiate NaT."""
+        out1 = to_timedelta64("NaT")
+        out2 = to_timedelta64("nat")
+        assert pd.isnull(out1)
+        assert pd.isnull(out2)
+
+    def test_nat_array(self):
+        """Ensure an array of NaT works."""
+        ar = np.array([to_timedelta64("NaT")] * 4)
+        out = to_timedelta64(ar)
+        assert np.all(pd.isnull(out))
+
+    def test_array_of_datetimes(self, random_patch):
+        """Ensure datetime64 array can be converted to timedelta array."""
+        dt_array = random_patch.get_coord("time").values
+        out = to_timedelta64(dt_array)
+        assert np.all(out.astype(np.int64) == dt_array.astype(np.int64))
+
 
 class TestToInt:
     """Tests for converting time-like types to ints, or passing through reals."""
@@ -299,8 +329,8 @@ class TestToInt:
 
     def test_nullish_returns_nan(self):
         """Ensure a timedelta array works."""
-        assert to_int(None) is np.NaN
-        assert to_int(pd.NaT) is np.NaN
+        assert to_int(None) is np.nan
+        assert to_int(pd.NaT) is np.nan
 
     def test_converted_to_int(self):
         """Ensure a number is converted to int."""
@@ -380,12 +410,12 @@ class TestToFloat:
 
     def test_numerical_array(self):
         """Tests for numerical arrays."""
-        ar = np.random.random(10)
+        ar = random_state.random(10)
         assert np.allclose(to_float(ar), ar)
-        assert np.issubdtype(ar.dtype, np.float_)
+        assert np.issubdtype(ar.dtype, np.float64)
         ar = np.ones(10)
         assert np.allclose(ar, 1.0)
-        assert np.issubdtype(ar.dtype, np.float_)
+        assert np.issubdtype(ar.dtype, np.float64)
 
     def test_timedelta(self):
         """Ensure time delta is floated."""
@@ -396,7 +426,7 @@ class TestToFloat:
         """Tests for arrays of time deltas."""
         td = to_timedelta64(np.ones(10))
         out = to_float(td)
-        assert np.issubdtype(out.dtype, np.float_)
+        assert np.issubdtype(out.dtype, np.float64)
         assert np.allclose(out, 1.0)
 
     def test_datetime(self):
@@ -410,20 +440,20 @@ class TestToFloat:
         """Tests for arrays of date times."""
         dt = to_datetime64(np.ones(10))
         out = to_float(dt)
-        assert np.issubdtype(out.dtype, np.float_)
+        assert np.issubdtype(out.dtype, np.float64)
         assert np.allclose(out, 1.0)
 
     def test_none(self):
         """Ensure None returns NaN."""
         out = to_float(None)
-        assert out is np.NaN
+        assert out is np.nan
 
     def test_empty_array(self):
         """Empty arrays should work too."""
         ar = np.array([])
         out = to_float(ar)
         assert len(out) == 0
-        assert np.issubdtype(out.dtype, np.float_)
+        assert np.issubdtype(out.dtype, np.float64)
 
     def test_series(self):
         """Ensure a series works."""

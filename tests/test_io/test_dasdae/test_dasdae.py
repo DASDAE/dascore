@@ -1,4 +1,5 @@
 """Tests for DASDAE format."""
+
 from __future__ import annotations
 
 import shutil
@@ -8,7 +9,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-import dascore.proc.coords
+from dascore.compat import random_state
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
@@ -44,6 +45,18 @@ def written_dascore_v1_empty(tmp_path_factory):
     path = tmp_path_factory.mktemp("empty_patcc") / "empty.hdf5"
     patch = dc.Patch()
     dc.write(patch, path, "DASDAE", file_version="1")
+    return path
+
+
+@pytest.fixture(scope="class")
+@register_func(WRITTEN_FILES)
+def written_dascore_correlate(tmp_path_factory, random_patch):
+    """Write a correlate patch to the dascore format."""
+    path = tmp_path_factory.mktemp("correlate_patcc") / "correlate.hdf5"
+    padded_pa = random_patch.pad(time="correlate")
+    dft_pa = padded_pa.dft("time", real=True)
+    cc_pa = dft_pa.correlate(distance=[0, 1, 2], samples=True)
+    dc.write(cc_pa, path, "DASDAE", file_version="1")
     return path
 
 
@@ -99,6 +112,11 @@ class TestWriteDASDAE:
         random_patch.io.write(written_dascore_v1_random, "dasdae")
         read_patch = dc.spool(written_dascore_v1_random)[0]
         assert random_patch == read_patch
+
+    def test_write_cc_patch(self, written_dascore_correlate):
+        """Ensure cross correlated patches can be writen and read."""
+        sp_cc = dc.spool(written_dascore_correlate)
+        assert isinstance(sp_cc[0], dc.Patch)
 
 
 class TestReadDASDAE:
@@ -185,7 +203,7 @@ class TestRoundTrips:
         dims = random_patch_with_lat_lon.dims
         # add time deltas to ensure they are also serialized/deserialized.
         dist_shape = shape[dims.index("distance")]
-        time_deltas = dc.to_timedelta64(np.random.random(dist_shape))
+        time_deltas = dc.to_timedelta64(random_state.random(dist_shape))
         patch = random_patch_with_lat_lon.update_coords(
             delta_times=("distance", time_deltas),
         )
@@ -236,7 +254,7 @@ class TestRoundTrips:
 
     def test_roundtrip_nullish_datetime_coord(self, tmp_path_factory, random_patch):
         """Ensure a patch with an attached datetime coord with nulls works."""
-        path = tmp_path_factory.mktemp("roundtrip_datetme_coord") / "out.h5"
+        path = tmp_path_factory.mktemp("roundtrip_datetime_coord") / "out.h5"
         dist = random_patch.get_coord("distance")
         dt = dc.to_datetime64(np.zeros_like(dist))
         dt[~dt.astype(bool)] = np.datetime64("nat")
@@ -246,3 +264,18 @@ class TestRoundTrips:
         new.io.write(path, "dasdae")
         patch = dc.spool(path, file_format="DASDAE")[0]
         assert isinstance(patch, dc.Patch)
+
+    # Frustratingly, it doesn't seem pytables can store NaN values using
+    # create_array, even when specifying an Atom with dflt=np.nan. See
+    # https://github.com/PyTables/PyTables/issues/423
+    @pytest.mark.xfail(reason="Pytables issue 423")
+    def test_roundtrip_len_1_non_coord(self, random_spool, tmp_path_factory):
+        """Ensure we can round-trip Non-coords."""
+        path = tmp_path_factory.mktemp("roundtrip_non_coord") / "out.h5"
+        # create a spool that has all non coords
+        spool = dc.spool([x.mean("time") for x in random_spool])
+        in_patch = spool[0]
+        in_patch.io.write(path, "dasdae")
+        new_spool = dc.spool(path, file_format="DASDAE")
+        out_patch = new_spool[0]
+        assert in_patch == out_patch

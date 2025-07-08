@@ -24,7 +24,7 @@ authors = [
   { name="Derrick Chambers", email="chambers.ja.derrick@gmail.com" },
 ]
 
-description = "A python library distributed fiber optic sensing"
+description = "A python library for distributed fiber optic sensing"
 readme = "readme.md"
 license = { file="docs/LICENSE" }
 requires-python = ">=3.10"
@@ -35,6 +35,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 keywords = ["geophysics", "distributed-acoustic-sensing"]
@@ -54,7 +55,6 @@ dependencies = [
      "tables>=3.7",
      "typing_extensions",
      "pint",
-     "segyio",
 ]
 
 [project.optional-dependencies]
@@ -63,6 +63,8 @@ extras = [
     "xarray",
     "findiff",
     "obspy",
+    "numba",
+    "segyio",
 ]
 
 docs = [
@@ -100,11 +102,14 @@ dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore[extras]"]
 # --- Entry Points
 
 [project.entry-points."dascore.fiber_io"]
+APSENSING__V10 = "dascore.io.ap_sensing.core:APSensingV10"
 DASDAE__V1 = "dascore.io.dasdae.core:DASDAEV1"
 DASHDF5__V1 = "dascore.io.dashdf5.core:DASHDF5"
 H5SIMPLE__V1_0 = "dascore.io.h5simple.core:H5Simple"
 FEBUS__V1 = "dascore.io.febus.core:Febus1"
 FEBUS__V2 = "dascore.io.febus.core:Febus2"
+NEUBREXRFS__V1 = "dascore.io.neubrex:NeubrexRFSV1"
+NEUBREXDAS__V1 = "dascore.io.neubrex:NeubrexDASV1"
 OPTODAS__V8 = "dascore.io.optodas.core:OptoDASV8"
 PICKLE = "dascore.io.pickle.core:PickleIO"
 PRODML__V2_0 = "dascore.io.prodml.core:ProdMLV2_0"
@@ -114,9 +119,14 @@ TDMS__V4713 = "dascore.io.tdms.core:TDMSFormatterV4713"
 TERRA15__V4 = "dascore.io.terra15.core:Terra15FormatterV4"
 TERRA15__V5 = "dascore.io.terra15.core:Terra15FormatterV5"
 TERRA15__V6 = "dascore.io.terra15.core:Terra15FormatterV6"
-SEGY__V2 = "dascore.io.segy.core:SegyV2"
+SILIXA_H5__V1 = "dascore.io.silixah5:SilixaH5V1"
+SEGY__V1_0 = "dascore.io.segy.core:SegyV1_0"
+SEGY__V2_0 = "dascore.io.segy.core:SegyV2_0"
+SEGY__V2_1 = "dascore.io.segy.core:SegyV2_1"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
+XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
+GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
 
 
 # --- External tool configuration
@@ -126,7 +136,19 @@ WAV = "dascore.io.wav.core:WavIO"
 line-length = 88
 
 # enable certain types of linting
-select = ["E", "F", "UP", "RUF", "I001", "D", "FA", "T", "N"]
+lint.select = [
+    "E",
+    "F",
+    "UP",
+    "RUF",
+    "I001",
+    "D",
+    "FA",
+    "T",
+    "N",
+    "NPY",
+    "NPY201",
+]
 
 # Exclude a variety of commonly ignored directories.
 exclude = [
@@ -157,17 +179,17 @@ exclude = [
 # lowest python version supported
 target-version = "py310"
 
-fixable = ["ALL"]
+lint.fixable = ["ALL"]
 
 # List of codes to ignore
-ignore = ["D105", "D107", "D401", "D205", "D200"]
+lint.ignore = ["D105", "D107", "D401", "D205", "D200", "D400"]
 
-[tool.ruff.mccabe]
+[tool.ruff.lint.mccabe]
 # Unlike Flake8, default to a complexity level of 10.
 max-complexity = 10
 
 # config for docstring parsing
-[tool.ruff.pydocstyle]
+[tool.ruff.lint.pydocstyle]
 convention = "numpy"
 
 [tool.pytest.ini_options]

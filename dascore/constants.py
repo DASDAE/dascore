@@ -1,4 +1,5 @@
 """Constants used throughout obsplus."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,11 +8,11 @@ from typing import Literal, Protocol, TypeVar, runtime_checkable
 import numpy as np
 import pandas as pd
 
-import dascore
+import dascore as dc
 
-PatchType = TypeVar("PatchType", bound="dascore.Patch")
+PatchType = TypeVar("PatchType", bound="dc.Patch")
 
-SpoolType = TypeVar("SpoolType", bound="dascore.BaseSpool")
+SpoolType = TypeVar("SpoolType", bound="dc.BaseSpool")
 
 
 @runtime_checkable
@@ -87,6 +88,10 @@ max_lens = {
 # Methods FileFormatter needs to support
 FILE_FORMATTER_METHODS = ("read", "write", "get_format", "scan")
 
+# These attributes are the default to ignore when determine if patches
+# can be merged or broadcast together.
+DEFAULT_ATTRS_TO_IGNORE = ("history", "dims")
+
 # Large and small np.datetime64[ns] (used when defaults are needed)
 SMALLDT64 = np.datetime64(MININT64 + 5_000_000_000, "ns")
 LARGEDT64 = np.datetime64(MAXINT64 - 5_000_000_000, "ns")
@@ -135,6 +140,27 @@ for each attribute.
 """
 
 
+select_values_description = """
+Any dimension name can be passed as key, and the values can be:
+    - a Slice or a tuple of (min, max) for that dimension. 
+      `None` and ... both indicate open intervals.
+    - an array of values to select, which must be a subset of the 
+      coordinate array.
+    - an array of booleans of the same length as the coordinate where
+      `True` indicates values to keep. 
+"""
+
+check_behavior_description = """
+check_behavior
+    Indicates what to do when an incompatible patch is found in the
+    spool. `None` will silently skip any incompatible patches,
+    'warn' will issue a warning and then skip incompatible patches,
+    'raise' will raise an
+    [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`)
+    if any incompatible patches are found.
+"""
+
+
 # Rich styles for various object displays.
 dascore_styles = dict(
     np_array_threshold=100,  # max number of elements to show in array
@@ -147,6 +173,7 @@ dascore_styles = dict(
     coord_monotonic="bold grey",
     coord_array="bold orange",
     coord_degenerate="bold red",
+    coord_non="bold red",
     units="bright blue",
     dtypes="bright black",
     keys="grey50",

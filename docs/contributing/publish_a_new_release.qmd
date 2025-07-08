@@ -1,0 +1,17 @@
+---
+title: "Publish a new release"
+---
+
+On this page, we provide a step-by-step guidance on how to publish a new release for DASCore.
+
+## Step 1: Draft a new release and publish
+
+On DASCore GitHub page, you should go to [Releases](https://github.com/DASDAE/dascore/releases), draft a new release. On the draft, choose a new tag a release title (e.g. 0.0.14). Finally, generate release notes and publish the relase.
+
+## Step 2: Check the release status
+
+On [Actions](https://github.com/DASDAE/dascore/actions), check the release status for both "PublishPackage" and "BuildDeployStableDocs". Also, make sure [PyPI](https://pypi.org/project/dascore/) is updated.
+
+## Step 3: Commit required changes for Conda
+
+For [conda](https://github.com/conda-forge/dascore-feedstock), you need to wait a few hours to get a pull request, and then verify/edit the dependencies, extras, etc. on [meta.yaml](https://github.com/conda-forge/dascore-feedstock/blob/main/recipe/meta.yaml) at /dascore-feedstock/recipe directory based on [pyproject.toml](https://github.com/DASDAE/dascore/blob/master/pyproject.toml) at /dascore directory. Therefore, if they do not match, you need to clone the dascore-feedstock branch (the branch that the bot wants to merge into the master), add the bot's fork as a remote (`git remote add conda_bot git@github.com:regro-cf-autotick-bot/dascore-feedstock`), fetch the new branch (`git fetch conda_bot`), and then check the bot's created branch out. Then, you modify the branch and push it back. After merging the pull request, you can verify the latest DASCore version at [conda-forge](https://anaconda.org/conda-forge/dascore).

@@ -1,4 +1,5 @@
 """Module for wiggle plotting."""
+
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
@@ -11,6 +12,7 @@ from dascore.utils.plotting import (
     _get_ax,
     _get_dim_label,
 )
+from dascore.utils.time import dtype_time_like
 
 
 def _get_offsets_factor(patch, dim, scale, other_labels):
@@ -39,6 +41,9 @@ def _shade(offsets, ax, data_scaled, color, wiggle_labels):
 
 def _format_y_axis_ticks(ax, offsets, other_axis_ticks, max_ticks=10):
     """Format the Y axis tick labels."""
+    # make sure not printing too many digits on the figure
+    if not dtype_time_like(other_axis_ticks):
+        other_axis_ticks = np.around(other_axis_ticks, decimals=2)
     # set the offset
     ax.set_yticks(offsets, other_axis_ticks)
     min_bins = min(len(other_axis_ticks), max_ticks)

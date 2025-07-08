@@ -1,4 +1,5 @@
 """Module for spools, containers of patches."""
+
 from __future__ import annotations
 
 import abc
@@ -13,6 +14,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.compat import is_array
 from dascore.constants import (
     PROGRESS_LEVELS,
     WARN_LEVELS,
@@ -22,16 +24,22 @@ from dascore.constants import (
     numeric_types,
     timeable_types,
 )
-from dascore.core.attrs import check_coords, check_dims
-from dascore.core.patch import Patch
-from dascore.exceptions import InvalidSpoolError, ParameterError, PatchDimError
+from dascore.exceptions import InvalidSpoolError, ParameterError
 from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor, _spool_map
-from dascore.utils.patch import _force_patch_merge, patches_to_df
+from dascore.utils.patch import (
+    _force_patch_merge,
+    _spool_up,
+    concatenate_patches,
+    get_patch_names,
+    patches_to_df,
+    stack_patches,
+)
 from dascore.utils.pd import (
+    _column_or_value,
     _convert_min_max_in_kwargs,
     adjust_segments,
     filter_df,
@@ -49,7 +57,7 @@ class BaseSpool(abc.ABC):
     _rich_style = "bold"
 
     @abc.abstractmethod
-    def __getitem__(self, item: int) -> PatchType:
+    def __getitem__(self, item: int | slice | np.ndarray) -> PatchType:
         """Returns a patch from the spool."""
 
     @abc.abstractmethod
@@ -110,7 +118,7 @@ class BaseSpool(abc.ABC):
         **kwargs,
     ) -> Self:
         """
-        Chunk the data in the spool along specified dimensions.
+        Chunk the data in the spool along specified dimension.
 
         Parameters
         ----------
@@ -142,6 +150,11 @@ class BaseSpool(abc.ABC):
         >>> time_chunked = spool.chunk(time=10, overlap=1)
         >>> # merge along time axis
         >>> time_merged = spool.chunk(time=...)
+
+        Notes
+        -----
+        [`Spool.concatenate`](`dascore.BaseSpool.concatenate`) performs a
+        similar operation but disregards the coordinate values.
         """
 
     @abc.abstractmethod
@@ -180,6 +193,9 @@ class BaseSpool(abc.ABC):
         >>> spool = dc.get_example_spool("random_das")
         >>> df = spool.get_contents()
         """
+
+    # Bind get_patch names as a spool method.
+    get_patch_names = get_patch_names
 
     # --- optional methods
 
@@ -249,6 +265,12 @@ class BaseSpool(abc.ABC):
         """
         return self
 
+    @compose_docstring(desc=concatenate_patches.__doc__)
+    def concatenate(self, check_behavior: WARN_LEVELS = "warn", **kwargs):
+        """{desc}"""
+        msg = f"spool of type {self.__class__} has no concatenate implementation"
+        raise NotImplementedError(msg)
+
     def map(
         self,
         func: Callable[[dc.Patch, ...], T],
@@ -307,60 +329,19 @@ class BaseSpool(abc.ABC):
             **kwargs,
         )
 
-    def stack(self, dim_vary=None, check_behavior: WARN_LEVELS = "warn") -> PatchType:
-        """
-        Stack (add) all patches compatible with first patch together.
+    # Add method for stacking (adding the data arrays) patches in spool.
+    stack = stack_patches
 
-        Parameters
-        ----------
-        dim_vary
-            The name of the dimension which can be different in values
-            (but not shape) and patches still added together.
-        check_behavior
-            Indicates what to do when an incompatible patch is found in the
-            spool. `None` will silently skip any incompatible patches,
-            'warn' will issue a warning and then skip incompatible patches,
-            'raise' will raise an
-            [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`)
-            if any incompatible patches are found.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> # add a spool with equal sized patches but progressing time dim
-        >>> spool = dc.get_example_spool()
-        >>> stacked_patch = spool.stack(dim_vary='time')
-        """
-        # check the dims/coords of first patch (considered to be standard for rest)
-        init_patch = self[0]
-        stack_arr = np.zeros_like(init_patch.data)
-
-        # ensure dim_vary is in dims
-        if dim_vary is not None and dim_vary not in init_patch.dims:
-            msg = f"Dimension {dim_vary} is not in first patch."
-            raise PatchDimError(msg)
-
-        for p in self:
-            # check dimensions of patch compared to init_patch
-            dims_ok = check_dims(init_patch, p, check_behavior)
-            coords_ok = check_coords(init_patch, p, check_behavior, dim_vary)
-            # actually do the stacking of data
-            if dims_ok and coords_ok:
-                stack_arr = stack_arr + p.data
-
-        # create attributes for the stack with adjusted history
-        stack_attrs = init_patch.attrs
-        new_history = list(init_patch.attrs.history)
-        new_history.append("stack")
-        stack_attrs = stack_attrs.update(history=new_history)
-
-        # create coords array for the stack
-        stack_coords = init_patch.coords
-        if dim_vary:  # adjust dim_vary to start at 0 for junk dimension indicator
-            coord_to_change = stack_coords.coord_map[dim_vary]
-            new_dim = coord_to_change.update_limits(min=0)
-            stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
-        return Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
+    @property
+    def viz(self):
+        """Raise AttributeError when Spool.viz is accessed."""
+        msg = (
+            "'Spool' has no 'viz' namespace. "
+            "Apply 'viz' on a Patch object. "
+            "(you can merge a subset of the spool into a single patch using "
+            "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
+        )
+        raise AttributeError(msg)
 
 
 class DataFrameSpool(BaseSpool):
@@ -396,6 +377,27 @@ class DataFrameSpool(BaseSpool):
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
 
+    def _select_from_array(self, array) -> Self:
+        """Create new spool with contents changed from array input."""
+        if np.issubdtype(array.dtype, np.bool_):  # boolean select
+            df = self._df[array]
+        elif np.issubdtype(array.dtype, np.integer):
+            df = self._df.iloc[array]
+        else:
+            msg = "Only bool or int dtypes are supported for spool array selection."
+            raise ValueError(msg)
+        source = self._source_df
+        inst = self._instruction_df
+        select_kwargs, merge_kwargs = self._select_kwargs, self._merge_kwargs
+        new = self.new_from_df(
+            df,
+            source_df=source,
+            instruction_df=inst,
+            select_kwargs=select_kwargs,
+            merge_kwargs=merge_kwargs,
+        )
+        return new
+
     def __getitem__(self, item) -> PatchType | BaseSpool:
         if isinstance(item, slice):  # a slice was used, return a sub-spool
             new_df = self._df.iloc[item]
@@ -407,6 +409,8 @@ class DataFrameSpool(BaseSpool):
                 instruction_df=new_inst,
                 source_df=new_source,
             )
+        elif is_array(item):  # An array was passed use np type selection.
+            return self._select_from_array(np.asarray(item))
         else:  # a single index was used, should return a single patch
             out = self._unbox_patch(self._get_patches_from_index(item))
         return out
@@ -448,17 +452,22 @@ class DataFrameSpool(BaseSpool):
             # convert kwargs to format understood by parser/patch.select
             kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
             patch = self._load_patch(kwargs)
-            # apply any trimming needed on patch
-            select_kwargs = {
-                i: v
-                for i, v in kwargs.items()
-                if i in patch.dims or i in patch.coords.coord_map
-            }
-            trimmed_patch: dc.Patch = patch.select(**select_kwargs)
+            # If the limits of the source patch were not modified, we can just
+            # use the select kwargs. This is important for missing coordinates
+            # (NaN values) to not get trimmed out.
+            if kwargs.get("_modified"):
+                select_kwargs = {
+                    i: v
+                    for i, v in kwargs.items()
+                    if i in patch.dims or i in patch.coords.coord_map
+                }
+            else:
+                select_kwargs = self._select_kwargs
+            patch: dc.Patch = patch.select(**select_kwargs)
             # its unfortunate, but currently we need to regenerate the patch
             # dict because the index doesn't carry all the dimensional info
-            info = trimmed_patch.attrs.flat_dump(exclude=["history"])
-            info["patch"] = trimmed_patch
+            info = patch.attrs.flat_dump(exclude=["history"])
+            info["patch"] = patch
             out.append(info)
         if len(out) > expected_len:
             out = _force_patch_merge(out, merge_kwargs=self._merge_kwargs)
@@ -475,8 +484,12 @@ class DataFrameSpool(BaseSpool):
         dims = get_dim_names_from_columns(source)
         cols2keep = get_column_names_from_dim(dims)
         instruction = (
-            current.copy()[cols2keep]
-            .assign(source_index=source.index, current_index=source.index)
+            current.copy(deep=False)[cols2keep]
+            .assign(
+                source_index=source.index,
+                current_index=source.index,
+                _modified=lambda x: _column_or_value(x, "_modified", False),
+            )
             .set_index("source_index")
             .sort_values("current_index")
         )
@@ -491,7 +504,7 @@ class DataFrameSpool(BaseSpool):
         return df.to_dict("records")
 
     @abc.abstractmethod
-    def _load_patch(self, kwargs) -> Self:
+    def _load_patch(self, kwargs) -> dc.Patch:
         """Given a row from the managed dataframe, return a patch."""
 
     @compose_docstring(doc=BaseSpool.chunk.__doc__)
@@ -504,11 +517,12 @@ class DataFrameSpool(BaseSpool):
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         **kwargs,
     ) -> Self:
-        """{doc}."""
+        """{doc}"""
         df = self._df.drop(columns=list(self._drop_columns), errors="ignore")
         chunker = ChunkManager(
             overlap=overlap,
             keep_partial=keep_partial,
+            snap_coords=snap_coords,
             group_columns=self._group_columns,
             tolerance=tolerance,
             conflict=conflict,
@@ -556,6 +570,7 @@ class DataFrameSpool(BaseSpool):
             ignore_bad_kwargs=True,
             **kwargs,
         ).loc[lambda x: x["current_index"].isin(filtered_df.index)]
+        # Determine if the instructions are the same as the source dataframe.
         out = self.new_from_df(
             filtered_df,
             source_df=self._source_df,
@@ -614,6 +629,8 @@ class DataFrameSpool(BaseSpool):
         """{doc}."""
         return self._df[filter_df(self._df, **self._select_kwargs)]
 
+    get_patch_names = get_patch_names
+
 
 class MemorySpool(DataFrameSpool):
     """A Spool for storing patches in memory."""
@@ -630,16 +647,23 @@ class MemorySpool(DataFrameSpool):
         base = super().__rich__()
         df = self._df
         if len(df):
-            t1, t2 = df["time_min"].min(), df["time_max"].max()
+            t1 = df["time_min"].min() if "time_min" in df.columns else ""
+            t2 = df["time_min"].max() if "time_min" in df.columns else ""
             tmin = get_nice_text(t1)
             tmax = get_nice_text(t2)
-            duration = get_nice_text(t2 - t1)
+            if t1 != "" and t2 != "":
+                duration = get_nice_text(t2 - t1)
+            else:
+                duration = ""
             base += Text(f"\n    Time Span: <{duration}> {tmin} to {tmax}")
         return base
 
     def _load_patch(self, kwargs) -> Self:
         """Load the patch into memory."""
         return kwargs["patch"]
+
+    # Add specific implementation of concatenate patches.
+    concatenate = _spool_up(concatenate_patches)
 
 
 @singledispatch
@@ -689,7 +713,7 @@ def _spool_from_str(path, **kwargs):
     # Return a FileSpool (lazy file reader), else return DirectorySpool.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
-        formatter = dc.io.FiberIO.manager.get_fiberio(_format, _version)
+        formatter = dc.io.FiberIO.manager.get_fiberio(format=_format, version=_version)
         if formatter.implements_scan:
             from dascore.clients.filespool import FileSpool
 

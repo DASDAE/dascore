@@ -1,4 +1,5 @@
 """Module for testing units."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -16,6 +17,7 @@ from dascore.units import (
     get_quantity_str,
     get_unit,
     invert_quantity,
+    quant_sequence_to_quant_array,
 )
 
 
@@ -64,10 +66,22 @@ class TestGetQuantStr:
         quant = get_quantity("m/s")
         out = get_quantity_str(quant)
         assert out == "m / s"
-        # with magnitude it should be included.
+        # with magnitude, it should be included.
         quant = get_quantity("10 m /s")
         out = get_quantity_str(quant)
         assert "10.0" in out
+
+    def test_timedelta_to_quantity(self):
+        """Ensure a timedelta can be converted to a quantity."""
+        dt = dc.to_timedelta64(20)
+        quant = dc.get_quantity(dt)
+        assert quant == (20 * dc.get_unit("s"))
+
+    def test_datetime_to_quantity(self):
+        """Ensure a datetime can be converted to a quantity."""
+        td = dc.to_datetime64("1970-01-01T00:00:20")
+        quant = dc.get_quantity(td)
+        assert quant == (20 * dc.get_unit("s"))
 
 
 class TestUnitAndFactor:
@@ -76,7 +90,8 @@ class TestUnitAndFactor:
     def test_quantx_units(self):
         """Tests for the quantx unit str."""
         mag, ustr = get_factor_and_unit("rad * 2pi/2^16")
-        assert ustr == "rad * π"
+        # sometimes it is "rad * π" other times "π * rad", so just use set.
+        assert set(ustr) == set("rad * π")
         assert np.isclose(mag, (2 / (2**16)))
 
     def test_simplify_units(self):
@@ -90,6 +105,20 @@ class TestUnitAndFactor:
         factor, unit = get_factor_and_unit(None)
         assert factor == 1
         assert unit is None
+
+    def test_timedelta64(self):
+        """Ensure timedeltas can be separated."""
+        td = dc.to_timedelta64(20)
+        (factor, unit) = get_factor_and_unit(td)
+        assert factor == 20.00
+        assert unit == "s"
+
+    def test_datetime64(self):
+        """Ensure datetime64 can be separated."""
+        td = dc.to_datetime64(20)
+        (factor, unit) = get_factor_and_unit(td)
+        assert factor == 20.00
+        assert unit == "s"
 
 
 class TestGetQuantity:
@@ -108,6 +137,16 @@ class TestGetQuantity:
         """Get quantity should work with temperatures."""
         quant1 = get_quantity("degC")
         assert "°C" in str(quant1)
+
+    def test_timedelta64(self):
+        """Ensure time deltas can be converted to quantity"""
+        quant = get_quantity(dc.to_timedelta64(20))
+        assert quant == (20 * dc.get_unit("s"))
+
+    def test_datetime64(self):
+        """Ensure time deltas can be converted to quantity"""
+        quant = get_quantity(dc.to_datetime64(20))
+        assert quant == (20 * dc.get_unit("s"))
 
 
 class TestConvenientImport:
@@ -185,7 +224,7 @@ class TestDTypeCompatible:
     """Ensure dtype compatibility check works."""
 
     quants = ("degC", "m/s", get_quantity("kg"))
-    non_dt_dtypes = (np.float_, np.int_, np.float32)
+    non_dt_dtypes = (np.float64, np.int_, np.float32)
 
     def test_non_datetime(self):
         """Any non-datetime should be compatible."""
@@ -253,3 +292,64 @@ class TestConvertUnits:
         f_array = (array * (9 * 2.5 / 5) + 32.0) / 6
         out = convert_units(array, from_units="2.5*degC", to_units="6*degF")
         assert np.allclose(f_array, out)
+
+    def test_not_output_units_raises(self):
+        """Ensure an error is raised if output units are None."""
+        msg = "are not specified"
+        with pytest.raises(UnitError, match=msg):
+            convert_units(1, from_units="m", to_units=None)
+
+    def test_array_quantity(self):
+        """Test that an array quantity works."""
+        array = np.arange(10) * get_quantity("m")
+        out = convert_units(array, to_units="ft")
+        np.allclose(array.magnitude, out * 3.28084)
+
+
+class TestQuantSequenceToQuantArray:
+    """Ensure we can convert a quantity sequence to an array."""
+
+    def test_valid_sequence_same_units(self):
+        """Test with a valid sequence of quantities with the same units."""
+        meter = get_quantity("m")
+        sequence = [1 * meter, 2 * meter, 3 * meter]
+        result = quant_sequence_to_quant_array(sequence)
+        expected = np.array([1, 2, 3]) * meter
+        np.testing.assert_array_equal(result.magnitude, expected.magnitude)
+        assert result.units == expected.units
+
+    def test_valid_sequence_different_units(self):
+        """Test sequence of quantities with compatible but different units."""
+        m, cm, km = get_quantity("m"), get_quantity("cm"), get_quantity("km")
+
+        sequence = [1 * m, 100 * cm, 0.001 * km]
+        result = quant_sequence_to_quant_array(sequence)
+        expected = np.array([1, 1, 1]) * m
+        assert np.allclose(result.magnitude, expected.magnitude)
+        assert result.units == expected.units
+
+    def test_incompatible_units(self):
+        """Test with a sequence of quantities with incompatible units."""
+        sequence = [1 * get_quantity("m"), 1 * get_quantity("s")]
+        msg = "Not all values in sequence have compatible units."
+        with pytest.raises(UnitError, match=msg):
+            quant_sequence_to_quant_array(sequence)
+
+    def test_non_quantity_elements(self):
+        """Test with a sequence containing non-quantity elements."""
+        sequence = [1 * get_quantity("m"), 5]
+        msg = "Not all values in sequence are quantities."
+        with pytest.raises(UnitError, match=msg):
+            quant_sequence_to_quant_array(sequence)
+
+    def test_empty_sequence(self):
+        """Test with an empty sequence."""
+        sequence = []
+        out = quant_sequence_to_quant_array(sequence)
+        assert isinstance(out, Quantity)
+
+    def test_numpy_array_input(self):
+        """Test with a numpy array input."""
+        sequence = np.array([1, 2, 3])
+        out = quant_sequence_to_quant_array(sequence)
+        assert isinstance(out, Quantity)

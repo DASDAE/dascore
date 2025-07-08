@@ -1,10 +1,12 @@
 """Tests for chunking dataframes."""
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.utils.chunk import ChunkManager, get_intervals
 from dascore.utils.time import to_timedelta64
@@ -169,6 +171,35 @@ class TestBasicChunkDF:
         assert len(duration) == 3
         assert (duration > np.timedelta64(0, "s")).all()
 
+    def test_nan_in_df(self, contiguous_df):
+        """Ensure contiguous df with nan inside still works."""
+        df = contiguous_df.copy()
+        # Adding null values on row 3
+        df.loc[3, "time_min"] = dc.to_datetime64("NaT")
+        # Which means new time should start in row 4 because of the gap.
+        expected_start = df.loc[4, "time_min"]
+        chunker = ChunkManager(keep_partial=True, time=dc.to_timedelta64(15))
+        _, chunk_df = chunker.chunk(df)
+        assert expected_start in set(chunk_df["time_min"])
+
+    def test_all_nan(self, contiguous_df):
+        """Ensure when all NaNs are encountered the chunked df is empty."""
+        nat = dc.to_datetime64("NaT")
+        df = contiguous_df.assign(time_min=nat, time_max=nat)
+        chunker = ChunkManager(time=dc.to_timedelta64(1.2))
+        _, chunk_df = chunker.chunk(df)
+        assert chunk_df.empty
+
+    def test_nan_in_sample_ok(self, contiguous_df):
+        """Ensure a NaN in the sampling rate is ok."""
+        df = contiguous_df.assign(time_step=dc.to_timedelta64("NaT"))
+        dur = (df["time_max"] - df["time_min"]).iloc[0]
+        chunker = ChunkManager(time=dc.to_timedelta64(dur / 2))
+        _, chunk_df = chunker.chunk(df)
+        assert isinstance(chunk_df, pd.DataFrame)
+        assert len(chunk_df) == 2 * len(contiguous_df)
+        assert np.all(pd.isnull(chunk_df["time_step"]))
+
 
 class TestChunkExceptions:
     """Tests for various exceptions from the chunk manager."""
@@ -187,6 +218,13 @@ class TestChunkExceptions:
         """Ensure zero length chunk raises."""
         with pytest.raises(ParameterError, match="must be greater than 0"):
             ChunkManager(time=0)
+
+    def test_raises_invalid_key_in_kwargs(self, contiguous_df):
+        """Ensure an invalid key in kwargs raises an error."""
+        chunk_manager = ChunkManager(Time=10)
+        chunk_manager.patch = type("Patch", (object,), {"dims": ["time", "distance"]})()
+        with pytest.raises(ParameterError, match="Cannot chunk spool or"):
+            chunk_manager.chunk(contiguous_df)
 
 
 class TestChunkToMerge:
@@ -231,6 +269,20 @@ class TestChunkToMerge:
         durations = out["time_max"] - out["time_min"]
         assert expected_durations.equals(durations)
 
+    def test_modified_flag_after_merge(self, contiguous_df):
+        """Test that the modified flag shows False for simple merge."""
+        cm = ChunkManager(time=None)
+        # Need to remove overlapping sample so these really are contiguous
+        # with no overlaps.
+        contiguous_df = contiguous_df.assign(
+            time_max=lambda x: x["time_max"] - x["time_step"]
+        )
+        source, current = cm.chunk(contiguous_df)
+        inst_df = cm.get_instruction_df(source, current)
+        assert len(current) == 1
+        assert current["time_min"].min() == contiguous_df["time_min"].min()
+        assert not inst_df["_modified"].any()
+
 
 class TestInstructionDF:
     """Sanity checks on intermediary df."""
@@ -266,3 +318,32 @@ class TestInstructionDF:
         used = in_df.loc[instruction.index]
         assert set(used["station"]) == set(in_df["station"])
         assert set(used["_group"]) == set(in_df["_group"])
+
+    def test_modified_flag_if_chunked(self, contiguous_df):
+        """Ensure the modified flag shows up for modified rows."""
+        df = contiguous_df
+        chunker = ChunkManager(
+            overlap=0,
+            time=5,
+            group_columns=("station",),
+            keep_partial=True,
+        )
+        in_df, out_df = chunker.chunk(df)
+        instruction = chunker.get_instruction_df(in_df, out_df)
+        assert instruction["_modified"].all()
+
+    def test_modified_flag_no_chunk(self, contiguous_df):
+        """Ensure the rows that don't change limits aren't modified."""
+        time_diff = contiguous_df["time_max"] - contiguous_df["time_min"]
+        df = contiguous_df.assign(time_max=lambda x: (x["time_max"] - x["time_step"]))
+        chunker = ChunkManager(
+            overlap=0,
+            time=time_diff.iloc[0],
+            group_columns=("station",),
+            keep_partial=True,
+        )
+        in_df, out_df = chunker.chunk(df)
+
+        assert (out_df[sorted(out_df.columns)]).equals(in_df[sorted(in_df.columns)])
+        instruction = chunker.get_instruction_df(in_df, out_df)
+        assert not instruction["_modified"].any()

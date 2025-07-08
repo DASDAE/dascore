@@ -1,4 +1,5 @@
 """Tests for IO utilities."""
+
 from __future__ import annotations
 
 from io import BufferedReader, BufferedWriter
@@ -165,6 +166,16 @@ class TestXarray:
         """Converting to xarray should be lossless."""
         out = dc.utils.io.xarray_to_patch(data_array_from_patch)
         assert out == random_patch
+
+    def test_convert_non_coord(self, random_patch):
+        """Ensure a patch with non-coord can still be converted."""
+        xr = pytest.importorskip("xarray")
+        patch = random_patch.sum("time")
+        dar = patch.io.to_xarray()
+        assert isinstance(dar, xr.DataArray)
+        # Ensure it round-trips
+        patch2 = dc.utils.io.xarray_to_patch(dar)
+        assert isinstance(patch2, dc.Patch)
 
 
 class TestObsPy:

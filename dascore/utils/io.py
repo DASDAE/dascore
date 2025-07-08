@@ -1,4 +1,5 @@
 """Utilities for basic IO tasks."""
+
 from __future__ import annotations
 
 import io
@@ -104,7 +105,7 @@ class IOResourceManager:
         return source
 
     def get_resource(self, required_type: RequiredType) -> RequiredType:
-        """Get the requested resource from."""
+        """Get the requested resource."""
         # no required type, just return source of manager.
         if required_type is None:
             return self.source
@@ -140,9 +141,15 @@ def patch_to_xarray(patch: PatchType):
     """Return a data array with patch contents."""
     xr = optional_import("xarray")
     attrs = dict(patch.attrs)
-    dims = patch.dims
-    coords = patch.coords._get_dim_array_dict()
-    return xr.DataArray(patch.data, attrs=attrs, dims=dims, coords=coords)
+    patch_dims = patch.dims
+    coords = {}
+    for name, coord in patch.coords.coord_map.items():
+        if coord._partial:
+            continue
+        dims = patch.coords.dim_map[name]
+        coords[name] = (dims, coord.values)
+    # Need to exclude non-coords
+    return xr.DataArray(patch.data, attrs=attrs, dims=patch_dims, coords=coords)
 
 
 def xarray_to_patch(data_array) -> PatchType:
@@ -257,7 +264,7 @@ def obspy_to_patch(stream, dim="distance") -> PatchType:
 
     dims = (dim, "time")
     coords = {
-        dim: ((dim,), np.array(new_dim)),
+        dim: ((dim,), np.asarray(new_dim)),
         "time": (("time",), dc.to_datetime64(tr.times("timestamp"))),
     }
     attrs = _get_attrs(tr)

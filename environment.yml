@@ -1,7 +1,6 @@
 name: dascore
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - pytest
   - pydantic>2.0

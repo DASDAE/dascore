@@ -10,5 +10,6 @@ from .fft import rfft
 from .fourier import dft, idft
 from .integrate import integrate
 from .spectro import spectrogram
-from .strain import velocity_to_strain_rate
+from .strain import velocity_to_strain_rate, velocity_to_strain_rate_edgeless
 from .dispersion import dispersion_phase_shift
+from .taup import tau_p

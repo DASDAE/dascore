@@ -1,5 +1,9 @@
 """Script to build the API docs for dascore."""
+
 from __future__ import annotations
+
+import sys
+from contextlib import suppress
 
 from _index_api import get_alias_mapping, parse_project
 from _qmd_builder import create_quarto_qmd
@@ -7,6 +11,10 @@ from _render_api import render_project
 from _validate_links import validate_all_links
 
 import dascore as dc
+
+with suppress(AttributeError):
+    sys.stdout.encoding = "utf-8"
+
 
 if __name__ == "__main__":
     print("Building documentation")  # noqa

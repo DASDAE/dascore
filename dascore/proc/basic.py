@@ -1,4 +1,5 @@
 """Basic operations for patches."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
@@ -6,18 +7,22 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from scipy.fft import next_fast_len
 
 import dascore as dc
-from dascore.constants import PatchType
-from dascore.core.attrs import PatchAttrs, merge_compatible_coords_attrs
+from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import UnitError
+from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.utils.misc import _get_nullish
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
-    get_dim_value_from_kwargs,
-    get_multiple_dim_value_from_kwargs,
+    _merge_aligned_coords,
+    _merge_models,
+    align_patch_coords,
+    get_dim_axis_value,
     patch_function,
 )
 
@@ -202,6 +207,23 @@ def abs(patch: PatchType) -> PatchType:
 
 
 @patch_function()
+def conj(patch: PatchType) -> PatchType:
+    """
+    Apply the complex conjugate of the patch data.
+
+    Examples
+    --------
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+    >>>
+    >>> # Example 1
+    >>> dft = pa.dft(None)  # multi-dim dft
+    >>> conj = dft.conj()
+    """
+    return patch.new(data=np.conj(patch.data))
+
+
+@patch_function()
 def real(patch: PatchType) -> PatchType:
     """
     Return a new patch with the real part of the data array.
@@ -241,50 +263,6 @@ def angle(patch: PatchType) -> PatchType:
     >>> out = pa.angle()
     """
     return patch.new(data=np.angle(patch.data))
-
-
-@patch_function(history=None)
-def transpose(self: PatchType, *dims: str) -> PatchType:
-    """
-    Transpose the data array to any dimension order desired.
-
-    Parameters
-    ----------
-    *dims
-        Dimension names which define the new data axis order.
-
-    Examples
-    --------
-    >>> import dascore # import dascore library
-    >>> pa = dascore.get_example_patch() # generate example patch
-    >>> # transpose the time and data array dimensions in the example patch
-    >>> out = dascore.proc.transpose(pa,"time", "distance")
-    """
-    dims = tuple(dims)
-    old_dims = self.coords.dims
-    new_coord = self.coords.transpose(*dims)
-    new_dims = new_coord.dims
-    axes = tuple(old_dims.index(x) for x in new_dims)
-    new_data = np.transpose(self.data, axes)
-    return self.new(data=new_data, coords=new_coord)
-
-
-@patch_function()
-def squeeze(self: PatchType, dim=None) -> PatchType:
-    """
-    Return a new object with len one dimensions flattened.
-
-    Parameters
-    ----------
-    dim
-        Selects a subset of the length one dimensions. If a dimension
-        is selected with length greater than one, an error is raised.
-        If None, all length one dimensions are squeezed.
-    """
-    coords = self.coords.squeeze(dim)
-    axis = None if dim is None else self.coords.dims.index(dim)
-    data = np.squeeze(self.data, axis=axis)
-    return self.new(data=data, coords=coords)
 
 
 @patch_function()
@@ -377,11 +355,18 @@ def standardize(
 
 
 @patch_function()
-def apply_operator(patch: PatchType, other, operator) -> PatchType:
+def apply_ufunc(
+    patch: PatchType | ArrayLike,
+    other: PatchType | ArrayLike,
+    operator: Callable,
+    *args,
+    attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
+    **kwargs,
+) -> PatchType:
     """
     Apply a ufunc-type operator to a patch.
 
-    This is used to implement a patch's operator overload.
+    This is used to implement a patch's operator overloading.
 
     Parameters
     ----------
@@ -394,49 +379,107 @@ def apply_operator(patch: PatchType, other, operator) -> PatchType:
         must be compatible.
     operator
         The operator. Must be numpy ufunc-like.
+    *args
+        Arguments to pass to the operator.
+    attrs_to_ignore
+        Attributes to ignore when considering if patches are compatible.
+    **kwargs
+        Keyword arguments to pass to the operator.
 
     Examples
     --------
     >>> import numpy as np
     >>> import dascore as dc
-    >>> from dascore.proc.basic import apply_operator
+    >>> from dascore.proc.basic import apply_ufunc
     >>> patch = dc.get_example_patch()
     >>> # multiply the patch by 10
-    >>> new = apply_operator(patch, 10, np.multiply)
+    >>> new = apply_ufunc(patch, 10, np.multiply)
     >>> assert np.allclose(patch.data * 10, new.data)
     >>> # add a random value to each element of patch data
     >>> noise = np.random.random(patch.shape)
-    >>> new = apply_operator(patch, noise, np.add)
+    >>> new = apply_ufunc(patch, noise, np.add)
     >>> assert np.allclose(new.data, patch.data + noise)
     >>> # subtract one patch from another. Coords and attrs must be compatible
-    >>> new = apply_operator(patch, patch, np.subtract)
+    >>> new = apply_ufunc(patch, patch, np.subtract)
     >>> assert np.allclose(new.data, 0)
+
+    Notes
+    -----
+    See [numpy's ufunc docs](https://numpy.org/doc/stable/reference/ufuncs.html)
     """
-    if isinstance(other, dc.Patch):
-        coords, attrs = merge_compatible_coords_attrs(patch, other)
-        other = other.data
-        if other_units := get_quantity(attrs.data_units):
+
+    def _get_coords_attrs_from_patches(patch, other):
+        """Deal with aligning two patches."""
+        # Align patches so their coords are identical and data aligned.
+        patch, other_patch = align_patch_coords(patch, other)
+        coords = _merge_aligned_coords(patch.coords, other_patch.coords)
+        # Get new attributes.
+        attrs = _merge_models(
+            patch.attrs,
+            other_patch.attrs,
+            attrs_to_ignore=attrs_to_ignore,
+        )
+        other = other_patch.data
+        if other_units := get_quantity(other_patch.attrs.data_units):
             other = other * other_units
-    else:
-        coords, attrs = patch.coords, patch.attrs
-    # handle units of output
-    if isinstance(other, Quantity | Unit):
+        return patch, other, coords, attrs
+
+    def _ensure_array_compatible(patch, other):
+        """Deal with broadcasting a patch and an array."""
+        # This handles warning from quantity.
+        other = other.magnitude if hasattr(other, "magnitude") else other
+        other = np.asanyarray(other)
+        if patch.shape == other.shape:
+            return patch
+        if (patch_ndims := patch.ndim) < (array_ndims := other.ndim):
+            msg = f"Cannot broadcast patch/array {patch_ndims=} {array_ndims=}"
+            raise PatchBroadcastError(msg)
+        patch = patch.make_broadcastable_to(other.shape)
+        return patch
+
+    def _apply_op(array1, array2, operator, reversed=False):
+        """Simply apply the operator, account for reversal."""
+        if reversed:
+            array1, array2 = array2, array1
+        return operator(array1, array2, *args, **kwargs)
+
+    def _apply_op_units(patch, other, operator, attrs, reversed=False):
+        """Apply the operation handling units attached to array."""
         data_units = get_quantity(attrs.data_units)
         data = patch.data if data_units is None else patch.data * data_units
         # other is not numpy array wrapped w/ quantity, convert to quant
         if not hasattr(other, "shape"):
             other = get_quantity(other)
         try:
-            new_data_w_units = operator(data, other)
+            new_data_w_units = _apply_op(data, other, operator, reversed=reversed)
         except DimensionalityError:
             msg = f"{operator} failed with units {data_units} and {other.units}"
             raise UnitError(msg)
         attrs = attrs.update(data_units=str(new_data_w_units.units))
         new_data = new_data_w_units.magnitude
-    else:  # simpler case; no units.
-        new_data = operator(patch.data, other)
+        return new_data, attrs
+
+    reversed = False  # flag to indicate we need to reverse data and patch
+    if not isinstance(patch, dc.Patch):
+        reversed = True
+        patch, other = other, patch
+    # Align/broadcast patch to input
+    if isinstance(other, dc.Patch):
+        patch, other, coords, attrs = _get_coords_attrs_from_patches(patch, other)
+    else:
+        patch = _ensure_array_compatible(patch, other)
+        coords, attrs = patch.coords, patch.attrs
+    # Apply operation
+    if isinstance(other, Quantity | Unit):
+        new_data, attrs = _apply_op_units(patch, other, operator, attrs, reversed)
+    else:
+        new_data = _apply_op(patch.data, other, operator, reversed)
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
+
+
+# This is left here to not break compatibility.
+apply_operator = apply_ufunc
 
 
 @patch_function()
@@ -526,7 +569,7 @@ def pad(
     patch: PatchType,
     mode: Literal["constant"] = "constant",
     constant_values: Any = 0,
-    expand_coords=False,
+    expand_coords=True,
     samples=False,
     **kwargs,
 ) -> PatchType:
@@ -543,72 +586,88 @@ def pad(
     expand_coords : bool, optional
         Determines how coordinates are adjusted when padding is applied.
         If set to True, the coordinates will be expanded to maintain their
-        order and even sampling (if originally evenly sampled), by extrapolating
-        based on the coordinate's step size.
-        If set to False, the new coordinates introduced by padding will be
-        filled with NaN values, preserving the original coordinate values but
-        not the order or sampling rate.
+        order and even sampling (if evenly sampled), by extrapolating
+        based on the coordinate's step size. If set to False, or coordinate
+        is not evenly sampled, the new coordinates introduced by padding
+        will be padded with NaN values.
     **kwargs:
         Used to specify dimension and number of elements,
         either an integer or a tuple (before, after).
+        In addition, the following strings are supported:
+
+        "fft" - pad to the next fast fft length along the given dimension by
+        adding values to the end of the axis.
+
+        "correlate" - prepare the coordinate for correlation/convolution in
+        the frequency domain by pading to the next fast fft length after
+        2*n - 1 where n is the current dimension length by adding values
+        to the end of the axis.
 
     Examples
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-    >>> # zero pad `time` dimension with 2 patch's time unit (e.g., sec)
+    >>> # Zero pad `time` dimension with 2 patch's time unit (e.g., sec)
     >>> # zeros before and 3 zeros after
-    >>> padded_patch_1 = patch.pad(time = (2, 3))
-    >>> # zero pad `distance` dimension with 4 unit values before and after
-    >>> padded_patch_3 = patch.pad(distance = 4, constant_values = 1, samples=True)
+    >>> padded_patch_1 = patch.pad(time=(2, 3))
+    >>> # Pad `distance` dimension with 1s 4 samples before and 4 after.
+    >>> padded_patch_3 = patch.pad(distance=4, constant_values=1, samples=True)
+    >>> # Get patch ready for fast fft along time dimension.
+    >>> padded_fft = patch.pad(time="fft")
     """
-    if isinstance(constant_values, list | tuple):
-        raise TypeError("constant_values must be a scalar, not a sequence.")
 
-    pad_width = [(0, 0)] * len(patch.shape)
-    dimfo = get_multiple_dim_value_from_kwargs(patch, kwargs)
-    new_coords = {}
-
-    for _, info in dimfo.items():
-        axis, dim, value = info["axis"], info["dim"], info["value"]
-
-        # Ensure pad_width is a tuple, even if a single integer is provided
-        if isinstance(value, int):
+    def _get_pad_tuple(value, samples, coord):
+        """
+        Get a tuple, in samples, of (pad_to_start, pad_to_end).
+        """
+        if value in {"fft", "correlate"}:
+            target_length = len(coord) if value == "fft" else 2 * len(coord) - 1
+            # Determine value so that the output dim will be a fast length.
+            value = (0, next_fast_len(target_length) - len(coord))
+            samples = True  # ensure padding isn't interpreted as coord units.
+        elif not isinstance(value, Sequence):
             value = (value, value)
+        if not samples:  # Ensure values are in samples.
+            value = tuple(coord.get_sample_count(x) for x in value)
+        return value
 
-        # Ensure kwargs are in samples
-        if not samples:
-            coord = patch.get_coord(dim, require_evenly_sampled=True)
-            value = (
-                coord.get_sample_count(value[0], samples=samples),
-                coord.get_sample_count(value[1], samples=samples),
-            )
-        pad_width[axis] = value
-
-        # Get new coordinate
-        if expand_coords:
-            new_start = coord.min() - value[0] * coord.step
-            new_end = coord.max() + (value[1] + 1) * coord.step
-            coord = patch.get_coord(dim, require_evenly_sampled=True)
-            old_values = coord.values
+    def _get_new_coord(coord, pad_tuple, expand_coords):
+        """Get the new coordinate along the expanded axis."""
+        if expand_coords and coord.evenly_sampled:
+            new_start = coord.min() - pad_tuple[0] * coord.step
+            new_end = coord.max() + (pad_tuple[1] + 1) * coord.step
+            assert coord.evenly_sampled, "expand_coords requires evenly sampled."
             new_coord = get_coord(
                 start=new_start, stop=new_end, step=coord.step, units=coord.units
             )
         else:
-            coord = patch.get_coord(dim)
-            old_values = coord.values.astype(np.float64)
+            old_values = coord.values
+            # Need to convert ints to float so NaN can be used.
+            if np.issubdtype(old_values.dtype, np.integer):
+                old_values = old_values.astype(np.float64)
+            null_value = _get_nullish(old_values.dtype)
             added_nan_values = np.pad(
-                old_values, pad_width=value, constant_values=np.nan
+                old_values, pad_width=pad_tuple, constant_values=null_value
             )
             new_coord = coord.update(data=added_nan_values)
-        new_coords[dim] = new_coord
+        return new_coord
 
-    # Pad patch's data
+    if isinstance(constant_values, Sequence):
+        raise ParameterError("constant_values must be a scalar, not a sequence.")
+
+    pad_width = [(0, 0)] * len(patch.shape)
+    dimfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
+    new_coords = {}
+
+    for dim, axis, value in dimfo:
+        coord = patch.get_coord(dim, require_evenly_sampled=not samples)
+        pad_tuple = _get_pad_tuple(value, samples, coord)
+        pad_width[axis] = pad_tuple
+        new_coords[dim] = _get_new_coord(coord, pad_tuple, expand_coords)
+
+    # Pad data, update coord manager, and return.
     new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
-
-    # Update coord manager
     new_coords = patch.coords.update(**new_coords)
-
     return patch.new(data=new_data, coords=new_coords)
 
 
@@ -639,7 +698,7 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     >>> # roll time dimension 5 elements and update coordinates
     >>> rolled_patch3 = patch.roll(time=5, samples=True, update_coord=True)
     """
-    dim, axis, input_value = get_dim_value_from_kwargs(patch, kwargs)
+    dim, axis, input_value = get_dim_axis_value(patch, kwargs=kwargs)[0]
     arr = patch.data
     coord = patch.get_coord(dim)
     value = coord.get_sample_count(input_value, samples=samples)

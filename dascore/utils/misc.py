@@ -1,4 +1,5 @@
 """Misc Utilities."""
+
 from __future__ import annotations
 
 import contextlib
@@ -8,8 +9,7 @@ import inspect
 import os
 import re
 import warnings
-from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Generator, Iterable, Mapping, Sequence, Sized
 from functools import cache
 from pathlib import Path
 from types import ModuleType
@@ -20,6 +20,7 @@ from scipy.linalg import solve
 from scipy.special import factorial
 
 import dascore as dc
+from dascore.compat import is_array
 from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
     FilterValueError,
@@ -27,10 +28,6 @@ from dascore.exceptions import (
     ParameterError,
 )
 from dascore.utils.progress import track
-
-
-class _Sentinel:
-    """Sentinel for key checks."""
 
 
 def register_func(list_or_dict: list | dict, key=None):
@@ -166,22 +163,46 @@ def all_close(ar1, ar2):
     Just uses numpy.allclose unless ar1 is a datetime, in which case
     strict equality is used.
     """
-    ar1, ar2 = np.array(ar1), np.array(ar2)
+    ar1, ar2 = np.asarray(ar1), np.asarray(ar2)
+    if not ar1.shape == ar2.shape:
+        return False
+    ar1_null = pd.isnull(ar1)
+    ar2_null = pd.isnull(ar2)
     try:
-        return np.allclose(ar1, ar2)
+        close = np.isclose(ar1, ar2)
+        bools = close | ar1_null | ar2_null
+        return np.all(bools)
     except TypeError:
         return np.all(ar1 == ar2)
 
 
-def iter_files(
-    paths: str | Iterable[str],
+def _all_null(maybe_ar):
+    """Return True if values is nullish, or all sub-values nullish if sequence."""
+    out = pd.isnull(maybe_ar)
+    out = out.all() if hasattr(out, "all") else out
+    return out
+
+
+def _get_nullish(dtype=np.floating):
+    """Get nullish values for a given dtype."""
+    if np.issubdtype(dtype, np.datetime64):
+        return np.datetime64("NaT")
+    elif np.issubdtype(dtype, np.timedelta64):
+        return np.timedelta64("NaT")
+    return np.nan
+
+
+def _iter_filesystem(
+    paths: str | Path | Iterable[str | Path],
     ext: str | None = None,
-    mtime: float | None = None,
+    timestamp: float | None = None,
     skip_hidden: bool = True,
-) -> Iterable[str]:
+    include_directories: bool = False,
+) -> Generator[str, str, None]:
     """
-    Use os.scan dir to iter files, optionally only for those with given
-    extension (ext) or modified times after mtime.
+    Iterate contents of a filesystem like thing.
+
+    Options allow for filtering and terminating early.
 
     Parameters
     ----------
@@ -189,29 +210,44 @@ def iter_files(
         The path to the base directory to traverse. Can also use a collection
         of paths.
     ext : str or None
-        The extensions to map.
-    mtime : int or float
-        Time stamp indicating the minimum mtime.
+        The extensions of files to return.
+    timestamp : int or float
+        Time stamp indicating the minimum mtime to scan.
     skip_hidden : bool
         If True skip files or folders (they begin with a '.')
+    include_directories
+        If True, also yield directories. In this case, a "skip" can be
+        passed back to the generator to indicate the rest of the directory
+        contents should be skipped.
 
     Yields
     ------
     Paths, as strings, meeting requirements.
     """
+    # handle returning directories if requested.
+    if include_directories and os.path.isdir(paths):
+        if not (skip_hidden and str(paths).startswith(".")):
+            signal = yield paths
+            if signal is not None and signal == "skip":
+                yield None
+                return
     try:  # a single path was passed
         for entry in os.scandir(paths):
             if entry.is_file() and (ext is None or entry.name.endswith(ext)):
-                if mtime is None or entry.stat().st_mtime >= mtime:
+                if timestamp is None or entry.stat().st_mtime >= timestamp:
                     if entry.name[0] != "." or not skip_hidden:
                         yield entry.path
             elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from iter_files(
-                    entry.path, ext=ext, mtime=mtime, skip_hidden=skip_hidden
+                yield from _iter_filesystem(
+                    entry.path,
+                    ext=ext,
+                    timestamp=timestamp,
+                    skip_hidden=skip_hidden,
+                    include_directories=include_directories,
                 )
-    except TypeError:  # multiple paths were passed
+    except (TypeError, AttributeError):  # multiple paths were passed
         for path in paths:
-            yield from iter_files(path, ext, mtime, skip_hidden)
+            yield from _iter_filesystem(path, ext, timestamp, skip_hidden)
     except NotADirectoryError:  # a file path was passed, just return it
         yield paths
 
@@ -289,7 +325,7 @@ def optional_import(package_name: str) -> ModuleType:
     except ImportError:
         msg = (
             f"{package_name} is not installed but is required for the "
-            f"requested functionality"
+            f"requested functionality."
         )
         raise MissingOptionalDependencyError(msg)
     return mod
@@ -297,7 +333,7 @@ def optional_import(package_name: str) -> ModuleType:
 
 def get_middle_value(array):
     """Get the middle value in the differences array without changing dtype."""
-    array = np.sort(np.array(array))
+    array = np.sort(np.asarray(array))
     last_ind = len(array) - 1
     ind = int(np.floor(last_ind / 2))
     return np.sort(array)[ind]
@@ -307,7 +343,7 @@ def all_diffs_close_enough(diffs):
     """Check if all the diffs are 'close' handling timedeltas."""
     if not len(diffs):
         return False
-    diffs = np.array(diffs)
+    diffs = np.asarray(diffs)
     is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
     is_td = np.issubdtype(diffs.dtype, np.datetime64)
     if is_td or is_dt:
@@ -379,14 +415,11 @@ def to_str(val):
     return str(val)
 
 
-def maybe_get_attrs(obj, attr_map: Mapping):
-    """Maybe get attributes from object (if they exist)."""
-    out = {}
-    for old_name, new_name in attr_map.items():
-        if hasattr(obj, old_name):
-            value = getattr(obj, old_name)
-            out[new_name] = unbyte(value)
-    return out
+def yield_sub_sequences(sequence, length=None):
+    """Yield subsequences of a sequence for specified length."""
+    length = length if length is not None else len(sequence)
+    for i in range(0, len(sequence), length):
+        yield sequence[i : i + length]
 
 
 def maybe_get_items(
@@ -445,131 +478,6 @@ def is_valid_coord_str(input_str, prefixes=None):
     """Return True if an input string is valid for representing coord info."""
     _valid_keys = tuple(dc.core.CoordSummary.model_fields)
     return _matches_prefix_suffix(input_str, _valid_keys, prefixes)
-
-
-def separate_coord_info(
-    obj,
-    dims: tuple[str] | None = None,
-    required: Sequence[str] | None = None,
-    cant_be_alone: tuple[str] = ("units", "dtype"),
-) -> tuple[dict, dict]:
-    """
-    Separate coordinate information from attr dict.
-
-    These can be in the flat-form (ie {time_min, time_max, time_step, ...})
-    or a nested coord: {coords: {time: {min, max, step}}
-
-    Parameters
-    ----------
-    obj
-        The object or model to
-    dims
-        The dimension to look for.
-    required
-        If provided, the required attributes (e.g., min, max, step).
-    cant_be_alone
-        names which cannot be on their own.
-
-    Returns
-    -------
-    coord_dict and attrs_dict.
-    """
-
-    def _meets_required(coord_dict, strict=True):
-        """
-        Return True coord dict meets the minimum required keys.
-
-        coord_dict represents potential coordinate fields.
-
-        Strict ensures all required values exist.
-        """
-        if not coord_dict:
-            return False
-        if not required and (set(coord_dict) - cant_be_alone):
-            return True
-        if required or not strict:
-            return set(coord_dict).issuperset(required)
-        return False
-
-    def _get_dims(obj):
-        """Try to ascertain dims from keys in obj."""
-        # check first for coord manager
-        if isinstance(obj, dict) and hasattr(obj.get("coords", None), "dims"):
-            return obj["coords"].dims
-
-        # This object already has dims, just honor it.
-        if dims := obj.get("dims", None):
-            return tuple(dims.split(",")) if isinstance(dims, str) else dims
-
-        potential_keys = defaultdict(set)
-        for key in obj:
-            if not is_valid_coord_str(key):
-                continue
-            potential_keys[key.split("_")[0]].add(key.split("_")[1])
-        return tuple(i for i, v in potential_keys.items() if _meets_required(v))
-
-    def _get_coords_from_top_level(obj, out, dims):
-        """First get coord info from top level."""
-        for dim in iterate(dims):
-            potential_coord = {
-                i.split("_")[1]: v for i, v in obj.items() if is_valid_coord_str(i, dim)
-            }
-            # nasty hack for handling d_{dim} for backward compatibility.
-            if (bad_name := f"d_{dim}") in obj:
-                msg = f"d_{dim} is deprecated, use {dim}_step"
-                warnings.warn(msg, DeprecationWarning, stacklevel=3)
-                potential_coord["step"] = obj[bad_name]
-
-            if _meets_required(potential_coord, strict=False):
-                out[dim] = potential_coord
-
-    def _get_coords_from_coord_level(obj, out):
-        """Get coords from coordinate level."""
-        coords = obj.get("coords", {})
-        if hasattr(coords, "to_summary_dict"):
-            coords = coords.to_summary_dict()
-        for key, value in coords.items():
-            if hasattr(value, "to_summary"):
-                value = value.to_summary()
-            if hasattr(value, "model_dump"):
-                value = value.model_dump()
-            if _meets_required(value, strict=False):
-                out[key] = value
-
-    def _pop_keys(obj, out):
-        """Pop out old keys for attrs, and unused keys from out."""
-        # first coord subdict
-        obj.pop("coords", None)
-        # then top-level
-        for coord_name, sub_dict in out.items():
-            for thing_name in sub_dict:
-                obj.pop(f"{coord_name}_{thing_name}", None)
-            if "step" in sub_dict:
-                obj.pop(f"d_{coord_name}", None)
-
-    # sequence of short-circuit checks
-    coord_dict = {}
-    required = set(required) if required is not None else set()
-    cant_be_alone = set(cant_be_alone)
-    if obj is None:
-        return coord_dict, {}
-    if hasattr(obj, "model_dump"):
-        obj = obj.model_dump()
-    obj = dict(obj)
-    # Check if dims need to be updated.
-    new_dims = _get_dims(obj)
-    if new_dims and new_dims != dims:
-        obj["dims"] = new_dims
-        dims = new_dims
-    # this is already a dict of coord info.
-    if dims and set(dims) == set(obj):
-        return obj, {}
-    _get_coords_from_coord_level(obj, coord_dict)
-    _get_coords_from_top_level(obj, coord_dict, dims)
-    _pop_keys(obj, coord_dict)
-    if "dims" not in obj and dims is not None:
-        obj["dims"] = dims
-    return coord_dict, obj
 
 
 def cached_method(func):
@@ -677,6 +585,13 @@ def _dict_list_diffs(dict_list):
 
 def sanitize_range_param(select) -> tuple:
     """Given a slice or tuple, check and return slice or tuple."""
+    # convert ellipses or ellipses values
+    if select is None or select is Ellipsis:
+        select = (None, None)
+    # we allow a len(2) list here to not break old codes, but encourage a tuple.
+    if not isinstance(select, (tuple | slice | list)) and select is not ...:
+        msg = "Range values must be a tuple or slice."
+        raise ParameterError(msg)
     # handle slices, need to convert to tuple
     if isinstance(select, slice):
         if select.step is not None:
@@ -686,9 +601,7 @@ def sanitize_range_param(select) -> tuple:
             )
             raise ParameterError(msg)
         select = (select.start, select.stop)
-    # convert ellipses or ellipses values
-    if select is None or select is Ellipsis:
-        select = (None, None)
+
     # validate length (only length 2 allowed)
     if len(select) != 2:
         msg = "Range indices must be a length 2 sequence."
@@ -698,13 +611,8 @@ def sanitize_range_param(select) -> tuple:
     return select
 
 
-def check_filter_kwargs(kwargs):
-    """Check filter kwargs and return dim name and filter range."""
-    if len(kwargs) != 1:
-        msg = "pass filter requires you specify one dimension and filter range."
-        raise FilterValueError(msg)
-    dim = next(iter(kwargs.keys()))
-    filt_range = kwargs[dim]
+def check_filter_sequence(filt_range):
+    """Ensure the filter sequence is the right shape."""
     # strip out units if used.
     mags = tuple([getattr(x, "magnitude", x) for x in filt_range])
     if not isinstance(filt_range, Sequence) or len(filt_range) != 2:
@@ -716,7 +624,16 @@ def check_filter_kwargs(kwargs):
             f"you passed {filt_range}"
         )
         raise FilterValueError(msg)
+    return filt_range
 
+
+def check_filter_kwargs(kwargs):
+    """Check filter kwargs and return dim name and filter range."""
+    if len(kwargs) != 1:
+        msg = "pass filter requires you specify one dimension and filter range."
+        raise FilterValueError(msg)
+    dim = next(iter(kwargs.keys()))
+    filt_range = check_filter_sequence(kwargs[dim])
     return dim, filt_range
 
 
@@ -735,3 +652,96 @@ def check_filter_range(nyquist, low, high, filt_min, filt_max):
             f"filt_min = {filt_min}, filt_max = {filt_max}"
         )
         raise FilterValueError(msg)
+
+
+def _merge_tuples(dims1, dims2):
+    """Merge tuples together, preserving order where possible."""
+    dims = dict.fromkeys(dims1)
+    dims.update(dict.fromkeys(dims2))
+    out = tuple(dims.keys())
+    return out
+
+
+def _validate_sample_values(value):
+    """
+    Validate values, or ranges, which represent samples.
+    """
+    slice_ = _to_slice(value)
+    start, stop = slice_.start, slice_.stop
+    if not all(
+        isinstance(v, (int | np.integer | type(None) | type(Ellipsis)))
+        for v in (start, stop)
+    ):
+        msg = "When samples=True, values must be integers."
+        raise ParameterError(msg)
+
+
+def _to_slice(limits):
+    """Convert slice or two len tuple to slice."""
+    if isinstance(limits, slice):
+        return limits
+    # ints should be interpreted as Slice(int, int+1) to not collapse dim.
+    if isinstance(limits, int):
+        if limits == -1:  # -1 case needs open interval to work
+            return slice(-1, None)
+        return slice(limits, limits + 1)
+    if limits is ... or limits is None:
+        return slice(None, None)
+    assert isinstance(limits, Sized) and len(limits) == 2
+    val1, val2 = limits
+    start = None if val1 is ... or val1 is None else val1
+    stop = None if val2 is ... or val2 is None else val2
+    return slice(start, stop)
+
+
+def _apply_union_indexers(indexer, array):
+    """
+    Apply indexers to array getting the union of indices.
+
+    For the case of multiple int arrays we actually don't want numpy's
+    advanced indexing feature here but rather the union of the array.
+    For example ar = [[1,2,3], [4,5,6], [7,8,9]]; ar[[0,1], [0,2]] returns
+    [1, 6] but we want [[1, 3], [4,6]], so we have to break the index apart.
+    We also want row/column independent boolean indexing, so whenever there
+    is more than one array in the indexer we need to apply each independently.
+    """
+    if array is None:  # no array passed, just return.
+        return array
+    array_count = sum(is_array(x) for x in indexer)
+    if array_count > 1:
+        out = array
+        ndim = len(out.shape)
+        for axis, ind in enumerate(indexer):
+            out = out[broadcast_for_index(ndim, axis, ind)]
+    else:
+        out = array[indexer]
+    return out
+
+
+def _maybe_array_to_slice(int_array, data_len):
+    """
+    Maybe convert an array of ints (indices) to a slice if it is sorted.
+    """
+    if len(int_array) < 2:
+        return int_array
+    diff = int_array[-1] - int_array[0]
+    int_array_len = len(int_array)
+    if diff == len(int_array) - 1:
+        if np.all(int_array[1:] > int_array[:-1]):
+            # this spans the whole array, use empty slice.
+            if int_array_len == data_len:
+                return slice(None)
+            # otherwise return sub-slice.
+            return slice(int_array[0], int_array[-1] + 1)
+    return int_array
+
+
+def to_object_array(object_sequence):
+    """
+    Convert a sequence of objects to a numpy array of objects.
+
+    This is useful, eg, for storing an object array in a dataframe.
+    """
+    out = np.empty(len(object_sequence), dtype=object)
+    out[:] = object_sequence
+    return out

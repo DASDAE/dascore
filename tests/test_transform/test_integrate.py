@@ -1,11 +1,11 @@
 """Module for performing integrations."""
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
 import dascore as dc
-import dascore.proc.coords
 from dascore.transform.integrate import integrate
 from dascore.units import get_quantity
 from dascore.utils.misc import broadcast_for_index
@@ -90,7 +90,8 @@ class TestDefiniteIntegration:
             out = patch.integrate(dim=dim, definite=True)
             assert out.shape[ax] == 1
             step = to_float(patch.get_coord(dim).step)
-            expected_data = np.trapz(patch.data, dx=step, axis=ax)
+            trap = getattr(np, "trapezoid", getattr(np, "trapz"))
+            expected_data = trap(patch.data, dx=step, axis=ax)
             ndims = len(patch.dims)
             indexer = broadcast_for_index(ndims, ax, None)
             assert np.allclose(out.data, expected_data[indexer])

@@ -139,6 +139,7 @@ website:
             - recipes/real_time_proc.qmd
             - recipes/smoothing.qmd
             - recipes/parallelization.qmd
+            - recipes/low_freq_proc.qmd
 
         - section: "IO"
           contents:
@@ -194,8 +195,11 @@ website:
         - text: Documentation Strategy
           href: notes/doc_strategy.qmd
 
-        - text: Fourier transforms
+        - text: Fourier Transforms
           href: notes/dft_notes.qmd
+
+        - text: Velocity to Strain Rate
+          href: notes/velocity_to_strain_rate.qmd
 
     - id: API
       title: "API"

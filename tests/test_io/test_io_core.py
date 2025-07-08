@@ -1,4 +1,5 @@
 """Test for basic IO and related functions."""
+
 from __future__ import annotations
 
 import copy
@@ -6,6 +7,7 @@ import io
 from pathlib import Path
 from typing import TypeVar
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -79,7 +81,7 @@ class _FiberCaster(FiberIO):
 
 
 class _FiberUnsupportedTypeHints(FiberIO):
-    """A fiber io which implements typehints which have not casting meaning."""
+    """A fiber io which implements typehints which have no casting meaning."""
 
     name = "_TypeHinterNotRight"
     version = "2"
@@ -88,6 +90,22 @@ class _FiberUnsupportedTypeHints(FiberIO):
         """Dummy read."""
         with open(resource) as fi:
             return fi.read()
+
+
+class _FiberDirectory(FiberIO):
+    """A FiberIO which accepts a directory."""
+
+    name = "_directory_test_io"
+    version = "0.1"
+    input_type = "directory"
+
+    def get_format(self, resource) -> tuple[str, str] | bool:
+        """Only accept directories which have specific naming."""
+        path = Path(resource)
+        name = path.name
+        if self.name in name:
+            return self.name, self.version
+        return False
 
 
 class TestPatchFileSummary:
@@ -120,7 +138,9 @@ class TestFormatManager:
         return manager
 
     def test_specific_format_and_version(self, format_manager):
-        """Specifying a known format and version should return exactly one formatter."""
+        """
+        Specifying a known format and version should return exactly one formatter.
+        """
         out = list(format_manager.yield_fiberio("DASDAE", "1"))
         assert len(out) == 1
         assert isinstance(out[0], DASDAEV1)
@@ -173,6 +193,18 @@ class TestFormatManager:
         file_format = _FiberFormatTestV1.name
         out = list(format_manager.yield_fiberio(format=file_format))
         assert len(out) == 2
+
+    def test_unique_values_extensions(self, format_manager):
+        """Ensure unique FiberIO are returned for an extension."""
+        out = list(format_manager.yield_fiberio(extension="h5"))
+        name_ver = [(x.name, x.version) for x in out]
+        assert len(name_ver) == len(set(name_ver))
+
+    def test_unique_values_no_extensions(self, format_manager):
+        """Ensure unique FiberIO are returned when nothing specified."""
+        out = list(format_manager.yield_fiberio())
+        name_ver = [(x.name, x.version) for x in out]
+        assert len(name_ver) == len(set(name_ver))
 
 
 class TestFormatter:
@@ -229,6 +261,14 @@ class TestFormatter:
 class TestGetFormat:
     """Tests to ensure formats can be retrieved."""
 
+    @pytest.fixture(scope="class")
+    def empty_h5_path(self, tmpdir_factory):
+        """Create an empty HDF5 file."""
+        path = tmpdir_factory.mktemp("empty") / "empty.h5"
+        with h5py.File(path, "w"):
+            pass
+        return path
+
     def test_not_known(self, dummy_text_file):
         """Ensure a non-path/str object raises."""
         with pytest.raises(UnknownFiberFormatError):
@@ -238,6 +278,20 @@ class TestGetFormat:
         """Ensure a missing file raises."""
         with pytest.raises(FileNotFoundError):
             dc.get_format("bad/file")
+
+    def test_fiberio_directory(self, tmp_path_factory):
+        """Ensure a directory can be recognized as a FiberIO."""
+        fiber_io = _FiberDirectory()
+        path = tmp_path_factory.mktemp(fiber_io.name)
+        assert fiber_io.get_format(path)
+        (name, version) = dc.get_format(path)
+        assert fiber_io.name == name
+        assert fiber_io.version == version
+
+    def test_empty_hdf5_no_format(self, empty_h5_path):
+        """Ensure the empty hdf5 dorsen't have a format."""
+        with pytest.raises(UnknownFiberFormatError):
+            dc.get_format(empty_h5_path)
 
 
 class TestScan:
@@ -288,6 +342,11 @@ class TestScan:
         out = dc.scan(nested_directory_with_patches)
         assert len(out) == 3
 
+    def test_scan_single_file(self, terra15_v6_path):
+        """Ensure scan works on a single file."""
+        out = dc.scan(terra15_v6_path)
+        assert len(out) == 1
+
     def test_can_raise(self):
         """
         Scan, when called from a FiberIO, should be able to raise if
@@ -297,6 +356,39 @@ class TestScan:
         bad_input = _FiberFormatTestV1()
         with pytest.raises(NotImplementedError):
             fio.scan(bad_input)
+
+    def test_bad_checksum(self, monkeypatch, terra15_v6_path):
+        """Test for when format is identified but can't read part of file #346"""
+        # Monkey patch scan to raise OSError. This simulates observed behavior.
+        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
+
+        def raise_os_error(*args, **kwargs):
+            raise OSError("Simulated OS issue")
+
+        monkeypatch.setattr(fiber_io, "scan", raise_os_error)
+
+        # Ensure scanning doesn't raise and warns
+        msg = "Failed to scan"
+        with pytest.warns(UserWarning, match=msg):
+            scan = dc.scan(terra15_v6_path)
+        assert not len(scan)
+
+
+class TestScanToDF:
+    """Tests for scanning to dataframes."""
+
+    def test_input_dataframe(self, random_spool):
+        """Ensure a dataframe returns a dataframe."""
+        df = random_spool.get_contents()
+        out = dc.scan_to_df(df)
+        assert out is df
+
+    def test_spool_dataframe(self, random_directory_spool):
+        """Ensure scan_to_df just gets the dataframe from the spool."""
+        expected = random_directory_spool.get_contents()
+        out = dc.scan_to_df(random_directory_spool)
+        assert out.equals(expected)
 
 
 class TestCastType:

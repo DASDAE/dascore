@@ -1,4 +1,5 @@
 """IO module for reading OptoDAS data."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -15,7 +16,7 @@ from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_da
 class OptoDASPatchAttrs(dc.PatchAttrs):
     """Patch attrs for OptoDAS."""
 
-    gauge_length: float = np.NaN
+    gauge_length: float = np.nan
     gauge_length_units: UnitQuantity | None = None
     schema_version: UTF8Str = ""
 
@@ -27,7 +28,7 @@ class OptoDASV8(FiberIO):
     preferred_extensions = ("hdf5", "h5")
     version = "8"
 
-    def get_format(self, resource: H5Reader) -> tuple[str, str] | bool:
+    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
         """
         Return True if file contains OptoDAS version 8 data else False.
 
@@ -40,7 +41,7 @@ class OptoDASV8(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
         """Scan a OptoDAS file, return summary information about the file's contents."""
         file_version = _get_opto_das_version_str(resource)
         extras = {

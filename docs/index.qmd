@@ -39,10 +39,13 @@ print(out_str)
 
 ```{python}
 import dascore as dc
-from dascore.utils.downloader import fetch
+# Import fetch to read DASCore example files 
+from dascore.utils.downloader import fetch 
 
-# get a path to an example file, replace with your path
+# Fetch a sample file path from DASCore
 file_path = fetch('terra15_das_1_trimmed.hdf5')
+# To read DAS data stored locally on your machine, simply replace the above line with:
+# file_path = "/path/to/data/directory/data.EXT"
 
 spool = dc.spool(file_path)
 patch = spool[0]
@@ -53,10 +56,14 @@ patch = spool[0]
 ```{python}
 #| output: false
 import dascore as dc
+# Import fetch to read DASCore example files 
 from dascore.utils.downloader import fetch
 
-# get a path to a directory of das files, replace with your path
+# Fetch a sample file path from DASCore (just to get a usable path for the rest of the cell)
 directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
+# To read a directory of DAS data stored locally on your machine, 
+# simply replace the above line with:
+# directory_path = "/path/to/data/directory/"
 
 spool = (
     # Create a spool to interact with directory data
