@@ -65,3 +65,8 @@ class OptoDASV8(FiberIO):
             resource, time=time, distance=distance, attr_cls=OptoDASPatchAttrs
         )
         return dc.spool(patches)
+
+class OptoDASV10(OptoDASV8):
+    """Support for OptoDAS V 10."""
+
+    version = "10"
