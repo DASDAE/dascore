@@ -66,6 +66,7 @@ class OptoDASV8(FiberIO):
         )
         return dc.spool(patches)
 
+
 class OptoDASV10(OptoDASV8):
     """Support for OptoDAS V 10."""
 
