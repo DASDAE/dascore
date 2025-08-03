@@ -26,7 +26,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: ./.github/actions/checkout
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: "true"
+          fetch-depth: '0'
+
 
       - uses: ./.github/actions/mamba-install-dascore
         with:

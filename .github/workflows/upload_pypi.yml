@@ -9,7 +9,10 @@ jobs:
   upload:
     runs-on: ubuntu-latest
     steps:
-      - uses: ./.github/actions/checkout
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: "true"
+          fetch-depth: '0'
 
       - name: setup conda
         uses: conda-incubator/setup-miniconda@v3

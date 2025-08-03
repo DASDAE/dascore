@@ -10,7 +10,10 @@ jobs:
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     steps:
-      - uses: ./.github/actions/checkout
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: "true"
+          fetch-depth: '0'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
