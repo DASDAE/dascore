@@ -40,9 +40,7 @@ jobs:
       env_file: "environment.yml"
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-tags: 'true'
+      - uses: ./.github/actions/checkout
 
       - uses: ./.github/actions/mamba-install-dascore
         with:

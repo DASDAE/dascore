@@ -11,9 +11,7 @@ jobs:
       || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-tags: 'true'
+      - uses: ./.github/actions/checkout
 
       - uses: ./.github/actions/mamba-install-dascore
         with:

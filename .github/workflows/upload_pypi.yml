@@ -9,13 +9,7 @@ jobs:
   upload:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: "get tags"
-        run: |
-          git fetch --tags --force # Retrieve annotated tags.
+      - uses: ./.github/actions/checkout
 
       - name: setup conda
         uses: conda-incubator/setup-miniconda@v3
