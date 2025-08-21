@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coordmanager import get_coord_manager
@@ -60,13 +62,26 @@ def _get_distance_coord(acq):
 
 def _get_time_coord(node):
     """Get the time information from a Raw node."""
+    time_array = node["RawDataTime"]
     time_attrs = node["RawDataTime"].attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
     end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
     end = dc.to_datetime64(end_str.rstrip("Z"))
-    step = (end - start) / (len(node["RawDataTime"]) - 1)
-    return get_coord(start=start, stop=end + step, step=step, units="s")
+    step = (end - start) / (len(time_array) - 1)
+    time_coord = get_coord(start=start, stop=end + step, step=step, units="s")
+    # Sometimes the "PartEndTime" can be wrong. Check for this and try to
+    # compensate. See #414.
+    last = time_array[-1:].astype("datetime64[us]")
+    diff = np.abs(time_coord.max() - last) / step
+    # Note: just in case the time array is not in microseconds as it should
+    # be, we prefer to use the iso 8601 strings in the 'PartStartTime' attrs
+    # because they are less likely to get messed up. Therefore, we only
+    # correct time coordinate from time array if the values are "close" but off.
+    if 0 < diff < 10:
+        time_array = time_array[:].astype("datetime64[us]")
+        time_coord = get_coord(data=time_array)
+    return time_coord
 
 
 def _get_data_unit_and_type(node):
@@ -108,9 +123,10 @@ def _get_prodml_attrs(fi, extras=None) -> list[dict]:
     for node in raw_nodes.values():
         info = dict(base_info)
         t_coord = _get_time_coord(node)
-        info.update(t_coord.get_attrs_dict("time"))
+        # info.update(t_coord.get_attrs_dict("time"))
         info.update(_get_data_unit_and_type(node))
-        info["dims"] = _get_dims(node)
+        dims = _get_dims(node)
+        info["dims"] = dims
         if extras is not None:
             info.update(extras)
         info["coords"] = {"time": t_coord, "distance": d_coord}
