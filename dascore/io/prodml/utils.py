@@ -63,7 +63,7 @@ def _get_distance_coord(acq):
 def _get_time_coord(node):
     """Get the time information from a Raw node."""
     time_array = node["RawDataTime"]
-    time_attrs = node["RawDataTime"].attrs
+    time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
     end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
@@ -123,7 +123,6 @@ def _get_prodml_attrs(fi, extras=None) -> list[dict]:
     for node in raw_nodes.values():
         info = dict(base_info)
         t_coord = _get_time_coord(node)
-        # info.update(t_coord.get_attrs_dict("time"))
         info.update(_get_data_unit_and_type(node))
         dims = _get_dims(node)
         info["dims"] = dims
