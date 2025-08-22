@@ -63,17 +63,20 @@ def _get_distance_coord(acq):
 def _get_time_coord(node):
     """Get the time information from a Raw node."""
     time_array = node["RawDataTime"]
+    array_len = len(time_array)
+    assert array_len > 0, "Missing time array in ProdML file."
     time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
     end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
     end = dc.to_datetime64(end_str.rstrip("Z"))
-    step = (end - start) / (len(time_array) - 1)
+    step = (end - start) / (array_len - 1)
     time_coord = get_coord(start=start, stop=end + step, step=step, units="s")
     # Sometimes the "PartEndTime" can be wrong. Check for this and try to
     # compensate. See #414.
-    last = time_array[-1:].astype("datetime64[us]")
-    diff = np.abs(time_coord.max() - last) / step
+    last = np.asarray(time_array[-1:]).astype("datetime64[us]")[0]
+    tc_max = np.asarray(time_coord.max()).astype("datetime64[us]")
+    diff = float(np.abs((tc_max - last) / step))
     # Note: just in case the time array is not in microseconds as it should
     # be, we prefer to use the iso 8601 strings in the 'PartStartTime' attrs
     # because they are less likely to get messed up. Therefore, we only
