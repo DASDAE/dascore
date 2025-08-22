@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import shutil
 
+import h5py
 import pandas as pd
 import pytest
 import tables
 
 import dascore as dc
+from dascore.core.coords import get_coord
 from dascore.io.core import read
 from dascore.utils.downloader import fetch
 
@@ -54,6 +56,22 @@ class TestProdMLFile:
         return new_path
 
     @pytest.fixture(scope="class")
+    def issue_514_patch_path(self, tmp_path_factory):
+        """Make a patch with bad endtime metadata. See #412."""
+        tmp_path = tmp_path_factory.mktemp("issue_514")
+        path = dc.utils.downloader.fetch("prodml_2.0.h5")
+        new_path = shutil.copy2(path, tmp_path / "prod_2_issue_514.h5")
+        with h5py.File(new_path, "a") as fi:
+            # monkey patch dimensions to simulate issue.
+            parent_node = fi["Acquisition"]["Raw[0]"]
+            time_node = parent_node["RawDataTime"]
+            time = time_node[:].astype("datetime64[us]")
+            time_coord = get_coord(data=time)
+            new_time = str(time_coord.max() + time_coord.step * 2)
+            time_node.attrs["PartEndTime"] = new_time
+        return new_path
+
+    @pytest.fixture(scope="class")
     def silixa_h5_patch(self, idas_h5_example_path):
         """Get the silixa file, return Patch."""
         return dc.spool(idas_h5_example_path)[0]
@@ -74,6 +92,11 @@ class TestProdMLFile:
     def test_issue_221(self, issue_221_patch_path):
         """Ensure dims are correctly ascertained."""
         patch = dc.read(issue_221_patch_path)[0]
+        assert isinstance(patch, dc.Patch)
+
+    def test_issue_514(self, issue_514_patch_path):
+        """Ensure the patch can be read despite bad attribute info."""
+        patch = dc.read(issue_514_patch_path)[0]
         assert isinstance(patch, dc.Patch)
 
 
