@@ -359,6 +359,7 @@ class TestMaybeMemMap:
         with open(terra15_v5_path, "rb") as fid:
             array = maybe_mem_map(fid)
         assert isinstance(array, np.memmap)
+        assert array.size
 
     def test_bytes_io(self):
         """Ensure non-files return arrays."""
@@ -367,3 +368,15 @@ class TestMaybeMemMap:
         bio.seek(0)
         array = maybe_mem_map(bio)
         assert isinstance(array, np.ndarray)
+        assert array.size == 4
+
+    def test_bytes_io_nonzero_position(self):
+        """Fallback should read entire buffer even if pointer is not at 0."""
+        bio = BytesIO()
+        bio.write(b"abcdef")
+        # Intentionally do not seek back to 0; pointer is at end.
+        arr_end_pos = maybe_mem_map(bio)
+        # Now reset to start and compare lengths; both should see full content.
+        bio.seek(0)
+        arr_full = maybe_mem_map(bio)
+        assert arr_end_pos.size == arr_full.size == 6

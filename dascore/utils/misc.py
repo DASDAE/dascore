@@ -781,7 +781,6 @@ def maybe_mem_map(fid: IOBase, dtype="<u1") -> np.ndarray | np.memmap:
         raw = np.memmap(fid.name, dtype=dtype, mode="r")
     except (AttributeError, TypeError, ValueError):
         # Fallback: read into memory
-        current = fid.tell()
+        fid.seek(0)
         raw = np.frombuffer(fid.read(), dtype=dtype)
-        fid.seek(current)
     return raw
