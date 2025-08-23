@@ -75,6 +75,20 @@ class TestFindIndex:
         os.chmod(path, 0o444)
         return path
 
+    @pytest.fixture()
+    def directory_indexer_bad_cache(self, tmp_path_factory):
+        """Create a subclass of indexer which has a bd index_map file."""
+        path = tmp_path_factory.mktemp("corrupt_cache_test")
+        cache_path = path / "corrupt_cache.json"
+
+        with cache_path.open("wt") as fi:
+            fi.write("{'bad': 'json'")
+
+        class SubIndexer(DirectoryIndexer):
+            index_map_path = cache_path
+
+        return SubIndexer
+
     def test_directory_cant_write(self, unwritable_directory):
         """Ensure correct path is found when a read-only directory is used."""
         dir_index = DirectoryIndexer(unwritable_directory)
@@ -105,6 +119,18 @@ class TestFindIndex:
         index_path.open("w").close()
         dir_indexer = DirectoryIndexer(path)
         assert dir_indexer.index_path == index_path
+
+    def test_corrupt_cache(
+        self,
+        directory_indexer_bad_cache,
+        tmp_path_factory,
+    ):
+        """Ensure a corrupted cache doesnt crash indexing. See #508."""
+        path = tmp_path_factory.mktemp("corrupt_cache_test")
+        # Test passes if this doesn't raise should not raise.
+        assert directory_indexer_bad_cache.index_map_path.exists()
+        directory_indexer_bad_cache(path)
+        assert not directory_indexer_bad_cache.index_map_path.exists()
 
 
 class TestBasics:
@@ -243,7 +269,7 @@ class TestUpdate:
         with pytest.warns(UserWarning, match=msg):
             dc.spool(index_old_version).update()
 
-    def test_new_version_warngs(self, index_new_version):
+    def test_new_version_warnings(self, index_new_version):
         """Ensure an index file with a newer version of dascore issues a warning."""
         msg = "The index was created with a newer version of dascore"
         dc.spool(index_new_version)
