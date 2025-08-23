@@ -97,11 +97,11 @@ class SegyV0_0(SegyV1_0):  # noqa
     version = "0.0"
 
 
-class SegyV0_1(SegyV1_0):  # noqa
+class SegyV0_100(SegyV1_0):  # noqa
     """
     An IO class supporting version 0.100 of the SEGY format.
 
-    This odd version is output by some Silixa files.
+    This odd version is output by some Silixa (Carina) files.
     """
 
     version = "0.100"
