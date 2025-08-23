@@ -13,7 +13,6 @@ from dascore.utils.misc import iterate, maybe_get_items, unbyte
 # --- Getting format/version
 
 EXPECTED_ATTRS = (
-    "GaugeLength",
     "PulseRate",
     "PulseWidth",
     "NumberOfLoci",
