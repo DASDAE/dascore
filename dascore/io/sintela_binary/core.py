@@ -21,7 +21,7 @@ from .utils import (
 
 
 class SintelaPatchAttrs(dc.PatchAttrs):
-    """Patch Attributes for Silixa hdf5 format."""
+    """Patch Attributes for Sintela binary format."""
 
     gauge_length: float = np.nan
     gauge_length_units: str = "m"
@@ -36,7 +36,7 @@ class SintelaBinaryV3(FiberIO):
 
     def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:
         """
-        Return name and version string if Silixa hdf5 else False.
+        Return name and version string or False.
 
         Parameters
         ----------
@@ -54,7 +54,7 @@ class SintelaBinaryV3(FiberIO):
         return False
 
     def scan(self, resource: BinaryReader, **kwargs) -> list[dc.PatchAttrs]:
-        """Scan a Silixa HDF5 file, return summary information on the contents."""
+        """Scan a file, return summary information on the contents."""
         extras = {
             "path": resource.name,
             "file_format": self.name,
@@ -73,8 +73,8 @@ class SintelaBinaryV3(FiberIO):
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,
     ) -> dc.BaseSpool:
-        """Read a single file with Silixa H5 data inside."""
+        """Read a single Sintela binary file."""
         patch = _get_patch(
-            resource, time=time, distance=distance, attr_cls=SintelaPatchAttrs
+            resource, time=time, distance=distance, attr_class=SintelaPatchAttrs
         )
         return dc.spool(patch)

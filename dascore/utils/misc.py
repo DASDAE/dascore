@@ -11,6 +11,7 @@ import re
 import warnings
 from collections.abc import Generator, Iterable, Mapping, Sequence, Sized
 from functools import cache
+from io import IOBase
 from pathlib import Path
 from types import ModuleType
 
@@ -745,3 +746,42 @@ def to_object_array(object_sequence):
     out = np.empty(len(object_sequence), dtype=object)
     out[:] = object_sequence
     return out
+
+
+def get_buffer_size(fid: IOBase):
+    """
+    Get the size of a buffer in bytes.
+
+    Parameters
+    ----------
+    fid
+        A buffered reader, e.g. from open(file) as fid.
+    """
+    path = getattr(fid, "name", None)
+    if path is None:
+        cur = fid.tell()
+        fid.seek(0, 2)  # end
+        file_size = fid.tell()
+        fid.seek(cur, 0)
+    else:
+        file_size = Path(path).stat().st_size
+    return file_size
+
+
+def maybe_mem_map(fid: IOBase, dtype="<u1") -> np.ndarray | np.memmap:
+    """
+    Try to get a memory map array from fid, otherwise just return array.
+
+    Parameters
+    ----------
+    fid
+        A buffered reader, e.g. from open(file) as fid.
+    """
+    try:
+        raw = np.memmap(fid.name, dtype=dtype, mode="r")
+    except (AttributeError, TypeError, ValueError):
+        # Fallback: read into memory
+        current = fid.tell()
+        raw = np.frombuffer(fid.read(), dtype=dtype)
+        fid.seek(current)
+    return raw

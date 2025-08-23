@@ -10,8 +10,6 @@ Notes
   start for version 4 support.
 """
 
-from pathlib import Path
-
 import numpy as np
 
 import dascore as dc
@@ -19,6 +17,7 @@ from dascore.compat import array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.utils.misc import get_buffer_size, maybe_mem_map
 
 SYNC_WORD = 0x11223344
 MAX_TRIGGERS = 8
@@ -94,8 +93,8 @@ _DATA_TYPE_MAP = {
     0: ("phase", "radians"),
     1: ("phase_difference", "radians"),
     2: ("phase_rate", "radians/s"),
-    3: ("Strain", "µϵ"),
-    4: ("Strain Rate", "µϵ/s"),
+    3: ("strain", "microstrain"),
+    4: ("strain_rate", "microstrain/s"),
 }
 
 
@@ -108,12 +107,14 @@ def _read_base_header(fid):
 
 def _get_number_of_packets(fid, header, version, size):
     """Get the number of packets in the file."""
-    file_size = Path(fid.name).stat().st_size
+    # get filesize without depending on input being a file.
+    file_size = get_buffer_size(fid)
     samples = header["num_samples"]
     channels = header["num_channels"]
     assert version == "3", "Only version 3 of Sintela binary currently supported."
     packet_size = size + (channels * samples * 4)
-    num_packets = file_size // packet_size
+    num_packets, remainder = divmod(file_size, packet_size)
+    assert not remainder, "Sintela binary file size not divisible by packet size."
     return num_packets
 
 
@@ -173,10 +174,9 @@ def _get_attr_dict(header, extras=None):
     data_type, units = _DATA_TYPE_MAP.get(header["data_type"], ("phase", "radians"))
     out = dict(
         data_type=data_type,
-        units=units,
+        data_units=units,
         gauge_length=header["gauge_length"],
         gps_status=header["gps_status"],
-        dims=DIMS,
     )
     out.update(extras if extras is not None else {})
     return out
@@ -191,7 +191,7 @@ def _load_data(fid, header):
     packet_size = header_size + num_channels * num_samples * dtype.itemsize
     # Memory map entire file as raw bytes. We do this to later skip the headers
     fid.seek(0)
-    raw = np.memmap(fid, dtype=np.uint8, mode="r")
+    raw = maybe_mem_map(fid)
     # Compute how many blocks
     block_count = raw.size // packet_size
     # Create a view that skips headers
