@@ -37,11 +37,15 @@ def _get_index_map(cache_path) -> dict:
     Note: this is purposefully mutable; handle with care.
     """
     path = Path(cache_path)
+    out = {}
     if path.exists():
-        with path.open("r") as fi:
-            out = json.load(fi)
-    else:
-        out = {}
+        try:
+            with path.open("r") as fi:
+                out = json.load(fi)
+        # On rare occasions, the file can become corrupt; just delete so it
+        # gets regenerated. See #508.
+        except (OSError, json.JSONDecodeError):
+            os.remove(path)
     return out
 
 
