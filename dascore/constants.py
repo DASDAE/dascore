@@ -63,6 +63,8 @@ VALID_DATA_TYPES = (
     "velocity",
     "strain_rate",
     "phase",
+    "phase_difference",
+    "phase_rate",
     "strain",
     "temperature",
     "temperature_gradient",
