@@ -8,13 +8,17 @@ from contextlib import suppress
 import rich.progress as prog
 
 import dascore as dc
+from dascore.compat import Progress
 from dascore.constants import PROGRESS_LEVELS
 
 
-def get_progress_instance(progress: PROGRESS_LEVELS = "standard"):
+def get_progress_instance(progress: PROGRESS_LEVELS | Progress = "standard"):
     """
     Get the Rich progress bar instance based on complexity level.
     """
+    # If a progress class is passed in, just use it.
+    if isinstance(progress, Progress):
+        return progress
     kwargs = {}
     progress_list = [
         prog.SpinnerColumn(),
@@ -29,13 +33,13 @@ def get_progress_instance(progress: PROGRESS_LEVELS = "standard"):
         # set the refresh rate very low and eliminate the spinner
         kwargs["refresh_per_second"] = 0.25
         progress_list = progress_list[1:]
-    return prog.Progress(*progress_list, **kwargs)
+    return Progress(*progress_list, **kwargs)
 
 
 def track(
     sequence: Sized | Generator,
     description: str,
-    progress: PROGRESS_LEVELS = "standard",
+    progress: PROGRESS_LEVELS | Progress = "standard",
     length: int | None = None,
     min_length: int = 1,
 ):
@@ -50,9 +54,10 @@ def track(
         A string describing the operation
     progress
         options are
-        None- disable progress bar,
-        "basic" reduced refresh rate,
-        "standard" - the normal progress bar
+            None- disable progress bar,
+            "basic" reduced refresh rate,
+            "standard" - the normal progress bar
+        can also accept a subclass of rich.progress.Progress.
     min_length
         The minimum length to emmit a progress bar.
     """
@@ -68,7 +73,7 @@ def track(
     if dc._debug or not length or progress is None:
         yield from sequence
         return
-    update = 1.0 if progress == "standard" else 5.0
+    update = 1.0 if isinstance(progress, str) and progress == "standard" else 5.0
     progress = get_progress_instance(progress)
     with progress:
         yield from progress.track(

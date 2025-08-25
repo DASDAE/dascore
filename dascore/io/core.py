@@ -20,6 +20,7 @@ import pandas as pd
 from pydantic import ConfigDict, Field, model_validator
 
 import dascore as dc
+from dascore.compat import Progress
 from dascore.constants import (
     PROGRESS_LEVELS,
     VALID_DATA_CATEGORIES,
@@ -32,6 +33,7 @@ from dascore.constants import (
 from dascore.core.attrs import str_validator
 from dascore.core.spool import DataFrameSpool
 from dascore.exceptions import (
+    InvalidFiberFileError,
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     UnknownFiberFormatError,
@@ -358,7 +360,8 @@ class _FiberIOManager:
                     # raise, in which case the format doesn't belong.
                     func_input = man.get_resource(required_type)
                     format_version = func(func_input, _pre_cast=True)
-                except Exception:  # ; we need to catch everything here
+                # For robustness, we need to catch everything else here.
+                except Exception:
                     continue
                 finally:
                     # If file handle-like seek back to 0 so it can be reused.
@@ -784,7 +787,7 @@ def scan(
     file_version: str | None = None,
     ext: str | None = None,
     timestamp: float | None = None,
-    progress: PROGRESS_LEVELS = "standard",
+    progress: PROGRESS_LEVELS | Progress = "standard",
 ) -> list[dc.PatchAttrs]:
     """
     Scan a potential patch source, return a list of PatchAttrs.
@@ -805,8 +808,8 @@ def scan(
         Time stamp indicating the minimum mtime.
     progress
         The type of progress bar to use. None disables progress bar and
-        "basic" is best for low latency scenarios. Can also acceted a single
-        callable that takes a generator as its ownly argument.
+        "basic" is best for low latency scenarios. Can also acceted a subclass
+        of rich.progress.Progress.
 
     Returns
     -------
@@ -842,45 +845,54 @@ def scan(
         length=length,
         min_length=20,
     )
-    for patch_source in tracker:
-        # just pull attrs from patch
-        if isinstance(patch_source, dc.Patch):
-            out.append(patch_source.attrs)
-            continue
-        with IOResourceManager(patch_source) as man:
-            try:
-                fiber_io, resource = _get_fiber_io_and_req_type(
-                    man,
-                    file_format=file_format,
-                    file_version=file_version,
-                    fiber_io_hint=fiber_io_hint,
-                )
-            except UnknownFiberFormatError:  # skip bad entities
+    try:
+        for patch_source in tracker:
+            # just pull attrs from patch
+            if isinstance(patch_source, dc.Patch):
+                out.append(patch_source.attrs)
                 continue
-            # Cache this fiber io to given preferential treatment next iteration.
-            # This speeds up the common case of many files with the same format.
-            fiber_io_hint[fiber_io.input_type] = fiber_io
-            # Special handling of directory FiberIOs.
-            if fiber_io.input_type == "directory":
-                # Directory fiber_io should send skip signal back to generator
-                # so that no files/sub directories are scanned.
-                generator.send("skip")
-                if not fiber_io._updated_after(resource, timestamp):
-                    continue
-                # Directory FiberIO may need to know the time after which
-                # contents should be returned.
-                source = fiber_io.scan(resource, timestamp=timestamp, _pre_cast=True)
-            else:
+            with IOResourceManager(patch_source) as man:
                 try:
-                    source = fiber_io.scan(resource, _pre_cast=True)
-                except OSError:  # This happens if the file is corrupt see #346.
-                    warnings.warn(f"Failed to scan {resource}", UserWarning)
+                    fiber_io, resource = _get_fiber_io_and_req_type(
+                        man,
+                        file_format=file_format,
+                        file_version=file_version,
+                        fiber_io_hint=fiber_io_hint,
+                    )
+                except UnknownFiberFormatError:  # skip bad entities
                     continue
-                except MissingOptionalDependencyError as ex:
-                    missing_optional_deps[ex.msg.split(" ")[0]] += 1
-                    continue
-            for attr in source:
-                out.append(dc.PatchAttrs.from_dict(attr))
+                # Cache this fiber io to given preferential treatment next
+                # iteration. This speeds up the common case of many files
+                # with the same format.
+                fiber_io_hint[fiber_io.input_type] = fiber_io
+                # Special handling of directory FiberIOs.
+                if fiber_io.input_type == "directory":
+                    # Directory fiber_io should send skip signal back to generator
+                    # so that no files/sub directories are scanned.
+                    generator.send("skip")
+                    if not fiber_io._updated_after(resource, timestamp):
+                        continue
+                    # Directory FiberIO may need to know the time after which
+                    # contents should be returned.
+                    source = fiber_io.scan(
+                        resource, timestamp=timestamp, _pre_cast=True
+                    )
+                else:
+                    try:
+                        source = fiber_io.scan(resource, _pre_cast=True)
+                    # This happens if the file is corrupt see #346.
+                    except (OSError, InvalidFiberFileError, ValueError, TypeError):
+                        warnings.warn(f"Failed to scan {resource}", UserWarning)
+                        continue
+                    except MissingOptionalDependencyError as ex:
+                        missing_optional_deps[ex.msg.split(" ")[0]] += 1
+                        continue
+                for attr in source:
+                    out.append(dc.PatchAttrs.from_dict(attr))
+    # Ensure ctl + c exists scan.
+    except KeyboardInterrupt:
+        getattr(progress, "stop", lambda: None)()
+        raise
     if missing_optional_deps:
         _handle_missing_optionals(out, missing_optional_deps)
     return out
