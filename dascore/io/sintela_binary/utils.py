@@ -17,6 +17,7 @@ from dascore.compat import array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.exceptions import InvalidFiberFileError
 from dascore.utils.misc import get_buffer_size, maybe_mem_map
 
 SYNC_WORD = 0x11223344
@@ -105,16 +106,17 @@ def _read_base_header(fid):
     return out
 
 
-def _get_number_of_packets(fid, header, version, size):
+def _get_number_of_packets(fid, header, size):
     """Get the number of packets in the file."""
     # get filesize without depending on input being a file.
     file_size = get_buffer_size(fid)
     samples = header["num_samples"]
     channels = header["num_channels"]
-    assert version == "3", "Only version 3 of Sintela binary currently supported."
     packet_size = size + (channels * samples * 4)
     num_packets, remainder = divmod(file_size, packet_size)
-    assert not remainder, "Sintela binary file size not divisible by packet size."
+    if remainder:
+        msg = "Sintela binary file size not divisible by packet size."
+        raise InvalidFiberFileError(msg)
     return num_packets
 
 
@@ -127,7 +129,8 @@ def _read_remaining_header(fid, base):
     dtype = _HEADER_DTYPES[version]
     buf = np.fromfile(fid, dtype=dtype, count=1)
     header = {x: y for x, y in zip(buf.dtype.names, buf[0])}
-    header["num_packets"] = _get_number_of_packets(fid, header, version, header_size)
+    assert version == "3", "only 3 support for now,"
+    header["num_packets"] = _get_number_of_packets(fid, header, header_size)
     header["dtype"] = "<f4"
     return header
 
