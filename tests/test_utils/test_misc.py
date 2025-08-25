@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 import warnings
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -15,9 +16,11 @@ from dascore.utils.misc import (
     MethodNameSpace,
     _iter_filesystem,
     cached_method,
+    get_buffer_size,
     get_stencil_coefs,
     iterate,
     maybe_get_items,
+    maybe_mem_map,
     optional_import,
     to_object_array,
     warn_or_raise,
@@ -326,3 +329,54 @@ class TestToObjectArray:
         patches = [random_patch] * 3
         out = to_object_array(patches)
         assert isinstance(out, np.ndarray)
+
+
+class TestGetBufferSize:
+    """Ensure we can get the size of various buffers."""
+
+    def test_file(self, terra15_v5_path):
+        """Ensure we can get the size of various buffers."""
+        expected_size = Path(terra15_v5_path).stat().st_size
+        with open(terra15_v5_path, "rb") as fid:
+            out = get_buffer_size(fid)
+        assert out == expected_size
+
+    def test_bytes_io(self):
+        """Ensure it can also get size of bytes io."""
+        bio = BytesIO()
+        bio.write(b"1234")
+        size1 = get_buffer_size(bio)
+        bio.seek(0)
+        size2 = get_buffer_size(bio)
+        assert size1 == size2 == 4
+
+
+class TestMaybeMemMap:
+    """Ensure we can get byte arrays from various objects."""
+
+    def test_file(self, terra15_v5_path):
+        """Test files return memmap."""
+        with open(terra15_v5_path, "rb") as fid:
+            array = maybe_mem_map(fid)
+        assert isinstance(array, np.memmap)
+        assert array.size
+
+    def test_bytes_io(self):
+        """Ensure non-files return arrays."""
+        bio = BytesIO()
+        bio.write(b"1234")
+        bio.seek(0)
+        array = maybe_mem_map(bio)
+        assert isinstance(array, np.ndarray)
+        assert array.size == 4
+
+    def test_bytes_io_nonzero_position(self):
+        """Fallback should read entire buffer even if pointer is not at 0."""
+        bio = BytesIO()
+        bio.write(b"abcdef")
+        # Intentionally do not seek back to 0; pointer is at end.
+        arr_end_pos = maybe_mem_map(bio)
+        # Now reset to start and compare lengths; both should see full content.
+        bio.seek(0)
+        arr_full = maybe_mem_map(bio)
+        assert arr_end_pos.size == arr_full.size == 6

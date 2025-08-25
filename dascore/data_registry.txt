@@ -30,3 +30,4 @@ neubrex_das_1.h5 48a97e27c56e66cc2954ba4eaaadd2169919bb8f897d78e95ef6ab50abb5027
 UoU_lf_urban.hdf5 d3f8fa6ff3d8ae993484b3fbf9b39505e2cf15cb3b39925a3519b27d5fbe7b5b https://github.com/dasdae/test_data/raw/master/das/UoU_lf_urban.hdf5
 small_channel_patch.sgy 31e551aadb361189c1c9325d504c883114ba9a7bb75fe4791e5089fabccef704 https://github.com/dasdae/test_data/raw/master/das/small_channel_patch.sgy
 gdr_1.h5 aaf11a7333b720436d194e3c7f4fa66f38907bb0c9abfa1804c150e634642aa2 https://github.com/dasdae/test_data/raw/master/das/gdr_1.h5
+sintela_binary_v3_test_1.raw 4c0afae1ab60b73ddcb3c4f7ac55b976d4d18d1ffc9ea6cd2dfa6a881b697101 https://github.com/dasdae/test_data/raw/master/das/sintela_binary_v3_test_1.raw
