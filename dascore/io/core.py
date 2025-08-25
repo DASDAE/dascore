@@ -839,7 +839,7 @@ def scan(
     length = _count_generator(_generator)
     generator = _iterate_scan_inputs(path, ext=ext, mtime=timestamp)
     # We want to avoid printing long object str reprs, so only print paths.
-    resource_str = path if isinstance(path, (str, Path)) else ""
+    resource_str = path if isinstance(path, str | Path) else ""
     tracker = track(
         generator,
         f"scan {resource_str}",
