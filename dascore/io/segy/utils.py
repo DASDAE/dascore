@@ -35,7 +35,7 @@ def _get_segy_version(fp):
     Based on ObsPy's implementation writen by Lion Krischer.
     https://github.com/obspy/obspy/blob/master/obspy/io/segy/core.py
     """
-    # # Read 400byte header into byte string.
+    # Read 400byte header into byte string.
     fp.seek(3200)
     header = fp.read(400)
     data_trace_count = twos_comp(header[12:14])
@@ -60,11 +60,12 @@ def _get_segy_version(fp):
         # Sanity checks for other values.
         data_trace_count >= 0,
         auxiliary_trace_count >= 0,
-        format_number_minor in {0, 1, 2, 3},
+        format_number_minor in {0, 1, 2, 3, 100},
         fixed_len_flag in {0, 1},
     )
     if all(checks):
-        return "segy", f"{format_number_major}.{format_number_minor}"
+        version = f"{format_number_major}.{format_number_minor}"
+        return "segy", version
     else:
         return False
 

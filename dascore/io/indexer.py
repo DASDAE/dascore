@@ -37,11 +37,19 @@ def _get_index_map(cache_path) -> dict:
     Note: this is purposefully mutable; handle with care.
     """
     path = Path(cache_path)
+    out = {}
+    successful_read = True
     if path.exists():
-        with path.open("r") as fi:
-            out = json.load(fi)
-    else:
+        try:
+            with path.open("r") as fi:
+                out = json.load(fi)
+        # On rare occasions, the file can become corrupt. See #508.
+        except (OSError, json.JSONDecodeError):
+            successful_read = False
+    if not isinstance(out, dict) or not successful_read:
         out = {}
+        with suppress(FileNotFoundError, PermissionError):
+            path.unlink(missing_ok=True)
     return out
 
 
