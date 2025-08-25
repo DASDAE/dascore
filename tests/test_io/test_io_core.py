@@ -11,7 +11,9 @@ import h5py
 import numpy as np
 import pandas as pd
 import pytest
+import rich.progress as prog
 
+import dascore
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
@@ -373,6 +375,23 @@ class TestScan:
         with pytest.warns(UserWarning, match=msg):
             scan = dc.scan(terra15_v6_path)
         assert not len(scan)
+
+    def test_keyboard_interrupt(self, monkeypatch):
+        """Ensure a keyboard interrupt works when progress bar is going"""
+
+        class Progress(prog.Progress):
+            """A dummy class for progress that just raises interrupt."""
+
+            def track(self, *args, **kwargs):
+                """Track progress."""
+                raise KeyboardInterrupt("test interrupt")
+
+        # Switch off debug to force progress bar, then make contents to scan.
+        monkeypatch.setattr(dascore, "_debug", False)
+        contents = list(dc.examples.get_example_spool(length=22))
+
+        with pytest.raises(KeyboardInterrupt, match="test interrupt"):
+            dc.scan(contents, progress=Progress())
 
 
 class TestScanToDF:
