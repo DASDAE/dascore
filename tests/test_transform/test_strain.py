@@ -170,3 +170,47 @@ class TestStaggeredStrainRateConversion:
             strain2 = patch.velocity_to_strain_rate_edgeless(step_multiple=mult)
 
             assert np.allclose(strain1.data, strain2.data)
+
+
+class TestRadianToStrain:
+    """Tests for converting from radian to strain (rate)."""
+
+    @pytest.fixture(scope="class")
+    def rad_patch(self, random_patch):
+        """Make a patch with radian data units."""
+        rand = np.random.RandomState(42)
+        data = rand.random(random_patch.data.shape) - 0.5
+        data_rad = 2 * np.pi * data
+        data_units = "rad"
+        attrs = random_patch.attrs.update(data_units=data_units, gauge_length=10)
+        return random_patch.update(data=data_rad, attrs=attrs)
+
+    def test_convert_data_units(self, rad_patch):
+        """Ensure we can convert data units to strain."""
+        out = rad_patch.radians_to_strain()
+        # Strain should now be in the units.
+        assert str(dc.get_unit("strain")) in str(out.attrs.data_units)
+        # Ensure the constant published in @lindsey2020broadband eq 3 works
+        # because the test data also have 10m gauge length.
+        expected_const = 11.6e-9
+        const = out.data / rad_patch.data
+        assert np.allclose(const, expected_const)
+
+    def test_no_gauge_length_in_attrs(self, rad_patch):
+        """Ensure an empty gauge length raises error."""
+        patch = rad_patch.update_attrs(gauge_length=None)
+
+        with pytest.raises(ParameterError, match="Gauge length must"):
+            patch.radians_to_strain()
+
+        out = patch.radians_to_strain(gauge_length=1)
+        assert isinstance(out, dc.Patch)
+
+    def test_no_radians(self, random_patch):
+        """Ensure no radians in units returns same patch."""
+        patch = random_patch.update_attrs(gauge_length=10)
+
+        with pytest.warns(UserWarning, match="no radians"):
+            out = patch.radians_to_strain()
+
+        assert out is patch
