@@ -10,7 +10,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.transform.differentiate import differentiate
-from dascore.units import get_factor_and_unit, get_unit
+from dascore.units import convert_units, get_factor_and_unit, get_unit
 from dascore.utils.patch import patch_function
 
 
@@ -241,7 +241,7 @@ def radians_to_strain(
     """
     # First get gauge length, using gl passed into function or attached to attrs.
     gl = getattr(patch.attrs, "gauge_length", None)
-    gauge = gauge_length if gauge_length is not None else gl
+    gauge = convert_units(gauge_length if gauge_length is not None else gl, "m")
     if gauge is None or gauge <= 0:
         msg = (
             "Gauge length must be non-zero positive and provided "
@@ -249,7 +249,8 @@ def radians_to_strain(
         )
         raise ParameterError(msg)
     # If units doesn't contain radians just return so function is idempotent
-    if str(dc.get_unit("radians")) not in str(patch.attrs.data_units):
+    quant = dc.get_quantity(patch.attrs.data_units)
+    if str(dc.get_unit("radians")) not in str(quant):
         msg = (
             f"Patch {patch} has no radians in its data_units, "
             f"skipping strain conversion."
@@ -261,7 +262,7 @@ def radians_to_strain(
     # Handle unit conversions.
     data_units = patch.attrs.get("data_units", None)
     d_factor, d_units = get_factor_and_unit(data_units, simplify=True)
-    new_units = d_units * get_unit("strain/radians")
+    new_units = get_unit(d_units) * get_unit("strain/radians")
     # Build output patch
     new_attrs = patch.attrs.update(data_units=new_units)
     new_data = patch.data * const * d_factor
