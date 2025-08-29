@@ -224,7 +224,7 @@ def radians_to_strain(
         The laser wavelength in m.
     stress_constant ($\zeta$)
         The stress constant.
-    refractive_index ($\Delta \Phi$)
+    refractive_index ($n$)
         The refractive index of the cable.
 
     Notes
