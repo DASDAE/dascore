@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import PatchType
-from dascore.exceptions import ParameterError
+from dascore.exceptions import ParameterError, UnitError
 from dascore.transform.differentiate import differentiate
 from dascore.units import convert_units, get_factor_and_unit, get_unit
 from dascore.utils.patch import patch_function
@@ -218,13 +218,13 @@ def radians_to_strain(
 
     Parameters
     ----------
-    gauge_length
+    gauge_length ($L_g$)
         The gauge length in meters.
-    wave_length
+    wave_length ($\lambda$)
         The laser wavelength in m.
-    stress_constant
+    stress_constant ($\zeta$)
         The stress constant.
-    refractive_index
+    refractive_index ($\Delta \Phi$)
         The refractive index of the cable.
 
     Notes
@@ -233,11 +233,6 @@ def radians_to_strain(
     $$
     \epsilon_{xx}(t, x_j) = \frac{\lambda}{4 \pi n L_{g} \zeta} \Delta \Phi
     $$
-    Where
-    \lambda : Laser wavelength (usually 1550 nm)
-    n : refractive index of cable (usually 1.445)
-    L_g : Gauge length
-    \zeta : stress multiplicative factor (0.79 for pure silica at 1550nm)
     """
     # First get gauge length, using gl passed into function or attached to attrs.
     gl = getattr(patch.attrs, "gauge_length", None)
@@ -263,6 +258,10 @@ def radians_to_strain(
     data_units = patch.attrs.get("data_units", None)
     d_factor, d_units = get_factor_and_unit(data_units, simplify=True)
     new_units = get_unit(d_units) * get_unit("strain/radians")
+    # Radians wasn't eliminated from the output units. Something went wrong.
+    if str(dc.get_unit("radians")) in str(new_units):
+        msg = f"radians to strain failed to convert {data_units} to strain."
+        raise UnitError(msg)
     # Build output patch
     new_attrs = patch.attrs.update(data_units=new_units)
     new_data = patch.data * const * d_factor

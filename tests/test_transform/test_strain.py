@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError, PatchAttributeError
+from dascore.exceptions import ParameterError, PatchAttributeError, UnitError
 from dascore.units import get_quantity
 
 
@@ -214,3 +214,9 @@ class TestRadianToStrain:
             out = patch.radians_to_strain()
 
         assert out is patch
+
+    def test_bad_units(self, rad_patch):
+        """Ensure when units are too complicated an error is raised."""
+        patch = rad_patch.update_attrs(data_units=dc.get_unit("radians * radians"))
+        with pytest.raises(UnitError, match="failed to convert"):
+            patch.radians_to_strain()
