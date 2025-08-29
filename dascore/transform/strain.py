@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import warnings
 
+import numpy as np
+
 import dascore as dc
 from dascore.constants import PatchType
-from dascore.exceptions import ParameterError
+from dascore.exceptions import ParameterError, UnitError
 from dascore.transform.differentiate import differentiate
+from dascore.units import convert_units, get_factor_and_unit, get_unit
 from dascore.utils.patch import patch_function
 
 
@@ -197,3 +200,69 @@ def velocity_to_strain_rate_edgeless(
     )
 
     return dc.Patch(data=strain_rate, coords=new_coords, attrs=new_attrs)
+
+
+@patch_function()
+def radians_to_strain(
+    patch: PatchType,
+    gauge_length=None,
+    wave_length: float = 1550.0 * 10 ** (-9),
+    stress_constant: float = 0.79,
+    refractive_index: float = 1.445,
+):
+    r"""
+    Convert data in radians to strain (rate).
+
+    This applies the simple formula found in @lindsey2020broadband to convert
+    data whose units have a radians component to strain.
+
+    Parameters
+    ----------
+    gauge_length ($L_g$)
+        The gauge length in meters.
+    wave_length ($\lambda$)
+        The laser wavelength in m.
+    stress_constant ($\zeta$)
+        The stress constant.
+    refractive_index ($n$)
+        The refractive index of the cable.
+
+    Notes
+    -----
+    Equation 3 of @lindsey2020broadband:
+    $$
+    \epsilon_{xx}(t, x_j) = \frac{\lambda}{4 \pi n L_{g} \zeta} \Delta \Phi
+    $$
+    """
+    # First get gauge length, using gl passed into function or attached to attrs.
+    gl = getattr(patch.attrs, "gauge_length", None)
+    gauge = convert_units(gauge_length if gauge_length is not None else gl, "m")
+    if gauge is None or gauge <= 0:
+        msg = (
+            "Gauge length must be non-zero positive and provided "
+            "or defined in patch attrs."
+        )
+        raise ParameterError(msg)
+    # If units doesn't contain radians just return so function is idempotent
+    quant = dc.get_quantity(patch.attrs.data_units)
+    if str(dc.get_unit("radians")) not in str(quant):
+        msg = (
+            f"Patch {patch} has no radians in its data_units, "
+            f"skipping strain conversion."
+        )
+        warnings.warn(msg)
+        return patch
+    # Get constant to multiply with data array.
+    const = wave_length / (4 * np.pi * refractive_index * gauge * stress_constant)
+    # Handle unit conversions.
+    data_units = patch.attrs.get("data_units", None)
+    d_factor, d_units = get_factor_and_unit(data_units, simplify=True)
+    new_units = get_unit(d_units) * get_unit("strain/radians")
+    # Radians wasn't eliminated from the output units. Something went wrong.
+    if str(dc.get_unit("radians")) in str(new_units):
+        msg = f"radians to strain failed to convert {data_units} to strain."
+        raise UnitError(msg)
+    # Build output patch
+    new_attrs = patch.attrs.update(data_units=new_units)
+    new_data = patch.data * const * d_factor
+    return patch.update(data=new_data, attrs=new_attrs)

@@ -253,6 +253,7 @@ class Patch:
     add_distance_to = dascore.proc.coords.add_distance_to
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_coords
+    radians_to_strain = dascore.transform.radians_to_strain
     rename_coords = dascore.proc.rename_coords
     update_coords = dascore.proc.update_coords
     drop_coords = dascore.proc.drop_coords
