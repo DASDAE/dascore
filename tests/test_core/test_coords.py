@@ -25,7 +25,7 @@ from dascore.core.coords import (
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
-from dascore.units import get_quantity
+from dascore.units import get_quantity, percent
 from dascore.utils.misc import all_close, register_func
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
@@ -357,9 +357,13 @@ class TestBasics:
 
     def test_coord_range(self, monotonic_float_coord):
         """Ensure that coord_range raises an error for not evenly sampled patches."""
+        coord = monotonic_float_coord
         msg = "has to be called on an evenly sampled"
         with pytest.raises(CoordError, match=msg):
-            monotonic_float_coord.coord_range()
+            coord.coord_range()
+        # But when exact=False it should work.
+        out = coord.coord_range(exact=False)
+        assert out == (coord.max() - coord.min())
 
     def test_get_coord_datetime(self):
         """Ensure get_coord accepts a datetime object. See #467."""
@@ -744,6 +748,12 @@ class TestSelect:
         expected = "When samples=True"
         with pytest.raises(ParameterError, match=expected):
             random_coord.select((1, 1.2), samples=True)
+
+    def test_percentage(self, coord):
+        """Ensure selecting by percentage works."""
+        out, indexer = coord.select((10 * percent, -20 * percent))
+        if coord.evenly_sampled:
+            assert abs((len(out) / len(coord)) - 0.70) < len(coord) / 100.0
 
 
 class TestOrder:

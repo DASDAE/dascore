@@ -7,7 +7,6 @@ from functools import reduce
 from operator import add
 
 import numpy as np
-from scipy.signal import windows  # the best operating system?
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
@@ -15,22 +14,8 @@ from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_axis_value, patch_function
+from dascore.utils.signal import WINDOW_FUNCTIONS, _get_window_function
 from dascore.utils.time import to_float
-
-TAPER_FUNCTIONS = dict(
-    barthann=windows.barthann,
-    bartlett=windows.bartlett,
-    blackman=windows.blackman,
-    blackmanharris=windows.blackmanharris,
-    bohman=windows.bohman,
-    hamming=windows.hamming,
-    hann=windows.hann,
-    cos=windows.hann,
-    nuttall=windows.nuttall,
-    parzen=windows.parzen,
-    triang=windows.triang,
-    ramp=windows.triang,
-)
 
 
 def _get_taper_slices(patch, kwargs):
@@ -42,7 +27,7 @@ def _get_taper_slices(patch, kwargs):
         start, stop = value[0], value[1]
     else:
         start, stop = value, value
-    dur = coord.max() - coord.min()
+    dur = coord.coord_range(exact=False)
     # either let units pass through or multiply by d_len
     clses = (Quantity, np.timedelta64)
     start = start if isinstance(start, clses) or start is None else start * dur
@@ -51,19 +36,6 @@ def _get_taper_slices(patch, kwargs):
     _, inds_1 = coord.select((None, start), relative=True)
     _, inds_2 = coord.select((stop, None), relative=True)
     return axis, (start, stop), inds_1, inds_2
-
-
-def _get_window_function(window_type):
-    """Get the window function to use for taper."""
-    # get taper function or raise if it isn't known.
-    if window_type not in TAPER_FUNCTIONS:
-        msg = (
-            f"'{window_type}' is not a known window type. "
-            f"Options are: {sorted(TAPER_FUNCTIONS)}"
-        )
-        raise ParameterError(msg)
-    func = TAPER_FUNCTIONS[window_type]
-    return func
 
 
 def _validate_windows(samps, start_slice, end_slice, shape, axis):
@@ -87,7 +59,7 @@ def _validate_windows(samps, start_slice, end_slice, shape, axis):
 
 
 @patch_function()
-@compose_docstring(taper_type=sorted(TAPER_FUNCTIONS))
+@compose_docstring(taper_type=sorted(WINDOW_FUNCTIONS))
 def taper(
     patch: PatchType,
     window_type: str = "hann",
@@ -219,7 +191,7 @@ def _get_range_envelope(coord, inds, window_type, invert):
 
 
 @patch_function()
-@compose_docstring(taper_type=sorted(TAPER_FUNCTIONS))
+@compose_docstring(taper_type=sorted(WINDOW_FUNCTIONS))
 def taper_range(
     patch: PatchType,
     window_type: str = "hann",
