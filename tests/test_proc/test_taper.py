@@ -7,9 +7,10 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError
-from dascore.proc.taper import TAPER_FUNCTIONS, taper
-from dascore.units import m
+from dascore.proc.taper import taper
+from dascore.units import m, percent
 from dascore.utils.misc import broadcast_for_index
+from dascore.utils.signal import WINDOW_FUNCTIONS
 
 gen = np.random.default_rng(32)
 
@@ -21,7 +22,7 @@ def patch_ones(random_patch):
     return patch
 
 
-@pytest.fixture(scope="session", params=sorted(TAPER_FUNCTIONS))
+@pytest.fixture(scope="session", params=sorted(WINDOW_FUNCTIONS))
 def time_tapered_patch(request, patch_ones):
     """Return a tapered trace."""
     # first get a patch with all ones for easy testing
@@ -37,6 +38,14 @@ def _get_start_end_indices(patch, dim):
     inds_start = broadcast_for_index(n_dims, axis, 0)
     inds_end = broadcast_for_index(n_dims, axis, -1)
     return inds_start, inds_end
+
+
+@pytest.fixture(scope="class")
+def patch_sorted_time(random_patch):
+    """Return a patch with sorted but not evenly spaced time dim."""
+    times = gen.random(len(random_patch.get_coord("time")))
+    new_times = dc.to_datetime64(np.sort(times))
+    return random_patch.update_coords(time=new_times)
 
 
 class TestTaperBasics:
@@ -125,16 +134,26 @@ class TestTaperBasics:
         patch2 = random_patch.taper(time=time2)
         assert patch1 == patch2
 
+    def test_percentage_taper(self, patch_ones):
+        """Ensure a percentage unit can be used in addition to fraction."""
+        out1 = patch_ones.taper(time=(0.1, 0.2))
+        out2 = patch_ones.taper(time=(10 * percent, 20 * percent))
+        assert out1.equals(out2, close=True)
+
+    def test_uneven_time_coord(self, patch_sorted_time):
+        """Ensure taper works on patches without even sampling."""
+        out = patch_sorted_time.taper(time=(0.1, 0.2))
+        assert isinstance(out, dc.Patch)
+
+    def test_full_taper(self, patch_ones):
+        """Ensure a "full taper" works"""
+        out = patch_ones.taper(time=0.5)
+        # The taper should have covered all the data
+        assert np.all(out.data < 1)
+
 
 class TestTaperRange:
     """Test for tapering a range of values."""
-
-    @pytest.fixture(scope="class")
-    def patch_sorted_time(self, random_patch):
-        """Return a patch with sorted but not evenly spaced time dim."""
-        times = gen.random(len(random_patch.get_coord("time")))
-        new_times = dc.to_datetime64(np.sort(times))
-        return random_patch.update_coords(time=new_times)
 
     def test_dims(self, patch_ones):
         """Ensure both dimensions work."""

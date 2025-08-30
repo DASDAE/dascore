@@ -108,7 +108,7 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     return self.__class__(self.data, **out)
 
 
-def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
+def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -> bool:
     """
     Determine if the current patch equals another.
 
@@ -119,6 +119,9 @@ def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
     only_required_attrs
         If True, only compare required attributes. This helps avoid issues
         with comparing histories or custom attrs of patches, for example.
+    close
+        If True, the data can be "close" using np.allclose, otherwise
+        all data must be equal.
     """
     # different types are not equal
     if not isinstance(other, type(self)):
@@ -145,8 +148,12 @@ def equals(self: PatchType, other: Any, only_required_attrs=True) -> bool:
         }
         if not_equal:
             return False
-
-    return np.equal(self.data, other.data).all()
+    # Test data equality or proximity.
+    if close and not np.allclose(self.data, other.data):
+        return False
+    elif not close and not np.equal(self.data, other.data).all():
+        return False
+    return True
 
 
 def update(

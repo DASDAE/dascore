@@ -7,7 +7,6 @@ from functools import reduce
 from operator import add
 
 import numpy as np
-from scipy.signal import windows  # the best operating system?
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
@@ -15,22 +14,8 @@ from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_axis_value, patch_function
+from dascore.utils.signal import WINDOW_FUNCTIONS, _get_window_function
 from dascore.utils.time import to_float
-
-TAPER_FUNCTIONS = dict(
-    barthann=windows.barthann,
-    bartlett=windows.bartlett,
-    blackman=windows.blackman,
-    blackmanharris=windows.blackmanharris,
-    bohman=windows.bohman,
-    hamming=windows.hamming,
-    hann=windows.hann,
-    cos=windows.hann,
-    nuttall=windows.nuttall,
-    parzen=windows.parzen,
-    triang=windows.triang,
-    ramp=windows.triang,
-)
 
 
 def _get_taper_slices(patch, kwargs):
@@ -42,7 +27,7 @@ def _get_taper_slices(patch, kwargs):
         start, stop = value[0], value[1]
     else:
         start, stop = value, value
-    dur = coord.max() - coord.min()
+    dur = coord.coord_range(extend=False)
     # either let units pass through or multiply by d_len
     clses = (Quantity, np.timedelta64)
     start = start if isinstance(start, clses) or start is None else start * dur
@@ -51,19 +36,6 @@ def _get_taper_slices(patch, kwargs):
     _, inds_1 = coord.select((None, start), relative=True)
     _, inds_2 = coord.select((stop, None), relative=True)
     return axis, (start, stop), inds_1, inds_2
-
-
-def _get_window_function(window_type):
-    """Get the window function to use for taper."""
-    # get taper function or raise if it isn't known.
-    if window_type not in TAPER_FUNCTIONS:
-        msg = (
-            f"'{window_type}' is not a known window type. "
-            f"Options are: {sorted(TAPER_FUNCTIONS)}"
-        )
-        raise ParameterError(msg)
-    func = TAPER_FUNCTIONS[window_type]
-    return func
 
 
 def _validate_windows(samps, start_slice, end_slice, shape, axis):
@@ -87,7 +59,7 @@ def _validate_windows(samps, start_slice, end_slice, shape, axis):
 
 
 @patch_function()
-@compose_docstring(taper_type=sorted(TAPER_FUNCTIONS))
+@compose_docstring(taper_type=sorted(WINDOW_FUNCTIONS))
 def taper(
     patch: PatchType,
     window_type: str = "hann",
@@ -105,9 +77,10 @@ def taper(
             {taper_type}.
     **kwargs
         Used to specify the dimension along which to taper and the percentage
-        of total length of the dimension or absolute units. If a single value
-        is passed, the taper will be applied to both ends. A length two tuple
-        can specify different values for each end, or no taper on one end.
+        of total length of the dimension (if a decimal or percente, see examples),
+        or absolute units. If a single value is passed, the taper will be applied
+        to both ends. A length two tuple can specify different values for each
+        end, or no taper on one end.
 
     Returns
     -------
@@ -128,9 +101,13 @@ def taper(
     >>> # Apply a triangular taper to 10% of the start of the distance dimension.
     >>> patch_taper2 = patch.taper(distance=(0.10, None), window_type='triang')
     >>>
+    >>> # Apply taper to first 20 percent and last 12 percent of time dimension.
+    >>> from dascore.units import percent
+    >>> patch_taper3 = patch.taper(time=(20 * percent, 12 * percent))
+    >>>
     >>> # Apply taper on first and last 15 m along distance axis.
     >>> from dascore.units import m
-    >>> patch_taper3 = patch.taper(distance=15 * m)
+    >>> patch_taper4 = patch.taper(distance=15 * m)
     """
     func = _get_window_function(window_type)
     # get taper values in samples.
@@ -219,7 +196,7 @@ def _get_range_envelope(coord, inds, window_type, invert):
 
 
 @patch_function()
-@compose_docstring(taper_type=sorted(TAPER_FUNCTIONS))
+@compose_docstring(taper_type=sorted(WINDOW_FUNCTIONS))
 def taper_range(
     patch: PatchType,
     window_type: str = "hann",

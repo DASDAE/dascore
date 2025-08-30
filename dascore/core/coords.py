@@ -30,6 +30,7 @@ from dascore.units import (
     get_factor_and_unit,
     get_quantity,
     get_quantity_str,
+    percent,
 )
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
@@ -505,11 +506,27 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         _, unit = get_factor_and_unit(self.units, simplify=True)
         return self.convert_units(unit)
 
-    def coord_range(self):
-        """Return a scaler value for the coordinate (e.g., number of seconds)."""
-        if not self.evenly_sampled:
-            raise CoordError("coord_range has to be called on an evenly sampled data.")
-        return self.max() - self.min() + self.step
+    def coord_range(self, extend: bool = True):
+        """
+        Return a scaler value for the coordinate range (e.g., number of seconds).
+
+        Parameters
+        ----------
+        extend
+            If true, count the end of the range as max() + sample step. This
+            can only work for evenly sampled coordinates.
+        """
+        if not self.evenly_sampled and extend:
+            msg = (
+                "If extend is True, the coord_range can only be called on "
+                f"evenly sampled coordinates but {self} is not."
+            )
+            raise CoordError(msg)
+        coord_range = self.max() - self.min()
+        if extend:
+            # Handle reverse sorted case
+            coord_range += np.abs(self.step)
+        return coord_range
 
     @abc.abstractmethod
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
@@ -599,7 +616,12 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         # strip units and v
         if hasattr(value, "units"):
-            value = convert_units(value.magnitude, self.units, value.units)
+            mag, unit = value.magnitude, value.units
+            if unit == percent:
+                value = (mag / 100.0) * self.coord_range(extend=False)
+                relative = True
+            else:
+                value = convert_units(value.magnitude, self.units, value.units)
         # if null or ... just return None
         if not is_array(value) and (pd.isnull(value) or value is Ellipsis):
             return None

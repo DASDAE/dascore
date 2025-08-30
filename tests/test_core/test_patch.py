@@ -401,6 +401,15 @@ class TestEquals:
         assert -random_patch == -random_patch
         assert (-random_patch).abs() == random_patch
 
+    def test_close(self, random_patch):
+        """Test the `close` parameter"""
+        new = random_patch * 0.999999999999999
+        assert not new.equals(random_patch, close=False)
+        assert new.equals(random_patch, close=True)
+        # Ensure equals returns false when arrays are not close.
+        not_close = random_patch * 0.1
+        assert not not_close.equals(random_patch, close=True)
+
 
 class TestTranspose:
     """Tests for switching dimensions."""

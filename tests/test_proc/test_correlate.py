@@ -69,7 +69,7 @@ class TestCorrelateInternal:
             frequency=range(10, 20),
             duration=5,
             channel_count=10,
-        ).taper(time=0.5)
+        ).taper(time=0.05)
         # normalize energy so autocorrection is 1
         time_axis = patch.dims.index("time")
         data = patch.data

@@ -135,7 +135,7 @@ def correlate(
     ...     frequency=range(10, 20),
     ...     duration=5,
     ...     channel_count=10,
-    ... ).taper(time=0.5).set_units(distance='m')
+    ... ).taper(time=0.05).set_units(distance='m')
     >>>
     >>> # Example 1
     >>> # Calculate cc for all channels as receivers and

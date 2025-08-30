@@ -10,7 +10,7 @@ from __future__ import annotations
 from contextlib import suppress
 
 import numpy as np
-from numpy import floor, interp  # NOQA
+from numpy import floor, interp, ndarray  # NOQA
 from numpy.random import RandomState
 from rich.progress import Progress  # NOQA
 from scipy.interpolate import interp1d  # NOQA
