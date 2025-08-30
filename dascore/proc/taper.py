@@ -77,9 +77,10 @@ def taper(
             {taper_type}.
     **kwargs
         Used to specify the dimension along which to taper and the percentage
-        of total length of the dimension or absolute units. If a single value
-        is passed, the taper will be applied to both ends. A length two tuple
-        can specify different values for each end, or no taper on one end.
+        of total length of the dimension (if a decimal or percente, see examples),
+        or absolute units. If a single value is passed, the taper will be applied
+        to both ends. A length two tuple can specify different values for each
+        end, or no taper on one end.
 
     Returns
     -------
@@ -100,9 +101,13 @@ def taper(
     >>> # Apply a triangular taper to 10% of the start of the distance dimension.
     >>> patch_taper2 = patch.taper(distance=(0.10, None), window_type='triang')
     >>>
+    >>> # Apply taper to first 20 percent and last 12 percent of time dimension.
+    >>> from dascore.units import percent
+    >>> patch_taper3 = patch.taper(time=(20 * percent, 12 * percent))
+    >>>
     >>> # Apply taper on first and last 15 m along distance axis.
     >>> from dascore.units import m
-    >>> patch_taper3 = patch.taper(distance=15 * m)
+    >>> patch_taper4 = patch.taper(distance=15 * m)
     """
     func = _get_window_function(window_type)
     # get taper values in samples.
