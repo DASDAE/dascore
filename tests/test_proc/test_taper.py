@@ -145,6 +145,12 @@ class TestTaperBasics:
         out = patch_sorted_time.taper(time=(0.1, 0.2))
         assert isinstance(out, dc.Patch)
 
+    def test_full_taper(self, patch_ones):
+        """Ensure a "full taper" works"""
+        out = patch_ones.taper(time=0.5)
+        # The taper should have covered all the data
+        assert np.all(out.data < 1)
+
 
 class TestTaperRange:
     """Test for tapering a range of values."""

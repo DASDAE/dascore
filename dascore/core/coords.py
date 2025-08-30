@@ -506,25 +506,21 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         _, unit = get_factor_and_unit(self.units, simplify=True)
         return self.convert_units(unit)
 
-    def coord_range(self, exact: bool = True):
+    def coord_range(self, extend: bool = True):
         """
         Return a scaler value for the coordinate range (e.g., number of seconds).
 
         Parameters
         ----------
-        exact
-            If true, only exact ranges are returned. This accounts for
-            spacing at the end of each sample. Consequently, exact is only
-            possible for evenly sampled coords. If false, just disregard
-            this if coord isnt't evenly sampled.
-
+        extend
+            If true, count the end of the range as max() + sample step. This
+            can only work for evenly sampled coordinates.
         """
-        if not self.evenly_sampled and exact:
+        if not self.evenly_sampled and extend:
             raise CoordError("coord_range has to be called on an evenly sampled data.")
-        step = getattr(self, "step", None)
         coord_range = self.max() - self.min()
-        if step is not None:
-            coord_range += step
+        if extend:
+            coord_range += self.step
         return coord_range
 
     @abc.abstractmethod
@@ -617,7 +613,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if hasattr(value, "units"):
             mag, unit = value.magnitude, value.units
             if unit == percent:
-                value = (mag / 100.0) * self.coord_range(exact=False)
+                value = (mag / 100.0) * self.coord_range(extend=False)
                 relative = True
             else:
                 value = convert_units(value.magnitude, self.units, value.units)

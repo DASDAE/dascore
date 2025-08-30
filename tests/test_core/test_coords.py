@@ -362,7 +362,7 @@ class TestBasics:
         with pytest.raises(CoordError, match=msg):
             coord.coord_range()
         # But when exact=False it should work.
-        out = coord.coord_range(exact=False)
+        out = coord.coord_range(extend=False)
         assert out == (coord.max() - coord.min())
 
     def test_get_coord_datetime(self):

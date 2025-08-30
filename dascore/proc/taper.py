@@ -27,7 +27,7 @@ def _get_taper_slices(patch, kwargs):
         start, stop = value[0], value[1]
     else:
         start, stop = value, value
-    dur = coord.coord_range(exact=False)
+    dur = coord.coord_range(extend=False)
     # either let units pass through or multiply by d_len
     clses = (Quantity, np.timedelta64)
     start = start if isinstance(start, clses) or start is None else start * dur
