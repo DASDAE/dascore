@@ -406,6 +406,9 @@ class TestEquals:
         new = random_patch * 0.999999999999999
         assert not new.equals(random_patch, close=False)
         assert new.equals(random_patch, close=True)
+        # Ensure equals returns false when arrays are not close.
+        not_close = random_patch * 0.1
+        assert not not_close.equals(random_patch, close=False)
 
 
 class TestTranspose:

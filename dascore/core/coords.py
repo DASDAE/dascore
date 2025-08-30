@@ -517,10 +517,15 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             can only work for evenly sampled coordinates.
         """
         if not self.evenly_sampled and extend:
-            raise CoordError("coord_range has to be called on an evenly sampled data.")
+            msg = (
+                "If extend is True, the coord_range can only be called on "
+                f"evenly sampled coordinates but {self} is not."
+            )
+            raise CoordError(msg)
         coord_range = self.max() - self.min()
         if extend:
-            coord_range += self.step
+            # Handle reverse sorted case
+            coord_range += np.abs(self.step)
         return coord_range
 
     @abc.abstractmethod

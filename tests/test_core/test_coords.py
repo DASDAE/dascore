@@ -358,7 +358,7 @@ class TestBasics:
     def test_coord_range(self, monotonic_float_coord):
         """Ensure that coord_range raises an error for not evenly sampled patches."""
         coord = monotonic_float_coord
-        msg = "has to be called on an evenly sampled"
+        msg = "only be called on evenly sampled"
         with pytest.raises(CoordError, match=msg):
             coord.coord_range()
         # But when exact=False it should work.
