@@ -7,6 +7,7 @@ import pytest
 from scipy.fft import next_fast_len
 
 import dascore as dc
+from dascore.exceptions import PatchError
 from dascore.transform.fourier import dft, idft
 from dascore.units import get_quantity
 
@@ -67,6 +68,12 @@ def chirp_stft_patch(chirp_patch):
     """Perform sensible stft on patch."""
     out = chirp_patch.stft(time=0.5 * seconds)
     return out.update_attrs(history=[])
+
+
+@pytest.fixture(scope="session")
+def chirp_stft_detrend_patch(chirp_patch):
+    """Perform stft with detrend on chirp patch."""
+    return chirp_patch.stft(time=100, overlap=10, samples=True, detrend=True)
 
 
 class TestDiscreteFourierTransform:
@@ -290,9 +297,33 @@ class TestInverseSTFT:
         """Round trip patch through stft."""
         return chirp_stft_patch.istft()
 
-    def test_near_round_trip(self, chirp_round_tripped, chirp_patch):
+    def test_near_round_trip_1(self, chirp_round_tripped, chirp_patch):
         """Test how well the patch round-tripped through the stft."""
         patch1, patch2 = chirp_round_tripped, chirp_patch
         assert patch1.ndim == patch2.ndim
         assert patch1.dims == patch2.dims
         assert patch1.shape == patch2.shape
+        assert patch1.equals(chirp_patch, close=True)
+
+    def test_round_trip_2(self):
+        """Another round trip test from the doctests."""
+        import dascore as dc
+        from dascore.units import second
+
+        patch = dc.get_example_patch("chirp")
+        # Simple stft with 10 second window and 4 seconds overlap
+        pa1 = patch.stft(time=10 * second, overlap=4 * second)
+        pa2 = pa1.istft()
+        assert pa2.equals(patch, close=True)
+
+    def test_non_transformed_raises(self, random_patch):
+        """A patch that hasn't undergone istft can't be used."""
+        msg = "undergone stft"
+        with pytest.raises(PatchError, match=msg):
+            random_patch.istft()
+
+    def test_detrended_raise(self, chirp_stft_detrend_patch):
+        """Since detrended stft can't be inverted it should raise."""
+        msg = "Inverse stft not possible"
+        with pytest.raises(PatchError, match=msg):
+            chirp_stft_detrend_patch.istft()
