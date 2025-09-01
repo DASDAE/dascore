@@ -250,12 +250,23 @@ class TestRenameDimension:
 class TestDropPrivate:
     """Tests for dropping private attrs."""
 
-    def test_simple_drop(self):
+    def test_simple_drop_private(self):
         """Ensure private attrs are removed after operation."""
         attrs = PatchAttrs(_private1=1, extra_attr=2).drop_private()
         attr_dict = dict(attrs)
         assert "_private1" not in attr_dict
         assert "extra_attr" in attr_dict
+
+
+class TestDrop:
+    """Tests for dropping attrs."""
+
+    def test_simple_drop(self):
+        """Ensure a single attr can be dropped."""
+        attrs = PatchAttrs(bob=1, bill=2, sue="Z")
+        new = dict(attrs.drop("bob", "bill"))
+        assert "bob" not in new and "bill" not in new
+        assert "sue" in new
 
 
 class TestMisc:

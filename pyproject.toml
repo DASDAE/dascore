@@ -51,7 +51,6 @@ dependencies = [
      "pooch>=1.2",
      "pydantic>2.1",
      "rich",
-     "scipy>=1.14.1",
      "tables>=3.7",
      "typing_extensions>=4.12",
      "pint",

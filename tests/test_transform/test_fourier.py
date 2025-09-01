@@ -11,6 +11,7 @@ from dascore.transform.fourier import dft, idft
 from dascore.units import get_quantity
 
 F_0 = 2
+seconds = get_quantity("seconds")
 
 
 @pytest.fixture(scope="session")
@@ -52,6 +53,20 @@ def ifft_sin_patch_time(fft_sin_patch_time):
 def ifft_sin_patch_all(fft_sin_patch_all):
     """Get the sine wave patch, set units for testing."""
     return idft(fft_sin_patch_all, dim=None)
+
+
+@pytest.fixture(scope="session")
+def chirp_patch():
+    """Get a patch with a linear chirp."""
+    patch = dc.examples.chirp(channel_count=2)
+    return patch
+
+
+@pytest.fixture(scope="session")
+def chirp_stft_patch(chirp_patch):
+    """Perform sensible stft on patch."""
+    out = chirp_patch.stft(time=0.5 * seconds)
+    return out.update_attrs(history=[])
 
 
 class TestDiscreteFourierTransform:
@@ -255,3 +270,29 @@ class TestInverseDiscreteFourierTransform:
         assert not diff, "attr keys shouldn't change"
         # Test no extra coords
         assert set(sin_patch.coords.coord_map) == set(idft.coords.coord_map)
+
+
+class TestSTFT:
+    """Tests for the short-time Fourier transform."""
+
+    def test_type(self, chirp_stft_patch, chirp_patch):
+        """Simply insure the correct type was returned."""
+        patch = chirp_stft_patch
+        assert isinstance(patch, dc.Patch)
+        assert len(patch.dims) == (len(chirp_patch.dims) + 1)
+
+
+class TestInverseSTFT:
+    """Tests for the inverse short-time Fourier transform."""
+
+    @pytest.fixture(scope="class")
+    def chirp_round_tripped(self, chirp_stft_patch):
+        """Round trip patch through stft."""
+        return chirp_stft_patch.istft()
+
+    def test_near_round_trip(self, chirp_round_tripped, chirp_patch):
+        """Test how well the patch round-tripped through the stft."""
+        patch1, patch2 = chirp_round_tripped, chirp_patch
+        assert patch1.ndim == patch2.ndim
+        assert patch1.dims == patch2.dims
+        assert patch1.shape == patch2.shape

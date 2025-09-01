@@ -763,6 +763,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             The value (supports units).
         samples
             If True, value is already in units of samples.
+        enforce_lt_coord
+            If True, raise an error if the number of samples obtained exceeds
+            the length of the coordinate.
         """
         assert self.ndim == 1, "get sample count only works for 1D coords."
         if not self.evenly_sampled:

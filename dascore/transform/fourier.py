@@ -8,23 +8,30 @@ implementation.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from functools import partial
 from operator import mul
 
 import numpy as np
 import numpy.fft as nft
+from scipy.signal import ShortTimeFFT
+from scipy.signal.windows import get_window
 
+import dascore as dc
+from dascore.compat import ndarray
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.units import invert_quantity
+from dascore.exceptions import PatchError
+from dascore.units import Quantity, invert_quantity, percent
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
+    get_dim_axis_value,
     patch_function,
 )
-from dascore.utils.time import to_float
+from dascore.utils.time import is_datetime64, is_timedelta64, to_float
 from dascore.utils.transformatter import FourierTransformatter
 
 
@@ -326,3 +333,161 @@ def idft(patch: PatchType, dim: str | None | Sequence[str] = None) -> PatchType:
     if padding:
         out = out.select(**padding, samples=True)
     return out
+
+
+def _get_stft_coords(patch, dim, axis, coord, stft, window):
+    """Get the new coordinate manager following stft."""
+
+    def _get_stft_dims(dim, dims, axis):
+        """Get the output dimensions after stft."""
+        ft = FourierTransformatter()
+        new_dims = list(ft.rename_dims(dims, index=axis, forward=True))
+        new_dims.append(dim)
+        return tuple(new_dims)
+
+    # Get new coordinate. Just called time here because that is most common.
+    time = stft.t(len(coord))
+    if is_datetime64(coord.dtype) or is_timedelta64(coord.dtype):
+        time = dc.to_timedelta64(time)
+    # Get new dimensions
+    new_dims = list(_get_stft_dims(dim, patch.dims, axis))
+    # Make dict of coordinates nd return coord manager.
+    coord_map = dict(patch.coords.coord_map)
+    coord_map.update(
+        {
+            dim: get_coord(values=time + coord.min()),
+            new_dims[axis]: get_coord(values=stft.f),
+            # Add window array for inverse stft.
+            "_stft_window": (None, window),
+        }
+    )
+    out = get_coord_manager(coords=coord_map, dims=tuple(new_dims))
+    return out
+
+
+@patch_function
+def stft(
+    patch: PatchType,
+    taper_window: str | ndarray = "hann",
+    overlap: Quantity | int = 50 * percent,
+    samples: bool = False,
+    detrend: bool = False,
+    **kwargs,
+):
+    """
+    Perform a short-time fourier transform.
+
+    Parameters
+    ----------
+    taper_window
+        The
+    overlap
+        The overlap between windows
+    samples
+        If True, the window length (provided in kwargs) and overlap parameters
+        are in samples (or explicit units).
+
+    Notes
+    -----
+    - If the data is
+    """
+    # Get coordinate information.
+    (dim, axis, val) = get_dim_axis_value(patch, kwargs=kwargs)[0]
+    coord = patch.get_coord(dim, require_sorted=True)
+    sampling_rate = 1 / dc.to_float(coord.step)
+    # Create window and calculate hop.
+    window = get_window(taper_window, len(coord), fftbins=False)
+    window_samples = coord.get_sample_count(val, samples=samples, enforce_lt_coord=True)
+    overlap = coord[:window_samples].get_sample_count(
+        overlap,
+        samples=samples,
+        enforce_lt_coord=True,
+    )
+    hop = window_samples - overlap
+    # Perform stft
+    fft_mode = "onesided" if np.isrealobj(patch.data) else "centered"
+    stft = ShortTimeFFT(win=window, hop=hop, fs=sampling_rate, fft_mode=fft_mode)
+    func = stft.stft if not detrend else partial(stft.stft_detrend, detr="linaer")
+    new_data = func(patch.data, axis=axis)
+    # Get new coordinate manager
+    cm = _get_stft_coords(patch, dim, axis, coord, stft, window)
+    # Update attrs with metadata needed to invert stft
+    new_attrs = {
+        "_stft_time_dimension": dim,
+        "_stft_frequency_dimension": cm.dims[axis],
+        "_stft_hop": hop,
+        "_stft_sampling_rate": sampling_rate,
+        "_stft_detrended": detrend,
+        "_stft_fft_mode": fft_mode,
+    }
+    attrs = patch.attrs.drop("coords").update(**new_attrs)
+    return patch.new(data=new_data, coords=cm, attrs=attrs)
+
+
+def _get_inverse_dimension(patch):
+    """Get the inverse dimension and axes."""
+    time_dimension = patch.attrs.get("_stft_time_dimension")
+    frequency_dimension = patch.attrs.get("_stft_frequency_dimension")
+    if time_dimension is None or frequency_dimension is None:
+        msg = (
+            "Inverse short time fourier transform requires a patch that has"
+            " undergone stft but this patch is missing required attrs."
+        )
+        raise PatchError(msg)
+    time_axis = patch.dims.index(time_dimension)
+    frequency_axis = patch.dims.index(frequency_dimension)
+    return time_axis, frequency_axis
+
+
+def _get_istft_coord(coords, sr, new_data, frequency_axis, time_axis):
+    """
+    Get the coordinate manager for the inverse of the short time fourier transform.
+    """
+    dims = coords.dims
+    # Create new time coordinate.
+    old_time = coords.get_coord(coords.dims[time_axis])
+    start_time = old_time.min()
+    if is_datetime64(start_time) or is_timedelta64(start_time):
+        sr = dc.to_timedelta64(sr)
+    time_len = new_data.shape[frequency_axis]
+    new_time = get_coord(
+        start=start_time,
+        stop=start_time + time_len * sr,
+        step=sr,
+    )
+    coord_map = dict(coords.coord_map)
+    coord_map.pop("_stft_window")
+    coord_map.pop(coords.dims[frequency_axis])
+    coord_map[dims[time_axis]] = new_time
+    # Get new dimensions
+    new_dims = list(dims)
+    new_dims[frequency_axis] = dims[time_axis]
+    new_dims.pop(time_axis)
+    return get_coord_manager(coords=coord_map, dims=new_dims)
+
+
+def istft(
+    patch,
+):
+    """
+    Inverse a short-time fourier transform.
+
+    """
+    # Instantiate the transformer.
+    time_axis, frequency_axis = _get_inverse_dimension(patch)
+    detrended = patch.attrs.get("_stft_detrended")
+    sr = patch.attrs.get("_stft_sampling_rate")
+    stft = ShortTimeFFT(
+        win=patch.get_coord("_stft_window").values,
+        hop=patch.attrs.get("_stft_hop"),
+        fs=sr,
+        fft_mode=patch.attrs.get("_stft_fft_mode"),
+    )
+    if detrended or not stft.invertible:
+        msg = f"Inverse stft not possible for patch {patch}."
+        raise PatchError(msg)
+    new_data = stft.istft(patch.data, t_axis=time_axis, f_axis=frequency_axis)
+    new_coord = _get_istft_coord(patch.coords, sr, new_data, frequency_axis, time_axis)
+    new_attrs = {i: v for i, v in patch.attrs.items() if not i.startswith("_stft")}
+    attrs = dc.PatchAttrs(**new_attrs)
+    return patch.new(data=new_data, coords=new_coord, attrs=attrs)
