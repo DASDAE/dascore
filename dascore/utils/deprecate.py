@@ -51,7 +51,7 @@ def deprecate(
         # Build a clear message for both runtime and typing hint
         qual = f"{func.__module__}.{getattr(func, '__qualname__', func.__name__)}"
         since_str = f" since {since}" if since else ""
-        removed_str = f" and will be removed in {removed_in}"
+        removed_str = f" and will be removed in {removed_in}" if removed_in else ""
         info_str = f" {info}" if info else ""
         msg = f"{qual} is deprecated{since_str}{removed_str}.{info_str}"
         return msg
