@@ -188,7 +188,11 @@ def correlate(
       prepended. For example, "lag_time".
     """
     if lag is not None:
-        msg = "Correlate lag is deprecated. Simply use on the output patch."
+        msg = (
+            "Patch.correlate's Parameter 'lag' is deprecated and ignored. "
+            "Simply use Patch.select on the output patch.  "
+            "(e.g., select(lag_time=(...)))"
+        )
         warnings.warn(msg, DeprecationWarning)
     assert len(patch.dims) == 2, "must be a 2D patch."
     dim, source_axis, source = get_dim_axis_value(patch, kwargs=kwargs)[0]
