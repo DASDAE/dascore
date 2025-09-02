@@ -5,7 +5,6 @@ from __future__ import annotations
 import functools
 import inspect
 import sys
-import warnings
 from collections import namedtuple
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
@@ -35,6 +34,7 @@ from dascore.exceptions import (
 from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.coordmanager import merge_coord_managers
+from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -325,6 +325,15 @@ def patches_to_df(
     return df
 
 
+@deprecate(
+    info=(
+        "merge_patches is deprecated. Use spool.chunk instead. "
+        "For example, to merge a list of patches you can use: "
+        "dascore.spool(patch_list).chunk(time=None) to merge on the time "
+        "dimension."
+    ),
+    removed_in="0.2.0",
+)
 def merge_patches(
     patches: Sequence[PatchType] | pd.DataFrame | SpoolType,
     dim: str = "time",
@@ -348,13 +357,6 @@ def merge_patches(
         along the desired dimension. e.g., the default value means any patches
         with gaps <= 1.5 * dt will be merged.
     """
-    msg = (
-        "merge_patches is deprecated. Use spool.chunk instead. "
-        "For example, to merge a list of patches you can use: "
-        "dascore.spool(patch_list).chunk(time=None) to merge on the time "
-        "dimension."
-    )
-    warnings.warn(msg, DeprecationWarning, stacklevel=2)
     return dc.spool(patches).chunk(**{dim: None}, tolerance=tolerance)
 
 

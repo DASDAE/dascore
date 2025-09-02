@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Mapping, Sequence
 
 import numpy as np
@@ -17,6 +16,7 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
+from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
@@ -272,10 +272,11 @@ class Patch:
         """
         return get_patch_names(self, *args, **kwargs).iloc[0]
 
+    @deprecate(
+        "assign_coords is deprecated, use update_coords instead.", removed_in="0.2.0"
+    )
     def assign_coords(self, *args, **kwargs):
         """Deprecated method for update_coords."""
-        msg = "assign_coords is deprecated, use update_coords instead."
-        warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.update_coords(*args, **kwargs)
 
     set_units = dascore.proc.set_units
@@ -287,10 +288,12 @@ class Patch:
     select = dascore.proc.select
     order = dascore.proc.order
 
+    @deprecate(
+        "patch.iselect is deprecated. Use patch.select with samples=True",
+        removed_in="0.2.0",
+    )
     def iselect(self, *args, **kwargs):
         """Deprecated  form of select."""
-        msg = "patch.iselect is deprecated. Use patch.select with samples=True"
-        warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.select(*args, samples=True, **kwargs)
 
     correlate = dascore.proc.correlate
@@ -315,13 +318,12 @@ class Patch:
     pad = dascore.proc.pad
     roll = dascore.proc.roll
 
+    @deprecate(
+        "patch.iresample is deprecated. Please use patch.resample " "with samples=True",
+        removed_in="0.2.0",
+    )
     def iresample(self, *args, **kwargs):
         """Deprecated method."""
-        msg = (
-            "patch.iresample is deprecated. Please use patch.resample "
-            "with samples=True"
-        )
-        warnings.warn(msg, DeprecationWarning, stacklevel=2)
         return self.resample(*args, samples=True, **kwargs)
 
     interpolate = dascore.proc.interpolate
@@ -365,13 +367,13 @@ class Patch:
         return VizPatchNameSpace(self)
 
     @property
+    @deprecate(
+        "The tran namespace is deprecated. Its methods can now be "
+        "accessed as normal patch methods (eg patch.dft)",
+        removed_in="0.2.0",
+    )
     def tran(self) -> Self:
         """The transformation namespace."""
-        msg = (
-            "The tran namespace is deprecated. Its methods can now be "
-            "accessed as normal path methods (eg patch.dft)"
-        )
-        warnings.warn(msg, DeprecationWarning)
         return self
 
     @property

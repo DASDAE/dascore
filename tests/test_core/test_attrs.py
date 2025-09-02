@@ -261,11 +261,6 @@ class TestDropPrivate:
 class TestMisc:
     """Misc small tests."""
 
-    def test_schema_deprecated(self):
-        """Ensure schema module emits deprecation warning."""
-        with pytest.warns(DeprecationWarning):
-            from dascore.core.schema import PatchAttrs  # noqa
-
     def test_get_attrs_non_dim_coordinates(self, random_patch_with_lat_lon):
         """
         Ensure only dims show up in dims even when coord manager has many

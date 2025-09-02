@@ -5,7 +5,6 @@ Deprecated module for Fourier transforms. Use
 
 from __future__ import annotations
 
-import warnings
 from operator import mul
 
 import numpy as np
@@ -13,12 +12,17 @@ import numpy as np
 from dascore.constants import PatchType
 from dascore.core.coords import get_coord
 from dascore.units import get_quantity
+from dascore.utils.deprecate import deprecate
 from dascore.utils.patch import _get_data_units_from_dims, patch_function
 from dascore.utils.time import to_float
 from dascore.utils.transformatter import FourierTransformatter
 
 
 @patch_function()
+@deprecate(
+    info="The Patch transform rfft is deprecated. Use dft instead.",
+    removed_in="0.2.0",
+)
 def rfft(patch: PatchType, dim="time") -> PatchType:
     """
     Perform a real fourier transform along the specified dimension.
@@ -26,8 +30,6 @@ def rfft(patch: PatchType, dim="time") -> PatchType:
     DEPRECATED FUNCTION: Use [dft](`dascore.transform.fourier.dft`) instead.
     This function is not scaled as detailed in the dascore documentation.
     """
-    msg = "The Patch transform rfft is deprecated. Use dft instead."
-    warnings.warn(msg, DeprecationWarning, stacklevel=2)
     assert dim in patch.dims
     axis = patch.dims.index(dim)
 
