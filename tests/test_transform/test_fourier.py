@@ -288,6 +288,12 @@ class TestSTFT:
         assert isinstance(patch, dc.Patch)
         assert len(patch.dims) == (len(chirp_patch.dims) + 1)
 
+    def test_array_window(self, random_patch):
+        """Ensure an array can be used as a window function."""
+        win = np.ones(100)
+        out = random_patch.stft(time=100, taper_window=win, overlap=10, samples=True)
+        assert len(out.dims) == (len(random_patch.dims) + 1)
+
 
 class TestInverseSTFT:
     """Tests for the inverse short-time Fourier transform."""
