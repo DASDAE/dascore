@@ -9,7 +9,7 @@ from scipy.fft import next_fast_len
 import dascore as dc
 from dascore.exceptions import PatchError
 from dascore.transform.fourier import dft, idft
-from dascore.units import get_quantity
+from dascore.units import get_quantity, second
 
 F_0 = 2
 seconds = get_quantity("seconds")
@@ -283,10 +283,19 @@ class TestSTFT:
     """Tests for the short-time Fourier transform."""
 
     def test_type(self, chirp_stft_patch, chirp_patch):
-        """Simply insure the correct type was returned."""
+        """Simply ensure the correct type was returned."""
         patch = chirp_stft_patch
         assert isinstance(patch, dc.Patch)
         assert len(patch.dims) == (len(chirp_patch.dims) + 1)
+
+    def test_coord_units(self, chirp_stft_patch):
+        """Ensure the units on the new coord are correct."""
+        second = dc.get_quantity("second")
+        hz = dc.get_quantity("Hz")
+        freq_coord = chirp_stft_patch.get_coord("ft_time")
+        time_coord = chirp_stft_patch.get_coord("time")
+        assert dc.get_quantity(time_coord.units) == second
+        assert dc.get_quantity(freq_coord.units) == hz
 
     def test_array_window(self, random_patch):
         """Ensure an array can be used as a window function."""
@@ -298,7 +307,7 @@ class TestSTFT:
 class TestInverseSTFT:
     """Tests for the inverse short-time Fourier transform."""
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture(scope="session")
     def chirp_round_tripped(self, chirp_stft_patch):
         """Round trip patch through stft."""
         return chirp_stft_patch.istft()
@@ -313,17 +322,17 @@ class TestInverseSTFT:
 
     def test_round_trip_2(self):
         """Another round trip test from the doctests."""
-        import dascore as dc
-        from dascore.units import second
-
         patch = dc.get_example_patch("chirp")
         # Simple stft with 10 second window and 4 seconds overlap
         pa1 = patch.stft(time=10 * second, overlap=4 * second)
         pa2 = pa1.istft()
         assert pa2.equals(patch, close=True)
+        # Ensure stft attrs and coords were cleaned up
+        assert not any(k.startswith("_stft") for k in dict(pa2.attrs))
+        assert not any(k.startswith("_stft") for k in dict(pa2.coords.coord_map))
 
     def test_non_transformed_raises(self, random_patch):
-        """A patch that hasn't undergone istft can't be used."""
+        """Test that a patch that hasn't undergone stft can't be used."""
         msg = "undergone stft"
         with pytest.raises(PatchError, match=msg):
             random_patch.istft()

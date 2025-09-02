@@ -158,7 +158,7 @@ def dft(
     See Also
     --------
     - [idft](`dascore.transform.fourier.idft`)
-    - [dtft](`dascore.transform.fourier.idft`)
+    - [stft](`dascore.transform.fourier.stft`)
 
     Examples
     --------
@@ -356,10 +356,14 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
     new_dims = list(_get_stft_dims(dim, patch.dims, axis))
     # Make dict of coordinates nd return coord manager.
     coord_map = dict(patch.coords.coord_map)
+    # Get units on new coordinates.
+    new_units = None
+    if coord.units is not None:
+        new_units = 1 / dc.get_quantity(coord.units)
     coord_map.update(
         {
-            dim: get_coord(values=time + coord.min()),
-            new_dims[axis]: get_coord(values=stft.f),
+            dim: get_coord(values=time + coord.min(), units=coord.units),
+            new_dims[axis]: get_coord(values=stft.f, units=new_units),
             # Add window array for inverse stft.
             "_stft_window": (None, window),
             "_stft_old_coord": (None, patch.get_coord(dim)),
@@ -425,7 +429,7 @@ def stft(
     """
     # Get coordinate information.
     (dim, axis, val) = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    coord = patch.get_coord(dim, require_sorted=True)
+    coord = patch.get_coord(dim, require_evenly_sampled=True)
     window_samples = coord.get_sample_count(val, samples=samples, enforce_lt_coord=True)
     sampling_rate = 1 / dc.to_float(coord.step)
     # Create window and calculate hop.
@@ -433,6 +437,7 @@ def stft(
         window = taper_window
     else:
         window = get_window(taper_window, window_samples, fftbins=False)
+    # By using a coord and enforce_lt_coord, we guarantee the overlap is lt window.
     overlap = coord[:window_samples].get_sample_count(
         overlap,
         samples=samples,
