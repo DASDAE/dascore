@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import partial
-from operator import mul
+from operator import mul, truediv
 from typing import Any
 
 import numpy as np
@@ -423,6 +423,12 @@ def stft(
     >>> window = get_window(("tukey", 0.1), 1000)
     >>> pa2 = patch.stft(time=1000, taper_window=window, overlap=100, samples=True)
 
+    Notes
+    -----
+    - The output is scalled the same as [Patch.dft](`dascore.Patch.dft`).
+    - For a given sliding window, Parseval's thereom doesn't hold exactly
+      unless a boxcare window is used.
+
     See Also
     --------
     [Patch.dft](`dascore.Patch.dft`), [Patch.istft](`dascore.Patch.istft`)
@@ -431,7 +437,8 @@ def stft(
     (dim, axis, val) = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coord = patch.get_coord(dim, require_evenly_sampled=True)
     window_samples = coord.get_sample_count(val, samples=samples, enforce_lt_coord=True)
-    sampling_rate = 1 / dc.to_float(coord.step)
+    step = dc.to_float(coord.step)
+    sampling_rate = 1 / dc.to_float(step)
     # Create window and calculate hop.
     if isinstance(taper_window, ndarray):
         window = taper_window
@@ -447,10 +454,15 @@ def stft(
     # Perform stft
     fft_mode = "onesided" if np.isrealobj(patch.data) else "centered"
     stft = ShortTimeFFT(
-        win=window, hop=hop, fs=sampling_rate, fft_mode=fft_mode, mfft=window_samples
+        win=window,
+        hop=hop,
+        fs=sampling_rate,
+        fft_mode=fft_mode,
+        mfft=window_samples,
     )
     func = stft.stft if not detrend else partial(stft.stft_detrend, detr="linear")
-    new_data = func(patch.data, axis=axis)
+    # For compatibility with dft, we scale by step. See the DFT note for why.
+    new_data = func(patch.data, axis=axis) * step
     # Get new coordinate manager
     cm = _get_stft_coords(patch, dim, axis, coord, stft, window)
     # Update attrs with metadata needed to invert stft
@@ -462,6 +474,8 @@ def stft(
         "_stft_detrended": detrend,
         "_stft_fft_mode": fft_mode,
         "_stft_mfft": window_samples,
+        "_stft_performed": True,
+        "data_units": _get_data_units_from_dims(patch, dim, mul),
     }
     attrs = patch.attrs.drop("coords").update(**new_attrs)
     return patch.new(data=new_data, coords=cm, attrs=attrs)
@@ -500,6 +514,20 @@ def _get_istft_coord(coords, frequency_axis, time_axis):
     return get_coord_manager(coords=coord_map, dims=new_dims), time
 
 
+def _get_short_time_fft(patch) -> ShortTimeFFT:
+    """Reconstruct the short time fft from the attrs/coords in patch."""
+    sr = patch.attrs.get("_stft_sampling_rate")
+    # Recreate STFFT class based on saved coords/attrs.
+    stft = ShortTimeFFT(
+        win=patch.get_coord("_stft_window").values,
+        hop=patch.attrs.get("_stft_hop"),
+        fs=sr,
+        fft_mode=patch.attrs.get("_stft_fft_mode"),
+        mfft=patch.attrs.get("_stft_mfft"),
+    )
+    return stft
+
+
 def istft(
     patch,
 ):
@@ -522,24 +550,19 @@ def istft(
     >>> pa2 = pa1.istft()
     >>> assert pa2.equals(patch, close=True)
     """
-    # Instantiate the transformer.
     time_axis, frequency_axis = _get_inverse_axes(patch)
     detrended = patch.attrs.get("_stft_detrended")
-    sr = patch.attrs.get("_stft_sampling_rate")
-    stft = ShortTimeFFT(
-        win=patch.get_coord("_stft_window").values,
-        hop=patch.attrs.get("_stft_hop"),
-        fs=sr,
-        fft_mode=patch.attrs.get("_stft_fft_mode"),
-        mfft=patch.attrs.get("_stft_mfft"),
-    )
+    # Instantiate the transformer.
+    stft = _get_short_time_fft(patch)
     # Raise if inverse not possible.
     if detrended or not stft.invertible:
         msg = f"Inverse stft not possible for patch {patch}."
         raise PatchError(msg)
     # Get coord manager and perform inverse transform.
     cm, coord = _get_istft_coord(patch.coords, frequency_axis, time_axis)
-    data_untrimmed = stft.istft(patch.data, t_axis=time_axis, f_axis=frequency_axis)
+    data_untrimmed = stft.istft(
+        patch.data / dc.to_float(coord.step), t_axis=time_axis, f_axis=frequency_axis
+    )
     # Trim data array to remove effect of padding.
     index = broadcast_for_index(
         data_untrimmed.ndim, frequency_axis, slice(0, len(coord))
@@ -548,5 +571,6 @@ def istft(
     assert new_data.shape == cm.shape
     # Re-assemble and return new patch.
     new_attrs = {i: v for i, v in patch.attrs.items() if not i.startswith("_stft")}
+    new_attrs["data_units"] = _get_data_units_from_dims(patch, "time", truediv)
     attrs = dc.PatchAttrs(**new_attrs).drop("coords")
     return patch.new(data=new_data, coords=cm, attrs=attrs)

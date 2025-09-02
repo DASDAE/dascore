@@ -11,6 +11,7 @@ from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_compatible_values, get_coord
+from dascore.utils.deprecate import deprecate
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _get_data_units_from_dims,
@@ -58,6 +59,11 @@ def _get_new_dims(patch, dim, new_coord_name):
 
 
 @patch_function()
+@deprecate(
+    info="Use Patch.stft() instead.",
+    since="0.1.11",
+    removed_in="0.2.0",
+)
 def spectrogram(patch: PatchType, dim: str = "time", **kwargs) -> PatchType:
     """
     Calculate a spectrogram from the patch data.

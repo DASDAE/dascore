@@ -303,6 +303,38 @@ class TestSTFT:
         out = random_patch.stft(time=100, taper_window=win, overlap=10, samples=True)
         assert len(out.dims) == (len(random_patch.dims) + 1)
 
+    def test_dft_equiv(self, random_patch):
+        """
+        Ensure using a boxcar window produces the same as the dft for an equal slice.
+        """
+        patch = random_patch.select(distance=1, samples=True)
+        stft = (
+            patch.stft(time=101, overlap=0, taper_window="boxcar", samples=True)
+            .select(time=0, samples=True)
+            .squeeze()
+        )
+        # The first slice should have 50 padded 0s on the right, and the first
+        # 51 samples in the signal.
+        padded = patch.pad(time=(50, 0), samples=True).select(
+            time=(0, 101), samples=True
+        )
+        padded_fft = padded.dft("time", real=True, pad=False).squeeze()
+        ar1 = stft.data
+        ar2 = padded_fft.data
+
+        factor = np.abs(ar1) / np.abs(ar2)
+        assert np.allclose(factor, 1.0)
+
+    def test_data_units(self, random_patch):
+        """Ensure data units match those of dft."""
+        patch = random_patch.update_attrs(data_units="m")
+        pa1 = patch.dft("time", real=True)
+        pa2 = patch.stft(time=1)
+        assert pa1.attrs.data_units == pa2.attrs.data_units
+        ipa1 = pa1.idft()
+        ipa2 = pa2.istft()
+        assert ipa1.attrs.data_units == ipa2.attrs.data_units
+
 
 class TestInverseSTFT:
     """Tests for the inverse short-time Fourier transform."""
@@ -330,6 +362,13 @@ class TestInverseSTFT:
         # Ensure stft attrs and coords were cleaned up
         assert not any(k.startswith("_stft") for k in dict(pa2.attrs))
         assert not any(k.startswith("_stft") for k in dict(pa2.coords.coord_map))
+
+    def test_roundtrip_3(self, random_patch):
+        """Simple round trip with near default params."""
+        patch = random_patch
+        stft = patch.stft(time=1)
+        istft = stft.istft()
+        assert patch.equals(istft, close=True)
 
     def test_non_transformed_raises(self, random_patch):
         """Test that a patch that hasn't undergone stft can't be used."""

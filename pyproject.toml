@@ -54,6 +54,7 @@ dependencies = [
      "tables>=3.7",
      "typing_extensions>=4.12",
      "pint",
+     "scipy>=1.15",
 ]
 
 [project.optional-dependencies]
