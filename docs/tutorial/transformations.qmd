@@ -57,7 +57,7 @@ patch = (
     .set_units("m/s")
 )
 
-patch.viz.waterfall(scale=0.1)
+patch.viz.waterfall();
 ```
 
 ```{python}
@@ -68,5 +68,5 @@ transformed = (
 )
 inverse =  transformed.istft()
 
-transformed.abs().select(distance=0, samples=True).squeeze().viz.waterfall()
+transformed.abs().select(distance=0, samples=True).squeeze().viz.waterfall();
 ```
