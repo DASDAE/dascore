@@ -42,12 +42,6 @@ print(real_transform.get_coord("ft_distance"))
 
 The Inverse Discrete Fourier Transform [idft](`dascore.transform.fourier.idft`) undoes the transformation.
 
-```{python}
-# Transform distance axis to Fourier domain using real fourier transform
-real_transform = patch.dft(dim='distance', real=True)
-print(real_transform.get_coord("ft_distance"))
-```
-
 # Short Time Fourier Transform
 
 Related to the Discrete Fourier Transform, the [Short Term Fourier Transform](https://en.wikipedia.org/wiki/Short-time_Fourier_transform) is useful for analyzing the time-dependent frequency content. DASCore implements this as [stft](`dascore.transform.fourier.stft`) and the corresponding [istft](`dascore.transform.fourier.istft`).

@@ -3,16 +3,19 @@ channels:
   - conda-forge
 dependencies:
   - pytest
-  - pydantic>2.0
+  - numpy>=1.24
+  - pydantic>2.1
   - pip
-  - pandas
+  - pandas>=2.0
   - pooch>=1.2
   - xarray
   - pre-commit
   - pytables
   - h5py
-  - matplotlib
-  - scipy>=1.10.0
+  - matplotlib>=3.5
+  - scipy>=1.15.0
   - findiff
   - jupyter
   - nbformat
+  - pint
+  - typing_extensions>=4.12

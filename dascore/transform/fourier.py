@@ -430,6 +430,9 @@ def stft(
     - The output is scalled the same as [Patch.dft](`dascore.Patch.dft`).
     - For a given sliding window, Parseval's thereom doesn't hold exactly
       unless a boxcare window is used.
+    - If an array is passed for taper_window that has a different length
+      than specified in kwargs, artificial enriching of frequency resolution
+      (equivalent to zero pading in time domain) can occur.
 
     See Also
     --------
@@ -530,6 +533,7 @@ def _get_short_time_fft(patch) -> ShortTimeFFT:
     return stft
 
 
+@patch_function
 def istft(
     patch,
 ):
@@ -573,6 +577,7 @@ def istft(
     assert new_data.shape == cm.shape
     # Re-assemble and return new patch.
     new_attrs = {i: v for i, v in patch.attrs.items() if not i.startswith("_stft")}
-    new_attrs["data_units"] = _get_data_units_from_dims(patch, "time", truediv)
+    dim = patch.dims[time_axis]
+    new_attrs["data_units"] = _get_data_units_from_dims(patch, dim, truediv)
     attrs = dc.PatchAttrs(**new_attrs).drop("coords")
     return patch.new(data=new_data, coords=cm, attrs=attrs)
