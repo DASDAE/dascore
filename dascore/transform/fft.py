@@ -27,8 +27,10 @@ def rfft(patch: PatchType, dim="time") -> PatchType:
     """
     Perform a real fourier transform along the specified dimension.
 
-    DEPRECATED FUNCTION: Use [dft](`dascore.transform.fourier.dft`) instead.
-    This function is not scaled as detailed in the dascore documentation.
+    Notes
+    -----
+    - Use [dft](`dascore.transform.fourier.dft`) instead.
+    - This function is not scaled as detailed in the dascore documentation.
     """
     assert dim in patch.dims
     axis = patch.dims.index(dim)

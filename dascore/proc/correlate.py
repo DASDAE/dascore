@@ -189,8 +189,9 @@ def correlate(
     """
     if lag is not None:
         msg = (
-            "Correlate lag is deprecated and does nothing. "
-            "Simply use on the output patch."
+            "Patch.correlate's Parameter 'lag' is deprecated and ignored. "
+            "Simply use Patch.select on the output patch.  "
+            "(e.g., select(lag_time=(...)))"
         )
         warnings.warn(msg, DeprecationWarning)
     assert len(patch.dims) == 2, "must be a 2D patch."

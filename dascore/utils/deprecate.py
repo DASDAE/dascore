@@ -5,7 +5,6 @@ A module for handling deprecations.
 from __future__ import annotations
 
 import functools
-import warnings
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -19,7 +18,6 @@ def deprecate(
     *,
     since: str | None = None,
     removed_in: str | None = None,
-    category: type[Warning] = DeprecationWarning,
 ) -> Callable[[F], F]:
     """
     Mark a function as deprecated.
@@ -31,14 +29,12 @@ def deprecate(
     Parameters
     ----------
     info
-        Short message shown in warnings and editor hints. it is useful to specify
+        Short message shown in warnings and editor hints. It is useful to specify
         what should be used in place of the deprecated function.
     since
         Version/date when deprecation started (for the message only).
     removed_in
         Version/date when the function will be removed (for the message only).
-    category
-        Warning class to emit (defaults to DeprecationWarning).
 
     Examples
     --------
@@ -49,20 +45,21 @@ def deprecate(
     ... def foo():
     ...     pass
     """
-    # Build a clear message for both runtime and typing hint
-    parts = [info]
-    if since:
-        parts.append(f"(since {since})")
-    if removed_in:
-        parts.append(f"(will be removed in {removed_in})")
-    message = " ".join(parts)
+
+    def _build_msg(func):
+        """Build the message to emmit."""
+        # Build a clear message for both runtime and typing hint
+        qual = f"{func.__module__}.{getattr(func, '__qualname__', func.__name__)}"
+        since_str = f" since {since}" if since else ""
+        removed_str = f" and will be removed in {removed_in}"
+        info_str = f" {info}" if info else ""
+        msg = f"{qual} is deprecated{since_str}{removed_str}.{info_str}"
+        return msg
 
     def _decorate(func: F) -> F:
         # Wrap to emit a runtime warning on call
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any):
-            msg = f"Function or method {func} is deprecated: \n" + message
-            warnings.warn(msg, category=category, stacklevel=3)
             return func(*args, **kwargs)
 
         # Add a simple marker attribute some tools may inspect
@@ -75,6 +72,7 @@ def deprecate(
         wrapper.__doc__ = (func.__doc__ or "").rstrip() + dep_header
 
         # Apply typing-level deprecation *to the wrapper* so editors see it
-        return dep(message)(wrapper)  # type: ignore[return-value]
+        msg = _build_msg(func)
+        return dep(msg)(wrapper)  # type: ignore[return-value]
 
     return _decorate

@@ -4,7 +4,7 @@ Tests for the deprecate decorator.
 
 import pytest
 
-from dascore.utils.deprecate import deprecate as deprecate
+from dascore.utils.deprecate import deprecate
 
 
 class TestDeprecated:

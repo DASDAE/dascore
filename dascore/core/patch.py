@@ -289,7 +289,7 @@ class Patch:
     order = dascore.proc.order
 
     @deprecate(
-        "patch.iselect is deprecated. Use patch.select with samples=True",
+        "Use patch.select(... samples=True) instead.",
         removed_in="0.2.0",
     )
     def iselect(self, *args, **kwargs):
