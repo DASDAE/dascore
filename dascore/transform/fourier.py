@@ -403,6 +403,8 @@ def stft(
         If True, detrend each time window before performing fourier transform.
         This can lead to nicer looking spectrograms, but means the istft is
         no longer possible.
+    psd
+        If True, return the power spectral density (PSD).
     **kwargs
         Used to specify window length in data units, percent, or samples.
 
