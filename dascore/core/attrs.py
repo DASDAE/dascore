@@ -247,6 +247,13 @@ class PatchAttrs(DascoreBaseModel):
             out["coords"] = {}
         return self.__class__(**out)
 
+    def drop(self, *args):
+        """Drop specific keys if they exist."""
+        contents = dict(self)
+        ok_to_keep = set(contents) - set(args)
+        out = {i: v for i, v in contents.items() if i in ok_to_keep}
+        return self.__class__(**out)
+
     def drop_private(self) -> Self:
         """Drop all private attributes."""
         contents = dict(self)

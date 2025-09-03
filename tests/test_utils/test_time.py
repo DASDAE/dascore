@@ -399,6 +399,13 @@ class TestIsDateTime:
         ser = pd.Series(array)
         assert is_datetime64(ser)
 
+    def test_dtype(self):
+        """Giving the function a numpy datatype should also work."""
+        d1 = np.array([1.0, 2.0]).dtype
+        d2 = np.array([1, 2]).astype("datetime64[ms]").dtype
+        assert not is_datetime64(d1)
+        assert is_datetime64(d2)
+
 
 class TestToFloat:
     """Tests for converting datetime(ish) things to floats."""
@@ -482,6 +489,13 @@ class TestIsTimeDelta:
         """Datetimes are not timedeltas :)."""
         dt = to_datetime64("2020-01-02")
         assert not is_timedelta64(dt)
+
+    def test_dtype(self):
+        """Giving the function a numpy datatype should also work."""
+        d1 = np.array([1.0, 2.0]).dtype
+        d2 = np.array([1, 2]).astype("timedelta64[ms]").dtype
+        assert not is_timedelta64(d1)
+        assert is_timedelta64(d2)
 
 
 class TestGetmaxMinTimes:

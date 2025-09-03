@@ -558,13 +558,22 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     ----------
     *dims
         Dimension names which define the new data axis order.
+        Can also include ... to indicate diemsnions that should be left
+        alone.
 
     Examples
     --------
     >>> import dascore # import dascore library
     >>> pa = dascore.get_example_patch() # generate example patch
-    >>> # transpose the time and data array dimensions in the example patch
-    >>> out = dascore.proc.transpose(pa,"time", "distance")
+    >>>
+    >>> # Transpose the time and data array dimensions in the example patch
+    >>> out = pa.transpose("time", "distance")
+    >>>
+    >>> # Set "distance" as the last dimension
+    >>> out = pa.transpose(..., "distance")
+    >>>
+    >>> # Set distance as the first dimension.
+    >>> out = pa.transpose("distance", ...)
     """
     dims = tuple(dims)
     old_dims = self.coords.dims

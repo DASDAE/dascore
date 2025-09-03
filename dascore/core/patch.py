@@ -350,6 +350,8 @@ class Patch:
     rfft = transform.rfft
     dft = transform.dft
     idft = transform.idft
+    stft = transform.stft
+    istft = transform.istft
     integrate = transform.integrate
     spectrogram = transform.spectrogram
     velocity_to_strain_rate = transform.velocity_to_strain_rate

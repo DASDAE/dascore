@@ -763,6 +763,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             The value (supports units).
         samples
             If True, value is already in units of samples.
+        enforce_lt_coord
+            If True, raise an error if the number of samples obtained exceeds
+            the length of the coordinate.
         """
         assert self.ndim == 1, "get sample count only works for 1D coords."
         if not self.evenly_sampled:
@@ -779,8 +782,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             samples = int(np.ceil(duration / self.step))
         if enforce_lt_coord and samples > len(self):
             msg = (
-                f"value of {value} results in a window larger than coordinate "
-                f"length of {len(self)}"
+                f"value of {value} with samples={samples }results in a window "
+                f"larger than coordinate length of {len(self)}."
             )
             raise ParameterError(msg)
         return samples

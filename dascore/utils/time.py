@@ -380,28 +380,36 @@ def _time_delta_to_float(time_delta: np.timedelta64):
     return to_timedelta64(time_delta) / ONE_SECOND
 
 
-def is_datetime64(obj) -> bool:
-    """Return True if object is a datetime64 (or equivalent) or an array of such."""
-    if isinstance(obj, np.datetime64):
+def _is_dtype(obj, numpy_dtype, pandas_dtype) -> bool:
+    """
+    Test if a variety of object types are of numpy or pandas dtype.
+
+    Returns True if the object is a numpy type, pandas type,
+    numpy dtype, pandas dtype, or an array-like of dtype values.
+    """
+    # Handle scalars: np.datetime64, pandas.Timestamp
+    if isinstance(obj, numpy_dtype | pandas_dtype):
         return True
-    if isinstance(obj, np.ndarray | list | tuple | pd.Series):
-        if np.issubdtype(np.asarray(obj).dtype, np.datetime64):
-            return True
-    if isinstance(obj, pd.Timestamp):
-        return True
+    # Handle numpy/pandas datetime64 dtypes directly
+    if isinstance(obj, (np.dtype | pd.api.extensions.ExtensionDtype)):
+        return np.issubdtype(obj, numpy_dtype)
+    # Handle pandas Series
+    if isinstance(obj, pd.Series):
+        return np.issubdtype(obj.dtype, numpy_dtype)
+    # Handle array-like objects (numpy arrays, lists, tuples)
+    if isinstance(obj, np.ndarray | list | tuple):
+        return np.issubdtype(np.asarray(obj).dtype, numpy_dtype)
     return False
 
 
-def is_timedelta64(obj) -> bool:
-    """Return True if object is a timedelta64 (or equivalent) or an array of such."""
-    if isinstance(obj, np.timedelta64):
-        return True
-    if isinstance(obj, np.ndarray | list | tuple | pd.Series):
-        if np.issubdtype(np.asarray(obj).dtype, np.timedelta64):
-            return True
-    if isinstance(obj, pd.Timedelta):
-        return True
-    return False
+def is_datetime64(obj):
+    """Determine if an object represents a timedelta64 dtype or value(s)."""
+    return _is_dtype(obj, np.datetime64, pd.Timestamp)
+
+
+def is_timedelta64(obj):
+    """Determine if an object represents a timedelta64 dtype or value(s)."""
+    return _is_dtype(obj, np.timedelta64, pd.Timedelta)
 
 
 def dtype_time_like(dtype_or_array) -> bool:

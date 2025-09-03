@@ -7,10 +7,12 @@ import pytest
 from scipy.fft import next_fast_len
 
 import dascore as dc
+from dascore.exceptions import PatchError
 from dascore.transform.fourier import dft, idft
-from dascore.units import get_quantity
+from dascore.units import get_quantity, second
 
 F_0 = 2
+seconds = get_quantity("seconds")
 
 
 @pytest.fixture(scope="session")
@@ -52,6 +54,26 @@ def ifft_sin_patch_time(fft_sin_patch_time):
 def ifft_sin_patch_all(fft_sin_patch_all):
     """Get the sine wave patch, set units for testing."""
     return idft(fft_sin_patch_all, dim=None)
+
+
+@pytest.fixture(scope="session")
+def chirp_patch():
+    """Get a patch with a linear chirp."""
+    patch = dc.examples.chirp(channel_count=2)
+    return patch
+
+
+@pytest.fixture(scope="session")
+def chirp_stft_patch(chirp_patch):
+    """Perform sensible stft on patch."""
+    out = chirp_patch.stft(time=0.5 * seconds)
+    return out.update_attrs(history=[])
+
+
+@pytest.fixture(scope="session")
+def chirp_stft_detrend_patch(chirp_patch):
+    """Perform stft with detrend on chirp patch."""
+    return chirp_patch.stft(time=100, overlap=10, samples=True, detrend=True)
 
 
 class TestDiscreteFourierTransform:
@@ -255,3 +277,107 @@ class TestInverseDiscreteFourierTransform:
         assert not diff, "attr keys shouldn't change"
         # Test no extra coords
         assert set(sin_patch.coords.coord_map) == set(idft.coords.coord_map)
+
+
+class TestSTFT:
+    """Tests for the short-time Fourier transform."""
+
+    def test_type(self, chirp_stft_patch, chirp_patch):
+        """Simply ensure the correct type was returned."""
+        patch = chirp_stft_patch
+        assert isinstance(patch, dc.Patch)
+        assert len(patch.dims) == (len(chirp_patch.dims) + 1)
+
+    def test_coord_units(self, chirp_stft_patch):
+        """Ensure the units on the new coord are correct."""
+        second = dc.get_quantity("second")
+        hz = dc.get_quantity("Hz")
+        freq_coord = chirp_stft_patch.get_coord("ft_time")
+        time_coord = chirp_stft_patch.get_coord("time")
+        assert dc.get_quantity(time_coord.units) == second
+        assert dc.get_quantity(freq_coord.units) == hz
+
+    def test_array_window(self, random_patch):
+        """Ensure an array can be used as a window function."""
+        win = np.ones(100)
+        out = random_patch.stft(time=100, taper_window=win, overlap=10, samples=True)
+        assert len(out.dims) == (len(random_patch.dims) + 1)
+
+    def test_dft_equiv(self, random_patch):
+        """
+        Ensure using a boxcar window produces the same as the dft for an equal slice.
+        """
+        patch = random_patch.select(distance=1, samples=True)
+        stft = (
+            patch.stft(time=101, overlap=0, taper_window="boxcar", samples=True)
+            .select(time=0, samples=True)
+            .squeeze()
+        )
+        # The first slice should have 50 padded 0s on the right, and the first
+        # 51 samples in the signal.
+        padded = patch.pad(time=(50, 0), samples=True).select(
+            time=(0, 101), samples=True
+        )
+        padded_fft = padded.dft("time", real=True, pad=False).squeeze()
+        ar1 = stft.data
+        ar2 = padded_fft.data
+
+        factor = np.abs(ar1) / np.abs(ar2)
+        assert np.allclose(factor, 1.0)
+
+    def test_data_units(self, random_patch):
+        """Ensure data units match those of dft."""
+        patch = random_patch.update_attrs(data_units="m")
+        pa1 = patch.dft("time", real=True)
+        pa2 = patch.stft(time=1)
+        assert pa1.attrs.data_units == pa2.attrs.data_units
+        ipa1 = pa1.idft()
+        ipa2 = pa2.istft()
+        assert ipa1.attrs.data_units == ipa2.attrs.data_units
+
+
+class TestInverseSTFT:
+    """Tests for the inverse short-time Fourier transform."""
+
+    @pytest.fixture(scope="session")
+    def chirp_round_tripped(self, chirp_stft_patch):
+        """Round trip patch through stft."""
+        return chirp_stft_patch.istft()
+
+    def test_near_round_trip_1(self, chirp_round_tripped, chirp_patch):
+        """Test how well the patch round-tripped through the stft."""
+        patch1, patch2 = chirp_round_tripped, chirp_patch
+        assert patch1.ndim == patch2.ndim
+        assert patch1.dims == patch2.dims
+        assert patch1.shape == patch2.shape
+        assert patch1.equals(chirp_patch, close=True)
+
+    def test_round_trip_2(self):
+        """Another round trip test from the doctests."""
+        patch = dc.get_example_patch("chirp")
+        # Simple stft with 10 second window and 4 seconds overlap
+        pa1 = patch.stft(time=10 * second, overlap=4 * second)
+        pa2 = pa1.istft()
+        assert pa2.equals(patch, close=True)
+        # Ensure stft attrs and coords were cleaned up
+        assert not any(k.startswith("_stft") for k in dict(pa2.attrs))
+        assert not any(k.startswith("_stft") for k in dict(pa2.coords.coord_map))
+
+    def test_roundtrip_3(self, random_patch):
+        """Simple round trip with near default params."""
+        patch = random_patch
+        stft = patch.stft(time=1)
+        istft = stft.istft()
+        assert patch.equals(istft, close=True)
+
+    def test_non_transformed_raises(self, random_patch):
+        """Test that a patch that hasn't undergone stft can't be used."""
+        msg = "undergone stft"
+        with pytest.raises(PatchError, match=msg):
+            random_patch.istft()
+
+    def test_detrended_raise(self, chirp_stft_detrend_patch):
+        """Since detrended stft can't be inverted it should raise."""
+        msg = "Inverse stft not possible"
+        with pytest.raises(PatchError, match=msg):
+            chirp_stft_detrend_patch.istft()
