@@ -52,6 +52,7 @@ def _get_febus_version_str(hdf_fi) -> str:
     """Return the version string for febus file."""
     # Define a few root attrs that act as a "fingerprint"
     # all Febus DAS files have folders that start with fa (I hope).
+    # Edit: They do not. I have simply removed this requirement (#525).
     inst_keys = sorted(hdf_fi.keys())
     expected_source_attrs = {
         "AmpliPower",
@@ -59,8 +60,7 @@ def _get_febus_version_str(hdf_fi) -> str:
         "WholeExtent",
         "SamplingRate",
     }
-    # iterate instrument keys
-    is_febus = all([x.startswith("fa") for x in inst_keys])
+    is_febus = True
     # Version 1, or what I think is version one (eg Valencia PubDAS data)
     # did not include a Version attr in Source dataset, so we use that as
     # the default.
