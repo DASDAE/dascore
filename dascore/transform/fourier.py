@@ -370,7 +370,7 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
     return out
 
 
-@patch_function
+@patch_function()
 def stft(
     patch: PatchType,
     taper_window: str | ndarray | tuple[str, Any, ...] = "hann",
