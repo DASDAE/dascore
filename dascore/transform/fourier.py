@@ -403,8 +403,6 @@ def stft(
         If True, detrend each time window before performing fourier transform.
         This can lead to nicer looking spectrograms, but means the istft is
         no longer possible.
-    psd
-        If True, return the power spectral density (PSD).
     **kwargs
         Used to specify window length in data units, percent, or samples.
 
@@ -517,7 +515,7 @@ def _get_istft_coord(coords, frequency_axis, time_axis):
     new_dims = list(dims)
     new_dims[frequency_axis] = dims[time_axis]
     new_dims.pop(time_axis)
-    return get_coord_manager(coords=coord_map, dims=new_dims), time
+    return get_coord_manager(coords=coord_map, dims=tuple(new_dims)), time
 
 
 def _get_short_time_fft(patch) -> ShortTimeFFT:
@@ -571,6 +569,7 @@ def istft(
         patch.data / dc.to_float(coord.step), t_axis=time_axis, f_axis=frequency_axis
     )
     # Trim data array to remove effect of padding.
+    # Note: after ISTFT, `frequency_axis` now indexes the restored time axis.
     index = broadcast_for_index(
         data_untrimmed.ndim, frequency_axis, slice(0, len(coord))
     )
