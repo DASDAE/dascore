@@ -172,7 +172,7 @@ def assert_dtype_compatible_with_units(dtype, quantity) -> Quantity:
     return quant
 
 
-def invert_quantity(unit: pint.Unit | str) -> pint.Unit:
+def invert_quantity(unit: pint.Unit | str) -> pint.Unit | None:
     """Invert a unit."""
     # just get magnitude for isnull test to avoid warning of casting
     # quantity to array.

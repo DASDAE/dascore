@@ -356,10 +356,7 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
     new_dims = list(_get_stft_dims(dim, patch.dims, axis))
     # Make dict of coordinates nd return coord manager.
     coord_map = dict(patch.coords.coord_map)
-    # Get units on new coordinates.
-    new_units = None
-    if coord.units is not None:
-        new_units = 1 / dc.get_quantity(coord.units)
+    new_units = invert_quantity(coord.units)
     coord_map.update(
         {
             dim: get_coord(values=time + coord.min(), units=coord.units),
@@ -431,7 +428,7 @@ def stft(
       series signal before the transformation.
     - If an array is passed for taper_window that has a different length
       than specified in kwargs, artificial enriching of frequency resolution
-      (equivalent to zero pading in time domain) can occur.
+      (equivalent to zero padding in time domain) can occur.
 
     See Also
     --------
@@ -442,7 +439,7 @@ def stft(
     coord = patch.get_coord(dim, require_evenly_sampled=True)
     window_samples = coord.get_sample_count(val, samples=samples, enforce_lt_coord=True)
     step = dc.to_float(coord.step)
-    sampling_rate = 1 / dc.to_float(step)
+    sampling_rate = 1 / step
     # Create window and calculate hop.
     if isinstance(taper_window, ndarray):
         window = taper_window
@@ -537,7 +534,7 @@ def istft(
     patch,
 ):
     """
-    Inverse a short-time fourier transform.
+    Invert a short-time fourier transform.
 
     Parameters
     ----------
