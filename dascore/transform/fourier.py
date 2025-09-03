@@ -427,9 +427,10 @@ def stft(
 
     Notes
     -----
-    - The output is scalled the same as [Patch.dft](`dascore.Patch.dft`).
-    - For a given sliding window, Parseval's thereom doesn't hold exactly
-      unless a boxcare window is used.
+    - The output is scaled the same as [Patch.dft](`dascore.Patch.dft`).
+      For a given sliding window, Parseval's theorem doesn't hold exactly
+      (unless a boxcar window is used) because the taper window changes the time
+      series signal before the transformation.
     - If an array is passed for taper_window that has a different length
       than specified in kwargs, artificial enriching of frequency resolution
       (equivalent to zero pading in time domain) can occur.
@@ -533,7 +534,7 @@ def _get_short_time_fft(patch) -> ShortTimeFFT:
     return stft
 
 
-@patch_function
+@patch_function()
 def istft(
     patch,
 ):
