@@ -439,7 +439,7 @@ def stft(
     coord = patch.get_coord(dim, require_evenly_sampled=True)
     window_samples = coord.get_sample_count(val, samples=samples, enforce_lt_coord=True)
     step = dc.to_float(coord.step)
-    sampling_rate = 1 / step
+    sampling_rate = 1 / abs(step)
     # Create window and calculate hop.
     if isinstance(taper_window, ndarray):
         window = taper_window
@@ -530,9 +530,7 @@ def _get_short_time_fft(patch) -> ShortTimeFFT:
 
 
 @patch_function()
-def istft(
-    patch,
-):
+def istft(patch) -> PatchType:
     """
     Invert a short-time fourier transform.
 
