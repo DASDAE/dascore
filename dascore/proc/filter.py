@@ -470,7 +470,7 @@ def slope_filter(
         the sign of the values in `filt` indicate the direction (towards or
         away) with increasing coordinate values.
         This can be used for up-down/left-right separation, assuming a
-        near-linear fiber layoyt.
+        near-linear fiber layout.
     notch
         If True, the filter represents a notch, meaning the slopes
         specified by the inner `filt` parameterse are attenuated rather

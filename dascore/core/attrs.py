@@ -233,17 +233,24 @@ class PatchAttrs(DascoreBaseModel):
 
     def update(self, **kwargs) -> Self:
         """Update an attribute in the model, return new model."""
-        coord_info, attr_info = separate_coord_info(kwargs, dims=self.dim_tuple)
+        passed_in_coords = kwargs.get("coords", True)
         out = self.model_dump(exclude_unset=True)
+        # If coords passed in, base new coordiantes on that.
+        new_coords = out.get("coords", {})
+        if isinstance(passed_in_coords, dc.CoordManager):
+            new_coords = passed_in_coords.model_dump(exclude_unset=True)
+
+        coord_info, attr_info = separate_coord_info(kwargs, dims=self.dim_tuple)
         out.update(attr_info)
-        out_coord_dict = out["coords"]
+        # Iterate the coordinate information and update.
         for name, coord_dict in coord_info.items():
-            if name not in out_coord_dict:
-                out_coord_dict[name] = coord_dict
+            if name not in new_coords:
+                new_coords[name] = coord_dict
             else:
-                out_coord_dict[name].update(coord_dict)
-        # silly check to clear coords
-        if not kwargs.get("coords", True):
+                new_coords[name].update(coord_dict)
+        out["coords"] = new_coords
+        # If falsy coords passed in clear the coordinates.
+        if not passed_in_coords:
             out["coords"] = {}
         return self.__class__(**out)
 

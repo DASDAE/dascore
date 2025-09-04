@@ -446,11 +446,14 @@ def stft(
     else:
         window = get_window(taper_window, window_samples, fftbins=False)
     # By using a coord and enforce_lt_coord, we guarantee the overlap is lt window.
-    overlap = coord[:window_samples].get_sample_count(
-        overlap,
-        samples=samples,
-        enforce_lt_coord=True,
-    )
+    if overlap is not None:
+        overlap = coord[:window_samples].get_sample_count(
+            overlap,
+            samples=samples,
+            enforce_lt_coord=True,
+        )
+    else:
+        overlap = 0
     hop = window_samples - overlap
     # Perform stft
     fft_mode = "onesided" if np.isrealobj(patch.data) else "centered"
