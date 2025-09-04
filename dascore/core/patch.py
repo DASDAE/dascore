@@ -107,25 +107,40 @@ class Patch:
         return dascore.proc.equals(self, other)
 
     def __add__(self, other):
-        return dascore.proc.apply_ufunc(self, other, np.add)
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.add)
 
     def __sub__(self, other):
-        return dascore.proc.apply_ufunc(self, other, np.subtract)
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.subtract)
 
     def __floordiv__(self, other):
-        return dascore.proc.apply_ufunc(self, other, np.floor_divide)
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.floor_divide)
 
     def __truediv__(self, other):
-        return dascore.proc.apply_ufunc(self, other, np.divide)
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.divide)
 
     def __mul__(self, other):
-        return dascore.proc.apply_ufunc(self, other, np.multiply)
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.multiply)
 
     def __pow__(self, other):
-        return dascore.proc.apply_ufunc(self, other, np.power)
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.power)
 
     def __mod__(self, other):
-        return dascore.proc.apply_ufunc(self, other, np.power)
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.mod)
+
+    def __gt__(self, other):
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.greater)
+
+    def __ge__(self, other):
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.greater_equal)
+
+    def __lt__(self, other):
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.less)
+
+    def __le__(self, other):
+        return dascore.utils.ufuncs.apply_ufunc(self, other, np.less_equal)
+
+    def __bool__(self):
+        return dascore.proc.basic.bool_patch(self)
 
     # Also add reverse operators
 
@@ -148,7 +163,7 @@ class Patch:
         assert method == "__call__", "only call supported."
         # pull out patch and other thing.
         arg1, arg2, *extras = inputs
-        out = dascore.proc.basic.apply_ufunc(arg1, arg2, ufunc, *extras, **kwargs)
+        out = dascore.utils.ufuncs.apply_ufunc(arg1, arg2, ufunc, *extras, **kwargs)
         return out
 
     def __array__(self, dtype=None, copy=None):
@@ -225,6 +240,11 @@ class Patch:
         return self.coords.size
 
     @property
+    def dtype(self) -> tuple[int, ...]:
+        """Return the dtype of the array."""
+        return self.data.dtype
+
+    @property
     def seconds(self) -> float:
         """Return number of seconds in the time coordinate."""
         return to_float(self.coords.coord_range("time"))
@@ -260,7 +280,7 @@ class Patch:
     drop_private_coords = dascore.proc.drop_private_coords
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
-    apply_ufunc = dascore.proc.apply_ufunc
+    apply_ufunc = dascore.utils.ufuncs.apply_ufunc
     get_patch_names = get_patch_names
 
     def get_patch_name(self, *args, **kwargs) -> str:
@@ -344,6 +364,8 @@ class Patch:
     first = dascore.proc.agg.first
     last = dascore.proc.agg.last
     sum = dascore.proc.agg.sum
+    any = dascore.proc.agg.any
+    all = dascore.proc.agg.all
 
     # --- transformation functions
     differentiate = transform.differentiate

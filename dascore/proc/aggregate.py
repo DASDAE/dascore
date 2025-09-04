@@ -303,3 +303,41 @@ def sum(
     {notes}
     """
     return aggregate.func(patch, dim=dim, method=np.nansum, dim_reduce=dim_reduce)
+
+
+@patch_function()
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
+def any(
+    patch: PatchType,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
+) -> PatchType:
+    """
+    Perform boolean any operation along one or more dimensions.
+
+    Parameters
+    ----------
+    {params}
+
+    {notes}
+    """
+    return aggregate.func(patch, dim=dim, method=np.any, dim_reduce=dim_reduce)
+
+
+@patch_function()
+@compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
+def all(
+    patch: PatchType,
+    dim: str | Sequence[str] | None = None,
+    dim_reduce: str | Callable = "empty",
+) -> PatchType:
+    """
+    Perform boolean all operation along one or more dimensions.
+
+    Parameters
+    ----------
+    {params}
+
+    {notes}
+    """
+    return aggregate.func(patch, dim=dim, method=np.all, dim_reduce=dim_reduce)

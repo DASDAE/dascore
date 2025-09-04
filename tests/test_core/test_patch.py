@@ -613,6 +613,10 @@ class TestApplyOperator:
         operator.truediv,
         operator.floordiv,
         operator.pow,
+        operator.ge,
+        operator.le,
+        operator.gt,
+        operator.lt,
     )
     bool_ops = (
         operator.and_,
@@ -635,6 +639,31 @@ class TestApplyOperator:
         ones = np.ones(random_patch.shape)
         new = apply_operator(random_patch, ones, np.add)
         assert np.allclose(new.data, ones + random_patch.data)
+
+    def test_comparison_ops(self, random_patch):
+        """Simple tests for comparison operations."""
+        out = random_patch > random_patch
+        assert np.issubdtype(out.dtype, np.bool_)
+        assert not out.all()
+
+
+class TestBool:
+    """Tests for boolean operators on Patches."""
+
+    def test_multi_dimensional_patch_raises(self, random_patch):
+        """
+        Much like numpy, the boolean conversion of an array is ambiguous.
+        """
+        with pytest.raises(ValueError, match="is ambiguous"):
+            bool(random_patch)
+
+    def test_single_value_returns_array_bool(self, random_patch):
+        """An array with a single value should return that values truthiness."""
+        truthy = (random_patch.abs() >= 0).all()
+        falsey = (random_patch.abs() < 0).all()
+
+        assert truthy
+        assert not falsey
 
 
 class TestGetCoord:
