@@ -335,6 +335,11 @@ class TestSTFT:
         ipa2 = pa2.istft()
         assert ipa1.attrs.data_units == ipa2.attrs.data_units
 
+    def test_none_for_overlap(self, random_patch):
+        """Using None for overlap should be supported."""
+        out = random_patch.stft(time=1, overlap=None)
+        assert isinstance(out, dc.Patch)
+
 
 class TestInverseSTFT:
     """Tests for the inverse short-time Fourier transform."""
