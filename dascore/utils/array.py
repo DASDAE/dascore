@@ -1,5 +1,5 @@
 """
-Utilities for working with/creating universal functions.
+Utilities for working with patches and arrays.
 """
 
 from __future__ import annotations
@@ -9,15 +9,23 @@ from collections.abc import Callable
 import numpy as np
 
 import dascore as dc
-from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
-from dascore.exceptions import PatchBroadcastError, UnitError
+from dascore.constants import _AGG_FUNCS, DEFAULT_ATTRS_TO_IGNORE, PatchType
+from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
     align_patch_coords,
+    get_dim_axis_value,
     patch_function,
+)
+from dascore.utils.time import (
+    dtype_time_like,
+    is_datetime64,
+    to_datetime64,
+    to_timedelta64,
 )
 
 
@@ -55,7 +63,7 @@ def apply_ufunc(
 
     Examples
     --------
-    >>> from dascore.proc.ufuncs import apply_ufunc    >>> import numpy as np
+    >>> from dascore.utils.array import apply_ufunc    >>> import numpy as np
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>> # multiply the patch by 10
@@ -174,3 +182,107 @@ def generate_ufunc(np_ufunc: np.ufunc) -> Callable:
     -----
     - The entire ufunc interface is not yet implemented.
     """
+
+
+def _get_new_coord(coord, dim_reduce):
+    """Get the new coordinate."""
+
+    def _maybe_handle_datatypes(func, data):
+        """Maybe handle the complexity of date times here."""
+        try:  # First try function directly
+            out = func(data)
+        except Exception:  # Fall back to floats and re-packing.
+            float_data = dc.to_float(data)
+            dfunc = to_datetime64 if is_datetime64(data) else to_timedelta64
+            out = dfunc(func(float_data))
+        return np.atleast_1d(out)
+
+    if dim_reduce == "empty":
+        new_coord = coord.update(shape=(1,), start=None, stop=None, data=None)
+    elif dim_reduce == "squeeze":
+        return None
+    elif (func := _AGG_FUNCS.get(dim_reduce)) or callable(dim_reduce):
+        func = dim_reduce if callable(dim_reduce) else func
+        coord_data = coord.data
+        if dtype_time_like(coord_data):
+            result = _maybe_handle_datatypes(func, coord_data)
+        else:
+            result = func(coord.data)
+        new_coord = coord.update(data=result)
+    else:
+        msg = "dim_reduce must be 'empty', 'squeeze' or valid aggregator."
+        raise ParameterError(msg)
+    return new_coord
+
+
+def _apply_aggregator(patch, dim, func, dim_reduce):
+    """Apply an aggregation operator to patch."""
+    data = patch.data
+    dims = tuple(iterate(patch.dims if dim is None else dim))
+    dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
+    # Iter all specified dimensions.
+    for dim, axis, value in dfo:
+        new_coord = _get_new_coord(patch.get_coord(dim), dim_reduce=dim_reduce)
+        if new_coord is None:
+            coords = patch.coords.drop_coords(dim)[0]
+            data = func(data, axis=axis)
+        else:
+            coords = patch.coords.update(**{dim: new_coord})
+            data = np.expand_dims(func(data, axis=axis), axis)
+        patch = patch.new(data=data, coords=coords)
+
+
+def _find_patches(args, kwargs):
+    """Return any patches in args and kwargs."""
+    patches1 = [x for x in args if isinstance(x, dc.Patch)]
+    patches2 = [x for x in kwargs.values() if isinstance(x, dc.Patch)]
+    return patches1 + patches2
+
+
+def _strip_data_from_patch(patch):
+    """Get data from patches."""
+    return patch.data if isinstance(patch, dc.Patch) else patch
+
+
+def array_function(self, func, types, args, kwargs):
+    """
+    Intercept NumPy functions for patch operations.
+
+    Parameters
+    ----------
+    func : callable
+        The NumPy function being called.
+    types : tuple
+        Types involved in the call.
+    args : tuple
+        Positional arguments to the function.
+    kwargs : dict
+        Keyword arguments to the function.
+    """
+    # Only handle functions involving Patches
+    if not any(issubclass(t, dc.Patch) for t in types):
+        return NotImplemented
+
+    _args = tuple(_strip_data_from_patch(a) for a in args)
+    _kwargs = {k: _strip_data_from_patch(v) for k, v in kwargs.items()}
+    patches = _find_patches(args, kwargs)
+    assert len(patches) > 0
+
+    # Call the original NumPy function on raw arrays
+    result = func(*_args, **_kwargs)
+
+    # If NumPy returns an array, wrap it back into Patch
+    if isinstance(result, np.ndarray):
+        return patches[0].new(data=result)
+    return result
+
+
+def array_ufunc(self, ufunc, method, *inputs, **kwargs):
+    """
+    Called when a numpy array is ufunc'ed against a patch.
+    """
+    assert method == "__call__", "only call supported."
+    # pull out patch and other thing.
+    arg1, arg2, *extras = inputs
+    out = dc.utils.ufuncs.apply_ufunc(arg1, arg2, ufunc, *extras, **kwargs)
+    return out

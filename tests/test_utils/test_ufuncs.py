@@ -10,7 +10,7 @@ import pytest
 from dascore import get_quantity
 from dascore.exceptions import UnitError
 from dascore.units import furlongs, m, s
-from dascore.utils.ufuncs import apply_ufunc
+from dascore.utils.array import apply_ufunc
 
 
 class TestApplyUfunc:

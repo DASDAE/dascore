@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Literal, Protocol, TypeVar, runtime_checkable
 
@@ -184,3 +185,15 @@ dascore_styles = dict(
     hms="green",
     dec="green",
 )
+
+
+_AGG_FUNCS = {
+    "mean": np.nanmean,
+    "median": np.nanmedian,
+    "min": np.nanmin,
+    "max": np.nanmax,
+    "sum": np.nansum,
+    "std": np.nanstd,
+    "first": partial(np.take, indices=0),
+    "last": partial(np.take, indices=-1),
+}

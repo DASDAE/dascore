@@ -759,3 +759,12 @@ class TestGetPatchName:
         """Happy path test."""
         name = random_patch.get_patch_name()
         assert isinstance(name, str)
+
+
+class TestNumpyFuncs:
+    """Tests for apply numpy directly to patches."""
+
+    def test_numpy_functions_return_patch(self, random_patch):
+        """Ensure numpy functions can return patches."""
+        out = np.min(random_patch)
+        assert isinstance(out, dc.Patch)

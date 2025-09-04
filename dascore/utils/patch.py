@@ -620,7 +620,7 @@ def get_dim_axis_value(
     if not overlap or (len(overlap) > 1 and not allow_multiple):
         msg = (
             "You must use exactly one dimension name in args or kwargs. "
-            f"You passed the following kwargs: {kwargs} args: {args } "
+            f"You passed the following kwargs: {kwargs} args: {args} "
             f"to a patch with dimensions {patch.dims}"
         )
         raise PatchCoordinateError(msg)

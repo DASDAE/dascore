@@ -16,6 +16,7 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
+from dascore.utils.array import array_function, array_ufunc
 from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
@@ -156,15 +157,8 @@ class Patch:
         return self.update(data=-self.data)
 
     # Numpy Compatibility things
-    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
-        """
-        Called when a numpy array is ufunc'ed against a patch.
-        """
-        assert method == "__call__", "only call supported."
-        # pull out patch and other thing.
-        arg1, arg2, *extras = inputs
-        out = dascore.utils.ufuncs.apply_ufunc(arg1, arg2, ufunc, *extras, **kwargs)
-        return out
+    __array_ufuncs__ = array_ufunc
+    __array_function__ = array_function
 
     def __array__(self, dtype=None, copy=None):
         """Used to convert Patches to arrays."""

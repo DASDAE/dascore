@@ -15,13 +15,13 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
+from dascore.utils.array import apply_ufunc
 from dascore.utils.misc import _get_nullish
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
     get_dim_axis_value,
     patch_function,
 )
-from dascore.utils.ufuncs import apply_ufunc
 
 
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
