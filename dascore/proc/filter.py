@@ -449,7 +449,7 @@ def slope_filter(
     """
     Filter the patch over certain slopes in the 2D Fourier domain.
 
-    Most commonly this used as an F-K (frequency wavenumber)
+    Most commonly this is used as an F-K (frequency wavenumber)
     filter to attenuate energy with specified apparent velocities.
 
     Parameters
@@ -458,7 +458,7 @@ def slope_filter(
         The patch to filter.
     filt
         A length 4 array of the form [va, vb, vc, vd]. If notch is False,
-        the filter selects the apparent velocites between 'vb' and 'vc'
+        the filter selects the apparent velocities between 'vb' and 'vc'
         with tapering boundaries from 'va' to 'vb' and from 'vc' to 'vd'.
     dims
         The dimensions used to determine slope. The first dim is in the
@@ -469,11 +469,11 @@ def slope_filter(
         If True, the filter should be considered direction. That is to say,
         the sign of the values in `filt` indicate the direction (towards or
         away) with increasing coordinate values.
-        This can be used for up-down/left-right separation, assuming a
+        This can be used for up/down or left/right separation, assuming a
         near-linear fiber layout.
     notch
         If True, the filter represents a notch, meaning the slopes
-        specified by the inner `filt` parameterse are attenuated rather
+        specified by the inner `filt` parameters are attenuated rather
         than those outside of them.
 
     Examples
@@ -514,7 +514,7 @@ def slope_filter(
     >>> filt = np.array([2e3,2.2e3,8e3,2e4]) * dc.get_unit("m/s")
     >>> patch_filtered = patch.slope_filter(filt=filt)
 
-    The [fk recipe](`docs/recipes/fk.qmd`) provides addtional examples.
+    The [FK recipe](`docs/recipes/fk.qmd`) provides addtional examples.
     """
 
     def _check_inputs(patch, filt, dims):

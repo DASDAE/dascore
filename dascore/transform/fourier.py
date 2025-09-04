@@ -374,7 +374,7 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
 def stft(
     patch: PatchType,
     taper_window: str | ndarray | tuple[str, Any, ...] = "hann",
-    overlap: Quantity | int = 50 * percent,
+    overlap: Quantity | int | None = 50 * percent,
     samples: bool = False,
     detrend: bool = False,
     **kwargs,
@@ -392,7 +392,9 @@ def stft(
         or an array, or a tuple of name and parameters passed to scipy.signal's
         get_window function.
     overlap
-        The overlap between windows
+        The overlap between windows. Can be a number (assumed to be in units of
+        the transformed dimension if `samples`==False), a percent, or None for
+        0 overlap.
     samples
         If True, the window length (provided in kwargs) and overlap parameters
         are in samples (or explicit units).

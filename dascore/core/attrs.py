@@ -235,8 +235,8 @@ class PatchAttrs(DascoreBaseModel):
         """Update an attribute in the model, return new model."""
         passed_in_coords = kwargs.get("coords", True)
         out = self.model_dump(exclude_unset=True)
-        # If coords passed in, base new coordiantes on that.
-        new_coords = out.get("coords", {})
+        # If coord manager passed in, base new coordinates on that.
+        new_coords = dict(out.get("coords", {}))
         if isinstance(passed_in_coords, dc.CoordManager):
             new_coords = passed_in_coords.model_dump(exclude_unset=True)
 
@@ -249,7 +249,7 @@ class PatchAttrs(DascoreBaseModel):
             else:
                 new_coords[name].update(coord_dict)
         out["coords"] = new_coords
-        # If falsy coords passed in clear the coordinates.
+        # If falsy coords passed in, clear the coordinates.
         if not passed_in_coords:
             out["coords"] = {}
         return self.__class__(**out)
