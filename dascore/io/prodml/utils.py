@@ -113,6 +113,7 @@ def _get_prodml_attrs(fi, extras=None) -> list[dict]:
         "PulseRate.uom": "pulse_rate_units",
         "GaugeLength": "gauge_length",
         "GaugeLengthUnit": "gauge_length_units",
+        "GaugeLengthUnits": "gauge_length_units",
         "GaugeLength.uom": "gauge_length_units",
         "schemaVersion": "schema_version",
     }
