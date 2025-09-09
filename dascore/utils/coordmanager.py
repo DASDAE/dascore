@@ -18,10 +18,10 @@ def merge_coord_managers(
     coord_managers: Sequence[dc.CoordManager],
     dim: str,
     snap_tolerance: float | None = None,
-    drop_conflicting=False,
+    drop_conflicting: bool = False,
 ) -> dc.CoordManager:
     """
-    Merger coordinate managers along a specified dimension.
+    Merge coordinate managers along a specified dimension.
 
     Parameters
     ----------
@@ -80,7 +80,7 @@ def merge_coord_managers(
             msg = (
                 f"Non merging coordinates {coord_name} are not equal. "
                 "Coordinate managers cannot be merged. Try using "
-                "spool.chunk with conflicts='drop'."
+                "spool.chunk with conflict='drop'."
             )
             raise CoordMergeError(msg)
         return out

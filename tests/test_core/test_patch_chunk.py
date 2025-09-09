@@ -486,7 +486,7 @@ class TestChunkMerge:
         Private coords that conflict should be dropped and not block merge
         when conflict="drop".
 
-        Otherwise they should be dropped.
+        Otherwise they should raise.
         """
         p1, p2 = patches_conflicting_private_coord
         merged_spool = dc.spool([p1, p2]).chunk(time=None, conflict="drop")

@@ -33,7 +33,7 @@ class TestMergeCoordManagers:
         c2 = rand.random(c1.shape)
 
         time = cm_basic.get_coord("time")
-        cm1 = cm_basic.update(_bad_coord=("distance", c1))
+        cm1 = cm_basic.update_coords(_bad_coord=("distance", c1))
         cm2 = cm1.update_coords(
             _bad_coord=("distance", c2), time=time + time.coord_range()
         )
