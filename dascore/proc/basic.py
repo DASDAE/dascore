@@ -558,9 +558,9 @@ def fillna(patch: PatchType, value) -> PatchType:
     >>> import dascore as dc
     >>> # load an example patch which has some NaN values.
     >>> patch = dc.get_example_patch("patch_with_null")
-    >>> # Replace all occurences of NaN with 0
+    >>> # Replace all occurrences of NaN with 0
     >>> out = patch.fillna(0)
-    >>> # Replace all occurences of NaN with 5
+    >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
     to_replace = pd.isnull(patch.data)
@@ -606,7 +606,7 @@ def pad(
         adding values to the end of the axis.
 
         "correlate" - prepare the coordinate for correlation/convolution in
-        the frequency domain by pading to the next fast fft length after
+        the frequency domain by padding to the next fast fft length after
         2*n - 1 where n is the current dimension length by adding values
         to the end of the axis.
 
@@ -710,11 +710,11 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     coord = patch.get_coord(dim)
     value = coord.get_sample_count(input_value, samples=samples)
 
-    roll_arr = np.roll(arr, value, axis=0)
+    roll_arr = np.roll(arr, value, axis=axis)
 
     # update coords if True
     if update_coord:
-        roll_coord_arr = np.roll(coord.values, value, axis=0)
+        roll_coord_arr = np.roll(coord.values, value)
         new_coord = coord.update(values=roll_coord_arr)
         patch = patch.update_coords(**{dim: new_coord})
 

@@ -197,7 +197,7 @@ def _create_size_and_axes(patch, kwargs, samples):
 
 
 @patch_function()
-@compose_docstring(sample_explination=samples_arg_description)
+@compose_docstring(sample_explanation=samples_arg_description)
 def median_filter(
     patch: PatchType, samples=False, mode="reflect", cval=0.0, **kwargs
 ) -> PatchType:
@@ -317,7 +317,7 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
 
 
 @patch_function()
-@compose_docstring(sample_explination=samples_arg_description)
+@compose_docstring(sample_explanation=samples_arg_description)
 def savgol_filter(
     patch: PatchType, polyorder, samples=False, mode="interp", cval=0.0, **kwargs
 ) -> PatchType:
@@ -379,7 +379,7 @@ def savgol_filter(
 
 
 @patch_function()
-@compose_docstring(sample_explination=samples_arg_description)
+@compose_docstring(sample_explanation=samples_arg_description)
 def gaussian_filter(
     patch: PatchType, samples=False, mode="reflect", cval=0.0, truncate=4.0, **kwargs
 ) -> PatchType:
@@ -438,7 +438,7 @@ def gaussian_filter(
 
 
 @patch_function()
-@compose_docstring(sample_explination=samples_arg_description)
+@compose_docstring(sample_explanation=samples_arg_description)
 def slope_filter(
     patch: PatchType,
     filt: Sequence[float],

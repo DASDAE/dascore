@@ -97,7 +97,7 @@ def differentiate(
     step
         The number of columns/rows to skip for differention.
         eg: an array of [a b c d e] uses b and d to calculate diff of c when
-        step = 1 and order = 2. When step = 2, a and e are used to calcualte
+        step = 1 and order = 2. When step = 2, a and e are used to calculate
         diff at c.
 
     Notes
@@ -107,7 +107,7 @@ def differentiate(
     order is interpreted as accuracy ("order" means order of differention
     in that package).
 
-    The second order first derivate, for an evenly spaced coordiante,
+    The second order first derivative, for an evenly spaced coordinate,
     is defined as:
 
     $$
