@@ -122,9 +122,10 @@ class TestInit:
     def test_min_max_populated(self, random_patch):
         """The min/max values of the distance attrs should have been populated."""
         attrs = random_patch.attrs
+        attr_class = type(attrs)
         expected_filled_in = [
             x
-            for x in list(attrs.model_fields)
+            for x in list(attr_class.model_fields)
             if x.startswith("distance") and "units" not in x
         ]
         for attr in expected_filled_in:

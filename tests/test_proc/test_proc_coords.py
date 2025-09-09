@@ -431,6 +431,14 @@ class TestSqueeze:
         with pytest.raises(CoordError, match=msg):
             flat_patch.squeeze(dim="time")
 
+    def test_coord_summary(self, flat_patch):
+        """Ensure the coordinate summary doesn't contain squeezed dim."""
+        patch = flat_patch.squeeze()
+        attrs = patch.attrs
+        coords = attrs.get("coords", None)
+        if coords:
+            assert set(coords) == set(patch.coords.coord_map)
+
 
 class TestGetCoord:
     """Tests for the get_coord convenience function."""
