@@ -606,7 +606,7 @@ def pad(
         adding values to the end of the axis.
 
         "correlate" - prepare the coordinate for correlation/convolution in
-        the frequency domain by pading to the next fast fft length after
+        the frequency domain by padding to the next fast fft length after
         2*n - 1 where n is the current dimension length by adding values
         to the end of the axis.
 
