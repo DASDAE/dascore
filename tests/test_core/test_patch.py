@@ -424,6 +424,10 @@ class TestTranspose:
         assert pa2.dims == dims_r
         assert list(pa2.data.shape) == list(reversed(pa1.data.shape))
 
+    def test_t_property(self, random_patch):
+        """Ensure the .T property returns the same as the transpose."""
+        assert random_patch.T == random_patch.transpose()
+
 
 class TestUpdateAttrs:
     """
@@ -764,7 +768,21 @@ class TestGetPatchName:
 class TestNumpyFuncs:
     """Tests for apply numpy directly to patches."""
 
-    def test_numpy_functions_return_patch(self, random_patch):
+    def test_reducer_function(self, random_patch):
         """Ensure numpy functions can return patches."""
-        out = np.min(random_patch)
+        out = np.min(random_patch, axis=1)
         assert isinstance(out, dc.Patch)
+        # The functions should behave the same as the methods.
+        assert random_patch.min(dim=random_patch.dims[1]).equals(out)
+
+    def test_non_reducer(self, random_patch):
+        """Ensure a non-reducing function also works."""
+        out = np.cumsum(random_patch, axis=0)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == random_patch.shape
+
+    def test_patch_on_patch(self, random_patch):
+        """Ensure two patches can be passed to numpy functions."""
+        breakpoint()
+        out = np.add(random_patch, random_patch)
+        breakpoint()

@@ -108,37 +108,37 @@ class Patch:
         return dascore.proc.equals(self, other)
 
     def __add__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.add)
+        return dascore.utils.array.apply_ufunc(np.add, self, other)
 
     def __sub__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.subtract)
+        return dascore.utils.array.apply_ufunc(np.subtract, self, other)
 
     def __floordiv__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.floor_divide)
+        return dascore.utils.array.apply_ufunc(np.floor_divide, self, other)
 
     def __truediv__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.divide)
+        return dascore.utils.array.apply_ufunc(np.divide, self, other)
 
     def __mul__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.multiply)
+        return dascore.utils.array.apply_ufunc(np.multiply, self, other)
 
     def __pow__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.power)
+        return dascore.utils.array.apply_ufunc(np.power, self, other)
 
     def __mod__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.mod)
+        return dascore.utils.array.apply_ufunc(np.mod, self, other)
 
     def __gt__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.greater)
+        return dascore.utils.array.apply_ufunc(np.greater, self, other)
 
     def __ge__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.greater_equal)
+        return dascore.utils.array.apply_ufunc(np.greater_equal, self, other)
 
     def __lt__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.less)
+        return dascore.utils.array.apply_ufunc(np.less, self, other)
 
     def __le__(self, other):
-        return dascore.utils.ufuncs.apply_ufunc(self, other, np.less_equal)
+        return dascore.utils.array.apply_ufunc(np.less_equal, self, other)
 
     def __bool__(self):
         return dascore.proc.basic.bool_patch(self)
@@ -157,8 +157,9 @@ class Patch:
         return self.update(data=-self.data)
 
     # Numpy Compatibility things
-    __array_ufuncs__ = array_ufunc
+    __array_ufunc__ = array_ufunc
     __array_function__ = array_function
+    __array_priority__ = 1000.0  # Prefer Patch in mixed ops.
 
     def __array__(self, dtype=None, copy=None):
         """Used to convert Patches to arrays."""
@@ -248,6 +249,12 @@ class Patch:
         """Return number of channels in the distance coordinate."""
         return self.coords.coord_size("distance")
 
+    @property
+    def T(self):  # noqa
+        """Transpose the Patch."""
+        # This isnt a great name but keeps the numpy tradition.
+        return self.transpose()
+
     # --- basic patch functionality.
 
     update = dascore.proc.update
@@ -274,7 +281,7 @@ class Patch:
     drop_private_coords = dascore.proc.drop_private_coords
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
-    apply_ufunc = dascore.utils.ufuncs.apply_ufunc
+    apply_ufunc = dascore.utils.array.apply_ufunc
     get_patch_names = get_patch_names
 
     def get_patch_name(self, *args, **kwargs) -> str:
