@@ -608,7 +608,7 @@ def diverse_spool():
     return dc.spool([y for x in all_spools for y in x])
 
 
-def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5"):
+def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5"):
     """
     Write out each patch in a spool to a directory.
 
@@ -626,7 +626,7 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extention="hdf5")
         assert path.exists()
     for patch in spool:
         name = get_patch_names(patch).iloc[0]
-        out_path = path / (f"{name}.{extention}")
+        out_path = path / (f"{name}.{extension}")
         patch.io.write(out_path, file_format=file_format)
     return path
 

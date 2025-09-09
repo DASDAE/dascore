@@ -162,8 +162,8 @@ def _get_patch_with_channel_coord(patch):
     dims = set(patch.dims)
     non_time = next(iter(dims - {"time"}))
     msg = (
-        "Currently the segy writer only handles 'channel' as the non-time "
-        "dimension this results in a loss of the '{non_time}' dimension."
+        f"Currently the segy writer only handles 'channel' as the non-time "
+        f"dimension; this results in a loss of the '{non_time}' dimension."
     )
     warnings.warn(msg)
     coord = patch.get_coord(non_time)
@@ -238,7 +238,7 @@ def _write_segy(spool, resource, version, segyio):
     """
     patch = _get_segy_compatible_patch(spool)
     time, channel = patch.get_coord("time"), patch.get_coord("channel")
-    chanel_step = channel.step
+    channel_step = channel.step
 
     time_dict = _make_time_header_dict(time)
     bin_field = segyio.BinField
@@ -268,7 +268,7 @@ def _write_segy(spool, resource, version, segyio):
             header = dict(time_dict)
             header.update(
                 {
-                    segyio.su.offset: chanel_step,
+                    segyio.su.offset: channel_step,
                     segyio.su.iline: num,
                     segyio.su.xline: 1,
                 }

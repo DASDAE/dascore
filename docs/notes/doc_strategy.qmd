@@ -18,7 +18,7 @@ The sections of DASCore's documentation can be classified as follows:
 
 We should try to not mix these types of documentation, but rather provide links in relevant locations. A few implications:
 
-* Long explanations of theory don't belong in the tutorial section; put a link to a page in the notes section if long explination is needed.
+* Long explanations of theory don't belong in the tutorial section; put a link to a page in the notes section if long explanation is needed.
 
 * Tutorial pages should only show basic usage of functions/methods/classes, then [cross reference](../contributing/documentation.qmd#cross-references) the API page.
 

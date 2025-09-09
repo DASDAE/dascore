@@ -209,7 +209,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
         return self._call_rolling_func(name="sum")
 
 
-@compose_docstring(sample_explination=samples_arg_description)
+@compose_docstring(sample_explanation=samples_arg_description)
 def rolling(
     patch: dc.Patch,
     step=None,

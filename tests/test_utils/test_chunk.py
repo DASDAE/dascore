@@ -114,7 +114,7 @@ class TestBasicChunkDF:
         assert new_interval == new_time_interval
 
     def test_rechunk_contiguous_with_sr_separation(self, contiguous_sr_spaced_df):
-        """Ensure it still works on data seperated by one sample."""
+        """Ensure it still works on data separated by one sample."""
         df = contiguous_sr_spaced_df
         sr = df["time_step"]
         time_interval = (sr + df["time_max"] - df["time_min"]).max()

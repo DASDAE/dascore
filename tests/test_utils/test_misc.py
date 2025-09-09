@@ -129,7 +129,7 @@ class TestIterFS:
         assert out == expected
 
     def test_extension(self, simple_dir):
-        """Test filtering based on extention."""
+        """Test filtering based on extension."""
         out = set(_iter_filesystem(simple_dir, ext=".txt"))
         for val in out:
             assert val.endswith(".txt")

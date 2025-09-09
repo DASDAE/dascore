@@ -557,7 +557,7 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
         if path.exists() and sha_256(path) == sha_256(markdown):
             continue
         path.write_text(markdown)
-    # remove files that are no longer writen. This can happen when the code is
+    # remove files that are no longer written. This can happen when the code is
     # refactored or objects are deleted.
     for path in files_to_delete:
         path.unlink()

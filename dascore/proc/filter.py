@@ -197,7 +197,7 @@ def _create_size_and_axes(patch, kwargs, samples):
 
 
 @patch_function()
-@compose_docstring(sample_explination=samples_arg_description)
+@compose_docstring(sample_explanation=samples_arg_description)
 def median_filter(
     patch: PatchType, samples=False, mode="reflect", cval=0.0, **kwargs
 ) -> PatchType:
@@ -317,7 +317,7 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
 
 
 @patch_function()
-@compose_docstring(sample_explination=samples_arg_description)
+@compose_docstring(sample_explanation=samples_arg_description)
 def savgol_filter(
     patch: PatchType, polyorder, samples=False, mode="interp", cval=0.0, **kwargs
 ) -> PatchType:
@@ -379,7 +379,7 @@ def savgol_filter(
 
 
 @patch_function()
-@compose_docstring(sample_explination=samples_arg_description)
+@compose_docstring(sample_explanation=samples_arg_description)
 def gaussian_filter(
     patch: PatchType, samples=False, mode="reflect", cval=0.0, truncate=4.0, **kwargs
 ) -> PatchType:
@@ -438,7 +438,7 @@ def gaussian_filter(
 
 
 @patch_function()
-@compose_docstring(sample_explination=samples_arg_description)
+@compose_docstring(sample_explanation=samples_arg_description)
 def slope_filter(
     patch: PatchType,
     filt: Sequence[float],
@@ -514,7 +514,7 @@ def slope_filter(
     >>> filt = np.array([2e3,2.2e3,8e3,2e4]) * dc.get_unit("m/s")
     >>> patch_filtered = patch.slope_filter(filt=filt)
 
-    The [fk recipe](`docs/recipes/fk.qmd`) provides addtional examples.
+    The [fk recipe](`docs/recipes/fk.qmd`) provides additional examples.
     """
 
     def _check_inputs(patch, filt, dims):

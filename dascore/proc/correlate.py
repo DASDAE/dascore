@@ -102,7 +102,7 @@ def correlate(
     is useful to undo dft artefacts after the idft is applied.
 
     While a 2D patch is required for input, a 3D patch is returned where the
-    3rd dimesion cooresponds to the source rows/columns. For the case of a
+    3rd dimension corresponds to the source rows/columns. For the case of a
     single source, the [`Patch.squeeze`](`dascore.Patch.squeeze`) method
     can be helpful to remove length 1 dimensions.
 

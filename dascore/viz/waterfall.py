@@ -22,7 +22,7 @@ from dascore.utils.plotting import (
 
 def _set_scale(im, scale, scale_type, patch):
     """Set the scale of the color bar based on scale and scale_type."""
-    # check scale paramters
+    # check scale parameters
     assert scale_type in {"absolute", "relative"}
     assert isinstance(scale, float | int) or len(scale) == 2
     # make sure we have a len two array
