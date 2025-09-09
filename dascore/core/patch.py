@@ -49,7 +49,7 @@ class Patch:
         first axis of data, the second to the second dimension, and so on.
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict or
-        [PatchAttrs](`dascore.core.attrs.PatchAttrs')
+        [PatchAttrs](`dascore.core.attrs.PatchAttrs`)
 
     Notes
     -----
@@ -125,7 +125,7 @@ class Patch:
         return dascore.proc.apply_ufunc(self, other, np.power)
 
     def __mod__(self, other):
-        return dascore.proc.apply_ufunc(self, other, np.power)
+        return dascore.proc.apply_ufunc(self, other, np.mod)
 
     # Also add reverse operators
 

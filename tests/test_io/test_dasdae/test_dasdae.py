@@ -114,7 +114,7 @@ class TestWriteDASDAE:
         assert random_patch == read_patch
 
     def test_write_cc_patch(self, written_dascore_correlate):
-        """Ensure cross correlated patches can be writen and read."""
+        """Ensure cross correlated patches can be written and read."""
         sp_cc = dc.spool(written_dascore_correlate)
         assert isinstance(sp_cc[0], dc.Patch)
 

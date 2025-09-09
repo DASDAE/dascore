@@ -389,7 +389,7 @@ class HDFPatchIndexManager:
 
     @property
     def has_index(self) -> bool:
-        """Return True if an index table has been writen."""
+        """Return True if an index table has been written."""
         expected_node = "/".join([self.namespace, "metadata"])
         with open_hdf5_file(self.path) as h5:
             try:

@@ -150,7 +150,7 @@ def dft(
     - Output data units are the original data units multiplied by the units
       of each transformed dimension.
 
-    - Non-dimensional coordiantes associated with transformed coordinates
+    - Non-dimensional coordinates associated with transformed coordinates
       will be dropped in the output.
 
     - See the [FFT notes](`docs/notes/dft_notes.qmd`) for more details.

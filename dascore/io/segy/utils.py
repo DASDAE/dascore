@@ -32,7 +32,7 @@ def _get_segy_version(fp):
 
     Returns (segy, version) if so else False.
 
-    Based on ObsPy's implementation writen by Lion Krischer.
+    Based on ObsPy's implementation written by Lion Krischer.
     https://github.com/obspy/obspy/blob/master/obspy/io/segy/core.py
     """
     # Read 400byte header into byte string.

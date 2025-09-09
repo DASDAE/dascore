@@ -64,7 +64,7 @@ def convert_units(
     """
     Convert the patch data or coordinate units.
 
-    Preform proper conversions from one unit to another, changing patch
+    Perform proper conversions from one unit to another, changing patch
     data and dimension labels to the new unit specified. If the data or
     coordinates whose units are to be converted are not set, the new units
     will simply be set without performing any conversions.

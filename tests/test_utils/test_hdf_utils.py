@@ -117,7 +117,7 @@ class TestHDFPatchIndexManager:
         index_manager.write_update(df)
 
     def test_has_content(self, index_manager_with_content, tmp_path):
-        """`has_index` should return True if data have been writen else False."""
+        """`has_index` should return True if data have been written else False."""
         assert index_manager_with_content.has_index
         # create hdf5 file with no index
         path = tmp_path / "empty.h5"
