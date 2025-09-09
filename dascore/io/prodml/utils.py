@@ -105,9 +105,11 @@ def _get_prodml_attrs(fi, extras=None) -> list[dict]:
     _root_attrs = {
         "PulseWidth": "pulse_width",
         "PulseWidthUnits": "pulse_width_units",
+        "PulseWidthUnit": "pulse_width_units",
         "PulseWidth.uom": "pulse_width_units",
         "PulseRate": "pulse_rate",
         "PulseRateUnit": "pulse_rate_units",
+        "PulseRateUnits": "pulse_rate_units",
         "PulseRate.uom": "pulse_rate_units",
         "GaugeLength": "gauge_length",
         "GaugeLengthUnit": "gauge_length_units",
