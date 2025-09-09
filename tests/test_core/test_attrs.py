@@ -299,6 +299,14 @@ class TestUpdateAttrs:
         new = attrs.update(coords=new_patch.coords)
         assert new.dim_tuple == new_patch.dims
 
+    def test_update_coord_summary(self, random_patch):
+        """Ensure updating attrs updates the summary."""
+        coords, _ = random_patch.coords.drop_coords("distance")
+        attr = random_patch.attrs.update(coords=coords)
+        coord_summary = attr.coords
+        # Distance should have been dropped from the coord summary.
+        assert set(coord_summary) == set(coords.coord_map)
+
 
 class TestGetAttrSummary:
     """Test getting dataframe of summary info."""

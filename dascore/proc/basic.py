@@ -191,12 +191,12 @@ def update(
     if dims is None:
         dims = coords.dims if isinstance(coords, CoordManager) else self.dims
     coords = get_coord_manager(coords, dims)
-    if attrs:
+    if attrs is not None:
         coords, attrs = coords.update_from_attrs(attrs)
     else:
         _attrs = dc.PatchAttrs.from_dict(attrs or self.attrs)
-        attrs = _attrs.update(coords=coords, dims=coords.dims)
-    return self.__class__(data=data, coords=coords, attrs=attrs, dims=coords.dims)
+        attrs = _attrs.update(coords=coords)
+    return self.__class__(data=data, coords=coords, attrs=attrs)
 
 
 @patch_function()
