@@ -714,7 +714,7 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
 
     # update coords if True
     if update_coord:
-        roll_coord_arr = np.roll(coord.values, value, axis=axis)
+        roll_coord_arr = np.roll(coord.values, value)
         new_coord = coord.update(values=roll_coord_arr)
         patch = patch.update_coords(**{dim: new_coord})
 
