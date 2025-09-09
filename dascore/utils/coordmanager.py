@@ -18,6 +18,7 @@ def merge_coord_managers(
     coord_managers: Sequence[dc.CoordManager],
     dim: str,
     snap_tolerance: float | None = None,
+    drop_conflicting=False,
 ) -> dc.CoordManager:
     """
     Merger coordinate managers along a specified dimension.
@@ -34,6 +35,9 @@ def merge_coord_managers(
         start/end to be joined together. If they don't meet this requirement
         an [CoordMergeError](`dascore.exceptions.CoordMergeError`) is raised.
         If None, no checks are performed.
+    drop_conflicting
+        If True, drop conflicting (non-dimensional) coordinates, otherwise
+        raise an exception if they occur.
     """
 
     def _get_dims(managers):
@@ -68,9 +72,15 @@ def merge_coord_managers(
                 dims = managers[0].dim_map[coord_name]
                 out[coord_name] = (dims, first)
                 continue
+            # Simply skip conflicting
+            elif drop_conflicting:
+                # These are non dimensional coords
+                if not any(coord_name in x.dims for x in managers):
+                    continue
             msg = (
                 f"Non merging coordinates {coord_name} are not equal. "
-                "Coordinate managers cannot be merged."
+                "Coordinate managers cannot be merged. Try using "
+                "spool.chunk with conflicts='drop'."
             )
             raise CoordMergeError(msg)
         return out

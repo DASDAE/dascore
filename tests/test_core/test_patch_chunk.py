@@ -270,6 +270,21 @@ class TestChunkMerge:
         # since
         return dc.spool(out)
 
+    @pytest.fixture(scope="class")
+    def patches_conflicting_private_coord(self, random_patch):
+        """Create two patches that have conflicting private coords."""
+        dist_ax = random_patch.dims.index("distance")
+        rand = np.random.RandomState(42)
+        c1 = rand.random(random_patch.shape[dist_ax])
+        c2 = rand.random(c1.shape)
+
+        time = random_patch.get_coord("time")
+        p1 = random_patch.update_coords(_bad_coord=("distance", c1))
+        p2 = random_patch.update_coords(
+            _bad_coord=("distance", c2), time=time + time.coord_range()
+        )
+        return p1, p2
+
     def test_merge_unequal_other(self, distance_adjacent):
         """When distance values are not equal time shouldn't be merge-able."""
         with pytest.raises(CoordMergeError):
@@ -462,3 +477,24 @@ class TestChunkMerge:
         chunked = spool.chunk(time=None)
         # Since the time dims are NaN, this can't work.
         assert not len(chunked)
+
+    def test_merge_with_conflicting_private_coords(
+        self,
+        patches_conflicting_private_coord,
+    ):
+        """
+        Private coords that conflict should be dropped and not block merge
+        when conflict="drop".
+
+        Otherwise they should be dropped.
+        """
+        p1, p2 = patches_conflicting_private_coord
+        merged_spool = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
+        merge_patch = merged_spool[0]
+        assert len(merged_spool) == 1
+        # Since the private coords conflicted, they should have been dropped.
+        coord_names = list(merge_patch.coords.coord_map)
+        assert not any([x.startswith("_") for x in coord_names])
+        # Without conflict drop this should raise.
+        with pytest.raises(CoordMergeError, match="conflict"):
+            dc.spool([p1, p2]).chunk(time=None)[0]
