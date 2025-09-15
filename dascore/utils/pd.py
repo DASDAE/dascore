@@ -450,7 +450,7 @@ def _remove_overlaps(df, name):
 
 
 def _column_or_value(df, col, value):
-    """Return the values from a column, if they exist, else bool array of False."""
+    """Return the values from a column, if they exist, else bool array of value."""
     if col in df.columns:
         return df[col].values
     out = np.broadcast_to(np.array(value), len(df))
