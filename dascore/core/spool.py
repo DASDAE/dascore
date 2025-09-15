@@ -132,8 +132,8 @@ class BaseSpool(abc.ABC):
             If True, snap the coords on joined patches such that the spacing
             remains constant.
         tolerance
-            The number of samples a block of data can be spaced and still be
-            considered contiguous.
+            The maximum number of samples a block of data can be spaced (gap) and
+            still be considered contiguous.
         conflict
             {conflict_desc}
         kwargs
