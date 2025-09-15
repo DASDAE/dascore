@@ -815,4 +815,3 @@ class TestNumpyFuncs:
         """Ensure multiple axes work."""
         out = np.min(random_patch, axis=(0, 1))
         assert isinstance(out, dc.Patch)
-
