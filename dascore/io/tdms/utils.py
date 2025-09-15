@@ -171,7 +171,7 @@ def _get_distance_coord(attr):
 
 def _get_all_attrs(tdms_file, lead_in_length=28):
     """Return all the attributes which can be fetched from attributes."""
-    # read leadin infomation into fileinfo
+    # read leadin information into fileinfo
     lead_in = tdms_file.read(lead_in_length)
     # lead_in is 28 bytes:
     fields = struct.unpack("<4siiQQ", lead_in)

@@ -132,7 +132,7 @@ def dft(
         True, which means the last (possibly only) dimenson should have an
         rfft performed, or 3) None, meaning no rfft.
     pad
-        If True, pad patch before peforming dft along desired dimensions to
+        If True, pad patch before performing dft along desired dimensions to
         the next fast length. This can avoid major slow-downs when dimension
         lengths are prime numbers.
 
@@ -150,7 +150,7 @@ def dft(
     - Output data units are the original data units multiplied by the units
       of each transformed dimension.
 
-    - Non-dimensional coordiantes associated with transformed coordinates
+    - Non-dimensional coordinates associated with transformed coordinates
       will be dropped in the output.
 
     - See the [FFT notes](`docs/notes/dft_notes.qmd`) for more details.

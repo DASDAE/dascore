@@ -50,7 +50,7 @@ class Patch:
         first axis of data, the second to the second dimension, and so on.
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict or
-        [PatchAttrs](`dascore.core.attrs.PatchAttrs')
+        [PatchAttrs](`dascore.core.attrs.PatchAttrs`)
 
     Notes
     -----
@@ -281,7 +281,7 @@ class Patch:
     drop_private_coords = dascore.proc.drop_private_coords
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
-    apply_ufunc = dascore.utils.array.apply_ufunc
+    apply_ufunc = dascore.proc.apply_ufunc
     get_patch_names = get_patch_names
 
     def get_patch_name(self, *args, **kwargs) -> str:

@@ -93,7 +93,7 @@ class BaseSpool(abc.ABC):
                 val1, val2 = dict1[key], dict2[key]
                 if isinstance(val1, dict):
                     if not _vals_equal(val1, val2):
-                        return
+                        return False
                 # this is primarily for dataframes which have equals method.
                 elif hasattr(val1, "equals"):
                     if not val1.equals(val2):

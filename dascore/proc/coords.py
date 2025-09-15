@@ -217,7 +217,7 @@ def rename_coords(self: PatchType, **kwargs) -> PatchType:
 @patch_function()
 def update_coords(self: PatchType, **kwargs) -> PatchType:
     """
-    Update the coordiantes of a patch.
+    Update the coordinates of a patch.
 
     Will either add new coordinates, or update existing ones.
 
@@ -246,7 +246,7 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
 @patch_function()
 def drop_coords(self: PatchType, *coords: str | Collection[str]) -> PatchType:
     """
-    Update the coordiantes of a patch.
+    Update the coordinates of a patch.
 
     Will either add new coordinates, or update existing ones.
 
@@ -302,7 +302,7 @@ def make_broadcastable_to(
     drop_coords=False,
 ) -> PatchType:
     """
-    Update the coordiantes of a patch.
+    Update the coordinates of a patch.
 
     Will either add new coordinates, or update existing ones.
 
@@ -682,7 +682,7 @@ def add_distance_to(
     Parameters
     ----------
     patch
-        The patch object which contains some overlap in coordiantes as
+        The patch object which contains some overlap in coordinates as
         index names in origin.
     origin
         A series which contains index names that overlap with patch coordinates.

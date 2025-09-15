@@ -246,7 +246,7 @@ coord_dict = {
     "dim2": get_coord(start=0.001, stop=1, step=.1),
     # "dim_coord" is a non-dimensional coordinate asscoiated with
     # dim1, so it must have the same shape. Notice how the associated
-    # dimension and coordiante values can be specified in a tuple. 
+    # dimension and coordinate values can be specified in a tuple. 
     "dim_coord": ("dim1", get_coord(start=10, stop=20, step=1)),
     # Non-dimensional coordinates are not associated with a dimension
     # and must use None as the first argument in the tuple.
@@ -298,7 +298,7 @@ and drop or disassociate coordinates.
 # Disassociate "new_coord" from dimension distance.
 new_cm_3 = new_cm_1.update(new_coord=(None, new_coord))
 
-# Drop coordiante "new_coord".
+# Drop coordinate "new_coord".
 new_cm_4 = cm.update(new_coord=None)
 
 # Drop dimension "time".

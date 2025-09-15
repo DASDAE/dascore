@@ -28,6 +28,32 @@ def random_complex_patch(random_patch):
     return pa
 
 
+@pytest.fixture(scope="session")
+def patch_with_null():
+    """Return a patch which has nullish values."""
+    return dc.get_example_patch("patch_with_null")
+
+
+@pytest.fixture(scope="session")
+def patch_with_inf(random_patch):
+    """Return a patch which has nullish values."""
+    pa = random_patch
+    ar = np.array(pa.data)
+    ar[:, 2] = np.inf
+    return pa.new(data=ar)
+
+
+@pytest.fixture(scope="class")
+def patch_3d_with_null(range_patch_3d):
+    """Return a patch which has nullish values."""
+    data = np.array(range_patch_3d.data).astype(np.float64)
+    nans = [(1, 1, 1), (0, 9, 9)]
+    for nan_ind in nans:
+        data[nan_ind] = np.nan
+    patch = range_patch_3d.update(data=data)
+    return patch
+
+
 class TestAbs:
     """Test absolute values."""
 
@@ -307,21 +333,6 @@ class TestPatchBroadcasting:
 class TestDropNa:
     """Tests for dropping nullish values in a patch."""
 
-    @pytest.fixture(scope="session")
-    def patch_with_null(self):
-        """Return a patch which has nullish values."""
-        return dc.get_example_patch("patch_with_null")
-
-    @pytest.fixture(scope="class")
-    def patch_3d_with_null(self, range_patch_3d):
-        """Return a patch which has nullish values."""
-        data = np.array(range_patch_3d.data).astype(np.float64)
-        nans = [(1, 1, 1), (0, 9, 9)]
-        for nan_ind in nans:
-            data[nan_ind] = np.nan
-        patch = range_patch_3d.update(data=data)
-        return patch
-
     def test_drop_time_any(self, patch_with_null):
         """Ensure we can drop NaN along time axis."""
         patch = patch_with_null.dropna("time")
@@ -366,24 +377,19 @@ class TestDropNa:
         out = patch.dropna("time", how="any")
         assert out.shape[axis] == patch.shape[axis] - 2
 
+    def test_inf_dropped(self, patch_with_inf):
+        """Ensure inf are also dropped when include_inf is True."""
+        patch = patch_with_inf.dropna("time", include_inf=True)
+        assert not np.any(np.isinf(patch.data))
+
+    def test_inf_not_dropped(self, patch_with_inf):
+        """Ensure inf are not dropped when include_inf is False."""
+        patch = patch_with_inf.dropna("time", include_inf=False)
+        assert np.any(np.isinf(patch.data))
+
 
 class TestFillNa:
     """Tests for replacing nullish values in a patch."""
-
-    @pytest.fixture(scope="session")
-    def patch_with_null(self):
-        """Return a patch which has nullish values."""
-        return dc.get_example_patch("patch_with_null")
-
-    @pytest.fixture(scope="class")
-    def patch_3d_with_null(self, range_patch_3d):
-        """Return a patch which has nullish values."""
-        data = np.array(range_patch_3d.data).astype(np.float64)
-        nans = [(1, 1, 1), (0, 9, 9)]
-        for nan_ind in nans:
-            data[nan_ind] = np.nan
-        patch = range_patch_3d.update(data=data)
-        return patch
 
     def test_fillna(self, patch_with_null):
         """Ensure we can fillna and keep the other values the same."""
@@ -404,6 +410,18 @@ class TestFillNa:
             patch.data[~pd.isnull(patch_3d_with_null.data)]
             == patch_3d_with_null.data[~pd.isnull(patch_3d_with_null.data)]
         )
+
+    def test_fill_inf(self, patch_with_inf):
+        """Ensure inf get filled."""
+        zero_count = np.sum(patch_with_inf.data == 0)
+        pa = patch_with_inf.fillna(0, include_inf=True)
+        assert zero_count < (np.sum(pa.data == 0))
+
+    def test_fill_no_inf(self, patch_with_inf):
+        """Ensure when include_inf=False inf don't get filled."""
+        zero_count = np.sum(patch_with_inf.data == 0)
+        pa = patch_with_inf.fillna(0, include_inf=False)
+        assert zero_count == (np.sum(pa.data == 0))
 
 
 class TestPad:

@@ -392,9 +392,11 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
             return get_middle_value(col)
         return None
 
-    def _get_new_coord(df, merge_dim, coords):
+    def _get_new_coord(df, merge_dim, coords, drop_conflicting=False):
         """Get new coordinates, also validate anticipated sampling."""
-        new_coord = merge_coord_managers(coords, dim=merge_dim)
+        new_coord = merge_coord_managers(
+            coords, dim=merge_dim, drop_conflicting=drop_conflicting
+        )
         expected_step = _maybe_step(df, merge_dim)
         if not pd.isnull(expected_step):
             new_coord = new_coord.snap(merge_dim)[0]
@@ -416,7 +418,10 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(datas, axis=axis)
-    new_coord = _get_new_coord(df, merge_dim, coords)
+    # Determine if conflicting non-dimensional coords should be dropped.
+    conf = merge_kwargs.get("conflicts", None)
+    drop_conf_coords = True if conf in {"drop", "keep_first"} else False
+    new_coord = _get_new_coord(df, merge_dim, coords, drop_conf_coords)
     coord = new_coord.coord_map[merge_dim] if merge_dim in dims else None
     new_attrs = combine_patch_attrs(attrs, merge_dim, coord=coord, **merge_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)

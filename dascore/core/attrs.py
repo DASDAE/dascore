@@ -164,7 +164,7 @@ class PatchAttrs(DascoreBaseModel):
         first, second = split
         if first == "d":
             first, second = second, "step"
-            msg = f"{item} is depreciated, use {first}_{second} instead."
+            msg = f"'{item}' is deprecated; use '{first}_{second}' instead."
             warnings.warn(msg, DeprecationWarning, stacklevel=2)
         if first not in self.coords:
             return super().__getattr__(item)

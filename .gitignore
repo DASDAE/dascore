@@ -91,3 +91,7 @@ uv.lock
 
 docs/index_files
 docs/index.quarto_ipynb
+
+# Claude stuff
+.claude
+CLAUDE.md

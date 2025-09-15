@@ -158,7 +158,7 @@ def _get_distance_coord(feb):
     distance_step = feb.zone.attrs["Spacing"][0]
     # Get origin info, these are absolute for distance.
     distance_origin = feb.zone.attrs["Origin"][0]
-    # Get the start/stop indicies for the zone
+    # Get the start/stop indices for the zone
     extent = feb.zone.attrs["Extent"]
     dist_ids = (extent[0], extent[1])
     # Create distance coord

@@ -39,7 +39,7 @@ DIMS = ("time", "distance")
 
 
 class TestGetCoordManager:
-    """Test suite for `get_coord_manger` helper function."""
+    """Test suite for `get_coord_manager` helper function."""
 
     def test_coords_and_attrs_raise(self, random_patch):
         """Ensure using coords and attrs raises."""

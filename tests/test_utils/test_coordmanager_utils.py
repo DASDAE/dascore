@@ -4,6 +4,7 @@ Tests for coordinate manager utils.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from dascore.core.coords import CoordArray, CoordMonotonicArray, CoordRange
@@ -22,6 +23,21 @@ class TestMergeCoordManagers:
         attr_name = f"{name}_min"
         new, _ = cm.update_from_attrs({attr_name: start + value})
         return new
+
+    @pytest.fixture(scope="class")
+    def conflicting_non_dim_coords(self, cm_basic):
+        """Get two coord managers with conflicting non-dimensional coordinates."""
+        dist_ax = cm_basic.dims.index("distance")
+        rand = np.random.RandomState(42)
+        c1 = rand.random(cm_basic.shape[dist_ax])
+        c2 = rand.random(c1.shape)
+
+        time = cm_basic.get_coord("time")
+        cm1 = cm_basic.update_coords(_bad_coord=("distance", c1))
+        cm2 = cm1.update_coords(
+            _bad_coord=("distance", c2), time=time + time.coord_range()
+        )
+        return cm1, cm2
 
     def test_merge_simple(self, cm_basic):
         """Ensure we can merge simple, contiguous, coordinates together."""
@@ -136,3 +152,16 @@ class TestMergeCoordManagers:
         cm = cm_dt_small_diff
         coord = cm.coord_map["time"]
         assert coord.sorted
+
+    def test_conflicting_non_dimensional_coords(self, conflicting_non_dim_coords):
+        """
+        Ensure conflicting non-dimensional coords can be merged if drop_conflict=True,
+        Otherwise raise.
+        """
+        c1, c2 = conflicting_non_dim_coords
+
+        out = merge_coord_managers([c1, c2], dim="time", drop_conflicting=True)
+        assert not any([x.startswith("_") for x in out.coord_map])
+
+        with pytest.raises(CoordMergeError, match="cannot be merged"):
+            merge_coord_managers([c1, c2], dim="time", drop_conflicting=False)

@@ -376,7 +376,12 @@ apply_operator = apply_ufunc
 
 
 @patch_function()
-def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchType:
+def dropna(
+    patch: PatchType,
+    dim,
+    how: Literal["any", "all"] = "any",
+    include_inf=True,
+) -> PatchType:
     """
     Return a patch with nullish values dropped along dimension.
 
@@ -389,10 +394,14 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
     how
         "any" or "all". If "any" drop label if any null values.
         If "all" drop label if all values are nullish.
+    include_inf
+        If True, drop all non-finite values.
 
     Notes
     -----
-    "nullish" is defined by `pandas.isnull`.
+    When include_inf is False, "nullish" is defined by `pandas.isnull`.
+    When include_inf is True (default), "nullish" includes non-finite values
+    (NaN, inf, -inf) as determined by `numpy.isfinite`
 
     Examples
     --------
@@ -406,7 +415,10 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
     """
     axis = patch.dims.index(dim)
     func = np.any if how == "any" else np.all
-    to_drop = pd.isnull(patch.data)
+    if include_inf:
+        to_drop = ~np.isfinite(patch.data)
+    else:
+        to_drop = pd.isnull(patch.data)
     # need to iterate each non-dim axis and collapse with func
     axes = set(range(len(patch.shape))) - {axis}
     to_drop = func(to_drop, axis=tuple(axes))
@@ -424,7 +436,7 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
 
 
 @patch_function()
-def fillna(patch: PatchType, value) -> PatchType:
+def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     """
     Return a patch with nullish values replaced by a value.
 
@@ -434,23 +446,29 @@ def fillna(patch: PatchType, value) -> PatchType:
         The patch which may contain nullish values.
     value
         The value to replace nullish values with.
+    include_inf
+        If True, also fill all non-finite values.
 
     Notes
     -----
-    "nullish" is defined by `pandas.isnull`.
+    When include_inf is False, "nullish" is defined by `pandas.isnull`.
+    When include_inf is True (default), "nullish" includes non-finite values
+    (NaN, inf, -inf) as determined by `numpy.isfinite`
 
     Examples
     --------
     >>> import dascore as dc
     >>> # load an example patch which has some NaN values.
     >>> patch = dc.get_example_patch("patch_with_null")
-    >>> # Replace all occurences of NaN with 0
+    >>> # Replace all occurrences of NaN with 0
     >>> out = patch.fillna(0)
-    >>> # Replace all occurences of NaN with 5
+    >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
-    to_replace = pd.isnull(patch.data)
-
+    if include_inf:
+        to_replace = ~np.isfinite(patch.data)
+    else:
+        to_replace = pd.isnull(patch.data)
     new_data = patch.data.copy()
     new_data[to_replace] = value
 
@@ -492,7 +510,7 @@ def pad(
         adding values to the end of the axis.
 
         "correlate" - prepare the coordinate for correlation/convolution in
-        the frequency domain by pading to the next fast fft length after
+        the frequency domain by padding to the next fast fft length after
         2*n - 1 where n is the current dimension length by adding values
         to the end of the axis.
 
@@ -596,11 +614,11 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     coord = patch.get_coord(dim)
     value = coord.get_sample_count(input_value, samples=samples)
 
-    roll_arr = np.roll(arr, value, axis=0)
+    roll_arr = np.roll(arr, value, axis=axis)
 
     # update coords if True
     if update_coord:
-        roll_coord_arr = np.roll(coord.values, value, axis=0)
+        roll_coord_arr = np.roll(coord.values, value)
         new_coord = coord.update(values=roll_coord_arr)
         patch = patch.update_coords(**{dim: new_coord})
 

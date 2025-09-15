@@ -636,7 +636,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     def _slice_degenerate(self, sliz):
         """
-        Return bool indicating if the slice should yeild degenerate
+        Return bool indicating if the slice should yield degenerate
         (empty array).
         """
         start, stop = sliz.start, sliz.stop

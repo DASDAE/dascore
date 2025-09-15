@@ -97,8 +97,8 @@ def integrate(
         all dimensions.
     definite
         If True, consider the integration to be defined from the minimum to
-        the maximum value along specified dimension(s). In essense, this
-        collapses the integrated dimensions to a lenght of 1.
+        the maximum value along specified dimension(s). In essence, this
+        collapses the integrated dimensions to a length of 1.
         If define is False, the shape of the patch is preserved and a
         "cumulative" type integration in performed.
 
