@@ -533,6 +533,12 @@ class TestFillNa:
         pa = patch_with_inf.fillna(0, include_inf=True)
         assert zero_count < (np.sum(pa.data == 0))
 
+    def test_fill_no_inf(self, patch_with_inf):
+        """Ensure when include_inf=False inf don't get filled."""
+        zero_count = np.sum(patch_with_inf.data == 0)
+        pa = patch_with_inf.fillna(0, include_inf=False)
+        assert zero_count == (np.sum(pa.data == 0))
+
 
 class TestPad:
     """Tests for the padding functionality in a patch."""
