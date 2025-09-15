@@ -40,6 +40,8 @@ def _dummy_reduce(array, axis=0, dtype=None, out=None, keepdims=False, **kwargs)
 
 # @patch_function()
 def apply_ufunc(
+    patch: PatchType | ArrayLike,
+    other: PatchType | ArrayLike,
     operator: Callable,
     *args: tuple[PatchType | ArrayLike, ...],
     attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
@@ -52,6 +54,13 @@ def apply_ufunc(
 
     Parameters
     ----------
+    patch
+        The patch instance.
+    other
+        The other object to apply the operator element-wise. Must be either a
+        non-patch which is broadcastable to the shape of the patch's data, or
+        a patch which has compatible coordinates. If units are provided they
+        must be compatible.
     operator
         The operator. Must be numpy ufunc-like.
     *args
@@ -160,6 +169,9 @@ def apply_ufunc(
 
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
+
+
+# class DASCOr
 
 
 def generate_ufunc(np_ufunc: np.ufunc) -> Callable:
