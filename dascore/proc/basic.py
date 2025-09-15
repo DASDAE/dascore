@@ -490,7 +490,12 @@ apply_operator = apply_ufunc
 
 
 @patch_function()
-def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchType:
+def dropna(
+    patch: PatchType,
+    dim,
+    how: Literal["any", "all"] = "any",
+    include_inf=True,
+) -> PatchType:
     """
     Return a patch with nullish values dropped along dimension.
 
@@ -503,6 +508,8 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
     how
         "any" or "all". If "any" drop label if any null values.
         If "all" drop label if all values are nullish.
+    include_inf
+        If True, drop all non-finite values.
 
     Notes
     -----
@@ -520,7 +527,10 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
     """
     axis = patch.dims.index(dim)
     func = np.any if how == "any" else np.all
-    to_drop = pd.isnull(patch.data)
+    if include_inf:
+        to_drop = ~np.isfinite(patch.data)
+    else:
+        to_drop = pd.isnull(patch.data)
     # need to iterate each non-dim axis and collapse with func
     axes = set(range(len(patch.shape))) - {axis}
     to_drop = func(to_drop, axis=tuple(axes))
@@ -538,7 +548,7 @@ def dropna(patch: PatchType, dim, how: Literal["any", "all"] = "any") -> PatchTy
 
 
 @patch_function()
-def fillna(patch: PatchType, value) -> PatchType:
+def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     """
     Return a patch with nullish values replaced by a value.
 
@@ -548,6 +558,8 @@ def fillna(patch: PatchType, value) -> PatchType:
         The patch which may contain nullish values.
     value
         The value to replace nullish values with.
+    include_inf
+        If True, also fill all non-finite values.
 
     Notes
     -----
@@ -563,8 +575,10 @@ def fillna(patch: PatchType, value) -> PatchType:
     >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
-    to_replace = pd.isnull(patch.data)
-
+    if include_inf:
+        to_replace = ~np.isfinite(patch.data)
+    else:
+        to_replace = pd.isnull(patch.data)
     new_data = patch.data.copy()
     new_data[to_replace] = value
 
