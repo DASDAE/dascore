@@ -518,7 +518,7 @@ class TestChunkMerge:
         assert len(result_spool) > len(spool)
 
         # Verify NO patches have NaN values and dataframe consistency
-        result_contents = result_spool.get_contents()
+        result_contents = result_spool.get_contents().reset_index(drop=True)
         for i, patch in enumerate(result_spool):
             # Assert no NaN values in patch attributes
             assert not pd.isna(patch.attrs["time_min"]), f"Patch {i} has NaN time_min"
@@ -534,35 +534,31 @@ class TestChunkMerge:
             assert not pd.isna(df_time_max), f"DF row {i} has NaN time_max"
             assert df_time_min <= df_time_max, f"DF row {i} has invalid time range"
 
-    def test_multiple_chained_chunks(self):
+    def test_multiple_chained_chunks(self, random_spool):
         """Test multiple chained chunk operations. See #533."""
-        spool = dc.get_example_spool()
-
         # Chain multiple chunk operations
-        result_spool = spool.chunk(time=...).chunk(time=5).chunk(time=2)
+        result_spool = random_spool.chunk(time=...).chunk(time=5).chunk(time=2)
 
         # Should be able to access all patches
         for i in range(len(result_spool)):
             patch = result_spool[i]
             assert isinstance(patch, dc.Patch)
 
-    def test_chunk_split_then_merge(self):
+    def test_chunk_split_then_merge(self, random_spool):
         """Test chaining chunk split followed by merge. See #533."""
-        spool = dc.get_example_spool()
-
         # First chunk into smaller pieces, then merge back
-        result_spool = spool.chunk(time=1).chunk(time=...)
+        result_spool = random_spool.chunk(time=1).chunk(time=...)
 
         # Should be able to access patches (this test the fix works)
         first_patch = result_spool[0]
         assert isinstance(first_patch, dc.Patch)
 
         # The merge operation should result in fewer patches than the chunked operation
-        chunked_spool = spool.chunk(time=1)
+        chunked_spool = random_spool.chunk(time=1)
         assert len(result_spool) <= len(chunked_spool)
 
         # Verify NO patches have NaN values and dataframe consistency
-        result_contents = result_spool.get_contents()
+        result_contents = result_spool.get_contents().reset_index(drop=True)
         for i, patch in enumerate(result_spool):
             # Assert no NaN values in patch attributes
             assert not pd.isna(patch.attrs["time_min"]), f"Patch {i} has NaN time_min"

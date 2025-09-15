@@ -519,7 +519,6 @@ class DataFrameSpool(BaseSpool):
     ) -> Self:
         """{doc}"""
         df = self._source_df.drop(columns=list(self._drop_columns), errors="ignore")
-        # df = self._df
         chunker = ChunkManager(
             overlap=overlap,
             keep_partial=keep_partial,
@@ -574,7 +573,6 @@ class DataFrameSpool(BaseSpool):
         source = adjust_segments(
             self._source_df.loc[inst.index], ignore_bad_kwargs=True, **kwargs
         )
-        # Determine if the instructions are the same as the source dataframe.
         out = self.new_from_df(
             filtered_df,
             # Drop rows that are no longer needed.
