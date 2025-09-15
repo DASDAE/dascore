@@ -513,7 +513,9 @@ def dropna(
 
     Notes
     -----
-    "nullish" is defined by `pandas.isnull`.
+    When include_inf is False, "nullish" is defined by `pandas.isnull`.
+    When include_inf is True (default), "nullish" includes non-finite values
+    (NaN, inf, -inf) as determined by `numpy.isfinite`
 
     Examples
     --------
@@ -563,7 +565,9 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
 
     Notes
     -----
-    "nullish" is defined by `pandas.isnull`.
+    When include_inf is False, "nullish" is defined by `pandas.isnull`.
+    When include_inf is True (default), "nullish" includes non-finite values
+    (NaN, inf, -inf) as determined by `numpy.isfinite`
 
     Examples
     --------
