@@ -14,7 +14,7 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, ParameterError
 from dascore.proc.basic import apply_operator
 from dascore.utils.misc import suppress_warnings
 
@@ -424,6 +424,10 @@ class TestTranspose:
         assert pa2.dims == dims_r
         assert list(pa2.data.shape) == list(reversed(pa1.data.shape))
 
+    def test_t_property(self, random_patch):
+        """Ensure the .T property returns the same as the transpose."""
+        assert random_patch.T == random_patch.transpose()
+
 
 class TestUpdateAttrs:
     """
@@ -637,7 +641,7 @@ class TestApplyOperator:
     def test_array_like(self, random_patch):
         """Ensure array-like operations work."""
         ones = np.ones(random_patch.shape)
-        new = apply_operator(random_patch, ones, np.add)
+        new = apply_operator(np.add, random_patch, ones)
         assert np.allclose(new.data, ones + random_patch.data)
 
     def test_comparison_ops(self, random_patch):
@@ -764,7 +768,51 @@ class TestGetPatchName:
 class TestNumpyFuncs:
     """Tests for apply numpy directly to patches."""
 
-    def test_numpy_functions_return_patch(self, random_patch):
+    def test_reducer_function(self, random_patch):
         """Ensure numpy functions can return patches."""
+        out = np.min(random_patch, axis=1)
+        assert isinstance(out, dc.Patch)
+        # The functions should behave the same as the methods.
+        assert random_patch.min(dim=random_patch.dims[1]).equals(out)
+
+    def test_accumulator(self, random_patch):
+        """Ensure accumulator method works."""
+        out = np.add.accumulate(random_patch, axis=0)
+        assert isinstance(out, dc.Patch)
+
+    def test_reduce(self, random_patch):
+        """Ensure reduce also works."""
+        out = np.multiply.reduce(random_patch, axis=0)
+        assert isinstance(out, dc.Patch)
+
+    def test_non_reducer(self, random_patch):
+        """Ensure a non-reducing function also works."""
+        out = np.cumsum(random_patch, axis=0)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == random_patch.shape
+
+    def test_patch_on_patch(self, random_patch):
+        """Ensure two patches can be passed to numpy functions."""
+        funcs = [np.add, np.subtract, np.multiply, np.divide]
+        for func in funcs:
+            out = func(random_patch, random_patch)
+            assert isinstance(out, dc.Patch)
+
+    def test_at_raises(self, random_patch):
+        """Ensure unupported ufuncs raise."""
+        msg = "ufunc method"
+        with pytest.raises(ParameterError, match=msg):
+            np.multiply.at(random_patch, [1, 20], random_patch)
+
+    def test_complete_reduction(self, random_patch):
+        """Ensure a compete reduction works."""
         out = np.min(random_patch)
         assert isinstance(out, dc.Patch)
+        assert out.size == 1
+        assert out.ndim == random_patch.ndim
+
+    def test_multiple_axes(self, random_patch):
+        """Ensure multiple axes work."""
+        out = np.min(random_patch, axis=(0, 1))
+        assert isinstance(out, dc.Patch)
+

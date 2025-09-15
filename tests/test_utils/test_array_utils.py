@@ -18,13 +18,13 @@ class TestApplyUfunc:
 
     def test_scalar(self, random_patch):
         """Test for a single scalar."""
-        new = apply_ufunc(random_patch, 10, np.multiply)
+        new = apply_ufunc(np.multiply, random_patch, 10)
         assert np.allclose(new.data, random_patch.data * 10)
 
     def test_array_like(self, random_patch):
         """Ensure array-like operations work."""
         ones = np.ones(random_patch.shape)
-        new = apply_ufunc(random_patch, ones, np.add)
+        new = apply_ufunc(np.add, random_patch, ones)
         assert np.allclose(new.data, ones + random_patch.data)
 
     def test_incompatible_coords(self, random_patch):
@@ -32,7 +32,7 @@ class TestApplyUfunc:
         time = random_patch.get_coord("time")
         new_time = time.max() + time.step
         new = random_patch.update_attrs(time_min=new_time)
-        out = apply_ufunc(new, random_patch, np.multiply)
+        out = apply_ufunc(np.multiply, new, random_patch)
         assert 0 in set(out.shape)
 
     def test_quantity_scalar(self, random_patch):
@@ -40,17 +40,17 @@ class TestApplyUfunc:
         patch = random_patch.set_units("m/s")
         other = 10 * m / s
         # first try multiply
-        new = apply_ufunc(patch, other, np.multiply)
+        new = apply_ufunc(np.multiply, patch, other)
         new_units = get_quantity("m/s") * get_quantity("m/s")
         assert get_quantity(new.attrs.data_units) == new_units
         assert isinstance(new.data, np.ndarray)
         # try add
-        new = apply_ufunc(patch, other, np.add)
+        new = apply_ufunc(np.add, patch, other)
         new_units = get_quantity("m/s")
         assert get_quantity(new.attrs.data_units) == new_units
         assert isinstance(new.data, np.ndarray)
         # and divide
-        new = apply_ufunc(patch, other, np.divide)
+        new = apply_ufunc(np.divide, patch, other)
         new_units = get_quantity("m/s") / get_quantity("m/s")
         assert new.attrs.data_units is None or new.attrs.data_units == new_units
         assert isinstance(new.data, np.ndarray)
@@ -60,17 +60,17 @@ class TestApplyUfunc:
         patch = random_patch.set_units("m/s")
         other = m / s
         # first try multiply
-        new = apply_ufunc(patch, other, np.multiply)
+        new = apply_ufunc(np.multiply, patch, other)
         new_units = get_quantity("m/s") * get_quantity("m/s")
         assert get_quantity(new.attrs.data_units) == new_units
         assert np.allclose(new.data, random_patch.data)
         # try add
-        new = apply_ufunc(patch, other, np.add)
+        new = apply_ufunc(np.add, patch, other)
         new_units = get_quantity("m/s")
         assert get_quantity(new.attrs.data_units) == new_units
         assert np.allclose(new.data, random_patch.data + 1)
         # and divide
-        new = apply_ufunc(patch, other, np.divide)
+        new = apply_ufunc(np.divide, patch, other)
         new_units = get_quantity("m/s") / get_quantity("m/s")
         assert new.attrs.data_units is None or new.attrs.data_units == new_units
         assert np.allclose(new.data, random_patch.data)
@@ -79,10 +79,14 @@ class TestApplyUfunc:
         """Ensure when patch units are set they are applied as well."""
         # test add
         pa1 = random_patch.set_units("m/s")
-        out1 = apply_ufunc(pa1, pa1, np.add)
+        out1 = apply_ufunc(np.add, pa1, pa1)
         assert get_quantity(out1.attrs.data_units) == get_quantity("m/s")
         # test multiply
-        out2 = apply_ufunc(pa1, pa1, np.multiply)
+        out2 = apply_ufunc(
+            np.multiply,
+            pa1,
+            pa1,
+        )
         assert get_quantity(out2.attrs.data_units) == get_quantity("m**2/s**2")
 
     def test_array_with_units(self, random_patch):
@@ -102,7 +106,7 @@ class TestApplyUfunc:
         pa1 = random_patch.set_units("m/s")
         other = 10 * get_quantity("m")
         with pytest.raises(UnitError):
-            apply_ufunc(pa1, other, np.add)
+            apply_ufunc(np.add, pa1, other)
 
     def test_patches_non_coords_len_1(self, random_patch):
         """Ensure patches with non-coords also work."""

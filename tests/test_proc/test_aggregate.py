@@ -100,7 +100,7 @@ class TestApplyOperators:
         # Ensure broadcasting works with reduced data
         out = random_patch - agg
         assert isinstance(out, dc.Patch)
-        assert np.allclose(random_patch.data - agg, out.data)
+        assert np.allclose(random_patch.data - agg.data, out.data)
 
     def test_single_reduction(self, random_patch):
         """Ensure a single patch reduced also works with broadcasting."""
