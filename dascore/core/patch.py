@@ -16,7 +16,7 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
-from dascore.utils.array import array_function, array_ufunc
+from dascore.utils.array import apply_ufunc, array_function
 from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
@@ -157,7 +157,7 @@ class Patch:
         return self.update(data=-self.data)
 
     # Numpy Compatibility things
-    __array_ufunc__ = array_ufunc
+    __array_ufunc__ = apply_ufunc
     __array_function__ = array_function
     __array_priority__ = 1000.0  # Prefer Patch in mixed ops.
 
@@ -185,8 +185,6 @@ class Patch:
         attrs = attrs_to_text(self.attrs)
         out = Text("\n").join([header, line, coords, data, attrs])
         return out
-
-        pass
 
     def __str__(self):
         out = self.__rich__()
@@ -230,12 +228,12 @@ class Patch:
         return self.coords.shape
 
     @property
-    def size(self) -> tuple[int, ...]:
+    def size(self) -> int:
         """Return the size of the data array."""
         return self.coords.size
 
     @property
-    def dtype(self) -> tuple[int, ...]:
+    def dtype(self) -> np.dtype:
         """Return the dtype of the array."""
         return self.data.dtype
 
@@ -250,7 +248,7 @@ class Patch:
         return self.coords.coord_size("distance")
 
     @property
-    def T(self):  # noqa
+    def T(self):  # noqa: N802
         """Transpose the Patch."""
         # This isnt a great name but keeps the numpy tradition.
         return self.transpose()
@@ -281,7 +279,7 @@ class Patch:
     drop_private_coords = dascore.proc.drop_private_coords
     coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
-    apply_ufunc = dascore.proc.apply_ufunc
+    apply_ufunc = dascore.utils.array.apply_ufunc
     get_patch_names = get_patch_names
 
     def get_patch_name(self, *args, **kwargs) -> str:

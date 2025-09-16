@@ -565,7 +565,7 @@ def get_dim_axis_value(
     allow_extra: bool = False,
 ) -> tuple[_DimAxisValue, ...]:
     """
-    Get dimension nane, index, and values from args/kwargs for a patch.
+    Get dimension name, index, and values from args/kwargs for a patch.
 
     This is helpful for implementing flexible fetching of dimension name,
     corresponding patch axis, and function specific values from args and
@@ -590,7 +590,7 @@ def get_dim_axis_value(
     -------
     Returns a tuple of:
         ((dim, axis, value), (dim, axis, value), ...)
-    To support retreiving multiple values from the same inputs. If dim name
+    To support retrieving multiple values from the same inputs. If dim name
     is found in args, its corresponding values is `None`.
 
     Examples

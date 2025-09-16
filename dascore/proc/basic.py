@@ -15,7 +15,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
-from dascore.utils.array import apply_ufunc
+from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.misc import _get_nullish
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
@@ -157,8 +157,8 @@ def bool_patch(self: PatchType):
     """
     Get the boolean value of a patch.
 
-    This follows the numpy convention of raising a value error if the patch
-    has more than on element. Otherwise, it returns the truthy value of the
+    This follows the NumPy convention of raising a ValueError if the patch
+    has more than one element. Otherwise, it returns the truthiness of the
     one element.
     """
     return bool(self.data)
@@ -372,7 +372,7 @@ def standardize(
 # This is left here to not break compatibility. It also forces `apply_ufunc`
 # to be imported in to this module where it used to live. In the rare chance
 # a user tries to access it directly from here it will still work.
-apply_operator = apply_ufunc
+apply_operator = _apply_binary_ufunc
 
 
 @patch_function()

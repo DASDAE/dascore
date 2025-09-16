@@ -6,15 +6,23 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from pint import DimensionalityError
 
+import dascore as dc
 from dascore import get_quantity
-from dascore.exceptions import UnitError
+from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
 from dascore.utils.array import apply_ufunc
 
 
 class TestApplyUfunc:
     """Tests for applying various ufunc-type operators."""
+
+    @pytest.mark.parametrize("func", (np.abs, np.tan, np.isfinite, np.exp))
+    def test_uniary_ufuncs(self, func, random_patch):
+        """Ensure ufuncs that take a single input also work."""
+        out = func(random_patch)
+        assert isinstance(out, dc.Patch)
 
     def test_scalar(self, random_patch):
         """Test for a single scalar."""
@@ -27,6 +35,33 @@ class TestApplyUfunc:
         new = apply_ufunc(np.add, random_patch, ones)
         assert np.allclose(new.data, ones + random_patch.data)
 
+    def test_reversed_scalar(self, random_patch):
+        """Ensure reversed scalar works on patch."""
+        out = 10 + random_patch  # np.add with Patch on RHS
+        assert isinstance(out, dc.Patch)
+        assert np.allclose(out.data, random_patch.data + 10)
+
+    def test_reversed_array_like(self, random_patch):
+        """Test reversed array works on patch."""
+        ones = np.ones(random_patch.shape)
+        out = ones * random_patch
+        assert np.allclose(out.data, ones * random_patch.data)
+
+    @pytest.mark.xfail(raises=(UnitError, DimensionalityError))
+    def test_reversed_unit_and_quantity(self, random_patch):
+        """
+        Ensure reversed quantity works on patch.
+
+        Currently, there is no way to make this pass without relying on internal
+        Pint implementation details. This is because pint first handles the
+        operation but doesn't know how to treat a Patch.
+        """
+        pa = random_patch.set_units("m/s")
+        out1 = (m / s) + pa  # unit on LHS
+        out2 = (10 * m / s) + pa  # quantity on LHS
+        assert np.allclose(out1.data, random_patch.data + 1)
+        assert np.allclose(out2.data, random_patch.data + 10)
+
     def test_incompatible_coords(self, random_patch):
         """Ensure un-alignable coords returns degenerate patch."""
         time = random_patch.get_coord("time")
@@ -34,6 +69,8 @@ class TestApplyUfunc:
         new = random_patch.update_attrs(time_min=new_time)
         out = apply_ufunc(np.multiply, new, random_patch)
         assert 0 in set(out.shape)
+        assert out.data.size == 0
+        assert out.dims == random_patch.dims
 
     def test_quantity_scalar(self, random_patch):
         """Ensure operators work with quantities."""
@@ -51,8 +88,9 @@ class TestApplyUfunc:
         assert isinstance(new.data, np.ndarray)
         # and divide
         new = apply_ufunc(np.divide, patch, other)
-        new_units = get_quantity("m/s") / get_quantity("m/s")
-        assert new.attrs.data_units is None or new.attrs.data_units == new_units
+        # Dimensionless result: units may be omitted; accept None or "1".
+        q = get_quantity(new.attrs.data_units)
+        assert q is None or q == get_quantity("1")
         assert isinstance(new.data, np.ndarray)
 
     def test_unit(self, random_patch):
@@ -94,7 +132,7 @@ class TestApplyUfunc:
         patch1 = random_patch
         ones = np.ones(patch1.shape) * furlongs
         out1 = patch1 * ones
-        assert get_quantity(out1.attrs.data_units) == get_quantity(furlongs)
+        assert get_quantity(out1.attrs.data_units) == get_quantity("furlongs")
         # test division with units
         patch2 = random_patch.set_units("m")
         out2 = patch2 / ones
@@ -128,4 +166,35 @@ class TestApplyUfunc:
     def test_non_dim_coords(self, random_dft_patch):
         """Ensure ufuncs can still be applied to coords with non dim coords."""
         out = random_dft_patch * random_dft_patch
+        out_coord_keys = set(out.coords.coord_map.keys())
+        input_coord_keys = set(random_dft_patch.coords.coord_map.keys())
+        assert out_coord_keys == input_coord_keys
         assert set(out.coords.coord_map) == set(random_dft_patch.coords.coord_map)
+
+    @pytest.mark.parametrize(
+        "op, other, expected_units, expected_data",
+        [
+            (np.multiply, 10 * m / s, "m**2/s**2", lambda d: d * 10),
+            (np.add, 10 * m / s, "m/s", lambda d: d + 10),
+            (np.divide, 10 * m / s, "1", lambda d: d / 10.0),
+        ],
+    )
+    def test_quantity_ops_param(
+        self, random_patch, op, other, expected_units, expected_data
+    ):
+        """Run several tests for quantities in various operations."""
+        pa = random_patch.set_units("m/s")
+        out = apply_ufunc(op, pa, other)
+        quant = get_quantity(out.attrs.data_units)
+        none_or_1 = quant is None and expected_units == "1"
+        assert none_or_1 or quant == get_quantity(expected_units)
+        assert np.allclose(out.data, expected_data(random_patch.data))
+
+    def test_unsupported_raises(self, random_patch):
+        """
+        When ufuncs don't have the right number of input/ouput an error
+        should be raised.
+        """
+        msg = "ufuncs with input/ouput"
+        with pytest.raises(ParameterError, match=msg):
+            apply_ufunc(np.frexp, random_patch)

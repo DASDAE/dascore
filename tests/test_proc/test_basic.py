@@ -161,8 +161,8 @@ class TestNormalize:
         norm = np.abs(np.sum(time_norm.data, axis=axis))
         assert np.allclose(norm, 1)
 
-    def test_max(self, random_patch):
-        """Ensure after operation norms are 1."""
+    def test_l1_norm(self, random_patch):
+        """Ensure after l1 normalization operation norms are 1."""
         dims = random_patch.dims
         # test along the distance axis
         dist_norm = random_patch.normalize("distance", norm="l1")
@@ -197,7 +197,7 @@ class TestNormalize:
             assert np.all(norm.data[:, 0] == 0.0)
 
 
-class TestStandarize:
+class TestStandardize:
     """Tests for standardization."""
 
     def test_base_case(self, random_patch):

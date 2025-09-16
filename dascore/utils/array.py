@@ -38,22 +38,50 @@ def _dummy_reduce(array, axis=0, dtype=None, out=None, keepdims=False, **kwargs)
     """A dummy reduce function since inspect.signature fails."""
 
 
+def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
+    """
+    Create a patch from a unary ufunc.
+
+    Parameters
+    ----------
+    operator
+        The operator. Must be numpy ufunc-like.
+    patch
+        The patch instance.
+    *args
+        Arguments to pass to the operator, can include arrays, scalars,
+        and patches.
+    **kwargs
+        Keyword arguments to pass to the operator.
+
+    Notes
+    -----
+    We assume the shape of the array won't change.
+    """
+    out = operator(patch.data, *args, **kwargs)
+    return patch.new(data=out)
+
+
 # @patch_function()
-def apply_ufunc(
+def _apply_binary_ufunc(
+    operator: np.ufunc,
     patch: PatchType | ArrayLike,
     other: PatchType | ArrayLike,
-    operator: Callable,
     *args: tuple[PatchType | ArrayLike, ...],
     attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE,
     **kwargs,
 ) -> PatchType:
     """
-    Apply a ufunc-type operator to a patch.
+    Apply a binary ufunc-type operator to one or more patches.
+
+    The input should be 2 and the output 1.
 
     This is used to implement a patch's operator overloading.
 
     Parameters
     ----------
+    operator
+        The operator. Must be numpy ufunc-like.
     patch
         The patch instance.
     other
@@ -61,8 +89,6 @@ def apply_ufunc(
         non-patch which is broadcastable to the shape of the patch's data, or
         a patch which has compatible coordinates. If units are provided they
         must be compatible.
-    operator
-        The operator. Must be numpy ufunc-like.
     *args
         Arguments to pass to the operator, can include arrays, scalars,
         and patches.
@@ -70,22 +96,6 @@ def apply_ufunc(
         Attributes to ignore when considering if patches are compatible.
     **kwargs
         Keyword arguments to pass to the operator.
-
-    Examples
-    --------
-    >>> from dascore.utils.array import apply_ufunc    >>> import numpy as np
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> # multiply the patch by 10
-    >>> new = apply_ufunc(np.multiply, patch, 10)
-    >>> assert np.allclose(patch.data * 10, new.data)
-    >>> # add a random value to each element of patch data
-    >>> noise = np.random.random(patch.shape)
-    >>> new = apply_ufunc(np.add, patch, noise)
-    >>> assert np.allclose(new.data, patch.data + noise)
-    >>> # subtract one patch from another. Coords and attrs must be compatible
-    >>> new = apply_ufunc(np.subtract, patch, patch)
-    >>> assert np.allclose(new.data, 0)
 
     Notes
     -----
@@ -136,27 +146,26 @@ def apply_ufunc(
             other = get_quantity(other)
         try:
             new_data_w_units = _apply_op(data, other, operator, reversed=reversed)
-        except DimensionalityError:
+        except DimensionalityError as er:
             msg = f"{operator} failed with units {data_units} and {other.units}"
-            raise UnitError(msg)
+            raise UnitError(msg) from er
         attrs = attrs.update(data_units=str(new_data_w_units.units))
         new_data = new_data_w_units.magnitude
         return new_data, attrs
 
-    # Get indices of patches in inputs.
-    patch_inds = [num for num, x in enumerate(args) if isinstance(x, dc.Patch)]
-
-    # There really aren't any ufuncs that take more than 2 inputs (maybe clip)
-    # so we just verify that here.
-    assert len(args) <= 2, "Currently, DASCOre ufuncs are only supported for 2 inputs."
-
-    (patch, other, *args) = args
+    # Count patch operands (we only support binary ops on patches).
+    patch_is_patch = isinstance(patch, dc.Patch)
+    other_is_patch = isinstance(other, dc.Patch)
+    patch_count = int(patch_is_patch) + int(other_is_patch)
+    # We only support binary ops on patch.
+    assert patch_count >= 1, "apply_ufunc requires at least one Patch operand."
+    # Make sure patch is a patch. Reverse if needed.
     reversed = False
-    if isinstance(other, dc.Patch) and not isinstance(patch, dc.Patch):
+    if other_is_patch and not patch_is_patch:
         patch, other = other, patch
         reversed = True
 
-    if len(patch_inds) > 1:
+    if patch_count > 1:
         patch, other, coords, attrs = _get_coords_attrs_from_patches(patch, other)
     else:
         patch = _ensure_array_compatible(patch, other)
@@ -171,12 +180,9 @@ def apply_ufunc(
     return new
 
 
-# class DASCOr
-
-
 def generate_ufunc(np_ufunc: np.ufunc) -> Callable:
     """
-    Create a patch ufunc from a numpy ufunc.
+    Create a patch ufunc from a binary ufunc.
 
     Parameters
     ----------
@@ -210,7 +216,8 @@ def _get_new_coord(coord, dim_reduce="empty"):
         """Maybe handle the complexity of date times here."""
         try:  # First try function directly
             out = func(data)
-        except Exception:  # Fall back to floats and re-packing.
+        # Fall back to floats and re-packing.
+        except (TypeError, ValueError, np.core._exceptions.UFuncTypeError):
             float_data = dc.to_float(data)
             dfunc = to_datetime64 if is_datetime64(data) else to_timedelta64
             out = dfunc(func(float_data))
@@ -240,7 +247,7 @@ def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
     dims = tuple(iterate(patch.dims if dim is None else dim))
     dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
     # Iter all specified dimensions.
-    for dim, axis, value in dfo:
+    for dim, axis, _ in dfo:
         new_coord = _get_new_coord(patch.get_coord(dim), dim_reduce=dim_reduce)
         if new_coord is None:
             coords = patch.coords.drop_coords(dim)[0]
@@ -339,6 +346,13 @@ def _reassemble_patch(result, patch, func, args, kwargs):
         new_coords = {x: _get_new_coord(patch.get_coord(x)) for x in dims}
         cm = patch.coords.update(**new_coords)
         return patch.new(data=result, coords=cm)
+    else:
+        # Fallback: if shape unchanged, just wrap result; else fail clearly.
+        if result.shape == patch.shape:
+            return patch.new(data=result)
+        func_name = getattr(func, "__name__", None)
+        msg = f"Cannot reassemble result of {func_name} without an axis parameter."
+        raise ParameterError(msg)
 
 
 def array_function(self, func, types, args, kwargs):
@@ -377,16 +391,75 @@ def array_function(self, func, types, args, kwargs):
     return patch
 
 
-def array_ufunc(self, ufunc, method, *inputs, **kwargs):
+def apply_ufunc(patch, ufunc, method=None, *args, **kwargs):
     """
     Called when a numpy array is ufunc'ed against a patch.
+
+    Parameters
+    ----------
+    patch
+        The patch to use in ufunc.
+    ufunc
+        The ufunc to use.
+    method
+        Indicates the ufunc method, normally call but also supports reduce
+        and accumulate.
+    *args
+        Positional arguments to the function.
+    **kwargs
+        Keyword arguments to the function.
+
+    Examples
+    --------
+    >>> from dascore.utils.array import apply_ufunc
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Get the abs of the patch.
+    >>> new = apply_ufunc(np.abs, patch)
+    >>> assert np.all(new.data >= 0)
+    >>>
+    >>> # Determine if which values of patch are finite.
+    >>> new = apply_ufunc(np.isfinite, patch)
+    >>> assert np.isdtype(new.dtype, np.bool_)
+    >>>
+    >>> # multiply the patch by 10
+    >>> new = apply_ufunc(np.multiply, patch, 10)
+    >>> assert np.allclose(patch.data * 10, new.data)
+    >>>
+    >>> # add a random value to each element of patch data
+    >>> noise = np.random.random(patch.shape)
+    >>> new = apply_ufunc(np.add, patch, noise)
+    >>> assert np.allclose(new.data, patch.data + noise)
+    >>>
+    >>> # subtract one patch from another. Coords and attrs must be compatible
+    >>> new = apply_ufunc(np.subtract, patch, patch)
+    >>> assert np.allclose(new.data, 0)
+
+    Notes
+    -----
+    See [numpy's ufunc docs](https://numpy.org/doc/stable/reference/ufuncs.html)
     """
-    if method == "__call__":
-        # pull out patch and other thing.
-        out = apply_ufunc(ufunc, *inputs, **kwargs)
+    if method in {"__call__", None}:
+        # Based on the ufuncs stated number of input/output, we dispatch
+        # to the appropriate function.
+        input_output_map = {
+            (2, 1): _apply_binary_ufunc,
+            (1, 1): _apply_unary_ufunc,
+        }
+        key = (ufunc.nin, ufunc.nout)
+        if key not in input_output_map:
+            msg = (
+                f"ufuncs with input/output numbers {key} are not supported. "
+                f"Use the patch.data array directly."
+            )
+            raise ParameterError(msg)
+        func = input_output_map[key]
+        out = func(ufunc, *args, **kwargs)
     elif method in {"reduce", "accumulate"}:
         func = getattr(ufunc, method)
-        return array_function(self, func, (type(self),), inputs, kwargs)
+        return array_function(patch, func, (type(patch),), args, kwargs)
     else:
         msg = (
             f"ufunc method: {method} is not supported. Use patch.data "

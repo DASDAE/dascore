@@ -37,7 +37,7 @@ and more details.
 
 
 @patch_function()
-@compose_docstring(params=AGG_DOC_STR, options=list(_AGG_FUNCS))
+@compose_docstring(params=AGG_DOC_STR, options=sorted(_AGG_FUNCS))
 def aggregate(
     patch: PatchType,
     dim: str | Sequence[str] | None = None,
