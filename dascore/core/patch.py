@@ -16,7 +16,7 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
-from dascore.utils.array import apply_ufunc, array_function
+from dascore.utils.array import patch_array_function, patch_array_ufunc
 from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
@@ -157,8 +157,8 @@ class Patch:
         return self.update(data=-self.data)
 
     # Numpy Compatibility things
-    __array_ufunc__ = apply_ufunc
-    __array_function__ = array_function
+    __array_ufunc__ = patch_array_ufunc
+    __array_function__ = patch_array_function
     __array_priority__ = 1000.0  # Prefer Patch in mixed ops.
 
     def __array__(self, dtype=None, copy=None):

@@ -195,6 +195,15 @@ class TestApplyUfunc:
         When ufuncs don't have the right number of input/ouput an error
         should be raised.
         """
-        msg = "ufuncs with input/ouput"
+        msg = "ufuncs with input/output"
         with pytest.raises(ParameterError, match=msg):
             apply_ufunc(np.frexp, random_patch)
+
+    def test_apply_reduction(self, random_patch):
+        """Ensure reductions also work."""
+        out = np.multiply.reduce(random_patch, axis=1)
+        out2 = np.multiply.reduce(random_patch, 1)
+        assert isinstance(out, dc.Patch)
+        assert out.shape[1] == 1
+
+        assert out2.equals(out)

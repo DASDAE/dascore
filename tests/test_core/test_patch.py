@@ -800,7 +800,7 @@ class TestNumpyFuncs:
 
     def test_at_raises(self, random_patch):
         """Ensure unupported ufuncs raise."""
-        msg = "ufunc method"
+        msg = "ufuncs"
         with pytest.raises(ParameterError, match=msg):
             np.multiply.at(random_patch, [1, 20], random_patch)
 

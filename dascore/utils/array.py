@@ -355,7 +355,94 @@ def _reassemble_patch(result, patch, func, args, kwargs):
         raise ParameterError(msg)
 
 
-def array_function(self, func, types, args, kwargs):
+def apply_array_func(func, *args, **kwargs):
+    """
+    Apply an array function.
+    """
+    # Only handle functions involving Patches
+    _args = tuple(_strip_data_from_patch(a) for a in args)
+    _kwargs = {k: _strip_data_from_patch(v) for k, v in kwargs.items()}
+    patches = _find_patches(args, kwargs)
+    assert len(patches), "No patches found in apply_array_func"
+    first_patch = patches[0]
+    assert len(patches) > 0
+    # Call the array function
+    result = func(*_args, **_kwargs)
+    # If we didn't get an array back, try to package it as an array
+    if not is_array(result):
+        result = array(result)
+    # Then we need to put the array back into the patch, but account for
+    # dimensions that may have changed.
+    patch = _reassemble_patch(result, first_patch, func, args, kwargs)
+    return patch
+
+
+# Mapping of ufunc dispatches. Keys are method name or num input/num output.
+UFUNC_MAP = {
+    (2, 1): _apply_binary_ufunc,
+    (1, 1): _apply_unary_ufunc,
+    "reduce": apply_array_func,
+    "accumulate": apply_array_func,
+}
+
+
+def apply_ufunc(ufunc, *args, **kwargs):
+    """
+    Apply a ufunc to one or more patches.
+
+    Parameters
+    ----------
+    ufunc
+        The ufunc to use.
+    *args
+        Additional positional arguments, can contain patches.
+    **kwargs
+        Keyword arguments, can contain patches.
+
+    Examples
+    --------
+    >>> from dascore.utils.array import apply_ufunc
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Call abs on a patch.
+    >>> new1 = apply_ufunc(np.abs, patch)
+    >>>
+    >>> # Add two patches
+    >>> new2 = apply_ufunc(np.add, patch, patch)
+    >>>
+    >>> # multiply the patch by 10
+    >>> new3 = apply_ufunc(np.multiply, patch, 10)
+
+    Notes
+    -----
+    See [numpy's ufunc docs](https://numpy.org/doc/stable/reference/ufuncs.html)
+    """
+    is_ufunc = isinstance(ufunc, np.ufunc)
+    if is_ufunc:
+        key = (ufunc.nin, ufunc.nout)
+    else:
+        key = ufunc.__name__
+    # Handle bad key.
+    if (func := UFUNC_MAP.get(key, None)) is None:
+        msg = (
+            f"ufuncs with input/output numbers or method of {key} are not "
+            f"supported for use with Patch. Use the patch.data array directly."
+        )
+        raise ParameterError(msg)
+    return func(ufunc, *args, **kwargs)
+
+
+def patch_array_ufunc(self, ufunc, method, *inputs, **kwargs):
+    """
+    Called when a numpy ufunc is applied to a patch (__array_ufunc__).
+    """
+    method = ufunc if method == "__call__" else getattr(ufunc, method, ufunc)
+    return apply_ufunc(method, *inputs, **kwargs)
+
+
+def patch_array_function(self, func, types, args, kwargs):
     """
     Intercept NumPy functions for patch operations.
 
@@ -372,98 +459,4 @@ def array_function(self, func, types, args, kwargs):
     """
     # Only handle functions involving Patches
     assert any(issubclass(t, dc.Patch) for t in types)
-
-    _args = tuple(_strip_data_from_patch(a) for a in args)
-    _kwargs = {k: _strip_data_from_patch(v) for k, v in kwargs.items()}
-    patches = _find_patches(args, kwargs)
-    assert len(patches) > 0
-
-    # Call the array function
-    result = func(*_args, **_kwargs)
-
-    # If we didn't get an array back, try to package it as an array
-    if not is_array(result):
-        result = array(result)
-
-    # Then we need to put the array back into the patch, but account for
-    # dimensions that may have changed.
-    patch = _reassemble_patch(result, self, func, args, kwargs)
-    return patch
-
-
-def apply_ufunc(patch, ufunc, method=None, *args, **kwargs):
-    """
-    Called when a numpy array is ufunc'ed against a patch.
-
-    Parameters
-    ----------
-    patch
-        The patch to use in ufunc.
-    ufunc
-        The ufunc to use.
-    method
-        Indicates the ufunc method, normally call but also supports reduce
-        and accumulate.
-    *args
-        Positional arguments to the function.
-    **kwargs
-        Keyword arguments to the function.
-
-    Examples
-    --------
-    >>> from dascore.utils.array import apply_ufunc
-    >>> import numpy as np
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>>
-    >>> # Get the abs of the patch.
-    >>> new = apply_ufunc(np.abs, patch)
-    >>> assert np.all(new.data >= 0)
-    >>>
-    >>> # Determine if which values of patch are finite.
-    >>> new = apply_ufunc(np.isfinite, patch)
-    >>> assert np.isdtype(new.dtype, np.bool_)
-    >>>
-    >>> # multiply the patch by 10
-    >>> new = apply_ufunc(np.multiply, patch, 10)
-    >>> assert np.allclose(patch.data * 10, new.data)
-    >>>
-    >>> # add a random value to each element of patch data
-    >>> noise = np.random.random(patch.shape)
-    >>> new = apply_ufunc(np.add, patch, noise)
-    >>> assert np.allclose(new.data, patch.data + noise)
-    >>>
-    >>> # subtract one patch from another. Coords and attrs must be compatible
-    >>> new = apply_ufunc(np.subtract, patch, patch)
-    >>> assert np.allclose(new.data, 0)
-
-    Notes
-    -----
-    See [numpy's ufunc docs](https://numpy.org/doc/stable/reference/ufuncs.html)
-    """
-    if method in {"__call__", None}:
-        # Based on the ufuncs stated number of input/output, we dispatch
-        # to the appropriate function.
-        input_output_map = {
-            (2, 1): _apply_binary_ufunc,
-            (1, 1): _apply_unary_ufunc,
-        }
-        key = (ufunc.nin, ufunc.nout)
-        if key not in input_output_map:
-            msg = (
-                f"ufuncs with input/output numbers {key} are not supported. "
-                f"Use the patch.data array directly."
-            )
-            raise ParameterError(msg)
-        func = input_output_map[key]
-        out = func(ufunc, *args, **kwargs)
-    elif method in {"reduce", "accumulate"}:
-        func = getattr(ufunc, method)
-        return array_function(patch, func, (type(patch),), args, kwargs)
-    else:
-        msg = (
-            f"ufunc method: {method} is not supported. Use patch.data "
-            f"directly if you need this functionality."
-        )
-        raise ParameterError(msg)
-    return out
+    return apply_array_func(func, *args, **kwargs)
