@@ -180,35 +180,6 @@ def _apply_binary_ufunc(
     return new
 
 
-def generate_ufunc(np_ufunc: np.ufunc) -> Callable:
-    """
-    Create a patch ufunc from a binary ufunc.
-
-    Parameters
-    ----------
-    np_ufunc
-        Any numpy u function.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from dascore.utils.array import generate_ufunc
-    >>> # Make a patch function from np add
-    >>> ufunc = generate_ufunc(np.add)
-    >>> # Now it can be used to operate on two patches
-    >>> pat = ufunc(patch, patch)
-    >>> # But can also be used to accumulate patches along dimensions.
-    >>> # EG cumsum.
-    >>> pat2 = ufunc.accumulate(patch, dim="time")
-    >>> # Or to reduce dimensions (eg aggregate).
-    >>> pat3 = ufunc.reduce(patch, dim="distance")
-
-    Notes
-    -----
-    - The entire ufunc interface is not yet implemented.
-    """
-
-
 def _get_new_coord(coord, dim_reduce="empty"):
     """Get the new coordinate."""
 
