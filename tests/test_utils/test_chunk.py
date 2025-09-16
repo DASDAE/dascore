@@ -258,6 +258,9 @@ class TestChunkToMerge:
         expected_durations = gapy_df["time_max"] - gapy_df["time_min"]
         durations = out["time_max"] - out["time_min"]
         assert expected_durations.equals(durations)
+        # Assert a UserWarning about gaps is raised
+        with pytest.warns(UserWarning, match=r"There is a gap in the patch"):
+            _, out = cm.chunk(gapy_df)
 
     def test_doesnt_merge_unordered_gappy_df(self, gapy_df_unordered):
         """Ensure the gappy dataframe doesn't get merged."""
