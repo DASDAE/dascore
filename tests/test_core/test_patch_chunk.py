@@ -498,3 +498,78 @@ class TestChunkMerge:
         # Without conflict drop this should raise.
         with pytest.raises(CoordMergeError, match="conflict"):
             dc.spool([p1, p2]).chunk(time=None)[0]
+
+    def test_chunk_merge_then_chunk_split(self, random_spool):
+        """
+        Test chaining chunk(time=...) followed by chunk(time=duration).
+        See #533.
+        """
+        spool = random_spool
+
+        # First merge all patches along time, then chunk into 2s segments
+        chunk_1_spool = spool.chunk(time=...)
+        result_spool = chunk_1_spool.chunk(time=2)
+
+        # Should be able to access patches
+        first_patch = result_spool[0]
+        assert isinstance(first_patch, dc.Patch)
+
+        # Should have more patches (chunking into smaller pieces)
+        assert len(result_spool) > len(spool)
+
+        # Verify NO patches have NaN values and dataframe consistency
+        result_contents = result_spool.get_contents().reset_index(drop=True)
+        for i, patch in enumerate(result_spool):
+            # Assert no NaN values in patch attributes
+            assert not pd.isna(patch.attrs["time_min"]), f"Patch {i} has NaN time_min"
+            assert not pd.isna(patch.attrs["time_max"]), f"Patch {i} has NaN time_max"
+
+            # Verify dataframe contains reasonable time values
+            df_row = result_contents.iloc[i]
+            df_time_min = dc.to_datetime64(df_row["time_min"])
+            df_time_max = dc.to_datetime64(df_row["time_max"])
+
+            # Dataframe times should not be NaN or invalid
+            assert not pd.isna(df_time_min), f"DF row {i} has NaN time_min"
+            assert not pd.isna(df_time_max), f"DF row {i} has NaN time_max"
+            assert df_time_min <= df_time_max, f"DF row {i} has invalid time range"
+
+    def test_multiple_chained_chunks(self, random_spool):
+        """Test multiple chained chunk operations. See #533."""
+        # Chain multiple chunk operations
+        result_spool = random_spool.chunk(time=...).chunk(time=5).chunk(time=2)
+
+        # Should be able to access all patches
+        for i in range(len(result_spool)):
+            patch = result_spool[i]
+            assert isinstance(patch, dc.Patch)
+
+    def test_chunk_split_then_merge(self, random_spool):
+        """Test chaining chunk split followed by merge. See #533."""
+        # First chunk into smaller pieces, then merge back
+        result_spool = random_spool.chunk(time=1).chunk(time=...)
+
+        # Should be able to access patches (this test the fix works)
+        first_patch = result_spool[0]
+        assert isinstance(first_patch, dc.Patch)
+
+        # The merge operation should result in fewer patches than the chunked operation
+        chunked_spool = random_spool.chunk(time=1)
+        assert len(result_spool) <= len(chunked_spool)
+
+        # Verify NO patches have NaN values and dataframe consistency
+        result_contents = result_spool.get_contents().reset_index(drop=True)
+        for i, patch in enumerate(result_spool):
+            # Assert no NaN values in patch attributes
+            assert not pd.isna(patch.attrs["time_min"]), f"Patch {i} has NaN time_min"
+            assert not pd.isna(patch.attrs["time_max"]), f"Patch {i} has NaN time_max"
+
+            # Verify dataframe contains reasonable time values
+            df_row = result_contents.iloc[i]
+            df_time_min = dc.to_datetime64(df_row["time_min"])
+            df_time_max = dc.to_datetime64(df_row["time_max"])
+
+            # Dataframe times should not be NaN or invalid
+            assert not pd.isna(df_time_min), f"DF row {i} has NaN time_min"
+            assert not pd.isna(df_time_max), f"DF row {i} has NaN time_max"
+            assert df_time_min <= df_time_max, f"DF row {i} has invalid time range"

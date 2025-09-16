@@ -518,7 +518,7 @@ class DataFrameSpool(BaseSpool):
         **kwargs,
     ) -> Self:
         """{doc}"""
-        df = self._df.drop(columns=list(self._drop_columns), errors="ignore")
+        df = self._source_df.drop(columns=list(self._drop_columns), errors="ignore")
         chunker = ChunkManager(
             overlap=overlap,
             keep_partial=keep_partial,
@@ -535,7 +535,7 @@ class DataFrameSpool(BaseSpool):
             instructions = chunker.get_instruction_df(in_df, out_df)
         return self.new_from_df(
             out_df,
-            source_df=self._df,
+            source_df=self._source_df,
             instruction_df=instructions,
             merge_kwargs={"conflicts": conflict},
         )
@@ -570,10 +570,13 @@ class DataFrameSpool(BaseSpool):
             ignore_bad_kwargs=True,
             **kwargs,
         ).loc[lambda x: x["current_index"].isin(filtered_df.index)]
-        # Determine if the instructions are the same as the source dataframe.
+        source = adjust_segments(
+            self._source_df.loc[inst.index], ignore_bad_kwargs=True, **kwargs
+        )
         out = self.new_from_df(
             filtered_df,
-            source_df=self._source_df,
+            # Drop rows that are no longer needed.
+            source_df=source,
             instruction_df=inst,
             select_kwargs=extra_kwargs,
         )
