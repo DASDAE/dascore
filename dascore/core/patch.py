@@ -16,7 +16,7 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
-from dascore.utils.array import patch_array_function, patch_array_ufunc
+from dascore.utils.array import PatchUFunc, patch_array_function, patch_array_ufunc
 from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
@@ -253,6 +253,8 @@ class Patch:
         # This isnt a great name but keeps the numpy tradition.
         return self.transpose()
 
+    # --- Patch ufuncs
+
     # --- basic patch functionality.
 
     update = dascore.proc.update
@@ -360,11 +362,26 @@ class Patch:
     mean = dascore.proc.agg.mean
     median = dascore.proc.agg.median
     std = dascore.proc.agg.std
-    first = dascore.proc.agg.first
-    last = dascore.proc.agg.last
     sum = dascore.proc.agg.sum
     any = dascore.proc.agg.any
     all = dascore.proc.agg.all
+    first = dascore.proc.agg.first
+    last = dascore.proc.agg.last
+
+    # --- Universal functions
+    add = PatchUFunc(np.add)
+    subtract = PatchUFunc(np.subtract)
+    multiply = PatchUFunc(np.multiply)
+    divide = PatchUFunc(np.divide)
+    exp = PatchUFunc(np.exp)
+    log = PatchUFunc(np.log)
+    log10 = PatchUFunc(np.log10)
+    log2 = PatchUFunc(np.log2)
+    is_finite = PatchUFunc(np.isfinite)
+    isnan = PatchUFunc(np.isnan)
+    isinf = PatchUFunc(np.isinf)
+    maximum = PatchUFunc(np.maximum)
+    minimum = PatchUFunc(np.minimum)
 
     # --- transformation functions
     differentiate = transform.differentiate

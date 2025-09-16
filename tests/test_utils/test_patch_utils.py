@@ -23,6 +23,7 @@ from dascore.utils.patch import (
     _spool_up,
     align_patch_coords,
     concatenate_patches,
+    dim_to_axis,
     get_dim_axis_value,
     get_patch_names,
     merge_compatible_coords_attrs,
@@ -645,3 +646,54 @@ class TestGetPatchName:
         """If extension is false the file extension should remain."""
         names = get_patch_names(random_directory_spool, strip_extension=False)
         assert "." in names.iloc[0]
+
+
+class TestDimToAxis:
+    """Tests for dim_to_axis function."""
+
+    def test_dim_to_axis_with_multiple_dims(self, random_patch):
+        """Test dim_to_axis function with multiple dimensions."""
+        # Test with list of dimensions
+        args = ()
+        kwargs = {"dim": ["time", "distance"]}
+        _new_args, new_kwargs = dim_to_axis(random_patch, args, kwargs)
+
+        expected_axes = [
+            random_patch.dims.index("time"),
+            random_patch.dims.index("distance"),
+        ]
+        assert new_kwargs["axis"] == expected_axes
+        assert "dim" not in new_kwargs
+
+    def test_dim_to_axis_no_dim(self, random_patch):
+        """Test dim_to_axis function with no dim parameter."""
+        # Test with no dim parameter
+        args = ("some_arg",)
+        kwargs = {"other": "value"}
+        new_args, new_kwargs = dim_to_axis(random_patch, args, kwargs)
+
+        # Should be unchanged
+        assert new_args == args
+        assert new_kwargs == kwargs
+
+    def test_dim_to_axis_with_none_dim(self, random_patch):
+        """Test dim_to_axis function with dim=None."""
+        # Test with None dim parameter
+        args = ()
+        kwargs = {"dim": None}
+        _new_args, new_kwargs = dim_to_axis(random_patch, args, kwargs)
+
+        # Should remove dim and not add axis
+        assert "dim" not in new_kwargs
+        assert "axis" not in new_kwargs
+
+    def test_dim_to_axis_single_string_dim(self, random_patch):
+        """Test dim_to_axis with single string dimension."""
+        args = ()
+        kwargs = {"dim": "time", "dtype": None}
+        _new_args, new_kwargs = dim_to_axis(random_patch, args, kwargs)
+
+        expected_axis = random_patch.dims.index("time")
+        assert new_kwargs["axis"] == expected_axis
+        assert "dim" not in new_kwargs
+        assert new_kwargs["dtype"] is None

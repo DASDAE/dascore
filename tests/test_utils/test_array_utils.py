@@ -12,7 +12,7 @@ import dascore as dc
 from dascore import get_quantity
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
-from dascore.utils.array import apply_ufunc
+from dascore.utils.array import PatchUFunc, apply_array_func, apply_ufunc
 
 
 class TestApplyUfunc:
@@ -207,3 +207,308 @@ class TestApplyUfunc:
         assert out.shape[1] == 1
 
         assert out2.equals(out)
+
+
+class TestPatchUFunc:
+    """Tests for PatchUFunc class."""
+
+    def test_basic_ufunc_usage(self, random_patch):
+        """Test basic ufunc usage (patch + patch) from docstring example."""
+        ufunc = PatchUFunc(np.add)
+        result = ufunc(random_patch, random_patch)
+
+        assert isinstance(result, dc.Patch)
+        assert np.allclose(result.data, random_patch.data + random_patch.data)
+        assert result.coords.equals(random_patch.coords)
+
+    def test_accumulate_method(self, random_patch):
+        """Test accumulate method with dimensions from docstring example."""
+        ufunc = PatchUFunc(np.add)
+
+        # Test accumulate along time dimension
+        result = ufunc.accumulate(random_patch, dim="time")
+
+        assert isinstance(result, dc.Patch)
+        # Check that shape is preserved for accumulate
+        assert result.shape == random_patch.shape
+        # Verify it's actually doing cumulative sum
+        axis = random_patch.dims.index("time")
+        expected = np.cumsum(random_patch.data, axis=axis)
+        assert np.allclose(result.data, expected)
+
+    def test_reduce_method(self, random_patch):
+        """Test reduce method with dimensions from docstring example."""
+        ufunc = PatchUFunc(np.add)
+
+        # Test reduce along distance dimension
+        result = ufunc.reduce(random_patch, dim="distance")
+
+        assert isinstance(result, dc.Patch)
+        # Check that the distance dimension is reduced to size 1
+        dist_axis = random_patch.dims.index("distance")
+        expected_shape = list(random_patch.shape)
+        expected_shape[dist_axis] = 1
+        assert result.shape == tuple(expected_shape)
+
+        # Verify it's actually summing along the distance axis
+        expected = np.expand_dims(
+            np.sum(random_patch.data, axis=dist_axis), axis=dist_axis
+        )
+        assert np.allclose(result.data, expected)
+
+    def test_introspection(self):
+        """Test that generated ufunc has proper introspection."""
+        ufunc = PatchUFunc(np.add)
+
+        assert hasattr(ufunc, "__name__")
+        assert ufunc.__name__ == "add"
+        assert hasattr(ufunc, "__doc__")
+        assert ufunc.__doc__ is not None
+
+    def test_method_binding(self, random_patch):
+        """Test that generated ufunc can be bound as a method."""
+        ufunc = PatchUFunc(np.multiply)
+
+        # Test descriptor protocol works
+        bound_ufunc = ufunc.__get__(random_patch, type(random_patch))
+        result = bound_ufunc(random_patch)
+
+        assert isinstance(result, dc.Patch)
+        assert np.allclose(result.data, random_patch.data * random_patch.data)
+
+        # accumulation and reduction should also work.
+        pa1 = bound_ufunc.reduce(dim="time")
+        pa2 = ufunc.reduce(random_patch, dim="time")
+        assert pa1.equals(pa2)
+
+        pa1 = bound_ufunc.accumulate(dim="time")
+        pa2 = ufunc.accumulate(random_patch, dim="time")
+        assert pa1.equals(pa2)
+
+    def test_different_ufuncs(self, random_patch):
+        """Test PatchUFunc works with different numpy ufuncs."""
+        # Test with multiply
+        mul_ufunc = PatchUFunc(np.multiply)
+        mul_result = mul_ufunc(random_patch, 2.0)
+        assert np.allclose(mul_result.data, random_patch.data * 2.0)
+
+        # Test with subtract
+        sub_ufunc = PatchUFunc(np.subtract)
+        sub_result = sub_ufunc(random_patch, random_patch)
+        assert np.allclose(sub_result.data, 0.0)
+
+    def test_bound_calls(self, random_patch):
+        """Test bound method calls using descriptor protocol."""
+        ufunc = PatchUFunc(np.multiply)
+
+        # Test bound call via __get__
+        bound_ufunc = ufunc.__get__(random_patch, type(random_patch))
+        result = bound_ufunc(2.0)
+        assert isinstance(result, dc.Patch)
+        assert np.allclose(result.data, random_patch.data * 2.0)
+
+        # Test bound reduce call
+        bound_result = bound_ufunc.reduce("time")
+        unbound_result = ufunc.reduce(random_patch, "time")
+        assert bound_result.equals(unbound_result)
+
+        # Test bound accumulate call
+        bound_result = bound_ufunc.accumulate("distance")
+        unbound_result = ufunc.accumulate(random_patch, "distance")
+        assert bound_result.equals(unbound_result)
+
+    def test_unary_ufunc(self, random_patch):
+        """Test PatchUFunc with unary ufuncs."""
+        ufunc = PatchUFunc(np.abs)
+        result = ufunc(random_patch)
+
+        assert isinstance(result, dc.Patch)
+        assert np.allclose(result.data, np.abs(random_patch.data))
+        assert ufunc.__name__ == "absolute"
+
+    def test_reduce_positional_args(self, random_patch):
+        """Test reduce method with positional arguments."""
+        ufunc = PatchUFunc(np.add)
+
+        # Test with positional dim argument
+        result = ufunc.reduce(random_patch, "time")
+        expected = ufunc.reduce(random_patch, dim="time")
+        assert result.equals(expected)
+
+    def test_accumulate_positional_args(self, random_patch):
+        """Test accumulate method with positional arguments."""
+        ufunc = PatchUFunc(np.add)
+
+        # Test with positional dim argument
+        result = ufunc.accumulate(random_patch, "distance")
+        expected = ufunc.accumulate(random_patch, dim="distance")
+        assert result.equals(expected)
+
+    def test_reduce_with_none_dim(self, random_patch):
+        """Test reduce method with dim=None."""
+        ufunc = PatchUFunc(np.add)
+
+        # Test with explicit None dim
+        result = ufunc.reduce(random_patch, dim=None)
+        assert isinstance(result, dc.Patch)
+
+    def test_accumulate_with_none_dim(self, random_patch):
+        """Test accumulate method with dim=None."""
+        ufunc = PatchUFunc(np.add)
+
+        # Test with explicit None dim
+        result = ufunc.accumulate(random_patch, dim=None)
+        assert isinstance(result, dc.Patch)
+
+    def test_bound_reduce_with_none(self, random_patch):
+        """Test bound reduce method with None argument."""
+        ufunc = PatchUFunc(np.add)
+        bound_ufunc = ufunc.__get__(random_patch, type(random_patch))
+
+        # Test bound call with None
+        result = bound_ufunc.reduce(None)
+        assert isinstance(result, dc.Patch)
+
+    def test_bound_accumulate_with_none(self, random_patch):
+        """Test bound accumulate method with None argument."""
+        ufunc = PatchUFunc(np.add)
+        bound_ufunc = ufunc.__get__(random_patch, type(random_patch))
+
+        # Test bound call with None
+        result = bound_ufunc.accumulate(None)
+        assert isinstance(result, dc.Patch)
+
+    def test_ufunc_with_no_name_or_doc(self):
+        """Test PatchUFunc with ufunc that has no __name__ or __doc__."""
+
+        # Create a mock ufunc-like object without __name__ or __doc__
+        class MockUfunc:
+            nin = 2
+            nout = 1
+
+            def __call__(self, *args, **kwargs):
+                return np.add(*args, **kwargs)
+
+        mock_ufunc = MockUfunc()
+        ufunc = PatchUFunc(mock_ufunc)
+
+        # Should use defaults
+        assert ufunc.__name__ == "patch_ufunc"
+        assert ufunc.__doc__ is None
+
+    def test_comprehensive_bound_unbound_equivalence(self, random_patch):
+        """Test that bound and unbound calls produce equivalent results."""
+        ufunc = PatchUFunc(np.multiply)
+
+        # Create bound version
+        bound_ufunc = ufunc.__get__(random_patch, type(random_patch))
+
+        # Test basic call equivalence
+        unbound_result = ufunc(random_patch, 3.0)
+        bound_result = bound_ufunc(3.0)
+        assert bound_result.equals(unbound_result)
+
+        # Test reduce equivalence with positional args
+        unbound_reduce = ufunc.reduce(random_patch, "time", dtype=np.float32)
+        bound_reduce = bound_ufunc.reduce("time", dtype=np.float32)
+        assert bound_reduce.equals(unbound_reduce)
+
+        # Test accumulate equivalence with keyword args
+        unbound_accum = ufunc.accumulate(random_patch, dim="distance")
+        bound_accum = bound_ufunc.accumulate(dim="distance")
+        assert bound_accum.equals(unbound_accum)
+
+    def test_multiple_binding_levels(self, random_patch):
+        """Test binding a generated ufunc multiple times."""
+        ufunc = PatchUFunc(np.add)
+
+        # Bind once
+        bound_once = ufunc.__get__(random_patch, type(random_patch))
+
+        # Verify the bound instance is a _BoundPatchUFunc
+        from dascore.utils.array import _BoundPatchUFunc
+
+        assert isinstance(bound_once, _BoundPatchUFunc)
+
+        # Test that the bound instance works correctly
+        result1 = bound_once(random_patch)
+        unbound_result = ufunc(random_patch, random_patch)
+        assert result1.equals(unbound_result)
+
+    def test_get_with_none_object(self):
+        """Test __get__ method with None object returns self."""
+        ufunc = PatchUFunc(np.add)
+        result = ufunc.__get__(None, None)
+        assert result is ufunc
+
+    def test_patch_ufunc_class_properties(self, random_patch):
+        """Test _BoundPatchUFunc class has proper attributes."""
+        from dascore.utils.array import _BoundPatchUFunc
+
+        ufunc = PatchUFunc(np.multiply)
+        bound_ufunc = ufunc.__get__(random_patch, type(random_patch))
+
+        # Should be instance of _BoundPatchUFunc
+        assert isinstance(bound_ufunc, _BoundPatchUFunc)
+
+        # Should have proper attributes
+        assert bound_ufunc.__name__ == "multiply"
+        assert bound_ufunc.np_ufunc is np.multiply
+        assert bound_ufunc.patch is random_patch
+
+
+class TestApplyArrayFunc:
+    """Tests for apply array func."""
+
+    def test_function_without_axis_parameter_error(self, random_patch):
+        """Test that functions without axis parameter that change shape raise error."""
+
+        # Create a mock function that changes shape but has no axis parameter
+        def shape_changing_func(data):
+            # Return a different shape to trigger the error path
+            return np.array([1, 2, 3])  # Always return same small array
+
+        # Remove any axis-related attributes to ensure no axis parameter
+        shape_changing_func.__name__ = "test_func"
+
+        # This should trigger the ParameterError
+        msg = "result of test_func without an axis parameter"
+        with pytest.raises(ParameterError, match=msg):
+            apply_array_func(shape_changing_func, random_patch)
+
+    def test_function_without_axis_parameter_same_shape(self, random_patch):
+        """Test functions without axis parameter but same shape work fine."""
+
+        # Create a mock function that keeps the same shape
+        def same_shape_func(data):
+            # Return same shape but modified data
+            return data * 2
+
+        same_shape_func.__name__ = "same_shape_test"
+
+        # This should work fine
+        result = apply_array_func(same_shape_func, random_patch)
+
+        assert isinstance(result, dc.Patch)
+        assert result.shape == random_patch.shape
+        assert np.allclose(result.data, random_patch.data * 2)
+
+    def test_no_axis_signature_same_shape_success(self, random_patch):
+        """Function without axis parameter, same shape returns success."""
+
+        # Create a function that has no 'axis' in its signature and preserves shape
+        def element_wise_func(data):
+            """A simple element-wise function that preserves array shape."""
+            return np.abs(data) + 1
+
+        # Ensure the function has a name for error reporting
+        element_wise_func.__name__ = "element_wise_func"
+
+        result = apply_array_func(element_wise_func, random_patch)
+
+        # Verify the result
+        assert isinstance(result, dc.Patch)
+        assert result.shape == random_patch.shape
+        assert result.coords.equals(random_patch.coords)  # coords should be preserved
+        assert result.attrs == random_patch.attrs  # attrs should be preserved
+        assert np.allclose(result.data, np.abs(random_patch.data) + 1)

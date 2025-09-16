@@ -5,7 +5,7 @@ Utilities for working with patches and arrays.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 
 import numpy as np
 
@@ -20,6 +20,7 @@ from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
     align_patch_coords,
+    dim_to_axis,
     get_dim_axis_value,
 )
 from dascore.utils.time import (
@@ -62,7 +63,6 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     return patch.new(data=out)
 
 
-# @patch_function()
 def _apply_binary_ufunc(
     operator: np.ufunc,
     patch: PatchType | ArrayLike,
@@ -180,6 +180,100 @@ def _apply_binary_ufunc(
     return new
 
 
+class _BoundPatchUFunc:
+    """A ufunc bound to a specific patch instance."""
+
+    def __init__(self, np_ufunc, patch):
+        self.np_ufunc = np_ufunc
+        self.patch = patch
+        self.__name__ = getattr(np_ufunc, "__name__", "patch_ufunc")
+        self.__doc__ = getattr(np_ufunc, "__doc__", None)
+
+    def __call__(self, *args, **kwargs):
+        """Call the ufunc with the bound patch."""
+        return apply_ufunc(self.np_ufunc, self.patch, *args, **kwargs)
+
+    def reduce(self, dim=None, dtype=None, **kwargs):
+        """Apply ufunc reduction along specified dimensions."""
+        return apply_ufunc(
+            self.np_ufunc.reduce, self.patch, dim=dim, dtype=dtype, **kwargs
+        )
+
+    def accumulate(self, dim=None, dtype=None, **kwargs):
+        """Apply ufunc accumulation along specified dimensions."""
+        return apply_ufunc(
+            self.np_ufunc.accumulate, self.patch, dim=dim, dtype=dtype, **kwargs
+        )
+
+
+class PatchUFunc:
+    """
+    A ufunc wrapper that can be applied to patches with dimension support.
+
+    This class wraps numpy ufuncs to work seamlessly with DASCore patches,
+    providing support for dimension-aware operations, coordinate preservation,
+    and method binding.
+
+    Parameters
+    ----------
+    np_ufunc : np.ufunc
+        The numpy ufunc to wrap.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> from dascore.utils.array import PatchUFunc
+    >>>
+    >>> # Create a patch ufunc from np.add
+    >>> add_ufunc = PatchUFunc(np.add)
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Use it to operate on patches
+    >>> result = add_ufunc(patch, patch)
+    >>>
+    >>> # Use accumulate and reduce methods
+    >>> cumsum = add_ufunc.accumulate(patch, dim="time")
+    >>> total = add_ufunc.reduce(patch, dim="distance")
+    >>>
+    >>> # Bind to patch instance for cleaner syntax
+    >>> bound_ufunc = add_ufunc.__get__(patch, type(patch))
+    >>> result2 = bound_ufunc.reduce(dim="time")  # No patch argument needed
+
+    Notes
+    -----
+    - Automatically handles dimension-to-axis conversion when `dim` parameter is used
+    - Preserves patch coordinates and attributes appropriately
+    - Supports method binding via the descriptor protocol
+    - Methods call `dascore.utils.array.apply_ufunc` under the hood
+    """
+
+    def __init__(self, np_ufunc):
+        self.np_ufunc = np_ufunc
+        self.__name__ = getattr(np_ufunc, "__name__", "patch_ufunc")
+        self.__doc__ = getattr(np_ufunc, "__doc__", None)
+
+    def __get__(self, obj, objtype=None):
+        """Bind to a patch instance, returning a _BoundPatchUFunc."""
+        if obj is None:
+            return self
+        return _BoundPatchUFunc(self.np_ufunc, obj)
+
+    def __call__(self, patch, *args, **kwargs):
+        """Call the ufunc with a patch as first argument."""
+        return apply_ufunc(self.np_ufunc, patch, *args, **kwargs)
+
+    def reduce(self, patch, dim=None, dtype=None, **kwargs):
+        """Apply ufunc reduction along specified dimensions."""
+        return apply_ufunc(self.np_ufunc.reduce, patch, dim=dim, dtype=dtype, **kwargs)
+
+    def accumulate(self, patch, dim=None, dtype=None, **kwargs):
+        """Apply ufunc accumulation along specified dimensions."""
+        return apply_ufunc(
+            self.np_ufunc.accumulate, patch, dim=dim, dtype=dtype, **kwargs
+        )
+
+
 def _get_new_coord(coord, dim_reduce="empty"):
     """Get the new coordinate."""
 
@@ -242,9 +336,11 @@ def _strip_data_from_patch(patch):
     return patch.data if isinstance(patch, dc.Patch) else patch
 
 
-def _get_dims_and_inds_from_signature(patch, sig, args, kwargs) -> bool:
+def _get_dims_and_inds_from_signature(
+    patch, sig, args, kwargs
+) -> tuple[tuple[str, ...], tuple]:
     """
-    Get dimension over which function was applied, and inds to re-example result.
+    Get dimension over which function was applied, and indices to re-expand result.
     """
 
     def _normalize_axes(axis, ndim: int) -> tuple[int, ...]:
@@ -296,7 +392,7 @@ def _reassemble_patch(result, patch, func, args, kwargs):
     """
     Method to put the patch back together.
     """
-    # Simples case, data shape hasn't changed.
+    # Simple case, data shape hasn't changed.
     if result.shape == patch.shape:
         return patch.new(data=result)
     # Otherwise, we have to do some detective work to figure out what happened
@@ -318,9 +414,8 @@ def _reassemble_patch(result, patch, func, args, kwargs):
         cm = patch.coords.update(**new_coords)
         return patch.new(data=result, coords=cm)
     else:
-        # Fallback: if shape unchanged, just wrap result; else fail clearly.
-        if result.shape == patch.shape:
-            return patch.new(data=result)
+        # This case should have already been caught at the start of this function.
+        assert result.shape != patch.shape
         func_name = getattr(func, "__name__", None)
         msg = f"Cannot reassemble result of {func_name} without an axis parameter."
         raise ParameterError(msg)
@@ -331,12 +426,16 @@ def apply_array_func(func, *args, **kwargs):
     Apply an array function.
     """
     # Only handle functions involving Patches
-    _args = tuple(_strip_data_from_patch(a) for a in args)
-    _kwargs = {k: _strip_data_from_patch(v) for k, v in kwargs.items()}
     patches = _find_patches(args, kwargs)
     assert len(patches), "No patches found in apply_array_func"
     first_patch = patches[0]
-    assert len(patches) > 0
+
+    # Convert dim to axis for numpy functions
+    converted_args, converted_kwargs = dim_to_axis(first_patch, args, kwargs)
+
+    _args = tuple(_strip_data_from_patch(a) for a in converted_args)
+    _kwargs = {k: _strip_data_from_patch(v) for k, v in converted_kwargs.items()}
+
     # Call the array function
     result = func(*_args, **_kwargs)
     # If we didn't get an array back, try to package it as an array
@@ -344,7 +443,9 @@ def apply_array_func(func, *args, **kwargs):
         result = array(result)
     # Then we need to put the array back into the patch, but account for
     # dimensions that may have changed.
-    patch = _reassemble_patch(result, first_patch, func, args, kwargs)
+    patch = _reassemble_patch(
+        result, first_patch, func, converted_args, converted_kwargs
+    )
     return patch
 
 

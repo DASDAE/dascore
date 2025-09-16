@@ -815,3 +815,19 @@ class TestNumpyFuncs:
         """Ensure multiple axes work."""
         out = np.min(random_patch, axis=(0, 1))
         assert isinstance(out, dc.Patch)
+
+    @pytest.mark.parametrize("name", ("add", "subtract", "divide"))
+    def test_some_binary_ufuncs(self, name, random_patch):
+        """Ensure some binary ufuncs on the patch work."""
+        func = getattr(random_patch, name)
+        # Test ufunc against other patch.
+        out = func(random_patch)
+        assert isinstance(out, dc.Patch)
+        # Test ufunc reduce
+        time_ind = random_patch.dims.index("time")
+        out = func.reduce("time")
+        assert isinstance(out, dc.Patch)
+        assert out.shape[time_ind] == 1
+        # Test ufunc accumulate
+        out = func.accumulate("time")
+        assert isinstance(out, dc.Patch)

@@ -1178,3 +1178,48 @@ def stack_patches(
         new_dim = coord_to_change.update_limits(min=0)
         stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
     return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
+
+
+def dim_to_axis(patch, args, kwargs):
+    """
+    Convert dimension names to axis indices in args/kwargs.
+
+    Parameters
+    ----------
+    patch : Patch
+        The patch object containing dimension information.
+    args : tuple
+        Positional arguments (returned unchanged).
+    kwargs : dict
+        Keyword arguments potentially containing 'dim' parameter.
+
+    Returns
+    -------
+    tuple[tuple, dict]
+        The args and kwargs with 'dim' converted to 'axis' if present.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.patch import dim_to_axis
+    >>> patch = dc.get_example_patch()
+    >>> args = ()
+    >>> kwargs = {"dim": "time", "dtype": None}
+    >>> new_args, new_kwargs = dim_to_axis(patch, args, kwargs)
+    >>> # new_kwarg = {'axis': 1, 'dtype': None}
+    """
+    # Only convert dim to axis if dim is explicitly provided in kwargs
+    if "dim" not in kwargs:
+        return args, kwargs
+
+    new_kwargs = dict(kwargs)
+    dim = new_kwargs.pop("dim")
+    if dim is not None:
+        axis = (
+            patch.dims.index(dim)
+            if isinstance(dim, str)
+            else [patch.dims.index(d) for d in dim]
+        )
+        new_kwargs["axis"] = axis
+
+    return args, new_kwargs
