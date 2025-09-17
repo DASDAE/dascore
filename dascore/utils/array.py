@@ -431,6 +431,7 @@ def apply_array_func(func, *args, **kwargs):
     """
     Apply an array function.
     """
+    _raise_on_out(kwargs)
     # Only handle functions involving Patches
     patches = _find_patches(args, kwargs)
     assert len(patches), "No patches found in apply_array_func"
@@ -498,6 +499,7 @@ def apply_ufunc(ufunc, *args, **kwargs):
     -----
     See [numpy's ufunc docs](https://numpy.org/doc/stable/reference/ufuncs.html)
     """
+    _raise_on_out(kwargs)
     is_ufunc = isinstance(ufunc, np.ufunc)
     if is_ufunc:
         key = (ufunc.nin, ufunc.nout)
@@ -527,7 +529,6 @@ def patch_array_ufunc(self, ufunc, method, *inputs, **kwargs):
     """
     Called when a numpy ufunc is applied to a patch (__array_ufunc__).
     """
-    _raise_on_out(kwargs)
     method = ufunc if method == "__call__" else getattr(ufunc, method, ufunc)
     return apply_ufunc(method, *inputs, **kwargs)
 
@@ -548,6 +549,5 @@ def patch_array_function(self, func, types, args, kwargs):
         Keyword arguments to the function.
     """
     # Only handle functions involving Patches
-    _raise_on_out(kwargs)
     assert any(issubclass(t, dc.Patch) for t in types)
     return apply_array_func(func, *args, **kwargs)
