@@ -52,7 +52,7 @@ def _raise_on_out(kwargs):
 def _clear_units_if_bool_dtype(patch):
     """Clear the units on the patch if it is a boolean."""
     dtype = getattr(patch, "dtype", None)
-    if np.issubdtype(dtype, np.bool_):
+    if dtype is not None and np.issubdtype(dtype, np.bool_):
         return patch.update_attrs(data_units=None)
     return patch
 
