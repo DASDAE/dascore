@@ -14,7 +14,7 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, ParameterError
 from dascore.proc.basic import apply_operator
 from dascore.utils.misc import suppress_warnings
 
@@ -424,6 +424,10 @@ class TestTranspose:
         assert pa2.dims == dims_r
         assert list(pa2.data.shape) == list(reversed(pa1.data.shape))
 
+    def test_t_property(self, random_patch):
+        """Ensure the .T property returns the same as the transpose."""
+        assert random_patch.T == random_patch.transpose()
+
 
 class TestUpdateAttrs:
     """
@@ -613,6 +617,10 @@ class TestApplyOperator:
         operator.truediv,
         operator.floordiv,
         operator.pow,
+        operator.ge,
+        operator.le,
+        operator.gt,
+        operator.lt,
     )
     bool_ops = (
         operator.and_,
@@ -633,8 +641,64 @@ class TestApplyOperator:
     def test_array_like(self, random_patch):
         """Ensure array-like operations work."""
         ones = np.ones(random_patch.shape)
-        new = apply_operator(random_patch, ones, np.add)
+        new = apply_operator(np.add, random_patch, ones)
         assert np.allclose(new.data, ones + random_patch.data)
+
+    def test_comparison_ops(self, random_patch):
+        """Simple tests for comparison operations."""
+        out = random_patch > random_patch
+        assert np.issubdtype(out.dtype, np.bool_)
+        assert not out.all()
+
+
+class TestBool:
+    """Tests for boolean operators on Patches."""
+
+    def test_multi_dimensional_patch_raises(self, random_patch):
+        """
+        Much like numpy, the boolean conversion of an array is ambiguous.
+        """
+        with pytest.raises(ValueError, match="is ambiguous"):
+            bool(random_patch)
+
+    def test_single_value_returns_array_bool(self, random_patch):
+        """An array with a single value should return that values truthiness."""
+        truthy = (random_patch.abs() >= 0).all()
+        falsey = (random_patch.abs() < 0).all()
+
+        assert truthy
+        assert not falsey
+
+    def test_boolean_comparisons(self, random_patch):
+        """Test that boolean comps work with number first and patch first."""
+        pa = random_patch
+        gt = pa > 0
+        assert isinstance(gt, dc.Patch)
+        assert gt.data.dtype == np.bool_
+        rgt = 0 < pa
+        assert rgt.equals(gt)
+        # equality across self should be all True for <= and >=
+        assert np.all((pa <= pa).data)
+        assert np.all((pa >= pa).data)
+
+    def test_boolean_comparisons_with_units(self, random_patch):
+        """Ensure boolean comps work with units."""
+        pa = random_patch.set_units("m/s")
+        m = dc.get_quantity("m")
+        s = dc.get_quantity("s")
+        q = 10 * m / s
+        out = pa > q
+        assert isinstance(out, dc.Patch)
+        assert out.data.dtype == np.bool_
+        # Units should be gone
+        assert dc.get_quantity(out.attrs.data_units) is None
+
+    def test_patch_units_dropped(self, patch):
+        """Ensure data units are dropped with boolean ops"""
+        patch1 = patch < 0
+        patch2 = patch.isinf()
+        assert dc.get_quantity(patch1.attrs.data_units) is None
+        assert dc.get_quantity(patch2.attrs.data_units) is None
 
 
 class TestGetCoord:
@@ -730,3 +794,71 @@ class TestGetPatchName:
         """Happy path test."""
         name = random_patch.get_patch_name()
         assert isinstance(name, str)
+
+
+class TestNumpyFuncs:
+    """Tests for apply numpy directly to patches."""
+
+    def test_reducer_function(self, random_patch):
+        """Ensure numpy functions can return patches."""
+        out = np.min(random_patch, axis=1)
+        assert isinstance(out, dc.Patch)
+        # The functions should behave the same as the methods.
+        assert random_patch.min(dim=random_patch.dims[1]).equals(out)
+
+    def test_accumulator(self, random_patch):
+        """Ensure accumulator method works."""
+        out = np.add.accumulate(random_patch, axis=0)
+        assert isinstance(out, dc.Patch)
+
+    def test_reduce(self, random_patch):
+        """Ensure reduce also works."""
+        out = np.multiply.reduce(random_patch, axis=0)
+        assert isinstance(out, dc.Patch)
+
+    def test_non_reducer(self, random_patch):
+        """Ensure a non-reducing function also works."""
+        out = np.cumsum(random_patch, axis=0)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == random_patch.shape
+
+    def test_patch_on_patch(self, random_patch):
+        """Ensure two patches can be passed to numpy functions."""
+        funcs = [np.add, np.subtract, np.multiply, np.divide]
+        for func in funcs:
+            out = func(random_patch, random_patch)
+            assert isinstance(out, dc.Patch)
+
+    def test_at_raises(self, random_patch):
+        """Ensure unupported ufuncs raise."""
+        msg = "ufuncs"
+        with pytest.raises(ParameterError, match=msg):
+            np.multiply.at(random_patch, [1, 20], random_patch)
+
+    def test_complete_reduction(self, random_patch):
+        """Ensure a compete reduction works."""
+        out = np.min(random_patch)
+        assert isinstance(out, dc.Patch)
+        assert out.size == 1
+        assert out.ndim == random_patch.ndim
+
+    def test_multiple_axes(self, random_patch):
+        """Ensure multiple axes work."""
+        out = np.min(random_patch, axis=(0, 1))
+        assert isinstance(out, dc.Patch)
+
+    @pytest.mark.parametrize("name", ("add", "subtract", "divide"))
+    def test_some_binary_ufuncs(self, name, random_patch):
+        """Ensure some binary ufuncs on the patch work."""
+        func = getattr(random_patch, name)
+        # Test ufunc against other patch.
+        out = func(random_patch)
+        assert isinstance(out, dc.Patch)
+        # Test ufunc reduce
+        time_ind = random_patch.dims.index("time")
+        out = func.reduce("time")
+        assert isinstance(out, dc.Patch)
+        assert out.shape[time_ind] == 1
+        # Test ufunc accumulate
+        out = func.accumulate("time")
+        assert isinstance(out, dc.Patch)

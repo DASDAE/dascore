@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from functools import partial
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal, Protocol, TypeVar, runtime_checkable
 
 import numpy as np
@@ -183,4 +186,18 @@ dascore_styles = dict(
     ymd="blue",
     hms="green",
     dec="green",
+)
+
+
+_AGG_FUNCS: Mapping[str, Callable] = MappingProxyType(
+    {
+        "mean": np.nanmean,
+        "median": np.nanmedian,
+        "min": np.nanmin,
+        "max": np.nanmax,
+        "sum": np.nansum,
+        "std": np.nanstd,
+        "first": partial(np.take, indices=0),
+        "last": partial(np.take, indices=-1),
+    }
 )

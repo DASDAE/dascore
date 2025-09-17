@@ -6,6 +6,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
+import dascore
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.proc.aggregate import _AGG_FUNCS
@@ -89,6 +90,12 @@ class TestBasicAggregations:
         expected = np.var(random_patch.get_array("distance"))
         assert out.get_coord("distance").values == expected
 
+    def test_any(self, random_patch):
+        """Ensure any works."""
+        out = (random_patch > 0.5).any(dim="time")
+        assert isinstance(out, dascore.Patch)
+        assert np.issubdtype(out.dtype, np.bool_)
+
 
 class TestApplyOperators:
     """Ensure aggregated patches can be used as operators for arithmetic."""
@@ -100,7 +107,7 @@ class TestApplyOperators:
         # Ensure broadcasting works with reduced data
         out = random_patch - agg
         assert isinstance(out, dc.Patch)
-        assert np.allclose(random_patch.data - agg, out.data)
+        assert np.allclose(random_patch.data - agg.data, out.data)
 
     def test_single_reduction(self, random_patch):
         """Ensure a single patch reduced also works with broadcasting."""

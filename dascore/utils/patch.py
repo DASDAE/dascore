@@ -565,7 +565,7 @@ def get_dim_axis_value(
     allow_extra: bool = False,
 ) -> tuple[_DimAxisValue, ...]:
     """
-    Get dimension nane, index, and values from args/kwargs for a patch.
+    Get dimension name, index, and values from args/kwargs for a patch.
 
     This is helpful for implementing flexible fetching of dimension name,
     corresponding patch axis, and function specific values from args and
@@ -590,7 +590,7 @@ def get_dim_axis_value(
     -------
     Returns a tuple of:
         ((dim, axis, value), (dim, axis, value), ...)
-    To support retreiving multiple values from the same inputs. If dim name
+    To support retrieving multiple values from the same inputs. If dim name
     is found in args, its corresponding values is `None`.
 
     Examples
@@ -625,7 +625,7 @@ def get_dim_axis_value(
     if not overlap or (len(overlap) > 1 and not allow_multiple):
         msg = (
             "You must use exactly one dimension name in args or kwargs. "
-            f"You passed the following kwargs: {kwargs} args: {args } "
+            f"You passed the following kwargs: {kwargs} args: {args} "
             f"to a patch with dimensions {patch.dims}"
         )
         raise PatchCoordinateError(msg)
@@ -1178,3 +1178,57 @@ def stack_patches(
         new_dim = coord_to_change.update_limits(min=0)
         stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
     return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
+
+
+def swap_kwargs_dim_to_axis(patch, kwargs):
+    """
+    Convert dimension names to axis indices in kwargs.
+
+    Parameters
+    ----------
+    patch : Patch
+        The patch object containing dimension information.
+    kwargs : dict
+        Keyword arguments potentially containing 'dim' parameter.
+
+    Returns
+    -------
+    dict
+        The kwargs with 'dim' converted to 'axis' if present.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.patch import swap_kwargs_dim_to_axis
+    >>> patch = dc.get_example_patch()
+    >>> kwargs = {"dim": "time", "dtype": None}
+    >>> new_kwargs = swap_kwargs_dim_to_axis(patch, kwargs)
+    >>> # new_kwarg = {'axis': 1, 'dtype': None}
+    """
+    # Only convert dim to axis if dim is explicitly provided in kwargs
+    if "dim" not in kwargs:
+        return kwargs
+
+    new_kwargs = dict(kwargs)
+    dim = new_kwargs.pop("dim")
+    if dim is not None:
+        if isinstance(dim, str):
+            if dim not in patch.dims:
+                from dascore.exceptions import ParameterError
+
+                msg = f"Dimension '{dim}' not found in patch dimensions {patch.dims}"
+                raise ParameterError(msg)
+            axis = patch.dims.index(dim)
+        else:
+            # Handle sequence of dimensions
+            axis = []
+            for d in dim:
+                if d not in patch.dims:
+                    from dascore.exceptions import ParameterError
+
+                    msg = f"Dimension '{d}' not found in patch dimensions {patch.dims}"
+                    raise ParameterError(msg)
+                axis.append(patch.dims.index(d))
+        new_kwargs["axis"] = axis
+
+    return new_kwargs
