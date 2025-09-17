@@ -1180,46 +1180,55 @@ def stack_patches(
     return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
 
 
-def dim_to_axis(patch, args, kwargs):
+def swap_kwargs_dim_to_axis(patch, kwargs):
     """
-    Convert dimension names to axis indices in args/kwargs.
+    Convert dimension names to axis indices in kwargs.
 
     Parameters
     ----------
     patch : Patch
         The patch object containing dimension information.
-    args : tuple
-        Positional arguments (returned unchanged).
     kwargs : dict
         Keyword arguments potentially containing 'dim' parameter.
 
     Returns
     -------
-    tuple[tuple, dict]
-        The args and kwargs with 'dim' converted to 'axis' if present.
+    dict
+        The kwargs with 'dim' converted to 'axis' if present.
 
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.patch import dim_to_axis
+    >>> from dascore.utils.patch import swap_kwargs_dim_to_axis
     >>> patch = dc.get_example_patch()
-    >>> args = ()
     >>> kwargs = {"dim": "time", "dtype": None}
-    >>> new_args, new_kwargs = dim_to_axis(patch, args, kwargs)
+    >>> new_kwargs = swap_kwargs_dim_to_axis(patch, kwargs)
     >>> # new_kwarg = {'axis': 1, 'dtype': None}
     """
     # Only convert dim to axis if dim is explicitly provided in kwargs
     if "dim" not in kwargs:
-        return args, kwargs
+        return kwargs
 
     new_kwargs = dict(kwargs)
     dim = new_kwargs.pop("dim")
     if dim is not None:
-        axis = (
-            patch.dims.index(dim)
-            if isinstance(dim, str)
-            else [patch.dims.index(d) for d in dim]
-        )
+        if isinstance(dim, str):
+            if dim not in patch.dims:
+                from dascore.exceptions import ParameterError
+
+                msg = f"Dimension '{dim}' not found in patch dimensions {patch.dims}"
+                raise ParameterError(msg)
+            axis = patch.dims.index(dim)
+        else:
+            # Handle sequence of dimensions
+            axis = []
+            for d in dim:
+                if d not in patch.dims:
+                    from dascore.exceptions import ParameterError
+
+                    msg = f"Dimension '{d}' not found in patch dimensions {patch.dims}"
+                    raise ParameterError(msg)
+                axis.append(patch.dims.index(d))
         new_kwargs["axis"] = axis
 
-    return args, new_kwargs
+    return new_kwargs

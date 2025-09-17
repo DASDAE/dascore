@@ -20,8 +20,8 @@ from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
     align_patch_coords,
-    dim_to_axis,
     get_dim_axis_value,
+    swap_kwargs_dim_to_axis,
 )
 from dascore.utils.time import (
     dtype_time_like,
@@ -149,8 +149,14 @@ def _apply_binary_ufunc(
         except DimensionalityError as er:
             msg = f"{operator} failed with units {data_units} and {other.units}"
             raise UnitError(msg) from er
-        attrs = attrs.update(data_units=str(new_data_w_units.units))
-        new_data = new_data_w_units.magnitude
+        # Check if result has units (comparison operators return plain arrays)
+        if hasattr(new_data_w_units, "units"):
+            attrs = attrs.update(data_units=str(new_data_w_units.units))
+            new_data = new_data_w_units.magnitude
+        else:
+            # Result is unitless (e.g., from boolean comparison)
+            attrs = attrs.update(data_units=None)
+            new_data = new_data_w_units
         return new_data, attrs
 
     # Count patch operands (we only support binary ops on patches).
@@ -431,7 +437,8 @@ def apply_array_func(func, *args, **kwargs):
     first_patch = patches[0]
 
     # Convert dim to axis for numpy functions
-    converted_args, converted_kwargs = dim_to_axis(first_patch, args, kwargs)
+    converted_kwargs = swap_kwargs_dim_to_axis(first_patch, kwargs)
+    converted_args = args
 
     _args = tuple(_strip_data_from_patch(a) for a in converted_args)
     _kwargs = {k: _strip_data_from_patch(v) for k, v in converted_kwargs.items()}
@@ -506,10 +513,18 @@ def apply_ufunc(ufunc, *args, **kwargs):
     return func(ufunc, *args, **kwargs)
 
 
+def _raise_on_out(kwargs):
+    """DASCore doesn't support the out parameter. Check for it and raise."""
+    if "out" in kwargs and kwargs["out"] is not None:
+        msg = "The 'out' parameter is not supported for Patch ufuncs."
+        raise ParameterError(msg)
+
+
 def patch_array_ufunc(self, ufunc, method, *inputs, **kwargs):
     """
     Called when a numpy ufunc is applied to a patch (__array_ufunc__).
     """
+    _raise_on_out(kwargs)
     method = ufunc if method == "__call__" else getattr(ufunc, method, ufunc)
     return apply_ufunc(method, *inputs, **kwargs)
 
@@ -530,5 +545,6 @@ def patch_array_function(self, func, types, args, kwargs):
         Keyword arguments to the function.
     """
     # Only handle functions involving Patches
+    _raise_on_out(kwargs)
     assert any(issubclass(t, dc.Patch) for t in types)
     return apply_array_func(func, *args, **kwargs)

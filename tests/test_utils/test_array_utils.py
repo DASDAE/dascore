@@ -19,10 +19,12 @@ class TestApplyUfunc:
     """Tests for applying various ufunc-type operators."""
 
     @pytest.mark.parametrize("func", (np.abs, np.tan, np.isfinite, np.exp))
-    def test_uniary_ufuncs(self, func, random_patch):
+    def test_unary_ufuncs(self, func, random_patch):
         """Ensure ufuncs that take a single input also work."""
         out = func(random_patch)
         assert isinstance(out, dc.Patch)
+        if func is np.isfinite:
+            assert out.data.dtype == np.bool_
 
     def test_scalar(self, random_patch):
         """Test for a single scalar."""
@@ -205,7 +207,6 @@ class TestApplyUfunc:
         out2 = np.multiply.reduce(random_patch, 1)
         assert isinstance(out, dc.Patch)
         assert out.shape[1] == 1
-
         assert out2.equals(out)
 
 

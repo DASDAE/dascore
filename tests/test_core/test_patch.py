@@ -669,6 +669,30 @@ class TestBool:
         assert truthy
         assert not falsey
 
+    def test_boolean_comparisons(self, random_patch):
+        """Test that boolean comps work with number first and patch first."""
+        pa = random_patch
+        gt = pa > 0
+        assert isinstance(gt, dc.Patch)
+        assert gt.data.dtype == np.bool_
+        rgt = 0 < pa
+        assert rgt.equals(gt)
+        # equality across self should be all True for <= and >=
+        assert np.all((pa <= pa).data)
+        assert np.all((pa >= pa).data)
+
+    def test_boolean_comparisons_with_units(self, random_patch):
+        """Ensure boolean comps work with units."""
+        pa = random_patch.set_units("m/s")
+        m = dc.get_quantity("m")
+        s = dc.get_quantity("s")
+        q = 10 * m / s
+        out = pa > q
+        assert isinstance(out, dc.Patch)
+        assert out.data.dtype == np.bool_
+        # Units should be gone
+        assert dc.get_quantity(out.attrs.data_units) is None
+
 
 class TestGetCoord:
     """Tests for retrieving coords and imposing requirements."""
