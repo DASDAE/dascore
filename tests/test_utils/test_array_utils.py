@@ -457,6 +457,12 @@ class TestPatchUFunc:
         assert bound_ufunc.np_ufunc is np.multiply
         assert bound_ufunc.patch is random_patch
 
+    def test_out_parameter_raises(self, random_patch):
+        """Since patches are immutable, we cant support out. Raise if provided."""
+        match = "cannot be used"
+        with pytest.raises(ParameterError, match=match):
+            apply_ufunc(np.add, random_patch, random_patch, out=random_patch)
+
 
 class TestApplyArrayFunc:
     """Tests for apply array func."""

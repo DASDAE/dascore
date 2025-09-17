@@ -516,7 +516,10 @@ def apply_ufunc(ufunc, *args, **kwargs):
 def _raise_on_out(kwargs):
     """DASCore doesn't support the out parameter. Check for it and raise."""
     if "out" in kwargs and kwargs["out"] is not None:
-        msg = "The 'out' parameter is not supported for Patch ufuncs."
+        msg = (
+            "Since patches are immutable, the 'out' parameter cannot be "
+            "used in patch functions."
+        )
         raise ParameterError(msg)
 
 
