@@ -57,7 +57,7 @@ and more details.
 """
 
 
-def _get_new_coord(coord, dim_reduce):
+def get_reduced_coordinate(coord, dim_reduce):
     """Get the new coordinate."""
 
     def _maybe_handle_datatypes(func, data):
@@ -140,7 +140,7 @@ def aggregate(
     dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
     # Iter all specified dimensions.
     for dim, axis, value in dfo:
-        new_coord = _get_new_coord(patch.get_coord(dim), dim_reduce=dim_reduce)
+        new_coord = get_reduced_coordinate(patch.get_coord(dim), dim_reduce=dim_reduce)
         if new_coord is None:
             coords = patch.coords.drop_coords(dim)[0]
             data = func(data, axis=axis)
