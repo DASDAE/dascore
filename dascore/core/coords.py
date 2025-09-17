@@ -21,7 +21,7 @@ from typing_extensions import Self
 
 import dascore as dc
 from dascore.compat import array, is_array
-from dascore.constants import dascore_styles
+from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import (
     Quantity,
@@ -888,6 +888,46 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         msg = f"Coordinate type {self.__class__} does not implement change_length"
         raise NotImplementedError(msg)
+
+    @compose_docstring(dim_reduce=DIM_REDUCE_DOCS)
+    def reduce_coord(self, dim_reduce="empty"):
+        """
+        Get a reduced coordinate.
+
+        This is used to get a coordinate after aggregating along a dimension.
+
+        Parameters
+        ----------
+        {dim_reduce}
+        """
+
+        def _maybe_handle_datatypes(func, data):
+            """Maybe handle the complexity of date times here."""
+            try:  # First try function directly
+                out = func(data)
+            # Fall back to floats and re-packing.
+            except (TypeError, ValueError, np.core._exceptions.UFuncTypeError):
+                float_data = dc.to_float(data)
+                dfunc = dc.to_datetime64 if is_datetime64(data) else dc.to_timedelta64
+                out = dfunc(func(float_data))
+            return np.atleast_1d(out)
+
+        if dim_reduce == "empty":
+            new_coord = self.update(shape=(1,), start=None, stop=None, data=None)
+        elif dim_reduce == "squeeze":
+            return None
+        elif (func := _AGG_FUNCS.get(dim_reduce)) or callable(dim_reduce):
+            func = dim_reduce if callable(dim_reduce) else func
+            coord_data = self.data
+            if dtype_time_like(coord_data):
+                result = _maybe_handle_datatypes(func, coord_data)
+            else:
+                result = func(self.data)
+            new_coord = self.update(data=result)
+        else:
+            msg = "dim_reduce must be 'empty', 'squeeze' or valid aggregator."
+            raise ParameterError(msg)
+        return new_coord
 
 
 class CoordPartial(BaseCoord):

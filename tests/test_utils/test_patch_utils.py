@@ -28,6 +28,7 @@ from dascore.utils.patch import (
     merge_compatible_coords_attrs,
     patches_to_df,
     stack_patches,
+    swap_kwargs_dim_to_axis,
 )
 
 
@@ -645,3 +646,65 @@ class TestGetPatchName:
         """If extension is false the file extension should remain."""
         names = get_patch_names(random_directory_spool, strip_extension=False)
         assert "." in names.iloc[0]
+
+
+class TestSwapKwargsDimToAxis:
+    """Tests for swap_kwargs_dim_to_axis function."""
+
+    def test_with_multiple_dims(self, random_patch):
+        """Test swap_kwargs_dim_to_axis function with multiple dimensions."""
+        # Test with list of dimensions
+        kwargs = {"dim": ["time", "distance"]}
+        new_kwargs = swap_kwargs_dim_to_axis(random_patch, kwargs)
+
+        expected_axes = [
+            random_patch.dims.index("time"),
+            random_patch.dims.index("distance"),
+        ]
+        assert new_kwargs["axis"] == expected_axes
+        assert "dim" not in new_kwargs
+
+    def test_no_dim(self, random_patch):
+        """Test swap_kwargs_dim_to_axis function with no dim parameter."""
+        # Test with no dim parameter
+        kwargs = {"other": "value"}
+        new_kwargs = swap_kwargs_dim_to_axis(random_patch, kwargs)
+
+        # Should be unchanged
+        assert new_kwargs == kwargs
+
+    def test_with_none_dim(self, random_patch):
+        """Test swap_kwargs_dim_to_axis function with dim=None."""
+        # Test with None dim parameter
+        kwargs = {"dim": None}
+        new_kwargs = swap_kwargs_dim_to_axis(random_patch, kwargs)
+
+        # Should remove dim and not add axis
+        assert "dim" not in new_kwargs
+        assert "axis" not in new_kwargs
+
+    def test_single_string_dim(self, random_patch):
+        """Test swap_kwargs_dim_to_axis with single string dimension."""
+        kwargs = {"dim": "time", "dtype": None}
+        new_kwargs = swap_kwargs_dim_to_axis(random_patch, kwargs)
+
+        expected_axis = random_patch.dims.index("time")
+        assert new_kwargs["axis"] == expected_axis
+        assert "dim" not in new_kwargs
+        assert new_kwargs["dtype"] is None
+
+    def test_unknown_dim_raises(self, random_patch):
+        """Bad dimension should raise ParameterError."""
+        # Patch has no dimension foo.
+        kwargs = {"dim": "foo"}
+
+        with pytest.raises(ParameterError, match="Dimension 'foo' not found"):
+            swap_kwargs_dim_to_axis(random_patch, kwargs)
+
+    def test_unknown_dim_in_list_raises(self, random_patch):
+        """Bad dimension in list should raise ParameterError."""
+        # One valid, one invalid dimension
+        kwargs = {"dim": ["time", "invalid_dim"]}
+
+        with pytest.raises(ParameterError, match="Dimension 'invalid_dim' not found"):
+            swap_kwargs_dim_to_axis(random_patch, kwargs)

@@ -5,3 +5,4 @@ dependencies:
   - pytables
   - h5py
   - pooch
+  - tk  # needed for plotting

@@ -9,7 +9,9 @@ from collections.abc import Callable
 import numpy as np
 import scipy.signal
 
-from dascore.constants import PatchType
+from dascore.constants import DIM_REDUCE_DOCS, PatchType
+from dascore.exceptions import ParameterError
+from dascore.utils.docs import compose_docstring
 from dascore.utils.patch import patch_function
 
 
@@ -43,6 +45,7 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     >>> assert np.allclose(analytic.data.real, patch.data)
     """
     # Get axis for the dimension
+    patch.get_coord(dim)  # Just so a nice error is raised if dim not in patch.
     axis = patch.dims.index(dim)
 
     # Apply Hilbert transform
@@ -55,7 +58,7 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
 @patch_function()
 def envelope(patch: PatchType, dim: str) -> PatchType:
     """
-    Calculate the envelope (amplitude) of a signal using the Hilbert transform.
+    Calculate the envelope of a signal using the Hilbert transform.
 
     The envelope is the magnitude of the analytic signal, which represents
     the instantaneous amplitude of the signal.
@@ -81,20 +84,30 @@ def envelope(patch: PatchType, dim: str) -> PatchType:
     >>> assert np.all(env.data >= 0)
     """
     # Get the analytic signal
-    analytic_patch = hilbert(patch, dim=dim)
-
+    patch.get_coord(dim)
+    axis = patch.dims.index(dim)
+    data = scipy.signal.hilbert(patch.data, axis=axis)
     # Calculate envelope as magnitude of analytic signal
-    envelope_data = np.abs(analytic_patch.data)
-
+    envelope_data = np.abs(data)
     # Return new patch with envelope data
     return patch.new(data=envelope_data)
 
 
+def __infer_transform_dim(patch, stack_dim):
+    """Try to infer transform dimension."""
+    dims = set(patch.dims) - {stack_dim}
+    if len(dims) > 1:
+        msg = "Patch has more than two dimensions, cant infer transform dim."
+        raise ParameterError(msg)
+    return next(iter(dims))
+
+
 @patch_function()
+@compose_docstring(dim_reduce=DIM_REDUCE_DOCS)
 def phase_weighted_stack(
     patch: PatchType,
-    transform_dim: str,
     stack_dim: str,
+    transform_dim: str | None = None,
     power: float = 2.0,
     dim_reduce: str | Callable = "empty",
 ) -> PatchType:
@@ -109,17 +122,19 @@ def phase_weighted_stack(
     ----------
     patch
         The patch to stack.
-    transform_dim
-        The dimension along which to perform the Hilbert transform.
-        For typical use cases this will be "time".
     stack_dim
         The dimension over which the data should be stacked. For typical
         use cases this will be "distance".
+    transform_dim
+        The dimension along which to perform the Hilbert transform.
+        For typical use cases this will be "time". If not provided, it will
+        be inferred as the other dimension besides stack dim. If the patch
+        has more than 2 dimensions and transform_dim is None, a ParameterError
+        is raised.
     power
         The power to which the phase coherence is raised. Higher values
-        give more weight to coherent signals. Default is 1.0.
-    normalize
-        If True, normalize the weights. Default is True.
+        give more weight to coherent signals.
+    {dim_reduce}
 
     Returns
     -------
@@ -129,40 +144,63 @@ def phase_weighted_stack(
 
     Notes
     -----
-    Phase weighted stacking is described in:
-    Schimmel, M., & Paulssen, H. (1997). Noise reduction and detection
-    of weak, coherent signals through phase-weighted stacks.
-    Geophysical Journal International, 130(2), 497-505.
+    Phase weighted stacking is described in @schimmel1997noise.
 
     Examples
     --------
     >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> # Create multiple realizations along distance dimension for demo
-    >>> stacked = patch.phase_weighted_stack(dim="distance", power=2.0)
-    >>> assert stacked.shape[patch.dims.index("distance")] == 1
+    >>> from dascore.examples import ricker_moveout
+    >>> import numpy as np
+    >>> import matplotlib.pyplot as plt
+    >>>
+    >>> # Create ricker wavelet with noise
+    >>> ricker_patch = ricker_moveout(velocity=0)
+    >>> noise_level = ricker_patch.data.max() * 0.2
+    >>> noise = np.random.normal(size=ricker_patch.data.shape) * noise_level
+    >>> patch = ricker_patch + noise
+    >>>
+    >>> # Make normal stack to phase weighted stack
+    >>> stack = patch.mean("distance").squeeze().data
+    >>> pws = patch.phase_weighted_stack("distance").squeeze().data
+    >>>
+    >>> # Plot results
+    >>> fig, ax = plt.subplots(1, 1)
+    >>> time = ricker_patch.get_array("time")
+    >>> ax.plot(time, stack, label="linear")
+    >>> ax.plot(time, pws.data, label="pws")
+    >>> ax.set_xlabel("time")
+    >>> ax.set_ylabel("amplitude")
+    >>> ax.legend()
+    >>> plt.show()
     """
     # Ensure patch has both stack and transform dim. Raises nice Error if not.
+    if transform_dim is None:
+        transform_dim = __infer_transform_dim(patch, stack_dim)
     stack_coord = patch.get_coord(stack_dim)
     _ = patch.get_coord(transform_dim)
     stack_axis = patch.dims.index(stack_dim)
     transform_axis = patch.dims.index(transform_dim)
     data = patch.data
 
-    # Get unit phasors
-    analytic_data = scipy.signal.hilbert(patch, axis=transform_axis)
-    unit_phasors = analytic_data / np.abs(analytic_data)
+    # Get unit phasors. We use eps here to avoid instable division by 0.
+    analytic_data = scipy.signal.hilbert(data, axis=transform_axis)
+    eps = np.finfo(analytic_data.real.dtype).eps
+    amp = np.maximum(np.abs(analytic_data), eps)
+
+    unit_phasors = analytic_data / amp
     mean_phasor = np.mean(unit_phasors, axis=stack_axis, keepdims=True)
 
     # Get weights based on coherence.
-    coherence = np.abs(mean_phasor.mean(axis=0)) ** power
-    weights = coherence**power
-    norm_weights = weights / np.max(weights)
+    # The coherence |mean_phasor| naturally ranges from 0 to 1:
+    # - 0: completely incoherent (random phases)
+    # - 1: perfectly coherent (all phases aligned)
+    weights = np.abs(mean_phasor) ** power
 
-    # Stack original data and apply weights
-    stacked_data = np.mean(data, axis=stack_axis, keepdims=True) * norm_weights
+    # Stack original data and apply weights (we can do this since weights
+    # are common across all samples)
+    stacked_data = np.mean(data, axis=stack_axis, keepdims=True) * weights
 
     # Create new coord and coord manager, put patch back and return.
-    new_coord = stack_coord  # Need to add this
-    cm = patch.coords.update({stack_dim: new_coord})
+    new_coord = stack_coord.reduce_coord(dim_reduce=dim_reduce)
+    cm = patch.coords.update(**{stack_dim: new_coord})
     return patch.new(data=stacked_data, coords=cm)

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from functools import partial
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal, Protocol, TypeVar, runtime_checkable
 
 import numpy as np
@@ -184,3 +187,28 @@ dascore_styles = dict(
     hms="green",
     dec="green",
 )
+
+
+_AGG_FUNCS: Mapping[str, Callable] = MappingProxyType(
+    {
+        "mean": np.nanmean,
+        "median": np.nanmedian,
+        "min": np.nanmin,
+        "max": np.nanmax,
+        "sum": np.nansum,
+        "std": np.nanstd,
+        "first": partial(np.take, indices=0),
+        "last": partial(np.take, indices=-1),
+    }
+)
+
+DIM_REDUCE_DOCS = """
+dim_reduce
+    How to reduce the dimensional coordinate associated with the 
+    aggregated axis. Can be the name of any valid aggregator, a callable,
+    "empty" (the default) - which returns and empty coord, or "squeeze" 
+    which drops the coordinate. For dimensions with datetime or timedelta 
+    datatypes, if the operation fails it will automatically be applied 
+    to the coordinates converted to floats then the output converted back 
+    to the appropriate time type. 
+"""

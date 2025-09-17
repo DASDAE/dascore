@@ -352,6 +352,26 @@ def forge_dts():
     return dc.spool(path)[0]
 
 
+@register_func(EXAMPLE_PATCHES, key="nd_patch")
+def nd_patch(dim_count=3, coord_lens=10):
+    """
+    Make an N dimensional Patch.
+
+    Parameters
+    ----------
+    dim_count
+        The number of dimensions.
+    coord_lens
+        The length of the coordinates.
+    """
+    ran = np.random.RandomState(42)
+    coords = {f"dim_{x + 1}": np.arange(coord_lens) for x in range(dim_count)}
+    dims = sorted(coords)
+    shape = tuple(len(coords[x]) for x in dims)
+    data = ran.randn(*shape)
+    return dc.Patch(data=data, coords=coords, dims=dims)
+
+
 @register_func(EXAMPLE_PATCHES, key="ricker_moveout")
 def ricker_moveout(
     frequency=15,
@@ -392,6 +412,7 @@ def ricker_moveout(
 
     def _ricker(time, delay):
         # shift time vector to account for different peak times.
+        delay = 0 if not np.isfinite(delay) else delay
         new_time = time - delay
         f = frequency
         # get amplitude and exp term of ricker
@@ -407,7 +428,9 @@ def ricker_moveout(
     # iterate each distance channel and update data
     for ind, dist in enumerate(distance):
         dist_to_source = np.abs(dist - source_distance)
-        time_delay = peak_time + (dist_to_source / velocity)
+        shift = dist_to_source / velocity
+        actual_shift = shift if np.isfinite(shift) else 0
+        time_delay = peak_time + actual_shift
         data[:, ind] = _ricker(time, time_delay)
 
     coords = {"time": to_timedelta64(time), "distance": distance}
