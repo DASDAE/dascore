@@ -39,6 +39,24 @@ def _dummy_reduce(array, axis=0, dtype=None, out=None, keepdims=False, **kwargs)
     """A dummy reduce function since inspect.signature fails."""
 
 
+def _raise_on_out(kwargs):
+    """DASCore doesn't support the out parameter. Check for it and raise."""
+    if "out" in kwargs and kwargs["out"] is not None:
+        msg = (
+            "Since patches are immutable, the 'out' parameter cannot be "
+            "used in patch functions."
+        )
+        raise ParameterError(msg)
+
+
+def _clear_units_if_bool_dtype(patch):
+    """Clear the units on the patch if it is a boolean."""
+    dtype = getattr(patch, "dtype", None)
+    if np.issubdtype(dtype, np.bool_):
+        return patch.update_attrs(data_units=None)
+    return patch
+
+
 def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     """
     Create a patch from a unary ufunc.
@@ -181,7 +199,6 @@ def _apply_binary_ufunc(
         new_data, attrs = _apply_op_units(patch, other, operator, attrs, reversed)
     else:
         new_data = _apply_op(patch.data, other, operator, reversed)
-
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
 
@@ -454,7 +471,7 @@ def apply_array_func(func, *args, **kwargs):
     patch = _reassemble_patch(
         result, first_patch, func, converted_args, converted_kwargs
     )
-    return patch
+    return _clear_units_if_bool_dtype(patch)
 
 
 # Mapping of ufunc dispatches. Keys are method name or num input/num output.
@@ -512,17 +529,8 @@ def apply_ufunc(ufunc, *args, **kwargs):
             f"supported for use with Patch. Use the patch.data array directly."
         )
         raise ParameterError(msg)
-    return func(ufunc, *args, **kwargs)
-
-
-def _raise_on_out(kwargs):
-    """DASCore doesn't support the out parameter. Check for it and raise."""
-    if "out" in kwargs and kwargs["out"] is not None:
-        msg = (
-            "Since patches are immutable, the 'out' parameter cannot be "
-            "used in patch functions."
-        )
-        raise ParameterError(msg)
+    out = func(ufunc, *args, **kwargs)
+    return _clear_units_if_bool_dtype(out)
 
 
 def patch_array_ufunc(self, ufunc, method, *inputs, **kwargs):

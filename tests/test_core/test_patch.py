@@ -693,6 +693,13 @@ class TestBool:
         # Units should be gone
         assert dc.get_quantity(out.attrs.data_units) is None
 
+    def test_patch_units_dropped(self, patch):
+        """Ensure data units are dropped with boolean ops"""
+        patch1 = patch < 0
+        patch2 = patch.isinf()
+        assert dc.get_quantity(patch1.attrs.data_units) is None
+        assert dc.get_quantity(patch2.attrs.data_units) is None
+
 
 class TestGetCoord:
     """Tests for retrieving coords and imposing requirements."""
