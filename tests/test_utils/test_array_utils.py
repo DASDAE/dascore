@@ -9,6 +9,7 @@ import pytest
 from pint import DimensionalityError
 
 import dascore as dc
+import dascore.proc.coords
 from dascore import get_quantity
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
@@ -157,7 +158,7 @@ class TestApplyUfunc:
     def test_patches_non_coords_different_len(self, random_patch):
         """Ensure patches with non-coords of different lengths work."""
         patch_1 = random_patch.mean("distance")
-        dist_ind = patch_1.get_axis("distance")
+        dist_ind = random_patch.get_axis("distance")
         old_shape = list(patch_1.shape)
         old_shape[dist_ind] = old_shape[dist_ind] + 2
         patch_2 = patch_1.make_broadcastable_to(tuple(old_shape))

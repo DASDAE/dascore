@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.exceptions import ParameterError
 from dascore.units import m
 from dascore.utils.misc import all_close
@@ -132,7 +133,7 @@ class TestRolling:
     def test_center(self, random_patch):
         """Ensure the center option places NaN at start and end."""
         out = random_patch.rolling(time=1, center=True).mean()
-        time_ax = out.get_axis("time")
+        time_ax = random_patch.get_axis("time")
         first_label = np.take(out.data, -1, axis=time_ax)
         assert np.all(np.isnan(first_label))
         last_label = np.take(out.data, 0, axis=time_ax)

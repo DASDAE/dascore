@@ -11,7 +11,7 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import CoordError, ParameterError, PatchBroadcastError
+from dascore.exceptions import ParameterError, PatchBroadcastError
 from dascore.utils.misc import _merge_tuples
 
 OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
@@ -373,7 +373,7 @@ class TestDropNa:
         out = patch.dropna("time", how="all")
         assert out.shape == patch.shape
         # then test any; it should drop 2 labels
-        axis = out.get_axis("time")
+        axis = patch.get_axis("time")
         out = patch.dropna("time", how="any")
         assert out.shape[axis] == patch.shape[axis] - 2
 
@@ -598,21 +598,3 @@ class TestRoll:
             random_patch.coords.get_array("distance")[0]
             == rolled_patch.coords.get_array("distance")[value]
         )
-
-
-class TestGetAxis:
-    """Tests for helper function to get get axis of dimension."""
-
-    def test_index_comparable(self, random_patch):
-        """Ensure get_axis is the same as patch.dims.index."""
-        for dim in random_patch.dims:
-            axis = random_patch.get_axis(dim)
-            assert axis == random_patch.get_axis(dim)
-
-    def test_raises(self, random_patch):
-        """
-        Ensure a nice error message is raised when asking for non-existent dim.
-        """
-        match = "has no dimension"
-        with pytest.raises(CoordError, match=match):
-            random_patch.get_axis(dim="money")

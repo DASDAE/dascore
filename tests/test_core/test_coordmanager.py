@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from rich.text import Text
 
 import dascore as dc
+import dascore.proc.coords
 from dascore import to_datetime64
 from dascore.compat import random_state
 from dascore.core.coordmanager import (
@@ -426,7 +427,7 @@ class TestSelect:
         """Selecting a range outside of dim should empty the manager."""
         data = np.ones(cm_basic.shape)
         cm, trim = cm_basic.select(distance=(-100, -10), array=data)
-        assert trim.shape[cm.get_axis("distance")] == 0
+        assert trim.shape[cm_basic.get_axis("distance")] == 0
         assert "distance" in cm.dims
         assert len(cm.get_array("distance")) == 0
         assert len(cm.coord_map["distance"]) == 0
@@ -1027,7 +1028,7 @@ class TestDecimate:
     def test_decimate_along_time(self, cm_basic):
         """Simply ensure decimation reduces shape."""
         cm = cm_basic
-        ind = cm.get_axis("distance")
+        ind = cm_basic.get_axis("distance")
         out, _ = cm.decimate(distance=2)
         assert len(out.coord_map["distance"]) < len(cm.coord_map["distance"])
         assert (out.shape[ind] * 2) == cm.shape[ind]

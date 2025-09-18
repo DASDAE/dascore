@@ -77,6 +77,8 @@ def envelope(patch: PatchType, dim: str) -> PatchType:
     Examples
     --------
     >>> import dascore as dc
+    >>> import numpy as np
+    >>>
     >>> patch = dc.get_example_patch()
     >>> env = patch.envelope(dim="time")
     >>> # Envelope is always positive

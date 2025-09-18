@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.exceptions import ParameterError
 from dascore.transform.differentiate import differentiate
 from dascore.units import get_quantity

@@ -53,27 +53,6 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     return self.new(coords=cm)
 
 
-def get_axis(self: PatchType, dim: str) -> int:
-    """
-    Get the axis corresponding to a Patch dimension. Raise error if not found.
-
-    Parameters
-    ----------
-    self
-        The Patch object.
-    dim
-        The dimension name.
-
-    Examples
-    --------
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> axis = patch.get_axis("time")
-    >>> assert axis == patch.get_axis("time")
-    """
-    return self.coords.get_axis(dim)
-
-
 def pipe(
     self: PatchType, func: Callable[[PatchType, ...], PatchType], *args, **kwargs
 ) -> PatchType:

@@ -13,6 +13,7 @@ from scipy.signal import chirp as spy_chirp
 
 import dascore as dc
 import dascore.core
+import dascore.proc.coords
 from dascore.compat import random_state
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.docs import compose_docstring

@@ -93,7 +93,7 @@ class TestMergeCoordManagers:
         new_time = out.coord_map["time"]
         assert isinstance(new_time, CoordRange)
         assert new_time.min() == time.min()
-        new_dim_len = out.shape[cm1.get_axis("time")]
+        new_dim_len = out.shape[out.get_axis("time")]
         expected_end = time.min() + (new_dim_len - 1) * time.step
         assert new_time.max() == expected_end
 

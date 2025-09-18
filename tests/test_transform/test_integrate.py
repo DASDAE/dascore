@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.transform.integrate import integrate
 from dascore.units import get_quantity
 from dascore.utils.misc import broadcast_for_index

@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.compat import is_array
 from dascore.core.coords import BaseCoord
 from dascore.exceptions import (
@@ -240,7 +241,7 @@ class TestSelect:
         """If select range excludes data range patch should be emptied."""
         out = random_patch.select(distance=(-100, -10))
         assert len(out.shape) == len(random_patch.shape)
-        deleted_axis = out.get_axis("distance")
+        deleted_axis = random_patch.get_axis("distance")
         assert out.shape[deleted_axis] == 0
         assert np.size(out.data) == 0
 
@@ -559,3 +560,21 @@ class TestAddDistanceTo:
         sorted_patch = out.sort_coords("origin_distance")
         coord = sorted_patch.get_array("origin_distance")
         assert np.all(np.sort(coord) == coord)
+
+
+class TestGetAxis:
+    """Tests for helper function to get get axis of dimension."""
+
+    def test_index_comparable(self, random_patch):
+        """Ensure get_axis is the same as patch.dims.index."""
+        for dim in random_patch.dims:
+            axis = random_patch.get_axis(dim)
+            assert axis == random_patch.dims.index(dim)
+
+    def test_raises(self, random_patch):
+        """
+        Ensure a nice error message is raised when asking for non-existent dim.
+        """
+        match = "has no dimension"
+        with pytest.raises(CoordError, match=match):
+            random_patch.get_axis(dim="money")

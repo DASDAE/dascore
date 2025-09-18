@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.exceptions import ParameterError
 from dascore.proc.taper import taper
 from dascore.units import m, percent

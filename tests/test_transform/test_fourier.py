@@ -7,6 +7,7 @@ import pytest
 from scipy.fft import next_fast_len
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.exceptions import PatchError
 from dascore.transform.fourier import dft, idft
 from dascore.units import get_quantity, second
