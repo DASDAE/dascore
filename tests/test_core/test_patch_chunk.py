@@ -273,7 +273,7 @@ class TestChunkMerge:
     @pytest.fixture(scope="class")
     def patches_conflicting_private_coord(self, random_patch):
         """Create two patches that have conflicting private coords."""
-        dist_ax = random_patch.dims.index("distance")
+        dist_ax = random_patch.get_axis("distance")
         rand = np.random.RandomState(42)
         c1 = rand.random(random_patch.shape[dist_ax])
         c2 = rand.random(c1.shape)

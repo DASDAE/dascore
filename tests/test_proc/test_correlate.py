@@ -34,7 +34,7 @@ class TestCorrelateShift:
         assert "lag_time" in auto_patch.dims
         coord_array = auto_patch.get_array("lag_time")
         # ensure the max value happens at zero lag time.
-        time_ax = auto_patch.dims.index("lag_time")
+        time_ax = auto_patch.get_axis("lag_time")
         argmax = np.argmax(random_dft_patch.data, axis=time_ax)
         assert np.all(coord_array[argmax] == dc.to_timedelta64(0))
 
@@ -71,7 +71,7 @@ class TestCorrelateInternal:
             channel_count=10,
         ).taper(time=0.05)
         # normalize energy so autocorrection is 1
-        time_axis = patch.dims.index("time")
+        time_axis = patch.get_axis("time")
         data = patch.data
         norm = np.linalg.norm(data, axis=time_axis, keepdims=True)
         return patch.update(data=data / norm)
@@ -90,7 +90,7 @@ class TestCorrelateInternal:
         """Ensure correlation works along distance dim."""
         dist = corr_patch.get_coord("distance")[0]
         out = corr_patch.correlate(distance=dist)
-        fft_ax = corr_patch.dims.index("time")
+        fft_ax = corr_patch.get_axis("time")
         fft_len = len(out.get_coord("lag_time"))
         argmax = np.argmax(out.data, axis=fft_ax)
         max_values = np.max(out.data, axis=fft_ax)

@@ -412,7 +412,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     dims = df["dims"].iloc[0].split(",")
     # get patches, ensure they are oriented the same.
     patches = [x.transpose(*dims) for x in df["patch"]]
-    axis = patches[0].dims.index(merge_dim)
+    axis = patches[0].get_axis(merge_dim)
     # get data, coords, attrs for merging patch together.
     datas = [x.data for x in patches]
     coords = [x.coords for x in patches]
@@ -602,11 +602,11 @@ def get_dim_axis_value(
     >>>
     >>> # Get tuple of dimension name, axis, and value from dict (eg kwargs)
     >>> (dim, ax, val) = get_dim_axis_value(patch, kwargs={"time": 10})[0]
-    >>> assert dim == "time" and ax == patch.dims.index("time") and val == 10
+    >>> assert dim == "time" and ax == patch.get_axis("time") and val == 10
     >>>
     >>> # Get dim name and axis from tuple (eg args)
     >>> (dim, ax, val) = get_dim_axis_value(patch, args=("time",))[0]
-    >>> assert dim == "time" and ax == patch.dims.index("time") and val is None
+    >>> assert dim == "time" and ax == patch.get_axis("time") and val is None
     >>>
     >>> # Get list of dim, ax val from multiple kwargs and args
     >>> info = get_dim_axis_value(
@@ -723,7 +723,7 @@ def _get_dx_or_spacing_and_axes(
             val = coord.data
         # need to convert val to float so datetimes work
         out.append(to_float(val))
-        axes.append(patch.dims.index(dim_))
+        axes.append(patch.get_axis(dim_))
 
     return tuple(out), tuple(axes)
 
@@ -1218,7 +1218,7 @@ def swap_kwargs_dim_to_axis(patch, kwargs):
 
                 msg = f"Dimension '{dim}' not found in patch dimensions {patch.dims}"
                 raise ParameterError(msg)
-            axis = patch.dims.index(dim)
+            axis = patch.get_axis(dim)
         else:
             # Handle sequence of dimensions
             axis = []
@@ -1228,7 +1228,7 @@ def swap_kwargs_dim_to_axis(patch, kwargs):
 
                     msg = f"Dimension '{d}' not found in patch dimensions {patch.dims}"
                     raise ParameterError(msg)
-                axis.append(patch.dims.index(d))
+                axis.append(patch.get_axis(d))
         new_kwargs["axis"] = axis
 
     return new_kwargs

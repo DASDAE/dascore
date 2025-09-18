@@ -35,7 +35,7 @@ def x_times_y_patch():
 @pytest.fixture(scope="class")
 def linear_patch(random_patch):
     """A patch increasing linearly along distance dimension."""
-    ind = random_patch.dims.index("distance")
+    ind = random_patch.get_axis("distance")
     dist_len = random_patch.shape[ind]
     new = np.arange(dist_len, dtype=np.float64)
     new_data: np.ndarray = np.broadcast_to(new[:, None], random_patch.shape)
@@ -64,7 +64,7 @@ class TestDifferentiateOrder2:
         patch = random_patch
         for dim in patch.dims:  # test all dimensions.
             out = random_patch.differentiate(dim=dim)
-            axis = patch.dims.index(dim)
+            axis = patch.get_axis(dim)
             # ensure the differentiation was applied
             sampling = to_float(patch.get_coord(dim).step)
             expected = np.gradient(patch.data, sampling, axis=axis, edge_order=2)
@@ -98,7 +98,7 @@ class TestDifferentiateOrder2:
         if np.any(np.isnan(out.data)):
             pytest.skip("found NaN in output, not sure why this happens.")
         spacing = to_float(out.get_coord("time").data)
-        ax = patch.dims.index("time")
+        ax = patch.get_axis("time")
         expected = np.gradient(patch.data, spacing, axis=ax, edge_order=2)
         assert np.allclose(expected, out.data, rtol=0.01)
 

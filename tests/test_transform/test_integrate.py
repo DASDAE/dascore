@@ -38,7 +38,7 @@ class TestIndefiniteIntegrals:
         """Happy path for default time/distance integrals."""
         for dim in ones_patch.dims:
             patch = integrate(ones_patch, dim=dim, definite=False)
-            ax = patch.dims.index(dim)
+            ax = patch.get_axis(dim)
             # We expect slice not on axis to be the identical
             non_dim_indexer = broadcast_for_index(
                 len(patch.dims), ax, slice(None, None), fill=slice(0, 1)
@@ -86,7 +86,7 @@ class TestDefiniteIntegration:
         """Ensure simple integration works."""
         patch = ones_patch
         for dim in patch.dims:
-            ax = patch.dims.index(dim)
+            ax = patch.get_axis(dim)
             out = patch.integrate(dim=dim, definite=True)
             assert out.shape[ax] == 1
             step = to_float(patch.get_coord(dim).step)

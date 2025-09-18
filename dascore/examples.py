@@ -365,9 +365,9 @@ def nd_patch(dim_count=3, coord_lens=10):
         The length of the coordinates.
     """
     ran = np.random.RandomState(42)
-    coords = {f"dim_{x + 1}": np.arange(coord_lens) for x in range(dim_count)}
-    dims = sorted(coords)
-    shape = tuple(len(coords[x]) for x in dims)
+    dims = tuple(f"dim_{i + 1}" for i in range(dim_count))
+    coords = {d: np.arange(coord_lens) for d in dims}
+    shape = tuple(len(coords[d]) for d in dims)
     data = ran.randn(*shape)
     return dc.Patch(data=data, coords=coords, dims=dims)
 
@@ -428,7 +428,8 @@ def ricker_moveout(
     # iterate each distance channel and update data
     for ind, dist in enumerate(distance):
         dist_to_source = np.abs(dist - source_distance)
-        shift = dist_to_source / velocity
+        with np.errstate(divide="ignore", invalid="ignore"):
+            shift = dist_to_source / velocity
         actual_shift = shift if np.isfinite(shift) else 0
         time_delay = peak_time + actual_shift
         data[:, ind] = _ricker(time, time_delay)
@@ -531,7 +532,7 @@ def delta_patch(
         # Get data with ones centered on selected dimensions.
         shape = patch.shape
         index = tuple(
-            shape[patch.dims.index(dimension)] // 2 if dimension in used_dims else 0
+            shape[patch.get_axis(dimension)] // 2 if dimension in used_dims else 0
             for dimension in patch.dims
         )
         data = np.zeros_like(patch.data)

@@ -69,7 +69,7 @@ class TestEnvelope:
 
     @pytest.fixture(autouse=True)
     def modulated_patch_and_envelope(self):
-        """Return a moduled patch"""
+        """Return a modulated patch"""
         # Create AM signal: A(t) * cos(w*t) where A(t) is the envelope
         t = np.linspace(0, 2, 1000)
         carrier_freq = 50  # Hz
@@ -143,7 +143,7 @@ class TestPhaseWeightedStack:
         assert np.isrealobj(result.data)
 
         # Stacked dimension should have length 1
-        distance_axis = random_patch.dims.index("distance")
+        distance_axis = random_patch.get_axis("distance")
         assert result.shape[distance_axis] == 1
 
         # Other dimensions should be preserved
@@ -157,7 +157,7 @@ class TestPhaseWeightedStack:
             stack_dim="time", transform_dim="distance"
         )
         # Time dimension should be reduced to 1
-        time_axis = random_patch.dims.index("time")
+        time_axis = random_patch.get_axis("time")
         assert result.shape[time_axis] == 1
 
     def test_infer_stack_dim(self):
@@ -199,10 +199,23 @@ class TestPhaseWeightedStack:
         result = random_patch.phase_weighted_stack(stack_dim="distance")
 
         # Distance coordinate should have length 1
-        assert result.shape[random_patch.dims.index("distance")] == 1
+        assert result.shape[random_patch.get_axis("distance")] == 1
 
         # Time coordinate should be unchanged (use array_equal for datetime)
         assert np.array_equal(result.get_array("time"), random_patch.get_array("time"))
+
+    def test_dim_reduce_squeeze(self, random_patch):
+        """Ensure dim reduce squeeze collapses stack dimension."""
+        out = random_patch.phase_weighted_stack("distance", dim_reduce="squeeze")
+        assert out.ndim == 1
+        assert "distance" not in out.dims
+
+    def test_one_dim_raises(self, random_patch):
+        """Test that one dimension raises error."""
+        patch = random_patch.mean("distance").squeeze()
+        msg = "Patch has one dimension"
+        with pytest.raises(ParameterError, match=msg):
+            patch.phase_weighted_stack("time")
 
 
 class TestHilbertIntegration:

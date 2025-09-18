@@ -206,9 +206,9 @@ DIM_REDUCE_DOCS = """
 dim_reduce
     How to reduce the dimensional coordinate associated with the 
     aggregated axis. Can be the name of any valid aggregator, a callable,
-    "empty" (the default) - which returns and empty coord, or "squeeze" 
-    which drops the coordinate. For dimensions with datetime or timedelta 
-    datatypes, if the operation fails it will automatically be applied 
-    to the coordinates converted to floats then the output converted back 
-    to the appropriate time type. 
+    "empty" (the default) which returns a length 1 partial coord, or 
+    "squeeze" which drops the coordinate. For dimensions with datetime 
+    or timedelta datatypes, if the operation fails it will automatically 
+    be applied to the coordinates converted to floats then the output 
+    converted back to the appropriate time type. 
 """

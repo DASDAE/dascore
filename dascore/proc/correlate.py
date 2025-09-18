@@ -66,7 +66,7 @@ def correlate_shift(patch, dim, undo_weighting=True):
     >>> auto_patch = idft.correlate_shift(dim="time")
     """
     coord = patch.get_coord(dim, require_evenly_sampled=True)
-    axis = patch.dims.index(dim)
+    axis = patch.get_axis(dim)
     data = np.fft.fftshift(patch.data, axes=axis)
     if undo_weighting:
         data = data / to_float(coord.step)

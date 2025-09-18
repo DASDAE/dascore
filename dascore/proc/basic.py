@@ -53,6 +53,27 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     return self.new(coords=cm)
 
 
+def get_axis(self: PatchType, dim: str) -> int:
+    """
+    Get the axis corresponding to a Patch dimension. Raise error if not found.
+
+    Parameters
+    ----------
+    self
+        The Patch object.
+    dim
+        The dimension name.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> axis = patch.get_axis("time")
+    >>> assert axis == patch.get_axis("time")
+    """
+    return self.coords.get_axis(dim)
+
+
 def pipe(
     self: PatchType, func: Callable[[PatchType, ...], PatchType], *args, **kwargs
 ) -> PatchType:
@@ -301,7 +322,7 @@ def normalize(
             max - divide each sample by the maximum of the absolute value of the axis.
             bit - sample-by-sample normalization (-1/+1)
     """
-    axis = self.dims.index(dim)
+    axis = self.get_axis(dim)
     data = self.data
     if norm in {"l1", "l2"}:
         order = int(norm[-1])
@@ -361,7 +382,7 @@ def standardize(
     standardized_distance = patch.standardize('distance')
     ```
     """
-    axis = self.dims.index(dim)
+    axis = self.get_axis(dim)
     data = self.data
     mean = np.mean(data, axis=axis, keepdims=True)
     std = np.std(data, axis=axis, keepdims=True)
@@ -413,7 +434,7 @@ def dropna(
     >>> # drop all distance labels that have all null values
     >>> out = patch.dropna("distance", how="all")
     """
-    axis = patch.dims.index(dim)
+    axis = patch.get_axis(dim)
     func = np.any if how == "any" else np.all
     if include_inf:
         to_drop = ~np.isfinite(patch.data)

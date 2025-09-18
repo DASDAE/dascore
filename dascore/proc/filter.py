@@ -131,7 +131,7 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
     >>> lp_ft = pa.pass_filter(distance=(200 * ft, ...))
     """
     dim, (arg1, arg2) = check_filter_kwargs(kwargs)
-    axis = patch.dims.index(dim)
+    axis = patch.get_axis(dim)
     coord_units = patch.coords.coord_map[dim].units
     filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units, dim=dim)
     sr = get_dim_sampling_rate(patch, dim)
@@ -174,7 +174,7 @@ def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchT
     >>> sobel_time_space = pa.sobel_filter('time').sobel_filter('distance')
     """
     dim, mode, cval = _check_sobel_args(dim, mode, cval)
-    axis = patch.dims.index(dim)
+    axis = patch.get_axis(dim)
     out = ndimage.sobel(patch.data, axis=axis, mode=mode, cval=cval)
     return dc.Patch(data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims)
 

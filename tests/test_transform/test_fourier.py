@@ -83,7 +83,7 @@ class TestDiscreteFourierTransform:
         """Ensure when sin wave is input max freq is correct."""
         assert "ft_time" in fft_sin_patch_time.dims
         patch = fft_sin_patch_time
-        freq_dim = patch.dims.index("ft_time")
+        freq_dim = patch.get_axis("ft_time")
         ar = np.argmax(np.abs(patch.data), freq_dim)
         assert np.allclose(ar, ar[0])
         freqs = patch.get_coord("ft_time").data
@@ -122,7 +122,7 @@ class TestDiscreteFourierTransform:
         """Ensure real fft works."""
         out = sin_patch.dft("time", real=True)
         coord = out.get_coord("ft_time")
-        freq_ax = out.dims.index("ft_time")
+        freq_ax = out.get_axis("ft_time")
         assert coord.min() == 0
         ar = np.argmax(np.abs(out.data), axis=freq_ax)
         assert np.allclose(ar, ar[0])

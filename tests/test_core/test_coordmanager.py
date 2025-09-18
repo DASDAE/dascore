@@ -349,7 +349,7 @@ class TestDrop:
     def test_trims_array(self, cm_multidim):
         """Trying to drop a dim that doesnt exist should just return."""
         array = np.ones(cm_multidim.shape)
-        axis = cm_multidim.dims.index("time")
+        axis = cm_multidim.get_axis("time")
         cm, new_array = cm_multidim.drop_coords("time", array=array)
         assert new_array.shape[axis] == 0
 
@@ -413,7 +413,7 @@ class TestSelect:
     def test_select_coord_dim(self, cm_basic):
         """Simple test for filtering dimension coord."""
         new, _ = cm_basic.select(distance=(100, 400))
-        dist_ind = cm_basic.dims.index("distance")
+        dist_ind = cm_basic.get_axis("distance")
         assert new.shape[dist_ind] < cm_basic.shape[dist_ind]
 
     def test_filter_array(self, cm_basic):
@@ -426,7 +426,7 @@ class TestSelect:
         """Selecting a range outside of dim should empty the manager."""
         data = np.ones(cm_basic.shape)
         cm, trim = cm_basic.select(distance=(-100, -10), array=data)
-        assert trim.shape[cm.dims.index("distance")] == 0
+        assert trim.shape[cm.get_axis("distance")] == 0
         assert "distance" in cm.dims
         assert len(cm.get_array("distance")) == 0
         assert len(cm.coord_map["distance"]) == 0
@@ -497,7 +497,7 @@ class TestSelect:
         for dim in cm_basic.dims:
             kwargs = {dim: index}
             out1, new_data = cm.select(array=data, samples=True, **kwargs)
-            dim_ind = cm.dims.index(dim)
+            dim_ind = cm.get_axis(dim)
             # now the array should have a len(1) in the selected dimension.
             assert out1.shape[dim_ind] == new_data.shape[dim_ind] == 1
             new_value = out1.coord_map[dim].values[0]
@@ -538,7 +538,7 @@ class TestSelect:
             cm.select(d1=(3, None), d2=(None, 6), samples=True)
         # But normal values should work and produce a shape of 4 for this case.
         out, _ = cm.select(d1=(3, None), d2=(None, 6))
-        distance_dim = out.dims.index("distance")
+        distance_dim = out.get_axis("distance")
         assert out.shape[distance_dim] == 4
 
     def test_array_by_values(self, coord_manager):
@@ -567,7 +567,7 @@ class TestSelect:
         coord = coord_manager.get_coord(dim_name)
         sub = coord[1:-1].values
         out, _ = coord_manager.select(**{dim_name: sub})
-        assert out.shape[out.dims.index(dim_name)] == len(sub)
+        assert out.shape[out.get_axis(dim_name)] == len(sub)
 
     def test_array_indices(self, coord_manager):
         """Ensure array indices work in select."""
@@ -890,7 +890,7 @@ class TestUpdate:
         """Tests for updating coord with degenerate coordinates."""
         cm = coord_manager
         out = cm.update(time=cm.coord_map["time"].empty())
-        assert out.shape[out.dims.index("time")] == 0
+        assert out.shape[out.get_axis("time")] == 0
         assert len(out.coord_map["time"]) == 0
 
     def test_update_degenerate_dim_multicoord(self, cm_multidim):
@@ -1027,7 +1027,7 @@ class TestDecimate:
     def test_decimate_along_time(self, cm_basic):
         """Simply ensure decimation reduces shape."""
         cm = cm_basic
-        ind = cm.dims.index("distance")
+        ind = cm.get_axis("distance")
         out, _ = cm.decimate(distance=2)
         assert len(out.coord_map["distance"]) < len(cm.coord_map["distance"])
         assert (out.shape[ind] * 2) == cm.shape[ind]

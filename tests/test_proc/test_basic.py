@@ -11,7 +11,7 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import ParameterError, PatchBroadcastError
+from dascore.exceptions import CoordError, ParameterError, PatchBroadcastError
 from dascore.utils.misc import _merge_tuples
 
 OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
@@ -250,7 +250,7 @@ class TestPatchBroadcasting:
         sub_patch = random_patch.min("time")
         out = random_patch - sub_patch
         assert isinstance(out, dc.Patch)
-        axis = random_patch.dims.index("time")
+        axis = random_patch.get_axis("time")
         to_sub = np.min(random_patch.data, axis=axis, keepdims=True)
         # Ensure the time aggregation worked.
         assert np.allclose(sub_patch.data, to_sub)
@@ -348,7 +348,7 @@ class TestDropNa:
         after_coord = patch.get_coord("time")
         assert len(before_coord) == len(after_coord) + 1
         # also should have no columns with all NaN
-        axis = patch_with_null.dims.index("time")
+        axis = patch_with_null.get_axis("time")
         assert axis == 1
         expected = np.all(pd.isnull(patch.data), axis=0)
         assert not np.any(expected)
@@ -361,7 +361,7 @@ class TestDropNa:
         after_coord = patch.get_coord("distance")
         assert len(before_coord) == len(after_coord) + 1
         # also should have no columns with all NaN
-        axis = patch_with_null.dims.index("distance")
+        axis = patch_with_null.get_axis("distance")
         assert axis == 0
         expected = np.all(pd.isnull(patch.data), axis=1)
         assert not np.any(expected)
@@ -373,7 +373,7 @@ class TestDropNa:
         out = patch.dropna("time", how="all")
         assert out.shape == patch.shape
         # then test any; it should drop 2 labels
-        axis = out.dims.index("time")
+        axis = out.get_axis("time")
         out = patch.dropna("time", how="any")
         assert out.shape[axis] == patch.shape[axis] - 2
 
@@ -433,7 +433,7 @@ class TestPad:
         # Check if the padding is applied correctly
         original_shape = random_patch.shape
         new_shape = padded_patch.shape
-        time_axis = random_patch.dims.index("time")
+        time_axis = random_patch.get_axis("time")
         assert new_shape[time_axis] == original_shape[time_axis] + 5
         # Ensure that padded values are zeros
         assert np.all(padded_patch.select(time=(None, 2), samples=samples).data == 0)
@@ -444,7 +444,7 @@ class TestPad:
         padded_patch = random_patch.pad(distance=7)
         original_shape = random_patch.shape
         new_shape = padded_patch.shape
-        distance_axis = random_patch.dims.index("distance")
+        distance_axis = random_patch.get_axis("distance")
         ch_spacing = random_patch.attrs["distance_step"]
         assert (
             new_shape[distance_axis] == original_shape[distance_axis] + 14 * ch_spacing
@@ -460,7 +460,7 @@ class TestPad:
         padded_patch = random_patch.pad(distance=4, expand_coords=expand_coords)
         original_shape = random_patch.shape
         new_shape = padded_patch.shape
-        distance_axis = random_patch.dims.index("distance")
+        distance_axis = random_patch.get_axis("distance")
         ch_spacing = random_patch.attrs["distance_step"]
         dist_max = random_patch.attrs["distance_max"]
         assert (
@@ -476,8 +476,8 @@ class TestPad:
             time=(6, 7), distance=(1, 4), constant_values=np.pi, samples=samples
         )
         # Check dimensions individually
-        time_axis = random_patch.dims.index("time")
-        distance_axis = random_patch.dims.index("distance")
+        time_axis = random_patch.get_axis("time")
+        distance_axis = random_patch.get_axis("distance")
         assert padded_patch.shape[time_axis] == random_patch.shape[time_axis] + 13
         assert (
             padded_patch.shape[distance_axis] == random_patch.shape[distance_axis] + 5
@@ -505,7 +505,7 @@ class TestPad:
         """Tests for padding to next fast length."""
         # First trim patch to match length
         patch_in = random_patch.select(time=(0, length), samples=True)
-        axis = patch_in.dims.index("time")
+        axis = patch_in.get_axis("time")
         length_old = patch_in.shape[axis]
         next_fast = next_fast_len(length_old)
         out = patch_in.pad(time="fft")
@@ -514,7 +514,7 @@ class TestPad:
 
     def test_correlate_pad(self, random_patch):
         """Ensure the fft correlate pad returns sensible values."""
-        axis = random_patch.dims.index("time")
+        axis = random_patch.get_axis("time")
         length_old = random_patch.shape[axis]
         next_fast = next_fast_len(length_old * 2 - 1)
         out = random_patch.pad(time="correlate")
@@ -598,3 +598,21 @@ class TestRoll:
             random_patch.coords.get_array("distance")[0]
             == rolled_patch.coords.get_array("distance")[value]
         )
+
+
+class TestGetAxis:
+    """Tests for helper function to get get axis of dimension."""
+
+    def test_index_comparable(self, random_patch):
+        """Ensure get_axis is the same as patch.dims.index."""
+        for dim in random_patch.dims:
+            axis = random_patch.get_axis(dim)
+            assert axis == random_patch.get_axis(dim)
+
+    def test_raises(self, random_patch):
+        """
+        Ensure a nice error message is raised when asking for non-existent dim.
+        """
+        match = "has no dimension"
+        with pytest.raises(CoordError, match=match):
+            random_patch.get_axis(dim="money")

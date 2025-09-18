@@ -253,8 +253,6 @@ class Patch:
         # This isnt a great name but keeps the numpy tradition.
         return self.transpose()
 
-    # --- Patch ufuncs
-
     # --- basic patch functionality.
 
     update = dascore.proc.update
@@ -283,6 +281,7 @@ class Patch:
     make_broadcastable_to = dascore.proc.make_broadcastable_to
     apply_ufunc = dascore.utils.array.apply_ufunc
     get_patch_names = get_patch_names
+    get_axis = dascore.proc.get_axis
 
     def get_patch_name(self, *args, **kwargs) -> str:
         """

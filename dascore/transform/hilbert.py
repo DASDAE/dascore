@@ -34,7 +34,7 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     Returns
     -------
     PatchType
-        A patch with a complex data array represneting the analytic signal.
+        A patch with a complex data array representing the analytic signal..
 
     Examples
     --------
@@ -45,8 +45,7 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     >>> assert np.allclose(analytic.data.real, patch.data)
     """
     # Get axis for the dimension
-    patch.get_coord(dim)  # Just so a nice error is raised if dim not in patch.
-    axis = patch.dims.index(dim)
+    axis = patch.get_axis(dim)
 
     # Apply Hilbert transform
     analytic_signal = scipy.signal.hilbert(patch.data, axis=axis)
@@ -84,8 +83,7 @@ def envelope(patch: PatchType, dim: str) -> PatchType:
     >>> assert np.all(env.data >= 0)
     """
     # Get the analytic signal
-    patch.get_coord(dim)
-    axis = patch.dims.index(dim)
+    axis = patch.get_axis(dim)
     data = scipy.signal.hilbert(patch.data, axis=axis)
     # Calculate envelope as magnitude of analytic signal
     envelope_data = np.abs(data)
@@ -98,6 +96,12 @@ def __infer_transform_dim(patch, stack_dim):
     dims = set(patch.dims) - {stack_dim}
     if len(dims) > 1:
         msg = "Patch has more than two dimensions, cant infer transform dim."
+        raise ParameterError(msg)
+    if len(dims) == 0:
+        msg = (
+            f"Patch has one dimension: {patch.dims}. The phase_weighted_stack"
+            f"requires at least two."
+        )
         raise ParameterError(msg)
     return next(iter(dims))
 
@@ -166,23 +170,22 @@ def phase_weighted_stack(
     >>> # Plot results
     >>> fig, ax = plt.subplots(1, 1)
     >>> time = ricker_patch.get_array("time")
-    >>> ax.plot(time, stack, label="linear")
-    >>> ax.plot(time, pws.data, label="pws")
-    >>> ax.set_xlabel("time")
-    >>> ax.set_ylabel("amplitude")
-    >>> ax.legend()
+    >>> _ = ax.plot(time, stack, label="linear")
+    >>> _ = ax.plot(time, pws, label="pws")
+    >>> _ = ax.set_xlabel("time")
+    >>> _ = ax.set_ylabel("amplitude")
+    >>> _ = ax.legend()
     >>> plt.show()
     """
     # Ensure patch has both stack and transform dim. Raises nice Error if not.
     if transform_dim is None:
         transform_dim = __infer_transform_dim(patch, stack_dim)
     stack_coord = patch.get_coord(stack_dim)
-    _ = patch.get_coord(transform_dim)
-    stack_axis = patch.dims.index(stack_dim)
-    transform_axis = patch.dims.index(transform_dim)
+    stack_axis = patch.get_axis(stack_dim)
+    transform_axis = patch.get_axis(transform_dim)
     data = patch.data
 
-    # Get unit phasors. We use eps here to avoid instable division by 0.
+    # Get unit phasors. Use eps here to avoid unstable division by 0.
     analytic_data = scipy.signal.hilbert(data, axis=transform_axis)
     eps = np.finfo(analytic_data.real.dtype).eps
     amp = np.maximum(np.abs(analytic_data), eps)
@@ -203,4 +206,6 @@ def phase_weighted_stack(
     # Create new coord and coord manager, put patch back and return.
     new_coord = stack_coord.reduce_coord(dim_reduce=dim_reduce)
     cm = patch.coords.update(**{stack_dim: new_coord})
+    if dim_reduce == "squeeze":
+        stacked_data = np.squeeze(stacked_data, axis=stack_axis)
     return patch.new(data=stacked_data, coords=cm)

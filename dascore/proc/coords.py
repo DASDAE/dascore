@@ -661,7 +661,7 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
         If None, all length one dimensions are squeezed.
     """
     coords = self.coords.squeeze(dim)
-    axis = None if dim is None else self.coords.dims.index(dim)
+    axis = None if dim is None else self.coords.get_axis(dim)
     data = np.squeeze(self.data, axis=axis)
     return self.new(data=data, coords=coords)
 

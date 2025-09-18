@@ -497,8 +497,8 @@ def _get_inverse_axes(patch):
             " undergone stft but this patch is missing required attrs. "
         )
         raise PatchError(msg)
-    time_axis = patch.dims.index(time_dimension)
-    frequency_axis = patch.dims.index(frequency_dimension)
+    time_axis = patch.get_axis(time_dimension)
+    frequency_axis = patch.get_axis(frequency_dimension)
     return time_axis, frequency_axis
 
 

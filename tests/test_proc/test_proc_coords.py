@@ -240,7 +240,7 @@ class TestSelect:
         """If select range excludes data range patch should be emptied."""
         out = random_patch.select(distance=(-100, -10))
         assert len(out.shape) == len(random_patch.shape)
-        deleted_axis = out.dims.index("distance")
+        deleted_axis = out.get_axis("distance")
         assert out.shape[deleted_axis] == 0
         assert np.size(out.data) == 0
 
