@@ -179,7 +179,6 @@ def phase_weighted_stack(
     >>> _ = ax.set_xlabel("time")
     >>> _ = ax.set_ylabel("amplitude")
     >>> _ = ax.legend()
-    >>> plt.show()
     """
     # Ensure patch has both stack and transform dim. Raises nice Error if not.
     if transform_dim is None:
