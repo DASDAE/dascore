@@ -39,6 +39,8 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     Examples
     --------
     >>> import dascore as dc
+    >>> import numpy as np
+    >>>
     >>> patch = dc.get_example_patch()
     >>> analytic = patch.hilbert(dim="time")
     >>> # Real part is original signal
