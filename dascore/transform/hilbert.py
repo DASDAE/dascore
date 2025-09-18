@@ -34,7 +34,7 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     Returns
     -------
     PatchType
-        A patch with a complex data array representing the analytic signal..
+        A patch with a complex data array representing the analytic signal.
 
     Examples
     --------
@@ -47,6 +47,7 @@ def hilbert(patch: PatchType, dim: str) -> PatchType:
     >>> assert np.allclose(analytic.data.real, patch.data)
     """
     # Get axis for the dimension
+    patch.get_coord(dim, require_evenly_sampled=True)  # Ensure evenly sampled
     axis = patch.get_axis(dim)
 
     # Apply Hilbert transform
@@ -87,6 +88,7 @@ def envelope(patch: PatchType, dim: str) -> PatchType:
     >>> assert np.all(env.data >= 0)
     """
     # Get the analytic signal
+    patch.get_coord(dim, require_evenly_sampled=True)  # Ensure evenly sampled
     axis = patch.get_axis(dim)
     data = scipy.signal.hilbert(patch.data, axis=axis)
     # Calculate envelope as magnitude of analytic signal
@@ -99,7 +101,7 @@ def __infer_transform_dim(patch, stack_dim):
     """Try to infer transform dimension."""
     dims = set(patch.dims) - {stack_dim}
     if len(dims) > 1:
-        msg = "Patch has more than two dimensions, cant infer transform dim."
+        msg = "Patch has more than two dimensions, can't infer transform dim."
         raise ParameterError(msg)
     if len(dims) == 0:
         msg = (
@@ -148,7 +150,8 @@ def phase_weighted_stack(
     -------
     PatchType
         A patch with the phase-weighted stack along the specified dimension.
-        The specified dimension will have length 1.
+        The specified dimension will have length 1 unless `dim_reduce="squeeze"`,
+        in which case the dimension is removed.
 
     Notes
     -----
@@ -187,6 +190,8 @@ def phase_weighted_stack(
     stack_axis = patch.get_axis(stack_dim)
     transform_axis = patch.get_axis(transform_dim)
     data = patch.data
+    patch.get_coord(transform_axis, require_evenly_sampled=True)  # Ensure evenly sampled
+
 
     # Get unit phasors. Use eps here to avoid unstable division by 0.
     analytic_data = scipy.signal.hilbert(data, axis=transform_axis)
