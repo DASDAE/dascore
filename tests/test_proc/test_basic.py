@@ -349,7 +349,7 @@ class TestDropNa:
         assert len(before_coord) == len(after_coord) + 1
         # also should have no columns with all NaN
         axis = patch_with_null.get_axis("time")
-        assert axis == 1
+        assert patch_with_null.dims[axis] == "time"
         expected = np.all(pd.isnull(patch.data), axis=0)
         assert not np.any(expected)
 
@@ -362,7 +362,7 @@ class TestDropNa:
         assert len(before_coord) == len(after_coord) + 1
         # also should have no columns with all NaN
         axis = patch_with_null.get_axis("distance")
-        assert axis == 0
+        assert patch_with_null.dims[axis] == "distance"
         expected = np.all(pd.isnull(patch.data), axis=1)
         assert not np.any(expected)
 
