@@ -160,7 +160,7 @@ patch = dc.get_example_patch()
 # Get the coordinate object for distance
 distance_coord = patch.get_coord("distance")
 
-# Get the array of values cooresponding to time
+# Get the array of values corresponding to time
 time_array = patch.get_array("time")
 ```
 
@@ -521,7 +521,7 @@ import dascore as dc
 # Load a patch which has latitude and longitude coordinates.
 patch = dc.get_example_patch("random_patch_with_lat_lon")
 
-# Dissassociate latitude from distance.
+# Disassociate latitude from distance.
 lat = patch.coords.get_array('latitude')
 patch_detached_lat = patch.update_coords(latitude=(None, lat))
 ```

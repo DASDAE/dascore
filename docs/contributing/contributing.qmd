@@ -30,7 +30,7 @@ the feature, the additional dependency, and (optional but encouraged) other futu
 features that may also share this dependency. Typically we'll try to come to a clear consensus, then you can
 move ahead with development. If the proposed DASCore dependency addition appears to be controversial, then you will
 deliver a short presentation at one of the bi-weekly DASDAE developer team check-ins that should
-descrive the feature, the additional dependency (including approximate added size of the software
+describe the feature, the additional dependency (including approximate added size of the software
 required to be installed), and ideas for other features that could be enabled by this dependency.
 Then the developer community in attendance will discuss the proposed change and take a vote (majority
 approval required).

@@ -6,18 +6,18 @@ execute:
 
 If you have [Docker](https://www.docker.com/) installed, you may also run the stable build of DASCore in a Docker container.
 
-First you need to clone the DAScore main repository:
+First you need to clone the DASCore main repository:
 ```bash
-https://github.com/DASDAE/dascore
+git clone https://github.com/DASDAE/dascore
 ```
 
-Then go to the DAScore directory and run docker build:
+Then go to the DASCore directory and run docker build:
 ```bash
 cd dascore
 docker build -t dascore .
 ```
 
-To run a Python script with the DAScore, mount the directory containing your scripts to the `/app` directory to the image using `-v` flag:
+To run a Python script with DASCore, mount the directory containing your scripts to the `/app` directory in the image using the `-v` flag:
 
 ```bash
 docker run -it -v $PWD:/app dascore python /app/test.py

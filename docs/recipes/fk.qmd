@@ -69,7 +69,7 @@ It's important to remember that *apparent* velocities (>= velocity) are filtered
 
 ### Phase Separation
 
-Another application of [`slope_filter`](`dascore.Patch.slope_filter`) is to separate P/S waves. In this case, the P velocity is about 4500 amd the S velocity is about 2700. The following code highlights S waves, but also introduces some artifacts: 
+Another application of [`slope_filter`](`dascore.Patch.slope_filter`) is to separate P/S waves. In this case, the P velocity is about 4500 and the S velocity is about 2700. The following code highlights S waves, but also introduces some artifacts: 
 
 ```{python}  
 filt_p = np.array([1_000, 2_300, 3_000, 4_000])

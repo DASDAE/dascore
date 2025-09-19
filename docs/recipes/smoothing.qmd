@@ -82,7 +82,6 @@ ax.set_title("NaNs in Patch");
 
 Which can be dropped with [Patch.dropna](`dascore.Patch.dropna`). 
 
-['Patch.fill_nan`]
 
 ## Savgol filter
 
