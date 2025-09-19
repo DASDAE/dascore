@@ -225,7 +225,7 @@ print(patch.seconds) # to get the number of seconds in the patch.
 print(patch.channel_count) # to get the number of channels in the patch.
 ```
 
-These only work for patches with dimensions "time" and "distance" but can help new users who may be unfamiliar datetimes and coordinates. 
+These only work for patches with dimensions "time" and "distance" but can help new users who may be unfamiliar with datetimes and coordinates. 
 
 The "name" of the patch, which is the filename that would be used if the patch were saved to disk by DASCore, can be generated via the [`Spool.get_patch_names`](`dascore.BaseSpool.get_patch_names`) to get a series of the names of the managed patches, or [`Patch.get_patch_name`](`dascore.Patch.get_patch_name`) to get a string of the patch name.
 
@@ -501,7 +501,7 @@ out_2 = pa.update_coords(
     longitude=('distance', lon),
 )
 
-# Add coordinate associted with multiple dimensions.
+# Add coordinate associated with multiple dimensions.
 quality = np.ones_like(pa.data)
 out_3 = pa.update_coords(
     quality=(pa.dims, quality)

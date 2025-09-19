@@ -2,4 +2,4 @@
 title: "Overview"
 ---
 
-Welcome to DASCore's cookbook! This is a collection of examples (recipes) to demonstrate how to perform various tasks with DASCore. Use the collapsible menu on the left to browse the recipes and consider [contributing](../contributing/contributing.qmd) some examples of your own.
+Welcome to DASCore's cookbook! This is a collection of examples (recipes) to demonstrate how to perform various tasks with DASCore. Use the collapsible menu in the sidebar to browse the recipes and consider [contributing](../contributing/contributing.qmd) some examples of your own.

@@ -312,7 +312,7 @@ Much like `BaseCoord`, the `CoordinateManager` class implements a variety of met
 
 ### Select
 
-[select]('dascore.core.coordmanager.CoordManager.select`) trims the coordinate manager and, optionally, an associated array.
+[select](`dascore.core.coordmanager.CoordManager.select`) trims the coordinate manager and, optionally, an associated array.
 
 ```{python}
 import dascore as dc
@@ -326,7 +326,7 @@ new_cm, new_data = cm.select(data=data, distance=(..., 100))
 
 ### Sort
 
-[sort]('dascore.core.coordmanager.CoordManager.sort`) sorts along one or more axes. 
+[sort](`dascore.core.coordmanager.CoordManager.sort`) sorts along one or more axes. 
 
 ```{python}
 import dascore as dc
@@ -340,7 +340,7 @@ new_cm, new_data = cm.sort("time", "distance", reverse=True)
 
 ### Rename Coord
 
-[rename_coord]('dascore.core.coordmanager.CoordManager.rename_coord`) renames a coordinate or dimension.
+[rename_coord](`dascore.core.coordmanager.CoordManager.rename_coord`) renames a coordinate or dimension.
 
 ```{python}
 import dascore as dc

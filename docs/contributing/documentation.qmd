@@ -165,7 +165,7 @@ References then show up at the bottom of the page, or if the mouse pointer hover
 
 # Equations
 
-Equations use standard latex. In line equations ($E=mc^2$) are surrounded by a single dollar sign (`$`) like this: `$E=mc^2$`. Multiline equations start and end with double dollar signs (`$$`) and can be given a referenceable label. For example:
+Equations use standard LaTeX. Inline equations ($E=mc^2$) are surrounded by a single dollar sign (`$`) like this: `$E=mc^2$`. Multiline equations start and end with double dollar signs (`$$`) and can be given a referenceable label. For example:
 
 $$
 \begin{array}{l}

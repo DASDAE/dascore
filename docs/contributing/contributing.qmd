@@ -46,10 +46,7 @@ DASDAE packages.
 
 Currently DASCore operates in BDFL mode during its initial construction phase,
 with Derrick Chambers leading the oversight of the master branch, but this is
-not intended to be the mode of operation in the future. In October 2023 at a
-DASDAE developer team check-in, the team will review the additions provided by
-contributors, and will nominate and approve a leadership team with a record of
-contribution to share the code management leadership responsibility.
+not intended to be the mode of operation in the future. At a DASDAE developer team check-in, the team reviews contributions and nominates a leadership team based on contribution history.
 
 Currently Eileen Martin and Ge Jin lead organizational activities (e.g. organize
 team meetings, coordinate logistics of training and tutorial activities, enforcement
