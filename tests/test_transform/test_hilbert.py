@@ -170,7 +170,7 @@ class TestPhaseWeightedStack:
         assert isinstance(out_2d, dc.Patch)
 
         # But raises on 3D patch
-        with pytest.raises(ParameterError, match="cant infer transform dim"):
+        with pytest.raises(ParameterError, match="can't infer transform dim"):
             dim = three_d_patch.dims[1]
             three_d_patch.phase_weighted_stack(dim)
 

@@ -186,32 +186,29 @@ def phase_weighted_stack(
     # Ensure patch has both stack and transform dim. Raises nice Error if not.
     if transform_dim is None:
         transform_dim = __infer_transform_dim(patch, stack_dim)
+    # Ensure evenly sampled transform dimension and get needed coords.
+    patch.get_coord(transform_dim, require_evenly_sampled=True)
     stack_coord = patch.get_coord(stack_dim)
-    stack_axis = patch.get_axis(stack_dim)
+    # Get corresponding axes.
     transform_axis = patch.get_axis(transform_dim)
+    stack_axis = patch.get_axis(stack_dim)
     data = patch.data
-    patch.get_coord(transform_axis, require_evenly_sampled=True)  # Ensure evenly sampled
-
-
     # Get unit phasors. Use eps here to avoid unstable division by 0.
     analytic_data = scipy.signal.hilbert(data, axis=transform_axis)
     eps = np.finfo(analytic_data.real.dtype).eps
     amp = np.maximum(np.abs(analytic_data), eps)
-
     unit_phasors = analytic_data / amp
     mean_phasor = np.mean(unit_phasors, axis=stack_axis, keepdims=True)
-
     # Get weights based on coherence.
     # The coherence |mean_phasor| naturally ranges from 0 to 1:
     # - 0: completely incoherent (random phases)
     # - 1: perfectly coherent (all phases aligned)
     weights = np.abs(mean_phasor) ** power
-
     # Stack original data and apply weights (we can do this since weights
     # are common across all samples)
-    stacked_data = np.mean(data, axis=stack_axis, keepdims=True) * weights
-
-    # Create new coord and coord manager, put patch back and return.
+    stacked_data = (
+        np.mean(data, axis=stack_axis, keepdims=True) * weights
+    )  # Create new coord and coord manager, put patch back and return.
     new_coord = stack_coord.reduce_coord(dim_reduce=dim_reduce)
     cm = patch.coords.update(**{stack_dim: new_coord})
     if dim_reduce == "squeeze":
