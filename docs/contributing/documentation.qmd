@@ -5,7 +5,7 @@ There are several levels of documentation in DASCore. These include: code commen
 
 # Code comments
 
-Code comments are primarily for developers. They should describe useful information and not  just restate obvious parts of the code. Consider refactoring with better named variables or smaller, well named functions if you find yourself making lots of these types of comments.
+Code comments are primarily for developers. They should describe useful information and not just restate obvious parts of the code. Consider refactoring with better named variables or smaller, well named functions if you find yourself making lots of these types of comments.
 
 Don't be afraid to make multi-line comments if needed.
 
@@ -69,7 +69,7 @@ def _recombobulate(df, arg1, arg2):
 
 ## Examples in docstrings
 
-Examples in docstrings can be done using the standard [doctest](https://docs.python.org/3/library/doctest.html) syntax as above, or [quarto code blocks](https://quarto org/docs/output-formats/html-code.html) can be used directly. The latter gives more control over outputs and display options.
+Examples in docstrings can be done using the standard [doctest](https://docs.python.org/3/library/doctest.html) syntax as above, or [quarto code blocks](https://quarto.org/docs/output-formats/html-code.html) can be used directly. The latter gives more control over outputs and display options.
 
 You can also specify [quarto html code block options](https://quarto.org/docs/output-formats/html-code.html) using a "#|" type comment and add headings using "###". For example:
 
@@ -165,7 +165,7 @@ References then show up at the bottom of the page, or if the mouse pointer hover
 
 # Equations
 
-Equations use standard latex. In line equations ($E=mc^2$) are surrounded by a single dollar sign (`$`) like this: `$E=mc^2$`. Multiline comments start and end with double dollar signs (`$$`) and can be given a reference-able label. For example:
+Equations use standard LaTeX. Inline equations ($E=mc^2$) are surrounded by a single dollar sign (`$`) like this: `$E=mc^2$`. Multiline equations start and end with double dollar signs (`$$`) and can be given a referenceable label. For example:
 
 $$
 \begin{array}{l}

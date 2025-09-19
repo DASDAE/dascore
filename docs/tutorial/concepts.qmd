@@ -34,14 +34,14 @@ time_1 = np.datetime64('2022-01-01T15:12:11.172455')
 # Create a new time by adding some time to time_1.
 time_2 = time_1 + np.timedelta64(60, 's')
 
-# Get the number of hour separating them:
+# Get the number of hours separating them:
 delta_1 = (time_2 - time_1) / np.timedelta64(1, 'h')
 ```
 
 DASCore provides two convenience functions for working with times:
 
 - [to_datetime64](`dascore.utils.time.to_datetime64`) converts different inputs to numpy datetime64 arrays or instances.
-- [to_timedelta64](`dascore.utils.time.to_datetime64`) converts different inputs to numpy timedelta64 arrays or instances.
+- [to_timedelta64](`dascore.utils.time.to_timedelta64`) converts different inputs to numpy timedelta64 arrays or instances.
 
 For example:
 

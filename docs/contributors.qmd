@@ -5,7 +5,7 @@ Include one empty line between contributors.
 
 # Contributors
 
-A Huge thanks to all of our contributors:
+Huge thanks to all of our contributors:
 
 [Derrick Chambers](https://github.com/d-chambers)
 
@@ -21,13 +21,13 @@ A Huge thanks to all of our contributors:
 
 [Ariel Lellouch](https://github.com/ariellellouch)
 
-[Manuel M. Mendoza](https:/github.com/SeisMatt)
+[Manuel M. Mendoza](https://github.com/SeisMatt)
 
-[Thomas Cullison](https:/github.com/code-cullison)
+[Thomas Cullison](https://github.com/code-cullison)
 
 [Shihao Yuan](https://github.com/Shihao-Yuan)
 
-[Tomas Snyder](https:/github.com/quasiStellar45)
+[Tomas Snyder](https://github.com/quasiStellar45)
 
 You can find more contributor information
 [here](https://github.com/DASDAE/dascore/graphs/contributors)

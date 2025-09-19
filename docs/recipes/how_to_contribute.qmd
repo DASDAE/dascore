@@ -81,10 +81,10 @@ Navigate to the DASCore repository on GitHub, and you should see a notification 
 
 # DASDAE users
 
-If you'd like to contribute to DASCore as a user, you should first fork the DASCore repository.Forking a repository allows you to freely experiment with changes without affecting the original project. Below is a detailed guide on how to do this. [This GitHub documentation](https://docs.github.com/en/get-started/quickstart/contributing-to-projects) might be beneficial to review as well.
+If you'd like to contribute to DASCore as a user, you should first fork the DASCore repository. Forking a repository allows you to freely experiment with changes without affecting the original project. Below is a detailed guide on how to do this. [This GitHub documentation](https://docs.github.com/en/get-started/quickstart/contributing-to-projects) might be beneficial to review as well.
 
-## Step 1: Fork the repositoy
-Go to the [DASCore repository](https://github.com/DASDAE/dascore) an click on "Fork".
+## Step 1: Fork the repository
+Go to the [DASCore repository](https://github.com/DASDAE/dascore) and click on "Fork".
 
 ## Step 2: Clone your fork
 Once you have forked the repository, you need to clone it to your local machine to start making changes. Then navigate to your local repository:

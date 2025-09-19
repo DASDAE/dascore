@@ -9,8 +9,8 @@ We create new features or bug fixes in their own branches and merge them into ma
 to a more complex branching model if the need arises.
 
 If substantial new features have been added since the last release we will bump the minor version.  If only bug
-fixes/minor changes have been made, only the patch version will be bumped. Like most python projects, we loosely
-follow [semantic versioning](https://semver.org/) in terms that we will not bump the major version until DASCore
+fixes/minor changes have been made, only the patch version will be bumped. Like most Python projects, we loosely
+follow [semantic versioning](https://semver.org/), meaning we will not bump the major version until DASCore
 is more stable.
 
 
@@ -23,7 +23,7 @@ strings may be preferred for efficiency.
 
 Column names should be snake_cased whenever possible.
 
-Always access columns with getitem and not getattr (ie use `df['column_name']` not `df.column_name`).
+Always access columns with getitem and not getattr (i.e., use `df['column_name']` not `df.column_name`).
 
 Prefer creating a new `DataFrame`/`Series` to modifying them inplace. Inplace modifications should require opting in
 (usually through an `inplace` key word argument).

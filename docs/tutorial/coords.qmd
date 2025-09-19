@@ -111,7 +111,7 @@ random_array = np.random.rand(10)
 random_coord = get_coord(data=random_array)
 
 # Returns a new array and indexer that can be used to apply the sorting
-# opeartion to a dimension of an array.
+# operation to a dimension of an array.
 sorted_coord, indexer = random_coord.sort()
 
 # The array could then be updated as follows.
@@ -190,7 +190,7 @@ coord_ft_set = coord.set_units("ft")
 silly_units = "10*PI*m/ft * furlongs * fortnight"
 coord_silly_units = get_coord(start=10, stop=21, step=1, units=silly_units)
 
-# Simplify the coordinates and modify coordinte values accordiningly.
+# Simplify the coordinates and modify coordinate values accordingly.
 simple_coord = coord_silly_units.simplify_units()
 print(f"Simplified units are: {simple_coord.units}")
 print(f"New coord lims are: {simple_coord.limits}") 
@@ -244,7 +244,7 @@ from dascore.core import get_coord, get_coord_manager
 coord_dict = {
     "dim1": get_coord(start=0, stop=10, step=1),
     "dim2": get_coord(start=0.001, stop=1, step=.1),
-    # "dim_coord" is a non-dimensional coordinate asscoiated with
+    # "dim_coord" is a non-dimensional coordinate associated with
     # dim1, so it must have the same shape. Notice how the associated
     # dimension and coordinate values can be specified in a tuple. 
     "dim_coord": ("dim1", get_coord(start=10, stop=20, step=1)),
@@ -312,7 +312,7 @@ Much like `BaseCoord`, the `CoordinateManager` class implements a variety of met
 
 ### Select
 
-[select]('dascore.core.coordmanager.CoordManager.select`) trims the coordinate manager and, optionally, an associated array.
+[select](`dascore.core.coordmanager.CoordManager.select`) trims the coordinate manager and, optionally, an associated array.
 
 ```{python}
 import dascore as dc
@@ -326,7 +326,7 @@ new_cm, new_data = cm.select(data=data, distance=(..., 100))
 
 ### Sort
 
-[sort]('dascore.core.coordmanager.CoordManager.sort`) sorts along one or more axes. 
+[sort](`dascore.core.coordmanager.CoordManager.sort`) sorts along one or more axes. 
 
 ```{python}
 import dascore as dc
@@ -334,13 +334,13 @@ import dascore as dc
 patch = dc.get_example_patch()
 cm, data = patch.coords, patch.data
 
-# Sort along both dimensions in descending oder.
+# Sort along both dimensions in descending order.
 new_cm, new_data = cm.sort("time", "distance", reverse=True)
 ```
 
 ### Rename Coord
 
-[rename_coord]('dascore.core.coordmanager.CoordManager.rename_coord`) renames a coordinate or dimension.
+[rename_coord](`dascore.core.coordmanager.CoordManager.rename_coord`) renames a coordinate or dimension.
 
 ```{python}
 import dascore as dc

@@ -1,5 +1,5 @@
 ---
-Title: "Testing"
+title: "Testing"
 ---
 
 # Testing
