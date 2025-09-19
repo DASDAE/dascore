@@ -30,8 +30,8 @@ the feature, the additional dependency, and (optional but encouraged) other futu
 features that may also share this dependency. Typically we'll try to come to a clear consensus, then you can
 move ahead with development. If the proposed DASCore dependency addition appears to be controversial, then you will
 deliver a short presentation at one of the bi-weekly DASDAE developer team check-ins that should
-describe the feature, the additional dependency (including approximate added size of the software
-required to be installed), and ideas for other features that could be enabled by this dependency.
+describe the feature, the additional dependency (including the approximate size of the additional
+software to be installed), and ideas for other features this dependency could enable.
 Then the developer community in attendance will discuss the proposed change and take a vote (majority
 approval required).
 
@@ -46,7 +46,7 @@ DASDAE packages.
 
 Currently DASCore operates in BDFL mode during its initial construction phase,
 with Derrick Chambers leading the oversight of the master branch, but this is
-not intended to be the mode of operation in the future. At a DASDAE developer team check-in, the team reviews contributions and nominates a leadership team based on contribution history.
+not intended to be the mode of operation in the future. At a DASDAE developer team check-in (currently biweekly), the team reviews contributions and nominates a leadership team for the next cycle based on contribution history.
 
 Currently Eileen Martin and Ge Jin lead organizational activities (e.g. organize
 team meetings, coordinate logistics of training and tutorial activities, enforcement

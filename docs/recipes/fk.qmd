@@ -4,7 +4,7 @@ execute:
     warning: False
 ---
 
-## FK transforms
+## F-K transforms
 
 [F-k transforms](https://wiki.seg.org/wiki/F-k_filtering) are common in geophysical applications for various types of filtering. For the following examples we will use the example_event included in DASCore's example files.
 
@@ -36,7 +36,7 @@ patch_filtered = (
 patch_filtered.viz.waterfall(show=True, scale=0.2);
 ```
 
-We can transform and visualize the patch in the F-K domain using the dft.
+We can transform and visualize the patch in the F-K domain using the DFT.
 
 ```{python}
 # Apply transform on all dimensions
@@ -72,14 +72,14 @@ It's important to remember that *apparent* velocities (>= velocity) are filtered
 Another application of [`slope_filter`](`dascore.Patch.slope_filter`) is to separate P/S waves. In this case, the P velocity is about 4500 m/s and the S velocity is about 2700 m/s. The following code highlights S waves, but also introduces some artifacts: 
 
 ```{python}  
-filt_p = np.array([1_000, 2_300, 3_000, 4_000])
-patch_filtered_p = patch_filtered.slope_filter(filt=filt_p)
-patch_filtered_p.viz.waterfall(scale=1);
+filt_s = np.array([1_000, 2_300, 3_000, 4_000])
+patch_filtered_s = patch_filtered.slope_filter(filt=filt_s)
+patch_filtered_s.viz.waterfall(scale=1);
 ```
 
 ### Up/Down separation
 
-Up/down (or left/right) separation is also possible using the `directional` keyword. Up-going (waves moving towards the interrogator according a decreasing distance value) have positive velocities and down-going (waves moving away from the interrogator) have negative velocities. 
+Up/down (or left/right) separation is also possible using the `directional` keyword. Up-going (waves moving towards the interrogator according to a decreasing distance value) have positive velocities and down-going (waves moving away from the interrogator) have negative velocities. 
 
 
 ```{python}  
