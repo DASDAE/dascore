@@ -275,3 +275,23 @@ class TestUpdate:
         dc.spool(index_new_version)
         with pytest.warns(UserWarning, match=msg):
             dc.spool(index_new_version).update()
+
+    def test_update_with_specific_paths(self, basic_indexer):
+        """Test updating with specific file paths to cover _get_paths method."""
+        # Get files in the directory
+        files = list(basic_indexer.path.rglob("*.hdf5"))
+        assert len(files) > 0, "Need at least one file for testing"
+
+        # Test update with specific paths (relative paths)
+        relative_paths = [f.name for f in files[:1]]  # Use just first file
+        updated = basic_indexer.update(paths=relative_paths)
+        contents = updated()
+
+        # Should have at least the file we specified
+        assert len(contents) >= 1
+
+        # Test update with absolute paths
+        absolute_paths = [str(f) for f in files[:1]]
+        updated2 = basic_indexer.update(paths=absolute_paths)
+        contents2 = updated2()
+        assert len(contents2) >= 1
