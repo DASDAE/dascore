@@ -12,7 +12,7 @@ from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord
 from dascore.exceptions import CoordError, ParameterError, PatchError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import get_parent_code_name
+from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
 
 
@@ -661,8 +661,11 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
         If None, all length one dimensions are squeezed.
     """
     coords = self.coords.squeeze(dim)
-    axis = None if dim is None else self.coords.dims.index(dim)
-    data = np.squeeze(self.data, axis=axis)
+    if dim is None:
+        axes = None
+    else:
+        axes = tuple(self.get_axis(x) for x in iterate(dim))
+    data = np.squeeze(self.data, axis=axes)
     return self.new(data=data, coords=coords)
 
 
@@ -735,3 +738,24 @@ def add_distance_to(
     new_coords[f"{prefix}_distance"] = (dims, distance)
     out = patch.update_coords.func(patch, **new_coords)
     return out
+
+
+def get_axis(self: PatchType, dim: str) -> int:
+    """
+    Get the axis corresponding to a Patch dimension. Raise error if not found.
+
+    Parameters
+    ----------
+    self
+        The Patch object.
+    dim
+        The dimension name.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> axis = patch.get_axis("time")
+    >>> assert axis == patch.get_axis("time")
+    """
+    return self.coords.get_axis(dim)

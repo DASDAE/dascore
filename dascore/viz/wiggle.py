@@ -17,7 +17,7 @@ from dascore.utils.time import dtype_time_like
 
 def _get_offsets_factor(patch, dim, scale, other_labels):
     """Get the offsets and scale the data."""
-    dim_axis = patch.dims.index(dim)
+    dim_axis = patch.get_axis(dim)
     # get and apply scale_factor. This controls how far apart the wiggles are.
     diffs = np.max(patch.data, axis=dim_axis) - np.min(patch.data, axis=dim_axis)
     offsets = (np.median(diffs) * scale) * np.arange(len(other_labels))

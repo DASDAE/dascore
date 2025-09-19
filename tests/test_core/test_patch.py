@@ -186,7 +186,7 @@ class TestInit:
             channel_count=2,
         )
         assert patch.shape == patch.coords.shape == patch.data.shape
-        time_shape = patch.shape[patch.dims.index("time")]
+        time_shape = patch.shape[patch.get_axis("time")]
         assert time_shape == len(patch.coords.get_array("time"))
         assert time_shape == len(patch.coords.get_array("time"))
 
@@ -244,7 +244,7 @@ class TestNew:
     def test_new_coord_dict_order(self, random_patch):
         """Ensure data can be init'ed with a dict of coords in any orientation."""
         patch = random_patch
-        axis = patch.dims.index("time")
+        axis = patch.get_axis("time")
         data = np.std(patch.data, axis=axis, keepdims=True)
         new_time = patch.coords.get_array("time")[0:1]
         new_dist = patch.coords.get_array("distance")
@@ -855,7 +855,7 @@ class TestNumpyFuncs:
         out = func(random_patch)
         assert isinstance(out, dc.Patch)
         # Test ufunc reduce
-        time_ind = random_patch.dims.index("time")
+        time_ind = random_patch.get_axis("time")
         out = func.reduce("time")
         assert isinstance(out, dc.Patch)
         assert out.shape[time_ind] == 1

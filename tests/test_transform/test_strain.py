@@ -15,7 +15,7 @@ from dascore.units import get_quantity
 @pytest.fixture(scope="class")
 def linear_velocity_patch(random_patch):
     """A patch increasing linearly along distance dimension."""
-    ind = random_patch.dims.index("distance")
+    ind = random_patch.get_axis("distance")
     dist_len = random_patch.shape[ind]
     new = np.arange(dist_len, dtype=np.float64)
     new_data: np.ndarray = np.broadcast_to(new[:, None], random_patch.shape)

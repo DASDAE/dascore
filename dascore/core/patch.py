@@ -253,8 +253,6 @@ class Patch:
         # This isnt a great name but keeps the numpy tradition.
         return self.transpose()
 
-    # --- Patch ufuncs
-
     # --- basic patch functionality.
 
     update = dascore.proc.update
@@ -283,6 +281,7 @@ class Patch:
     make_broadcastable_to = dascore.proc.make_broadcastable_to
     apply_ufunc = dascore.utils.array.apply_ufunc
     get_patch_names = get_patch_names
+    get_axis = dascore.proc.get_axis
 
     def get_patch_name(self, *args, **kwargs) -> str:
         """
@@ -396,6 +395,9 @@ class Patch:
     velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
     dispersion_phase_shift = transform.dispersion_phase_shift
     tau_p = transform.tau_p
+    hilbert = transform.hilbert
+    envelope = transform.envelope
+    phase_weighted_stack = transform.phase_weighted_stack
 
     # --- Method Namespaces
     # Note: these can't be cached_property (from functools) or references

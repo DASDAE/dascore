@@ -27,7 +27,7 @@ class TestMergeCoordManagers:
     @pytest.fixture(scope="class")
     def conflicting_non_dim_coords(self, cm_basic):
         """Get two coord managers with conflicting non-dimensional coordinates."""
-        dist_ax = cm_basic.dims.index("distance")
+        dist_ax = cm_basic.get_axis("distance")
         rand = np.random.RandomState(42)
         c1 = rand.random(cm_basic.shape[dist_ax])
         c2 = rand.random(c1.shape)
@@ -93,7 +93,7 @@ class TestMergeCoordManagers:
         new_time = out.coord_map["time"]
         assert isinstance(new_time, CoordRange)
         assert new_time.min() == time.min()
-        new_dim_len = out.shape[cm1.dims.index("time")]
+        new_dim_len = out.shape[out.get_axis("time")]
         expected_end = time.min() + (new_dim_len - 1) * time.step
         assert new_time.max() == expected_end
 

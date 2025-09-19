@@ -33,7 +33,7 @@ def rfft(patch: PatchType, dim="time") -> PatchType:
     - This function is not scaled as detailed in the dascore documentation.
     """
     assert dim in patch.dims
-    axis = patch.dims.index(dim)
+    axis = patch.get_axis(dim)
 
     ft = FourierTransformatter()
     data = patch.data
