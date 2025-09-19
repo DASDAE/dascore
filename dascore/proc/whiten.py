@@ -148,7 +148,7 @@ def whiten(
         amp = np.ones_like(fft_patch.data)
     else:
         _check_smooth(fft_coord, smooth_size, water_level)
-        axis = fft_patch.dims.index(fft_dim)
+        axis = fft_patch.get_axis(fft_dim)
         window_len = fft_coord.get_sample_count(smooth_size, enforce_lt_coord=True)
         amp = _get_amp_envelope(fft_patch, axis, window_len, water_level)
     # Init new output from new amplitudes and old phases.

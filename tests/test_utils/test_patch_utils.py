@@ -658,8 +658,8 @@ class TestSwapKwargsDimToAxis:
         new_kwargs = swap_kwargs_dim_to_axis(random_patch, kwargs)
 
         expected_axes = [
-            random_patch.dims.index("time"),
-            random_patch.dims.index("distance"),
+            random_patch.get_axis("time"),
+            random_patch.get_axis("distance"),
         ]
         assert new_kwargs["axis"] == expected_axes
         assert "dim" not in new_kwargs
@@ -688,7 +688,7 @@ class TestSwapKwargsDimToAxis:
         kwargs = {"dim": "time", "dtype": None}
         new_kwargs = swap_kwargs_dim_to_axis(random_patch, kwargs)
 
-        expected_axis = random_patch.dims.index("time")
+        expected_axis = random_patch.get_axis("time")
         assert new_kwargs["axis"] == expected_axis
         assert "dim" not in new_kwargs
         assert new_kwargs["dtype"] is None

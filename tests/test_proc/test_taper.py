@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.exceptions import ParameterError
 from dascore.proc.taper import taper
 from dascore.units import m, percent
@@ -33,7 +34,7 @@ def time_tapered_patch(request, patch_ones):
 
 def _get_start_end_indices(patch, dim):
     """Helper function to get indices for slicing start/end of data."""
-    axis = patch.dims.index(dim)
+    axis = patch.get_axis(dim)
     n_dims = len(patch.dims)
     inds_start = broadcast_for_index(n_dims, axis, 0)
     inds_end = broadcast_for_index(n_dims, axis, -1)
@@ -117,7 +118,7 @@ class TestTaperBasics:
         patch = patch_ones.taper(distance=value)
         data_new = patch.data
         data_old = patch_ones.data
-        dim_len = patch.dims.index("distance")
+        dim_len = patch.get_axis("distance")
         mid_dim = dim_len // 2
 
         assert not np.allclose(data_new, data_old)
@@ -177,7 +178,7 @@ class TestTaperRange:
 
     def test_invert(self, patch_ones):
         """Ensure inverting results in 0s near the peaks of taper."""
-        dim, ax = "time", patch_ones.dims.index("time")
+        dim, ax = "time", patch_ones.get_axis("time")
         coord = patch_ones.get_coord(dim)
         clen = len(coord)
         ind1 = int(clen / 3)

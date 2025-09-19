@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.proc.coords
 from dascore.exceptions import ParameterError
 from dascore.units import m
 from dascore.utils.misc import all_close
@@ -132,7 +133,7 @@ class TestRolling:
     def test_center(self, random_patch):
         """Ensure the center option places NaN at start and end."""
         out = random_patch.rolling(time=1, center=True).mean()
-        time_ax = out.dims.index("time")
+        time_ax = random_patch.get_axis("time")
         first_label = np.take(out.data, -1, axis=time_ax)
         assert np.all(np.isnan(first_label))
         last_label = np.take(out.data, 0, axis=time_ax)
@@ -145,7 +146,7 @@ class TestRolling:
         """
         random = np.random.RandomState(42)
         patch = range_patch
-        axis = patch.dims.index("distance")
+        axis = patch.get_axis("distance")
         # random window and step sizes for each trial run.
         window = random.randint(1, patch.shape[axis])
         step = random.randint(1, patch.shape[axis])
@@ -190,7 +191,7 @@ class TestRolling:
         """Test pandas apply works."""
         # This can be very slow so we use a large window and step size.
         dt = random_patch.get_coord("time").step
-        time_len = random_patch.shape[random_patch.dims.index("time")]
+        time_len = random_patch.shape[random_patch.get_axis("time")]
         window = (time_len - 1) * dt
         step = (time_len - 1) * dt
         roll1 = random_patch.rolling(time=window, step=step, engine="pandas")

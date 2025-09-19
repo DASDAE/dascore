@@ -11,7 +11,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.compat import array, is_array
-from dascore.constants import _AGG_FUNCS, DEFAULT_ATTRS_TO_IGNORE, PatchType
+from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
 from dascore.utils.misc import iterate
@@ -22,12 +22,6 @@ from dascore.utils.patch import (
     align_patch_coords,
     get_dim_axis_value,
     swap_kwargs_dim_to_axis,
-)
-from dascore.utils.time import (
-    dtype_time_like,
-    is_datetime64,
-    to_datetime64,
-    to_timedelta64,
 )
 
 
@@ -297,38 +291,6 @@ class PatchUFunc:
         )
 
 
-def _get_new_coord(coord, dim_reduce="empty"):
-    """Get the new coordinate."""
-
-    def _maybe_handle_datatypes(func, data):
-        """Maybe handle the complexity of date times here."""
-        try:  # First try function directly
-            out = func(data)
-        # Fall back to floats and re-packing.
-        except (TypeError, ValueError, np.core._exceptions.UFuncTypeError):
-            float_data = dc.to_float(data)
-            dfunc = to_datetime64 if is_datetime64(data) else to_timedelta64
-            out = dfunc(func(float_data))
-        return np.atleast_1d(out)
-
-    if dim_reduce == "empty":
-        new_coord = coord.update(shape=(1,), start=None, stop=None, data=None)
-    elif dim_reduce == "squeeze":
-        return None
-    elif (func := _AGG_FUNCS.get(dim_reduce)) or callable(dim_reduce):
-        func = dim_reduce if callable(dim_reduce) else func
-        coord_data = coord.data
-        if dtype_time_like(coord_data):
-            result = _maybe_handle_datatypes(func, coord_data)
-        else:
-            result = func(coord.data)
-        new_coord = coord.update(data=result)
-    else:
-        msg = "dim_reduce must be 'empty', 'squeeze' or valid aggregator."
-        raise ParameterError(msg)
-    return new_coord
-
-
 def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
     """Apply an aggregation operator to patch."""
     data = patch.data
@@ -336,7 +298,7 @@ def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
     dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
     # Iter all specified dimensions.
     for dim, axis, _ in dfo:
-        new_coord = _get_new_coord(patch.get_coord(dim), dim_reduce=dim_reduce)
+        new_coord = patch.get_coord(dim).reduce_coord(dim_reduce=dim_reduce)
         if new_coord is None:
             coords = patch.coords.drop_coords(dim)[0]
             data = func(data, axis=axis)
@@ -433,7 +395,7 @@ def _reassemble_patch(result, patch, func, args, kwargs):
         dims, inds = _get_dims_and_inds_from_signature(patch, sig, args, kwargs)
         # re-expand array.
         result = result[inds]
-        new_coords = {x: _get_new_coord(patch.get_coord(x)) for x in dims}
+        new_coords = {x: patch.get_coord(x).reduce_coord() for x in dims}
         cm = patch.coords.update(**new_coords)
         return patch.new(data=result, coords=cm)
     else:

@@ -102,7 +102,7 @@ class TestWaterfall:
     def test_time_axis_label_int_overflow(self, random_patch):
         """Make sure the time axis labels are correct (windows compatibility)."""
         ax = random_patch.viz.waterfall()
-        name = ["y", "x"][random_patch.dims.index("time")]
+        name = ["y", "x"][random_patch.get_axis("time")]
         # Get the piece of the label corresponding to the starttime
         # WE can just grab the offset text.
         sub_ax = getattr(ax, f"{name}axis")

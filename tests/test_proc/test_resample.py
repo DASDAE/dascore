@@ -19,7 +19,7 @@ class TestInterpolate:
     def test_interp_upsample_distance(self, random_patch):
         """Ensure interpolation between distance works."""
         start, stop, step = get_start_stop_step(random_patch, "distance")
-        axis = random_patch.dims.index("distance")
+        axis = random_patch.get_axis("distance")
         new_sampling = step / 2.2
         new_coord = np.arange(start, stop, new_sampling)
         out = random_patch.interpolate(distance=new_coord)
@@ -29,7 +29,7 @@ class TestInterpolate:
     def test_interp_down_sample_distance(self, random_patch):
         """Ensure interp can be used to downsample data."""
         start, stop, step = get_start_stop_step(random_patch, "distance")
-        axis = random_patch.dims.index("distance")
+        axis = random_patch.get_axis("distance")
         new_sampling = step / 0.1
         new_coord = np.arange(start, stop, new_sampling)
         out = random_patch.interpolate(distance=new_coord)
@@ -46,7 +46,7 @@ class TestInterpolate:
     def test_upsample_time(self, random_patch):
         """Ensure time can be upsampled."""
         start, stop, step = get_start_stop_step(random_patch, "time")
-        axis = random_patch.dims.index("time")
+        axis = random_patch.get_axis("time")
         new = np.arange(start, stop, step / 2)
         out = random_patch.interpolate(time=new)
         assert out.attrs["time_min"] == np.min(new)
@@ -140,7 +140,7 @@ class TestResample:
         """Test decreasing the temporal sampling rate."""
         start, stop, step = get_start_stop_step(random_patch, "time")
         patch = random_patch
-        axis = patch.dims.index("time")
+        axis = patch.get_axis("time")
         new_dt = 2 * step
         new = patch.resample(time=new_dt)
         assert new_dt == new.attrs["time_step"]
@@ -156,7 +156,7 @@ class TestResample:
     def test_upsample_time(self, random_patch):
         """Test increasing the temporal sampling rate."""
         current_dt = random_patch.attrs["time_step"]
-        axis = random_patch.dims.index("time")
+        axis = random_patch.get_axis("time")
         new_dt = current_dt / 2
         new = random_patch.resample(time=new_dt)
         assert new_dt == new.attrs["time_step"]
@@ -171,7 +171,7 @@ class TestResample:
     def test_upsample_time_float(self, random_patch):
         """Test int as time sampling rate."""
         current_dt = random_patch.attrs["time_step"]
-        axis = random_patch.dims.index("time")
+        axis = random_patch.get_axis("time")
         new_dt = current_dt / 2
         new = random_patch.resample(time=new_dt / np.timedelta64(1, "s"))
         assert new_dt == new.attrs["time_step"]
@@ -188,7 +188,7 @@ class TestResample:
         current_dx = random_patch.attrs["distance_step"]
         new_dx = current_dx / 2
         new = random_patch.resample(distance=new_dx)
-        axis = random_patch.dims.index("distance")
+        axis = random_patch.get_axis("distance")
         assert new_dx == new.attrs["distance_step"]
         assert np.allclose(np.diff(new.coords.get_array("distance")), new_dx)
         shape1, shape2 = random_patch.data.shape, new.data.shape
