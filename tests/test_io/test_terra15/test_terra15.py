@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -70,6 +71,20 @@ class TestTerra15:
         """Assert that the generic hdf5 file is not a terra15."""
         parser = Terra15FormatterV4()
         assert not parser.get_format(generic_hdf5)
+
+    def test_unsupported_version_error(self):
+        """Test that unsupported Terra15 version raises NotImplementedError."""
+        from dascore.io.terra15.utils import _get_version_data_node
+
+        # Create a mock HDF5 root object with unsupported version
+        class MockRoot:
+            attrs: ClassVar = {"file_version": "999"}  # Unsupported version
+
+        mock_root = MockRoot()
+
+        # Test that it raises NotImplementedError
+        with pytest.raises(NotImplementedError, match="Unknown Terra15 version"):
+            _get_version_data_node(mock_root)
 
 
 class TestTerra15Unfinished:
