@@ -6,26 +6,19 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 
-from dascore.constants import _AGG_FUNCS, PatchType
+from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, PatchType
 from dascore.utils.array import _apply_aggregator
 from dascore.utils.docs import compose_docstring
 from dascore.utils.patch import patch_function
 
-AGG_DOC_STR = """
+AGG_DOC_STR = f"""
 patch
     The input Patch.
 dim
     The dimension along which aggregations are to be performed.
     If None, apply aggregation to all dimensions sequentially.
     If a sequence, apply sequentially in order provided.
-dim_reduce
-    How to reduce the dimensional coordinate associated with the 
-    aggregated axis. Can be the name of any valid aggregator, a callable,
-    "empty" (the default) - which returns and empty coord, or "squeeze" 
-    which drops the coordinate. For dimensions with datetime or timedelta 
-    datatypes, if the operation fails it will automatically be applied 
-    to the coordinates converted to floats then the output converted back 
-    to the appropriate time type. 
+{DIM_REDUCE_DOCS}
 """
 
 AGG_NOTES = """

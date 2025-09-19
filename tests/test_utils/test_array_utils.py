@@ -9,6 +9,7 @@ import pytest
 from pint import DimensionalityError
 
 import dascore as dc
+import dascore.proc.coords
 from dascore import get_quantity
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
@@ -157,7 +158,7 @@ class TestApplyUfunc:
     def test_patches_non_coords_different_len(self, random_patch):
         """Ensure patches with non-coords of different lengths work."""
         patch_1 = random_patch.mean("distance")
-        dist_ind = patch_1.dims.index("distance")
+        dist_ind = random_patch.get_axis("distance")
         old_shape = list(patch_1.shape)
         old_shape[dist_ind] = old_shape[dist_ind] + 2
         patch_2 = patch_1.make_broadcastable_to(tuple(old_shape))
@@ -233,7 +234,7 @@ class TestPatchUFunc:
         # Check that shape is preserved for accumulate
         assert result.shape == random_patch.shape
         # Verify it's actually doing cumulative sum
-        axis = random_patch.dims.index("time")
+        axis = random_patch.get_axis("time")
         expected = np.cumsum(random_patch.data, axis=axis)
         assert np.allclose(result.data, expected)
 
@@ -246,7 +247,7 @@ class TestPatchUFunc:
 
         assert isinstance(result, dc.Patch)
         # Check that the distance dimension is reduced to size 1
-        dist_axis = random_patch.dims.index("distance")
+        dist_axis = random_patch.get_axis("distance")
         expected_shape = list(random_patch.shape)
         expected_shape[dist_axis] = 1
         assert result.shape == tuple(expected_shape)

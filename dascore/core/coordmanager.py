@@ -370,7 +370,7 @@ class CoordManager(DascoreBaseModel):
                 dim = self.dim_map[name][0]
                 new_coord, indexer = coord.sort(reverse=reverse)
                 new_coords[name] = new_coord
-                indexes.append(self._get_indexer(self.dims.index(dim), indexer))
+                indexes.append(self._get_indexer(self.get_axis(dim), indexer))
                 # also sort related coords.
                 _sort_related(name, dim, indexer, new_coords)
             return new_coords, tuple(indexes)
@@ -720,6 +720,23 @@ class CoordManager(DascoreBaseModel):
             text = Text.assemble(base, coord.__rich__())
             out.append(text)
         return Text.assemble(*out)
+
+    def get_axis(self: Self, dim: str) -> int:
+        """
+        Get the axis corresponding to a Patch dimension. Raise error if not found.
+
+        Parameters
+        ----------
+        self
+            The Patch object.
+        dim
+            The dimension name.
+        """
+        try:
+            return self.dims.index(dim)
+        except (ValueError, IndexError):
+            msg = f"Patch has no dimension: {dim}. Its dimensions are: {self.dims}"
+            raise CoordError(msg)
 
     def __str__(self):
         return str(self.__rich__())

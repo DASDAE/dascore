@@ -12,6 +12,11 @@ on:
       - '**.py'
       - '.github/workflows/run_min_dep_tests.yml'
 
+env:
+  # Ensure matplotlib doesn't try to show figures in CI
+  MPLBACKEND: Agg
+  QT_QPA_PLATFORM: offscreen
+
 # Cancel previous runs when this one starts.
 concurrency:
   group: TestCodeMinDeps-${{ github.event.pull_request.number || github.run_id }}

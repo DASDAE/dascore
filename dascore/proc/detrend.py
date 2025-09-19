@@ -32,6 +32,6 @@ def detrend(patch: PatchType, dim, type="linear") -> PatchType:
     >>> out = pa.detrend("time") # detrend along the time dimension
     """
     assert dim in patch.dims
-    axis = patch.dims.index(dim)
+    axis = patch.get_axis(dim)
     out = scipy_detrend(patch.data, axis=axis, type=type)
     return patch.new(data=out)

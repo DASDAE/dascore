@@ -20,14 +20,14 @@ class TestBasicAggregations:
         """Ensure aggregations can occur."""
         out = random_patch.aggregate(dim="distance", method="first")
         assert out.ndim == random_patch.ndim
-        axis = random_patch.dims.index("distance")
+        axis = random_patch.get_axis("distance")
         inds = broadcast_for_index(len(random_patch.data.shape), axis, 0)
         assert np.allclose(random_patch.data[inds].flatten(), out.data.flatten())
 
     def test_last(self, random_patch):
         """Ensure aggregations can occur."""
         out = random_patch.aggregate(dim="time", method="last")
-        axis = random_patch.dims.index("time")
+        axis = random_patch.get_axis("time")
         inds = broadcast_for_index(len(random_patch.data.shape), axis, -1)
         assert np.allclose(random_patch.data[inds].flatten(), out.data.flatten())
 
@@ -54,6 +54,7 @@ class TestBasicAggregations:
         """Ensure the old dimension can be squeezed out."""
         out = random_patch.aggregate(dim="time", method="mean", dim_reduce="squeeze")
         assert "time" not in out.dims
+        assert out.ndim == 1
 
     def test_dim_reduce_mean(self, random_patch):
         """Ensure the mean value can be left on the coord."""
