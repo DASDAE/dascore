@@ -208,7 +208,7 @@ class CoordManager(DascoreBaseModel):
             "future dascore version it will return a BaseCoord instance. "
             "Use patch.coords.get_array(coord_name) instead."
         )
-        warnings.warn(msg, UserWarning, stacklevel=2)
+        warnings.warn(msg, UserWarning, stacklevel=6)
         return self.get_coord(item).values
 
     def __getattr__(self, item) -> BaseCoord:

@@ -146,12 +146,28 @@ class Patch:
     # Also add reverse operators
 
     __radd__ = __add__
-    __rsub__ = __sub__
+
+    def __rsub__(self, other):
+        """Reverse subtraction: other - self."""
+        return dascore.utils.array.apply_ufunc(np.subtract, other, self)
+
     __rmul__ = __mul__
-    __rpow__ = __pow__
-    __rtruediv__ = __truediv__
-    __rfloordiv__ = __floordiv__
-    __rmod__ = __mod__
+
+    def __rpow__(self, other):
+        """Reverse power: other ** self."""
+        return dascore.utils.array.apply_ufunc(np.power, other, self)
+
+    def __rtruediv__(self, other):
+        """Reverse true division: other / self."""
+        return dascore.utils.array.apply_ufunc(np.divide, other, self)
+
+    def __rfloordiv__(self, other):
+        """Reverse floor division: other // self."""
+        return dascore.utils.array.apply_ufunc(np.floor_divide, other, self)
+
+    def __rmod__(self, other):
+        """Reverse modulo: other % self."""
+        return dascore.utils.array.apply_ufunc(np.mod, other, self)
 
     def __neg__(self):
         return self.update(data=-self.data)

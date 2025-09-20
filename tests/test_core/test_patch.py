@@ -650,6 +650,26 @@ class TestApplyOperator:
         assert np.issubdtype(out.dtype, np.bool_)
         assert not out.all()
 
+    def test_reverse_subtraction(self):
+        """Test that reverse subtraction works correctly."""
+        patch = dc.get_example_patch("random_das")
+        scalar = 10.0
+        # Test reverse subtraction: scalar - patch
+        result = scalar - patch
+        # The result should be scalar - patch.data, not patch.data - scalar
+        expected = scalar - patch.data
+        assert np.allclose(result.data, expected)
+
+    def test_reverse_subtraction_with_array(self):
+        """Test reverse subtraction with array."""
+        patch = dc.get_example_patch("random_das")
+        array = np.ones_like(patch.data) * 5.0
+        # Test array - patch
+        result = array - patch
+        # Should be array - patch.data
+        expected = array - patch.data
+        assert np.allclose(result.data, expected)
+
 
 class TestBool:
     """Tests for boolean operators on Patches."""
