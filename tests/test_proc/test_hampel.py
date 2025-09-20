@@ -205,16 +205,15 @@ class TestHampelFilter:
         # With uniform data, output should be same as input
         np.testing.assert_array_equal(result.data, patch_uniform_data.data)
 
-    def test_get_hampel_window_size_function(self, patch_with_spikes):
-        """Test the _get_hampel_window_size helper function."""
-        from dascore.proc.hampel import _get_hampel_window_size
+    def test_window_size_validation(self, patch_with_spikes):
+        """Test window size validation via public API."""
+        # Test that even window sizes raise errors when samples=True
+        with pytest.raises(ParameterError, match="windows must be odd"):
+            patch_with_spikes.hampel_filter(time=4, threshold=3.5, samples=True)
 
-        # Test with valid parameters
-        kwargs = {"time": 1.0}
-        size = _get_hampel_window_size(patch_with_spikes, kwargs, samples=False)
-
-        assert isinstance(size, tuple)
-        assert len(size) > 0
+        # Test minimum sample validation
+        with pytest.raises(ParameterError, match="must have at least 3 samples"):
+            patch_with_spikes.hampel_filter(time=0, threshold=3.5, samples=True)
 
     def test_non_separable_conditions(self, patch_with_spikes):
         """Test conditions where separable mode is not used."""
@@ -231,9 +230,9 @@ class TestHampelFilter:
         assert result2.data.shape == patch_with_spikes.data.shape
 
         # Test case 3: not all(s > 1 for s in size) (some dimensions have size 1)
-        # This will use the separable path since it has 2 dimensions with size > 1
+        # Use a larger time window but force distance to minimum to test separable guard
         result3 = patch_with_spikes.hampel_filter(
-            time=0.6, distance=3.0, threshold=3.5, separable=True
+            time=5, distance=3, threshold=3.5, separable=True, samples=True
         )
         assert result3.data.shape == patch_with_spikes.data.shape
 

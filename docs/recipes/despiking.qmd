@@ -1,7 +1,7 @@
 ---
 title: "Despiking"
 execute:
-  warn: false
+  warning: false
 ---
 
 This recipe demonstrates how to remove spikes from DAS data.
@@ -23,7 +23,6 @@ We'll start by creating synthetic data with artificial spikes to demonstrate the
 
 ```{python}
 import numpy as np
-import matplotlib.pyplot as plt
 
 import dascore as dc
 
@@ -42,7 +41,7 @@ data[150, 200] = 1200.0  # Another positive spike
 data[:, 75] = 1500.0
 
 # Add time spike
-data [75, :] = -1400
+data[75, :] = -1400
 
 # Create patch with spikes
 spike_patch = patch.update(data=data)
@@ -63,12 +62,12 @@ filtered_time = spike_patch.hampel_filter(time=0.02, threshold=3.5)
 ax = filtered_time.viz.waterfall(**plot_kwargs)
 ax.set_title("Filtered along Time (threshold=3.5)");
 ```
-The resulting signal had some of the spikes removed with minimal distorting to the original signal. To remove the time spike, we need to apply the filter along the distance axis. We could apply two filters separately, but often a multidimensional filter is easier.  
+The resulting signal had some of the spikes removed with minimal distortion to the original signal. To remove the time spike, we need to apply the filter along the distance axis. We could apply two filters separately, but often a multidimensional filter is easier.  
 
 
-```{warning}
+::: {.callout-warning}
 The Hampel filter can be quite slow if large windows are used. We recommend using window sizes that correspond to <10 samples for most cases.
-```
+:::
 
 ### Multi-dimensional Filtering
 
