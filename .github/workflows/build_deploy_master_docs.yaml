@@ -37,6 +37,7 @@ jobs:
           fetch-tags: "true"
           fetch-depth: '0'
 
+      - uses: ./.github/actions/prep_doc_build
 
       - uses: ./.github/actions/mamba-install-dascore
         with:
