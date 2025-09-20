@@ -37,11 +37,12 @@ jobs:
           fetch-tags: "true"
           fetch-depth: '0'
 
-
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: "3.12"
           environment-file: './.github/doc_environment.yml'
+
+      - uses: ./.github/actions/prep_doc_build
 
       - name: publish docs to netlify
         shell: bash -l {0}
