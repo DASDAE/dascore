@@ -131,20 +131,27 @@ def hampel_filter(
     size = get_patch_window_size(
         patch, kwargs, samples, require_odd=True, warn_above=10, min_samples=3
     )
+
+    # Convert to float64 to avoid integer overflow/precision loss
+    dataf = data.astype(np.float64, copy=False)
+
     # Local median and MAD via median filters.
     if separable and sum(s > 1 for s in size) >= 2:
         # Use separable filtering for multi-dimensional windows
         # This is faster but provides an approximation
-        med = _separable_median(data, size, mode)
-        abs_med_diff = np.abs(data - med)
+        med = _separable_median(dataf, size, mode)
+        abs_med_diff = np.abs(dataf - med)
         mad = _separable_median(abs_med_diff, size, mode)
     else:
         # Use standard 2D median filter (more accurate but slower)
-        med, abs_med_diff, mad = _calculate_standard_median_and_mad(data, size, mode)
+        med, abs_med_diff, mad = _calculate_standard_median_and_mad(dataf, size, mode)
     # Handle mad values of 0 so denominator doesn't blow up.
     mad_safe = np.where(mad == 0.0, np.finfo(float).eps, mad)
     # Hampel test and replacement.
     thresholded = abs_med_diff / mad_safe
-    out = np.where(thresholded > threshold, med, data)
+    out = np.where(thresholded > threshold, med, dataf)
+    # Cast back to original dtype (round if original was integer)
+    if np.issubdtype(data.dtype, np.integer):
+        out = np.rint(out)
     out = out.astype(data.dtype, copy=False)
     return patch.update(data=out)

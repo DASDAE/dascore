@@ -102,7 +102,7 @@ class TestWienerFilter:
     def test_parameter_validation(self, noisy_patch):
         """Test parameter validation."""
         # Test no parameters
-        with pytest.raises(ParameterError, match="must specify"):
+        with pytest.raises(ParameterError, match="Must specify"):
             noisy_patch.wiener_filter()
 
     def test_uniform_data(self, uniform_patch):
@@ -187,7 +187,7 @@ class TestWienerFilter:
         result = reduced_patch.wiener_filter(time=5, samples=True)
         assert result.data.shape == reduced_patch.data.shape
 
-    def test_noise_reduction_effectiveness(self, noisy_patch):
+    def test_noise_reduction_effectiveness(self):
         """Test that the filter actually reduces noise."""
         # Create a simple test with a known signal
         # Use a simple constant signal with added noise

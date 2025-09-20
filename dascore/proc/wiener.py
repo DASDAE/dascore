@@ -7,6 +7,7 @@ from __future__ import annotations
 from scipy.signal import wiener
 
 from dascore.constants import PatchType
+from dascore.exceptions import ParameterError
 from dascore.utils.patch import get_patch_window_size, patch_function
 
 
@@ -69,6 +70,13 @@ def wiener_filter(
     This implementation uses scipy.signal.wiener which performs adaptive
     noise reduction based on local statistics within the specified window.
     """
+    if not kwargs:
+        msg = (
+            "To use wiener_filter you must specify dimension-specific window "
+            "sizes via kwargs (e.g., time=5, distance=3)"
+        )
+        raise ParameterError(msg)
+
     size = get_patch_window_size(patch, kwargs, samples, min_samples=1)
     filtered_data = wiener(patch.data, mysize=size, noise=noise)
     return patch.update(data=filtered_data)

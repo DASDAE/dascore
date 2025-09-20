@@ -625,8 +625,9 @@ def get_dim_axis_value(
     overlap = patch_dim_set & input_set
     # Determine if there is the right number of overlaps.
     if not overlap or (len(overlap) > 1 and not allow_multiple):
+        expect = "at least one" if allow_multiple else "exactly one"
         msg = (
-            "You must specify one dimension name(s) in args or kwargs. "
+            f"You must specify {expect} dimension name in args or kwargs. "
             f"You passed the following kwargs: {kwargs} args: {args} "
             f"to a patch with dimensions {patch.dims}"
         )
@@ -681,6 +682,7 @@ def get_patch_window_size(
     require_odd: bool = False,
     warn_above: int | None = None,
     min_samples: int = 1,
+    enforce_lt_coord: bool = False,
 ) -> tuple[int, ...]:
     """
     Get window sizes for patch processing operations.
@@ -700,6 +702,8 @@ def get_patch_window_size(
         If specified, warn when any dimension window size exceeds this value.
     min_samples
         Minimum number of samples required per dimension.
+    enforce_lt_coord
+        If True, reject windows larger than coordinate length.
 
     Returns
     -------
@@ -711,12 +715,18 @@ def get_patch_window_size(
         If window sizes are too small, or if require_odd=True and samples=True
         but window size is even.
     """
+    # Handle empty kwargs case - return all ones
+    if not kwargs:
+        return tuple([1] * patch.data.ndim)
+
     aggs = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
     size = [1] * patch.data.ndim
 
     for name, axis, val in aggs:
         coord = patch.get_coord(name, require_evenly_sampled=True)
-        samps = coord.get_sample_count(val, samples=samples)
+        samps = coord.get_sample_count(
+            val, samples=samples, enforce_lt_coord=enforce_lt_coord
+        )
 
         # Check minimum samples requirement
         if samps < min_samples:

@@ -14,6 +14,7 @@ import dascore as dc
 from dascore import patch_function
 from dascore.constants import PatchType
 from dascore.exceptions import (
+    CoordError,
     IncompatiblePatchError,
     ParameterError,
     PatchAttributeError,
@@ -802,14 +803,14 @@ class TestGetPatchWindowSize:
             assert size[time_axis] == 5
 
     def test_empty_kwargs(self, simple_patch):
-        """Test with empty kwargs raises ParameterError."""
-        match = "You must specify"
-        with pytest.raises(ParameterError, match=match):
-            get_patch_window_size(simple_patch, {})
+        """Test with empty kwargs returns all ones."""
+        size = get_patch_window_size(simple_patch, {})
+        assert all(s == 1 for s in size)
+        assert len(size) == simple_patch.data.ndim
 
     def test_invalid_dimension_raises(self, simple_patch):
         """Test invalid dimension name raises error."""
-        with pytest.raises(Exception):  # Should raise during get_dim_axis_value
+        with pytest.raises(ParameterError):
             get_patch_window_size(simple_patch, {"invalid_dim": 5})
 
     def test_non_evenly_sampled_raises(self, simple_patch):
@@ -824,5 +825,5 @@ class TestGetPatchWindowSize:
             time_vals = np.concatenate([time_vals, extra_vals])
         irregular_patch = simple_patch.update_coords(time=time_vals[:time_size])
 
-        with pytest.raises(Exception):  # Should raise during require_evenly_sampled
+        with pytest.raises(CoordError):
             get_patch_window_size(irregular_patch, {"time": 0.5})

@@ -233,7 +233,7 @@ class TestNotchFilter:
         """Test that no dimension raises an appropriate error."""
         msg = "You must"
         with pytest.raises(ParameterError, match=msg):
-            random_patch.median_filter()
+            random_patch.notch_filter(q=30)
 
     def test_notch_filter_time(self, random_patch):
         """Test the notch filter along the time dimension."""
@@ -282,7 +282,7 @@ class TestSavgolFilter:
         """Ensure no kwargs raises."""
         msg = "You must"
         with pytest.raises(ParameterError, match=msg):
-            random_patch.median_filter()
+            random_patch.savgol_filter(polyorder=2)
 
     def test_savgol_filter_time(self, random_patch):
         """Test savgol filter in time dimension."""

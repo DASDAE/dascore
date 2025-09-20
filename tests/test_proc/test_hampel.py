@@ -387,3 +387,10 @@ class TestHampelFilter:
                 result.data[individual_spike_time, individual_spike_dist]
             )
             assert filtered_spike < original_spike / 2
+
+    def test_int_patch(self, random_patch):
+        """Ensure a patch with int type works."""
+        data = np.round(random_patch.data * 100).astype(np.int64)
+        patch = random_patch.update(data=data)
+        out = patch.hampel_filter(time=5, samples=True, threshold=5)
+        assert np.issubdtype(out.dtype, np.integer)
