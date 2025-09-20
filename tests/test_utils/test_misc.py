@@ -480,6 +480,18 @@ class TestDeepEqualityCheck:
         dict2 = {"obj": obj2}
         assert not deep_equality_check(dict1, dict2)
 
+    def test_top_level_dataframe_equality(self):
+        """Test when top level dfs are equal."""
+        df1 = pd.DataFrame({"a": [1, 2, 3]})
+        df2 = pd.DataFrame({"a": [1, 2, 3]})
+        assert deep_equality_check(df1, df2) is True
+
+    def test_top_level_dataframe_inequality(self):
+        """Test when top-level dicts are not equal."""
+        df1 = pd.DataFrame({"a": [1, 2, 3]})
+        df2 = pd.DataFrame({"a": [1, 2, 4]})
+        assert deep_equality_check(df1, df2) is False
+
     def test_numpy_array_equal(self):
         """Test numpy array comparison (equal)."""
         arr1 = np.array([1, 2, 3])
@@ -544,7 +556,6 @@ class TestDeepEqualityCheck:
 
     def test_mixed_comparison_types(self):
         """Test comparison with mixed types to ensure full coverage."""
-        import pandas as pd
 
         class CustomObj:
             def __init__(self, val):
@@ -573,7 +584,6 @@ class TestDeepEqualityCheck:
 
     def test_one_has_equals_method_other_doesnt(self):
         """Test when only one object has equals method."""
-        import pandas as pd
 
         class NoEqualsMethod:
             def __init__(self, val):
@@ -655,3 +665,19 @@ class TestDeepEqualityCheck:
 
         # This should detect the circular reference and return True
         assert deep_equality_check(dict1, dict2)
+
+    def test_top_level_dataframe_comparison_returns_bool(self):
+        """Test that comparing DataFrames directly returns bool, not Series."""
+        df1 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        df2 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        df3 = pd.DataFrame({"a": [1, 2, 4], "b": [4, 5, 6]})
+
+        # Test equal DataFrames
+        result = deep_equality_check(df1, df2)
+        assert isinstance(result, bool), f"Expected bool, got {type(result)}"
+        assert result is True
+
+        # Test unequal DataFrames
+        result = deep_equality_check(df1, df3)
+        assert isinstance(result, bool), f"Expected bool, got {type(result)}"
+        assert result is False

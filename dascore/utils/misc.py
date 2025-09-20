@@ -831,8 +831,14 @@ def deep_equality_check(obj1, obj2, visited=None):
             equal = obj1 == obj2
             # Handle numpy arrays and other array-like objects
             if hasattr(equal, "all"):
-                return equal.all()
-            return equal
+                result = equal.all()
+                # Handle case where .all() returns a Series (e.g., pandas DataFrame)
+                # In such cases, call .all() again to get a boolean
+                if hasattr(result, "all"):
+                    result = result.all()
+                # Ensure we return a Python bool, not numpy.bool_
+                return bool(result)
+            return bool(equal)
         except (ValueError, TypeError):
             # For objects that can't be compared, fall back to False
             return False
@@ -846,11 +852,11 @@ def deep_equality_check(obj1, obj2, visited=None):
     pair_id = (obj1_id, obj2_id)
     # If we've already started comparing these exact objects,
     # avoid infinite recursion
-    if pair_id in visited:
+    if pair_id in visited or (obj2_id, obj1_id) in visited:
         return True  # Equal for circular refs to avoid infinite recursion
     visited.add(pair_id)
     try:
-        if not isinstance(obj1, dict) or not isinstance(obj2, dict):
+        if not isinstance(obj1, Mapping) or not isinstance(obj2, Mapping):
             # Non-dict comparison, handle arrays and other types
             return _robust_equality_check(obj1, obj2)
 
@@ -861,7 +867,7 @@ def deep_equality_check(obj1, obj2, visited=None):
             # Check for object identity first to handle self-references
             if val1 is val2:
                 continue
-            elif isinstance(val1, dict) and isinstance(val2, dict):
+            elif isinstance(val1, Mapping) and isinstance(val2, Mapping):
                 if not deep_equality_check(val1, val2, visited):
                     return False
             # this is primarily for dataframes which have equals method.
