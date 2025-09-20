@@ -159,26 +159,17 @@ def hampel_filter(
     ...     time=1.0, distance=5.0, threshold=3.5, separable=True
     ... )
     """
-    if threshold <= 0:
-        msg = "hampel_filter threshold must be greater than zero"
+    if threshold <= 0 or not np.isfinite(threshold):
+        msg = "hampel_filter threshold must be finite and greater than zero"
         raise ParameterError(msg)
-    if not np.isfinite(threshold):
-        raise ParameterError("hampel_filter `threshold` must be finite.")
-
     # First build axis windows
     data = patch.data
     # For now we just hardcode mode as it is probably the only one that
     # makes sense in a DAS data context.
     mode = "reflect"
     size = _get_hampel_window_size(patch, kwargs, samples)
-
-    # No-op if no dimension was selected (all ones).
-    if all(s == 1 for s in size):
-        return patch
-
     # Convert to float64 to avoid integer overflow/precision loss
     dataf = np.asarray(data, dtype=np.float64)
-
     # Local median and MAD via median filters.
     if separable and sum(s > 1 for s in size) >= 2:
         # Use separable filtering for multi-dimensional windows
@@ -189,14 +180,10 @@ def hampel_filter(
     else:
         # Use standard 2D median filter (more accurate but slower)
         med, abs_med_diff, mad = _calculate_standard_median_and_mad(dataf, size, mode)
-
     # Handle mad values of 0 so denominator doesn't blow up.
     mad_safe = np.where(mad == 0.0, np.finfo(float).eps, mad)
     # Hampel test and replacement.
     thresholded = abs_med_diff / mad_safe
     out = np.where(thresholded > threshold, med, dataf)
-    # Cast back to original dtype (round if original was integer)
-    if np.issubdtype(data.dtype, np.integer):
-        out = np.rint(out)
     out = out.astype(data.dtype, copy=False)
     return patch.update(data=out)

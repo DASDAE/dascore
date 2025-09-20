@@ -275,7 +275,7 @@ class TestHampelFilter:
 
     def test_bad_threshold_raises(self, patch_with_spikes):
         """Ensure a bad threshold raises ParameterError."""
-        with pytest.raises(ParameterError, match="must be greater than zero"):
+        with pytest.raises(ParameterError, match="greater than zero"):
             patch_with_spikes.hampel_filter(time=0.6, threshold=0)
         with pytest.raises(ParameterError, match="must be finite"):
             patch_with_spikes.hampel_filter(time=0.6, threshold=np.inf)
