@@ -133,7 +133,7 @@ website:
         - section: "Processing"
           contents:
 
-            - recipes/despike.qmd
+            - recipes/despiking.qmd
             - recipes/smoothing.qmd
             - recipes/correlate.qmd
             - recipes/edge_effects.qmd
