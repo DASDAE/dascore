@@ -123,7 +123,7 @@ def hampel_filter(
 
     See Also
     --------
-    - The (Despikine recipe)[`docs/recipes/despiking.qmd`].
+    - The (Despiking recipe)[`docs/recipes/despiking.qmd`].
 
     Examples
     --------
