@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import inspect
 import sys
+import warnings
 from collections import namedtuple
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
@@ -625,16 +626,14 @@ def get_dim_axis_value(
     # Determine if there is the right number of overlaps.
     if not overlap or (len(overlap) > 1 and not allow_multiple):
         msg = (
-            "You must use exactly one dimension name in args or kwargs. "
+            "You must specify one dimension name(s) in args or kwargs. "
             f"You passed the following kwargs: {kwargs} args: {args} "
             f"to a patch with dimensions {patch.dims}"
         )
-        raise PatchCoordinateError(msg)
+        raise ParameterError(msg)
     # Handle the case of extra inputs
     if (remaining := input_set - patch_dim_set) and not allow_extra:
-        msg = (
-            "The following input dimensions are not found in the patch. " f"{remaining}"
-        )
+        msg = f"The following input dimensions are not found in the patch. {remaining}"
         raise PatchCoordinateError(msg)
     # Ensure order is preserved (eg args, then kwargs)
     dim_out = tuple(x for x in args + tuple(kwargs) if x in overlap)
@@ -672,6 +671,85 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
         )
         raise CoordDataError(msg)
     return 1.0 / d_dim
+
+
+def get_patch_window_size(
+    patch: PatchType,
+    kwargs: dict,
+    samples: bool = False,
+    *,
+    require_odd: bool = False,
+    warn_above: int | None = None,
+    min_samples: int = 1,
+) -> tuple[int, ...]:
+    """
+    Get window sizes for patch processing operations.
+
+    Parameters
+    ----------
+    patch
+        The input patch.
+    kwargs
+        Keyword arguments specifying dimension names and their window sizes.
+    samples
+        If True, kwargs values are in samples; if False, in coordinate units.
+    require_odd
+        If True, require odd window sizes. When samples=False, even sizes
+        are adjusted to be odd. When samples=True, even sizes raise ParameterError.
+    warn_above
+        If specified, warn when any dimension window size exceeds this value.
+    min_samples
+        Minimum number of samples required per dimension.
+
+    Returns
+    -------
+    Tuple of window sizes for each dimension of the patch data.
+
+    Raises
+    ------
+    ParameterError
+        If window sizes are too small, or if require_odd=True and samples=True
+        but window size is even.
+    """
+    aggs = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
+    size = [1] * patch.data.ndim
+
+    for name, axis, val in aggs:
+        coord = patch.get_coord(name, require_evenly_sampled=True)
+        samps = coord.get_sample_count(val, samples=samples)
+
+        # Check minimum samples requirement
+        if samps < min_samples:
+            msg = (
+                f"Window must have at least {min_samples} samples along each "
+                f"dimension. {name} has {samps} samples. Try increasing its value."
+            )
+            raise ParameterError(msg)
+
+        # Handle odd number requirement
+        if require_odd and (samps % 2 != 1):
+            if not samples:
+                # Adjust even sizes to odd when samples=False
+                samps += 1
+            else:
+                # Raise error when samples=True and size is even
+                msg = (
+                    f"For clean median calculation, dimension windows must be odd "
+                    f"but {name} has a value of {samps} samples."
+                )
+                raise ParameterError(msg)
+
+        # Issue warning for large window sizes
+        if warn_above is not None and samps > warn_above:
+            msg = (
+                f"Large window size ({samps} samples) in dimension '{name}' "
+                f"may result in slow performance. Consider reducing the window size."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=3)
+
+        size[axis] = samps
+
+    return tuple(size)
 
 
 def _get_data_units_from_dims(patch, dims, operator):

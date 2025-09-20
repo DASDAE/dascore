@@ -102,22 +102,8 @@ class TestWienerFilter:
     def test_parameter_validation(self, noisy_patch):
         """Test parameter validation."""
         # Test no parameters
-        with pytest.raises(
-            ParameterError, match="Must specify dimension-specific window sizes"
-        ):
+        with pytest.raises(ParameterError, match="must specify"):
             noisy_patch.wiener_filter()
-
-    def test_dimension_window_size_validation(self, noisy_patch):
-        """Test dimension-specific window size validation."""
-        # Test with zero window size which should result in 0 samples
-        with pytest.raises(ParameterError, match="must have at least 1 sample"):
-            noisy_patch.wiener_filter(distance=0, samples=True)
-
-    def test_even_window_size_warning(self, noisy_patch):
-        """Test warning for even window sizes when samples=True."""
-        # This should issue a warning for even window size
-        with pytest.warns(UserWarning, match="should be odd"):
-            noisy_patch.wiener_filter(time=4, samples=True)
 
     def test_uniform_data(self, uniform_patch):
         """Test Wiener filter on uniform data."""
@@ -205,9 +191,9 @@ class TestWienerFilter:
         """Test that the filter actually reduces noise."""
         # Create a simple test with a known signal
         # Use a simple constant signal with added noise
-        np.random.seed(123)
+        rand = np.random.RandomState(123)
         simple_signal = np.ones((50, 50)) * 5.0
-        noise = np.random.normal(0, 0.5, simple_signal.shape)
+        noise = rand.normal(0, 0.5, simple_signal.shape)
         noisy_signal = simple_signal + noise
 
         # Create patch
@@ -228,23 +214,11 @@ class TestWienerFilter:
         # smoothing/noise reduction)
         assert filtered_variance <= original_variance
 
-    def test_get_wiener_window_size_function(self, noisy_patch):
-        """Test the _get_wiener_window_size helper function."""
-        from dascore.proc.wiener import _get_wiener_window_size
-
-        # Test with valid parameters
-        kwargs = {"time": 5}
-        size = _get_wiener_window_size(noisy_patch, kwargs, samples=True)
-
-        assert isinstance(size, tuple)
-        assert len(size) == noisy_patch.data.ndim
-        # Should have 5 samples for time dimension (axis depends on patch dims)
-        assert 5 in size
-
     def test_edge_case_small_patch(self):
         """Test with very small patch."""
         # Create a small patch
-        small_data = np.random.rand(3, 3)
+        rand = np.random.RandomState(242)
+        small_data = rand.rand(3, 3)
         patch = dc.Patch(
             data=small_data,
             coords={"time": np.arange(3), "distance": np.arange(3)},

@@ -7,38 +7,7 @@ from __future__ import annotations
 from scipy.signal import wiener
 
 from dascore.constants import PatchType
-from dascore.exceptions import ParameterError
-from dascore.utils.patch import get_dim_axis_value, patch_function
-
-
-def _get_wiener_window_size(patch, kwargs, samples):
-    """Get the size of the wiener filter window."""
-    aggs = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
-    size = [1] * patch.data.ndim
-    for name, axis, val in aggs:
-        coord = patch.get_coord(name, require_evenly_sampled=True)
-        samps = coord.get_sample_count(val, samples=samples)
-        if samps < 1:
-            msg = (
-                f"wiener filter must have at least 1 sample along each dimension. "
-                f"{name} has {samps} samples. Try increasing its value."
-            )
-            raise ParameterError(msg)
-        # Wiener filter requires odd window sizes for best results
-        if (samps % 2 != 1) and not samples:
-            samps += 1
-        if (samps % 2 != 1) and samples:
-            msg = (
-                "For optimal Wiener filtering, dimension windows should be odd "
-                f"but {name} has a value of {samps} samples. Consider using an "
-                "odd number."
-            )
-            import warnings
-
-            warnings.warn(msg, UserWarning)
-
-        size[axis] = samps
-    return tuple(size)
+from dascore.utils.patch import get_patch_window_size, patch_function
 
 
 @patch_function()
@@ -67,7 +36,8 @@ def wiener_filter(
         If True, values specified by kwargs are in samples not coordinate units.
     **kwargs
         Used to specify the window sizes for each dimension. Each selected
-        dimension must be evenly sampled.
+        dimension must be evenly sampled. It works best when the window samples
+        are odd.
 
     Returns
     -------
@@ -99,23 +69,6 @@ def wiener_filter(
     This implementation uses scipy.signal.wiener which performs adaptive
     noise reduction based on local statistics within the specified window.
     """
-    # Use kwargs to specify per-dimension window sizes
-    if not kwargs:
-        msg = (
-            "Must specify dimension-specific window sizes via kwargs "
-            "(e.g., time=5, distance=3)"
-        )
-        raise ParameterError(msg)
-
-    size = _get_wiener_window_size(patch, kwargs, samples)
-    # Convert size tuple to format expected by scipy.signal.wiener
-    # scipy.signal.wiener expects None for single value or a list of ints
-    # (no None values)
-    if all(s == 1 for s in size):
-        # All dimensions have size 1, use default behavior
-        filtered_data = wiener(patch.data, mysize=None, noise=noise)
-    else:
-        # Use the size tuple directly (no None values)
-        filtered_data = wiener(patch.data, mysize=size, noise=noise)
-
+    size = get_patch_window_size(patch, kwargs, samples, min_samples=1)
+    filtered_data = wiener(patch.data, mysize=size, noise=noise)
     return patch.update(data=filtered_data)

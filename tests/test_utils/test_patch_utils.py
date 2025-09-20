@@ -25,6 +25,7 @@ from dascore.utils.patch import (
     concatenate_patches,
     get_dim_axis_value,
     get_patch_names,
+    get_patch_window_size,
     merge_compatible_coords_attrs,
     patches_to_df,
     stack_patches,
@@ -202,8 +203,8 @@ class TestGetDimAxisValue:
     def test_raises_no_overlap(self, random_patch):
         """Test that an exception is raised when key doesn't exist."""
         kwargs = {}
-        msg = "exactly one dimension"
-        with pytest.raises(PatchCoordinateError, match=msg):
+        msg = "You must specify"
+        with pytest.raises(ParameterError, match=msg):
             get_dim_axis_value(random_patch, kwargs=kwargs)
 
     def test_raises_extra(self, random_patch):
@@ -234,8 +235,8 @@ class TestGetDimAxisValue:
         out = get_dim_axis_value(random_patch, kwargs=kwargs, allow_multiple=True)
         assert len(out) == len(random_patch.dims)
         # But if not it should raise
-        msg = "exactly one dimension"
-        with pytest.raises(PatchCoordinateError, match=msg):
+        msg = "You must specify"
+        with pytest.raises(ParameterError, match=msg):
             get_dim_axis_value(random_patch, kwargs=kwargs, allow_multiple=False)
 
 
@@ -708,3 +709,120 @@ class TestSwapKwargsDimToAxis:
 
         with pytest.raises(ParameterError, match="Dimension 'invalid_dim' not found"):
             swap_kwargs_dim_to_axis(random_patch, kwargs)
+
+
+class TestGetPatchWindowSize:
+    """Tests for the get_patch_window_size function."""
+
+    @pytest.fixture()
+    def simple_patch(self):
+        """Create a simple patch for testing."""
+        patch = dc.get_example_patch()
+        return patch.update_coords(time_step=0.2)  # Make windows reasonable
+
+    def test_basic_window_size(self, simple_patch):
+        """Test basic window size calculation."""
+        size = get_patch_window_size(simple_patch, {"time": 0.6})
+        assert isinstance(size, tuple)
+        assert len(size) == simple_patch.data.ndim
+        # Find which axis corresponds to time
+        time_axis = simple_patch.dims.index("time")
+        distance_axis = simple_patch.dims.index("distance")
+        assert size[time_axis] > 1  # time dimension should have window > 1
+        assert size[distance_axis] == 1  # distance dimension should be 1
+
+    def test_multiple_dimensions(self, simple_patch):
+        """Test window size with multiple dimensions."""
+        size = get_patch_window_size(simple_patch, {"time": 0.6, "distance": 3.0})
+        time_axis = simple_patch.dims.index("time")
+        distance_axis = simple_patch.dims.index("distance")
+        assert size[time_axis] > 1  # time dimension
+        assert size[distance_axis] > 1  # distance dimension
+
+    def test_samples_true(self, simple_patch):
+        """Test with samples=True parameter."""
+        size = get_patch_window_size(simple_patch, {"time": 5}, samples=True)
+        time_axis = simple_patch.dims.index("time")
+        assert size[time_axis] == 5
+
+    def test_require_odd_true_samples_false(self, simple_patch):
+        """Test require_odd=True with samples=False adjusts even sizes."""
+        # Use a value that would give even samples
+        coord = simple_patch.get_coord("time")
+        step = coord.step
+        even_value = step * 4  # Should give 4 samples
+
+        size = get_patch_window_size(
+            simple_patch, {"time": even_value}, samples=False, require_odd=True
+        )
+        # Should be adjusted to 5 (next odd number)
+        time_axis = simple_patch.dims.index("time")
+        assert size[time_axis] % 2 == 1
+
+    def test_require_odd_true_samples_true_even_raises(self, simple_patch):
+        """Test require_odd=True with samples=True raises for even sizes."""
+        with pytest.raises(ParameterError, match="windows must be odd"):
+            get_patch_window_size(
+                simple_patch, {"time": 4}, samples=True, require_odd=True
+            )
+
+    def test_require_odd_true_samples_true_odd_passes(self, simple_patch):
+        """Test require_odd=True with samples=True passes for odd sizes."""
+        size = get_patch_window_size(
+            simple_patch, {"time": 5}, samples=True, require_odd=True
+        )
+        time_axis = simple_patch.dims.index("time")
+        assert size[time_axis] == 5
+
+    def test_min_samples_validation(self, simple_patch):
+        """Test minimum samples validation."""
+        with pytest.raises(ParameterError, match="at least 3 samples"):
+            get_patch_window_size(
+                simple_patch, {"time": 2}, samples=True, min_samples=3
+            )
+
+    def test_warn_above_warning(self, simple_patch):
+        """Test warning for large window sizes."""
+        with pytest.warns(UserWarning, match="Large window size.*may result in slow"):
+            get_patch_window_size(
+                simple_patch, {"time": 15}, samples=True, warn_above=10
+            )
+
+    def test_no_warning_under_threshold(self, simple_patch):
+        """Test no warning for window sizes under threshold."""
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # Turn warnings into errors
+            # This should not raise (no warning)
+            size = get_patch_window_size(
+                simple_patch, {"time": 5}, samples=True, warn_above=10
+            )
+            time_axis = simple_patch.dims.index("time")
+            assert size[time_axis] == 5
+
+    def test_empty_kwargs(self, simple_patch):
+        """Test with empty kwargs raises ParameterError."""
+        match = "You must specify"
+        with pytest.raises(ParameterError, match=match):
+            get_patch_window_size(simple_patch, {})
+
+    def test_invalid_dimension_raises(self, simple_patch):
+        """Test invalid dimension name raises error."""
+        with pytest.raises(Exception):  # Should raise during get_dim_axis_value
+            get_patch_window_size(simple_patch, {"invalid_dim": 5})
+
+    def test_non_evenly_sampled_raises(self, simple_patch):
+        """Test non-evenly sampled coordinate raises error."""
+        # Create a non-evenly sampled coordinate
+        time_size = simple_patch.data.shape[simple_patch.dims.index("time")]
+        time_vals = np.array([0.0, 0.1, 0.3, 0.7, 1.5])  # Non-uniform spacing
+        # Take enough values to match the patch size
+        if len(time_vals) < time_size:
+            # Extend with more irregular values
+            extra_vals = np.linspace(2.0, 10.0, time_size - len(time_vals))
+            time_vals = np.concatenate([time_vals, extra_vals])
+        irregular_patch = simple_patch.update_coords(time=time_vals[:time_size])
+
+        with pytest.raises(Exception):  # Should raise during require_evenly_sampled
+            get_patch_window_size(irregular_patch, {"time": 0.5})
