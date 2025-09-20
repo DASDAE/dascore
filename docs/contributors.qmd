@@ -1,33 +1,5 @@
-<!--
-Add your name and github handle here in alphabetic order by last name.
-Include one empty line between contributors.
--->
-
 # Contributors
 
-Huge thanks to all of our contributors:
+A huge thanks to [all the DASCore contributors](https://github.com/DASDAE/dascore/graphs/contributors)!
 
-[Derrick Chambers](https://github.com/d-chambers)
-
-[Hafiz Issah](https://github.com/aissah)
-
-[Ahmad Tourei](https://github.com/ahmadtourei/)
-
-[Ge Jin](https://github.com/jinwar)
-
-[Eileen Martin](https://github.com/eileenrmartin)
-
-[Aaron Girard](https://github.com/aaronjgirard)
-
-[Ariel Lellouch](https://github.com/ariellellouch)
-
-[Manuel M. Mendoza](https://github.com/SeisMatt)
-
-[Thomas Cullison](https://github.com/code-cullison)
-
-[Shihao Yuan](https://github.com/Shihao-Yuan)
-
-[Tomas Snyder](https://github.com/quasiStellar45)
-
-You can find more contributor information
-[here](https://github.com/DASDAE/dascore/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=DASDAE/dascore)](https://github.com/DASDAE/dascore/graphs/contributors)

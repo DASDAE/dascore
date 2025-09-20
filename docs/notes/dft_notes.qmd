@@ -265,7 +265,7 @@ Patch methods [dft](`dascore.transform.fourier.dft`) and [idft](`dascore.transfo
 
 ## Useful Resources
 
-[Sclaing of DFT](https://appliedacousticschalmers.github.io/scaling-of-the-dft/AES2020_eBrief/): Concise overview of the DFT and its properties compared to the CFT.
+[Scaling of DFT](https://appliedacousticschalmers.github.io/scaling-of-the-dft/AES2020_eBrief/): Concise overview of the DFT and its properties compared to the CFT.
 
 [xrft](https://xrft.readthedocs.io/en/latest/index.html): A very useful resource for DASCore's implementation.
 

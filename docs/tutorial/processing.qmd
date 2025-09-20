@@ -168,7 +168,7 @@ smoothed = patch.rolling(time=50*dt).mean()
 smoothed.viz.waterfall(scale=.1);
 ```
 
-Notice the nan values at the start of the time axis. These can be trimmed with [`Patch`.dropna](`dascore.Patch.dropna`).
+Notice the nan values at the start of the time axis. These can be trimmed with [`Patch.dropna`](`dascore.Patch.dropna`).
 
 
 # Whiten
@@ -271,7 +271,7 @@ white_patch = patch.whiten(smooth_size=2, time=(10, 20, 80, 90))
 _ = plot_time_and_frequency(white_patch)
 ```
 
-`Whiten` also accepts patches in the frequency domain, in which case a frequency patches are returned. This might be useful if whiten is only a part of a frequency domain workflow.
+`Whiten` also accepts patches in the frequency domain, in which case frequency patches are returned. This might be useful if whiten is only a part of a frequency domain workflow.
 
 ```{python}
 fft_patch = patch.dft("time", real=True)

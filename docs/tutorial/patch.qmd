@@ -132,7 +132,7 @@ array[:10] = 12  # then this works
 
 ## Coords
 
-DASCore implements a class called [CoordManager](`dascore.core.coordmanager.CoordManager`) which managers dimension names, coordinate labels, selecting, sorting, etc. `CoordManager` has several convenience methods for accessing contained information:
+DASCore implements a class called [CoordManager](`dascore.core.coordmanager.CoordManager`) which manages dimension names, coordinate labels, selecting, sorting, etc. `CoordManager` has several convenience methods for accessing contained information:
 
 ```{python}
 import dascore as dc
