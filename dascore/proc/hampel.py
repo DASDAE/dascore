@@ -121,6 +121,10 @@ def hampel_filter(
     dimension they will be adjusted to be an odd length. This ensures
     a clean median calculation is possible.
 
+    See Also
+    --------
+    - The (Despikine recipe)[`docs/recipes/despiking.qmd`].
+
     Examples
     --------
     >>> import numpy as np

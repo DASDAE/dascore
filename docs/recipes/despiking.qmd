@@ -95,4 +95,3 @@ ax.set_title("Filtered along Time and Distance");
 5. **Edge effects**: The filter uses reflection mode at boundaries to minimize edge effects.
 
 6. **Validation**: Always visually inspect results and consider domain-specific requirements when choosing parameters.
-
