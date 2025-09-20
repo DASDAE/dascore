@@ -31,14 +31,14 @@ CF_STANDARD_NAMES = {
 }
 
 
-def is_netcdf4_file(h5file: h5py.File) -> bool:
+def is_netcdf4_file(resource) -> bool:
     """
     Check if an HDF5 file follows NetCDF-4 conventions.
 
     Parameters
     ----------
-    h5file
-        Open h5py.File object
+    resource
+        Open file resource (h5py.File or H5Reader)
 
     Returns
     -------
@@ -53,12 +53,24 @@ def is_netcdf4_file(h5file: h5py.File) -> bool:
     - Presence of dimension scales with DIMENSION_LIST
     """
     try:
+        # Get attributes from either h5py.File or H5Reader
+        if hasattr(resource, 'attrs'):
+            # h5py.File
+            attrs = resource.attrs
+        elif hasattr(resource, 'root') and hasattr(resource.root, '_v_attrs'):
+            # H5Reader (PyTables)
+            attrs = {}
+            for attr_name in resource.root._v_attrs._f_list():
+                attrs[attr_name] = resource.root._v_attrs[attr_name]
+        else:
+            return False
+
         # Check for NetCDF-specific markers
-        if "_NCProperties" in h5file.attrs:
+        if "_NCProperties" in attrs:
             return True
 
         # Check for Conventions attribute indicating CF compliance
-        conventions = h5file.attrs.get("Conventions", "")
+        conventions = attrs.get("Conventions", "")
         if isinstance(conventions, bytes):
             conventions = conventions.decode("utf-8", errors="ignore")
 
@@ -66,13 +78,25 @@ def is_netcdf4_file(h5file: h5py.File) -> bool:
             return True
 
         # Look for dimension scales (NetCDF-4 specific)
-        for dataset in h5file.values():
-            if isinstance(dataset, h5py.Dataset):
-                if "DIMENSION_LIST" in dataset.attrs:
-                    return True
-                # Also check if it's a dimension scale
-                if dataset.is_scale:
-                    return True
+        if hasattr(resource, 'values'):
+            # h5py.File
+            for dataset in resource.values():
+                if isinstance(dataset, h5py.Dataset):
+                    if "DIMENSION_LIST" in dataset.attrs:
+                        return True
+                    # Also check if it's a dimension scale
+                    if dataset.is_scale:
+                        return True
+        elif hasattr(resource, 'root'):
+            # H5Reader (PyTables) - check for dimension scales
+            try:
+                for node in resource.root._f_walknodes("Array"):
+                    if hasattr(node, '_v_attrs'):
+                        attrs_list = node._v_attrs._f_list() if hasattr(node._v_attrs, '_f_list') else []
+                        if "DIMENSION_LIST" in attrs_list:
+                            return True
+            except:
+                pass
 
         return False
 
@@ -80,21 +104,33 @@ def is_netcdf4_file(h5file: h5py.File) -> bool:
         return False
 
 
-def get_cf_version(h5file: h5py.File) -> str | None:
+def get_cf_version(resource) -> str | None:
     """
     Extract CF convention version from NetCDF file.
 
     Parameters
     ----------
-    h5file
-        Open h5py.File object
+    resource
+        Open file resource (h5py.File or H5Reader)
 
     Returns
     -------
     str | None
         CF version string (e.g., "1.8") or None if not found
     """
-    conventions = h5file.attrs.get("Conventions", "")
+    # Get attributes from either h5py.File or H5Reader
+    if hasattr(resource, 'attrs'):
+        # h5py.File
+        conventions = resource.attrs.get("Conventions", "")
+    elif hasattr(resource, 'root') and hasattr(resource.root, '_v_attrs'):
+        # H5Reader (PyTables)
+        try:
+            conventions = resource.root._v_attrs.get("Conventions", "")
+        except:
+            conventions = ""
+    else:
+        return None
+
     if isinstance(conventions, bytes):
         conventions = conventions.decode("utf-8", errors="ignore")
 
@@ -406,6 +442,10 @@ def get_cf_global_attrs(
         history_str = " | ".join(str(h) for h in patch_attrs.history)
         attrs["processing_history"] = history_str
 
+    # Add quality attribute if available
+    if hasattr(patch_attrs, "quality") and patch_attrs.quality:
+        attrs["quality"] = patch_attrs.quality
+
     return attrs
 
 
@@ -435,6 +475,7 @@ def extract_patch_attrs_from_netcdf(h5file: h5py.File) -> dict:
         "data_type": "data_type",
         "data_category": "data_category",
         "source_data_type": "data_type",  # Fallback
+        "quality": "quality",
     }
 
     for cf_name, patch_name in attr_mapping.items():

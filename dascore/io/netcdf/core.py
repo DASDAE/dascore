@@ -267,7 +267,7 @@ class NetCDFCFV18(FiberIO):
         }
 
         # Try to determine units
-        if hasattr(coord, "units"):
+        if hasattr(coord, "units") and coord.units:
             cf_attrs["units"] = str(coord.units)
         elif "depth" in name.lower():
             cf_attrs["units"] = "m"
