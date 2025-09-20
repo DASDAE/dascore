@@ -275,6 +275,11 @@ class TestHampelFilter:
         assert result_high.data.shape == patch_with_spikes.data.shape
         assert result_default.data.shape == patch_with_spikes.data.shape
 
+    def test_bad_threshold_raises(self, patch_with_spikes):
+        """Ensure a bad threshold raises ParameterError."""
+        with pytest.raises(ParameterError, match="must be greater than zero"):
+            patch_with_spikes.hampel_filter(time=0.6, threshold=0)
+
     def test_entire_distance_channel_spike_removal(self, patch_with_spikes):
         """
         Test that spikes encompassing an entire distance channel are removed with

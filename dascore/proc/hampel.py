@@ -158,8 +158,11 @@ def hampel_filter(
     >>> filtered_fast = patch.hampel_filter(
     ...     time=1.0, distance=5.0, threshold=3.5, separable=True
     ... )
-
     """
+    if threshold <= 0:
+        msg = "hampel_filter threshold must be greater than zero"
+        raise ParameterError(msg)
+
     # First build axis windows
     data = patch.data
     # For now we just hardcode mode as it is probably the only one that
