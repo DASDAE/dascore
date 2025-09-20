@@ -653,3 +653,139 @@ class TestMisc:
         spool = dc.spool(random_dft_patch)
         patch = spool[0]
         assert isinstance(patch, dc.Patch)
+
+
+class TestSpoolEquality:
+    """Tests for spool equality comparisons to ensure 100% coverage."""
+
+    def test_spool_equality_non_dict_comparison(self, random_spool):
+        """Test line 107: non-dict comparison in _vals_equal."""
+        spool1 = copy.deepcopy(random_spool)
+        spool2 = copy.deepcopy(random_spool)
+
+        # Add non-dict values to test the non-dict comparison path
+        spool1._test_string = "hello"
+        spool2._test_string = "hello"
+
+        # This should be equal
+        assert spool1 == spool2
+
+        # Now make them different to test the comparison
+        spool2._test_string = "world"
+
+        # This should be False
+        assert spool1 != spool2
+
+    def test_spool_equality_with_objects_having_dict(self, random_spool):
+        """Test line 127: objects with __dict__ that are not equal."""
+
+        class TestObject:
+            def __init__(self, value):
+                self.value = value
+
+        spool1 = copy.deepcopy(random_spool)
+        spool2 = copy.deepcopy(random_spool)
+
+        # Add objects with __dict__ that have different values
+        spool1._test_obj = TestObject(1)
+        spool2._test_obj = TestObject(2)  # Different data
+
+        # This should hit line 127 and return False
+        assert spool1 != spool2
+
+    def test_spool_equality_with_objects_having_dict_equal(self, random_spool):
+        """Test objects with __dict__ that are equal via recursive comparison."""
+
+        class TestObject:
+            def __init__(self, value):
+                self.value = value
+
+        spool1 = random_spool
+        spool2 = copy.deepcopy(random_spool)
+
+        # Add objects with __dict__ that have same internal state
+        spool1._test_obj = TestObject(42)
+        spool2._test_obj = TestObject(42)
+
+        # This should be equal via recursive __dict__ comparison
+        assert spool1 == spool2
+
+    def test_spool_equality_mixed_types(self):
+        """Test equality with various mixed data types."""
+        # Create simple spools to avoid cache issues
+        patch = dc.get_example_patch()
+        spool1 = dc.spool([patch])
+        spool2 = dc.spool([patch])
+
+        # Test with integers (non-dict)
+        spool1._int_val = 42
+        spool2._int_val = 42
+        assert spool1 == spool2
+
+        # Test with lists (non-dict)
+        spool1._list_val = [1, 2, 3]
+        spool2._list_val = [1, 2, 3]
+        assert spool1 == spool2
+
+        # Test with numpy arrays (non-dict)
+        spool1._array_val = np.array([1, 2, 3])
+        spool2._array_val = np.array([1, 2, 3])
+        assert spool1 == spool2
+
+        # Test arrays with different values
+        spool1._array_val = np.array([1, 2, 3])
+        spool2._array_val = np.array([1, 2, 4])
+        assert spool1 != spool2
+
+    def test_spool_equality_with_dataframes(self):
+        """Test equality with pandas DataFrames (has equals method)."""
+        # Create simple spools to avoid cache issues
+        patch = dc.get_example_patch()
+        spool1 = dc.spool([patch])
+        spool2 = dc.spool([patch])
+
+        # Add DataFrames that should be equal
+        df1 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        df2 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+
+        spool1._test_df = df1
+        spool2._test_df = df2
+
+        # Should be equal via df.equals()
+        assert spool1 == spool2
+
+        # Now test with different DataFrames
+        df3 = pd.DataFrame({"a": [1, 2, 4], "b": [4, 5, 6]})  # Different data
+        spool2._test_df = df3
+
+        # Should not be equal
+        assert spool1 != spool2
+
+    def test_specific_coverage_lines(self):
+        """Test to specifically cover lines 107 and 127."""
+        # Create minimal spools
+        patch = dc.get_example_patch()
+        spool1 = dc.spool([patch])
+        spool2 = dc.spool([patch])
+
+        # Line 107: Non-dict comparison
+        spool1._string_test = "hello"
+        spool2._string_test = "hello"
+        assert spool1 == spool2
+
+        # Make them different to test line 107 return False
+        spool2._string_test = "world"
+        assert spool1 != spool2
+
+        # Line 127: Objects with __dict__ that are different
+        class SimpleObj:
+            def __init__(self, val):
+                self.val = val
+
+        spool1 = dc.spool([patch])
+        spool2 = dc.spool([patch])
+        spool1._obj = SimpleObj(1)
+        spool2._obj = SimpleObj(2)
+
+        # This should return False at line 127
+        assert spool1 != spool2

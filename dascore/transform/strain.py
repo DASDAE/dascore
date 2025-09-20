@@ -99,6 +99,10 @@ def velocity_to_strain_rate(
         warnings.warn(msg, DeprecationWarning)
         step_multiple = gauge_multiple * 2
 
+    if step_multiple <= 0:
+        msg = "step_multiple must be positive."
+        raise ParameterError(msg)
+
     if step_multiple % 2 != 0:
         msg = (
             "Step_multiple must be even. Use velocity_to_strain_rate_edgeless "
@@ -173,6 +177,10 @@ def velocity_to_strain_rate_edgeless(
     [`velocity_to_strain_rate` note](docs/notes/velocity_to_strain_rate.qmd)
     for more details on step_multiple and order effects.
     """
+    if step_multiple <= 0:
+        msg = "step_multiple must be positive."
+        raise ParameterError(msg)
+
     coord = patch.get_coord("distance", require_evenly_sampled=True)
     distance_step = coord.step
     gauge_length = step_multiple * distance_step

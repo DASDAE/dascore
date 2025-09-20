@@ -784,3 +784,104 @@ def maybe_mem_map(fid: IOBase, dtype="<u1") -> np.ndarray | np.memmap:
         fid.seek(0)
         raw = np.frombuffer(fid.read(), dtype=dtype)
     return raw
+
+
+def deep_equality_check(obj1, obj2, visited=None):
+    """
+    Deep equality comparison for dictionaries and nested objects.
+
+    Handles circular references, numpy arrays, pandas DataFrames,
+    and objects with __dict__ attributes. This function provides
+    comprehensive equality checking that goes beyond Python's
+    default equality operators.
+
+    Parameters
+    ----------
+    obj1, obj2
+        The objects to compare. Can be dictionaries, objects with __dict__,
+        numpy arrays, pandas DataFrames, or any other objects.
+    visited
+        Set to track visited object pairs for circular reference detection.
+        Internal parameter used during recursion.
+
+    Returns
+    -------
+    bool
+        True if the objects are deeply equal, False otherwise.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.misc import deep_equality_check
+    >>>
+    >>> # Basic usage
+    >>> deep_equality_check({"a": 1}, {"a": 1})
+    True
+    >>>
+    >>> # With numpy arrays
+    >>> dict1 = {"arr": np.array([1, 2, 3])}
+    >>> dict2 = {"arr": np.array([1, 2, 3])}
+    >>> deep_equality_check(dict1, dict2)
+    True
+    """
+
+    def _robust_equality_check(obj1, obj2):
+        """Robust equality check to also handle arrays."""
+        try:
+            equal = obj1 == obj2
+            # Handle numpy arrays and other array-like objects
+            if hasattr(equal, "all"):
+                result = equal.all()
+                # Handle case where .all() returns a Series (e.g., pandas DataFrame)
+                # In such cases, call .all() again to get a boolean
+                if hasattr(result, "all"):
+                    result = result.all()
+                # Ensure we return a Python bool, not numpy.bool_
+                return bool(result)
+            return bool(equal)
+        except (ValueError, TypeError):
+            # For objects that can't be compared, fall back to False
+            return False
+
+    if visited is None:
+        visited = set()
+    # Create unique identifiers for the objects to detect cycles
+    # Use the objects themselves for more accurate cycle detection
+    obj1_id = id(obj1)
+    obj2_id = id(obj2)
+    pair_id = (obj1_id, obj2_id)
+    # If we've already started comparing these exact objects,
+    # avoid infinite recursion
+    if pair_id in visited or (obj2_id, obj1_id) in visited:
+        return True  # Equal for circular refs to avoid infinite recursion
+    visited.add(pair_id)
+    try:
+        if not isinstance(obj1, Mapping) or not isinstance(obj2, Mapping):
+            # Non-dict comparison, handle arrays and other types
+            return _robust_equality_check(obj1, obj2)
+
+        if (set1 := set(obj1)) != set(obj2):
+            return False
+        for key in set1:
+            val1, val2 = obj1[key], obj2[key]
+            # Check for object identity first to handle self-references
+            if val1 is val2:
+                continue
+            elif isinstance(val1, Mapping) and isinstance(val2, Mapping):
+                if not deep_equality_check(val1, val2, visited):
+                    return False
+            # this is primarily for dataframes which have equals method.
+            elif hasattr(val1, "equals") and hasattr(val2, "equals"):
+                if not val1.equals(val2):
+                    return False
+            # Handle object comparison carefully to avoid infinite recursion
+            elif hasattr(val1, "__dict__") and hasattr(val2, "__dict__"):
+                # For objects with __dict__, use recursive comparison
+                if not deep_equality_check(val1.__dict__, val2.__dict__, visited):
+                    return False
+            else:
+                if not _robust_equality_check(val1, val2):
+                    return False
+        return True
+    finally:
+        visited.remove(pair_id)

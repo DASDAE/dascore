@@ -99,6 +99,35 @@ class TestStrainRateConversion:
             )
             assert np.allclose(out1.data, expected)
 
+    def test_negative_step_multiple_raises(self, linear_velocity_patch):
+        """Test that negative step_multiple raises an error."""
+        patch = linear_velocity_patch
+        # Negative step_multiple should raise an error
+        with pytest.raises(ParameterError, match="must be positive"):
+            patch.velocity_to_strain_rate(step_multiple=-2)
+
+    def test_zero_step_multiple_raises(self, linear_velocity_patch):
+        """Test that zero step_multiple raises an error."""
+        patch = linear_velocity_patch
+        # Zero step_multiple should raise an error
+        with pytest.raises(ParameterError, match="must be positive"):
+            patch.velocity_to_strain_rate(step_multiple=0)
+
+    def test_positive_odd_step_multiple_raises(self, linear_velocity_patch):
+        """Test that odd step_multiple still raises appropriate error."""
+        patch = linear_velocity_patch
+        # Odd step_multiple should raise the existing error about being even
+        with pytest.raises(ParameterError, match="must be even"):
+            patch.velocity_to_strain_rate(step_multiple=3)
+
+    def test_positive_even_step_multiple_works(self, linear_velocity_patch):
+        """Test that positive even step_multiple works correctly."""
+        patch = linear_velocity_patch
+        # This should work fine
+        result = patch.velocity_to_strain_rate(step_multiple=2)
+        assert result is not None
+        assert result.attrs.data_type == "strain_rate"
+
 
 class TestStaggeredStrainRateConversion:
     """Tests for converting velocity to strain-rate with staggered function."""
@@ -165,11 +194,23 @@ class TestStaggeredStrainRateConversion:
             strain1 = patch.velocity_to_strain_rate(step_multiple=mult).select(
                 distance=(mult // 2, -mult // 2), samples=True
             )
-
             # Function 2's output should match function 1.
             strain2 = patch.velocity_to_strain_rate_edgeless(step_multiple=mult)
-
             assert np.allclose(strain1.data, strain2.data)
+
+    def test_negative_step_multiple_raises(self, linear_velocity_patch):
+        """Test that velocity_to_strain_rate_edgeless also validates step_multiple."""
+        patch = linear_velocity_patch
+        # Negative step_multiple should raise an error
+        with pytest.raises(ParameterError, match="must be positive"):
+            patch.velocity_to_strain_rate_edgeless(step_multiple=-1)
+
+    def test_zero_step_multiple_raises(self, linear_velocity_patch):
+        """Test that velocity_to_strain_rate_edgeless validates zero step_multiple."""
+        patch = linear_velocity_patch
+        # Zero step_multiple should raise an error
+        with pytest.raises(ParameterError, match="must be positive"):
+            patch.velocity_to_strain_rate_edgeless(step_multiple=0)
 
 
 class TestRadianToStrain:

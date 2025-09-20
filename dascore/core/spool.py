@@ -29,7 +29,7 @@ from dascore.utils.chunk import ChunkManager
 from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import CacheDescriptor, _spool_map
+from dascore.utils.misc import CacheDescriptor, _spool_map, deep_equality_check
 from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
@@ -85,26 +85,9 @@ class BaseSpool(abc.ABC):
 
     def __eq__(self, other) -> bool:
         """Simple equality checks on spools."""
-
-        def _vals_equal(dict1, dict2):
-            if (set1 := set(dict1)) != set(dict2):
-                return False
-            for key in set1:
-                val1, val2 = dict1[key], dict2[key]
-                if isinstance(val1, dict):
-                    if not _vals_equal(val1, val2):
-                        return False
-                # this is primarily for dataframes which have equals method.
-                elif hasattr(val1, "equals"):
-                    if not val1.equals(val2):
-                        return False
-                elif val1 != val2:
-                    return False
-            return True
-
         my_dict = self.__dict__
         other_dict = getattr(other, "__dict__", {})
-        return _vals_equal(my_dict, other_dict)
+        return deep_equality_check(my_dict, other_dict)
 
     @abc.abstractmethod
     @compose_docstring(conflict_desc=attr_conflict_description)

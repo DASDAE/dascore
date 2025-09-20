@@ -9,6 +9,7 @@ from io import BytesIO
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from dascore.exceptions import MissingOptionalDependencyError
@@ -16,6 +17,7 @@ from dascore.utils.misc import (
     MethodNameSpace,
     _iter_filesystem,
     cached_method,
+    deep_equality_check,
     get_buffer_size,
     get_stencil_coefs,
     iterate,
@@ -380,3 +382,302 @@ class TestMaybeMemMap:
         bio.seek(0)
         arr_full = maybe_mem_map(bio)
         assert arr_end_pos.size == arr_full.size == 6
+
+
+class TestDeepEqualityCheck:
+    """Comprehensive tests for the deep_equality_check function."""
+
+    def test_none_visited_initialization(self):
+        """Test that visited is initialized to empty set when None."""
+        result = deep_equality_check({"a": 1}, {"a": 1})
+        assert result is True
+
+    def test_circular_reference_detection(self):
+        """Test circular reference detection and handling."""
+        dict1 = {"a": 1}
+        dict2 = {"a": 1}
+        # Create circular references
+        dict1["self"] = dict1
+        dict2["self"] = dict2
+        assert deep_equality_check(dict1, dict2)
+
+    def test_non_dict_comparison_equal(self):
+        """Test non-dict objects that are equal."""
+        assert deep_equality_check("hello", "hello")
+        assert deep_equality_check(42, 42)
+        assert deep_equality_check([1, 2, 3], [1, 2, 3])
+
+    def test_non_dict_comparison_unequal(self):
+        """Test non-dict objects that are not equal."""
+        assert not deep_equality_check("hello", "world")
+        assert not deep_equality_check(42, 43)
+        assert not deep_equality_check([1, 2, 3], [1, 2, 4])
+
+    def test_dict_different_keys(self):
+        """Test dictionaries with different keys."""
+        dict1 = {"a": 1, "b": 2}
+        dict2 = {"a": 1, "c": 2}
+        assert not deep_equality_check(dict1, dict2)
+
+    def test_object_identity_skip(self):
+        """Test that identical objects are skipped."""
+        shared_obj = {"nested": "value"}
+        dict1 = {"shared": shared_obj, "other": 1}
+        dict2 = {"shared": shared_obj, "other": 1}
+        assert deep_equality_check(dict1, dict2)
+
+    def test_nested_dict_equality(self):
+        """Test nested dictionary comparison."""
+        dict1 = {"a": {"nested": 1}}
+        dict2 = {"a": {"nested": 1}}
+        assert deep_equality_check(dict1, dict2)
+
+    def test_nested_dict_inequality(self):
+        """Test nested dictionary comparison that fails."""
+        dict1 = {"a": {"nested": 1}}
+        dict2 = {"a": {"nested": 2}}
+        assert not deep_equality_check(dict1, dict2)
+
+    def test_dataframe_equality(self):
+        """Test pandas DataFrame comparison using equals method."""
+        df1 = pd.DataFrame({"a": [1, 2, 3]})
+        df2 = pd.DataFrame({"a": [1, 2, 3]})
+        dict1 = {"df": df1}
+        dict2 = {"df": df2}
+        assert deep_equality_check(dict1, dict2)
+
+    def test_dataframe_inequality(self):
+        """Test pandas DataFrame comparison that fails."""
+        df1 = pd.DataFrame({"a": [1, 2, 3]})
+        df2 = pd.DataFrame({"a": [1, 2, 4]})
+        dict1 = {"df": df1}
+        dict2 = {"df": df2}
+        assert not deep_equality_check(dict1, dict2)
+
+    def test_object_with_dict_equal(self):
+        """Test objects with __dict__ that are equal."""
+
+        class TestObj:
+            def __init__(self, value):
+                self.value = value
+
+        obj1 = TestObj(42)
+        obj2 = TestObj(42)
+        dict1 = {"obj": obj1}
+        dict2 = {"obj": obj2}
+        assert deep_equality_check(dict1, dict2)
+
+    def test_object_with_dict_unequal(self):
+        """Test objects with __dict__ that are not equal."""
+
+        class TestObj:
+            def __init__(self, value):
+                self.value = value
+
+        obj1 = TestObj(42)
+        obj2 = TestObj(43)
+        dict1 = {"obj": obj1}
+        dict2 = {"obj": obj2}
+        assert not deep_equality_check(dict1, dict2)
+
+    def test_top_level_dataframe_equality(self):
+        """Test when top level dfs are equal."""
+        df1 = pd.DataFrame({"a": [1, 2, 3]})
+        df2 = pd.DataFrame({"a": [1, 2, 3]})
+        assert deep_equality_check(df1, df2) is True
+
+    def test_top_level_dataframe_inequality(self):
+        """Test when top-level dicts are not equal."""
+        df1 = pd.DataFrame({"a": [1, 2, 3]})
+        df2 = pd.DataFrame({"a": [1, 2, 4]})
+        assert deep_equality_check(df1, df2) is False
+
+    def test_numpy_array_equal(self):
+        """Test numpy array comparison (equal)."""
+        arr1 = np.array([1, 2, 3])
+        arr2 = np.array([1, 2, 3])
+        dict1 = {"arr": arr1}
+        dict2 = {"arr": arr2}
+        assert deep_equality_check(dict1, dict2)
+
+    def test_numpy_array_unequal(self):
+        """Test numpy array comparison (not equal)."""
+        arr1 = np.array([1, 2, 3])
+        arr2 = np.array([1, 2, 4])
+        dict1 = {"arr": arr1}
+        dict2 = {"arr": arr2}
+        assert not deep_equality_check(dict1, dict2)
+
+    def test_regular_value_equal(self):
+        """Test regular values that are equal."""
+        dict1 = {"val": 42}
+        dict2 = {"val": 42}
+        assert deep_equality_check(dict1, dict2)
+
+    def test_regular_value_unequal(self):
+        """Test regular values that are not equal."""
+        dict1 = {"val": 42}
+        dict2 = {"val": 43}
+        assert not deep_equality_check(dict1, dict2)
+
+    def test_value_error_exception_handling(self):
+        """Test ValueError exception handling."""
+
+        class BadComparisonObj:
+            """Object without __dict__ that raises ValueError on comparison."""
+
+            __slots__ = ["value"]
+
+            def __init__(self, value):
+                self.value = value
+
+            def __eq__(self, other):
+                raise ValueError("BadComparisonObj instances cannot be compared")
+
+        obj1 = BadComparisonObj(1)
+        obj2 = BadComparisonObj(2)
+        dict1 = {"bad": obj1}
+        dict2 = {"bad": obj2}
+        assert not deep_equality_check(dict1, dict2)
+
+    def test_successful_comparison_return_true(self):
+        """Test successful comparison returns True."""
+        dict1 = {"a": 1, "b": 2, "c": 3}
+        dict2 = {"a": 1, "b": 2, "c": 3}
+        assert deep_equality_check(dict1, dict2)
+
+    def test_finally_block_cleanup(self):
+        """Test that visited set is cleaned up in finally block."""
+        # This is harder to test directly, but we can verify the function
+        # works correctly with nested calls, which requires proper cleanup
+        dict1 = {"a": {"b": {"c": 1}}}
+        dict2 = {"a": {"b": {"c": 1}}}
+        assert deep_equality_check(dict1, dict2)
+
+    def test_mixed_comparison_types(self):
+        """Test comparison with mixed types to ensure full coverage."""
+
+        class CustomObj:
+            def __init__(self, val):
+                self.val = val
+
+        # Complex nested structure to test multiple code paths
+        dict1 = {
+            "string": "hello",
+            "int": 42,
+            "array": np.array([1, 2, 3]),
+            "dataframe": pd.DataFrame({"x": [1, 2]}),
+            "custom_obj": CustomObj(10),
+            "nested": {"inner_array": np.array([4, 5, 6]), "inner_obj": CustomObj(20)},
+        }
+
+        dict2 = {
+            "string": "hello",
+            "int": 42,
+            "array": np.array([1, 2, 3]),
+            "dataframe": pd.DataFrame({"x": [1, 2]}),
+            "custom_obj": CustomObj(10),
+            "nested": {"inner_array": np.array([4, 5, 6]), "inner_obj": CustomObj(20)},
+        }
+
+        assert deep_equality_check(dict1, dict2)
+
+    def test_one_has_equals_method_other_doesnt(self):
+        """Test when only one object has equals method."""
+
+        class NoEqualsMethod:
+            def __init__(self, val):
+                self.val = val
+
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        obj = NoEqualsMethod(42)
+        dict1 = {"item": df}
+        dict2 = {"item": obj}
+        # This should fall through to the general comparison path
+        assert not deep_equality_check(dict1, dict2)
+
+    def test_both_have_equals_method_but_one_fails(self):
+        """Test when both have equals method but comparison fails."""
+        df1 = pd.DataFrame({"a": [1, 2, 3]})
+        df2 = pd.DataFrame({"a": [4, 5, 6]})
+        dict1 = {"df": df1}
+        dict2 = {"df": df2}
+        # This should use equals() method and return False
+        assert not deep_equality_check(dict1, dict2)
+
+    def test_array_like_all_method_coverage(self):
+        """Test Equal.all() for array-like objects."""
+        # Create array-like objects that will trigger the .all() path
+        arr1 = np.array([1, 2, 3])
+        arr2 = np.array([1, 2, 3])
+        # Test direct comparison (non-dict path)
+        assert deep_equality_check(arr1, arr2)
+
+        # Test with arrays that are not equal
+        arr3 = np.array([1, 2, 4])
+        assert not deep_equality_check(arr1, arr3)
+
+    def test_type_error_exception_handling(self):
+        """Test TypeError exception handling."""
+
+        class TypeErrorComparison:
+            """Object that raises TypeError on comparison."""
+
+            def __eq__(self, other):
+                raise TypeError("Cannot compare this object")
+
+        obj1 = TypeErrorComparison()
+        obj2 = TypeErrorComparison()
+        # This should catch TypeError and return False
+        assert not deep_equality_check(obj1, obj2)
+
+    def test_value_error_exception_handling_direct(self):
+        """Test ValueError exception handling for direct comparison."""
+
+        class ValueErrorComparison:
+            """Object that raises ValueError on comparison."""
+
+            def __eq__(self, other):
+                raise ValueError("Cannot compare this object")
+
+        obj1 = ValueErrorComparison()
+        obj2 = ValueErrorComparison()
+        # This should catch ValueError and return False
+        assert not deep_equality_check(obj1, obj2)
+
+    def test_non_array_equal_comparison(self):
+        """Test line 834: return equal path for non-array objects."""
+        # Test with simple objects that don't have .all() method
+        assert deep_equality_check(42, 42)
+        assert deep_equality_check("hello", "hello")
+        assert not deep_equality_check(42, 43)
+        assert not deep_equality_check("hello", "world")
+
+    def test_circular_reference_return_true(self):
+        """Test line 850: circular reference detection returns True."""
+        # Create a more complex circular reference that will trigger line 850
+        dict1 = {"a": 1}
+        dict2 = {"a": 1}
+
+        # Create mutual circular references
+        dict1["ref"] = dict1  # self-reference
+        dict2["ref"] = dict2  # self-reference
+
+        # This should detect the circular reference and return True
+        assert deep_equality_check(dict1, dict2)
+
+    def test_top_level_dataframe_comparison_returns_bool(self):
+        """Test that comparing DataFrames directly returns bool, not Series."""
+        df1 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        df2 = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        df3 = pd.DataFrame({"a": [1, 2, 4], "b": [4, 5, 6]})
+
+        # Test equal DataFrames
+        result = deep_equality_check(df1, df2)
+        assert isinstance(result, bool), f"Expected bool, got {type(result)}"
+        assert result is True
+
+        # Test unequal DataFrames
+        result = deep_equality_check(df1, df3)
+        assert isinstance(result, bool), f"Expected bool, got {type(result)}"
+        assert result is False
