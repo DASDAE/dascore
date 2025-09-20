@@ -133,11 +133,12 @@ website:
         - section: "Processing"
           contents:
 
+            - recipes/despike.qmd
+            - recipes/smoothing.qmd
             - recipes/correlate.qmd
             - recipes/edge_effects.qmd
             - recipes/fk.qmd
             - recipes/real_time_proc.qmd
-            - recipes/smoothing.qmd
             - recipes/parallelization.qmd
             - recipes/low_freq_proc.qmd
 
