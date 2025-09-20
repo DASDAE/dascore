@@ -102,7 +102,7 @@ class TestWienerFilter:
     def test_parameter_validation(self, noisy_patch):
         """Test parameter validation."""
         # Test no parameters
-        with pytest.raises(ParameterError, match="Must specify"):
+        with pytest.raises(ParameterError, match="you must specify"):
             noisy_patch.wiener_filter()
 
     def test_uniform_data(self, uniform_patch):
