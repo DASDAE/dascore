@@ -323,6 +323,7 @@ class Patch:
     dropna = dascore.proc.dropna
     fillna = dascore.proc.fillna
     pass_filter = dascore.proc.pass_filter
+    hample_filter = dascore.proc.hampel_filter
     sobel_filter = dascore.proc.sobel_filter
     median_filter = dascore.proc.median_filter
     notch_filter = dascore.proc.notch_filter
