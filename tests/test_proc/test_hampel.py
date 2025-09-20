@@ -256,8 +256,6 @@ class TestHampelFilter:
         # Check that data shapes are preserved
         assert result_time.data.shape == patch_with_spikes.data.shape
         assert result_distance.data.shape == patch_with_spikes.data.shape
-        assert result_time.data.shape == patch_with_spikes.data.shape
-        assert result_distance.data.shape == patch_with_spikes.data.shape
 
     def test_different_threshold_values(self, patch_with_spikes):
         """Test various threshold values for edge cases."""
@@ -279,6 +277,10 @@ class TestHampelFilter:
         """Ensure a bad threshold raises ParameterError."""
         with pytest.raises(ParameterError, match="must be greater than zero"):
             patch_with_spikes.hampel_filter(time=0.6, threshold=0)
+        with pytest.raises(ParameterError, match="must be finite"):
+            patch_with_spikes.hampel_filter(time=0.6, threshold=np.inf)
+        with pytest.raises(ParameterError, match="must be finite"):
+            patch_with_spikes.hampel_filter(time=0.6, threshold=np.nan)
 
     def test_entire_distance_channel_spike_removal(self, patch_with_spikes):
         """

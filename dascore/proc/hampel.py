@@ -4,6 +4,8 @@ Functionality for Hampel despiking.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from scipy.ndimage import median_filter
 
@@ -14,8 +16,6 @@ from dascore.utils.patch import get_dim_axis_value, patch_function
 
 def _get_hampel_window_size(patch, kwargs, samples):
     """Get the size of the hampel operator."""
-    import warnings
-
     aggs = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
     size = [1] * patch.data.ndim
     for name, axis, val in aggs:
@@ -117,9 +117,9 @@ def hampel_filter(
 
     Notes
     -----
-    If the selected window lengths don't represent odd numbers in each
-    dimension they will be adjusted to be an odd length. This ensures
-    a clean median calculation is possible.
+    When samples=False, even window lengths are bumped to the next odd
+    value to ensure a clean median calculation. When samples=True, an
+    even sample count raises a ParameterError.
 
     See Also
     --------
@@ -162,6 +162,8 @@ def hampel_filter(
     if threshold <= 0:
         msg = "hampel_filter threshold must be greater than zero"
         raise ParameterError(msg)
+    if not np.isfinite(threshold):
+        raise ParameterError("hampel_filter `threshold` must be finite.")
 
     # First build axis windows
     data = patch.data
@@ -170,11 +172,15 @@ def hampel_filter(
     mode = "reflect"
     size = _get_hampel_window_size(patch, kwargs, samples)
 
+    # No-op if no dimension was selected (all ones).
+    if all(s == 1 for s in size):
+        return patch
+
     # Convert to float64 to avoid integer overflow/precision loss
     dataf = np.asarray(data, dtype=np.float64)
 
     # Local median and MAD via median filters.
-    if separable and len(size) > 1 and all(s > 1 for s in size):
+    if separable and sum(s > 1 for s in size) >= 2:
         # Use separable filtering for multi-dimensional windows
         # This is faster but provides an approximation
         med = _separable_median(dataf, size, mode)
@@ -189,6 +195,8 @@ def hampel_filter(
     # Hampel test and replacement.
     thresholded = abs_med_diff / mad_safe
     out = np.where(thresholded > threshold, med, dataf)
-    # Cast back to original dtype
+    # Cast back to original dtype (round if original was integer)
+    if np.issubdtype(data.dtype, np.integer):
+        out = np.rint(out)
     out = out.astype(data.dtype, copy=False)
     return patch.update(data=out)
