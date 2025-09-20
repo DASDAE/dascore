@@ -824,6 +824,19 @@ def deep_equality_check(obj1, obj2, visited=None):
     >>> deep_equality_check(dict1, dict2)
     True
     """
+
+    def _robust_equality_check(obj1, obj2):
+        """Robust equality check to also handle arrays."""
+        try:
+            equal = obj1 == obj2
+            # Handle numpy arrays and other array-like objects
+            if hasattr(equal, "all"):
+                return equal.all()
+            return equal
+        except (ValueError, TypeError):
+            # For objects that can't be compared, fall back to False
+            return False
+
     if visited is None:
         visited = set()
     # Create unique identifiers for the objects to detect cycles
@@ -838,8 +851,8 @@ def deep_equality_check(obj1, obj2, visited=None):
     visited.add(pair_id)
     try:
         if not isinstance(obj1, dict) or not isinstance(obj2, dict):
-            # Non-dict comparison, use direct comparison
-            return obj1 == obj2
+            # Non-dict comparison, handle arrays and other types
+            return _robust_equality_check(obj1, obj2)
 
         if (set1 := set(obj1)) != set(obj2):
             return False
@@ -861,18 +874,7 @@ def deep_equality_check(obj1, obj2, visited=None):
                 if not deep_equality_check(val1.__dict__, val2.__dict__, visited):
                     return False
             else:
-                # Handle arrays and other types carefully
-                try:
-                    equal = val1 == val2
-                    # Handle numpy arrays and other arrays
-                    if hasattr(equal, "all"):
-                        if not equal.all():
-                            return False
-                    elif not equal:
-                        return False
-                except ValueError:
-                    # For objects that can't be compared (like arrays),
-                    # fall back to False
+                if not _robust_equality_check(val1, val2):
                     return False
         return True
     finally:

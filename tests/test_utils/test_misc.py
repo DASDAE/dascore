@@ -520,7 +520,7 @@ class TestDeepEqualityCheck:
                 self.value = value
 
             def __eq__(self, other):
-                raise ValueError("Cannot compare")
+                raise ValueError("BadComparisonObj instances cannot be compared")
 
         obj1 = BadComparisonObj(1)
         obj2 = BadComparisonObj(2)
@@ -594,3 +594,64 @@ class TestDeepEqualityCheck:
         dict2 = {"df": df2}
         # This should use equals() method and return False
         assert not deep_equality_check(dict1, dict2)
+
+    def test_array_like_all_method_coverage(self):
+        """Test Equal.all() for array-like objects."""
+        # Create array-like objects that will trigger the .all() path
+        arr1 = np.array([1, 2, 3])
+        arr2 = np.array([1, 2, 3])
+        # Test direct comparison (non-dict path)
+        assert deep_equality_check(arr1, arr2)
+
+        # Test with arrays that are not equal
+        arr3 = np.array([1, 2, 4])
+        assert not deep_equality_check(arr1, arr3)
+
+    def test_type_error_exception_handling(self):
+        """Test TypeError exception handling."""
+
+        class TypeErrorComparison:
+            """Object that raises TypeError on comparison."""
+
+            def __eq__(self, other):
+                raise TypeError("Cannot compare this object")
+
+        obj1 = TypeErrorComparison()
+        obj2 = TypeErrorComparison()
+        # This should catch TypeError and return False
+        assert not deep_equality_check(obj1, obj2)
+
+    def test_value_error_exception_handling_direct(self):
+        """Test ValueError exception handling for direct comparison."""
+
+        class ValueErrorComparison:
+            """Object that raises ValueError on comparison."""
+
+            def __eq__(self, other):
+                raise ValueError("Cannot compare this object")
+
+        obj1 = ValueErrorComparison()
+        obj2 = ValueErrorComparison()
+        # This should catch ValueError and return False
+        assert not deep_equality_check(obj1, obj2)
+
+    def test_non_array_equal_comparison(self):
+        """Test line 834: return equal path for non-array objects."""
+        # Test with simple objects that don't have .all() method
+        assert deep_equality_check(42, 42)
+        assert deep_equality_check("hello", "hello")
+        assert not deep_equality_check(42, 43)
+        assert not deep_equality_check("hello", "world")
+
+    def test_circular_reference_return_true(self):
+        """Test line 850: circular reference detection returns True."""
+        # Create a more complex circular reference that will trigger line 850
+        dict1 = {"a": 1}
+        dict2 = {"a": 1}
+
+        # Create mutual circular references
+        dict1["ref"] = dict1  # self-reference
+        dict2["ref"] = dict2  # self-reference
+
+        # This should detect the circular reference and return True
+        assert deep_equality_check(dict1, dict2)
