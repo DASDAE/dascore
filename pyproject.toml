@@ -132,6 +132,7 @@ RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
 XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
 GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
+NETCDF_CF__V1_8 = "dascore.io.netcdf.core:NetCDFCFV18"
 
 
 # --- External tool configuration
