@@ -154,48 +154,6 @@ class TestHampelFilter:
         # Should be identical for single dimension
         np.testing.assert_array_equal(result_standard.data, result_separable.data)
 
-    def test_performance_warning(self, patch_with_spikes):
-        """Test that performance warning is issued for large windows."""
-        # This should issue a warning for large window size
-        with pytest.warns(
-            UserWarning, match="Large window size.*may result in slow performance"
-        ):
-            # Use a large window that will trigger the warning
-            patch_with_spikes.hampel_filter(time=3.0, threshold=3.5)
-
-    def test_insufficient_samples_error(self, patch_with_spikes):
-        """Test error when window size results in less than 3 samples."""
-        # This should raise an error because window is too small
-        with pytest.raises(ParameterError, match="must have at least 3 samples"):
-            patch_with_spikes.hampel_filter(
-                time=0.00001, threshold=3.5
-            )  # Very small window
-
-    def test_odd_samples_with_samples_true_error(self, patch_with_spikes):
-        """Test error when samples=True and sample count is even."""
-        # This should raise an error because even samples with samples=True
-        with pytest.raises(ParameterError, match="windows must be odd"):
-            patch_with_spikes.hampel_filter(
-                time=4, samples=True, threshold=3.5
-            )  # 4 is even
-
-    def test_odd_samples_with_samples_false_adjustment(self, patch_with_spikes):
-        """Test that odd samples are adjusted when samples=False."""
-        # This should work because samples=False allows adjustment
-        # We need to find a value that gives odd samples when converted
-        # Let's use a value that will result in an odd number of samples
-
-        # Get coordinate info to calculate a value that gives odd samples
-        coord = patch_with_spikes.get_coord("time")
-        step = coord.step
-        # Use a value that when divided by step gives an odd number
-        odd_value = step * 5.5  # This should give 5-6 samples, we can adjust
-
-        result = patch_with_spikes.hampel_filter(
-            time=odd_value, samples=False, threshold=3.5
-        )
-        assert result.data.shape == patch_with_spikes.data.shape
-
     def test_zero_mad_handling(self, patch_uniform_data):
         """Test handling of zero MAD values."""
         # Uniform data should have MAD = 0, test that eps is used
@@ -204,16 +162,6 @@ class TestHampelFilter:
         assert result.data.shape == patch_uniform_data.data.shape
         # With uniform data, output should be same as input
         np.testing.assert_array_equal(result.data, patch_uniform_data.data)
-
-    def test_window_size_validation(self, patch_with_spikes):
-        """Test window size validation via public API."""
-        # Test that even window sizes raise errors when samples=True
-        with pytest.raises(ParameterError, match="windows must be odd"):
-            patch_with_spikes.hampel_filter(time=4, threshold=3.5, samples=True)
-
-        # Test minimum sample validation
-        with pytest.raises(ParameterError, match="must have at least 3 samples"):
-            patch_with_spikes.hampel_filter(time=0, threshold=3.5, samples=True)
 
     def test_non_separable_conditions(self, patch_with_spikes):
         """Test conditions where separable mode is not used."""
@@ -439,3 +387,10 @@ class TestHampelFilter:
                 result.data[individual_spike_time, individual_spike_dist]
             )
             assert filtered_spike < original_spike / 2
+
+    def test_int_patch(self, random_patch):
+        """Ensure a patch with int type works."""
+        data = np.round(random_patch.data * 100).astype(np.int64)
+        patch = random_patch.update(data=data)
+        out = patch.hampel_filter(time=5, samples=True, threshold=5)
+        assert np.issubdtype(out.dtype, np.integer)

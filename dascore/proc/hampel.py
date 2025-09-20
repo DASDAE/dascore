@@ -4,51 +4,12 @@ Functionality for Hampel despiking.
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 from scipy.ndimage import median_filter
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
-from dascore.utils.patch import get_dim_axis_value, patch_function
-
-
-def _get_hampel_window_size(patch, kwargs, samples):
-    """Get the size of the hampel operator."""
-    aggs = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
-    size = [1] * patch.data.ndim
-    for name, axis, val in aggs:
-        coord = patch.get_coord(name, require_evenly_sampled=True)
-        samps = coord.get_sample_count(val, samples=samples)
-        if samps < 3:
-            msg = (
-                f"hampel must have at least 3 samples along each dimension. "
-                f"{name} has {samps} samples. Try increasing its value."
-            )
-            raise ParameterError(msg)
-        # Just to make sure the median is a nice value, we need an odd number
-        # of samples. Just bump if samples wasn't specified, else raise.
-        if (samps % 2 != 1) and not samples:
-            samps += 1
-        if (samps % 2 != 1) and samples:
-            msg = (
-                "For clean median calculation in hampel function, dimension "
-                f"windows must be odd but {name} has a value of {samps} samples."
-            )
-            raise ParameterError(msg)
-
-        # Warn if window size is large
-        if samps > 10:
-            msg = (
-                f"Large window size ({samps} samples) in dimension '{name}' "
-                f"may result in slow performance. Consider using separable=True "
-                f"for faster processing or reducing the window size."
-            )
-            warnings.warn(msg, UserWarning, stacklevel=2)
-
-        size[axis] = samps
-    return tuple(size)
+from dascore.utils.patch import get_patch_window_size, patch_function
 
 
 def _separable_median(data, size, mode):
@@ -167,9 +128,13 @@ def hampel_filter(
     # For now we just hardcode mode as it is probably the only one that
     # makes sense in a DAS data context.
     mode = "reflect"
-    size = _get_hampel_window_size(patch, kwargs, samples)
+    size = get_patch_window_size(
+        patch, kwargs, samples, require_odd=True, warn_above=10, min_samples=3
+    )
+
     # Convert to float64 to avoid integer overflow/precision loss
-    dataf = np.asarray(data, dtype=np.float64)
+    dataf = data.astype(np.float64, copy=False)
+
     # Local median and MAD via median filters.
     if separable and sum(s > 1 for s in size) >= 2:
         # Use separable filtering for multi-dimensional windows
@@ -185,5 +150,8 @@ def hampel_filter(
     # Hampel test and replacement.
     thresholded = abs_med_diff / mad_safe
     out = np.where(thresholded > threshold, med, dataf)
+    # Cast back to original dtype (round if original was integer)
+    if np.issubdtype(data.dtype, np.integer):
+        out = np.rint(out)
     out = out.astype(data.dtype, copy=False)
     return patch.update(data=out)

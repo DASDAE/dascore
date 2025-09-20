@@ -14,7 +14,6 @@ from dascore.exceptions import (
     CoordDataError,
     FilterValueError,
     ParameterError,
-    PatchCoordinateError,
     UnitError,
 )
 from dascore.units import Hz, convert_units, get_unit, m
@@ -205,8 +204,8 @@ class TestMedianFilter:
 
     def test_median_no_kwargs_raises(self, random_patch):
         """Apply default values."""
-        msg = "You must use exactly one"
-        with pytest.raises(PatchCoordinateError, match=msg):
+        msg = "You must"
+        with pytest.raises(ParameterError, match=msg):
             random_patch.median_filter()
 
     def test_median_filter_time(self, random_patch):
@@ -232,8 +231,8 @@ class TestNotchFilter:
 
     def test_notch_no_kwargs_raises(self, random_patch):
         """Test that no dimension raises an appropriate error."""
-        msg = "You must use exactly one"
-        with pytest.raises(PatchCoordinateError, match=msg):
+        msg = "You must"
+        with pytest.raises(ParameterError, match=msg):
             random_patch.notch_filter(q=30)
 
     def test_notch_filter_time(self, random_patch):
@@ -280,9 +279,9 @@ class TestSavgolFilter:
     """Simple tests on Savgol filter."""
 
     def test_savgol_no_kwargs_raises(self, random_patch):
-        """Apply default values."""
-        msg = "You must use exactly one"
-        with pytest.raises(PatchCoordinateError, match=msg):
+        """Ensure no kwargs raises."""
+        msg = "You must"
+        with pytest.raises(ParameterError, match=msg):
             random_patch.savgol_filter(polyorder=2)
 
     def test_savgol_filter_time(self, random_patch):
@@ -291,8 +290,8 @@ class TestSavgolFilter:
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_savgol_filter_ones(self, random_patch):
-        """Apply default values."""
+    def test_savgol_samples(self, random_patch):
+        """Test using samples parameter."""
         out = random_patch.savgol_filter(polyorder=2, distance=5, samples=True)
         assert out != random_patch
 
