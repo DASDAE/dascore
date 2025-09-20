@@ -345,6 +345,7 @@ class Patch:
     savgol_filter = dascore.proc.savgol_filter
     gaussian_filter = dascore.proc.gaussian_filter
     slope_filter = dascore.proc.slope_filter
+    wiener_filter = dascore.proc.wiener_filter
     abs = dascore.proc.abs
     conj = dascore.proc.conj
     real = dascore.proc.real
