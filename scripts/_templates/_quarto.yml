@@ -76,6 +76,9 @@ website:
         - text: Introduction
           href: index.qmd
 
+        - text: Formats
+          href: supported_formats.qmd
+
         - text: Changelog
           href: changelog.qmd
 
@@ -133,11 +136,12 @@ website:
         - section: "Processing"
           contents:
 
+            - recipes/despiking.qmd
+            - recipes/smoothing.qmd
             - recipes/correlate.qmd
             - recipes/edge_effects.qmd
             - recipes/fk.qmd
             - recipes/real_time_proc.qmd
-            - recipes/smoothing.qmd
             - recipes/parallelization.qmd
             - recipes/low_freq_proc.qmd
 

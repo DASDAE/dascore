@@ -37,7 +37,7 @@ quarto preview docs
 ```
 
 :::{.note}
-This will take a few minutes the first time you run it. After that, the results are cached on only the changed files are re-rendered.
+This will take a few minutes the first time you run it. After that, the results are cached and only the changed files are re-rendered.
 :::
 
 Now, you can make new documentation or make changes to the "index.qmd" file on the /dascore/docs/ directory and so on.

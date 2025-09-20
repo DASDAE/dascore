@@ -43,8 +43,6 @@ jobs:
           python-version: "3.12"
           environment-file: './.github/doc_environment.yml'
 
-      - uses: ./.github/actions/build-docs
-
       - name: publish docs to netlify
         shell: bash -l {0}
         env:

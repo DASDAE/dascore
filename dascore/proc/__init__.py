@@ -14,4 +14,5 @@ from .rolling import rolling
 from .taper import taper, taper_range
 from .units import convert_units, set_units, simplify_units
 from .whiten import whiten
+from .hampel import hampel_filter
 from .wiener import wiener_filter

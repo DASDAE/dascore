@@ -19,7 +19,7 @@ patch = dc.get_example_patch('example_event_2')
 patch.viz.waterfall(show=True, scale=(-50,50))
 ```
 
-## wiggle
+## Wiggle
 The [`wiggle patch function`](`dascore.viz.wiggle`) creates a wiggle plot of the patch data. We'll use the same patch as above to model this function.
 
 ```{python}
