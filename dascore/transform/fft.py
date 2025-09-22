@@ -27,6 +27,15 @@ def rfft(patch: PatchType, dim="time") -> PatchType:
     """
     Perform a real fourier transform along the specified dimension.
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Transform along time dimension
+    >>> ft_patch = patch.rfft(dim='time')
+    >>> assert 'ft_time' in ft_patch.dims
+
     Notes
     -----
     - Use [dft](`dascore.transform.fourier.dft`) instead.

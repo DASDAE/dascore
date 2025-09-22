@@ -70,6 +70,14 @@ def spectrogram(
     **kwargs : dict, optional
         Passed to `scipy.signal.spectrogram` to control spectrogram options.
         See its documentation for options.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Create a spectrogram plot
+    >>> ax = patch.viz.spectrogram(show=False)
     """
     dims = patch.dims
     if len(dims) > 2 or len(dims) < 1:

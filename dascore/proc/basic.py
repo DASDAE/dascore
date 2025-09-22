@@ -72,6 +72,21 @@ def pipe(
         Positional arguments that get passed to func.
     **kwargs
         Keyword arguments passed to func.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Define a custom function that squares the data
+    >>> def square_data(patch):
+    ...     return patch.new(data=patch.data ** 2)
+    >>>
+    >>> # Use pipe to apply the function
+    >>> squared = patch.pipe(square_data)
+    >>>
+    >>> # Can also chain with other methods
+    >>> result = patch.pipe(square_data).mean(dim="time")
     """
     return func(self, *args, **kwargs)
 
@@ -84,6 +99,17 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     ----------
     **attrs
         attrs to add/update.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Update existing attributes
+    >>> updated = patch.update_attrs(instrument_type="DAS")
+    >>>
+    >>> # Add new custom attributes
+    >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
     """
 
     def _fast_attr_update(self, attrs):
@@ -119,6 +145,23 @@ def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -
     close
         If True, the data can be "close" using np.allclose, otherwise
         all data must be equal.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch1 = dc.get_example_patch()
+    >>> patch2 = dc.get_example_patch()
+    >>>
+    >>> # Test equality
+    >>> are_equal = patch1.equals(patch2)
+    >>>
+    >>> # Test with modified patch
+    >>> modified = patch1.update_attrs(custom_attr="test")
+    >>> equal_ignoring_custom = patch1.equals(modified, only_required_attrs=True)
+    >>>
+    >>> # Test with close comparison for numerical data
+    >>> noisy = patch1.new(data=patch1.data + 1e-10)
+    >>> close_equal = patch1.equals(noisy, close=True)
     """
     # different types are not equal
     if not isinstance(other, type(self)):
@@ -300,6 +343,20 @@ def normalize(
             l2 - divide each sample by the l2 of the axis.
             max - divide each sample by the maximum of the absolute value of the axis.
             bit - sample-by-sample normalization (-1/+1)
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # L2 normalization along time dimension
+    >>> l2_norm = patch.normalize(dim="time", norm="l2")
+    >>>
+    >>> # Max normalization along distance dimension
+    >>> max_norm = patch.normalize(dim="distance", norm="max")
+    >>>
+    >>> # Bit normalization (sign only)
+    >>> bit_norm = patch.normalize(dim="time", norm="bit")
     """
     axis = self.get_axis(dim)
     data = self.data
@@ -460,8 +517,10 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     >>> import dascore as dc
     >>> # load an example patch which has some NaN values.
     >>> patch = dc.get_example_patch("patch_with_null")
+    >>>
     >>> # Replace all occurrences of NaN with 0
     >>> out = patch.fillna(0)
+    >>>
     >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
@@ -518,11 +577,14 @@ def pad(
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
+    >>>
     >>> # Zero pad `time` dimension with 2 patch's time unit (e.g., sec)
     >>> # zeros before and 3 zeros after
     >>> padded_patch_1 = patch.pad(time=(2, 3))
+    >>>
     >>> # Pad `distance` dimension with 1s 4 samples before and 4 after.
     >>> padded_patch_3 = patch.pad(distance=4, constant_values=1, samples=True)
+    >>>
     >>> # Get patch ready for fast fft along time dimension.
     >>> padded_fft = patch.pad(time="fft")
     """
@@ -602,10 +664,13 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
+    >>>
     >>> # roll time dimension 5 elements
     >>> rolled_patch = patch.roll(time=5, samples=True)
+    >>>
     >>> # roll distance dimension 30 meters(or units of distance in patch)
     >>> rolled_patch2 = patch.roll(distance=30, samples=False)
+    >>>
     >>> # roll time dimension 5 elements and update coordinates
     >>> rolled_patch3 = patch.roll(time=5, samples=True, update_coord=True)
     """

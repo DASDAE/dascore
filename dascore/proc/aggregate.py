@@ -93,6 +93,15 @@ def min(
     ----------
     {params}
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Get minimum along time dimension
+    >>> min_patch = patch.min(dim='time')
+    >>> assert min_patch.size < patch.size
+
     {notes}
     """
     return aggregate.func(patch, dim=dim, method=np.nanmin, dim_reduce=dim_reduce)
@@ -112,6 +121,15 @@ def max(
     ----------
     {params}
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Get maximum along distance dimension
+    >>> max_patch = patch.max(dim='distance')
+    >>> assert max_patch.size < patch.size
+
     {notes}
     """
     return aggregate.func(patch, dim=dim, method=np.nanmax, dim_reduce=dim_reduce)
@@ -130,6 +148,15 @@ def mean(
     Parameters
     ----------
     {params}
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Get mean along time dimension
+    >>> time_mean = patch.mean(dim='time')
+    >>> assert time_mean.size < patch.size
 
     {notes}
     """
