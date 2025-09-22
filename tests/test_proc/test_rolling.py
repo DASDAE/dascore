@@ -298,15 +298,20 @@ class TestNumpyVsPandasRolling:
 class TestFrame:
     """Tests for creating frames from the rollers."""
 
-    def test_basic_frame_1d(self):
-        """Test basic frame functionality with 1D patch."""
-        # Create a simple 1D patch
+    @pytest.fixture(scope="class")
+    def patch_to_9(self):
+        """Simple 1D patch with data from 0 to 9"""
         data = np.arange(10)
         patch = dc.Patch(
             data=data,
             coords={"time": dc.to_datetime64(np.arange(10))},
             dims=("time",),
         )
+        return patch
+
+    def test_basic_frame_1d(self, patch_to_9):
+        """Test basic frame functionality with 1D patch."""
+        patch = patch_to_9
 
         # Test with window=3, step=1
         rolling = patch.rolling(time=3)
@@ -484,23 +489,6 @@ class TestFrame:
         # Check relative time coordinate exists
         rel_coord = framed.get_coord("relative_time")
         assert len(rel_coord) == 3  # window size
-
-    def test_frame_history_update(self):
-        """Test that patch history is properly updated."""
-        data = np.arange(5)
-        patch = dc.Patch(
-            data=data,
-            coords={"time": dc.to_datetime64(np.arange(5))},
-            dims=("time",),
-        )
-
-        rolling = patch.rolling(time=2)
-        framed = rolling.frame(dim="custom_window")
-
-        # Check that history was updated
-        assert len(framed.attrs.history) == len(patch.attrs.history) + 1
-        # The last history entry should mention the frame operation
-        assert "frame(dim='custom_window')" in framed.attrs.history[-1]
 
     @pytest.mark.parametrize("window,step", [(2, 1), (3, 2), (4, 4)])
     def test_frame_various_parameters(self, window, step):

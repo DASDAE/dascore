@@ -117,64 +117,36 @@ class _PatchRollerInfo(DascoreBaseModel):
         # Set default dimension name if not provided
         if dim is None:
             dim = f"relative_{self.dim}"
-
         # Use sliding window view to create frames
         slide_view = np.lib.stride_tricks.sliding_window_view(
             self.patch.data,
             self.window,
             self.axis,
         )
-
         # Account for step size by slicing the sliding window view
         step_slice = [slice(None, None)] * len(self.patch.data.shape)
         step_slice.append(slice(None, None))  # for the new window dimension
         step_slice[self.axis] = slice(None, None, self.step)
-
         # Apply the slice to get the stepped frames
         framed_data = slide_view[tuple(step_slice)]
-
-        # Keep the window dimension at the end for now
-        # We'll reorder later if needed
-
         # Create coordinate for the new dimension (relative coordinate within window)
-        coord = self.patch.get_coord(self.dim)
-        if hasattr(coord, "step"):
-            window_coord_values = np.arange(self.window) * coord.step
-        else:
-            window_coord_values = np.arange(self.window)
-
-        # Create new coordinate object for the window dimension
-        window_coord = dc.get_coord(values=window_coord_values)
-
-        # Update coordinates - account for step in the original dimension
-        orig_coord = self.patch.get_coord(self.dim)
-
-        # Calculate number of complete windows and their starting positions
-        max_idx = len(orig_coord) - self.window + 1
-        if self.step == 1:
-            # For step=1, we have all possible windows
-            stepped_indices = np.arange(0, max_idx)
-        else:
-            # For step>1, we have windows at regular intervals
-            stepped_indices = np.arange(0, max_idx, self.step)
-
-        new_coord_values = orig_coord.values[stepped_indices]
-        new_coords = self.patch.coords.update(**{self.dim: new_coord_values})
-
-        new_coords = self.patch.coords.update(**{dim: (dim, window_coord)})
-
+        coord = self.patch.get_coord(self.dim, require_evenly_sampled=True)
+        # Get relative coord
+        coord_array = np.arange(self.window) * coord.step
+        relative_coord = dc.get_coord(data=coord_array, units=coord.units)
+        # Get new coord to replace old one.
+        start = self.window // 2 if self.center else 0
+        stop = len(coord) - self.window + 1
+        inds = np.arange(len(coord))[start : stop : self.step]
+        new_coord = coord[inds]
+        # And new coord
+        coord_map = dict(self.patch.coords.coord_map)
+        coord_map[dim] = relative_coord
+        coord_map[self.dim] = new_coord
         # Create new dimensions list by appending the new dimension
         new_dims = [*list(self.patch.dims), dim]
-
-        # Update attributes with history
-        new_history = list(self.patch.attrs.history)
-        hist_str = f"{self.roll_hist}.frame(dim='{dim}')"
-        new_history.append(hist_str)
-        attrs = self.patch.attrs.update(history=new_history, coords={})
-
-        return self.patch.__class__(
-            data=framed_data, coords=new_coords, dims=new_dims, attrs=attrs
-        )
+        coords = dc.get_coord_manager(coords=coord_map, dims=new_dims)
+        return self.patch.update(data=framed_data, coords=coords)
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):
