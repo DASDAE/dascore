@@ -293,3 +293,256 @@ class TestNumpyVsPandasRolling:
                 pandas_out = patch.rolling(**kwargs_pandas).mean().dropna(dim)
                 numpy_out = patch.rolling(**kwargs_numpy).mean().dropna(dim)
                 assert pandas_out == numpy_out
+
+
+class TestFrame:
+    """Tests for creating frames from the rollers."""
+
+    def test_basic_frame_1d(self):
+        """Test basic frame functionality with 1D patch."""
+        # Create a simple 1D patch
+        data = np.arange(10)
+        patch = dc.Patch(
+            data=data,
+            coords={"time": dc.to_datetime64(np.arange(10))},
+            dims=("time",),
+        )
+
+        # Test with window=3, step=1
+        rolling = patch.rolling(time=3)
+        framed = rolling.frame()
+
+        # Check dimensions
+        assert framed.dims == ("time", "relative_time")
+        assert framed.shape == (8, 3)  # 10 - 3 + 1 = 8 windows, each of size 3
+
+        # Check data - should have overlapping windows
+        expected = np.array(
+            [
+                [0, 1, 2],
+                [1, 2, 3],
+                [2, 3, 4],
+                [3, 4, 5],
+                [4, 5, 6],
+                [5, 6, 7],
+                [6, 7, 8],
+                [7, 8, 9],
+            ]
+        )
+        assert np.array_equal(framed.data, expected)
+
+    def test_frame_with_step(self):
+        """Test frame functionality with step > 1."""
+        # Create a simple 1D patch
+        data = np.arange(10)
+        patch = dc.Patch(
+            data=data,
+            coords={"time": dc.to_datetime64(np.arange(10))},
+            dims=("time",),
+        )
+
+        # Test with window=3, step=2
+        rolling = patch.rolling(time=3, step=2)
+        framed = rolling.frame()
+
+        # Check dimensions
+        assert framed.dims == ("time", "relative_time")
+        assert framed.shape == (4, 3)  # (10 - 3 + 1) // 2 = 4 windows
+
+        # Check data - should have non-overlapping windows with step=2
+        expected = np.array([[0, 1, 2], [2, 3, 4], [4, 5, 6], [6, 7, 8]])
+        assert np.array_equal(framed.data, expected)
+
+    def test_frame_custom_dim_name(self):
+        """Test frame with custom dimension name."""
+        data = np.arange(6)
+        patch = dc.Patch(
+            data=data,
+            coords={"time": dc.to_datetime64(np.arange(6))},
+            dims=("time",),
+        )
+
+        rolling = patch.rolling(time=2)
+        framed = rolling.frame(dim="window")
+
+        # Check custom dimension name
+        assert framed.dims == ("time", "window")
+        assert "window" in framed.coords
+
+    def test_frame_2d_patch_time_axis(self):
+        """Test frame functionality with 2D patch along time axis."""
+        # Create a 2D patch
+        data = np.arange(20).reshape(10, 2)
+        patch = dc.Patch(
+            data=data,
+            coords={
+                "time": dc.to_datetime64(np.arange(10)),
+                "distance": np.arange(2) * 0.1,
+            },
+            dims=("time", "distance"),
+        )
+
+        # Apply rolling along time axis
+        rolling = patch.rolling(time=3)
+        framed = rolling.frame()
+
+        # Check dimensions (new dimension is appended at the end)
+        assert framed.dims == ("time", "distance", "relative_time")
+        assert framed.shape == (8, 2, 3)
+
+        # Check first window (data layout is different due to sliding window view)
+        # The window dimension contains the values from the rolling window
+        # For the first window along time, we expect the first 3 time samples
+        # For time index 0: framed.data[0, distance_idx, window_idx] should be
+        # data[window_idx, distance_idx]
+        for dist_idx in range(2):
+            for window_idx in range(3):
+                expected_value = data[window_idx, dist_idx]
+                actual_value = framed.data[0, dist_idx, window_idx]
+                assert actual_value == expected_value
+
+    def test_frame_2d_patch_distance_axis(self):
+        """Test frame functionality with 2D patch along distance axis."""
+        # Create a 2D patch
+        data = np.arange(20).reshape(10, 2)
+        patch = dc.Patch(
+            data=data,
+            coords={
+                "time": dc.to_datetime64(np.arange(10)),
+                "distance": np.arange(2) * 0.1,
+            },
+            dims=("time", "distance"),
+        )
+
+        # Apply rolling along distance axis (using distance step to get
+        # window size in samples)
+        dist_step = patch.get_coord("distance").step
+        rolling = patch.rolling(distance=2 * dist_step)  # window of 2 samples
+        framed = rolling.frame()
+
+        # Check dimensions (new dimension is appended at the end)
+        assert framed.dims == ("time", "distance", "relative_distance")
+        assert framed.shape == (10, 1, 2)  # Only 1 complete window along distance
+
+    def test_frame_large_step(self):
+        """Test frame with step size equal to window size (non-overlapping)."""
+        data = np.arange(12)
+        patch = dc.Patch(
+            data=data,
+            coords={"time": dc.to_datetime64(np.arange(12))},
+            dims=("time",),
+        )
+
+        # Non-overlapping windows
+        rolling = patch.rolling(time=3, step=3)
+        framed = rolling.frame()
+
+        # Should have 4 non-overlapping windows: [0,1,2], [3,4,5], [6,7,8], [9,10,11]
+        assert framed.shape == (4, 3)
+        expected = np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]])
+        assert np.array_equal(framed.data, expected)
+
+    def test_frame_incomplete_windows(self):
+        """Test that incomplete windows are not included."""
+        data = np.arange(7)  # 7 elements
+        patch = dc.Patch(
+            data=data,
+            coords={"time": dc.to_datetime64(np.arange(7))},
+            dims=("time",),
+        )
+
+        # Window=3, step=3 should give 2 complete windows and ignore the last element
+        rolling = patch.rolling(time=3, step=3)
+        framed = rolling.frame()
+
+        # Should have 2 complete windows: [0,1,2], [3,4,5]
+        # Element 6 is ignored because it doesn't form a complete window
+        assert framed.shape == (2, 3)
+        expected = np.array([[0, 1, 2], [3, 4, 5]])
+        assert np.array_equal(framed.data, expected)
+
+    def test_frame_coordinates(self):
+        """Test that coordinates are properly updated."""
+        data = np.arange(8)
+        time_coords = dc.to_datetime64(np.arange(8))
+        patch = dc.Patch(
+            data=data,
+            coords={"time": time_coords},
+            dims=("time",),
+        )
+
+        rolling = patch.rolling(time=3, step=2)
+        framed = rolling.frame()
+
+        # Check that original time coordinate is properly stepped
+        new_coord = framed.get_coord("time")
+
+        # With step=2, we should have coordinates at indices 0, 2, 4
+        expected_len = 3  # (8 - 3 + 1) // 2 = 3
+        assert len(new_coord) == expected_len
+
+        # Check relative time coordinate exists
+        rel_coord = framed.get_coord("relative_time")
+        assert len(rel_coord) == 3  # window size
+
+    def test_frame_history_update(self):
+        """Test that patch history is properly updated."""
+        data = np.arange(5)
+        patch = dc.Patch(
+            data=data,
+            coords={"time": dc.to_datetime64(np.arange(5))},
+            dims=("time",),
+        )
+
+        rolling = patch.rolling(time=2)
+        framed = rolling.frame(dim="custom_window")
+
+        # Check that history was updated
+        assert len(framed.attrs.history) == len(patch.attrs.history) + 1
+        # The last history entry should mention the frame operation
+        assert "frame(dim='custom_window')" in framed.attrs.history[-1]
+
+    @pytest.mark.parametrize("window,step", [(2, 1), (3, 2), (4, 4)])
+    def test_frame_various_parameters(self, window, step):
+        """Test frame with various window and step parameters."""
+        data = np.arange(20)
+        patch = dc.Patch(
+            data=data,
+            coords={"time": dc.to_datetime64(np.arange(20))},
+            dims=("time",),
+        )
+
+        rolling = patch.rolling(time=window, step=step)
+        framed = rolling.frame()
+
+        # Calculate expected number of windows
+        # Number of valid starting positions with the given step
+        expected_windows = len(list(range(0, len(data) - window + 1, step)))
+
+        assert framed.shape == (expected_windows, window)
+        assert framed.dims == ("time", "relative_time")
+
+    def test_frame_different_engines(self):
+        """Test that frame works with different rolling engines."""
+        data = np.arange(10).reshape(5, 2)
+        patch = dc.Patch(
+            data=data,
+            coords={
+                "time": dc.to_datetime64(np.arange(5)),
+                "distance": np.arange(2) * 0.1,
+            },
+            dims=("time", "distance"),
+        )
+
+        # Test with numpy engine
+        rolling_numpy = patch.rolling(time=3, engine="numpy")
+        framed_numpy = rolling_numpy.frame()
+
+        # Test with pandas engine
+        rolling_pandas = patch.rolling(time=3, engine="pandas")
+        framed_pandas = rolling_pandas.frame()
+
+        # Both should produce same results
+        assert framed_numpy.shape == framed_pandas.shape
+        assert framed_numpy.dims == framed_pandas.dims
+        assert np.array_equal(framed_numpy.data, framed_pandas.data)

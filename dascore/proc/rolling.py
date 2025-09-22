@@ -9,7 +9,7 @@ import pandas as pd
 from pydantic import Field
 
 import dascore as dc
-from dascore.constants import samples_arg_description
+from dascore.constants import PatchType, samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DascoreBaseModel
@@ -56,6 +56,125 @@ class _PatchRollerInfo(DascoreBaseModel):
         new_history.append(hist_str)
         attrs = self.patch.attrs.update(history=new_history, coords={})
         return attrs
+
+    def frame(self, dim: str | None = None) -> PatchType:
+        """
+        Create frames from rolling object.
+
+        This essentially expands the data from each *complete* moving window
+        into a new dimension. Data views are used as to not make copies.
+
+        The new dimension contains the "relative" values (first minus last
+        for each window) and its name is controlled by the `dim` parameter.
+
+        Consider a patch with a simple 1D array in the dimension "time":
+        [0, 1, 2, 3, 4, 5], and rolling(time=time, step=step)
+
+        - If time = 2*dt and step == 1 the output patch will have:
+          [[0, 1]
+           [1, 2]
+           [2, 3]
+           [3, 4]
+           [4, 5]
+           [5, 6]]
+
+        - if time = 2*dt and step == 2 then the output patch will have:
+          [[0, 1]
+           [2, 3]
+           [4, 5]]
+
+        if time = 3*dt and step == 3 then the output patch will have:
+          [[0, 1, 2]
+           [3, 4, 5]]
+
+        if time = 3*dt and step == 2 then the output patch will have:
+          [[0, 1, 2]
+           [2, 3, 4]]
+        # Note: there is no 5 because it doesn't fit in a complete window.
+
+        Parameters
+        ----------
+        dim
+            The name of the new dimension. If None, the new name is the
+            name of the dimension to which the roller was applied, but
+            prepended with "relative".
+
+        Returns
+        -------
+        A patch with each of the moving windows expanded into the new
+        dimension.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>>
+        >>> # Expand 1D patch into 2D.
+        >>> patch1d = patch.mean("distance").squeeze()
+        >>> rolling = patch1d.rolling(time=1, step=2)
+        >>> expanded = rolling.frame()
+        """
+        # Set default dimension name if not provided
+        if dim is None:
+            dim = f"relative_{self.dim}"
+
+        # Use sliding window view to create frames
+        slide_view = np.lib.stride_tricks.sliding_window_view(
+            self.patch.data,
+            self.window,
+            self.axis,
+        )
+
+        # Account for step size by slicing the sliding window view
+        step_slice = [slice(None, None)] * len(self.patch.data.shape)
+        step_slice.append(slice(None, None))  # for the new window dimension
+        step_slice[self.axis] = slice(None, None, self.step)
+
+        # Apply the slice to get the stepped frames
+        framed_data = slide_view[tuple(step_slice)]
+
+        # Keep the window dimension at the end for now
+        # We'll reorder later if needed
+
+        # Create coordinate for the new dimension (relative coordinate within window)
+        coord = self.patch.get_coord(self.dim)
+        if hasattr(coord, "step"):
+            window_coord_values = np.arange(self.window) * coord.step
+        else:
+            window_coord_values = np.arange(self.window)
+
+        # Create new coordinate object for the window dimension
+        window_coord = dc.get_coord(values=window_coord_values)
+
+        # Update coordinates - account for step in the original dimension
+        orig_coord = self.patch.get_coord(self.dim)
+
+        # Calculate number of complete windows and their starting positions
+        max_idx = len(orig_coord) - self.window + 1
+        if self.step == 1:
+            # For step=1, we have all possible windows
+            stepped_indices = np.arange(0, max_idx)
+        else:
+            # For step>1, we have windows at regular intervals
+            stepped_indices = np.arange(0, max_idx, self.step)
+
+        new_coord_values = orig_coord.values[stepped_indices]
+        new_coords = self.patch.coords.update(**{self.dim: new_coord_values})
+
+        new_coords = self.patch.coords.update(**{dim: (dim, window_coord)})
+
+        # Create new dimensions list by appending the new dimension
+        new_dims = [*list(self.patch.dims), dim]
+
+        # Update attributes with history
+        new_history = list(self.patch.attrs.history)
+        hist_str = f"{self.roll_hist}.frame(dim='{dim}')"
+        new_history.append(hist_str)
+        attrs = self.patch.attrs.update(history=new_history, coords={})
+
+        return self.patch.__class__(
+            data=framed_data, coords=new_coords, dims=new_dims, attrs=attrs
+        )
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):
