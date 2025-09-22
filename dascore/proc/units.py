@@ -45,10 +45,13 @@ def set_units(
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
+    >>>
     >>> # set the data units
     >>> patch_with_units = patch.set_units("km/ms")
+    >>>
     >>> # set the units of the distance coordinate
     >>> patch_feet = patch.set_units(distance='feet')
+    >>>
     >>> # remove data units
     >>> patch_removed_units = patch_with_units.set_units(None)
     """
@@ -83,6 +86,20 @@ def convert_units(
     ------
     [UnitError](`dascore.exceptions.UnitError`) if any of the new units
     are not compatible with the old units.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Set initial units
+    >>> patch_with_units = patch.set_units("m/s", distance="m", time="s")
+    >>>
+    >>> # Convert data units from m/s to km/s
+    >>> converted_data = patch_with_units.convert_units(data_units="km/s")
+    >>>
+    >>> # Convert coordinate units
+    >>> converted_coords = patch_with_units.convert_units(distance="km")
     """
     # convert data
     if data_units is not None:
@@ -106,6 +123,17 @@ def simplify_units(
 
     All data and coordinate units will be converted to their
     base units and corresponding data/labels multiplied by a conversion factor.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Set complex units
+    >>> complex_units = patch.set_units("km/h", distance="km", time="h")
+    >>>
+    >>> # Simplify to base units (m/s, m, s)
+    >>> simplified = complex_units.simplify_units()
     """
     # get data and data units
     attrs = patch.attrs

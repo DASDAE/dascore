@@ -233,6 +233,18 @@ class CoordManager(DascoreBaseModel):
 
         Input values can be of the same form as initialization.
         To drop coordinates, simply pass {coord_name: None}
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> import numpy as np
+        >>> patch = dc.get_example_patch()
+        >>> coords = patch.coords
+        >>>
+        >>> # Update time coordinate
+        >>> new_time = np.arange(len(coords.get_array('time')))
+        >>> new_coords = coords.update(time=new_time)
+        >>> assert 'time' in new_coords
         """
 
         def _get_dim_change_drop(coord_map, dim_map):
@@ -588,6 +600,16 @@ class CoordManager(DascoreBaseModel):
             If True, the query meaning is in samples.
         **kwargs
             Used to specify dimension and select arguments.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> coords = patch.coords
+        >>>
+        >>> # Select subset of coordinates
+        >>> new_coords, _ = coords.select(time=(0, 10))
+        >>> assert 'time' in new_coords
 
         See also [`CoordManager.order`](`dascore.core.CoordManager.order`).
         """
@@ -1120,7 +1142,7 @@ def get_coord_manager(
     if dims is None:
         if isinstance(coords, Mapping) and all(isinstance(x, str) for x in coords):
             dims = tuple(i for i, v in coords.items() if not isinstance(v, tuple))
-        elif attrs is not None and "dims" in attrs or hasattr(attrs, "dims"):
+        elif (attrs is not None and "dims" in attrs) or hasattr(attrs, "dims"):
             dims = tuple(attrs["dims"].split(","))
         else:
             dims = ()

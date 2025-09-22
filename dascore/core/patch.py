@@ -210,7 +210,19 @@ class Patch:
 
     @property
     def dims(self) -> tuple[str, ...]:
-        """Return the dimensions contained in patch."""
+        """
+        Return the dimensions contained in patch.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>>
+        >>> # Get dims from patch.
+        >>> dims = patch.dims
+        >>> assert 'time' in dims
+        >>> assert 'distance' in dims
+        """
         return self.coords.dims
 
     @property
@@ -225,27 +237,81 @@ class Patch:
 
     @property
     def attrs(self) -> PatchAttrs:
-        """Return the dimensions contained in patch."""
+        """
+        Return the patch attributes.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>>
+        >>> # Get attrs from patch.
+        >>> attrs = patch.attrs
+        >>> assert hasattr(attrs, 'data_type')
+        """
         return self._attrs
 
     @property
     def coords(self) -> CoordManager:
-        """Return the dimensions contained in patch."""
+        """
+        Return the patch coordinates.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> coords = patch.coords
+        >>>
+        >>> # Get coords from patch.
+        >>> assert 'time' in coords
+        >>> assert 'distance' in coords
+        """
         return self._coords
 
     @property
     def data(self) -> ArrayLike:
-        """Return the data contained in patch."""
+        """
+        Return the data contained in patch.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> data = patch.data
+        >>> assert data.shape == patch.shape
+        """
         return self._data
 
     @property
     def shape(self) -> tuple[int, ...]:
-        """Return the shape of the data array."""
+        """
+        Return the shape of the data array.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>>
+        >>> # Get shape from patch.
+        >>> shape = patch.shape
+        >>> assert len(shape) == len(patch.dims)
+        """
         return self.coords.shape
 
     @property
     def size(self) -> int:
-        """Return the size of the data array."""
+        """
+        Return the size of the data array.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>>
+        >>> # Get size from patch.
+        >>> size = patch.size
+        >>> assert size == patch.data.size
+        """
         return self.coords.size
 
     @property

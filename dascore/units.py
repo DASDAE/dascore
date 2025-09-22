@@ -51,6 +51,19 @@ def get_unit(value) -> Unit:
     Usually quantities, generated with
     [`get_quantity`](`dascore.units.get_quantity`), are easy to work
     with.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>>
+    >>> # Create unit from string
+    >>> unit = dc.get_unit('m/s')
+    >>> assert str(unit) == 'm / s'
+    >>>
+    >>> # Create unit from existing quantity
+    >>> quantity = dc.get_quantity('10 Hz')
+    >>> unit = dc.get_unit(quantity.units)
+    >>> assert str(unit) == 'Hz'
     """
     if isinstance(value, Quantity):
         assert value.magnitude == 1.0
@@ -81,6 +94,7 @@ def get_quantity(value: str_or_none) -> Quantity | None:
     >>> import dascore as dc
     >>> meters = dc.get_quantity("m")
     >>> accel = dc.get_quantity("m/s^2")
+    >>>
     >>> # This can also convert date times.
     >>> many_seconds = dc.get_quantity(dc.to_timedelta64(200))
     """
@@ -258,10 +272,12 @@ def get_filter_units(
     Examples
     --------
     >>> from dascore.units import get_filter_units, Hz, s
+    >>>
     >>> # Passing a tuple in Hz leaves the output in Hz
     >>> assert get_filter_units(1 * Hz, 10 * Hz, s) == (1., 10.)
     >>> assert get_filter_units(None, 10 * Hz, s) == (None, 10.)
     >>> assert get_filter_units(1 * Hz, 10 * Hz, s) == (1., 10.)
+    >>>
     >>> # Passing a tuple in seconds will convert to Hz and switch order, if needed.
     >>> assert get_filter_units(1 * s, 10 * s, s) == (0.1, 1.)
     >>> assert get_filter_units(None, 10 * s, s) == (None, 0.1)

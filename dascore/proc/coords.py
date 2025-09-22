@@ -42,8 +42,10 @@ def snap_coords(patch: PatchType, *coords, reverse=False):
     >>> import dascore as dc
     >>> # get an example patch which has unevenly sampled coords time, distance
     >>> patch = dc.get_example_patch("wacky_dim_coords_patch")
+    >>>
     >>> # snap time dimension
     >>> time_snap = patch.snap_coords("time")
+    >>>
     >>> # snap the distance dimension
     >>> dist_snap = patch.snap_coords("distance")
     """
@@ -73,9 +75,11 @@ def sort_coords(patch: PatchType, *coords, reverse=False):
     >>> import dascore as dc
     >>> # get an example patch which has unevenly sampled coords time, distance
     >>> patch = dc.get_example_patch("wacky_dim_coords_patch")
+    >>>
     >>> # sort time coordinate (dimension) in ascending order
     >>> time_snap = patch.sort_coords("time")
     >>> assert time_snap.coords.coord_map['time'].sorted
+    >>>
     >>> # sort distance coordinate (dimension) in descending order
     >>> dist_snap = patch.sort_coords("distance", reverse=True)
     >>> assert dist_snap.coords.coord_map['distance'].reverse_sorted
@@ -205,6 +209,7 @@ def rename_coords(self: PatchType, **kwargs) -> PatchType:
     --------
     >>> import dascore as dc
     >>> pa = dc.get_example_patch()
+    >>>
     >>> # rename dim "distance" to "fragrance"
     >>> pa2 = pa.rename_coords(distance='fragrance')
     >>> assert 'fragrance' in pa2.dims
@@ -449,27 +454,37 @@ def select(
     >>> import dascore as dc
     >>> from dascore.examples import get_example_patch
     >>> patch = get_example_patch()
+    >>>
     >>> # select meters 50 to 300
     >>> new_distance = patch.select(distance=(50, 300))
+    >>>
     >>> # select channels less than 300
     >>> lt_dist = patch.select(distance=(..., 300))
+    >>>
     >>> # select time (1 second from start to -1 second from end)
     >>> t1 = patch.attrs.time_min + dc.to_timedelta64(1)
     >>> t2 = patch.attrs.time_max - dc.to_timedelta64(1)
     >>> new_time1 = patch.select(time=(t1, t2))
+    >>>
     >>> # this can be accomplished more simply using the relative keyword
     >>> new_time2 = patch.select(time=(1, -1), relative=True)
+    >>>
     >>> # filter 1 second from start time to 3 seconds from start time
     >>> new_time3 = patch.select(time=(1, 3), relative=True)
+    >>>
     >>> # filter 6 second from end time to 1 second from end time
     >>> new_time4 = patch.select(time=(-6, -1), relative=True)
+    >>>
     >>> # Select first 10 distance indices
     >>> new_distance1 = patch.select(distance=(..., 10), samples=True)
+    >>>
     >>> # Select last time row/column
     >>> new_distance2 = patch.select(time=-1, samples=True)
+    >>>
     >>> # only include certain rows/columns based on a boolean array.
     >>> time = patch.get_array("time")
     >>> new_time_5 = patch.select(time=time>time[2])
+    >>>
     >>> # Select only specific values along a dimension
     >>> distance = patch.get_array("distance")
     >>> new_distance_3 = patch.select(distace=distance[1::2])
@@ -524,10 +539,12 @@ def order(
     >>> import dascore as dc
     >>> from dascore.examples import get_example_patch
     >>> patch = get_example_patch()
+    >>>
     >>> # Sub-select only a section of the distance and ensure order.
     >>> dist = patch.get_array("distance")
     >>> new_dist = dist[1:5][::-1]
     >>> patch_1 = patch.order(distance=new_dist)
+    >>>
     >>> # Get duplicate the first time row or column
     >>> patch_2 = patch.order(time=[0, 0, 0], samples=True)
 
@@ -603,18 +620,18 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
-
+    >>>
     >>> # Add two dummy dimensions to patch named "end" and "stop"
     >>> new = patch.append_dims("end", "stop")
-
+    >>>
     >>> # Add a dummy dimension called "face" to end of patch
     >>> # which has a coordinate value of [1].
     >>> new = patch.append_dims(face=[1])
-
+    >>>
     >>> # Same thing as above, but with a larger coords which broadcasts
     >>> # the data to shape appropriate to mach coordinates.
     >>> new = patch.append_dims(face=[1, 2])
-
+    >>>
     >>> # Add a dummy dimension of length 3 to end of patch.
     >>> # the data to shape appropriate to mach coordinates.
     >>> new = patch.append_dims(face=3)
@@ -659,6 +676,19 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
         Selects a subset of the length one dimensions. If a dimension
         is selected with length greater than one, an error is raised.
         If None, all length one dimensions are squeezed.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> import numpy as np
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Create a patch with a length-1 dimension by selecting time slice
+    >>> time_array = patch.coords.get_array("time")
+    >>> single_time = patch.select(time=(time_array[0], time_array[0]))
+    >>>
+    >>> # Squeeze the length-1 time dimension
+    >>> squeezed = single_time.squeeze(dim="time")
     """
     coords = self.coords.squeeze(dim)
     if dim is None:
@@ -755,6 +785,7 @@ def get_axis(self: PatchType, dim: str) -> int:
     --------
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
+    >>>
     >>> axis = patch.get_axis("time")
     >>> assert axis == patch.get_axis("time")
     """

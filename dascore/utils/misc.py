@@ -815,14 +815,12 @@ def deep_equality_check(obj1, obj2, visited=None):
     >>> from dascore.utils.misc import deep_equality_check
     >>>
     >>> # Basic usage
-    >>> deep_equality_check({"a": 1}, {"a": 1})
-    True
+    >>> assert deep_equality_check({"a": 1}, {"a": 1})
     >>>
     >>> # With numpy arrays
     >>> dict1 = {"arr": np.array([1, 2, 3])}
     >>> dict2 = {"arr": np.array([1, 2, 3])}
-    >>> deep_equality_check(dict1, dict2)
-    True
+    >>> assert deep_equality_check(dict1, dict2)
     """
 
     def _robust_equality_check(obj1, obj2):
