@@ -19,6 +19,7 @@ from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.misc import _get_nullish
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
+    align_patch_coords,
     get_dim_axis_value,
     patch_function,
 )
@@ -623,3 +624,66 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
         patch = patch.update_coords(**{dim: new_coord})
 
     return patch.new(data=roll_arr)
+
+
+@patch_function()
+def where(
+    patch: PatchType, cond: ArrayLike | PatchType, other: Any | PatchType = np.nan
+) -> PatchType:
+    """
+    Return elements from patch where condition is True, else fill with other.
+
+    Parameters
+    ----------
+    patch
+        The input patch
+    cond
+        Condition array. Should be a boolean array with the same shape as patch data,
+        or a patch with boolean data that is broadcastable to the patch's shape.
+    other
+        Value to use for locations where cond is False. Can be a scalar value,
+        array, or patch that is broadcastable to the patch's shape. Default is NaN.
+
+    Returns
+    -------
+    PatchType
+        A new patch with values from patch where cond is True, and other elsewhere.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> import numpy as np
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Where data > 0 fill with original patch values else nan.
+    >>> condition = patch.data > 0
+    >>> out = patch.where(condition)
+    >>>
+    >>> # Use another patch as condition
+    >>> other = patch.data.mean()).astype(bool)
+    >>> boolean_patch = patch.new(data=(patch.data > other))
+    >>> out = patch.where(boolean_patch, other=0)
+    >>>
+    >>> # Replace values below threshold with 0
+    >>> out = patch.where(patch.data > patch.data.mean(), other=0)
+    """
+
+    def _get_array(possible_array):
+        """Get array from patch or array."""
+        if isinstance(possible_array, dc.Patch):
+            _, aligned = align_patch_coords(patch, possible_array)
+            out = aligned.data
+        else:
+            out = possible_array
+        return np.asarray(out)
+
+    cond_array = _get_array(cond)
+    # Ensure condition is boolean
+    if not np.issubdtype(cond_array.dtype, np.bool_):
+        msg = "Condition must be a boolean array or patch with boolean data"
+        raise ValueError(msg)
+
+    other_array = _get_array(other)
+    # Use numpy.where to apply condition
+    new_data = np.where(cond_array, patch.data, other_array)
+    return patch.new(data=new_data)
