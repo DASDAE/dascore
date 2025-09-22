@@ -660,7 +660,7 @@ def where(
     >>> out = patch.where(condition)
     >>>
     >>> # Use another patch as condition
-    >>> other = patch.data.mean()).astype(bool)
+    >>> other = patch.data.mean().astype(bool)
     >>> boolean_patch = patch.new(data=(patch.data > other))
     >>> out = patch.where(boolean_patch, other=0)
     >>>
