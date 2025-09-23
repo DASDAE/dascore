@@ -74,7 +74,7 @@ class TestRolling:
         roll = range_patch.rolling(distance=self.window * step, step=self.step * step)
 
         out = roll.max().dropna("distance")
-        start = roll.get_start_index()
+        start = roll._get_start_index()
         # Determine what output should be.
         vals = np.arange(self.window - 1, range_patch.shape[0])
         expected = vals[start :: self.step, None]
@@ -311,7 +311,7 @@ class TestFrame:
 
     @pytest.fixture(scope="class")
     def patch_to_20(self):
-        """get a 1D patch to 20."""
+        """Get a 1D patch to 20."""
         data = np.arange(20)
         patch = dc.Patch(
             data=data,
@@ -554,13 +554,13 @@ class TestFrame:
         rolling = patch.rolling(time=window, step=step, center=True)
         framed = rolling.frame()
         # Expected frame count equals ceil((N - window + 1)/step)
-        N = len(data)
-        M = N - window + 1
-        expected_frames = (M + step - 1) // step
+        n_count = len(data)
+        m_count = n_count - window + 1
+        expected_frames = (m_count + step - 1) // step
         assert framed.shape == (expected_frames, window)
         # Check that time labels correspond to window centers
         coord = patch.get_coord("time")
-        starts = np.arange(M)[::step]
+        starts = np.arange(m_count)[::step]
         # centers = starts + (window // 2)
         # expected_labels = coord[centers]
         # assert np.array_equal(
@@ -581,10 +581,7 @@ class TestFrame:
             frame_coord = frame.get_coord("time")
 
             if not mean_coord == frame_coord:
-
-                breakpoint()
                 mean = rolling.mean().dropna("time")
                 frame = rolling.frame()
 
             assert mean_coord == frame_coord
-
