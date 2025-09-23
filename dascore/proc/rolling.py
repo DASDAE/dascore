@@ -64,33 +64,32 @@ class _PatchRollerInfo(DascoreBaseModel):
         This essentially expands the data from each *complete* moving window
         into a new dimension. Data views are used as to not make copies.
 
-        The new dimension contains the "relative" values (first minus last
-        for each window) and its name is controlled by the `dim` parameter.
+        The new dimension contains the samples from each complete window.
+        Its name is controlled by the `dim` parameter.
 
         Consider a patch with a simple 1D array in the dimension "time":
         [0, 1, 2, 3, 4, 5], and rolling(time=time, step=step)
 
-        - If time = 2*dt and step == 1 the output patch will have:
-          [[0, 1]
-           [1, 2]
-           [2, 3]
-           [3, 4]
-           [4, 5]
-           [5, 6]]
+        - If window = 2 samples and step == 1, for data [0,1,2,3,4,5]:
+          [[0, 1],
+           [1, 2],
+           [2, 3],
+           [3, 4],
+           [4, 5]]
 
-        - if time = 2*dt and step == 2 then the output patch will have:
+        - If window = 2 and step == 2:
           [[0, 1]
            [2, 3]
            [4, 5]]
 
-        if time = 3*dt and step == 3 then the output patch will have:
+        - If window = 3 and step == 3:
           [[0, 1, 2]
            [3, 4, 5]]
 
-        if time = 3*dt and step == 2 then the output patch will have:
+        - If window = 3 and step == 2:
           [[0, 1, 2]
            [2, 3, 4]]
-        # Note: there is no 5 because it doesn't fit in a complete window.
+        # Note: the last element (5) can't start a complete window here.
 
         Parameters
         ----------
@@ -113,6 +112,11 @@ class _PatchRollerInfo(DascoreBaseModel):
         >>> patch1d = patch.mean("distance").squeeze()
         >>> rolling = patch1d.rolling(time=1, step=2)
         >>> expanded = rolling.frame()
+
+        Notes
+        -----
+        The output dimensions
+
         """
         # Set default dimension name if not provided
         if dim is None:
@@ -135,18 +139,23 @@ class _PatchRollerInfo(DascoreBaseModel):
         coord_array = np.arange(self.window) * coord.step
         relative_coord = dc.get_coord(data=coord_array, units=coord.units)
         # Get new coord to replace old one.
-        start = self.window // 2 if self.center else 0
-        stop = len(coord) - self.window + 1
-        inds = np.arange(len(coord))[start : stop : self.step]
-        new_coord = coord[inds]
+        # Compute sliding-window start indices directly
+        start_inds = np.arange(0, len(coord) - self.window + 1, self.step)
+        # Derive label indices by adding offset
+        offset = int(np.floor(self.window / 2)) if self.center else self.window - 1
+        label_inds = start_inds + offset
+        # Ensure indexing stays within bounds
+        label_inds = np.clip(label_inds, 0, len(coord) - 1)
+        new_coord = coord[label_inds]
         # And new coord
         coord_map = dict(self.patch.coords.coord_map)
         coord_map[dim] = relative_coord
         coord_map[self.dim] = new_coord
         # Create new dimensions list by appending the new dimension
-        new_dims = [*list(self.patch.dims), dim]
+        new_dims = (*self.patch.dims, dim)
         coords = dc.get_coord_manager(coords=coord_map, dims=new_dims)
-        return self.patch.update(data=framed_data, coords=coords)
+        attrs = self._get_attrs_with_apply_history("frame")
+        return self.patch.update(data=framed_data, coords=coords, attrs=attrs)
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):

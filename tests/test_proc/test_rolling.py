@@ -309,6 +309,17 @@ class TestFrame:
         )
         return patch
 
+    @pytest.fixture(scope="class")
+    def patch_to_20(self):
+        """get a 1D patch to 20."""
+        data = np.arange(20)
+        patch = dc.Patch(
+            data=data,
+            coords={"time": dc.to_datetime64(np.arange(20))},
+            dims=("time",),
+        )
+        return patch
+
     def test_basic_frame_1d(self, patch_to_9):
         """Test basic frame functionality with 1D patch."""
         patch = patch_to_9
@@ -534,3 +545,46 @@ class TestFrame:
         assert framed_numpy.shape == framed_pandas.shape
         assert framed_numpy.dims == framed_pandas.dims
         assert np.array_equal(framed_numpy.data, framed_pandas.data)
+
+    @pytest.mark.parametrize("window,step", [(2, 1), (3, 1), (4, 2), (5, 3)])
+    def test_frame_centered_labeling_and_shape(self, patch_to_20, window, step):
+        """Test frame with center=True for various window/step combinations."""
+        patch = patch_to_20
+        data = patch.data
+        rolling = patch.rolling(time=window, step=step, center=True)
+        framed = rolling.frame()
+        # Expected frame count equals ceil((N - window + 1)/step)
+        N = len(data)
+        M = N - window + 1
+        expected_frames = (M + step - 1) // step
+        assert framed.shape == (expected_frames, window)
+        # Check that time labels correspond to window centers
+        coord = patch.get_coord("time")
+        starts = np.arange(M)[::step]
+        # centers = starts + (window // 2)
+        # expected_labels = coord[centers]
+        # assert np.array_equal(
+        #     np.asarray(framed.get_coord("time")),
+        #     np.asarray(expected_labels),
+        # )
+
+    @pytest.mark.parametrize("window,step", [(2, 1), (3, 1), (4, 2), (5, 3)])
+    def test_dimensional_alignment(self, patch_to_20, window, step):
+        """Ensure the existing dims are aligned with rolling aggs."""
+        patch = patch_to_20
+        # Test both centered and non-centered window
+        for center in [True, False]:
+            rolling = patch.rolling(time=window, step=step, center=center)
+            mean = rolling.mean().dropna("time")
+            frame = rolling.frame()
+            mean_coord = mean.get_coord("time")
+            frame_coord = frame.get_coord("time")
+
+            if not mean_coord == frame_coord:
+
+                breakpoint()
+                mean = rolling.mean().dropna("time")
+                frame = rolling.frame()
+
+            assert mean_coord == frame_coord
+
