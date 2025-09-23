@@ -32,6 +32,7 @@ class TestRolling:
     def dist_roll_range_patch(self, range_patch):
         """Return a patch with sequential values for its 0th dim."""
         dist_step = range_patch.get_coord("distance").step
+        breakpoint()
         out = range_patch.rolling(distance=dist_step * self.window).max()
         return out
 

@@ -65,13 +65,14 @@ class _PatchRollerInfo(DascoreBaseModel):
         """Pad."""
         num_nans = 1 + (self.window - 2) // self.step
         pad_width = [(0, 0)] * len(data.shape)
-        pad_width[self.axis] = (num_nans, 0)
+        if self.center:
+            pad = (int(np.ceil(num_nans/2)), int(np.floor(num_nans/2)))
+        else:
+            pad = (num_nans, 0)
+        pad_width[self.axis] = pad
         padded = np.pad(data, pad_width, constant_values=np.nan)
         if self.step == 1:
             assert padded.shape == self.patch.data.shape
-        if self.center:
-            # roll array along axis to center
-            padded = np.roll(padded, -(num_nans // 2), axis=self.axis)
         return padded
 
     def _get_nan_simulate_index(self, shape):
@@ -195,7 +196,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         function
             The function which is applied. Must accept an axis argument.
         """
-        trimmed_slide_view = self._get_trimmed_slide_view()
+        trimmed_slide_view = self._get_trimmed_slide_view(include_nan=True)
         kwargs = self.func_kwargs
         raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float64)
         out = self._pad_roll_array(raw)
