@@ -10,6 +10,7 @@ import pandas as pd
 from scipy.fft import next_fast_len
 
 import dascore as dc
+from dascore.compat import array
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
@@ -660,30 +661,30 @@ def where(
     >>> out = patch.where(condition)
     >>>
     >>> # Use another patch as condition
-    >>> other = patch.data.mean().astype(bool)
-    >>> boolean_patch = patch.new(data=(patch.data > other))
+    >>> threshold = patch.data.mean()
+    >>> boolean_patch = patch.new(data=(patch.data > threshold))
     >>> out = patch.where(boolean_patch, other=0)
     >>>
     >>> # Replace values below threshold with 0
     >>> out = patch.where(patch.data > patch.data.mean(), other=0)
     """
+    cls = patch.__class__  # Use this so it works with subclasses
+    # Align patch and cond
+    if isinstance(cond, cls):
+        patch, cond = align_patch_coords(patch, cond)
+    # Align patch and other, may need to re-align cond
+    if isinstance(other, cls):
+        patch, other = align_patch_coords(patch, other)
+        if isinstance(cond, cls):
+            patch, cond = align_patch_coords(patch, cond)
 
-    def _get_array(possible_array):
-        """Get array from patch or array."""
-        if isinstance(possible_array, dc.Patch):
-            _, aligned = align_patch_coords(patch, possible_array)
-            out = aligned.data
-        else:
-            out = possible_array
-        return np.asarray(out)
+    cond_array, other_array = array(cond), array(other)
 
-    cond_array = _get_array(cond)
     # Ensure condition is boolean
     if not np.issubdtype(cond_array.dtype, np.bool_):
         msg = "Condition must be a boolean array or patch with boolean data"
         raise ValueError(msg)
 
-    other_array = _get_array(other)
     # Use numpy.where to apply condition
     new_data = np.where(cond_array, patch.data, other_array)
     return patch.new(data=new_data)

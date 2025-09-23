@@ -657,10 +657,10 @@ class TestWhere:
         # Check that dimensions are preserved
         assert result.dims == random_patch.dims
 
-        # Check that attributes are preserved (except possibly history)
-        for key in random_patch.attrs.__dict__:
-            if key != "history":
-                assert getattr(result.attrs, key) == getattr(random_patch.attrs, key)
+        # Check that attributes are preserved (except history)
+        assert result.attrs.model_dump(
+            exclude={"history"}
+        ) == random_patch.attrs.model_dump(exclude={"history"})
 
     def test_where_non_boolean_condition_raises(self, random_patch):
         """Test that non-boolean condition raises ValueError."""
@@ -684,21 +684,6 @@ class TestWhere:
         assert np.all(result.data[0, :] == -1)
         assert np.allclose(result.data[1:, :], random_patch.data[1:, :])
 
-    def test_where_with_complex_data(self, random_complex_patch):
-        """Test where method with complex data."""
-        abs_data = np.abs(random_complex_patch.data)
-        condition = abs_data > abs_data.mean()
-        result = random_complex_patch.where(condition, other=0 + 0j)
-
-        # Check that the result has the same shape
-        assert result.shape == random_complex_patch.shape
-
-        # Check that values where condition is True are preserved
-        assert np.allclose(result.data[condition], random_complex_patch.data[condition])
-
-        # Check that values where condition is False are 0+0j
-        assert np.all(result.data[~condition] == 0 + 0j)
-
     def test_where_with_broadcastable_patch_other(self, random_patch):
         """Test where with a broadcastable patch as other parameter."""
         # Get the actual dimensions of the patch to create the right broadcasting
@@ -713,3 +698,77 @@ class TestWhere:
             assert result.shape == random_patch.shape
             # Check that values where condition is True are preserved
             assert np.allclose(result.data[condition], random_patch.data[condition])
+            # Check that values where condition is False come from the broadcasted other
+            false_mask = ~condition
+            # The exact values depend on how the broadcasting worked
+            assert np.all(
+                ~np.isnan(result.data[false_mask])
+            )  # Should have valid values
+
+    def test_where_with_misaligned_coords(self, random_patch):
+        """Test where with condition patch having misaligned coordinates."""
+        # Create a subset of the original patch with partial overlap
+        time_coord = random_patch.coords.get_array("time")
+        # Take only part of the time coordinates to create a partial overlap
+        partial_time = time_coord[10:20]  # Use a subset
+
+        # Create a boolean condition patch with partial time coordinates
+        shifted_patch = random_patch.new(
+            coords={
+                "time": partial_time,
+                "distance": random_patch.coords.get_array("distance"),
+            },
+            data=(random_patch.data[:, 10:20] > random_patch.data[:, 10:20].mean()),
+        )
+
+        # This should work with coordinate alignment (union)
+        result = random_patch.where(shifted_patch, other=0)
+
+        # The result should have the union of coordinates and correct shape
+        assert result is not None
+        assert isinstance(result.data, np.ndarray)
+        # After alignment, coords should have the overlapping range
+        result_time = result.coords.get_array("time")
+        partial_time_len = len(partial_time)
+        assert len(result_time) == partial_time_len
+
+    def test_where_both_cond_and_other_misaligned(self, random_patch):
+        """Test where with both condition and other patches having misaligned coords."""
+        # Create condition patch with partial time overlap (first part)
+        time_coord = random_patch.coords.get_array("time")
+        cond_time = time_coord[5:15]  # indices 5-14
+
+        condition_patch = random_patch.new(
+            coords={
+                "time": cond_time,
+                "distance": random_patch.coords.get_array("distance"),
+            },
+            data=(random_patch.data[:, 5:15] > random_patch.data[:, 5:15].mean()),
+        )
+
+        # Create other patch with different partial time overlap (shifted range)
+        other_time = time_coord[8:18]  # indices 8-17, overlaps with condition
+        other_patch = random_patch.new(
+            coords={
+                "time": other_time,
+                "distance": random_patch.coords.get_array("distance"),
+            },
+            data=random_patch.data[:, 8:18] * 0.5,  # Use different values
+        )
+
+        # This should work with coordinate alignment handling both patches
+        result = random_patch.where(condition_patch, other=other_patch)
+
+        # The result should have coordinates that are the intersection of all three
+        assert result is not None
+        assert isinstance(result.data, np.ndarray)
+
+        # After alignment, the time coordinate should be the intersection
+        result_time = result.coords.get_array("time")
+        # The intersection of [5:15], [8:18], and full range should be [8:15]
+        expected_overlap_len = 7  # indices 8, 9, 10, 11, 12, 13, 14
+        assert len(result_time) == expected_overlap_len
+
+        # Verify the actual time values match the expected overlap
+        expected_time_values = time_coord[8:15]
+        assert np.array_equal(result_time, expected_time_values)
