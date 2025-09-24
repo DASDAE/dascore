@@ -32,7 +32,6 @@ class TestRolling:
     def dist_roll_range_patch(self, range_patch):
         """Return a patch with sequential values for its 0th dim."""
         dist_step = range_patch.get_coord("distance").step
-        breakpoint()
         out = range_patch.rolling(distance=dist_step * self.window).max()
         return out
 
@@ -73,9 +72,8 @@ class TestRolling:
         # first calculate rolling max on time axis.
         step = range_patch.get_coord("distance").step
         roll = range_patch.rolling(distance=self.window * step, step=self.step * step)
-
         out = roll.max().dropna("distance")
-        start = roll._get_start_index()
+        start = roll.get_nan_simulate_index().start
         # Determine what output should be.
         vals = np.arange(self.window - 1, range_patch.shape[0])
         expected = vals[start :: self.step, None]
@@ -163,6 +161,7 @@ class TestRolling:
         rolling_mean_pandas = rolling_df(df, window, step=step, axis=axis).mean()
         filtered_data_pandas = rolling_mean_pandas.dropna(axis=axis).values
         assert applied_result.shape == filtered_data_pandas.shape
+
         assert np.allclose(applied_result, filtered_data_pandas)
 
     def test_pandas_engine_raises_3d_patch(self, range_patch_3d):
@@ -449,14 +448,13 @@ class TestFrame:
             coords={"time": dc.to_datetime64(np.arange(12))},
             dims=("time",),
         )
-
         # Non-overlapping windows
         rolling = patch.rolling(time=3, step=3)
         framed = rolling.frame()
+        # Should have 3 non-overlapping windows
+        expected = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
 
-        # Should have 4 non-overlapping windows: [0,1,2], [3,4,5], [6,7,8], [9,10,11]
-        assert framed.shape == (4, 3)
-        expected = np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]])
+        assert framed.shape == expected.shape
         assert np.array_equal(framed.data, expected)
 
     def test_frame_incomplete_windows(self):
@@ -467,7 +465,8 @@ class TestFrame:
             coords={"time": dc.to_datetime64(np.arange(7))},
             dims=("time",),
         )
-
+        [0, 1, 2, 3, 4, 5, 6, 7]
+        expected = np.array([[2, 3, 4], [5, 6, 7]])
         # Window=3, step=3 should give 2 complete windows and ignore the last element
         rolling = patch.rolling(time=3, step=3)
         framed = rolling.frame()
