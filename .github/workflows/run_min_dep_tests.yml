@@ -48,6 +48,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           install-package: false
           environment-file: './.github/min_deps_environment.yml'
+          cache-number: 1
 
       - name: Install dascore (min deps)
         shell: bash -l {0}

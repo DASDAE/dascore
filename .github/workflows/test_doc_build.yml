@@ -21,6 +21,7 @@ jobs:
         with:
           python-version: "3.12"
           environment-file: './.github/doc_environment.yml'
+          cache-number: 1
 
       - uses: ./.github/actions/build-docs
 

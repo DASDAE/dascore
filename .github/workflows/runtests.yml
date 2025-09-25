@@ -51,6 +51,7 @@ jobs:
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ matrix.python-version }}
+          cache-number: ${{ env.CACHE_NUMBER }}
 
       # Runs test suite and calculates coverage
       - name: run test suite
