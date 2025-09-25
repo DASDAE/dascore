@@ -107,7 +107,7 @@ def _cached_read(path, io=None):
         read = dc.read
     else:
         read = io.read
-    with skip_missing_dependency():
+    with skip_missing_or_timeout():
         out = read(path)
     return out
 
@@ -122,12 +122,12 @@ def _get_flat_io_test():
 
 
 @contextmanager
-def skip_missing_dependency():
+def skip_missing_or_timeout():
     """Skip if missing dependencies found."""
     try:
         yield
-    except MissingOptionalDependencyError:
-        pytest.skip("Missing optional dep to read file.")
+    except (MissingOptionalDependencyError, TimeoutError):
+        pytest.skip("Missing optional dep to read file or unable to fetch.")
 
 
 @pytest.fixture(scope="session", params=list(COMMON_IO_READ_TESTS))
@@ -159,7 +159,7 @@ def data_file_path(request):
 @pytest.fixture(scope="session")
 def read_spool(data_file_path):
     """Read each file into a spool."""
-    with skip_missing_dependency():
+    with skip_missing_or_timeout():
         out = dc.read(data_file_path)
     return out
 
@@ -167,7 +167,7 @@ def read_spool(data_file_path):
 @pytest.fixture(scope="session")
 def scanned_attrs(data_file_path):
     """Read each file into a spool."""
-    with skip_missing_dependency():
+    with skip_missing_or_timeout():
         out = dc.scan(data_file_path)
     return out
 
@@ -293,7 +293,7 @@ class TestRead:
         a patch containing the requested data is returned.
         """
         io, path = io_path_tuple
-        with skip_missing_dependency():
+        with skip_missing_or_timeout():
             attrs_from_file = dc.scan(path)
         assert len(attrs_from_file)
         # skip files that have more than one patch for now
@@ -341,7 +341,7 @@ class TestScan:
 
     def test_scan_basics(self, data_file_path):
         """Ensure each file can be scanned."""
-        with skip_missing_dependency():
+        with skip_missing_or_timeout():
             attrs_list = dc.scan(data_file_path)
         assert len(attrs_list)
 
@@ -352,7 +352,7 @@ class TestScan:
     def test_scan_has_version_and_format(self, io_path_tuple):
         """Scan output should contain version and format."""
         io, path = io_path_tuple
-        with skip_missing_dependency():
+        with skip_missing_or_timeout():
             attr_list = io.scan(path)
         for attrs in attr_list:
             assert attrs.file_format == io.name
@@ -422,7 +422,7 @@ class TestIntegration:
             "tag",
             "network",
         )
-        with skip_missing_dependency():
+        with skip_missing_or_timeout():
             scan_attrs_list = dc.scan(data_file_path)
         patch_attrs_list = [x.attrs for x in _cached_read(data_file_path)]
         assert len(scan_attrs_list) == len(patch_attrs_list)
