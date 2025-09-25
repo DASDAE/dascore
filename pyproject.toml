@@ -80,12 +80,11 @@ test = [
     "pytest",
     "pytest-codeblocks",
     "pytest-cov",
-    "pytest-codspeed",
     "twine",
 ]
 
 profile = [
-    "typer",
+    "pytest-codspeed",
 ]
 
 all = ["dascore[extras]"]

@@ -5,7 +5,7 @@ args="tests -s --cov dascore --cov-append --cov-report=xml"
 if [[ "$1" == "doctest" ]]; then
   args="dascore --doctest-modules"
 fi
-if [[ "$1" == "benchmarks" ]]; then
+if [[ "$1" == "profile" ]]; then
   args="benchmarks --codspeed"
 fi
 

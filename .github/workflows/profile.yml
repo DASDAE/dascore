@@ -1,3 +1,4 @@
+# An action for running DASCore's performance benchmarks.
 name: CodSpeed Benchmarks
 
 on:
@@ -31,5 +32,5 @@ jobs:
         uses: CodSpeedHQ/action@v4
         with:
           mode: instrumentation
-          run: pytest benchmarks/ --codspeed
+          run: ./.github/test_code.sh profile
           token: ${{ secrets.CODSPEED_TOKEN }}  # Optional for public repos
