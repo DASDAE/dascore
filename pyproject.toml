@@ -80,11 +80,11 @@ test = [
     "pytest",
     "pytest-codeblocks",
     "pytest-cov",
+    "pytest-codspeed",
     "twine",
 ]
 
 profile = [
-    "asv",
     "typer",
 ]
 

@@ -83,6 +83,7 @@ docs/**/*.ipynb
 
 # profile stuff from asv
 .asv
+.codspeed
 
 # misc
 scratch/**
