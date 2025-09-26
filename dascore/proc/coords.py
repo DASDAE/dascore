@@ -492,7 +492,7 @@ def select(
     >>>
     >>> # Select only specific values along a dimension
     >>> distance = patch.get_array("distance")
-    >>> new_distance_3 = patch.select(distace=distance[1::2])
+    >>> new_distance_3 = patch.select(distance=distance[1::2])
 
     Notes
     -----
