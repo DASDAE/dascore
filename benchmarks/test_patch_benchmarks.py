@@ -36,6 +36,16 @@ def cleanup_mpl():
 class TestProcessingBenchmarks:
     """Benchmarks for patch processing operations."""
 
+    @pytest.fixture(scope="module")
+    def interp_time(self, example_patch):
+        """Get an array for interpolation."""
+        # This is a fixture as to not affect the timing.
+        patch = example_patch
+        # upsample time
+        start, stop, step = get_start_stop_step(patch, "time")
+        step = dc.to_timedelta64(dc.to_float(step) / 2)
+        return np.arange(start, stop, step)
+
     @pytest.mark.benchmark
     def test_pass_filter_performance(self, example_patch):
         """Time the pass filter."""
@@ -53,16 +63,10 @@ class TestProcessingBenchmarks:
         patch.median_filter(time=5, samples=True)
 
     @pytest.mark.benchmark
-    def test_resample_performance(self, example_patch):
-        """Time resample operations."""
+    def test_interpolate_performance(self, example_patch, interp_time):
+        """Time interpolate operations."""
         patch = example_patch
-        # upsample time
-        start, stop, step = get_start_stop_step(patch, "time")
-        patch.interpolate(time=np.arange(start, stop, step / 2))
-        # up sample distance
-        start, stop, step = get_start_stop_step(patch, "distance")
-        new_coord = np.arange(start, stop, step / 2.2)
-        patch.interpolate(distance=new_coord)
+        patch.interpolate(time=interp_time)
 
     @pytest.mark.benchmark
     def test_decimate_performance(self, example_patch):

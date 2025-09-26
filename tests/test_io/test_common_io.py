@@ -98,12 +98,21 @@ SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv"}
 
 
 @contextmanager
-def skip_missing_or_timeout():
+def skip_missing():
     """Skip if missing dependencies found."""
     try:
         yield
     except MissingOptionalDependencyError as exc:
         pytest.skip(f"Missing optional dependency required to read file: {exc}")
+    except TimeoutError as exc:
+        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
+
+
+@contextmanager
+def skip_timeout():
+    """Skip if downloading file times out."""
+    try:
+        yield
     except TimeoutError as exc:
         pytest.skip(f"Unable to fetch data due to timeout: {exc}")
 
@@ -118,7 +127,7 @@ def _cached_read(path, io=None):
         read = dc.read
     else:
         read = io.read
-    with skip_missing_or_timeout():
+    with skip_missing():
         out = read(path)
     return out
 
@@ -145,7 +154,8 @@ def io_path_tuple(request):
     This is used for common testing.
     """
     io, fetch_name = request.param
-    return io, fetch(fetch_name)
+    with skip_timeout():
+        return io, fetch(fetch_name)
 
 
 @pytest.fixture(scope="session", params=get_registry_df()["name"])
@@ -155,13 +165,14 @@ def data_file_path(request):
     # Some files should be skipped if not DAS or too big.
     if str(param) in SKIP_DATA_FILES:
         pytest.skip(f"Skipping {param}")
-    return fetch(request.param)
+    with skip_timeout():
+        return fetch(request.param)
 
 
 @pytest.fixture(scope="session")
 def read_spool(data_file_path):
     """Read each file into a spool."""
-    with skip_missing_or_timeout():
+    with skip_missing():
         out = dc.read(data_file_path)
     return out
 
@@ -169,7 +180,7 @@ def read_spool(data_file_path):
 @pytest.fixture(scope="session")
 def scanned_attrs(data_file_path):
     """Read each file into a spool."""
-    with skip_missing_or_timeout():
+    with skip_missing():
         out = dc.scan(data_file_path)
     return out
 
@@ -244,7 +255,8 @@ class TestGetFormat:
             if isinstance(other_io, type(io_instance)):
                 continue
             for key in data_files:
-                path = fetch(key)
+                with skip_timeout():
+                    path = fetch(key)
                 out = io_instance.get_format(path)
                 if out:
                     format_name, version = out
@@ -295,7 +307,7 @@ class TestRead:
         a patch containing the requested data is returned.
         """
         io, path = io_path_tuple
-        with skip_missing_or_timeout():
+        with skip_missing():
             attrs_from_file = dc.scan(path)
         assert len(attrs_from_file)
         # skip files that have more than one patch for now
@@ -343,7 +355,7 @@ class TestScan:
 
     def test_scan_basics(self, data_file_path):
         """Ensure each file can be scanned."""
-        with skip_missing_or_timeout():
+        with skip_missing():
             attrs_list = dc.scan(data_file_path)
         assert len(attrs_list)
 
@@ -354,7 +366,7 @@ class TestScan:
     def test_scan_has_version_and_format(self, io_path_tuple):
         """Scan output should contain version and format."""
         io, path = io_path_tuple
-        with skip_missing_or_timeout():
+        with skip_missing():
             attr_list = io.scan(path)
         for attrs in attr_list:
             assert attrs.file_format == io.name
@@ -424,7 +436,7 @@ class TestIntegration:
             "tag",
             "network",
         )
-        with skip_missing_or_timeout():
+        with skip_missing():
             scan_attrs_list = dc.scan(data_file_path)
         patch_attrs_list = [x.attrs for x in _cached_read(data_file_path)]
         assert len(scan_attrs_list) == len(patch_attrs_list)
