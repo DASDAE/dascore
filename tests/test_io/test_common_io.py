@@ -288,13 +288,13 @@ class TestRead:
         """If the format supports reading from a stream, test it out."""
         io, path = io_path_tuple
         req_type = getattr(io.read, "_required_type", None)
-        if not isinstance(req_type, BinaryReader):
-            msg = f"{io} doesn't require a read type."
-            pytest.skip(msg)
+        if req_type is not BinaryReader:
+            pytest.skip(f"{io} doesn't support BinaryReader streams.")
+
         spool1 = _cached_read(path)
         # write file contents to bytes io and ensure it can be read.
         bio = BytesIO()
-        bio.write(Path(io_path_tuple).read_bytes())
+        bio.write(Path(path).read_bytes())
         bio.seek(0)
         spool2 = io.read(bio)
         for patch1, patch2 in zip(spool1, spool2):
@@ -444,12 +444,12 @@ class TestIntegration:
             # first compare dimensions are related attributes
             for dim in pat_attrs1.dim_tuple:
                 assert getattr(pat_attrs1, f"{dim}_min") == getattr(
-                    pat_attrs1, f"{dim}_min"
+                    scan_attrs2, f"{dim}_min"
                 )
                 for dim_attr in DIM_RELATED_ATTRS:
                     attr_name = dim_attr.format(dim=dim)
                     attr1 = getattr(pat_attrs1, attr_name)
-                    attr2 = getattr(pat_attrs1, attr_name)
+                    attr2 = getattr(scan_attrs2, attr_name)
                     assert attr1 == attr2
             # then other expected attributes.
             for attr_name in comp_attrs:
