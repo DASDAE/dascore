@@ -85,13 +85,16 @@ test = [
 
 profile_base = [
     "pytest-codspeed",
+    "pytest-profiling",
 ]
 
 all = ["dascore[extras]"]
 
+profile = ["dascore[test]", "dascore[profile_base]"]
+
 dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore[extras]"]
 
-profile = ["dascore[test]", "dascore[profile_base]"]
+
 
 
 # --- URLs for project

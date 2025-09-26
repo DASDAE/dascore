@@ -18,3 +18,5 @@ Documentation [[stable](https://dascore.org), [development](https://dascore.netl
 [Citation](https://seismica.library.mcgill.ca/article/view/1184)
 
 > Chambers, D., Jin, G., Tourei, A., Issah, A. H. S., Lellouch, A., Martin, E., Zhu, D., Girard, A., Yuan, S., Cullison, T., Snyder, T., Kim, S., Danes, N., Pnithan, N., Boltz, M. S. & Mendoza, M. M. (2024). DASCore: a Python Library for Distributed Fiber Optic Sensing. Seismica, 3(2).
+
+[![Contributors](https://contrib.rocks/image?repo=DASDAE/dascore)](https://github.com/DASDAE/dascore/graphs/contributors)

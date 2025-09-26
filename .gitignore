@@ -96,3 +96,6 @@ docs/index.quarto_ipynb
 # Claude stuff
 .claude
 CLAUDE.md
+
+# profile stuff
+prof/
