@@ -15,6 +15,7 @@ from functools import cache
 from io import BytesIO
 from operator import eq, ge, le
 from pathlib import Path
+from urllib import error as urllib_error
 
 import numpy as np
 import pandas as pd
@@ -113,7 +114,7 @@ def skip_timeout():
     """Skip if downloading file times out."""
     try:
         yield
-    except TimeoutError as exc:
+    except (TimeoutError, urllib_error.URLError) as exc:
         pytest.skip(f"Unable to fetch data due to timeout: {exc}")
 
 
