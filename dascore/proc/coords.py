@@ -10,7 +10,12 @@ from scipy.interpolate import interp1d
 
 from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord
-from dascore.exceptions import CoordError, ParameterError, PatchError
+from dascore.exceptions import (
+    CoordError,
+    ParameterError,
+    PatchCoordinateError,
+    PatchError,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import get_parent_code_name, iterate
 from dascore.utils.patch import patch_function
@@ -497,6 +502,15 @@ def select(
       See [`Patch.order`](`dascore.Patch.order`).
 
     """
+    # Check for and raise on invalid kwargs.
+    if invalid_coords := set(kwargs) - set(patch.coords.coord_map):
+        invalid_list = sorted(invalid_coords)
+        valid_list = sorted(patch.coords.coord_map)
+        msg = (
+            f"Coordinate(s) {invalid_list} not found in patch coordinates: {valid_list}"
+        )
+        raise PatchCoordinateError(msg)
+
     new_coords, data = patch.coords.select(
         **kwargs,
         array=patch.data,

@@ -14,6 +14,7 @@ from dascore.exceptions import (
     CoordError,
     ParameterError,
     PatchBroadcastError,
+    PatchCoordinateError,
     PatchError,
 )
 from dascore.units import get_quantity
@@ -320,6 +321,33 @@ class TestSelect:
         face_angle = patch.get_coord("face_angle")
         new = patch.select(face_angle=(face_angle.min(), face_angle.max()))
         assert new == patch
+
+    def test_select_nonexistent_coordinate_raises_error(self, random_patch):
+        """
+        Test that selecting on a non-existing coordinate
+        raises PatchCoordinateError.
+        """
+        # Try to select on a coordinate that doesn't exist
+        with pytest.raises(PatchCoordinateError, match="nonexistent_coord"):
+            random_patch.select(nonexistent_coord=(0, 10))
+
+    def test_select_multiple_nonexistent_coordinates_raises_error(self, random_patch):
+        """
+        Test that selecting on multiple non-existing coordinates raises
+        PatchCoordinateError.
+        """
+        # Try to select on multiple coordinates that don't exist
+        with pytest.raises(PatchCoordinateError, match="coord1.*coord2"):
+            random_patch.select(bad_coord1=(0, 10), bad_coord2=(5, 15))
+
+    def test_select_mix_valid_invalid_coordinates_raises_error(self, random_patch):
+        """
+        Test that mixing valid and invalid coordinates raises
+        PatchCoordinateError.
+        """
+        # Try to select on a mix of valid and invalid coordinates
+        with pytest.raises(PatchCoordinateError, match="invalid_coord"):
+            random_patch.select(time=(0, 1), invalid_coord=(0, 10))
 
 
 class TestOrder:
