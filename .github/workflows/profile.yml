@@ -1,0 +1,36 @@
+# An action for running DASCore's performance benchmarks.
+name: CodSpeed Benchmarks
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+env:
+  python_version: "3.13"
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: "true"
+          fetch-depth: '0'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.python_version }}
+
+      - name: Install dependencies
+        run: pip install ".[profile]"
+
+      - name: Run benchmarks
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: instrumentation
+          run: ./.github/test_code.sh profile
+          token: ${{ secrets.CODSPEED_TOKEN }}  # Optional for public repos
