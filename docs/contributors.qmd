@@ -1,5 +1,3 @@
 # Contributors
 
 A huge thanks to [all the DASCore contributors](https://github.com/DASDAE/dascore/graphs/contributors)!
-
-[![Contributors](https://contrib.rocks/image?repo=DASDAE/dascore)](https://github.com/DASDAE/dascore/graphs/contributors)

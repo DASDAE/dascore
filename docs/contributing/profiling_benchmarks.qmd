@@ -3,30 +3,30 @@ title: Profiling and Benchmarks
 ---
 # Benchmarks
 
-DASCore uses [Airspeed Velocity (asv)](https://github.com/airspeed-velocity/) to create and run a simple benchmark suite. The benchmarks are found in the benchmark folder at the top level of the repository.
-
-The [asv documentation](https://asv.readthedocs.io/en/stable/) is great, and you can do all sorts of things with the benchmarks. For the most common use case, that is to compare changes in performance on a development branch to the main branch, you can simply use two scripts in the script directory.
+DASCore uses [codspeed](https://codspeed.io/) to create and run a simple benchmark suite. The benchmarks are found in the benchmarks folder at the top level of the repository.
 
 To run the benchmarks:
 ```bash
-python scripts/run_benchmarks.py
+python -m pytest benchmarks/ --codspeed
 ```
 
-And to get a simple (text-based) visualization of the differences:
-```bash
-python scripts/visualize_benchmarks.py
-```
+However, when you create a pull request, the benchmarks will be run in the CI/CD and a report displayed. If there are significant performance regressions, more discussion is needed before merging the pull request. 
 
-If you notice any significant degradations, it is probably worth looking into via profiling.
+If you add significant new functionality, you should probably add a benchmark.
 
 # Profiling
 
-You can profile the problematic benchmark(s) to see *why* their performance degraded. This is done with the [asv profile](https://asv.readthedocs.io/en/stable/commands.html#id13) command.
+If you find a significant issue, you can profile the problematic benchmark(s) to see *why* their performance degraded. This can be done with the [pytest profile plugin](https://pypi.org/project/pytest-profiling/). 
 
-For example, suppose you notice a large increase in runtime for the time_pass_filter benchmark in the patch_benchmarks' ProcessingSuite. You can load a nice interactive [snakeviz](https://jiffyclub.github.io/snakeviz/) gui (assuming you installed snakeviz `pip install snakeviz`) like so:
+For example, suppose you notice a large increase in runtime for the pass_filter benchmark in the patch_benchmarks' TestProcessingBenchmarks class. Run the benchmark again under profiling: 
 
 ```bash
-asv profile patch_benchmarks.ProcessingSuite.time_pass_filter -E existing --gui snakeviz
+pytest benchmarks/test_patch_benchmarks.py::TestProcessingBenchmarks::test_pass_filter_performance --profile
+```
+This will create a new `prof` folder with `test_pass_filter_performance.prof` as one of the files. You can view these with a variety of tools, such as [snakeviz](https://jiffyclub.github.io/snakeviz/) (assuming you installed snakeviz with `pip install snakeviz`).
+
+```bash 
+snakeviz prof/test_pass_filter_performance.prof
 ```
 
 You can then click through the call stack and see which functions can be improved. After tweaking them, re-run the profiling and see if the overall time improves.

@@ -1,9 +1,12 @@
 #!/bin/bash
 
 # Script to run tests to account for wonkiness of periodic mac failures.
-args=" -s --cov dascore --cov-append --cov-report=xml"
+args="tests -s --cov dascore --cov-append --cov-report=xml"
 if [[ "$1" == "doctest" ]]; then
   args="dascore --doctest-modules"
+fi
+if [[ "$1" == "profile" ]]; then
+  args="benchmarks --codspeed"
 fi
 
 exit_code=0
