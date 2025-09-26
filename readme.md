@@ -3,6 +3,7 @@
 A python library for distributed fiber optic sensing.
 
 [![coverage](https://codecov.io/gh/dasdae/dascore/branch/master/graph/badge.svg)](https://codecov.io/gh/dasdae/dascore)
+[![CodSpeed Badge](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/DASDAE/dascore)
 [![PyPI Version](https://img.shields.io/pypi/v/dascore.svg)](https://pypi.python.org/pypi/dascore)
 [![supported versions](https://img.shields.io/pypi/pyversions/dascore.svg?label=python_versions)](https://pypi.python.org/pypi/dascore)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/dascore.svg?label=pypi)](https://pypi.org/project/dascore/)
@@ -17,3 +18,5 @@ Documentation [[stable](https://dascore.org), [development](https://dascore.netl
 [Citation](https://seismica.library.mcgill.ca/article/view/1184)
 
 > Chambers, D., Jin, G., Tourei, A., Issah, A. H. S., Lellouch, A., Martin, E., Zhu, D., Girard, A., Yuan, S., Cullison, T., Snyder, T., Kim, S., Danes, N., Pnithan, N., Boltz, M. S. & Mendoza, M. M. (2024). DASCore: a Python Library for Distributed Fiber Optic Sensing. Seismica, 3(2).
+
+[![Contributors](https://contrib.rocks/image?repo=DASDAE/dascore)](https://github.com/DASDAE/dascore/graphs/contributors)

@@ -83,6 +83,7 @@ docs/**/*.ipynb
 
 # profile stuff from asv
 .asv
+.codspeed
 
 # misc
 scratch/**
@@ -95,3 +96,6 @@ docs/index.quarto_ipynb
 # Claude stuff
 .claude
 CLAUDE.md
+
+# profile stuff
+prof/
