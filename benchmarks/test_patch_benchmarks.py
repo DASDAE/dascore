@@ -26,6 +26,13 @@ def patch_uneven_time():
     return patch.update_coords(time=new_vales)
 
 
+@pytest.fixture()
+def cleanup_mpl():
+    """Close all open matplotlib figures after test."""
+    yield
+    plt.close("all")
+
+
 class TestProcessingBenchmarks:
     """Benchmarks for patch processing operations."""
 
@@ -136,7 +143,7 @@ class TestTransformBenchmarks:
     @pytest.fixture
     def dft_patch(self, example_patch):
         """Get DFT patch for benchmarks."""
-        return example_patch.tran.dft("time")
+        return example_patch.dft("time")
 
     @pytest.mark.benchmark
     def test_indefinite_integrate_performance(self, example_patch):
@@ -165,7 +172,7 @@ class TestTransformBenchmarks:
 
     @pytest.mark.benchmark
     def test_stft(self, example_patch):
-        """Time Hilbert transform."""
+        """Time short time fourier transform transform."""
         patch = example_patch
         patch.stft(time=1, overlap=0.25)
 
@@ -183,16 +190,12 @@ class TestTransformBenchmarks:
 
 
 class TestVisualizationBenchmarks:
-    """Benchmarks for patch visualization operations."""
+    """Benchmarks for patch visualization operations (or str repr)."""
 
     @pytest.mark.benchmark
-    def test_waterfall_performance(self, example_patch):
+    def test_waterfall_performance(self, example_patch, cleanup_mpl):
         """Timing for waterfall patch."""
         example_patch.viz.waterfall()
-        # Clean up matplotlib figures
-        import matplotlib.pyplot as plt
-
-        plt.close("all")
 
     @pytest.mark.benchmark
     def test_str_performance(self, example_patch):
@@ -205,12 +208,10 @@ class TestVisualizationBenchmarks:
         repr(example_patch)
 
     @pytest.mark.benchmark
-    def test_wiggle_performance(self, example_patch):
+    def test_wiggle_performance(self, example_patch, cleanup_mpl):
         """Time wiggle plot visualization."""
         patch = example_patch.select(distance=(0, 100))  # Subset for performance
         patch.viz.wiggle()
-        # Clean up matplotlib figures
-        plt.close("all")
 
 
 class TestAggregationBenchmarks:

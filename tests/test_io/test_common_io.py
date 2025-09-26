@@ -122,12 +122,16 @@ def _get_flat_io_test():
 
 
 @contextmanager
-def skip_missing_or_timeout():
+def skip_missing_dependency():
     """Skip if missing dependencies found."""
     try:
         yield
-    except (MissingOptionalDependencyError, TimeoutError):
-        pytest.skip("Missing optional dep to read file or unable to fetch.")
+    except MissingOptionalDependencyError as exc:
+        pytest.skip(
+            f"Missing optional dependency required to read file: {exc}"
+        )
+    except TimeoutError as exc:
+        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
 
 
 @pytest.fixture(scope="session", params=list(COMMON_IO_READ_TESTS))

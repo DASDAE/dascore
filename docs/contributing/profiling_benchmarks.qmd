@@ -7,7 +7,7 @@ DASCore uses [codspeed](https://codspeed.io/) to create and run a simple benchma
 
 To run the benchmarks:
 ```bash
-python -m pytest benchmarks --codspeed
+python -m pytest benchmarks/ --codspeed
 ```
 
 However, when you create a pull request, the benchmarks will be run in the CI/CD and a report displayed. If there are significant performance regressions, more discussion is needed before merging the pull request. 
