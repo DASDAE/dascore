@@ -97,6 +97,17 @@ COMMON_IO_WRITE_TESTS = (
 SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv"}
 
 
+@contextmanager
+def skip_missing_or_timeout():
+    """Skip if missing dependencies found."""
+    try:
+        yield
+    except MissingOptionalDependencyError as exc:
+        pytest.skip(f"Missing optional dependency required to read file: {exc}")
+    except TimeoutError as exc:
+        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
+
+
 @cache
 def _cached_read(path, io=None):
     """
@@ -119,19 +130,6 @@ def _get_flat_io_test():
         for fetch_name in iterate(fetch_name_list):
             flat_io.append([io, fetch_name])
     return flat_io
-
-
-@contextmanager
-def skip_missing_dependency():
-    """Skip if missing dependencies found."""
-    try:
-        yield
-    except MissingOptionalDependencyError as exc:
-        pytest.skip(
-            f"Missing optional dependency required to read file: {exc}"
-        )
-    except TimeoutError as exc:
-        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
 
 
 @pytest.fixture(scope="session", params=list(COMMON_IO_READ_TESTS))
