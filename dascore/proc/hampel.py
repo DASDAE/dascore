@@ -11,6 +11,13 @@ from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.patch import get_patch_window_size, patch_function
 
+# Optional bottleneck import for performance optimization
+try:
+    import bottleneck as bn
+    HAS_BOTTLENECK = True
+except ImportError:
+    HAS_BOTTLENECK = False
+
 
 def _separable_median(data, size, mode, out):
     """Calculate the median along each dimension sequentially."""
@@ -21,13 +28,38 @@ def _separable_median(data, size, mode, out):
     # Apply 1D median filters along each dimension with size > 1
     for axis, window_size in enumerate(size):
         if window_size > 1:
-            # Create size tuple for this dimension
-            axis_size = [1] * len(size)
-            axis_size[axis] = window_size
-            # Use output buffer for in-place operation
-            median_filter(current, size=tuple(axis_size), mode=mode, output=current)
+            if HAS_BOTTLENECK and mode == 'reflect' and window_size <= 15:
+                # Use bottleneck for better performance on smaller windows with reflection padding
+                _bottleneck_median_1d(current, window_size, axis, output=current)
+            else:
+                # Use scipy median_filter (fallback or for larger windows)
+                axis_size = [1] * len(size)
+                axis_size[axis] = window_size
+                median_filter(current, size=tuple(axis_size), mode=mode, output=current)
 
     return current
+
+
+def _bottleneck_median_1d(data, window_size, axis, output):
+    """Apply 1D median filter using bottleneck with reflection padding."""
+    # Add reflection padding for edge handling
+    pad_size = window_size // 2
+    pad_config = [(0, 0)] * data.ndim
+    pad_config[axis] = (pad_size, pad_size)
+
+    # Add reflection padding
+    padded = np.pad(data, pad_config, mode='reflect')
+
+    # Apply bottleneck move_median
+    filtered_padded = bn.move_median(padded, window=window_size, axis=axis, min_count=1)
+
+    # Remove padding to get back to original size
+    slice_obj = [slice(None)] * padded.ndim
+    slice_obj[axis] = slice(pad_size, -pad_size if pad_size > 0 else None)
+    filtered = filtered_padded[tuple(slice_obj)]
+
+    # Copy result to output buffer
+    np.copyto(output, filtered)
 
 
 def _calculate_standard_median_and_mad(data, size, mode):
@@ -128,7 +160,7 @@ def hampel_filter(
     is_int = data.dtype.kind == "i"
     dataf = data.copy() if not is_int else data.astype(np.float32)
     # Local median and MAD via median filters.
-    if separable:
+    if separable and sum(s > 1 for s in size) >= 2:
         # Use separable filtering for multi-dimensional windows
         # This is faster but provides an approximation
         # Pre-allocate buffers to reduce memory allocations
