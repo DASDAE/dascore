@@ -59,7 +59,10 @@ def _apply_scipy_operation(
 
     # Apply function with appropriate parameters
     if func_name == "uniform_filter1d":
-        uniform = func(data.astype(float), size=window, axis=axis, **kwargs)
+        # Only promote integer or boolean dtypes to float, preserve float/complex
+        data_kind = data.dtype.kind
+        data = data.astype(np.float64) if data_kind in {"i", "b", "u"} else data
+        uniform = func(data, size=window, axis=axis, **kwargs)
         if operation.lower() == "sum":
             # For sum, uniform_filter1d computes mean, so we scale by window size
             uniform *= window
@@ -121,9 +124,8 @@ def _select_engine(preferred: str, operation: str) -> str:
     if preferred not in available:
         engine = available[0]
         msg = (
-            f"Cant use engine: {engine} for function: {operation} "
-            f"because preferred engine {preferred} is not available. It may "
-            "require an additional installation."
+            f"Preferred engine {preferred} is not available; falling back to {engine}. "
+            "It may require an additional installation."
         )
         warnings.warn(msg, UserWarning, stacklevel=4)
         preferred = engine
@@ -178,7 +180,7 @@ def moving_window(
     if window > data.shape[axis]:
         msg = (
             f"Window size ({window}) larger than data size ({data.shape[axis]}) "
-            f"along axis {axis}",
+            f"along axis {axis}"
         )
         raise ParameterError(msg)
 
