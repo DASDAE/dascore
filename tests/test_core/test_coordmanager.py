@@ -660,12 +660,12 @@ class TestSelect:
         # Non-dim coord associated with one dimension should work.
         lat = cm_multidim.get_array("latitude")
         lat_mean = np.mean(lat)
-        out, _ = cm_multidim.select(latitude=slice(lat, lat_mean))
+        out, _ = cm_multidim.select(latitude=(..., lat_mean))
         assert isinstance(out, dc.CoordManager)
-        # Multi-dim coord should raise PatchCoordError
-        msg = "Cannot select on a coordinate with more than one dim. "
+        # Multi-dim coord should raise CoordError
+        msg = "Only 1 dimensional coordinates can be used for selection"
         with pytest.raises(CoordError, match=msg):
-            cm_multidim.select(quality=slice(1, 20))
+            cm_multidim.select(quality=(1, 20))
 
     def test_select_coord_tied_to_dimension_affects_others(self, cm_multidim):
         """
@@ -677,16 +677,18 @@ class TestSelect:
         # that dim
         lat = cm_multidim.get_array("latitude")
         lat_mean = np.mean(lat)
-        out, _ = cm_multidim.select(latitude=slice(lat, lat_mean))
+        out, _ = cm_multidim.select(latitude=(..., lat_mean))
         # Check that the new lat is what we expect.
-        new_lat = out.get_coord("latitude")
-        expected = lat.values[lat.values <= lat_mean]
-        assert np.all(new_lat == expected)
+        new_lat = out.get_array("latitude")
+        expected = lat[lat <= lat_mean]
+        assert np.array_equal(new_lat, expected)
         # And the other coord associated with that dimension have the same len.
-        for coord, name in out.coord_map.items():
-            if name not in (dims := out.dim_map[name]):
+        for name, coord in out.coord_map.items():
+            coord_dims = out.dim_map[name]
+            # Skip coords not tied to distance dimension
+            if "distance" not in coord_dims:
                 continue
-            axis = dims.index(coord)
+            axis = coord_dims.index("distance")
             assert coord.shape[axis] == len(new_lat)
 
 
