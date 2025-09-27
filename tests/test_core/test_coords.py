@@ -128,6 +128,13 @@ def random_date_coord():
     return get_coord(data=dc.to_datetime64(ar))
 
 
+@pytest.fixture(scope="session")
+def string_coord():
+    """Create coordinates with string data."""
+    string_data = np.array(["apple", "banana", "cherry", "date", "elderberry"])
+    return get_coord(data=string_data)
+
+
 # This is a "special case" so it isnt aggregated into meta fixture.
 @pytest.fixture(scope="class")
 def basic_non_coord():
@@ -1950,3 +1957,221 @@ class TestIssues:
         array = np.array([1, 2, 3])
         out = get_coord(data=array * ft)
         assert dc.get_quantity(out.units) == ft
+
+
+class TestStringCoords:
+    """Tests for string coordinates."""
+
+    def test_string_coord_creation(self, string_coord):
+        """Test basic string coordinate creation."""
+        from dascore.core.coords import CoordString
+
+        assert isinstance(string_coord, CoordString)
+        assert len(string_coord) == 5
+        assert not string_coord.evenly_sampled
+        assert not string_coord.sorted
+
+    def test_string_coord_values(self, string_coord):
+        """Test string coordinate values access."""
+        values = string_coord.values
+        expected = np.array(["apple", "banana", "cherry", "date", "elderberry"])
+        assert np.array_equal(values, expected)
+
+    def test_string_coord_select_exact(self, string_coord):
+        """Test selecting exact string matches."""
+        result, indexer = string_coord.select("banana")
+        assert len(result) == 1
+        assert result.values[0] == "banana"
+        assert indexer == np.array([1])
+
+    def test_string_coord_select_array(self, string_coord):
+        """Test selecting with string array."""
+        target = np.array(["apple", "cherry"])
+        result, indexer = string_coord.select(target)
+        assert len(result) == 2
+        assert np.array_equal(result.values, target)
+        assert np.array_equal(indexer, np.array([0, 2]))
+
+    def test_string_coord_select_missing(self, string_coord):
+        """Test selecting non-existent strings."""
+        result, indexer = string_coord.select("orange")
+        assert len(result) == 0
+        assert len(indexer) == 0
+
+    def test_string_coord_no_arithmetic(self, string_coord):
+        """Test that string coordinates don't support arithmetic operations."""
+        assert not string_coord._allow_arithmetic
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            np.array(["café", "naïve", "résumé", "北京"]),  # Unicode
+            np.array(["text", "more text"], dtype="O"),  # Object array
+            np.array([], dtype="U10"),  # Empty
+        ],
+    )
+    def test_string_coord_types(self, data):
+        """Test various string coordinate types."""
+        from dascore.core.coords import CoordString
+
+        coord = get_coord(data=data)
+        assert isinstance(coord, CoordString)
+        assert np.array_equal(coord.values, data)
+        if len(data) == 0:
+            assert coord.degenerate
+
+    def test_string_coord_error_operations(self, string_coord):
+        """Test operations that should raise errors."""
+        from dascore.exceptions import CoordError
+
+        # Test unit conversion
+        with pytest.raises(CoordError, match="unit conversion"):
+            string_coord.convert_units("m")
+
+        # Test slice operations
+        with pytest.raises(CoordError, match="slice operations"):
+            string_coord.get_slice_tuple("slice_arg")
+
+        # Test limit updates
+        with pytest.raises(CoordError, match="limit updates"):
+            string_coord.update_limits(min=0, max=10)
+
+        # Test summary conversion
+        with pytest.raises(CoordError, match="summary conversion"):
+            string_coord.to_summary()
+
+        # Test relative selection
+        with pytest.raises(CoordError, match="relative selection"):
+            string_coord.select("banana", relative=True)
+
+    def test_string_coord_min_max(self, string_coord):
+        """Test min/max operations on string coordinates."""
+        assert string_coord.min() == "apple"  # lexicographically first
+        assert string_coord.max() == "elderberry"  # lexicographically last
+
+    def test_string_coord_sort(self, string_coord):
+        """Test sorting string coordinates."""
+        sorted_coord, indices = string_coord.sort()
+        expected_sorted = ["apple", "banana", "cherry", "date", "elderberry"]
+        assert np.array_equal(sorted_coord.values, expected_sorted)
+
+        # Test reverse sort
+        sorted_coord_rev, indices_rev = string_coord.sort(reverse=True)
+        expected_reversed = ["elderberry", "date", "cherry", "banana", "apple"]
+        assert np.array_equal(sorted_coord_rev.values, expected_reversed)
+
+    def test_string_coord_getitem(self, string_coord):
+        """Test indexing operations."""
+        # Test single item
+        single_item = string_coord[0]
+        assert single_item == "apple"
+
+        # Test slice
+        subset = string_coord[1:3]
+        assert isinstance(subset, type(string_coord))
+        assert np.array_equal(subset.values, ["banana", "cherry"])
+
+        # Test boolean indexing
+        mask = np.array([True, False, True, False, False])
+        subset = string_coord[mask]
+        assert np.array_equal(subset.values, ["apple", "cherry"])
+
+    def test_string_coord_select_samples(self, string_coord):
+        """Test sample-based selection."""
+        # Test with numpy array (goes through _select_by_array with samples=True)
+        result, indexer = string_coord.select(np.array([0, 2]), samples=True)
+        assert len(result) == 2
+        assert np.array_equal(result.values, ["apple", "cherry"])
+        # indexer should be a boolean mask indicating selected positions
+        expected_mask = np.array([True, False, True, False, False])
+        assert np.array_equal(indexer, expected_mask)
+
+        # Test single index (goes through _select_by_samples)
+        result, indexer = string_coord.select(1, samples=True)
+        assert len(result) == 1
+        assert result.values[0] == "banana"
+
+    def test_string_coord_select_boolean_array(self, string_coord):
+        """Test selection with boolean arrays."""
+        bool_array = np.array([True, False, True, False, False])
+        result, indexer = string_coord._select_by_array(bool_array)
+        assert len(result) == 2
+        assert np.array_equal(result.values, ["apple", "cherry"])
+
+    def test_string_coord_unsupported_selection(self, string_coord):
+        """Test unsupported selection types."""
+        with pytest.raises(CoordError, match="not supported"):
+            string_coord.select(123)  # Integer that's not samples
+
+    def test_string_coord_empty_operations(self):
+        """Test operations on empty string coordinates."""
+        empty_coord = get_coord(data=np.array([], dtype="U10"))
+        assert empty_coord.min() is None
+        assert empty_coord.max() is None
+        assert len(empty_coord) == 0
+
+    def test_string_coord_set_units(self, string_coord):
+        """Test set_units method (should delegate to convert_units)."""
+        from dascore.exceptions import CoordError
+
+        with pytest.raises(CoordError, match="unit conversion"):
+            string_coord.set_units("m")
+
+    def test_string_coord_get_compatible_value(self, string_coord):
+        """Test _get_compatible_value method."""
+        # Test normal string conversion
+        result = string_coord._get_compatible_value(123)
+        assert result == "123"
+
+        # Test None handling
+        result = string_coord._get_compatible_value(None)
+        assert result is None
+
+        # Test relative selection error
+        from dascore.exceptions import CoordError
+
+        with pytest.raises(CoordError, match="relative selection"):
+            string_coord._get_compatible_value("test", relative=True)
+
+
+class TestStringCoordUtilities:
+    """Tests for string coordinate utility functions."""
+
+    def test_is_string_like_array(self):
+        """Test _is_string_like_array function."""
+        from dascore.core.coords import _is_string_like_array
+
+        # Test Unicode strings
+        assert _is_string_like_array(np.array(["a", "b", "c"]))
+
+        # Test byte strings
+        assert _is_string_like_array(np.array([b"a", b"b"], dtype="S"))
+
+        # Test object arrays with strings
+        assert _is_string_like_array(np.array(["text", "more"], dtype="O"))
+
+        # Test numeric arrays
+        assert not _is_string_like_array(np.array([1, 2, 3]))
+        assert not _is_string_like_array(np.array([1.0, 2.0, 3.0]))
+
+        # Test mixed object arrays
+        mixed_obj = np.array([1, "text"], dtype="O")
+        assert not _is_string_like_array(mixed_obj)
+
+        # Test empty arrays
+        assert _is_string_like_array(np.array([], dtype="U"))
+        assert not _is_string_like_array(np.array([], dtype="f"))
+
+        # Test non-array input
+        assert not _is_string_like_array([1, 2, 3])  # Plain list
+        assert not _is_string_like_array("not an array")  # String
+
+    def test_raise_string_coord_error(self):
+        """Test _raise_string_coord_error function."""
+        from dascore.core.coords import _raise_string_coord_error
+        from dascore.exceptions import CoordError
+
+        with pytest.raises(
+            CoordError, match="String coordinates do not support test operation"
+        ):
+            _raise_string_coord_error("test operation")

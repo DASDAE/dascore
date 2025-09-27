@@ -53,16 +53,46 @@ def _save_attrs_and_dims(patch, patch_group):
     patch_group._v_attrs["_dims"] = ",".join(patch.dims)
 
 
+def _convert_strings_to_bytes(data):
+    """Convert string arrays to bytes for HDF5 storage."""
+    if len(data) == 0:
+        return np.array([], dtype="S1")
+
+    # Convert all to strings first, then encode to UTF-8
+    if data.dtype.kind in ("U", "S"):
+        str_data = data.astype(str)
+    else:  # Object array
+        str_data = [str(x) for x in data]
+
+    # Encode to UTF-8 and find max length
+    utf8_bytes = [s.encode("utf-8") for s in str_data]
+    max_len = max(len(b) for b in utf8_bytes)
+    return np.array(utf8_bytes, dtype=f"S{max_len}")
+
+
 def _save_array(data, name, group, h5):
-    """Save an array to a group, handle datetime flubbery."""
-    # handle datetime conversions
+    """Save an array to a group, handle datetime and string conversions."""
+    # Determine data types
     is_dt = np.issubdtype(data.dtype, np.datetime64)
     is_td = np.issubdtype(data.dtype, np.timedelta64)
+    is_str = data.dtype.kind in ("U", "S", "O")
+
+    # Store original dtype for strings
+    original_dtype = str(data.dtype) if is_str else None
+
+    # Convert data based on type
     if is_dt or is_td:
         data = to_int(data)
+    elif is_str:
+        data = _convert_strings_to_bytes(data)
+
+    # Create array and set attributes
     array_node = _create_or_squash_array(h5, group, name, data)
     array_node._v_attrs["is_datetime64"] = is_dt
     array_node._v_attrs["is_timedelta64"] = is_td
+    array_node._v_attrs["is_string"] = is_str
+    if original_dtype is not None:
+        array_node._v_attrs["original_string_dtype"] = original_dtype
 
 
 def _save_coords(patch, patch_group, h5):
@@ -107,13 +137,46 @@ def _get_attrs(patch_group):
         return PatchAttrs(**out)
 
 
+def _convert_bytes_to_strings(data, original_dtype=None):
+    """Convert bytes arrays back to strings."""
+    # Decode bytes to unicode strings
+    str_data = np.array([s.decode("utf-8") for s in data], dtype="U")
+
+    # Try to restore original dtype if provided
+    if original_dtype:
+        try:
+            if original_dtype.startswith(("<U", "U")):
+                str_data = str_data.astype(original_dtype)
+            elif original_dtype == "object":
+                str_data = str_data.astype("O")
+        except (ValueError, TypeError):
+            # Fall back to default unicode if restoration fails
+            pass
+
+    return str_data
+
+
 def _read_array(table_array):
     """Read an array into numpy."""
     data = table_array[:]
-    if table_array._v_attrs["is_datetime64"]:
-        data = data.view("datetime64[ns]")
-    if table_array._v_attrs["is_timedelta64"]:
-        data = data.view("timedelta64[ns]")
+    attrs = table_array._v_attrs
+
+    if attrs["is_datetime64"]:
+        return data.view("datetime64[ns]")
+    elif attrs["is_timedelta64"]:
+        return data.view("timedelta64[ns]")
+    elif "is_string" in attrs and attrs["is_string"] and data.dtype.kind == "S":
+        original_dtype = (
+            attrs.get("original_string_dtype", None)
+            if hasattr(attrs, "get")
+            else (
+                attrs["original_string_dtype"]
+                if "original_string_dtype" in attrs
+                else None
+            )
+        )
+        return _convert_bytes_to_strings(data, original_dtype)
+
     return data
 
 

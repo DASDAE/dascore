@@ -1029,9 +1029,14 @@ class CoordManager(DascoreBaseModel):
 
     def to_summary_dict(self) -> dict[str, CoordSummary | tuple[str, ...]]:
         """Convert the contents of the coordinate manager to a summary dict."""
+        from dascore.core.coords import CoordString
+
         dim_map = self.dim_map
         out = {}
         for name, coord in self.coord_map.items():
+            # Skip string coordinates as they cannot be summarized
+            if isinstance(coord, CoordString):
+                continue
             out[name] = coord.to_summary(dims=dim_map[name])
         return out
 

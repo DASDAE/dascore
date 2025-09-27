@@ -1512,6 +1512,152 @@ class CoordMonotonicArray(CoordArray):
         return self._step_meets_requirement(lt)
 
 
+def _is_string_like_array(data: ArrayLike) -> bool:
+    """Check if array contains string-like data."""
+    if not hasattr(data, "dtype"):
+        return False
+
+    # Direct string types
+    if data.dtype.kind in ("U", "S"):
+        return True
+
+    # Object arrays - check actual content
+    if data.dtype.kind == "O" and len(data) > 0:
+        sample_size = min(5, len(data))
+        sample = data[:sample_size]
+        return all(isinstance(x, (str | bytes | np.str_ | np.bytes_)) for x in sample)
+
+    return False
+
+
+def _raise_string_coord_error(operation: str) -> None:
+    """Raise consistent error for unsupported string coordinate operations."""
+    raise CoordError(f"String coordinates do not support {operation}")
+
+
+class CoordString(BaseCoord):
+    """
+    A coordinate for string/categorical data.
+
+    This coordinate type handles string arrays and provides specialized
+    selection methods for text-based data.
+    """
+
+    values: ArrayLike
+    _rich_style = dascore_styles["coord_array"]
+    _evenly_sampled = False
+    _sorted = False
+    _allow_arithmetic = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_string_data(cls, values):
+        """Ensure data is string-like and setup proper attributes."""
+        if isinstance(values, dict):
+            data = values.get("values")
+            if data is not None:
+                data = np.asarray(data)
+                # Convert to string dtype if needed
+                if data.dtype.kind not in ("U", "S", "O"):
+                    data = data.astype("U")
+                values["values"] = data
+                values["dtype"] = data.dtype
+                values["shape"] = data.shape
+        return values
+
+    def convert_units(self, units) -> Self:
+        """String coordinates don't support units."""
+        if units is not None:
+            _raise_string_coord_error("unit conversion")
+        return self
+
+    def set_units(self, units) -> Self:
+        """String coordinates don't support units."""
+        return self.convert_units(units)
+
+    def _get_compatible_value(self, value, relative=False):
+        """Convert value to string if needed."""
+        if value is None:
+            return None
+        if relative:
+            _raise_string_coord_error("relative selection")
+        return str(value)
+
+    def _select_by_string_values(self, values):
+        """Helper method to select by string value(s)."""
+        mask = np.isin(self.values, np.atleast_1d(values))
+        indices = np.where(mask)[0]
+        if len(indices) == 0:
+            return self.empty(), np.array([], dtype=int)
+        return self[mask], indices
+
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
+        """Apply select, return selected coords and index for selecting data."""
+        if relative:
+            _raise_string_coord_error("relative selection")
+
+        if is_array(args):
+            return self._select_by_array(args, relative=relative, samples=samples)
+        elif samples:
+            return self._select_by_samples(args)
+        elif isinstance(args, (str | list | tuple)):
+            return self._select_by_string_values(args)
+        else:
+            msg = f"String coordinate selection not supported for {type(args)}"
+            raise CoordError(msg)
+
+    def _select_by_array(self, array, samples=False, relative=False):
+        """Select based on array input."""
+        if samples:
+            return self._select_by_sample_array(array)
+        if np.issubdtype(getattr(array, "dtype", None), np.bool_):
+            return self[array], array
+        # Convert array values to strings for comparison
+        str_array = np.array([str(x) for x in array])
+        mask = np.isin(self.values, str_array)
+        indices = np.where(mask)[0]
+        return self[mask], indices
+
+    def get_slice_tuple(self, arg, relative=False):
+        """String coordinates don't support slice operations."""
+        _raise_string_coord_error("slice operations")
+
+    def __getitem__(self, item) -> Self:
+        """Get subset of coordinate."""
+        out = self.values[item]
+        if not np.ndim(out):
+            return out
+        return self.__class__(values=out, units=self.units)
+
+    def _min(self):
+        """Return the lexicographically first string."""
+        return min(self.values) if len(self.values) > 0 else None
+
+    def _max(self):
+        """Return the lexicographically last string."""
+        return max(self.values) if len(self.values) > 0 else None
+
+    def sort(self, reverse=False):
+        """Sort the string coordinate lexicographically."""
+        sorted_indices = np.argsort(self.values)
+        if reverse:
+            sorted_indices = sorted_indices[::-1]
+        sorted_coord = self[sorted_indices]
+        return sorted_coord, sorted_indices
+
+    def update_limits(self, min=None, max=None, step=None, **kwargs):
+        """String coordinates don't support limit updates."""
+        if any(x is not None for x in [min, max, step]) or kwargs:
+            _raise_string_coord_error("limit updates")
+        return self
+
+    def to_summary(self, dims=None):
+        """String coordinates cannot be summarized."""
+        _raise_string_coord_error("summary conversion")
+
+
 def get_coord(
     *,
     data: ArrayLike | None | np.ndarray | BaseCoord = None,
@@ -1672,6 +1818,11 @@ def get_coord(
             return data
         if not isinstance(data, np.ndarray):
             data = np.atleast_1d(data)
+
+        # Check if data is string-like
+        if _is_string_like_array(data):
+            return CoordString(values=data)
+
         if np.size(data) == 0:
             dtype = dtype or data.dtype
             return CoordPartial(shape=data.shape, units=units, step=step, dtype=dtype)

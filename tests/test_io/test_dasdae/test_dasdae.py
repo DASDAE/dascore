@@ -279,3 +279,179 @@ class TestRoundTrips:
         new_spool = dc.spool(path, file_format="DASDAE")
         out_patch = new_spool[0]
         assert in_patch == out_patch
+
+    @pytest.mark.parametrize(
+        "labels,coord_name",
+        [
+            (lambda n: [f"sensor_{i:03d}" for i in range(n)], "sensor_id"),
+            (lambda n: [f"传感器_{i:03d}" for i in range(n)], "sensor_unicode"),
+        ],
+    )
+    def test_roundtrip_string_coords(
+        self, tmp_path_factory, random_patch, labels, coord_name
+    ):
+        """Ensure patches with string coordinates can roundtrip."""
+        path = tmp_path_factory.mktemp(f"roundtrip_{coord_name}") / f"{coord_name}.h5"
+
+        # Create string coordinate for distance axis
+        distance_coord = random_patch.get_coord("distance")
+        string_labels = np.array(labels(len(distance_coord)))
+
+        # Update patch with string coordinate
+        patch_with_strings = random_patch.update_coords(
+            **{coord_name: ("distance", string_labels)}
+        )
+
+        # Write and read back
+        patch_with_strings.io.write(path, "dasdae")
+        new_patch = dc.spool(path, file_format="DASDAE")[0]
+
+        # Verify string coordinate was preserved
+        original_labels = patch_with_strings.coords.get_array(coord_name)
+        new_labels = new_patch.coords.get_array(coord_name)
+
+        assert np.array_equal(original_labels, new_labels)
+        assert len(new_patch.coords.get_coord(coord_name)) == len(distance_coord)
+
+        # Check that the coordinate is still a string coordinate
+        from dascore.core.coords import CoordString
+
+        coord_obj = new_patch.coords.get_coord(coord_name)
+        assert isinstance(coord_obj, CoordString)
+
+
+class TestDASDAEStringUtilities:
+    """Tests for DASDAE string utility functions."""
+
+    def test_convert_strings_to_bytes(self):
+        """Test _convert_strings_to_bytes function."""
+        from dascore.io.dasdae.utils import _convert_strings_to_bytes
+
+        # Test Unicode strings
+        unicode_data = np.array(["hello", "world", "北京"])
+        result = _convert_strings_to_bytes(unicode_data)
+        assert result.dtype.kind == "S"
+        assert len(result) == 3
+
+        # Test byte strings
+        byte_data = np.array([b"hello", b"world"], dtype="S")
+        result = _convert_strings_to_bytes(byte_data)
+        assert result.dtype.kind == "S"
+
+        # Test object arrays
+        obj_data = np.array(["text", 123], dtype="O")
+        result = _convert_strings_to_bytes(obj_data)
+        assert result.dtype.kind == "S"
+        # Should convert 123 to string
+        assert b"123" in result
+
+        # Test empty arrays
+        empty_data = np.array([], dtype="U")
+        result = _convert_strings_to_bytes(empty_data)
+        assert result.dtype == "S1"
+        assert len(result) == 0
+
+    def test_convert_bytes_to_strings(self):
+        """Test _convert_bytes_to_strings function."""
+        from dascore.io.dasdae.utils import _convert_bytes_to_strings
+
+        # Test basic conversion
+        byte_data = np.array([b"hello", b"world"], dtype="S")
+        result = _convert_bytes_to_strings(byte_data)
+        assert result.dtype.kind == "U"
+        assert np.array_equal(result, ["hello", "world"])
+
+        # Test Unicode bytes
+        unicode_bytes = np.array(["北京".encode(), "café".encode()], dtype="S")
+        result = _convert_bytes_to_strings(unicode_bytes)
+        assert np.array_equal(result, ["北京", "café"])
+
+        # Test with original dtype restoration
+        result = _convert_bytes_to_strings(byte_data, original_dtype="<U10")
+        assert result.dtype == "<U10"
+
+        # Test with object dtype restoration
+        result = _convert_bytes_to_strings(byte_data, original_dtype="object")
+        assert result.dtype == object
+
+        # Test with invalid dtype (should fall back)
+        result = _convert_bytes_to_strings(byte_data, original_dtype="invalid_dtype")
+        assert result.dtype.kind == "U"
+
+    def test_save_array_string_handling(self, tmp_path_factory):
+        """Test _save_array function with string data."""
+        import tables as tb
+
+        from dascore.io.dasdae.utils import _save_array
+
+        # Create temporary HDF5 file
+        path = tmp_path_factory.mktemp("string_save_test") / "test.h5"
+
+        with tb.open_file(str(path), mode="w") as h5_file:
+            # Test Unicode string array
+            unicode_data = np.array(["hello", "world", "北京"])
+            _save_array(unicode_data, "unicode_test", h5_file.root, h5_file)
+
+            # Test object string array
+            obj_data = np.array(["text", "more"], dtype="O")
+            _save_array(obj_data, "object_test", h5_file.root, h5_file)
+
+            # Test empty string array
+            empty_data = np.array([], dtype="U5")
+            _save_array(empty_data, "empty_test", h5_file.root, h5_file)
+
+        # Verify the arrays were saved with correct attributes
+        with tb.open_file(str(path), mode="r") as h5_file:
+            unicode_node = h5_file.get_node("/unicode_test")
+            assert unicode_node._v_attrs["is_string"]
+            assert "original_string_dtype" in unicode_node._v_attrs
+
+            obj_node = h5_file.get_node("/object_test")
+            assert obj_node._v_attrs["is_string"]
+
+            empty_node = h5_file.get_node("/empty_test")
+            assert empty_node._v_attrs["is_string"]
+
+    def test_read_array_string_handling(self, tmp_path_factory):
+        """Test _read_array function with string data."""
+        import tables as tb
+
+        from dascore.io.dasdae.utils import _read_array, _save_array
+
+        path = tmp_path_factory.mktemp("string_read_test") / "test.h5"
+        original_data = np.array(["hello", "world", "北京"])
+
+        # Save and read back
+        with tb.open_file(str(path), mode="w") as h5_file:
+            _save_array(original_data, "string_test", h5_file.root, h5_file)
+
+        with tb.open_file(str(path), mode="r") as h5_file:
+            node = h5_file.get_node("/string_test")
+            restored_data = _read_array(node)
+
+        assert restored_data.dtype.kind == "U"
+        assert np.array_equal(restored_data, original_data)
+
+    def test_read_array_non_string_data(self, tmp_path_factory):
+        """Test _read_array function with non-string data (should pass through)."""
+        import tables as tb
+
+        from dascore.io.dasdae.utils import _read_array
+
+        path = tmp_path_factory.mktemp("non_string_test") / "test.h5"
+        numeric_data = np.array([1.0, 2.0, 3.0])
+
+        # Create a simple array without string attributes
+        with tb.open_file(str(path), mode="w") as h5_file:
+            array_node = h5_file.create_array(
+                h5_file.root, "numeric_test", numeric_data
+            )
+            array_node._v_attrs["is_datetime64"] = False
+            array_node._v_attrs["is_timedelta64"] = False
+            array_node._v_attrs["is_string"] = False
+
+        with tb.open_file(str(path), mode="r") as h5_file:
+            node = h5_file.get_node("/numeric_test")
+            result = _read_array(node)
+
+        assert np.array_equal(result, numeric_data)
