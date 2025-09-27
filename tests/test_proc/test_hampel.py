@@ -394,3 +394,17 @@ class TestHampelFilter:
         patch = random_patch.update(data=data)
         out = patch.hampel_filter(time=5, samples=True, threshold=5)
         assert np.issubdtype(out.dtype, np.integer)
+
+    def test_unchanged_patch_data(self, patch_with_spikes):
+        """Ensure original patch data isn't modified wit separable."""
+        # Since we are doing some fancy inplace tricks just make sure original
+        # data array is left unchanged.
+        original = patch_with_spikes.data.copy()
+        out = patch_with_spikes.hampel_filter(
+            time=5, distance=5, samples=True, threshold=5, separable=True,
+        )
+        now = patch_with_spikes.data
+        assert np.all(original == now)
+        # Just in case, make sure the filter actually did something, otherwise
+        # the check above is pointless.
+        assert not np.all(original == out.data)

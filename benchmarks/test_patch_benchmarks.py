@@ -47,7 +47,7 @@ class TestProcessingBenchmarks:
         return np.arange(start, stop, step)
 
     @pytest.mark.benchmark
-    def test_pass_filter_performance(self, example_patch):
+    def test_pass_filter(self, example_patch):
         """Time the pass filter."""
         patch = example_patch
         patch.pass_filter(distance=(0.1, 0.2))
@@ -56,20 +56,20 @@ class TestProcessingBenchmarks:
         patch.pass_filter(time=(10, 100))
 
     @pytest.mark.benchmark
-    def test_median_filter_performance(self, example_patch):
+    def test_median_filter(self, example_patch):
         """Time the median filter."""
         patch = example_patch
         patch.median_filter(distance=5, time=5, samples=True)
         patch.median_filter(time=5, samples=True)
 
     @pytest.mark.benchmark
-    def test_interpolate_performance(self, example_patch, interp_time):
+    def test_interpolate(self, example_patch, interp_time):
         """Time interpolate operations."""
         patch = example_patch
         patch.interpolate(time=interp_time)
 
     @pytest.mark.benchmark
-    def test_decimate_performance(self, example_patch):
+    def test_decimate(self, example_patch):
         """Time decimation."""
         patch = example_patch
         patch.decimate(time=2)
@@ -78,7 +78,7 @@ class TestProcessingBenchmarks:
         patch.decimate(time=10, filter_type=None)
 
     @pytest.mark.benchmark
-    def test_select_performance(self, example_patch):
+    def test_select(self, example_patch):
         """Selecting on time/distance dimension"""
         patch = example_patch
         patch.select(distance=(100, 200))
@@ -89,53 +89,58 @@ class TestProcessingBenchmarks:
         patch.select(time=(t1, t2))
 
     @pytest.mark.benchmark
-    def test_sobel_filter_performance(self, example_patch):
+    def test_sobel_filter(self, example_patch):
         """Time the Sobel filter."""
         patch = example_patch
         patch.sobel_filter(dim="time")
 
     @pytest.mark.benchmark
-    def test_standardize_performance(self, example_patch):
+    def test_standardize(self, example_patch):
         """Time standardization operation."""
         patch = example_patch
         patch.standardize(dim="time")
 
     @pytest.mark.benchmark
-    def test_taper_performance(self, example_patch):
+    def test_taper(self, example_patch):
         """Time tapering operations."""
         patch = example_patch
         patch.taper(time=0.1)
 
     @pytest.mark.benchmark
-    def test_transpose_performance(self, example_patch):
+    def test_transpose(self, example_patch):
         """Time transpose operations."""
         patch = example_patch
         dims = patch.dims[::-1]
         patch.transpose(*dims)
 
     @pytest.mark.benchmark
-    def test_roll_performance(self, example_patch):
+    def test_roll(self, example_patch):
         """Time roll/shift operations."""
         patch = example_patch
         patch.roll(time=10, samples=True)
 
     @pytest.mark.benchmark
-    def test_snap_coords_performance(self, patch_uneven_time):
+    def test_snap_coords(self, patch_uneven_time):
         """Time coordinate snapping."""
         patch = patch_uneven_time
         patch.snap_coords("time")
 
     @pytest.mark.benchmark
-    def test_hampel_filter_performance(self, example_patch):
+    def test_hampel_filter_non_separable(self, example_patch):
         """Time the Hampel filter."""
-        patch = example_patch
-        patch.hampel_filter(threshold=3.0, time=5, samples=True)
-        patch.hampel_filter(
-            threshold=2.5, distance=3, time=5, samples=True, separable=True
+        example_patch.hampel_filter(
+            threshold=3.0, distance=3, time=5, samples=True, separable=False
         )
 
     @pytest.mark.benchmark
-    def test_wiener_filter_performance(self, example_patch):
+    def test_hampel_filter(self, example_patch):
+        """Time the Hampel filter."""
+        example_patch.hampel_filter(
+            threshold=3.0, distance=3, time=5, samples=True, separable=True
+        )
+
+    @pytest.mark.benchmark
+    def test_wiener_filter(self, example_patch):
         """Time the Wiener filter."""
         patch = example_patch
         patch.wiener_filter(time=3, samples=True)
@@ -150,27 +155,27 @@ class TestTransformBenchmarks:
         return example_patch.dft("time")
 
     @pytest.mark.benchmark
-    def test_indefinite_integrate_performance(self, example_patch):
+    def test_indefinite_integrate(self, example_patch):
         """Integrate along time axis."""
         example_patch.integrate(dim="time", definite=False)
 
     @pytest.mark.benchmark
-    def test_definite_integrate_performance(self, example_patch):
+    def test_definite_integrate(self, example_patch):
         """Integrate along time axis."""
         example_patch.integrate(dim="time", definite=True)
 
     @pytest.mark.benchmark
-    def test_differentiate_performance(self, example_patch):
+    def test_differentiate(self, example_patch):
         """Differentiate along time axis."""
         example_patch.differentiate(dim="time")
 
     @pytest.mark.benchmark
-    def test_dft_performance(self, example_patch):
+    def test_dft(self, example_patch):
         """The discrete fourier transform."""
         example_patch.dft(dim="time")
 
     @pytest.mark.benchmark
-    def test_idft_performance(self, dft_patch):
+    def test_idft(self, dft_patch):
         """The inverse of the fourier transform."""
         dft_patch.idft()
 
@@ -181,13 +186,13 @@ class TestTransformBenchmarks:
         patch.stft(time=1, overlap=0.25)
 
     @pytest.mark.benchmark
-    def test_hilbert_performance(self, example_patch):
+    def test_hilbert(self, example_patch):
         """Time Hilbert transform."""
         patch = example_patch
         patch.hilbert(dim="time")
 
     @pytest.mark.benchmark
-    def test_envelope_performance(self, example_patch):
+    def test_envelope(self, example_patch):
         """Time envelope calculation."""
         patch = example_patch
         patch.envelope(dim="time")
@@ -197,22 +202,22 @@ class TestVisualizationBenchmarks:
     """Benchmarks for patch visualization operations (or str repr)."""
 
     @pytest.mark.benchmark
-    def test_waterfall_performance(self, example_patch, cleanup_mpl):
+    def test_waterfall(self, example_patch, cleanup_mpl):
         """Timing for waterfall patch."""
         example_patch.viz.waterfall()
 
     @pytest.mark.benchmark
-    def test_str_performance(self, example_patch):
+    def test_str(self, example_patch):
         """Timing for getting str rep."""
         str(example_patch)
 
     @pytest.mark.benchmark
-    def test_repr_performance(self, example_patch):
+    def test_repr(self, example_patch):
         """Time representation generation."""
         repr(example_patch)
 
     @pytest.mark.benchmark
-    def test_wiggle_performance(self, example_patch, cleanup_mpl):
+    def test_wiggle(self, example_patch, cleanup_mpl):
         """Time wiggle plot visualization."""
         patch = example_patch.select(distance=(0, 100))  # Subset for performance
         patch.viz.wiggle()
@@ -222,55 +227,55 @@ class TestAggregationBenchmarks:
     """Benchmarks for patch aggregation operations."""
 
     @pytest.mark.benchmark
-    def test_mean_performance(self, example_patch):
+    def test_mean(self, example_patch):
         """Time mean aggregation."""
         patch = example_patch
         patch.mean(dim="time")
         patch.mean(dim="distance")
 
     @pytest.mark.benchmark
-    def test_max_performance(self, example_patch):
+    def test_max(self, example_patch):
         """Time max aggregation."""
         patch = example_patch
         patch.max(dim="time")
         patch.max(dim="distance")
 
     @pytest.mark.benchmark
-    def test_min_performance(self, example_patch):
+    def test_min(self, example_patch):
         """Time min aggregation."""
         patch = example_patch
         patch.min(dim="time")
         patch.min(dim="distance")
 
     @pytest.mark.benchmark
-    def test_std_performance(self, example_patch):
+    def test_std(self, example_patch):
         """Time standard deviation aggregation."""
         patch = example_patch
         patch.std(dim="time")
         patch.std(dim="distance")
 
     @pytest.mark.benchmark
-    def test_sum_performance(self, example_patch):
+    def test_sum(self, example_patch):
         """Time sum aggregation."""
         patch = example_patch
         patch.sum(dim="time")
         patch.sum(dim="distance")
 
     @pytest.mark.benchmark
-    def test_median_performance(self, example_patch):
+    def test_median(self, example_patch):
         """Time median aggregation."""
         patch = example_patch
         patch.median(dim="time")
         patch.median(dim="distance")
 
     @pytest.mark.benchmark
-    def test_first_performance(self, example_patch):
+    def test_first(self, example_patch):
         """Time first aggregation."""
         patch = example_patch
         patch.first(dim="time")
 
     @pytest.mark.benchmark
-    def test_last_performance(self, example_patch):
+    def test_last(self, example_patch):
         """Time last aggregation."""
         patch = example_patch
         patch.last(dim="distance")
@@ -293,11 +298,11 @@ class TestRollingBenchmarks:
         return example_patch.rolling(time=roll_time)
 
     @pytest.mark.benchmark
-    def test_rolling_small_roller_mean_performance(self, small_roller):
+    def test_rolling_small_roller_mean(self, small_roller):
         """Time rolling mean calculation for small roller."""
         small_roller.mean()
 
     @pytest.mark.benchmark
-    def test_rolling_large_roller_mean_performance(self, big_roller):
+    def test_rolling_large_roller_mean(self, big_roller):
         """Time rolling mean calculation."""
         big_roller.mean()
