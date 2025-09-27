@@ -41,7 +41,7 @@ def hampel_filter(
     *,
     threshold: float,
     samples=False,
-    separable=True,
+    separable=False,
     **kwargs,
 ):
     """
