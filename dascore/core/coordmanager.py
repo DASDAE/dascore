@@ -115,22 +115,31 @@ def _get_indexers_and_new_coords_dict(
 ):
     """Get reductions for each dimension."""
     dim_reductions = {x: slice(None, None) for x in cm.dims}
-    dimap = cm.dim_map
     new_coords = dict(cm._get_dim_array_dict(keep_coord=True))
     for coord_name, vals in kwargs.items():
-        # this is not a selectable coord, just skip.
-        if coord_name not in cm.coord_map or not len(cm.dim_map[coord_name]):
-            continue
+        # All coordinates should exist in coord_map (filtered by
+        # _get_single_dim_kwarg_list)
+        assert coord_name in cm.coord_map
         coord = cm.coord_map[coord_name]
+        coord_dims = cm.dim_map[coord_name]
         _ensure_1d_coord(coord, coord_name)
-        dim_name = dimap[coord_name][0]
+        # Handle non-dimensional coordinates (not tied to any dimension)
+        if not len(coord_dims):
+            # Apply operation directly to the non-dimensional coordinate
+            method = getattr(coord, operation)
+            new_coord, _ = method(vals, relative=relative, samples=samples)
+            # Update only this coordinate in new_coords, don't affect array indexing
+            new_coords[coord_name] = (coord_dims, new_coord)
+            continue
+        # Handle dimensional coordinates (tied to exactly one dimension)
+        dim_name = coord_dims[0]
         # different logic if we are using indices or values
         method = getattr(coord, operation)
         new_coord, reductions = method(vals, relative=relative, samples=samples)
         # this handles the case of out-of-bound selections.
         # These should be converted to degenerate coords.
         dim_reductions[dim_name] = reductions
-        new_coords[coord_name] = (dimap[coord_name], new_coord)
+        new_coords[coord_name] = (coord_dims, new_coord)
         # update other coords affected by change.
         _indirect_coord_updates(cm, dim_name, coord_name, reductions, new_coords)
     indexers = tuple(dim_reductions[x] for x in cm.dims)

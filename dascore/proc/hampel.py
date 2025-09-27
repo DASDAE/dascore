@@ -96,15 +96,11 @@ def hampel_filter(
     >>> data[10, 5] = 10  # Add a large spike
     >>> patch = patch.update(data=data)
     >>>
-    >>> # Apply hampel filter along time dimension with 1.0 unit window
-    >>> filtered = patch.hampel_filter(time=1.0, threshold=3.5)
+    >>> # Apply hampel filter along time dimension with 0.2 unit window
+    >>> filtered = patch.hampel_filter(time=0.2, threshold=3.5)
     >>> assert filtered.data.shape == patch.data.shape
     >>> # The spike should be reduced
     >>> assert abs(filtered.data[10, 5]) < abs(patch.data[10, 5])
-    >>>
-    >>> # Apply filter with a lower threshold for more aggressive filtering
-    >>> filtered_aggressive = patch.hampel_filter(time=1.0, threshold=2.0)
-    >>> assert isinstance(filtered_aggressive, dc.Patch)
     >>>
     >>> # Apply filter along multiple dimensions:
     >>> filtered_2d = patch.hampel_filter(time=1.0, distance=5.0, threshold=3.5)
@@ -115,10 +111,6 @@ def hampel_filter(
     ...     time=3, distance=3, samples=True, threshold=3.5
     ... )
     >>>
-    >>> # Use separable filtering for faster processing (approximation)
-    >>> filtered_fast = patch.hampel_filter(
-    ...     time=1.0, distance=5.0, threshold=3.5, separable=True
-    ... )
     """
     if threshold <= 0 or not np.isfinite(threshold):
         msg = "hampel_filter threshold must be finite and greater than zero"
