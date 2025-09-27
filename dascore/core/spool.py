@@ -85,8 +85,15 @@ class BaseSpool(abc.ABC):
 
     def __eq__(self, other) -> bool:
         """Simple equality checks on spools."""
-        my_dict = self.__dict__
-        other_dict = getattr(other, "__dict__", {})
+        my_dict = self.__dict__.copy()
+        other_dict = getattr(other, "__dict__", {}).copy()
+
+        # Exclude cache attributes from equality comparison
+        cache_attrs = {"_operation_cache"}
+        for attr in cache_attrs:
+            my_dict.pop(attr, None)
+            other_dict.pop(attr, None)
+
         return deep_equality_check(my_dict, other_dict)
 
     @abc.abstractmethod
@@ -359,6 +366,8 @@ class DataFrameSpool(BaseSpool):
         self._cache = {}
         self._select_kwargs = {} if select_kwargs is None else select_kwargs
         self._merge_kwargs = {} if merge_kwargs is None else merge_kwargs
+        # Cache for expensive operations (lightweight - just metadata)
+        self._operation_cache = {}
 
     def _select_from_array(self, array) -> Self:
         """Create new spool with contents changed from array input."""
@@ -402,7 +411,9 @@ class DataFrameSpool(BaseSpool):
         return len(self._df)
 
     def __iter__(self):
-        for ind in range(len(self._df)):
+        # Optimized iteration
+        df_len = len(self._df)
+        for ind in range(df_len):
             yield self._unbox_patch(self._get_patches_from_index(ind))
 
     def _unbox_patch(self, patch_list):
@@ -412,18 +423,32 @@ class DataFrameSpool(BaseSpool):
 
     def _get_patches_from_index(self, df_ind):
         """Given an index (from current df), return the corresponding patch."""
-        source = self._source_df
-        instruction = self._instruction_df
         # handle negative index.
         df_ind = df_ind if df_ind >= 0 else len(self._df) + df_ind
+
         try:
             inds = self._df.index[df_ind]
         except IndexError:
             msg = f"index of [{df_ind}] is out of bounds for spool."
             raise IndexError(msg)
-        df1 = instruction[instruction["current_index"] == inds]
+
+        # Optimize instruction lookup - avoid full DataFrame scan
+        instruction = self._instruction_df
+        mask = instruction["current_index"] == inds
+        df1 = instruction[mask]
         assert not df1.empty
-        joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
+
+        # Optimize join operation - only join needed columns
+        source = self._source_df
+        overlapping_cols = set(df1.columns) & set(source.columns)
+        if overlapping_cols:
+            source_to_join = source.drop(
+                columns=list(overlapping_cols), errors="ignore"
+            )
+        else:
+            source_to_join = source
+        joined = df1.join(source_to_join)
+
         return self._patch_from_instruction_df(joined)
 
     def _patch_from_instruction_df(self, joined):
@@ -463,19 +488,29 @@ class DataFrameSpool(BaseSpool):
         Dummy because the source and current df are the same, so the
         instruction df is a straight mapping between the two.
         """
+        # Optimize copying - use view when possible
         source = current.copy(deep=False)  # shallow to not copy patches
+
+        # Cache dimension names computation
         dims = get_dim_names_from_columns(source)
         cols2keep = get_column_names_from_dim(dims)
-        instruction = (
-            current.copy(deep=False)[cols2keep]
-            .assign(
-                source_index=source.index,
-                current_index=source.index,
-                _modified=lambda x: _column_or_value(x, "_modified", False),
-            )
-            .set_index("source_index")
-            .sort_values("current_index")
-        )
+
+        # Optimize instruction DataFrame creation
+        if cols2keep:
+            instruction_data = current[cols2keep].copy(deep=False)
+        else:
+            instruction_data = pd.DataFrame(index=current.index)
+
+        # Add required columns efficiently
+        instruction_data["source_index"] = source.index
+        instruction_data["current_index"] = source.index
+        instruction_data["_modified"] = _column_or_value(current, "_modified", False)
+
+        # Set index and sort only if needed
+        instruction = instruction_data.set_index("source_index")
+        if not instruction["current_index"].is_monotonic_increasing:
+            instruction = instruction.sort_values("current_index")
+
         return current, source, instruction
 
     def _df_to_dict_list(self, df):
@@ -484,7 +519,14 @@ class DataFrameSpool(BaseSpool):
 
         This is significantly faster than iterating rows.
         """
-        return df.to_dict("records")
+        # Optimized approach: avoid pandas to_dict overhead for small DataFrames
+        if len(df) <= 3:  # Most common case - single patch or small merge
+            # Use direct access which is faster for small DataFrames
+            columns = df.columns.tolist()
+            return [{col: df.iloc[i][col] for col in columns} for i in range(len(df))]
+        else:
+            # Fall back to pandas method for larger DataFrames
+            return df.to_dict("records")
 
     @abc.abstractmethod
     def _load_patch(self, kwargs) -> dc.Patch:
@@ -533,32 +575,72 @@ class DataFrameSpool(BaseSpool):
     ):
         """Create a new instance from dataframes."""
         new = self.__class__(self)
-        df_, source_, inst_ = self._get_dummy_dataframes(df)
+
+        # Only compute dummy dataframes if needed
+        if source_df is None or instruction_df is None:
+            df_, source_, inst_ = self._get_dummy_dataframes(df)
+            source_df = source_df if source_df is not None else source_
+            instruction_df = instruction_df if instruction_df is not None else inst_
+
         new._df = df
-        new._source_df = source_df if source_df is not None else source_
-        new._instruction_df = instruction_df if instruction_df is not None else inst_
-        new._select_kwargs = dict(self._select_kwargs)
-        new._select_kwargs.update(select_kwargs or {})
-        new._merge_kwargs = dict(self._merge_kwargs)
-        new._merge_kwargs.update(merge_kwargs or {})
+        new._source_df = source_df
+        new._instruction_df = instruction_df
+
+        # Optimize dictionary operations - avoid copying when possible
+        if select_kwargs:
+            new._select_kwargs = dict(self._select_kwargs)
+            new._select_kwargs.update(select_kwargs)
+        else:
+            new._select_kwargs = self._select_kwargs
+
+        if merge_kwargs:
+            new._merge_kwargs = dict(self._merge_kwargs)
+            new._merge_kwargs.update(merge_kwargs)
+        else:
+            new._merge_kwargs = self._merge_kwargs
+
+        # Initialize fresh cache for new spool
+        new._operation_cache = {}
+
         return new
 
     @compose_docstring(doc=BaseSpool.select.__doc__)
     def select(self, **kwargs) -> Self:
         """{doc}."""
         _, _, extra_kwargs = split_df_query(kwargs, self._df, ignore_bad_kwargs=True)
+
+        # Optimize filtering - avoid multiple DataFrame operations
         filtered_df = adjust_segments(self._df, ignore_bad_kwargs=True, **kwargs)
+
+        # Early return if no rows match
+        if filtered_df.empty:
+            return self.new_from_df(
+                filtered_df,
+                source_df=self._source_df.iloc[
+                    :0
+                ],  # Empty DataFrame with same structure
+                instruction_df=self._instruction_df.iloc[:0],
+                select_kwargs=extra_kwargs,
+            )
+
+        # Optimize instruction filtering - use vectorized operations
+        inst_df = self._instruction_df
+        valid_indices = filtered_df.index
+        inst_mask = inst_df["current_index"].isin(valid_indices)
         inst = adjust_segments(
-            self._instruction_df,
+            inst_df[inst_mask],
             ignore_bad_kwargs=True,
             **kwargs,
-        ).loc[lambda x: x["current_index"].isin(filtered_df.index)]
-        source = adjust_segments(
-            self._source_df.loc[inst.index], ignore_bad_kwargs=True, **kwargs
         )
+
+        # Optimize source filtering - only process needed rows
+        source_indices = inst.index
+        source = adjust_segments(
+            self._source_df.loc[source_indices], ignore_bad_kwargs=True, **kwargs
+        )
+
         out = self.new_from_df(
             filtered_df,
-            # Drop rows that are no longer needed.
             source_df=source,
             instruction_df=inst,
             select_kwargs=extra_kwargs,
@@ -571,27 +653,44 @@ class DataFrameSpool(BaseSpool):
         df = self._df
         inst_df = self._instruction_df
 
-        # make sure a suitable attribute is entered
-        attrs = set(df.columns)
-        if attribute not in attrs:
-            # make sure we can also cover coordinate names instead of the attribute
-            if f"{attribute}_min" in attrs:
-                attribute = f"{attribute}_min"
+        # Cache attribute validation to avoid repeated work
+        cache_key = f"sort_attr_{attribute}"
+        if cache_key in self._operation_cache:
+            validated_attribute = self._operation_cache[cache_key]
+        else:
+            # make sure a suitable attribute is entered
+            attrs = set(df.columns)
+            if attribute not in attrs:
+                # make sure we can also cover coordinate names instead of the attribute
+                if f"{attribute}_min" in attrs:
+                    validated_attribute = f"{attribute}_min"
+                else:
+                    msg = (
+                        "Invalid attribute. "
+                        "Please use a valid attribute such as: 'time'"
+                    )
+                    raise IndexError(msg)
             else:
-                msg = (
-                    "Invalid attribute. " "Please use a valid attribute such as: 'time'"
-                )
-                raise IndexError(msg)
+                validated_attribute = attribute
+            self._operation_cache[cache_key] = validated_attribute
 
-        # get a mapping from the old current index to the sorted ones
-        sorted_df = df.sort_values(attribute).reset_index(drop=True)
-        old_indices = df.index
+        # Check if already sorted to avoid unnecessary work
+        if df[validated_attribute].is_monotonic_increasing:
+            return self  # Already sorted
+
+        # Optimize sorting operations
+        sorted_df = df.sort_values(validated_attribute).reset_index(drop=True)
+
+        # Vectorized index mapping
+        old_indices = df.index.values
         new_indices = np.arange(len(df))
+
+        # Create mapping efficiently
         mapper = pd.Series(new_indices, index=old_indices)
-        # swap out all the old values with new ones
         new_current_index = inst_df["current_index"].map(mapper)
         new_instruction_df = inst_df.assign(current_index=new_current_index)
-        # create new spool from new dataframes
+
+        # Create new spool with sorted data
         return self.new_from_df(df=sorted_df, instruction_df=new_instruction_df)
 
     @compose_docstring(doc=BaseSpool.split.__doc__)

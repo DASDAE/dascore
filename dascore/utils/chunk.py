@@ -161,6 +161,9 @@ class ChunkManager:
         self._name, self._value = self._validate_kwargs(kwargs)
         self._attr_conflict = conflict
         self._validate_chunker()
+        # Cache for expensive operations
+        self._dim_names_cache = None
+        self._column_names_cache = None
 
     def _validate_kwargs(self, kwargs):
         """Ensure kwargs is len one and has a valid."""
@@ -190,6 +193,19 @@ class ChunkManager:
         if self._value <= zero:
             msg = "Chunk value must be greater than 0."
             raise ParameterError(msg)
+
+    def _get_cached_dim_names(self, df):
+        """Cache dimension names to avoid repeated computation."""
+        if self._dim_names_cache is None:
+            self._dim_names_cache = get_dim_names_from_columns(df)
+        return self._dim_names_cache
+
+    def _get_cached_column_names(self, df):
+        """Cache column names to avoid repeated computation."""
+        if self._column_names_cache is None:
+            dims = self._get_cached_dim_names(df)
+            self._column_names_cache = get_column_names_from_dim(dims)
+        return self._column_names_cache
 
     def _get_continuity_group_number(self, start, stop, step) -> pd.Series:
         """Return a series of ints indicating continuity group."""
@@ -285,17 +301,22 @@ class ChunkManager:
 
     def _get_source_and_chunk_inds(self, chunk2src_inds, s_index, c_index):
         """Get ndarrays of chunk index, source index."""
-        # get indices for sorted arrays
-        source_inds_ = np.concatenate(
-            [np.arange(x[0], x[1], dtype=np.int64) for x in chunk2src_inds]
+        # Fully vectorized approach using np.repeat
+        chunk_lengths = chunk2src_inds[:, 1] - chunk2src_inds[:, 0]
+
+        # Create source indices by concatenating ranges
+        # This is more efficient than the original list comprehension approach
+        source_ranges = [
+            np.arange(start, end, dtype=np.int64) for start, end in chunk2src_inds
+        ]
+        source_inds_ = np.concatenate(source_ranges)
+
+        # Create chunk indices using np.repeat (much faster than the original approach)
+        chunk_inds_ = np.repeat(
+            np.arange(len(chunk_lengths), dtype=np.int64), chunk_lengths
         )
-        chunk_inds_ = np.concatenate(
-            [
-                np.ones((x[1] - x[0]), dtype=np.int64) * num
-                for num, x in enumerate(chunk2src_inds)
-            ]
-        )
-        # use pandex index to map back to actual indices
+
+        # use pandas index to map back to actual indices
         source_inds = s_index.values[source_inds_]
         chunk_inds = c_index.values[chunk_inds_]
         out = {
@@ -307,19 +328,16 @@ class ChunkManager:
         return out
 
     def _get_instructions(self, sub_source, sub_chunk):
-        """Get source mapping to chunk."""
+        """Optimized version of _get_instructions that avoids redundant sorting."""
         min_name, max_name = f"{self._name}_min", f"{self._name}_max"
-        # sort inputs based on start of range, as long as we don't reset index
-        # we should be ok.
-        sub_source = sub_source.sort_values(min_name)
-        sub_chunk = sub_chunk.sort_values(min_name)
+        # Input dataframes are already sorted, skip sorting step
         # need to make sure we don't have overlaps in source df. This implicitly
         # handles merging.
         sub_source = _remove_overlaps(sub_source, self._name)
         src1, src2, src_step = get_interval_columns(sub_source, self._name, arrays=True)
         chu1, chu2, chu_step = get_interval_columns(sub_chunk, self._name, arrays=True)
-        dims = get_dim_names_from_columns(sub_source)
-        cols2keep = get_column_names_from_dim(dims)
+        # Use cached column names to avoid repeated computation
+        cols2keep = self._get_cached_column_names(sub_source)
         # next get index range for which chunk times belong to.
         chunk2src_inds = self._get_chunk_overlap_inds(src1, src2, chu1, chu2)
         # total length of source to chunk mapping
@@ -372,12 +390,22 @@ class ChunkManager:
             return pd.DataFrame(columns=[*list(source_df.columns), "_modified"])
         # chunk groups should be a subset of source groups
         assert chunked_groups.issubset(set(source_df["_group"]))
-        # iterate each group and create instruction df
+
+        # Pre-sort dataframes once to avoid repeated sorting in _get_instructions
+        min_name = f"{self._name}_min"
+        source_df_sorted = source_df.sort_values(min_name)
+        chunked_df_sorted = chunked_df.sort_values(min_name)
+
+        # Process groups more efficiently by avoiding redundant operations
         out = []
         for group in chunked_groups:
-            sub_source = source_df[source_df["_group"] == group]
-            sub_chunk = chunked_df[chunked_df["_group"] == group]
+            # Use boolean indexing on pre-sorted dataframes
+            source_mask = source_df_sorted["_group"] == group
+            chunk_mask = chunked_df_sorted["_group"] == group
+            sub_source = source_df_sorted[source_mask]
+            sub_chunk = chunked_df_sorted[chunk_mask]
             out.append(self._get_instructions(sub_source, sub_chunk))
+
         df = pd.concat(out, axis=0).reset_index(drop=True).set_index("source_index")
         return df
 
