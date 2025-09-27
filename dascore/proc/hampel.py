@@ -181,11 +181,12 @@ def hampel_filter(
         patch, kwargs, samples, require_odd=True, warn_above=10, min_samples=3
     )
     # Need to convert ints to float for calculations to avoid roundoff error.
-    is_int = data.dtype.kind == "i"
+    # There were issues using np.issubdtype not working so this uses kind.
+    is_int = data.dtype.kind in {"i", "u"}
     dataf = data.copy() if not is_int else data.astype(np.float32)
 
     # Apply hampel filtering using appropriate method
-    if separable and sum(s > 1 for s in size) >= 2:
+    if separable:
         # Use separable filtering for multi-dimensional windows (faster approximation)
         dataf = _hampel_separable(dataf, size, mode, threshold)
     else:

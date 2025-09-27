@@ -329,8 +329,8 @@ def optional_import(
     ... except MissingOptionalDependencyError:
     ...     pass
     >>>
-    >>> bob = optional_import('boblib5', return_none=True)
-    >>> assert bob is not None
+    >>> bob = optional_import('boblib5', on_missing="ignore")
+    >>> assert bob is None
     """
     try:
         mod = importlib.import_module(package_name)

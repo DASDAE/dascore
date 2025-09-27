@@ -8,13 +8,13 @@ when optional dependencies are missing.
 
 from __future__ import annotations
 
-import warnings
-from functools import cache
 import importlib
-from typing import Callable, Literal
+import warnings
+from collections.abc import Callable
+from functools import cache
+from typing import Literal
 
 import numpy as np
-from sympy.physics.units import boltzmann
 
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import optional_import
@@ -50,10 +50,12 @@ OPERATION_REGISTRY = {
 }
 
 
-def _apply_scipy_operation(data: np.ndarray, window: int, operation: str, axis: int, **kwargs) -> np.ndarray:
+def _apply_scipy_operation(
+    data: np.ndarray, window: int, operation: str, axis: int, **kwargs
+) -> np.ndarray:
     """Apply scipy operation with proper handling."""
     module_name, func_name = OPERATION_REGISTRY[operation]["scipy"]
-    func = _get_engine_function("scipy",operation)
+    func = _get_engine_function("scipy", operation)
 
     # Apply function with appropriate parameters
     if func_name == "uniform_filter1d":
@@ -72,12 +74,14 @@ def _apply_scipy_operation(data: np.ndarray, window: int, operation: str, axis: 
         return func(data, size=window, axis=axis, **kwargs)
 
 
-def _apply_bottleneck_operation(data: np.ndarray, window: int, operation: str, axis: int, **kwargs) -> np.ndarray:
+def _apply_bottleneck_operation(
+    data: np.ndarray, window: int, operation: str, axis: int, **kwargs
+) -> np.ndarray:
     """Apply bottleneck operation with error handling."""
     func = _get_engine_function("bottleneck", operation)
 
     # Filter out scipy-specific kwargs that bottleneck doesn't accept
-    bottleneck_kwargs = {k: v for k, v in kwargs.items() if k not in ['mode']}
+    bottleneck_kwargs = {k: v for k, v in kwargs.items() if k not in ["mode"]}
     result = func(data, window=window, axis=axis, min_count=1, **bottleneck_kwargs)
     return result
 
@@ -87,7 +91,6 @@ ENGINE_WRAPPERS = {
     "scipy": _apply_scipy_operation,
     "bottleneck": _apply_bottleneck_operation,
 }
-
 
 
 @cache
@@ -100,7 +103,7 @@ def _get_module(module_name):
 def _get_available_engines() -> list[str]:
     """Get list of available engines (cached)."""
     bottle_list = [] if bn is None else ["bottleneck"]
-    return tuple(['scipy'] + bottle_list)
+    return tuple(["scipy", *bottle_list])
 
 
 def _get_engine_function(engine: str, func_name: str) -> Callable | None:
@@ -136,12 +139,12 @@ def _select_engine(preferred: str, operation: str) -> str:
 
 
 def moving_window(
-        data: np.ndarray,
-        window: int,
-        operation: str,
-        axis: int = 0,
-        engine: Literal["auto", "scipy", "bottleneck"] = "auto",
-        **kwargs
+    data: np.ndarray,
+    window: int,
+    operation: str,
+    axis: int = 0,
+    engine: Literal["auto", "scipy", "bottleneck"] = "auto",
+    **kwargs,
 ) -> np.ndarray:
     """
     Generic moving window operation with automatic engine selection.
@@ -187,31 +190,43 @@ def moving_window(
 
 
 # Convenience functions - much simpler now!
-def move_median(data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs) -> np.ndarray:
+def move_median(
+    data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs
+) -> np.ndarray:
     """Moving median filter."""
     return moving_window(data, window, "median", axis, engine, **kwargs)
 
 
-def move_mean(data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs) -> np.ndarray:
+def move_mean(
+    data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs
+) -> np.ndarray:
     """Moving mean filter."""
     return moving_window(data, window, "mean", axis, engine, **kwargs)
 
 
-def move_std(data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs) -> np.ndarray:
+def move_std(
+    data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs
+) -> np.ndarray:
     """Moving standard deviation filter."""
     return moving_window(data, window, "std", axis, engine, **kwargs)
 
 
-def move_sum(data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs) -> np.ndarray:
+def move_sum(
+    data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs
+) -> np.ndarray:
     """Moving sum filter."""
     return moving_window(data, window, "sum", axis, engine, **kwargs)
 
 
-def move_min(data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs) -> np.ndarray:
+def move_min(
+    data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs
+) -> np.ndarray:
     """Moving minimum filter."""
     return moving_window(data, window, "min", axis, engine, **kwargs)
 
 
-def move_max(data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs) -> np.ndarray:
+def move_max(
+    data: np.ndarray, window: int, axis: int = 0, engine: str = "auto", **kwargs
+) -> np.ndarray:
     """Moving maximum filter."""
     return moving_window(data, window, "max", axis, engine, **kwargs)

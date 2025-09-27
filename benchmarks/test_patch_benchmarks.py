@@ -202,7 +202,8 @@ class TestVisualizationBenchmarks:
     """Benchmarks for patch visualization operations (or str repr)."""
 
     @pytest.mark.benchmark
-    def test_waterfall(self, example_patch, cleanup_mpl):
+    @pytest.mark.usefixtures("cleanup_mpl")
+    def test_waterfall(self, example_patch):
         """Timing for waterfall patch."""
         example_patch.viz.waterfall()
 
@@ -216,8 +217,9 @@ class TestVisualizationBenchmarks:
         """Time representation generation."""
         repr(example_patch)
 
+    @pytest.mark.usefixtures("cleanup_mpl")
     @pytest.mark.benchmark
-    def test_wiggle(self, example_patch, cleanup_mpl):
+    def test_wiggle(self, example_patch):
         """Time wiggle plot visualization."""
         patch = example_patch.select(distance=(0, 100))  # Subset for performance
         patch.viz.wiggle()

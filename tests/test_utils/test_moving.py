@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pytest
 
 from dascore.exceptions import ParameterError
 from dascore.utils.moving import (
-    _get_available_engines,
     OPERATION_REGISTRY,
+    _get_available_engines,
     move_max,
     move_mean,
     move_median,
@@ -41,7 +39,7 @@ class TestMovingWindow:
         """Validate basic properties of results."""
         assert isinstance(result, np.ndarray)
         assert result.shape == original_data.shape
-        assert result.dtype.kind in ['f', 'i', 'c']  # float, int, or complex
+        assert result.dtype.kind in ["f", "i", "c"]  # float, int, or complex
 
     def _test_finite_properties(self, results, data):
         """Test mathematical properties of operations."""
@@ -66,7 +64,7 @@ class TestMovingWindow:
         # Min should be <= max
         assert np.all(min_vals <= max_vals)
 
-    def _compare_engine_results(self, result1, result2, window, operation):
+    def _compare_engine_results(self, result1, result2, window):
         """Compare results from different engines."""
         # Compare interior values (avoiding edge effects)
         interior_slice = slice(window // 2, -window // 2 if window > 2 else None)
@@ -94,7 +92,8 @@ class TestMovingWindow:
                 mean1, mean2 = np.mean(vals1), np.mean(vals2)
                 if abs(mean1) > 1e-10 and abs(mean2) > 1e-10:
                     rel_diff = abs(mean1 - mean2) / max(abs(mean1), abs(mean2))
-                    assert rel_diff < 0.5  # Allow 50% difference for edge handling differences
+                    # Allow 50% difference for edge handling differences
+                    assert rel_diff < 0.5
 
     # Fixtures
 
@@ -104,7 +103,7 @@ class TestMovingWindow:
         return {
             "1d": np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]),
             "2d": np.array([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]]),
-            "large": np.random.rand(1000),
+            "large": np.random.default_rng(42).random(1000),
             "single": np.array([5.0]),
             "constant": np.array([5.0, 5.0, 5.0, 5.0, 5.0]),
         }
@@ -117,7 +116,9 @@ class TestMovingWindow:
     # Core functionality tests
     @pytest.mark.parametrize("operation", TEST_OPERATIONS)
     @pytest.mark.parametrize("engine", TEST_ENGINES)
-    def test_operation_engine_combinations(self, test_data, operation, engine, available_engines):
+    def test_operation_engine_combinations(
+        self, test_data, operation, engine, available_engines
+    ):
         """Test all operation/engine combinations."""
         if engine == "bottleneck" and "bottleneck" not in available_engines:
             pytest.skip("Bottleneck not available")
@@ -189,7 +190,7 @@ class TestMovingWindow:
             ("constant", 3, "Constant values"),
         ]
 
-        for data_key, window, description in edge_cases:
+        for data_key, window, _ in edge_cases:
             data = test_data[data_key]
 
             result = move_median(data, window)
@@ -254,7 +255,7 @@ class TestMovingWindow:
                 result_bn = moving_window(data, window, operation, engine="bottleneck")
 
                 # Compare interior values (avoiding edge effects)
-                self._compare_engine_results(result_scipy, result_bn, window, operation)
+                self._compare_engine_results(result_scipy, result_bn, window)
 
             except ParameterError:
                 # Skip if operation not available in one engine
