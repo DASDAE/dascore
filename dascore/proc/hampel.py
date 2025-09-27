@@ -9,18 +9,15 @@ from scipy.ndimage import median_filter
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.utils.moving import move_median
 from dascore.utils.patch import get_patch_window_size, patch_function
-
-# Optional bottleneck import for performance optimization
-try:
-    import bottleneck as bn
-    HAS_BOTTLENECK = True
-except ImportError:
-    HAS_BOTTLENECK = False
 
 
 def _separable_median(data, size, mode, out):
-    """Calculate the median along each dimension sequentially."""
+    """
+    Calculate the median along each dimension sequentially using bottleneck
+    (optimized for speed).
+    """
     # Start by copying input data to output buffer
     np.copyto(out, data)
     current = out
@@ -28,38 +25,13 @@ def _separable_median(data, size, mode, out):
     # Apply 1D median filters along each dimension with size > 1
     for axis, window_size in enumerate(size):
         if window_size > 1:
-            if HAS_BOTTLENECK and mode == 'reflect' and window_size <= 15:
-                # Use bottleneck for better performance on smaller windows with reflection padding
-                _bottleneck_median_1d(current, window_size, axis, output=current)
-            else:
-                # Use scipy median_filter (fallback or for larger windows)
-                axis_size = [1] * len(size)
-                axis_size[axis] = window_size
-                median_filter(current, size=tuple(axis_size), mode=mode, output=current)
+            # Use unified moving window interface with automatic engine selection
+            filtered = move_median(
+                current, window_size, axis=axis, engine="auto", mode=mode
+            )
+            np.copyto(current, filtered)
 
     return current
-
-
-def _bottleneck_median_1d(data, window_size, axis, output):
-    """Apply 1D median filter using bottleneck with reflection padding."""
-    # Add reflection padding for edge handling
-    pad_size = window_size // 2
-    pad_config = [(0, 0)] * data.ndim
-    pad_config[axis] = (pad_size, pad_size)
-
-    # Add reflection padding
-    padded = np.pad(data, pad_config, mode='reflect')
-
-    # Apply bottleneck move_median
-    filtered_padded = bn.move_median(padded, window=window_size, axis=axis, min_count=1)
-
-    # Remove padding to get back to original size
-    slice_obj = [slice(None)] * padded.ndim
-    slice_obj[axis] = slice(pad_size, -pad_size if pad_size > 0 else None)
-    filtered = filtered_padded[tuple(slice_obj)]
-
-    # Copy result to output buffer
-    np.copyto(output, filtered)
 
 
 def _calculate_standard_median_and_mad(data, size, mode):
@@ -68,6 +40,58 @@ def _calculate_standard_median_and_mad(data, size, mode):
     abs_med_diff = np.abs(data - med)
     mad = median_filter(abs_med_diff, size=size, mode=mode)
     return med, abs_med_diff, mad
+
+
+def _hampel_separable(dataf, size, mode, threshold):
+    """Apply hampel filter using separable median filtering (faster approximation)."""
+    # Pre-allocate buffers to reduce memory allocations
+    med = np.empty_like(dataf)
+    abs_med_diff = np.empty_like(dataf)
+    mad = np.empty_like(dataf)
+
+    # Calculate median using pre-allocated buffer
+    _separable_median(dataf, size, mode, out=med)
+
+    # Calculate absolute difference using out parameter for efficiency
+    np.subtract(dataf, med, out=abs_med_diff)
+    np.abs(abs_med_diff, out=abs_med_diff)
+
+    # Calculate MAD using pre-allocated buffer
+    _separable_median(abs_med_diff, size, mode, out=mad)
+
+    # Handle zero MAD values in-place to avoid creating mad_safe array
+    mad[mad == 0.0] = np.finfo(dataf.dtype).eps
+
+    # Reuse abs_med_diff buffer for thresholded calculation
+    np.true_divide(abs_med_diff, mad, out=abs_med_diff)
+
+    # Final comparison using in-place assignment (abs_med_diff now contains
+    # thresholded values).
+    outlier_mask = abs_med_diff > threshold
+    dataf[outlier_mask] = med[outlier_mask]
+
+    return dataf
+
+
+def _hampel_non_separable(dataf, size, mode, threshold):
+    """
+    Apply hampel filter using standard 2D median filtering
+    (more accurate but slower).
+    """
+    # Use standard 2D median filter
+    med, abs_med_diff, mad = _calculate_standard_median_and_mad(dataf, size, mode)
+
+    # Handle mad values of 0 so denominator doesn't blow up
+    mad_safe = np.where(mad == 0.0, np.finfo(dataf.dtype).eps, mad)
+
+    # Hampel test and replacement
+    thresholded = abs_med_diff / mad_safe
+
+    # Use in-place assignment for consistency
+    outlier_mask = thresholded > threshold
+    dataf[outlier_mask] = med[outlier_mask]
+
+    return dataf
 
 
 @patch_function()
@@ -159,40 +183,14 @@ def hampel_filter(
     # Need to convert ints to float for calculations to avoid roundoff error.
     is_int = data.dtype.kind == "i"
     dataf = data.copy() if not is_int else data.astype(np.float32)
-    # Local median and MAD via median filters.
+
+    # Apply hampel filtering using appropriate method
     if separable and sum(s > 1 for s in size) >= 2:
-        # Use separable filtering for multi-dimensional windows
-        # This is faster but provides an approximation
-        # Pre-allocate buffers to reduce memory allocations
-        med = np.empty_like(dataf)
-        abs_med_diff = np.empty_like(dataf)
-        mad = np.empty_like(dataf)
-        # Calculate median using pre-allocated buffer
-        _separable_median(dataf, size, mode, out=med)
-        # Calculate absolute difference using out parameter for efficiency
-        np.subtract(dataf, med, out=abs_med_diff)
-        np.abs(abs_med_diff, out=abs_med_diff)
-        # Calculate MAD using pre-allocated buffer
-        _separable_median(abs_med_diff, size, mode, out=mad)
-        # Handle zero MAD values in-place to avoid creating mad_safe array
-        mad[mad == 0.0] = np.finfo(dataf.dtype).eps
-        # Reuse abs_med_diff buffer for thresholded calculation
-        np.true_divide(abs_med_diff, mad, out=abs_med_diff)
-        # Final comparison using in-place assignment (abs_med_diff now contains
-        # thresholded values)
-        # Start with dataf as base, then replace outliers with median values
-        outlier_mask = abs_med_diff > threshold
-        dataf[outlier_mask] = med[outlier_mask]
+        # Use separable filtering for multi-dimensional windows (faster approximation)
+        dataf = _hampel_separable(dataf, size, mode, threshold)
     else:
         # Use standard 2D median filter (more accurate but slower)
-        med, abs_med_diff, mad = _calculate_standard_median_and_mad(dataf, size, mode)
-        # Handle mad values of 0 so denominator doesn't blow up.
-        mad_safe = np.where(mad == 0.0, np.finfo(dataf.dtype).eps, mad)
-        # Hampel test and replacement.
-        thresholded = abs_med_diff / mad_safe
-        # Use in-place assignment for consistency
-        outlier_mask = thresholded > threshold
-        dataf[outlier_mask] = med[outlier_mask]
+        dataf = _hampel_non_separable(dataf, size, mode, threshold)
     # Cast back to original dtype (round if original was integer)
     if np.issubdtype(data.dtype, np.integer):
         dataf = np.rint(dataf)

@@ -228,6 +228,11 @@ class TestOptionalImport:
         with pytest.raises(MissingOptionalDependencyError, match="boblib4"):
             optional_import("boblib4")
 
+    def test_ignore(self):
+        """If on_missing == "ignore" none is returned."""
+        out = optional_import("boblib4", on_missing="ignore")
+        assert out is None
+
 
 class TestGetStencilCoefficients:
     """Tests for stencil coefficients."""
