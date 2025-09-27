@@ -132,7 +132,6 @@ def _get_indexers_and_new_coords_dict(
             new_coords[coord_name] = (coord_dims, new_coord)
             continue
         # Handle dimensional coordinates (tied to exactly one dimension)
-        _ensure_1d_coord(coord, coord_name)
         dim_name = coord_dims[0]
         # different logic if we are using indices or values
         method = getattr(coord, operation)

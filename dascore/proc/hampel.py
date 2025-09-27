@@ -96,7 +96,7 @@ def hampel_filter(
     >>> data[10, 5] = 10  # Add a large spike
     >>> patch = patch.update(data=data)
     >>>
-    >>> # Apply hampel filter along time dimension with 1.0 unit window
+    >>> # Apply hampel filter along time dimension with 0.2 unit window
     >>> filtered = patch.hampel_filter(time=0.2, threshold=3.5)
     >>> assert filtered.data.shape == patch.data.shape
     >>> # The spike should be reduced

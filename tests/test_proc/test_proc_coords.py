@@ -354,7 +354,7 @@ class TestSelect:
         PatchCoordinateError.
         """
         # Try to select on multiple coordinates that don't exist
-        with pytest.raises(PatchCoordinateError, match="coord1.*coord2"):
+        with pytest.raises(PatchCoordinateError, match=r"coord1.*coord2"):
             random_patch.select(bad_coord1=(0, 10), bad_coord2=(5, 15))
 
     def test_select_mix_valid_invalid_coordinates_raises_error(self, random_patch):
