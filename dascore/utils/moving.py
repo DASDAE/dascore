@@ -83,9 +83,16 @@ def _apply_bottleneck_operation(
     """Apply bottleneck operation with error handling."""
     func = _get_engine_function("bottleneck", operation)
 
+    # Extract user-specified min_count with default of 1
+    min_count = kwargs.pop("min_count", 1)
+
     # Filter out scipy-specific kwargs that bottleneck doesn't accept
-    bottleneck_kwargs = {k: v for k, v in kwargs.items() if k not in ["mode"]}
-    result = func(data, window=window, axis=axis, min_count=1, **bottleneck_kwargs)
+    scipy_only_kwargs = {"mode", "origin", "cval"}
+    bottleneck_kwargs = {k: v for k, v in kwargs.items() if k not in scipy_only_kwargs}
+
+    result = func(
+        data, window=window, axis=axis, min_count=min_count, **bottleneck_kwargs
+    )
     return result
 
 
@@ -103,7 +110,7 @@ def _get_module(module_name):
 
 
 @cache
-def _get_available_engines() -> list[str]:
+def _get_available_engines() -> tuple[str, ...]:
     """Get list of available engines (cached)."""
     bottle_list = [] if bn is None else ["bottleneck"]
     return tuple(["scipy", *bottle_list])
