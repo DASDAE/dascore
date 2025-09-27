@@ -98,9 +98,9 @@ def _hampel_non_separable(dataf, size, mode, threshold):
 def hampel_filter(
     patch: PatchType,
     *,
-    threshold: float,
+    threshold: float = 10.0,
     samples=False,
-    separable=True,
+    approximate=True,
     **kwargs,
 ):
     """
@@ -111,14 +111,14 @@ def hampel_filter(
     patch
         Input patch.
     threshold
-        Outlier threshold in MAD units.
+        Outlier threshold in MAD units. Default is 10.0.
     samples
         If True, values specified by kwargs are in samples not coordinate units.
-    separable
-        If True, apply 1D median filters sequentially along each dimension
-        instead of a true 2D median filter. This is much faster (3-4x speedup)
-        but provides an approximation of the true 2D median. The approximation
-        is usually good enough for spike removal purposes.
+    approximate
+        If True, use fast approximation algorithms for improved performance.
+        This applies 1D median filters sequentially along each dimension
+        instead of a true 2D median filter, providing a 3-4x speedup.
+        The approximation is usually good enough for spike removal purposes.
     **kwargs
         Used to specify the lengths of the filter in each dimension. Each
         selected dim must be evenly sampled and should represent a window
@@ -139,9 +139,20 @@ def hampel_filter(
     value to ensure a clean median calculation. When samples=True, an
     even sample count raises a ParameterError.
 
+    **Edge Handling:**
+    - Edge effects may differ slightly between modes due to different padding
+      strategies based on the patch's dimensionality and use of `approximate`
+      parameter.
+
+    **Performance:**
+    - Install `bottleneck` package for significant speedup in median
+      calculations.
+    - `approximate=True` provides 3-4x speedup over exact calculations
+    - Bottleneck acceleration applies to both approximate and exact modes
+
     See Also
     --------
-    - Despiking recipe: docs/recipes/despiking.qmd
+    - [Despiking recipe](`docs/recipes/despiking.qmd`)
 
     Examples
     --------
@@ -153,20 +164,23 @@ def hampel_filter(
     >>> data[10, 5] = 10  # Add a large spike
     >>> patch = patch.update(data=data)
     >>>
-    >>> # Apply hampel filter along time dimension with 1.0 unit window
-    >>> filtered = patch.hampel_filter(time=0.2, threshold=3.5)
+    >>> # Apply hampel filter with default threshold (10.0)
+    >>> filtered = patch.hampel_filter(time=0.2)
     >>> assert filtered.data.shape == patch.data.shape
     >>> # The spike should be reduced
     >>> assert abs(filtered.data[10, 5]) < abs(patch.data[10, 5])
+    >>>
+    >>> # Use custom threshold
+    >>> filtered_custom = patch.hampel_filter(time=0.2, threshold=3.5)
     >>>
     >>> # Specify hampel window in samples not coord units.
     >>> filtered_samps = patch.hampel_filter(
     ...     time=3, distance=3, samples=True, threshold=3.5
     ... )
     >>>
-    >>> # Use separable=False for exact median calculations (slower)
-    >>> filtered_fast = patch.hampel_filter(
-    ...     time=5, distance=5, threshold=3.5, samples=True, separable=False
+    >>> # Use approximate=False for exact median calculations (slower)
+    >>> filtered_exact = patch.hampel_filter(
+    ...     time=5, distance=5, threshold=3.5, samples=True, approximate=False
     ... )
     """
     if threshold <= 0 or not np.isfinite(threshold):
@@ -184,10 +198,8 @@ def hampel_filter(
     # There were issues using np.issubdtype not working so this uses kind.
     is_int = data.dtype.kind in {"i", "u"}
     dataf = data.copy() if not is_int else data.astype(np.float32)
-
     # Apply hampel filtering using appropriate method
-    if separable:
-        # Use separable filtering for multi-dimensional windows (faster approximation)
+    if approximate:
         dataf = _hampel_separable(dataf, size, mode, threshold)
     else:
         # Use standard 2D median filter (more accurate but slower)

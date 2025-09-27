@@ -126,17 +126,17 @@ class TestProcessingBenchmarks:
         patch.snap_coords("time")
 
     @pytest.mark.benchmark
-    def test_hampel_filter_non_separable(self, example_patch):
+    def test_hampel_filter_non_approximate(self, example_patch):
         """Time the Hampel filter."""
         example_patch.hampel_filter(
-            threshold=3.0, distance=3, time=5, samples=True, separable=False
+            threshold=3.0, distance=3, time=5, samples=True, approximate=False
         )
 
     @pytest.mark.benchmark
     def test_hampel_filter(self, example_patch):
         """Time the Hampel filter."""
         example_patch.hampel_filter(
-            threshold=3.0, distance=3, time=5, samples=True, separable=True
+            threshold=3.0, distance=3, time=5, samples=True, approximate=True
         )
 
     @pytest.mark.benchmark

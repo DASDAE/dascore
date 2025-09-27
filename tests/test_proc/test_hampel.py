@@ -117,6 +117,18 @@ class TestHampelFilter:
 
         assert diff_low >= diff_high
 
+    def test_default_threshold(self, patch_with_spikes):
+        """Test that default threshold (10.0) works correctly."""
+        # Test with default threshold
+        result_default = patch_with_spikes.hampel_filter(time=0.6)
+
+        # Test with explicit threshold=10.0
+        result_explicit = patch_with_spikes.hampel_filter(time=0.6, threshold=10.0)
+
+        # Should produce identical results
+        np.testing.assert_array_equal(result_default.data, result_explicit.data)
+        assert result_default.data.shape == patch_with_spikes.data.shape
+
     def test_samples_parameter_true(self, patch_with_spikes):
         """Test with samples=True parameter."""
         # Use samples instead of coordinate units (must be odd number)
@@ -133,21 +145,21 @@ class TestHampelFilter:
         # Check that data shape is preserved
         assert result.data.shape == patch_with_spikes.data.shape
 
-    def test_separable_parameter(self, patch_with_spikes):
-        """Test the separable parameter for faster processing."""
+    def test_approximate_parameter(self, patch_with_spikes):
+        """Test the approximate parameter for faster processing."""
         # Standard 2D filtering
         result_standard = patch_with_spikes.hampel_filter(
-            time=0.6, distance=3.0, threshold=3.5, separable=False
+            time=0.6, distance=3.0, threshold=3.5, approximate=False
         )
 
-        # Separable filtering (approximation)
-        result_separable = patch_with_spikes.hampel_filter(
-            time=0.6, distance=3.0, threshold=3.5, separable=True
+        # Approximate filtering (faster approximation)
+        result_approximate = patch_with_spikes.hampel_filter(
+            time=0.6, distance=3.0, threshold=3.5, approximate=True
         )
 
         # Both should have same shape
         assert result_standard.data.shape == patch_with_spikes.data.shape
-        assert result_separable.data.shape == patch_with_spikes.data.shape
+        assert result_approximate.data.shape == patch_with_spikes.data.shape
 
         # Results should be similar but not identical (approximation)
         # Check that spikes are still reduced in both cases
@@ -155,25 +167,50 @@ class TestHampelFilter:
         original_spike = abs(patch_with_spikes.data[time_idx, dist_idx])
 
         standard_spike = abs(result_standard.data[time_idx, dist_idx])
-        separable_spike = abs(result_separable.data[time_idx, dist_idx])
+        approximate_spike = abs(result_approximate.data[time_idx, dist_idx])
 
         # Both should reduce the spike
         assert standard_spike < original_spike
-        assert separable_spike < original_spike
+        assert approximate_spike < original_spike
 
-    def test_separable_single_dimension(self, patch_with_spikes):
-        """Test separable parameter with single dimension (should behave the same)."""
-        # Single dimension cases should behave the same regardless of separable
+    def test_approximate_single_dimension(self, patch_with_spikes):
+        """
+        Test approximate parameter with single dimension provides effective spike
+        removal.
+        """
+        # Single dimension cases should both be effective at spike removal
         result_standard = patch_with_spikes.hampel_filter(
-            time=0.6, threshold=3.5, separable=False
+            time=0.6, threshold=3.5, approximate=False
         )
-        result_separable = patch_with_spikes.hampel_filter(
-            time=0.6, threshold=3.5, separable=True
+        result_approximate = patch_with_spikes.hampel_filter(
+            time=0.6, threshold=3.5, approximate=True
         )
 
-        # Should be identical for single dimension, excluding edges due to
-        # different padding
-        _assert_interior_equal(result_standard.data, result_separable.data)
+        # Both should significantly reduce the spikes at known locations
+        original_data = patch_with_spikes.data
+        for time_idx, dist_idx, spike_val in self.SPIKE_LOCATIONS:
+            if time_idx < original_data.shape[0] and dist_idx < original_data.shape[1]:
+                original_spike = abs(original_data[time_idx, dist_idx])
+                standard_spike = abs(result_standard.data[time_idx, dist_idx])
+                approximate_spike = abs(result_approximate.data[time_idx, dist_idx])
+
+                # Both methods should reduce the spike magnitude
+                assert (
+                    standard_spike < original_spike
+                ), f"Standard method didn't reduce spike at ({time_idx}, {dist_idx})"
+                assert (
+                    approximate_spike < original_spike
+                ), f"Approximate method didn't reduce spike at ({time_idx}, {dist_idx})"
+
+                # Both should achieve similar spike reduction (within 50% of each other)
+                reduction_ratio = min(standard_spike, approximate_spike) / max(
+                    standard_spike, approximate_spike
+                )
+                msg = (
+                    f"Methods differ too much in spike reduction at "
+                    f"({time_idx}, {dist_idx})"
+                )
+                assert reduction_ratio > 0.5, msg
 
     def test_zero_mad_handling(self, patch_uniform_data):
         """Test handling of zero MAD values."""
@@ -185,24 +222,24 @@ class TestHampelFilter:
         # (edges may differ due to no padding)
         _assert_interior_equal(result.data, patch_uniform_data.data)
 
-    def test_non_separable_conditions(self, patch_with_spikes):
-        """Test conditions where separable mode is not used."""
-        # Test case 1: separable=False
+    def test_non_approximate_conditions(self, patch_with_spikes):
+        """Test conditions where approximate mode is not used."""
+        # Test case 1: approximate=False
         result1 = patch_with_spikes.hampel_filter(
-            time=0.6, distance=3.0, threshold=3.5, separable=False
+            time=0.6, distance=3.0, threshold=3.5, approximate=False
         )
         assert result1.data.shape == patch_with_spikes.data.shape
 
         # Test case 2: len(size) <= 1 (single dimension)
         result2 = patch_with_spikes.hampel_filter(
-            time=0.6, threshold=3.5, separable=True
+            time=0.6, threshold=3.5, approximate=True
         )
         assert result2.data.shape == patch_with_spikes.data.shape
 
         # Test case 3: not all(s > 1 for s in size) (some dimensions have size 1)
-        # Use a larger time window but force distance to minimum to test separable guard
+        # Use a larger time window but force distance to minimum to test approximate
         result3 = patch_with_spikes.hampel_filter(
-            time=5, distance=3, threshold=3.5, separable=True, samples=True
+            time=5, distance=3, threshold=3.5, approximate=True, samples=True
         )
         assert result3.data.shape == patch_with_spikes.data.shape
 
@@ -418,7 +455,7 @@ class TestHampelFilter:
         assert np.issubdtype(out.dtype, np.integer)
 
     def test_unchanged_patch_data(self, patch_with_spikes):
-        """Ensure original patch data isn't modified wit separable."""
+        """Ensure original patch data isn't modified with approximate."""
         # Since we are doing some fancy inplace tricks just make sure original
         # data array is left unchanged.
         original = patch_with_spikes.data.copy()
@@ -427,7 +464,7 @@ class TestHampelFilter:
             distance=5,
             samples=True,
             threshold=5,
-            separable=True,
+            approximate=True,
         )
         now = patch_with_spikes.data
         assert np.all(original == now)
