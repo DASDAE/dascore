@@ -663,7 +663,7 @@ class TestSelect:
         out, _ = cm_multidim.select(latitude=(..., lat_mean))
         assert isinstance(out, dc.CoordManager)
         # Multi-dim coord should raise CoordError
-        msg = "Only 1 dimensional coordinates can be used for selection"
+        msg = "Only 1 dimensional coordinates"
         with pytest.raises(CoordError, match=msg):
             cm_multidim.select(quality=(1, 20))
 
@@ -690,6 +690,46 @@ class TestSelect:
                 continue
             axis = coord_dims.index("distance")
             assert coord.shape[axis] == len(new_lat)
+
+    def test_select_nonexistent_coordinate_ignores_gracefully(self, cm_basic):
+        """Test that selecting on a non-existent coordinate is ignored gracefully."""
+        # This tests line 122 in _get_indexers_and_new_coords_dict
+        original_shape = cm_basic.shape
+        out, _ = cm_basic.select(nonexistent_coord=(1, 10))
+
+        # Should return unchanged coordinate manager
+        assert out == cm_basic
+        assert out.shape == original_shape
+
+        # Should work with multiple nonexistent coordinates
+        out2, _ = cm_basic.select(
+            fake_coord1=(1, 2), fake_coord2=slice(0, 5), another_fake=(10, 20)
+        )
+        assert out2 == cm_basic
+        assert out2.shape == original_shape
+
+    def test_select_mix_valid_invalid_coordinates(self, cm_basic):
+        """Test selecting with mix of valid and invalid coordinate names."""
+        # This also exercises line 122 but with mixed scenarios
+        time_vals = cm_basic.get_array("time")
+        subset_time = (time_vals[1], time_vals[-2])
+
+        out, _ = cm_basic.select(
+            time=subset_time,  # valid coordinate
+            nonexistent=(1, 10),  # invalid coordinate - should be ignored
+            fake_dim=slice(0, 5),  # another invalid coordinate
+        )
+
+        # Only the valid coordinate selection should have been applied
+        assert (
+            out.shape[cm_basic.get_axis("time")]
+            < cm_basic.shape[cm_basic.get_axis("time")]
+        )
+        # Distance should be unchanged since it wasn't selected
+        assert (
+            out.shape[cm_basic.get_axis("distance")]
+            == cm_basic.shape[cm_basic.get_axis("distance")]
+        )
 
 
 class TestOrder:

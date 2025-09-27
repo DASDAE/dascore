@@ -117,29 +117,20 @@ def _get_indexers_and_new_coords_dict(
     dim_reductions = {x: slice(None, None) for x in cm.dims}
     new_coords = dict(cm._get_dim_array_dict(keep_coord=True))
     for coord_name, vals in kwargs.items():
-        # Skip coordinates not in coord_map
-        if coord_name not in cm.coord_map:
-            continue
+        # All coordinates should exist in coord_map (filtered by
+        # _get_single_dim_kwarg_list)
+        assert coord_name in cm.coord_map
         coord = cm.coord_map[coord_name]
         coord_dims = cm.dim_map[coord_name]
+        _ensure_1d_coord(coord, coord_name)
         # Handle non-dimensional coordinates (not tied to any dimension)
         if not len(coord_dims):
-            _ensure_1d_coord(coord, coord_name)
             # Apply operation directly to the non-dimensional coordinate
             method = getattr(coord, operation)
             new_coord, _ = method(vals, relative=relative, samples=samples)
             # Update only this coordinate in new_coords, don't affect array indexing
             new_coords[coord_name] = (coord_dims, new_coord)
             continue
-
-        # Handle coordinates with more than one dimension
-        if len(coord_dims) > 1:
-            msg = (
-                "Only 1 dimensional coordinates can be used for selection "
-                f"{coord_name} has {len(coord_dims)} dimensions."
-            )
-            raise CoordError(msg)
-
         # Handle dimensional coordinates (tied to exactly one dimension)
         _ensure_1d_coord(coord, coord_name)
         dim_name = coord_dims[0]

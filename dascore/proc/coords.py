@@ -517,8 +517,8 @@ def select(
         relative=relative,
         samples=samples,
     )
-    # no slicing was performed, just return original.
-    if data.shape == patch.data.shape:
+    # no slicing was performed, just return original if coordinates also unchanged.
+    if data.shape == patch.data.shape and new_coords == patch.coords:
         return patch
     if copy:
         data = data.copy()
