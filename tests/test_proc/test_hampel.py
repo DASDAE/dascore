@@ -401,7 +401,11 @@ class TestHampelFilter:
         # data array is left unchanged.
         original = patch_with_spikes.data.copy()
         out = patch_with_spikes.hampel_filter(
-            time=5, distance=5, samples=True, threshold=5, separable=True,
+            time=5,
+            distance=5,
+            samples=True,
+            threshold=5,
+            separable=True,
         )
         now = patch_with_spikes.data
         assert np.all(original == now)

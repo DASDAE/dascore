@@ -12,20 +12,11 @@ from dascore.exceptions import ParameterError
 from dascore.utils.patch import get_patch_window_size, patch_function
 
 
-def _separable_median(data, size, mode, out=None):
+def _separable_median(data, size, mode, out):
     """Calculate the median along each dimension sequentially."""
-    # If output buffer is provided, use it; otherwise start with input data
-    if out is not None:
-        # Copy data to output buffer first
-        np.copyto(out, data)
-        med = out
-    else:
-        # Safety check: if no output buffer and data is not writeable,
-        # we need to create a copy for the first filter operation
-        if not data.flags.writeable:
-            med = data.copy()
-        else:
-            med = data
+    # Start by copying input data to output buffer
+    np.copyto(out, data)
+    current = out
 
     # Apply 1D median filters along each dimension with size > 1
     for axis, window_size in enumerate(size):
@@ -33,15 +24,10 @@ def _separable_median(data, size, mode, out=None):
             # Create size tuple for this dimension
             axis_size = [1] * len(size)
             axis_size[axis] = window_size
-            filtered = median_filter(med, size=tuple(axis_size), mode=mode)
+            # Use output buffer for in-place operation
+            median_filter(current, size=tuple(axis_size), mode=mode, output=current)
 
-            # If we're using an output buffer, copy the result back
-            if out is not None:
-                np.copyto(med, filtered)
-            else:
-                med = filtered
-
-    return med
+    return current
 
 
 def _calculate_standard_median_and_mad(data, size, mode):
@@ -58,7 +44,7 @@ def hampel_filter(
     *,
     threshold: float,
     samples=False,
-    separable=False,
+    separable=True,
     **kwargs,
 ):
     """
@@ -85,9 +71,7 @@ def hampel_filter(
     Warning
     -------
     Selecting windows with many samples can be *very* slow. It is recommended
-    window size in each dimension be <10 samples. For larger windows, consider
-    using `separable=True` for significantly faster processing (3-4x speedup)
-    at the cost of a slight approximation.
+    window size in each dimension be <10 samples.
 
     Returns
     -------
@@ -114,27 +98,19 @@ def hampel_filter(
     >>> patch = patch.update(data=data)
     >>>
     >>> # Apply hampel filter along time dimension with 1.0 unit window
-    >>> filtered = patch.hampel_filter(time=1.0, threshold=3.5)
+    >>> filtered = patch.hampel_filter(time=0.2, threshold=3.5)
     >>> assert filtered.data.shape == patch.data.shape
     >>> # The spike should be reduced
     >>> assert abs(filtered.data[10, 5]) < abs(patch.data[10, 5])
-    >>>
-    >>> # Apply filter with a lower threshold for more aggressive filtering
-    >>> filtered_aggressive = patch.hampel_filter(time=1.0, threshold=2.0)
-    >>> assert isinstance(filtered_aggressive, dc.Patch)
-    >>>
-    >>> # Apply filter along multiple dimensions:
-    >>> filtered_2d = patch.hampel_filter(time=1.0, distance=5.0, threshold=3.5)
-    >>> assert filtered_2d.data.shape == patch.data.shape
     >>>
     >>> # Specify hampel window in samples not coord units.
     >>> filtered_samps = patch.hampel_filter(
     ...     time=3, distance=3, samples=True, threshold=3.5
     ... )
     >>>
-    >>> # Use separable filtering for faster processing (approximation)
+    >>> # Use separable=False for exact median calculations (slower)
     >>> filtered_fast = patch.hampel_filter(
-    ...     time=1.0, distance=5.0, threshold=3.5, separable=True
+    ...     time=5, distance=5, threshold=3.5, samples=True, separable=False
     ... )
     """
     if threshold <= 0 or not np.isfinite(threshold):
@@ -148,36 +124,45 @@ def hampel_filter(
     size = get_patch_window_size(
         patch, kwargs, samples, require_odd=True, warn_above=10, min_samples=3
     )
-    # Convert to float64 to avoid integer overflow/precision loss
-    if not np.issubdtype(data.dtype, np.floating):
-        data = data.astype(np.float32)
+    # Need to convert ints to float for calculations to avoid roundoff error.
+    is_int = data.dtype.kind == "i"
+    dataf = data.copy() if not is_int else data.astype(np.float32)
     # Local median and MAD via median filters.
     if separable:
         # Use separable filtering for multi-dimensional windows
         # This is faster but provides an approximation
         # Pre-allocate buffers to reduce memory allocations
-        med = np.empty_like(data)
-        abs_med_diff = np.empty_like(data)
-        mad = np.empty_like(data)
+        med = np.empty_like(dataf)
+        abs_med_diff = np.empty_like(dataf)
+        mad = np.empty_like(dataf)
         # Calculate median using pre-allocated buffer
-        _separable_median(data, size, mode, out=med)
-        # Calculate absolute difference using out parameter
-        np.subtract(data, med, out=abs_med_diff)
+        _separable_median(dataf, size, mode, out=med)
+        # Calculate absolute difference using out parameter for efficiency
+        np.subtract(dataf, med, out=abs_med_diff)
         np.abs(abs_med_diff, out=abs_med_diff)
         # Calculate MAD using pre-allocated buffer
         _separable_median(abs_med_diff, size, mode, out=mad)
+        # Handle zero MAD values in-place to avoid creating mad_safe array
+        mad[mad == 0.0] = np.finfo(dataf.dtype).eps
+        # Reuse abs_med_diff buffer for thresholded calculation
+        np.true_divide(abs_med_diff, mad, out=abs_med_diff)
+        # Final comparison using in-place assignment (abs_med_diff now contains
+        # thresholded values)
+        # Start with dataf as base, then replace outliers with median values
+        outlier_mask = abs_med_diff > threshold
+        dataf[outlier_mask] = med[outlier_mask]
     else:
         # Use standard 2D median filter (more accurate but slower)
-        med, abs_med_diff, mad = _calculate_standard_median_and_mad(data, size, mode)
-    # Handle mad values of 0 so denominator doesn't blow up.
-    mad[mad==0] = 2* np.finfo(float).eps
-    # Hampel test and replacement.
-    # Reuse abs_med_diff buffer for thresholded to save memory
-    thresholded = abs_med_diff
-    np.true_divide(abs_med_diff, mad, out=thresholded)
-    out = np.where(thresholded > threshold, med, data)
+        med, abs_med_diff, mad = _calculate_standard_median_and_mad(dataf, size, mode)
+        # Handle mad values of 0 so denominator doesn't blow up.
+        mad_safe = np.where(mad == 0.0, np.finfo(dataf.dtype).eps, mad)
+        # Hampel test and replacement.
+        thresholded = abs_med_diff / mad_safe
+        # Use in-place assignment for consistency
+        outlier_mask = thresholded > threshold
+        dataf[outlier_mask] = med[outlier_mask]
     # Cast back to original dtype (round if original was integer)
-    if np.issubdtype(patch.data.dtype, np.integer):
-        out = np.rint(out)
-    out = out.astype(patch.data.dtype, copy=False)
+    if np.issubdtype(data.dtype, np.integer):
+        dataf = np.rint(dataf)
+    out = dataf.astype(data.dtype, copy=False)
     return patch.update(data=out)
