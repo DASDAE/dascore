@@ -171,15 +171,17 @@ class TestMovingWindow:
     def test_unavailable_engine_warns(self, test_data):
         """Test unavailable engine warns."""
         with pytest.warns(UserWarning, match="not available"):
-            moving_window(test_data["1d"], 3, "median", engine="invalid_engine")
+            out = moving_window(test_data["1d"], 3, "median", engine="invalid_engine")
+        # It should also return an array.
+        assert isinstance(out, np.ndarray)
+        assert out.shape == test_data["1d"].shape
 
     def test_large_window_warning(self, test_data):
         """Test warning for window larger than data."""
         data = test_data["1d"]
         large_window = len(data) + 1
         with pytest.raises(ParameterError, match="larger than data size"):
-            result = moving_window(data, large_window, "median")
-            assert isinstance(result, np.ndarray)
+            moving_window(data, large_window, "median")
 
     # Edge cases
     def test_edge_cases(self, test_data):
