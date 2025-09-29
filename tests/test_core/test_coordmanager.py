@@ -1357,35 +1357,30 @@ class TestFlip:
         cm = cm_basic
         original_time = cm.get_array("time")
         flipped_cm = cm.flip("time")
-
         # The flipped coordinate should be reversed
         flipped_time = flipped_cm.get_array("time")
         assert np.array_equal(flipped_time, original_time[::-1])
-
         # Other coordinates should remain unchanged
         assert np.array_equal(
             flipped_cm.get_array("distance"), cm.get_array("distance")
         )
-
         # Shape and dimensions should remain the same
         assert flipped_cm.shape == cm.shape
         assert flipped_cm.dims == cm.dims
+        # Should not mutate original object
+        assert flipped_cm is not cm
 
     def test_flip_multiple_dim_coords(self, cm_basic):
         """Ensure we can flip multiple dimensional coordinates."""
         cm = cm_basic
         original_time = cm.get_array("time")
         original_distance = cm.get_array("distance")
-
         flipped_cm = cm.flip("time", "distance")
-
         # Both coordinates should be reversed
         flipped_time = flipped_cm.get_array("time")
         flipped_distance = flipped_cm.get_array("distance")
-
         assert np.array_equal(flipped_time, original_time[::-1])
         assert np.array_equal(flipped_distance, original_distance[::-1])
-
         # Shape and dimensions should remain the same
         assert flipped_cm.shape == cm.shape
         assert flipped_cm.dims == cm.dims
@@ -1395,20 +1390,20 @@ class TestFlip:
         cm = cm_multidim
         original_distance = cm.get_array("distance")
         original_latitude = cm.get_array("latitude")
-
         # Flip the distance coordinate
         flipped_cm = cm.flip("distance")
-
         # Distance should be flipped
         flipped_distance = flipped_cm.get_array("distance")
         assert np.array_equal(flipped_distance, original_distance[::-1])
-
         # Associated coordinates (like latitude) should also be flipped
         flipped_latitude = flipped_cm.get_array("latitude")
         assert np.array_equal(flipped_latitude, original_latitude[::-1])
-
         # Time should remain unchanged
         assert np.array_equal(flipped_cm.get_array("time"), cm.get_array("time"))
+        # 2D associated coordinate (quality) should be flipped along distance axis
+        q_before = cm.coord_map["quality"].values
+        q_after = flipped_cm.coord_map["quality"].values
+        assert np.array_equal(q_after, q_before[:, ::-1])
 
     def test_flip_2d_coord_raises(self, cm_multidim):
         """Ensure flipping a 2D coordinate directly raises an error."""
@@ -1428,10 +1423,8 @@ class TestFlip:
         """Ensure flip preserves coordinate properties like units, etc."""
         cm = cm_basic
         original_time_coord = cm.coord_map["time"]
-
         flipped_cm = cm.flip("time")
         flipped_time_coord = flipped_cm.coord_map["time"]
-
         # Properties other than values should be preserved
         assert original_time_coord.units == flipped_time_coord.units
         assert original_time_coord.dtype == flipped_time_coord.dtype
@@ -1443,7 +1436,6 @@ class TestFlip:
         # Create a coordinate manager with an empty time coordinate
         empty_time = cm.coord_map["time"].empty()
         empty_cm = cm.update(time=empty_time)
-
         # Flipping should work even with empty coordinates
         flipped_cm = empty_cm.flip("time")
         assert len(flipped_cm.get_array("time")) == 0
@@ -1453,7 +1445,6 @@ class TestFlip:
         """Ensure flipping twice returns to original state."""
         cm = cm_basic
         double_flipped = cm.flip("time").flip("time")
-
         # Double flip should return to original state
         assert cm == double_flipped
         assert np.array_equal(cm.get_array("time"), double_flipped.get_array("time"))
@@ -1465,13 +1456,23 @@ class TestFlip:
         """Ensure we can flip all dimensions at once."""
         cm = cm_basic
         all_flipped = cm.flip(*cm.dims)
-
         # All coordinates should be flipped
         for dim in cm.dims:
             original = cm.get_array(dim)
             flipped = all_flipped.get_array(dim)
             assert np.array_equal(flipped, original[::-1])
-
         # Shape and dimension order should remain the same
         assert all_flipped.shape == cm.shape
         assert all_flipped.dims == cm.dims
+
+    def test_flip_all_dimensions_propagates_to_associated(self, cm_multidim):
+        """Test that flipping all dims propagates to associated coordinates."""
+        cm = cm_multidim
+        out = cm.flip(*cm.dims)
+        # latitude shares 'distance' -> should reverse
+        lat0 = cm.get_array("latitude")
+        assert np.array_equal(out.get_array("latitude"), lat0[::-1])
+        # quality shares both -> reverse on both axes
+        q0 = cm.coord_map["quality"].values
+        q1 = out.coord_map["quality"].values
+        assert np.array_equal(q1, q0[::-1, ::-1])

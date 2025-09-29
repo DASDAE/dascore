@@ -782,9 +782,9 @@ def flip(patch, *dims, flip_coords=True):
     >>> # Flip patch over all dimensions.
     >>> out = patch.flip(*patch.dims)
     """
+    if not dims:
+        return patch  # no-op
     axes = tuple(patch.get_axis(name) for name in dims)
-    data = np.flip(patch.data, axis=axes)
-    coords = patch.coords
-    if flip_coords:
-        coords = coords.flip(*dims)
+    data = np.flip(patch.data, axis=axes) if dims else patch.data
+    coords = patch.coords.flip(*dims) if flip_coords else patch.coords
     return patch.new(data=data, coords=coords)

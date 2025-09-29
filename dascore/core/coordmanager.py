@@ -1095,7 +1095,7 @@ class CoordManager(DascoreBaseModel):
             inds = broadcast_for_index(coord.ndim, axis, slice(None, None, -1))
             return coord[inds]
 
-        out = dict(self.coord_map)
+        out = {}
         dim_map = self.dim_map
         dim_to_coord_map = self.dim_to_coord_map
 
@@ -1109,18 +1109,19 @@ class CoordManager(DascoreBaseModel):
                     "coords."
                 )
                 raise CoordError(msg)
-            out[name] = _flip_coord(coord, 0)
+
+            out[name] = (dim_map[name], _flip_coord(coord, 0))
             # If this is a dimensional coord, flip coords that depend on it.
             for associated in dim_to_coord_map.get(name, ()):
+                # Don't flip dimensional coords twice!
                 if associated == name:
                     continue
+                associated_coord = self.get_coord(associated)
                 dims = dim_map[associated]
                 axis = dims.index(name)
-                out[associated] = (dims, _flip_coord(out[associated], axis))
-        return dc.get_coord_manager(
-            coords=out,
-            dims=self.dims,
-        )
+                out[associated] = (dims, _flip_coord(associated_coord, axis))
+
+        return self.update(**out)
 
 
 def get_coord_manager(

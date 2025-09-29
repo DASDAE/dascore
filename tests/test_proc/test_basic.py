@@ -810,3 +810,27 @@ class TestFlip:
         """Ensure coord doesn't change with flip_coords=False"""
         flipped_patch = random_patch.flip("time", flip_coords=False)
         assert flipped_patch.get_coord("time") == random_patch.get_coord("time")
+
+    def test_flip_reverses_data_time(self, random_patch):
+        """Test that data is actually reversed along time axis."""
+        axis = random_patch.get_axis("time")
+        out = random_patch.flip("time")
+        expected = np.flip(random_patch.data, axis=axis)
+        assert np.array_equal(out.data, expected)
+
+    def test_double_flip_restores(self, random_patch):
+        """Test that double flipping restores original patch."""
+        out = random_patch.flip("time").flip("time")
+        assert random_patch.equals(out)
+
+    def test_flip_coords_false_reverses_data_only(self, random_patch):
+        """Test that flip_coords=False only reverses data, not coordinates."""
+        axis = random_patch.get_axis("time")
+        out = random_patch.flip("time", flip_coords=False)
+        assert np.array_equal(out.data, np.flip(random_patch.data, axis=axis))
+        assert out.get_coord("time") == random_patch.get_coord("time")
+
+    def test_no_op(self, random_patch):
+        """Ensure passing no dims does nothing."""
+        out = random_patch.flip()
+        assert out is random_patch
