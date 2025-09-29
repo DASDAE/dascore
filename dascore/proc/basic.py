@@ -773,6 +773,7 @@ def flip(patch, *dims, flip_coords=True):
     Examples
     --------
     >>> import dascore as dc
+    >>> import numpy as np
     >>> patch = dc.get_example_patch()
     >>>
     >>> # Flip patch over time axis
