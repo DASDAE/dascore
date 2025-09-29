@@ -1078,20 +1078,44 @@ class CoordManager(DascoreBaseModel):
         return self.get_coord(coord_name).size
 
     def coord_range(self, coord_name: str):
-        """Return a scaler value for the coordinate (e.g., number of seconds)."""
+        """
+        Get the numeric span of a coordinate.
+        
+        Returns:
+            float: The coordinate's range (span), e.g., duration in seconds.
+        """
         return self.get_coord(coord_name).coord_range()
 
     def flip(self, *dims):
         """
-        Flip one or more coordinates.
-
-        Parameters
-        ----------
-        *dims
-            Names of coordinates to flip.
+        Flip the specified coordinates and propagate flips to coordinates that depend on them.
+        
+        Each provided coordinate name is reversed along its axis; if a flipped coordinate is dimensional, any other coordinates associated with that dimension are also reversed along their corresponding axis. Only 1D coordinates may be flipped directly.
+        
+        Parameters:
+            *dims: str
+                One or more coordinate names to flip.
+        
+        Returns:
+            CoordManager: A new CoordManager with the specified coordinates (and dependent coordinates) flipped.
+        
+        Raises:
+            CoordError: If a requested coordinate is not 1-dimensional.
         """
 
         def _flip_coord(coord, axis):
+            """
+            Return a coordinate array with the specified axis reversed.
+            
+            Parameters:
+                coord: array-like or BaseCoord
+                    Coordinate data to flip; must support `.ndim` and NumPy-style indexing.
+                axis: int
+                    Axis index to reverse.
+            
+            Returns:
+                Flipped coordinate of the same type as `coord` with the values along `axis` reversed.
+            """
             inds = broadcast_for_index(coord.ndim, axis, slice(None, None, -1))
             return coord[inds]
 

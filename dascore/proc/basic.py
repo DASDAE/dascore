@@ -697,41 +697,15 @@ def where(
     patch: PatchType, cond: ArrayLike | PatchType, other: Any | PatchType = np.nan
 ) -> PatchType:
     """
-    Return elements from patch where condition is True, else fill with other.
-
-    Parameters
-    ----------
-    patch
-        The input patch
-    cond
-        Condition array. Should be a boolean array with the same shape as patch data,
-        or a patch with boolean data that is broadcastable to the patch's shape.
-    other
-        Value to use for locations where cond is False. Can be a scalar value,
-        array, or patch that is broadcastable to the patch's shape. Default is NaN.
-
-    Returns
-    -------
-    PatchType
-        A new patch with values from patch where cond is True, and other elsewhere.
-
-    Examples
-    --------
-    >>> import dascore as dc
-    >>> import numpy as np
-    >>> patch = dc.get_example_patch()
-    >>>
-    >>> # Where data > 0 fill with original patch values else nan.
-    >>> condition = patch.data > 0
-    >>> out = patch.where(condition)
-    >>>
-    >>> # Use another patch as condition
-    >>> threshold = patch.data.mean()
-    >>> boolean_patch = patch.new(data=(patch.data > threshold))
-    >>> out = patch.where(boolean_patch, other=0)
-    >>>
-    >>> # Replace values below threshold with 0
-    >>> out = patch.where(patch.data > patch.data.mean(), other=0)
+    Select elements from the patch where a boolean condition is True, replacing other positions with `other`.
+    
+    Parameters:
+        patch (PatchType): Input patch.
+        cond (ArrayLike | PatchType): Boolean array or patch whose boolean data is broadcastable to the patch's shape.
+        other (Any | PatchType): Value, array, or patch broadcastable to the patch's shape used where `cond` is False. Defaults to `np.nan`.
+    
+    Returns:
+        PatchType: A new patch containing values from `patch` where `cond` is True and values from `other` elsewhere.
     """
     cls = patch.__class__  # Use this so it works with subclasses
     # Align patch and cond
@@ -758,29 +732,18 @@ def where(
 @patch_function()
 def flip(patch, *dims, flip_coords=True):
     """
-    Flip patch data and (optionally coords) along specified dimensions.
-
-    Parameters
-    ----------
-    patch
-        The patch to flip.
-    *dims
-        The dimensions over which to flip (mirror).
-    flip_coords
-        If True, also flip coords associated with dimensions, otherwise
-        leave them unchanged.
-
-    Examples
-    --------
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>>
-    >>> # Flip patch over time axis
-    >>> out = patch.flip("time")
-    >>> assert np.all(patch.get_array("time") == out.get_array("time")[::-1])
-    >>>
-    >>> # Flip patch over all dimensions.
-    >>> out = patch.flip(*patch.dims)
+    Flip the patch data along the specified dimensions.
+    
+    Parameters:
+        patch:
+            The patch to flip.
+        *dims:
+            Dimension names to flip (mirror) the data along. If empty, no axes are flipped.
+        flip_coords (bool):
+            If True, also flip the corresponding coordinates for the given dimensions; if False, coordinates are left unchanged.
+    
+    Returns:
+        A new patch with data flipped along the specified dimensions. If `flip_coords` is True, the returned patch's coordinates for those dimensions are also flipped.
     """
     axes = tuple(patch.get_axis(name) for name in dims)
     data = np.flip(patch.data, axis=axes)
