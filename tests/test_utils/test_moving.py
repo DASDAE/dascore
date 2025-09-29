@@ -20,7 +20,7 @@ from dascore.utils.moving import (
 
 # Test configuration
 TEST_OPERATIONS = list(OPERATION_REGISTRY.keys())
-TEST_ENGINES = ["scipy", "bottleneck", "auto"]
+TEST_ENGINES = [*_get_available_engines(), "auto"]
 TEST_CONVENIENCE_FUNCS = {
     "median": move_median,
     "mean": move_mean,
