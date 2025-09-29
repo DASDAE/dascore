@@ -753,3 +753,38 @@ def where(
     # Use numpy.where to apply condition
     new_data = np.where(cond_array, patch.data, other_array)
     return patch.new(data=new_data)
+
+
+@patch_function()
+def flip(patch, *dims, flip_coords=True):
+    """
+    Flip patch data and (optionally coords) along specified dimensions.
+
+    Parameters
+    ----------
+    patch
+        The patch to flip.
+    *dims
+        The dimensions over which to flip (mirror).
+    flip_coords
+        If True, also flip coords associated with dimensions, otherwise
+        leave them unchanged.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Flip patch over time axis
+    >>> out = patch.flip("time")
+    >>> assert np.all(patch.get_array("time") == out.get_array("time")[::-1])
+    >>>
+    >>> # Flip patch over all dimensions.
+    >>> out = patch.flip(*patch.dims)
+    """
+    axes = tuple(patch.get_axis(name) for name in dims)
+    data = np.flip(patch.data, axis=axes)
+    coords = patch.coords
+    if flip_coords:
+        coords = coords.flip(*dims)
+    return patch.new(data=data, coords=coords)

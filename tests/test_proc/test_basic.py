@@ -772,3 +772,41 @@ class TestWhere:
         # Verify the actual time values match the expected overlap
         expected_time_values = time_coord[8:15]
         assert np.array_equal(result_time, expected_time_values)
+
+
+class TestFlip:
+    """Test for flipping patch."""
+
+    def test_flipped_time(self, random_patch):
+        """Test basic properties of flipped patch."""
+        flipped_patch = random_patch.flip("time")
+
+        # Dimensions and shape should be the same.
+        assert flipped_patch.data.shape == random_patch.shape
+        assert flipped_patch.dims == random_patch.dims
+
+        # Time coord should have reversed.
+        flipped_time = flipped_patch.coords.get_array("time")
+        time = random_patch.get_array("time")
+        assert np.all(flipped_time == time[::-1])
+
+    def test_flipped_time_and_distance(self, random_patch):
+        """Test basic properties of flipped patch."""
+        flipped_patch = random_patch.flip("time", "distance")
+
+        # Dimensions and shape should be the same.
+        assert flipped_patch.data.shape == random_patch.shape
+        assert flipped_patch.dims == random_patch.dims
+
+        # Time and distance should have reversed.
+        flipped_time = flipped_patch.coords.get_array("time")
+        time = random_patch.get_array("time")
+        assert np.all(flipped_time == time[::-1])
+        flipped_distance = flipped_patch.coords.get_array("distance")
+        distance = random_patch.get_array("distance")
+        assert np.all(flipped_distance == distance[::-1])
+
+    def test_no_coords(self, random_patch):
+        """Ensure coord doesn't change with flip_coords=False"""
+        flipped_patch = random_patch.flip("time", flip_coords=False)
+        assert flipped_patch.get_coord("time") == random_patch.get_coord("time")

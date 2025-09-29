@@ -1342,3 +1342,7 @@ class TestSetDims:
         match = "does not match the shape of"
         with pytest.raises(CoordError, match=match):
             cm.set_dims(distance="quality")
+
+
+class TestFlip:
+    """Tests for flipping a coord manager."""

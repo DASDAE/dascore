@@ -78,9 +78,7 @@ def dispersion_phase_shift(
     patch = (
         dc.get_example_patch('dispersion_event')
     )
-    axis = patch.get_axis("distance")
-    flipped_data = np.flip(patch.data, axis=axis)
-    mirrored_patch = patch.update(data=flipped_data)
+    mirrored_patch = patch.flip("distance")
 
     disp_patch = mirrored_patch.dispersion_phase_shift(np.arange(100,1500,1),
             approx_resolution=0.1,approx_freq=[5,70])
