@@ -89,8 +89,6 @@ ax.set_title("Filtered along Time and Distance");
 
 3. **Window size**: Choose window sizes that are large enough to provide stable statistics but small enough to preserve local features. Start with ~5-9 samples per dimension.
 
-4. **Performance optimization**: For large windows (>10 samples), use `separable=True` to achieve a speedup with minimal quality loss.
+4. **Performance optimization**: `approximate=True` (default) achieves a 3-4x speedup with minimal quality loss. It is usually good enough for simply removing data spikes, but exact median calculations can be achieved by setting this to False.
 
-5. **Edge effects**: The filter uses reflection mode at boundaries to minimize edge effects.
-
-6. **Validation**: Always visually inspect results and consider domain-specific requirements when choosing parameters.
+5. **Validation**: Always visually inspect results and consider domain-specific requirements when choosing parameters.

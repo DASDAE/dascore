@@ -65,6 +65,7 @@ extras = [
     "obspy",
     "numba",
     "segyio",
+    "bottleneck",
 ]
 
 docs = [
@@ -92,7 +93,7 @@ all = ["dascore[extras]"]
 
 profile = ["dascore[test]", "dascore[profile_base]"]
 
-dev = ["dascore[test]", "dascore[docs]", "dascore[profile]", "dascore[extras]"]
+dev = ["dascore[test]", "dascore[docs]", "dascore[profile_base]", "dascore[extras]"]
 
 
 

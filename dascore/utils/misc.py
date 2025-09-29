@@ -14,6 +14,7 @@ from functools import cache
 from io import IOBase
 from pathlib import Path
 from types import ModuleType
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -113,7 +114,7 @@ def warn_or_raise(
     behavior
         If None, do nothing. If
     """
-    if not behavior:
+    if not behavior or behavior == "ignore":
         return
     if behavior == "raise":
         raise exception(msg)
@@ -296,15 +297,22 @@ class CacheDescriptor:
         cache[self._name] = value
 
 
-def optional_import(package_name: str) -> ModuleType:
+def optional_import(
+    package_name: str, on_missing: Literal["raise", "warn", "ignore"] = "raise"
+) -> ModuleType | None:
     """
-    Import a module and return the module object if installed, else raise error.
+    Import a module and return the module object if installed.
+
+    If not installed, raise an Error or return None.
 
     Parameters
     ----------
     package_name
         The name of the package which may or may not be installed. Can
         also be sub-packages/modules (eg dascore.core).
+    on_missing
+        If "raise" raise an Error if missing, if "warn" or "ignore",
+        return None.
 
     Raises
     ------
@@ -320,6 +328,9 @@ def optional_import(package_name: str) -> ModuleType:
     ...     optional_import('boblib5')  # doesn't exist so this raises
     ... except MissingOptionalDependencyError:
     ...     pass
+    >>>
+    >>> bob = optional_import('boblib5', on_missing="ignore")
+    >>> assert bob is None
     """
     try:
         mod = importlib.import_module(package_name)
@@ -328,7 +339,8 @@ def optional_import(package_name: str) -> ModuleType:
             f"{package_name} is not installed but is required for the "
             f"requested functionality."
         )
-        raise MissingOptionalDependencyError(msg)
+        warn_or_raise(msg, MissingOptionalDependencyError, behavior=on_missing)
+        mod = None
     return mod
 
 
