@@ -424,6 +424,13 @@ class DataFrameSpool(BaseSpool):
         df1 = instruction[instruction["current_index"] == inds]
         assert not df1.empty
         joined = df1.join(source.drop(columns=df1.columns, errors="ignore"))
+        # Occasionally, duplicates can creep into the database.
+        # But it costs a bit to check for, so only drop duplicates
+        # on large joined dataframes.
+        if len(joined) > 10:
+            joined = joined.drop(
+                columns=self._group_columns, errors="ignore"
+            ).drop_duplicates()
         return self._patch_from_instruction_df(joined)
 
     def _patch_from_instruction_df(self, joined):

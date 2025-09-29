@@ -621,6 +621,116 @@ class TestSelect:
         out, _ = new_cm.select(new_dim=(1, 20))
         assert new_cm == out
 
+    def test_select_non_dim_coord_shortens_coordinate(self, cm_basic):
+        """Test that selecting non-dimensional coords shortens only that coordinate."""
+        # Add a non-dimensional coordinate with numeric values
+        quality_scores = np.array([0.1, 0.5, 0.9, 0.2, 0.8, 0.3, 0.7])
+        new_cm = cm_basic.update(quality=(None, quality_scores))
+        # Select subset of quality scores using array indexing
+        selected_indices = np.array([1, 3, 5])  # Select indices 1, 3, 5
+        out, _ = new_cm.select(quality=selected_indices, samples=True)
+        # Quality coordinate should be shortened
+        expected_quality = quality_scores[selected_indices]
+        assert np.array_equal(out.get_array("quality"), expected_quality)
+        # Dimensional coordinates should be unchanged
+        assert cm_basic.shape == out.shape
+        assert np.array_equal(out.get_array("time"), new_cm.get_array("time"))
+        assert np.array_equal(out.get_array("distance"), new_cm.get_array("distance"))
+
+    def test_select_non_dim_coord_with_boolean_mask(self, cm_basic):
+        """Test selecting non-dimensional coordinates using boolean arrays."""
+        # Add a non-dimensional coordinate
+        values = np.array([10, 20, 30, 40, 50, 60, 70])
+        new_cm = cm_basic.update(sensor_values=(None, values))
+        # Create boolean mask
+        mask = values > 35  # Should select [40, 50, 60, 70]
+        out, _ = new_cm.select(sensor_values=mask)
+        # Only the non-dimensional coordinate should be affected
+        expected_values = values[mask]
+        assert np.array_equal(out.get_array("sensor_values"), expected_values)
+        # Dimensional coordinates should remain unchanged
+        for coord in set(cm_basic.coord_map) - {"sensor_values"}:
+            assert cm_basic.get_coord(coord) == new_cm.get_coord(coord)
+
+    def test_select_multi_dim_coord_raises(self, cm_multidim):
+        """
+        Coords that are associated with more than one dim cannot be selected
+        because it could ruin the squareness of the patch.
+        """
+        # Non-dim coord associated with one dimension should work.
+        lat = cm_multidim.get_array("latitude")
+        lat_mean = np.mean(lat)
+        out, _ = cm_multidim.select(latitude=(..., lat_mean))
+        assert isinstance(out, dc.CoordManager)
+        # Multi-dim coord should raise CoordError
+        msg = "Only 1 dimensional coordinates"
+        with pytest.raises(CoordError, match=msg):
+            cm_multidim.select(quality=(1, 20))
+
+    def test_select_coord_tied_to_dimension_affects_others(self, cm_multidim):
+        """
+        Test that selecting a coord tied to a dimension affects other coords
+        on that dim.
+        """
+        # cm_multidim should have coordinates that share dimensions
+        # Get a coordinate that's tied to a dimension and has other coords sharing
+        # that dim
+        lat = cm_multidim.get_array("latitude")
+        lat_mean = np.mean(lat)
+        out, _ = cm_multidim.select(latitude=(..., lat_mean))
+        # Check that the new lat is what we expect.
+        new_lat = out.get_array("latitude")
+        expected = lat[lat <= lat_mean]
+        assert np.array_equal(new_lat, expected)
+        # And the other coord associated with that dimension have the same len.
+        for name, coord in out.coord_map.items():
+            coord_dims = out.dim_map[name]
+            # Skip coords not tied to distance dimension
+            if "distance" not in coord_dims:
+                continue
+            axis = coord_dims.index("distance")
+            assert coord.shape[axis] == len(new_lat)
+
+    def test_select_nonexistent_coordinate_ignores_gracefully(self, cm_basic):
+        """Test that selecting on a non-existent coordinate is ignored gracefully."""
+        # This tests line 122 in _get_indexers_and_new_coords_dict
+        original_shape = cm_basic.shape
+        out, _ = cm_basic.select(nonexistent_coord=(1, 10))
+
+        # Should return unchanged coordinate manager
+        assert out == cm_basic
+        assert out.shape == original_shape
+
+        # Should work with multiple nonexistent coordinates
+        out2, _ = cm_basic.select(
+            fake_coord1=(1, 2), fake_coord2=slice(0, 5), another_fake=(10, 20)
+        )
+        assert out2 == cm_basic
+        assert out2.shape == original_shape
+
+    def test_select_mix_valid_invalid_coordinates(self, cm_basic):
+        """Test selecting with mix of valid and invalid coordinate names."""
+        # This also exercises line 122 but with mixed scenarios
+        time_vals = cm_basic.get_array("time")
+        subset_time = (time_vals[1], time_vals[-2])
+
+        out, _ = cm_basic.select(
+            time=subset_time,  # valid coordinate
+            nonexistent=(1, 10),  # invalid coordinate - should be ignored
+            fake_dim=slice(0, 5),  # another invalid coordinate
+        )
+
+        # Only the valid coordinate selection should have been applied
+        assert (
+            out.shape[cm_basic.get_axis("time")]
+            < cm_basic.shape[cm_basic.get_axis("time")]
+        )
+        # Distance should be unchanged since it wasn't selected
+        assert (
+            out.shape[cm_basic.get_axis("distance")]
+            == cm_basic.shape[cm_basic.get_axis("distance")]
+        )
+
 
 class TestOrder:
     """Tests for ordering coordinate managers."""

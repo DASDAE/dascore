@@ -145,10 +145,9 @@ def hampel_filter(
       parameter.
 
     **Performance:**
-    - Install `bottleneck` package for significant speedup in median
-      calculations.
     - `approximate=True` provides 3-4x speedup over exact calculations
-    - Bottleneck acceleration applies to both approximate and exact modes
+    - Installing `bottleneck` package can further improve performance (~50%)
+      which applies to both approximate and exact modes.
 
     See Also
     --------
@@ -164,23 +163,20 @@ def hampel_filter(
     >>> data[10, 5] = 10  # Add a large spike
     >>> patch = patch.update(data=data)
     >>>
-    >>> # Apply hampel filter with default threshold (10.0)
-    >>> filtered = patch.hampel_filter(time=0.2)
+    >>> # Apply hampel filter along time dimension with 0.2 unit window
+    >>> filtered = patch.hampel_filter(time=0.2, threshold=3.5)
     >>> assert filtered.data.shape == patch.data.shape
     >>> # The spike should be reduced
     >>> assert abs(filtered.data[10, 5]) < abs(patch.data[10, 5])
     >>>
-    >>> # Use custom threshold
-    >>> filtered_custom = patch.hampel_filter(time=0.2, threshold=3.5)
+    >>> # Apply filter along multiple dimensions using samples and
+    >>> # default threshold.
+    >>> filtered_2d = patch.hampel_filter(time=5, distance=5, sampels=True)
+    >>> assert filtered_2d.data.shape == patch.data.shape
     >>>
-    >>> # Specify hampel window in samples not coord units.
-    >>> filtered_samps = patch.hampel_filter(
-    ...     time=3, distance=3, samples=True, threshold=3.5
-    ... )
-    >>>
-    >>> # Use approximate=False for exact median calculations (slower)
+    >>> # Use exact median calculations (slower, more accurate)
     >>> filtered_exact = patch.hampel_filter(
-    ...     time=5, distance=5, threshold=3.5, samples=True, approximate=False
+    ...     time=5, distance=5, samples=True, approximate=False
     ... )
     """
     if threshold <= 0 or not np.isfinite(threshold):

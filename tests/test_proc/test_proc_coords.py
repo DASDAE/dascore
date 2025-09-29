@@ -14,6 +14,7 @@ from dascore.exceptions import (
     CoordError,
     ParameterError,
     PatchBroadcastError,
+    PatchCoordinateError,
     PatchError,
 )
 from dascore.units import get_quantity
@@ -192,6 +193,23 @@ class TestCoordsFromDf:
 class TestSelect:
     """Tests for selecting data from patch."""
 
+    def _add_non_dim_coords(self, patch, coord_dict):
+        """Helper to add non-dimensional coordinates to a patch."""
+        new_coords = patch.coords.update(**coord_dict)
+        return patch.new(coords=new_coords)
+
+    def _assert_coord_unchanged(self, original_patch, selected_patch, coord_name):
+        """Helper to assert a coordinate remains unchanged."""
+        assert np.array_equal(
+            original_patch.coords.get_array(coord_name),
+            selected_patch.coords.get_array(coord_name),
+        )
+
+    def _assert_data_shape_unchanged(self, original_patch, selected_patch):
+        """Helper to assert data shape remains unchanged."""
+        assert selected_patch.data.shape == original_patch.data.shape
+        assert np.array_equal(selected_patch.data, original_patch.data)
+
     def test_select_by_distance(self, random_patch):
         """Ensure distance can be used to filter patch."""
         dmin, dmax = 100, 200
@@ -320,6 +338,215 @@ class TestSelect:
         face_angle = patch.get_coord("face_angle")
         new = patch.select(face_angle=(face_angle.min(), face_angle.max()))
         assert new == patch
+
+    def test_select_nonexistent_coordinate_raises_error(self, random_patch):
+        """
+        Test that selecting on a non-existing coordinate
+        raises PatchCoordinateError.
+        """
+        # Try to select on a coordinate that doesn't exist
+        with pytest.raises(PatchCoordinateError, match="nonexistent_coord"):
+            random_patch.select(nonexistent_coord=(0, 10))
+
+    def test_select_multiple_nonexistent_coordinates_raises_error(self, random_patch):
+        """
+        Test that selecting on multiple non-existing coordinates raises
+        PatchCoordinateError.
+        """
+        # Try to select on multiple coordinates that don't exist
+        with pytest.raises(PatchCoordinateError, match=r"coord1.*coord2"):
+            random_patch.select(bad_coord1=(0, 10), bad_coord2=(5, 15))
+
+    def test_select_mix_valid_invalid_coordinates_raises_error(self, random_patch):
+        """
+        Test that mixing valid and invalid coordinates raises
+        PatchCoordinateError.
+        """
+        # Try to select on a mix of valid and invalid coordinates
+        with pytest.raises(PatchCoordinateError, match="invalid_coord"):
+            random_patch.select(time=(0, 1), invalid_coord=(0, 10))
+
+    def test_select_non_dim_coord_with_boolean_mask(self, random_patch):
+        """Test selecting non-dimensional coordinates using boolean masks on Patch."""
+        # Add a non-dimensional coordinate to the patch
+        quality_values = np.random.RandomState(42).rand(10)
+        patch_with_coord = self._add_non_dim_coords(
+            random_patch, {"quality": (None, quality_values)}
+        )
+
+        # Create boolean mask and select
+        mask = quality_values > 0.5
+        selected_patch = patch_with_coord.select(quality=mask)
+
+        # Only the non-dimensional coordinate should be affected
+        expected_quality = quality_values[mask]
+        assert np.array_equal(
+            selected_patch.coords.get_array("quality"), expected_quality
+        )
+
+        # Patch data and dimensional coordinates should remain unchanged
+        self._assert_data_shape_unchanged(patch_with_coord, selected_patch)
+        self._assert_coord_unchanged(patch_with_coord, selected_patch, "time")
+        self._assert_coord_unchanged(patch_with_coord, selected_patch, "distance")
+
+    def test_select_non_dim_coord_with_array_indices(self, random_patch):
+        """Test selecting non-dimensional coordinates using array indices on Patch."""
+        # Add non-dimensional coordinates to the patch
+        sensor_ids = np.arange(100, 115)  # 15 values
+        temperature_data = np.random.RandomState(42).rand(15) * 100
+        patch_with_coords = self._add_non_dim_coords(
+            random_patch,
+            {"sensor_ids": (None, sensor_ids), "temperature": (None, temperature_data)},
+        )
+
+        # Select subset using array indices
+        selected_indices = np.array([2, 5, 8, 12])
+        selected_patch = patch_with_coords.select(
+            sensor_ids=selected_indices, samples=True
+        )
+
+        # Check that only the selected coordinate was affected
+        expected_ids = sensor_ids[selected_indices]
+        assert np.array_equal(
+            selected_patch.coords.get_array("sensor_ids"), expected_ids
+        )
+        # Temperature should remain unchanged since we only selected sensor_ids
+        self._assert_coord_unchanged(patch_with_coords, selected_patch, "temperature")
+
+        # Patch data and dimensional coordinates should be unchanged
+        self._assert_data_shape_unchanged(patch_with_coords, selected_patch)
+        for dim in patch_with_coords.dims:
+            self._assert_coord_unchanged(patch_with_coords, selected_patch, dim)
+
+    def test_select_mixed_dim_and_non_dim_coords(self, random_patch):
+        """
+        Test selecting both dimensional and non-dimensional coordinates
+        simultaneously.
+        """
+        # Add non-dimensional coordinate with numeric values
+        station_ids = np.array([101, 102, 103, 104, 105])
+        patch_with_coord = self._add_non_dim_coords(
+            random_patch, {"station_ids": (None, station_ids)}
+        )
+
+        # Select on both dimensional and non-dimensional coordinates
+        time_coord = patch_with_coord.coords.get_array("time")
+        time_subset = time_coord[: len(time_coord) // 2]  # First half of time
+        station_mask = np.array(
+            [True, False, True, False, True]
+        )  # Select 101, 103, 105
+
+        selected_patch = patch_with_coord.select(
+            time=time_subset, station_ids=station_mask
+        )
+
+        # Check both selections worked
+        expected_stations = station_ids[station_mask]  # [101, 103, 105]
+        assert np.array_equal(
+            selected_patch.coords.get_array("station_ids"), expected_stations
+        )
+        assert np.array_equal(selected_patch.coords.get_array("time"), time_subset)
+
+        # Check dimensional selection affected patch shape
+        assert selected_patch.data.shape != patch_with_coord.data.shape
+        assert len(selected_patch.coords.get_array("time")) == len(time_subset)
+
+    def test_select_non_dim_coord_associated_with_dimension(self, random_patch):
+        """
+        Test selecting non-dimensional coordinates that are associated with a
+        dimension.
+        """
+        # Add a non-dimensional coordinate associated with distance dimension
+        distance_coord = random_patch.coords.get_array("distance")
+        elevation_values = np.random.RandomState(42).rand(len(distance_coord)) * 1000
+        patch_with_coord = self._add_non_dim_coords(
+            random_patch, {"elevation": ("distance", elevation_values)}
+        )
+
+        # Select using boolean mask on the elevation coordinate
+        elevation_subset = elevation_values > 500  # Select high elevations
+        selected_patch = patch_with_coord.select(elevation=elevation_subset)
+
+        # Both elevation and distance coordinates should be affected
+        expected_elevation = elevation_values[elevation_subset]
+        expected_distance = distance_coord[elevation_subset]
+        assert np.array_equal(
+            selected_patch.coords.get_array("elevation"), expected_elevation
+        )
+        assert np.array_equal(
+            selected_patch.coords.get_array("distance"), expected_distance
+        )
+
+        # Patch data shape should change because distance dimension changed
+        assert selected_patch.data.shape != patch_with_coord.data.shape
+        distance_axis = patch_with_coord.get_axis("distance")
+        assert selected_patch.data.shape[distance_axis] == np.sum(elevation_subset)
+
+        # Time coordinate should remain unchanged
+        self._assert_coord_unchanged(patch_with_coord, selected_patch, "time")
+
+    def test_select_non_dim_coord_with_array_values(self, random_patch):
+        """Test selecting non-dimensional coordinates using specific array values."""
+        # Add coordinates with same length as distance dimension
+        distance_coord = random_patch.coords.get_array("distance")
+        sensor_ids = np.arange(1000, 1000 + len(distance_coord))
+        fiber_quality = np.random.RandomState(42).rand(len(distance_coord))
+        patch_with_coord = self._add_non_dim_coords(
+            random_patch,
+            {
+                "sensor_ids": ("distance", sensor_ids),
+                "fiber_quality": ("distance", fiber_quality),
+            },
+        )
+
+        # Select specific sensor IDs by array values (select a subset)
+        selected_ids = sensor_ids[10:15]  # Select 5 sensors
+        selected_patch = patch_with_coord.select(sensor_ids=selected_ids)
+
+        # All coordinates tied to distance should be affected
+        expected_quality = fiber_quality[10:15]
+        expected_distance = distance_coord[10:15]
+        assert np.array_equal(
+            selected_patch.coords.get_array("sensor_ids"), selected_ids
+        )
+        assert np.array_equal(
+            selected_patch.coords.get_array("fiber_quality"), expected_quality
+        )
+        assert np.array_equal(
+            selected_patch.coords.get_array("distance"), expected_distance
+        )
+
+        # Data shape should change along distance axis
+        distance_axis = patch_with_coord.get_axis("distance")
+        assert selected_patch.data.shape[distance_axis] == 5
+
+    def test_select_coord_tied_to_time_dimension(self, random_patch):
+        """Test selecting coordinates associated with time dimension."""
+        # Add a coordinate tied to time (e.g., measurement quality over time)
+        time_coord = random_patch.coords.get_array("time")
+        quality_over_time = np.random.RandomState(42).rand(len(time_coord))
+        patch_with_coord = self._add_non_dim_coords(
+            random_patch, {"measurement_quality": ("time", quality_over_time)}
+        )
+
+        # Select time periods with high quality measurements
+        high_quality_mask = quality_over_time > 0.7
+        selected_patch = patch_with_coord.select(measurement_quality=high_quality_mask)
+
+        # Both quality and time coordinates should be affected
+        expected_quality = quality_over_time[high_quality_mask]
+        expected_time = time_coord[high_quality_mask]
+        assert np.array_equal(
+            selected_patch.coords.get_array("measurement_quality"), expected_quality
+        )
+        assert np.array_equal(selected_patch.coords.get_array("time"), expected_time)
+
+        # Data shape should change along time axis
+        time_axis = patch_with_coord.get_axis("time")
+        assert selected_patch.data.shape[time_axis] == np.sum(high_quality_mask)
+
+        # Distance coordinate should remain unchanged
+        self._assert_coord_unchanged(patch_with_coord, selected_patch, "distance")
 
 
 class TestOrder:
