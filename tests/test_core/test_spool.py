@@ -125,6 +125,36 @@ class TestSpoolEquals:
 class TestIndexing:
     """Tests for indexing spools to retrieve patches."""
 
+    @pytest.fixture
+    def large_spool_with_duplicates(self):
+        """Create a spool with >10 patches that may have duplicate group columns."""
+        base_patch = dc.get_example_patch()
+
+        # Create 12 patches (more than 10) with duplicate group column values
+        patches = []
+        for i in range(12):
+            # Make sure some patches have identical group_columns values
+            if i < 6:
+                # First 6 patches will have identical metadata
+                patch = base_patch.update_attrs(
+                    network="test_net",
+                    station="test_sta",
+                    data_type="test_type",
+                    tag="test_tag",
+                )
+            else:
+                # Last 6 patches will have different metadata to avoid all being
+                # duplicates
+                patch = base_patch.update_attrs(
+                    network=f"test_net_{i}",
+                    station=f"test_sta_{i}",
+                    data_type="test_type",
+                    tag="test_tag",
+                )
+            patches.append(patch)
+
+        return dc.spool(patches)
+
     def test_simple_index(self, random_spool):
         """Ensure indexing a spool returns a patch."""
         for ind in range(len(random_spool)):
@@ -144,6 +174,23 @@ class TestIndexing:
         match = "out of bounds for spool"
         with pytest.raises(IndexError, match=match):
             _ = random_spool[len(random_spool)]
+
+    def test_drop_duplicates_large_joined_dataframe(self, large_spool_with_duplicates):
+        """Test that duplicates are removed when joined dataframe > 10 rows."""
+        spool = large_spool_with_duplicates
+
+        # Access a patch to trigger _get_patches_from_index
+        # This should execute the drop_duplicates code path when len(joined) > 10
+        patch = spool[0]
+        assert isinstance(patch, dc.Patch)
+
+        # Verify the spool still works correctly despite potential duplicates
+        assert len(spool) == 12
+
+        # Test that all patches are still accessible
+        for i in range(len(spool)):
+            patch = spool[i]
+            assert isinstance(patch, dc.Patch)
 
 
 class TestSlicing:

@@ -264,5 +264,5 @@ class TestMovingWindow:
         Ensure the bottleneck std works (current scipy engine doesnt have this).
         """
         pytest.importorskip("bottleneck")
-        out = moving_window(test_data["1d"], 10, "std", axis=0)
+        out = moving_window(test_data["1d"], 10, "std", axis=0, engine="bottleneck")
         assert out.shape == test_data["1d"].shape
