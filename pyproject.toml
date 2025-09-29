@@ -65,6 +65,7 @@ extras = [
     "obspy",
     "numba",
     "segyio",
+    "bottleneck",
 ]
 
 docs = [

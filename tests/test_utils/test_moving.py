@@ -13,7 +13,6 @@ from dascore.utils.moving import (
     move_mean,
     move_median,
     move_min,
-    move_std,
     move_sum,
     moving_window,
 )
@@ -24,7 +23,6 @@ TEST_ENGINES = ["scipy", "bottleneck", "auto"]
 TEST_CONVENIENCE_FUNCS = {
     "median": move_median,
     "mean": move_mean,
-    "std": move_std,
     "sum": move_sum,
     "min": move_min,
     "max": move_max,
@@ -260,3 +258,11 @@ class TestMovingWindow:
             except ParameterError:
                 # Skip if operation not available in one engine
                 continue
+
+    def test_bottleneck_std(self, test_data):
+        """
+        Ensure the bottleneck std works (current scipy engine doesnt have this).
+        """
+        pytest.importorskip("bottleneck")
+        out = moving_window(test_data["1d"], 10, "std", axis=0)
+        assert out.shape == test_data["1d"].shape

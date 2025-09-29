@@ -428,9 +428,7 @@ class DataFrameSpool(BaseSpool):
         # But it costs a bit to check for, so only drop duplicates
         # on large joined dataframes.
         if len(joined) > 10:
-            joined = joined.drop(
-                columns=self._group_columns, errors="ignore"
-            ).drop_duplicates()
+            joined = joined.drop_duplicates(subset=self._group_columns, keep="first")
         return self._patch_from_instruction_df(joined)
 
     def _patch_from_instruction_df(self, joined):

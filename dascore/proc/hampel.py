@@ -171,7 +171,7 @@ def hampel_filter(
     >>>
     >>> # Apply filter along multiple dimensions using samples and
     >>> # default threshold.
-    >>> filtered_2d = patch.hampel_filter(time=5, distance=5, sampels=True)
+    >>> filtered_2d = patch.hampel_filter(time=5, distance=5, samples=True)
     >>> assert filtered_2d.data.shape == patch.data.shape
     >>>
     >>> # Use exact median calculations (slower, more accurate)
