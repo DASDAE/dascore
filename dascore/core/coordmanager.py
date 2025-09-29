@@ -1081,14 +1081,14 @@ class CoordManager(DascoreBaseModel):
         """Return a scaler value for the coordinate (e.g., number of seconds)."""
         return self.get_coord(coord_name).coord_range()
 
-    def flip(self, **coord_names):
+    def flip(self, *dims):
         """
         Flip one or more coordinates.
 
         Parameters
         ----------
-        coord_names
-            A tuple of coordinates to flip.
+        *dims
+            Names of coordinates to flip.
         """
 
         def _flip_coord(coord, axis):
@@ -1099,7 +1099,8 @@ class CoordManager(DascoreBaseModel):
         dim_map = self.dim_map
         dim_to_coord_map = self.dim_to_coord_map
 
-        for name in coord_names:
+        # Iterate each of the coords to flip.
+        for name in dims:
             coord = self.get_coord(name)
             if coord.ndim != 1:
                 msg = (
@@ -1109,10 +1110,17 @@ class CoordManager(DascoreBaseModel):
                 )
                 raise CoordError(msg)
             out[name] = _flip_coord(coord, 0)
+            # If this is a dimensional coord, flip coords that depend on it.
             for associated in dim_to_coord_map.get(name, ()):
-                axis = dim_map[associated].index(name)
-                out[associated] = _flip_coord(out[associated], axis)
-        return dc.get_coord_manager(coords=out, dims=self.dims)
+                if associated == name:
+                    continue
+                dims = dim_map[associated]
+                axis = dims.index(name)
+                out[associated] = (dims, _flip_coord(out[associated], axis))
+        return dc.get_coord_manager(
+            coords=out,
+            dims=self.dims,
+        )
 
 
 def get_coord_manager(
