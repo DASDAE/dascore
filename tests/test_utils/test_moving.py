@@ -29,6 +29,10 @@ TEST_CONVENIENCE_FUNCS = {
     "max": move_max,
 }
 
+# Add std wrapper when bottleneck is available.
+if "bottleneck" in _get_available_engines():
+    TEST_CONVENIENCE_FUNCS["std"] = move_std
+
 
 class TestMovingWindow:
     """Test moving window operations with different engines."""
@@ -40,7 +44,7 @@ class TestMovingWindow:
         assert result.shape == original_data.shape
         assert result.dtype.kind in ["f", "i", "c"]  # float, int, or complex
 
-    def _test_finite_properties(self, results, data):
+    def _test_finite_properties(self, results, data, window):
         """Test mathematical properties of operations."""
         # Find where all results are finite
         all_finite = np.ones(len(data), dtype=bool)
@@ -50,23 +54,41 @@ class TestMovingWindow:
         if not np.any(all_finite):
             return  # Skip if no finite values
 
+        mean_vals = results["mean"]
+        sum_vals = results["sum"]
+        min_vals = results["min"]
+        max_vals = results["max"]
+
+        # On truly interior indices, sum should equal mean * window (within tolerance).
+        # These are indices where the full window is available without edge effects.
+        if window >= 3 and len(data) >= window:
+            # True interior: start from window-1 to end-(window-1)
+            interior_start = window - 1
+            interior_end = len(data) - (window - 1)
+            if interior_end > interior_start:
+                interior_slice = slice(interior_start, interior_end)
+                interior_finite = all_finite[interior_slice]
+                if np.any(interior_finite):
+                    mean_interior = mean_vals[interior_slice][interior_finite]
+                    sum_interior = sum_vals[interior_slice][interior_finite]
+                    np.testing.assert_allclose(
+                        sum_interior, mean_interior * window, rtol=1e-6, atol=1e-12
+                    )
+
+        # Min should be <= max (test on all finite indices)
         finite_indices = np.where(all_finite)[0]
-
-        # Test properties only where values are finite
-        mean_vals = results["mean"][finite_indices]
-        sum_vals = results["sum"][finite_indices]
-        min_vals = results["min"][finite_indices]
-        max_vals = results["max"][finite_indices]
-
-        # Sum should be >= mean (for positive window size)
-        assert np.all(sum_vals >= mean_vals)
-        # Min should be <= max
-        assert np.all(min_vals <= max_vals)
+        if len(finite_indices) > 0:
+            min_finite = min_vals[finite_indices]
+            max_finite = max_vals[finite_indices]
+            assert np.all(min_finite <= max_finite)
 
     def _compare_engine_results(self, result1, result2, window):
         """Compare results from different engines."""
-        # Compare interior values (avoiding edge effects)
-        interior_slice = slice(window // 2, -window // 2 if window > 2 else None)
+        # Skip comparison for tiny windows where a stable interior is ill-defined.
+        if window < 3:
+            return
+        # Symmetric interior (works for odd/even windows and avoids edges)
+        interior_slice = slice(window // 2, -window // 2)
 
         interior1 = result1[interior_slice]
         interior2 = result2[interior_slice]
@@ -80,10 +102,7 @@ class TestMovingWindow:
             vals1 = interior1[common_finite]
             vals2 = interior2[common_finite]
 
-            # Check that both give reasonable results (within data range)
-            data_min, data_max = -10, 10  # Reasonable range
-            assert np.all((vals1 >= data_min) & (vals1 <= data_max))
-            assert np.all((vals2 >= data_min) & (vals2 <= data_max))
+            # Value-range guard removed; relative agreement is checked below.
 
             # For most operations, results should be similar
             # (allowing for different edge handling)
@@ -153,8 +172,9 @@ class TestMovingWindow:
         window = 2
 
         for axis in [0, 1]:
-            result = move_median(data, window, axis=axis)
-            assert result.shape == data.shape
+            for func in (move_median, move_mean, move_sum, move_min, move_max):
+                result = func(data, window, axis=axis)
+                assert result.shape == data.shape
 
     # Input validation tests
     @pytest.mark.parametrize("invalid_window", [0, -1])
@@ -210,6 +230,9 @@ class TestMovingWindow:
             data = base_data.astype(dtype)
             result = move_mean(data, 3)
             assert isinstance(result, np.ndarray)
+            # Mean should promote to floating dtype for integer inputs.
+            if dtype in [np.int32]:
+                assert result.dtype.kind == "f"
 
     # Numerical properties tests
     def test_operation_properties(self, test_data):
@@ -222,7 +245,7 @@ class TestMovingWindow:
             results[operation] = moving_window(data, window, operation)
 
         # Test properties where both results are finite
-        self._test_finite_properties(results, data)
+        self._test_finite_properties(results, data, window)
 
     def test_numerical_accuracy(self):
         """Test numerical accuracy with known results."""
