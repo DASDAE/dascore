@@ -68,6 +68,21 @@ def non_distance_dir_spool(tmp_path_factory):
     return dc.spool(path).update()
 
 
+@pytest.fixture
+def directory_spool_redundant_index(random_spool, tmp_path_factory):
+    """Force a spool to be indexed many times with same files."""
+    path = Path(tmp_path_factory.mktemp("redundant_index_spool"))
+    dascore.examples.spool_to_directory(random_spool, path, "dasdae")
+    spool = dc.spool(path).update()
+
+    # Touch each file, re-index to saturate index with duplicates.
+    for _ in range(12):
+        for file_path in path.glob("*"):
+            file_path.touch()
+        spool = spool.update()
+    return spool
+
+
 @pytest.fixture(scope="class", params=DIRECTORY_SPOOLS)
 def directory_spool(request):
     """Meta fixture for getting all file spools."""
@@ -348,6 +363,12 @@ class TestBasicChunk:
             # because we try to avoid overlaps, the segments can be up to 2
             # samples shorter than what was asked for. Maybe revisit this?
             assert diff <= 2 * (patch.attrs.time_step / ONE_SECOND)
+
+    def test_chunk_redundant_index(self, directory_spool_redundant_index):
+        """Ensure redundant indices are handled effectively with chunking"""
+        spool = directory_spool_redundant_index.chunk(time=None)
+        patch = spool[0]
+        assert isinstance(patch, dc.Patch)
 
 
 class TestGetContents:
