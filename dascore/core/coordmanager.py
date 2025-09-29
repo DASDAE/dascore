@@ -68,6 +68,7 @@ from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
     _matches_prefix_suffix,
+    broadcast_for_index,
     cached_method,
     iterate,
 )
@@ -1079,6 +1080,48 @@ class CoordManager(DascoreBaseModel):
     def coord_range(self, coord_name: str):
         """Return a scaler value for the coordinate (e.g., number of seconds)."""
         return self.get_coord(coord_name).coord_range()
+
+    def flip(self, *dims):
+        """
+        Flip one or more coordinates.
+
+        Parameters
+        ----------
+        *dims
+            Names of coordinates to flip.
+        """
+
+        def _flip_coord(coord, axis):
+            inds = broadcast_for_index(coord.ndim, axis, slice(None, None, -1))
+            return coord[inds]
+
+        out = {}
+        dim_map = self.dim_map
+        dim_to_coord_map = self.dim_to_coord_map
+
+        # Iterate each of the coords to flip.
+        for name in dims:
+            coord = self.get_coord(name)
+            if coord.ndim != 1:
+                msg = (
+                    "CoordManager can only flip 1D coords directly. "
+                    "Flipping associated dimensions will flip multidimensional "
+                    "coords."
+                )
+                raise CoordError(msg)
+
+            out[name] = (dim_map[name], _flip_coord(coord, 0))
+            # If this is a dimensional coord, flip coords that depend on it.
+            for associated in dim_to_coord_map.get(name, ()):
+                # Don't flip dimensional coords twice!
+                if associated == name:
+                    continue
+                associated_coord = self.get_coord(associated)
+                dims = dim_map[associated]
+                axis = dims.index(name)
+                out[associated] = (dims, _flip_coord(associated_coord, axis))
+
+        return self.update(**out)
 
 
 def get_coord_manager(
