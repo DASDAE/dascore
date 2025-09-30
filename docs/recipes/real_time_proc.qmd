@@ -31,7 +31,7 @@ sp = sp.sort("time")
 
 ## Set real-time processing parameters (if needed)
 
-In this section, we define the window size and step size required for [rolling](`dascore.proc.rolling.rolling`) mean processing. With a sampling interval of 10 seconds, the cutoff frequency (Nyquist frequency) is determined to be 0.05 Hz. Additionally, we establish the desired wait time after each run by using the `sleep_time_mult` parameter, which acts as a multiplier coefficient for the number of seconds in each patch.
+In this section, we define the window size and step size required for [rolling](`dascore.proc.rolling.rolling`) mean processing. Additionally, we establish the desired wait time after each run by using the `sleep_time_mult` parameter, which acts as a multiplier coefficient for the number of seconds in each patch.
 
 ```{python}
 # Define the target sampling interval (in sec.)
@@ -96,7 +96,7 @@ while True:
                     "Therefore, real-time data processing ended successfully.")
                 break
 
-    # Set sleep time after each run to the 
+    # Set sleep time after each run 
     sleep_time = num_sec * sleep_time_mult 
 
     # Do processing on each patch in the spool

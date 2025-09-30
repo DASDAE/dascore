@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-In DASCore, transformations are operations which change the units of a patch. Transforms can be found in the [transform module](`dascore.transform`) or access as `Patch` methods.
+In DASCore, transformations are operations which change the units of a patch. Transforms can be found in the [transform module](`dascore.transform`) or accessed as `Patch` methods.
 
 # Discrete Fourier Transforms
 

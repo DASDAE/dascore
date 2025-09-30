@@ -32,10 +32,10 @@ pa = sp[0]
 
 # Define the target sampling interval (in sec.)
 dt = 1
-# With a sampling interval of 10 seconds, the cutoff frequency (Nyquist frequency) is determined to be 0.05 Hz 
+# With a sampling interval of 1 second, the cutoff frequency (Nyquist frequency) is determined to be 0.5 Hz 
 cutoff_freq = 1 / (2*dt)
 
-# Safety factor for the low-pass filter to avoid ailiasing 
+# Safety factor for the low-pass filter to avoid aliasing 
 filter_safety_factor = 0.9
 
 # Enter memory size to be dedicated for processing (in MB)
@@ -47,7 +47,7 @@ tolerance = 1e-3
 
 ## Calculate chunk size and determine edge effects
 
-To chunk the spool, first we need to figure out the chunk size based on machine's memory size so we ensure we can load and process patches with no memory issues. Longer chunk size (longer patches) increases computation efficiency. 
+To chunk the spool, first we need to figure out the chunk size based on the machine's memory size so we ensure we can load and process patches with no memory issues. Longer chunk size (longer patches) increases computation efficiency. 
 
 Notes: 
 
@@ -126,7 +126,7 @@ if np.ceil(edge) >= chunk_size / 2:
 ## Perform low-frequency processing and save results on disk
 ```{python}
 
-# First we chunk the spool based on the `chunk_size' and `edge` calculated before.
+# First we chunk the spool based on the `chunk_size` and `edge` calculated before.
 sp_chunked_overlap = sp.chunk(time=chunk_size, overlap=2*edge, keep_partial=True)
 
 # Process each patch in the spool and save the result patch
@@ -161,7 +161,7 @@ sp_lf = dc.spool(output_data_dir)
 sp_lf_merged = sp_lf.chunk(time=None, conflict="keep_first")
 pa_lf_merged = sp_lf_merged[0]
 
-# Visualize the results. Try different scale values for better Visualization.
+# Visualize the results. Try different scale values for better visualization.
 pa_lf_merged.viz.waterfall(scale=0.5)
 ```
 

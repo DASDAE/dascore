@@ -10,7 +10,7 @@ please be aware of our [code of conduct](code_of_conduct.qmd).
 To start, clone DASCore and [install it in development mode](dev_install.qmd). If you are new to contributing to open-source projects, this [recipe](../recipes/how_to_contribute.qmd) provides step-by-step instructions.
 
 Review how [DASCore's testing](testing.qmd) works, [how DASCore is documented](documentation.qmd),
-[DAScore style and linting](style_and_linting.qmd), and the [general guidelines](general_guidelines.qmd).
+[DASCore style and linting](style_and_linting.qmd), and the [general guidelines](general_guidelines.qmd).
 
 
 
@@ -20,38 +20,12 @@ Development planning and prioritization takes place [here](https://github.com/or
 
 # DASCore or other DASDAE packages
 
-You may wonder whether a new feature you'd like to add belongs in DASCore, or if it should be
-part of another [DASDAE](https://github.com/DASDAE) package. The guiding principle is that
-if it does not require additional dependencies and is not particularly specialized to
-one sub-area of applied seismology, then it can be part of DASCore. What if the feature
-you're interested in adding is generally applicable for many kinds of DAS data analysis, but
-requires some additional package dependency? If this is the case, open a discussion describing
-the feature, the additional dependency, and (optional but encouraged) other future
-features that may also share this dependency. Typically we'll try to come to a clear consensus, then you can
-move ahead with development. If the proposed DASCore dependency addition appears to be controversial, then you will
-deliver a short presentation at one of the bi-weekly DASDAE developer team check-ins that should
-describe the feature, the additional dependency (including the approximate size of the additional
-software to be installed), and ideas for other features this dependency could enable.
-Then the developer community in attendance will discuss the proposed change and take a vote (majority
-approval required).
+You may wonder whether a new feature you'd like to add belongs in DASCore, or if it should be part of another [DASDAE](https://github.com/DASDAE) package. The guiding principle is that if it does not require additional dependencies and is not particularly specialized to one sub-area of applied seismology, then it can be part of DASCore. What if the feature you're interested in adding is generally applicable for many kinds of DAS data analysis, but requires some additional package dependency? If this is the case, open a discussion describing the feature, the additional dependency, and (optional but encouraged) other future features that may also share this dependency. Typically we'll try to come to a clear consensus, then you can move ahead with development. If the proposed DASCore dependency addition appears to be controversial, then you will deliver a short presentation at one of the bi-weekly DASDAE developer team check-ins that should describe the feature, the additional dependency (including the approximate size of the additional software to be installed), and ideas for other features this dependency could enable. Then the developer community in attendance will discuss the proposed change and take a vote (majority approval required).
 
-If you are interested in creating a new [DASDAE](https://github.com/DASDAE) package which uses
-DASCore as a dependency, you are not required to hold it to the same style and testing guidelines
-as DASCore, but you are encouraged to do so, and can use DASCore's setup as an example. Following
-a common set of style and contributor workflows will make it easier for us to develop a
-community of DASDAE developers who can easily move between using and developing any of the
-DASDAE packages.
+If you are interested in creating a new [DASDAE](https://github.com/DASDAE) package which uses DASCore as a dependency, you are not required to hold it to the same style and testing guidelines as DASCore, but you are encouraged to do so, and can use DASCore's setup as an example. Following a common set of style and contributor workflows will make it easier for us to develop a community of DASDAE developers who can easily move between using and developing any of the DASDAE packages.
 
 # Leadership
 
-Currently DASCore operates in BDFL mode during its initial construction phase,
-with Derrick Chambers leading the oversight of the master branch, but this is
-not intended to be the mode of operation in the future. At a DASDAE developer team check-in (currently biweekly), the team reviews contributions and nominates a leadership team for the next cycle based on contribution history.
+Currently DASCore operates in BDFL mode during its initial construction phase, with Derrick Chambers leading the oversight of the master branch, but this is not intended to be the mode of operation in the future. At a DASDAE developer team check-in (currently biweekly), the team reviews contributions and nominates a leadership team for the next cycle based on contribution history.
 
-Currently Eileen Martin and Ge Jin lead organizational activities (e.g. organize
-team meetings, coordinate logistics of training and tutorial activities, enforcement
-of community standards, approving travel and research assistantships for some contributors
-at Colorado School of Mines) as PI and co-PI of the NSF Geoinformatics grant that is
-supporting initial development of DASDAE packages. However, as the contributor
-community grows beyond Colorado School of Mines, after the life of the grant, these
-roles are intended to be rotating among community members.
+Currently Eileen Martin and Ge Jin lead organizational activities (e.g. organize team meetings, coordinate logistics of training and tutorial activities, enforcement of community standards, approving travel and research assistantships for some contributors at Colorado School of Mines) as PI and co-PI of the NSF Geoinformatics grant that is supporting initial development of DASDAE packages. However, as the contributor community grows beyond Colorado School of Mines, after the life of the grant, these roles are intended to be rotating among community members.

@@ -77,7 +77,7 @@ plt.tight_layout()
 
 Notice how the noisy channels around distance 2600m and 3400m have lower amplitude but occur along more channels when the `step_multiple` is increased.
 
-Using the first function, the smallest `step_multiple` is 2. Despite treating the edges differently, the outputs of function 2 are nearly tha same as function 1 and no significant edge effects are observable. 
+Using the first function, the smallest `step_multiple` is 2. Despite treating the edges differently, the outputs of function 2 are nearly the same as function 1 and no significant edge effects are observable. 
 
 ```{python}
 #| code-fold: true
