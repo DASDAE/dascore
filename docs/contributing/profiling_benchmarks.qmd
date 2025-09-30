@@ -21,7 +21,7 @@ If you find a significant issue, you can profile the problematic benchmark(s) to
 For example, suppose you notice a large increase in runtime for the pass_filter benchmark in the patch_benchmarks' TestProcessingBenchmarks class. Run the benchmark again under profiling: 
 
 ```bash
-pytest benchmarks/test_patch_benchmarks.py::TestProcessingBenchmarks::test_pass_filter_performance --profile
+pytest benchmarks/test_patch_benchmarks.py::TestProcessingBenchmarks::test_pass_filter --profile
 ```
 This will create a new `prof` folder with `test_pass_filter_performance.prof` as one of the files. You can view these with a variety of tools, such as [snakeviz](https://jiffyclub.github.io/snakeviz/) (assuming you installed snakeviz with `pip install snakeviz`).
 

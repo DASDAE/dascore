@@ -35,7 +35,7 @@ This section shows how to use the "mpi4py" library to parallelize dascore code.
 
 ## Installation
 
-First, make sure you have installed DASCore on your machine. See [DASCore Installation](https://dascore.org/#:~:text=0.2%29%3B-,Installation). Secondly, you need to properly install the mpi4py library. After installing and loading the [Open MPI](https://docs.open-mpi.org/en/v5.0.x/installing-open-mpi/quickstart.html) module on your machine (e.g., on Linux: ` load module to/mpi/openmpi/gcc/compiler/path`), install [mpi4py](https://pypi.org/project/mpi4py/). It might be easier to install using conda-forge as below:
+First, make sure you have installed DASCore on your machine. See [DASCore Installation](https://dascore.org/#:~:text=0.2%29%3B-,Installation). Secondly, you need to properly install the mpi4py library. After installing and loading the [Open MPI](https://docs.open-mpi.org/en/v5.0.x/installing-open-mpi/quickstart.html) module on your machine (e.g., on Linux: `load module to/mpi/openmpi/gcc/compiler/path`), install [mpi4py](https://pypi.org/project/mpi4py/). It might be easier to install using conda-forge as below:
 
 ```bash
 conda install -c conda-forge mpi4py openmpi

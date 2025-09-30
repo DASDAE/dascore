@@ -18,7 +18,7 @@ To demonstrate this process, imagine adding support for a format called `jingle`
 
 ## Adding a New IO Module
 
-First, we create a new io module called 'jingle' in DASCore's io module (dascore/io/jingle). Make sure there is a \__init__.py file in this module whose docstring describes basic use of the format and lists any non-obvious implementation details that might debug/improve the parser.
+First, we create a new io module called 'jingle' in DASCore's io module (dascore/io/jingle). Make sure there is a \__init__.py file in this module whose docstring describes basic use of the format and lists any non-obvious implementation details that might help debug/improve the parser.
 
 contents of `dascore/io/jingle/__init__.py`
 ```{python}
@@ -37,7 +37,7 @@ jingle = dc.spool('path_to_file.jgl')
 """
 ```
 
-Next, create a `core.py` file in the new module (dascore/io/jingle/core.py). Start by creating a class called `JingleIOV1` which subclasses (`dascore.io.core.FiberIO`)[`dascore.io.core.FiberIO`]. Now, on your subclass, you need to implement the supported methods.
+Next, create a `core.py` file in the new module (dascore/io/jingle/core.py). Start by creating a class called `JingleIOV1` which subclasses [`dascore.io.core.FiberIO`](`dascore.io.core.FiberIO`). Now, on your subclass, you need to implement the supported methods.
 
 Contents of `dascore/io/jingle/core.py`:
 

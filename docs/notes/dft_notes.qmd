@@ -4,7 +4,7 @@ These notes provide the reasoning for DASCore's [fourier](`dascore.transform.fou
 
 ## Summary {#sec-summary}
 
-- When performing discrete fourier transforms, DACore multiplies numpy's fft output by the coordinate spacing in order to:
+- When performing discrete fourier transforms, DASCore multiplies numpy's fft output by the coordinate spacing in order to:
 
    - Produce the same units as the continuous fourier transform
    - Preserve energy between the initial and transformed signals
@@ -55,7 +55,7 @@ Before defining the Discrete Fourier Transform (DFT), let's first consider how w
 
 2. Energy Preservation: From @eq-3, integrating the square of the untransformed data should yield the same value as integrating the square of the amplitude spectra.
 
-3. The amplitude of the zero frequency should be equal to the integral of the time series.
+3. The amplitude of the zero frequency should be equal to the integral of the signal.
 
 Now, let's look at Numpy's DFT, which is defined as:
 
@@ -65,11 +65,11 @@ $${#eq-4}
 
 where $a$ is the untransformed series of length $n$, $A$ is the transformed discrete series with elements corresponding to frequency bins ($k$, $k=0, ..., n-1$)
 
-Right away you might notice some reasons @eq-4 can't meet our expectations. First, nowhere are the units of $a$'s axis multiplied by the summation. Since the exponential term must be unit-less, $a$ must have the same units as $A$. Next, the energy can't be preserved since the number of elements in the summation increases as $n$ increases. Lastly, $A(0) = \sum_{m=0}^{n-1} a_m$ which is not the integral, but the sum, of $a$ (it doesn't consider sample spacing).
+Right away you might notice some reasons @eq-4 can't meet our expectations. First, nowhere are the units of $a$'s axis multiplied in the summation. Since the exponential term must be unit-less, $a$ must have the same units as $A$. Next, the energy can't be preserved since the number of elements in the summation increases as $n$ increases. Lastly, $A(0) = \sum_{m=0}^{n-1} a_m$ which is not the integral, but the sum, of $a$ (it doesn't consider sample spacing).
 
 ## Two Sine Waves
 
-To illustrate some of these issues, consider a sine waves with amplitude of $\pm$ $b_0$ and dominant frequency of $f_0$ Hz.
+To illustrate some of these issues, consider a sine wave with amplitude of $\pm$ $b_0$ and dominant frequency of $f_0$ Hz.
 
 $$
 f(x) = b_0 sin(2 \pi\ f_0 x)
@@ -83,11 +83,11 @@ $${#eq-6}
 
 Where $\delta$ is the Dirac delta distribution.
 
-To discretize @eq-5, let $f_0 = 2$, the total signal duration ($T$) = 5 seconds, and $b_0$ = 1. We create two sine waves, one with 500 samples and one with 1000 samples. When we naively perform the dft, [shift the zero frequency to the center](https://numpy.org/doc/stable/reference/generated/numpy.fft.fftshift.html), and plot the amplitude spectra get the following:
+To discretize @eq-5, let $f_0 = 2$, the total signal duration ($T$) = 5 seconds, and $b_0$ = 1. We create two sine waves, one with 500 samples and one with 1000 samples. When we naively perform the dft, [shift the zero frequency to the center](https://numpy.org/doc/stable/reference/generated/numpy.fft.fftshift.html), and plot the amplitude spectra we get the following:
 
 ```{python}
 #| code-fold: true
-#| label: fig-unscalled-plot
+#| label: fig-unscaled-plot
 #| fig-cap: "Sine amplitude spectrum"
 import matplotlib.pyplot as plt
 
@@ -109,7 +109,7 @@ def get_fft_and_freqs(time, signal):
     return np.fft.fftshift(freqs), np.fft.fftshift(fft)
 
 
-def plot_amplitude_spectras(freqs1, fft1, freqs2, fft2, lims=(-5, 5)):
+def plot_amplitude_spectra(freqs1, fft1, freqs2, fft2, lims=(-5, 5)):
     """plot amplitude spectra without normalization"""
     plt.plot(freqs1, np.abs(fft1), label=f"n={len(freqs1)}", alpha=0.8)
     plt.plot(freqs2, np.abs(fft2), label=f"n={len(freqs2)}", alpha=0.8)
@@ -133,11 +133,11 @@ freqs1, fft1 = get_fft_and_freqs(t1, sin1)
 freqs2, fft2 = get_fft_and_freqs(t2, sin2)
 
 # and plot
-ax = plot_amplitude_spectras(freqs1, fft1, freqs2, fft2)
+ax = plot_amplitude_spectra(freqs1, fft1, freqs2, fft2)
 plt.show()
 ```
 
-As expected, both outputs have spikes at $\pm f_0$ (5Hz), but the amplitude of the 1000 sample function 2X larger than the 500 sample function. This isn't entirely surprising; from @eq-6 we expect the amplitude to tend toward infinity as the signal moves from discrete to continuous ($n \rightarrow \infty$). However, this scaling is typically not useful. Certainly, it won't meet our expectations stated above.
+As expected, both outputs have spikes at $\pm f_0$ (2Hz), but the amplitude of the 1000 sample function is 2X larger than the 500 sample function. This isn't entirely surprising; from @eq-6 we expect the amplitude to tend toward infinity as the signal moves from discrete to continuous ($n \rightarrow \infty$). However, this scaling is typically not useful. Certainly, it won't meet our expectations stated above.
 
 ## Scaling
 
@@ -145,11 +145,11 @@ One approach to fix scaling discrepancy is to divide each amplitude spectrum by 
 
 ```{python}
 #| code-fold: true
-#| label: fig-n-scalled-plot
+#| label: fig-n-scaled-plot
 #| fig-cap: "Sine amplitude spectrum scaled by n"
 n_scaled_fft1 = fft1 / len(freqs1)
 n_scaled_fft2 = fft2 / len(freqs2)
-ax = plot_amplitude_spectras(freqs1, n_scaled_fft1, freqs2, n_scaled_fft2)
+ax = plot_amplitude_spectra(freqs1, n_scaled_fft1, freqs2, n_scaled_fft2)
 plt.show()
 ```
 
@@ -182,7 +182,7 @@ print(f"fft n-scaled (n={len(t2)}) energy {fft2_energy:.02f}")
 
 It doesn't. And what about the units? As we saw above, $A$ in @eq-4 would have the same units as $a$.
 
-What if, drawing inspiration from @eq-1, we simply scale the output units by the function's sample spacing ($dx$)? After all, the spacing and the number of samples is directly related by
+What if, drawing inspiration from @eq-1, we simply scale the output by the function's sample spacing ($dx$)? After all, the spacing and the number of samples is directly related by
 
 $$
 \frac{T}{n} = dx
@@ -191,16 +191,16 @@ $${#eq-7}
 
 ```{python}
 #| code-fold: true
-#| label: fig-dt-scalled-plot
-#| fig-cap: "Sine amplitude spectrum scalled by dx"
+#| label: fig-dt-scaled-plot
+#| fig-cap: "Sine amplitude spectrum scaled by dx"
 dt1, dt2 = t1[1] - t1[0], t2[1] - t2[0]
 dt_scaled_fft1 = fft1 * dt1
 dt_scaled_fft2 = fft2 * dt2
-ax = plot_amplitude_spectras(freqs1, dt_scaled_fft1, freqs2, dt_scaled_fft2)
+ax = plot_amplitude_spectra(freqs1, dt_scaled_fft1, freqs2, dt_scaled_fft2)
 plt.show()
 ```
 
-As expected, The transforms with different numbers of points still have the same magnitude at $\pm f_0$. Checking their energy conservation:
+As expected, the transforms with different numbers of points still have the same magnitude at $\pm f_0$. Checking their energy conservation:
 
 ```{python}
 #| code-fold: true
@@ -242,7 +242,7 @@ tri_fft1_scaled = tri_fft1 * dt1
 tri_fft2_scaled = tri_fft2 * dt2
 
 
-ax = plot_amplitude_spectras(tri_freq1, tri_fft1_scaled, tri_freq2, tri_fft2_scaled)
+ax = plot_amplitude_spectra(tri_freq1, tri_fft1_scaled, tri_freq2, tri_fft2_scaled)
 
 value = np.abs(tri_fft2_scaled).max()
 
