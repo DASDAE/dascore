@@ -674,7 +674,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def _get_relative_values(self, value):
         """Get relative values based on start (pos) or stop (neg)."""
         pos = np.sign(value).astype(np.int_) >= 0
-        return self.min() + value if pos else self.max() + value
+        return np.where(pos, self.min() + value, self.max() + value)
 
     def empty(self, axes=None) -> Self:
         """

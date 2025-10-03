@@ -1950,3 +1950,10 @@ class TestIssues:
         array = np.array([1, 2, 3])
         out = get_coord(data=array * ft)
         assert dc.get_quantity(out.units) == ft
+
+    def test_2d_coord(self):
+        """Ensure we can get a 2D coordinate from an array."""
+        array = np.ones(2,2)
+        coord = get_coord(data=array)
+        breakpoint()
+        assert isinstance(coord, BaseCoord)
