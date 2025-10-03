@@ -18,6 +18,7 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.core.coords import (
     BaseCoord,
+    CoordArray,
     CoordMonotonicArray,
     CoordPartial,
     CoordRange,
@@ -1951,9 +1952,9 @@ class TestIssues:
         out = get_coord(data=array * ft)
         assert dc.get_quantity(out.units) == ft
 
-    def test_2d_coord(self):
-        """Ensure we can get a 2D coordinate from an array."""
-        array = np.ones(2,2)
-        coord = get_coord(data=array)
-        breakpoint()
-        assert isinstance(coord, BaseCoord)
+    def test_2d_date_time(self, evenly_sampled_date_coord):
+        """Ensure get_coord can handle a 2D datetime64 coord."""
+        dates = evenly_sampled_date_coord.values
+        data = np.stack([dates, dates], axis=-1)
+        coord = get_coord(data=data)
+        assert isinstance(coord, CoordArray)

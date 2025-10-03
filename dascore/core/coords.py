@@ -674,7 +674,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def _get_relative_values(self, value):
         """Get relative values based on start (pos) or stop (neg)."""
         pos = np.sign(value).astype(np.int_) >= 0
-        return np.where(pos, self.min() + value, self.max() + value)
+        if is_array(value):
+            out = np.where(pos, self.min() + value, self.max() + value)
+        else:
+            out = self.min() + value if pos else self.max() + value
+        return out
 
     def empty(self, axes=None) -> Self:
         """
@@ -1623,6 +1627,9 @@ def get_coord(
     def _maybe_get_start_stop_step(data):
         """Get start, stop, step, is_monotonic."""
         data = np.asarray(data)
+        # special case for ndim arrays.
+        if data.ndim > 1:
+            return None, None, None, False
         view2 = data[1:]
         view1 = data[:-1]
         is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)

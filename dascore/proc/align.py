@@ -117,9 +117,7 @@ def _apply_shifts_to_data(data, shifts, dim_axis, coord_axis, mode, fill_value):
     # Use advanced indexing - need to flatten and rebuild
     flat_valid = valid_mask.ravel()
     flat_traces = np.broadcast_to(trace_indices, valid_mask.shape).ravel()[flat_valid]
-    flat_source = np.broadcast_to(source_indices, valid_mask.shape).ravel()[
-        flat_valid
-    ]
+    flat_source = np.broadcast_to(source_indices, valid_mask.shape).ravel()[flat_valid]
     flat_dest = np.broadcast_to(dest_indices, valid_mask.shape).ravel()[flat_valid]
     # Build full index tuple for all dimensions
     source_idx = [flat_traces, ..., flat_source]
@@ -166,11 +164,10 @@ def _validate_alignment_inputs(patch, kwargs):
     return dim_name, coord_name
 
 
-def _get_aligned_coords(
-        patch, dim_name, shifted_data, mode, inds, dim_axis
-):
+def _get_aligned_coords(patch, dim_name, shifted_data, mode, inds, dim_axis):
     """
     Get the aligned coordinate manager.
+
     Parameters
     ----------
     patch
@@ -206,12 +203,12 @@ def _get_aligned_coords(
 
 @patch_function()
 def align_to_coord(
-        patch: PatchType,
-        mode: Literal["full", "valid", "same"] = "same",
-        relative: bool = False,
-        samples: bool = False,
-        fill_value: float = np.nan,
-        **kwargs,
+    patch: PatchType,
+    mode: Literal["full", "valid", "same"] = "same",
+    relative: bool = False,
+    samples: bool = False,
+    fill_value: float = np.nan,
+    **kwargs,
 ) -> PatchType:
     """
     Align patches based on values in a non-dimension coordinate.
@@ -280,7 +277,7 @@ def align_to_coord(
     """
     dim_name, coord_name = _validate_alignment_inputs(patch, kwargs)
     dim = patch.get_coord(dim_name, require_evenly_sampled=True)
-    coord = patch.get_coord(coord_name, require_evenly_sampled=True)
+    coord = patch.get_coord(coord_name)
     # Get alignment indices.
     inds = dim.get_next_index(coord.values, samples=samples, relative=relative)
     # Get axes for shifting
