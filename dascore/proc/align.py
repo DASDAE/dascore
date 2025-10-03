@@ -104,10 +104,8 @@ def _apply_shifts_to_data(data, shifts, dim_axis, coord_axes, mode, fill_value):
             src_end = n_samples
             dst_start = shift + start_pad
             dst_end = dst_start + n_samples
-            # Clip to valid ranges
-            if dst_start < 0:
-                src_start -= dst_start
-                dst_start = 0
+            # Note: we normalize to min shift earlier so we can get values > 0
+            assert dst_start >= 0
             if dst_end > output_size:
                 src_end -= dst_end - output_size
                 dst_end = output_size
@@ -125,7 +123,7 @@ def _validate_alignment_inputs(patch, kwargs):
         msg = "align_to_coords requires exactly one keyword argument"
         raise ParameterError(msg)
     (dim_name, coord_name) = dict(kwargs).popitem()
-    if not (isinstance(dim_name, str) and dim_name is not None):
+    if not isinstance(coord_name, str):
         msg = "align_to_coords requires keyword name and value to be strings."
         raise ParameterError(msg)
     # key must be a dimension and value a non-dimensional coord name.
