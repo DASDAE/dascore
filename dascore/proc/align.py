@@ -55,76 +55,66 @@ def _calculate_mode_parameters(mode, shifts, n_samples):
     }
 
 
-def _apply_shifts_to_data(data, shifts, dim_axis, coord_axis, mode, fill_value):
+def _apply_shifts_to_data(data, shifts, dim_axis, coord_axes, mode, fill_value):
     """
-    Apply different shifts to data along specified axis using vectorization.
+    Apply different shifts to data along specified axis.
 
     Parameters
     ----------
     data
         The input data array.
     shifts
-        Array of shift amounts, one per position along coord_axis.
+        Array of shift amounts with dimensions matching coord_axes.
     dim_axis
         The axis along which to apply shifts.
-    coord_axis
-        The axis along which shift amounts vary.
+    coord_axes
+        The axes along which shift amounts vary.
     mode
         One of "full", "valid", or "same".
     fill_value
         Value to use for positions without data.
     """
-    # Move axes so dim_axis is last and coord_axis is first for easier indexing
-    data = np.moveaxis(data, [coord_axis, dim_axis], [0, -1])
-    n_traces, n_samples = data.shape[0], data.shape[-1]
-    # Determine output size and padding based on mode
+    coord_axes = tuple(coord_axes) if not isinstance(coord_axes, tuple) else coord_axes
+    # Calculate output parameters
+    n_samples = data.shape[dim_axis]
     mode_params = _calculate_mode_parameters(mode, shifts, n_samples)
     output_size = mode_params["output_size"]
     adjusted_shifts = mode_params["adjusted_shifts"]
     start_pad = mode_params["start_offset_samples"]
-    # Create output array filled with fill_value
+    # Create output array
     out_shape = list(data.shape)
-    out_shape[-1] = output_size
+    out_shape[dim_axis] = output_size
     output = np.full(out_shape, fill_value, dtype=data.dtype)
-    # Use advanced indexing to assign shifted data
-    trace_indices = np.arange(n_traces)[:, None]
-    if mode == "valid":
-        # For valid mode, extract overlapping region from source WITHOUT shifting
-        # All traces read the same window: the overlapping region
-        sample_indices = np.arange(output_size)
-        # For valid, we take the window from max_shift to max_shift + output_size
-        # This is the region that overlaps for all traces after alignment
-        # Broadcast to all traces
-        source_indices = np.broadcast_to(
-            sample_indices + start_pad, (n_traces, output_size)
-        )
-        dest_indices = np.broadcast_to(sample_indices, (n_traces, output_size))
-        # All indices should be valid by construction
-        valid_mask = np.ones((n_traces, output_size), dtype=bool)
-    else:
-        # For full/same modes, shift data into destination positions
-        sample_indices = np.arange(n_samples)
-        dest_indices = sample_indices + adjusted_shifts[:, None] + start_pad
-        source_indices = sample_indices
-        # Mask valid destination indices
-        valid_mask = (dest_indices >= 0) & (dest_indices < output_size)
-    # Expand indices to handle arbitrary number of middle dimensions
-    for _ in range(data.ndim - 2):
-        trace_indices = trace_indices[..., None]
-        valid_mask = valid_mask[..., None]
-        source_indices = source_indices[..., None]
-        dest_indices = dest_indices[..., None]
-    # Use advanced indexing - need to flatten and rebuild
-    flat_valid = valid_mask.ravel()
-    flat_traces = np.broadcast_to(trace_indices, valid_mask.shape).ravel()[flat_valid]
-    flat_source = np.broadcast_to(source_indices, valid_mask.shape).ravel()[flat_valid]
-    flat_dest = np.broadcast_to(dest_indices, valid_mask.shape).ravel()[flat_valid]
-    # Build full index tuple for all dimensions
-    source_idx = [flat_traces, ..., flat_source]
-    dest_idx = [flat_traces, ..., flat_dest]
-    output[tuple(dest_idx)] = data[tuple(source_idx)]
-    # Move axes back to original positions
-    output = np.moveaxis(output, [0, -1], [coord_axis, dim_axis])
+    # Iterate over all shift positions
+    for idx in np.ndindex(shifts.shape):
+        shift = int(adjusted_shifts[idx])
+        # Build slice for this position
+        src_slice = [slice(None)] * data.ndim
+        dst_slice = [slice(None)] * data.ndim
+        for ax, i in zip(coord_axes, idx):
+            src_slice[ax] = i
+            dst_slice[ax] = i
+        if mode == "valid":
+            # All traces extract same window
+            src_slice[dim_axis] = slice(start_pad, start_pad + output_size)
+            dst_slice[dim_axis] = slice(None)
+        else:
+            # Calculate source and destination ranges
+            src_start = 0
+            src_end = n_samples
+            dst_start = shift + start_pad
+            dst_end = dst_start + n_samples
+            # Clip to valid ranges
+            if dst_start < 0:
+                src_start -= dst_start
+                dst_start = 0
+            if dst_end > output_size:
+                src_end -= dst_end - output_size
+                dst_end = output_size
+            src_slice[dim_axis] = slice(src_start, src_end)
+            dst_slice[dim_axis] = slice(dst_start, dst_end)
+        # Copy data
+        output[tuple(dst_slice)] = data[tuple(src_slice)]
     return output
 
 
@@ -286,7 +276,7 @@ def align_to_coord(
     coord_axes = tuple(patch.dims.index(x) for x in coord_dims)
     # Apply shifts to data
     shifted_data = _apply_shifts_to_data(
-        patch.data, inds, dim_axis, coord_axes[0], mode, fill_value
+        patch.data, inds, dim_axis, coord_axes, mode, fill_value
     )
     assert shifted_data.ndim == patch.data.ndim, "dimensionality changed"
     # Get new coord manager
