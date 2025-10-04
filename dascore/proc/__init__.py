@@ -16,3 +16,4 @@ from .units import convert_units, set_units, simplify_units
 from .whiten import whiten
 from .hampel import hampel_filter
 from .wiener import wiener_filter
+from .align import align_to_coord

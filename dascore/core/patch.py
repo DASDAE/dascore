@@ -423,6 +423,7 @@ class Patch:
     roll = dascore.proc.roll
     where = dascore.proc.where
     flip = dascore.proc.flip
+    align_to_coord = dascore.proc.align_to_coord
 
     @deprecate(
         "patch.iresample is deprecated. Please use patch.resample " "with samples=True",

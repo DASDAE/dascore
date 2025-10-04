@@ -674,7 +674,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def _get_relative_values(self, value):
         """Get relative values based on start (pos) or stop (neg)."""
         pos = np.sign(value).astype(np.int_) >= 0
-        return self.min() + value if pos else self.max() + value
+        if is_array(value):
+            out = np.where(pos, self.min() + value, self.max() + value)
+        else:
+            out = self.min() + value if pos else self.max() + value
+        return out
 
     def empty(self, axes=None) -> Self:
         """
@@ -830,9 +834,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if samples:
             min_val, max_val = 0, len(self) - 1
             array = array.astype(np.int64)
-            wrap_around = array < 0
-            # account for negative indexing
-            array[wrap_around] = array[wrap_around] + max_val + 1
+            # account for negative indexing (wrap around) only when not allowing OOB
+            if not allow_out_of_bounds:
+                wrap_around = array < 0
+                array[wrap_around] = array[wrap_around] + max_val + 1
         else:
             min_val, max_val = self.min(), self.max()
             array = self._get_compatible_value(array, relative=relative)
@@ -841,7 +846,20 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         if not allow_out_of_bounds and np.any(is_gt | is_lt):
             msg = f"Value: {array} is out of bounds for {self}"
             raise ValueError(msg)
-        # Fix max values
+
+        # If allow_out_of_bounds and we have out of bounds values,
+        # compute actual indices for evenly sampled coords
+        if allow_out_of_bounds and np.any(is_gt | is_lt):
+            # For samples mode, just return the raw indices (no clamping)
+            if samples:
+                return array if input_array_like else array[0]
+            # For absolute mode with evenly sampled coords, compute index from value
+            if hasattr(self, "step") and self.step is not None:
+                # Calculate index: (value - min) / step
+                indices = ((array - min_val) / self.step).astype(np.int64)
+                return indices if input_array_like else indices[0]
+
+        # Clamp values to bounds for backward compatibility when not out of bounds
         array[is_gt] = max_val
         array[is_lt] = min_val
         # samples should already have the answer, just return
@@ -1623,6 +1641,9 @@ def get_coord(
     def _maybe_get_start_stop_step(data):
         """Get start, stop, step, is_monotonic."""
         data = np.asarray(data)
+        # special case for ndim arrays.
+        if data.ndim > 1:
+            return None, None, None, False
         view2 = data[1:]
         view1 = data[:-1]
         is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)
