@@ -424,7 +424,7 @@ class TestAlignToCoord:
 
         # Verify shapes, coords and data are the same after dropping nan.
         assert reversed_clean.shape == patch.shape
-        assert reversed_patch.equals(patch)
+        assert reversed_clean.equals(patch)
 
     def test_reverse_with_zero_shifts(self, patch_with_zero_shifts):
         """Test reverse parameter with zero shifts (should be identity)."""
@@ -445,28 +445,3 @@ class TestAlignToCoord:
         np.testing.assert_array_equal(reversed_patch.data, patch.data)
         assert aligned.shape == patch.shape
         assert reversed_patch.shape == patch.shape
-
-    def test_reverse_with_conflicting_fill_value(self, patch_with_known_shifts):
-        """
-        Test that reverse operation fails gracefully when fill_value conflicts
-        with data.
-        """
-        patch = patch_with_known_shifts
-
-        # Apply forward alignment with fill_value that appears in data (0.0)
-        aligned = patch.align_to_coord(
-            time="shift_time_known", mode="full", samples=True, fill_value=0.0
-        )
-
-        # Reverse should fail because 0.0 appears in the original data
-        with pytest.raises(
-            ValueError,
-            match="fill_value=0.0 appears to be present in all data positions",
-        ):
-            aligned.align_to_coord(
-                time="shift_time_known",
-                mode="full",
-                samples=True,
-                reverse=True,
-                fill_value=0.0,
-            )

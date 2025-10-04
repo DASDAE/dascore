@@ -32,7 +32,7 @@ class _ShiftInfo:
 def _get_source_indices(shifts, start_shift, end_shift, n_samples):
     """Get the indices in the source array."""
     min_start = -shifts + start_shift
-    start = np.where(min_start < 0, 0, -shifts)
+    start = np.where(min_start < 0, 0, min_start)
     max_end = n_samples - shifts + end_shift
     end = np.where(max_end > n_samples, n_samples, max_end)
     return (start, end)
@@ -40,7 +40,7 @@ def _get_source_indices(shifts, start_shift, end_shift, n_samples):
 
 def _get_dest_indices(shifts, start_shift, n_samples, output_size):
     """Get indices in the output array."""
-    start = shifts - start_shift
+    start = np.maximum(0, shifts - start_shift)
     max_ends = start + n_samples
     end = np.where(max_ends > output_size, output_size, max_ends)
     return (start, end)
@@ -173,14 +173,14 @@ def _get_aligned_coords(patch, dim_name, meta):
     return patch.coords.update(**{dim_name: new_coord})
 
 
-def _get_shift_indices(coord, reverse):
+def _get_shift_indices(coord, dim, reverse, samples, relative):
     """
     Get the indices  for shifting.
 
     Positive values indicate a shift to the right, negative to left.
     """
     # First get naive indices, then subtract min.
-    inds = coord.get_next_index(coord.values)
+    inds = dim.get_next_index(coord.values, samples=samples, relative=relative)
     out = inds - np.min(inds)
     # Reverse index. This way the min value still is at 0 (reference)
     if reverse:
@@ -219,7 +219,7 @@ def align_to_coord(
         dimension, else they are absolute.
     samples
         If True, the values in the alignment coord indicate samples rather
-        that values in the shift dimension's units.
+        than values in the shift dimension's units.
     reverse
         If True, multiply the alignment coordinate values by -1 to reverse
         a previous alignment operation.
@@ -233,19 +233,19 @@ def align_to_coord(
 
     Returns
     -------
-    A patch with new coordinate reference_{dim}
+    A patch with aligned coordinates.
 
     Notes
     -----
     To understand the mode argument, consider a 2D patch with two traces,
-    an alignment dimension length of 10, and a relative shift of 5 sample.
+    an alignment dimension length of 10, and a relative shift of 5 samples.
     For mode=="full" the output looks like this:
         -----aaaaaaaaaa
         bbbbbbbbbb-----
     For mode=="same" the patch will look like this:
         aaaaaaaaaa
         bbbbb-----
-    for mode=="valid":
+    For mode=="valid":
         aaaaa
         bbbbb
     where a and b represent values in first and second trace, respectively,
@@ -254,6 +254,7 @@ def align_to_coord(
     Examples
     --------
     >>> import dascore as dc
+    >>> import numpy as np
     >>> patch = dc.get_example_patch()
     >>>
     >>> # Create a suitable dimension for alignment.
@@ -263,8 +264,29 @@ def align_to_coord(
     >>> ref_times = time[np.arange(len(distance))]
     >>> patch_coord = patch.update_coords(shift_time=("distance", ref_times))
     >>>
-    >>> # Apply the alignment
+    >>> # Example 1: Apply the alignment, filling values with NaN
     >>> out = patch_coord.align_to_coord(time="shift_time", mode="full")
+    >>>
+    >>> # Example 2: Round-trip alignment with reverse parameter
+    >>> shifts = np.array([0, 5, 10, 15, 20])  # shifts in samples
+    >>> patch_shift = patch.update_coords(my_shifts=("distance", shifts))
+    >>> # Forward alignment
+    >>> aligned = patch_shift.align_to_coord(
+    ...     time="my_shifts", samples=True, mode="full"
+    ... )
+    >>> # Reverse to get back original (after dropping NaN padding)
+    >>> reversed_patch = aligned.align_to_coord(
+    ...     time="my_shifts", samples=True, mode="full", reverse=True
+    ... )
+    >>> original = reversed_patch.dropna("time")
+    >>> assert original.equals(patch_shift)
+    >>>
+    >>> # Example 3: Use 'valid' mode to extract only overlapping region
+    >>> valid_aligned = patch_shift.align_to_coord(
+    ...     time="my_shifts", samples=True, mode="valid"
+    ... )
+    >>> # Result contains no NaN values, only the overlapping data
+    >>> assert not np.isnan(valid_aligned).any()
     """
     # Validate inputs and get coordinates.
     dim_name, coord_name = _validate_alignment_inputs(patch, kwargs)
@@ -279,7 +301,7 @@ def align_to_coord(
     coord_axes = tuple(patch.dims.index(x) for x in coord_dims)
 
     # Get the metadata about shift and the indices for shifting.
-    inds = _get_shift_indices(coord, reverse)
+    inds = _get_shift_indices(coord, dim, reverse, samples, relative)
     meta = _calculate_shift_info(mode, inds, dim, dim_axis, patch.shape, reverse)
 
     # Apply shifts to data
