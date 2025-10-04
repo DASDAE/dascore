@@ -405,7 +405,68 @@ class TestAlignToCoord:
                 trace_data == i
             ), f"Trace {i} should have value {i} in valid mode"
 
-        # The valid region corresponds to the overlapping part
-        # For trace 0 (shift=0): samples 0:6 of original data
-        # For trace 4 (shift=4): samples 4:10 of original data
-        # The overlap is where all traces have valid data
+    def test_round_trip_with_reverse(self, patch_with_known_shifts):
+        """Test that alignment can be reversed using reverse parameter."""
+        patch = patch_with_known_shifts
+
+        # Apply forward alignment with full mode to preserve all data
+        aligned = patch.align_to_coord(
+            time="shift_time_known", mode="full", samples=True
+        )
+
+        # Apply reverse alignment to undo the shift
+        reversed_patch = aligned.align_to_coord(
+            time="shift_time_known", mode="full", samples=True, reverse=True
+        )
+
+        # Drop NaN values reversed patch
+        reversed_clean = reversed_patch.dropna("time")
+
+        # Verify shapes, coords and data are the same after dropping nan.
+        assert reversed_clean.shape == patch.shape
+        assert reversed_patch.equals(patch)
+
+    def test_reverse_with_zero_shifts(self, patch_with_zero_shifts):
+        """Test reverse parameter with zero shifts (should be identity)."""
+        patch = patch_with_zero_shifts
+
+        # Apply forward alignment with zero shifts
+        aligned = patch.align_to_coord(
+            time="shift_time_zero", mode="full", samples=True
+        )
+
+        # Apply reverse alignment (should be identity)
+        reversed_patch = aligned.align_to_coord(
+            time="shift_time_zero", mode="full", samples=True, reverse=True
+        )
+
+        # Both patches should be identical to original
+        np.testing.assert_array_equal(aligned.data, patch.data)
+        np.testing.assert_array_equal(reversed_patch.data, patch.data)
+        assert aligned.shape == patch.shape
+        assert reversed_patch.shape == patch.shape
+
+    def test_reverse_with_conflicting_fill_value(self, patch_with_known_shifts):
+        """
+        Test that reverse operation fails gracefully when fill_value conflicts
+        with data.
+        """
+        patch = patch_with_known_shifts
+
+        # Apply forward alignment with fill_value that appears in data (0.0)
+        aligned = patch.align_to_coord(
+            time="shift_time_known", mode="full", samples=True, fill_value=0.0
+        )
+
+        # Reverse should fail because 0.0 appears in the original data
+        with pytest.raises(
+            ValueError,
+            match="fill_value=0.0 appears to be present in all data positions",
+        ):
+            aligned.align_to_coord(
+                time="shift_time_known",
+                mode="full",
+                samples=True,
+                reverse=True,
+                fill_value=0.0,
+            )

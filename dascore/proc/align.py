@@ -2,118 +2,127 @@
 Functions to align patches based on some criterion.
 """
 
+from __future__ import annotations
+
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 
+from dascore.compat import ndarray
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import iterate
 from dascore.utils.patch import patch_function
 
 
-def _calculate_mode_parameters(mode, shifts, n_samples):
-    """
-    Calculate output size and offsets based on alignment mode.
+@dataclass(frozen=True)  # frozen=True → makes it immutable (like namedtuple)
+class _ShiftInfo:
+    """Metadata about the shift based on mode."""
 
-    Parameters
-    ----------
-    mode
-        One of "full", "valid", or "same".
-    shifts
-        Array of shift amounts.
-    n_samples
-        Original number of samples along the dimension.
+    output_length: float
+    mode: str
+    start_shift: int
+    end_shift: int
+    new_shape: tuple[int, ...]
+    source_slice: tuple[ndarray, ndarray]
+    dest_slice: tuple[ndarray, ndarray]
 
-    Returns
-    -------
-    dict with keys:
-        output_size: Size of output dimension
-        adjusted_shifts: Shifts adjusted for the output coordinate frame
-        start_offset_samples: Offset in samples from original start
+
+def _get_source_indices(shifts, start_shift, end_shift, n_samples):
+    """Get the indices in the source array."""
+    min_start = -shifts + start_shift
+    start = np.where(min_start < 0, 0, -shifts)
+    max_end = n_samples - shifts + end_shift
+    end = np.where(max_end > n_samples, n_samples, max_end)
+    return (start, end)
+
+
+def _get_dest_indices(shifts, start_shift, n_samples, output_size):
+    """Get indices in the output array."""
+    start = shifts - start_shift
+    max_ends = start + n_samples
+    end = np.where(max_ends > output_size, output_size, max_ends)
+    return (start, end)
+
+
+def _calculate_shift_info(
+    mode,
+    shifts,
+    dim,
+    dim_axis,
+    patch_shape,
+    reverse,
+):
     """
+    Calculate metadata about the shift.
+    """
+    # Note: shifts are either all >= 0 or <=0
     shifts = np.asarray(shifts, dtype=np.int64)
     min_shift, max_shift = shifts.min(), shifts.max()
+    n_samples = len(dim)
+
     if mode == "full":
-        # Expand dimension to fit all shifts
-        output_size = n_samples + max_shift - min_shift
-        adjusted_shifts = shifts - min_shift
-        start_offset_samples = -min_shift
+        # Shift value to left/right most index in reference to stationary trace.
+        start_shift = min_shift
+        end_shift = max_shift
     elif mode == "same":
-        # Keep original size
-        output_size = n_samples
-        adjusted_shifts = shifts
-        start_offset_samples = 0
-    else:  # mode == "valid"
+        # Keep original size (and dimension)
+        start_shift = 0
+        end_shift = 0
+    else:
+        assert mode == "valid"
         # Find overlapping region
-        output_size = n_samples - (max_shift - min_shift)
-        adjusted_shifts = shifts - min_shift
-        start_offset_samples = max_shift - min_shift
-    return {
-        "output_size": output_size,
-        "adjusted_shifts": adjusted_shifts,
-        "start_offset_samples": start_offset_samples,
-    }
+        # for forward, can only shift start time, reverse only endtime.
+        start_shift = max_shift if max_shift > 0 else 0
+        end_shift = min_shift if min_shift < 0 else 0
+
+    output_size = n_samples + end_shift - start_shift
+    # get slices for start/stop
+    source_inds = _get_source_indices(shifts, start_shift, end_shift, n_samples)
+    dest_inds = _get_dest_indices(shifts, start_shift, n_samples, output_size)
+    # determine shape
+    shape = list(patch_shape)
+    shape[dim_axis] = output_size
+    # Package up and return.
+    out = _ShiftInfo(
+        mode=mode,
+        output_length=output_size,
+        start_shift=start_shift,
+        end_shift=end_shift,
+        new_shape=tuple(shape),
+        source_slice=source_inds,
+        dest_slice=dest_inds,
+    )
+    return out
 
 
-def _apply_shifts_to_data(data, shifts, dim_axis, coord_axes, mode, fill_value):
+def _create_slice_indexer(start, stop, ndim, idx, coord_axes, dim_axis):
+    """Create a slice indexer to go from start/stop idx to coord axes."""
+    out = [slice(None)] * ndim
+    out[dim_axis] = slice(start, stop)
+    for i, ax in zip(idx, coord_axes):
+        out[ax] = i
+    return tuple(out)
+
+
+def _apply_shifts_to_data(data, meta, dim_axis, coord_axes, fill_value):
     """
     Apply different shifts to data along specified axis.
-
-    Parameters
-    ----------
-    data
-        The input data array.
-    shifts
-        Array of shift amounts with dimensions matching coord_axes.
-    dim_axis
-        The axis along which to apply shifts.
-    coord_axes
-        The axes along which shift amounts vary.
-    mode
-        One of "full", "valid", or "same".
-    fill_value
-        Value to use for positions without data.
     """
-    coord_axes = tuple(coord_axes) if not isinstance(coord_axes, tuple) else coord_axes
-    # Calculate output parameters
-    n_samples = data.shape[dim_axis]
-    mode_params = _calculate_mode_parameters(mode, shifts, n_samples)
-    output_size = mode_params["output_size"]
-    adjusted_shifts = mode_params["adjusted_shifts"]
-    start_pad = mode_params["start_offset_samples"]
-    # Create output array
-    out_shape = list(data.shape)
-    out_shape[dim_axis] = output_size
-    output = np.full(out_shape, fill_value, dtype=data.dtype)
-    # Iterate over all shift positions
-    for idx in np.ndindex(shifts.shape):
-        shift = int(adjusted_shifts[idx])
-        # Build slice for this position
-        src_slice = [slice(None)] * data.ndim
-        dst_slice = [slice(None)] * data.ndim
-        for ax, i in zip(coord_axes, idx):
-            src_slice[ax] = i
-            dst_slice[ax] = i
-        if mode == "valid":
-            # All traces extract same window
-            src_slice[dim_axis] = slice(start_pad, start_pad + output_size)
-            dst_slice[dim_axis] = slice(None)
-        else:
-            # Calculate source and destination ranges
-            src_start = 0
-            src_end = n_samples
-            dst_start = shift + start_pad
-            dst_end = dst_start + n_samples
-            # Note: we normalize to min shift earlier so we can get values > 0
-            assert dst_start >= 0
-            if dst_end > output_size:
-                src_end -= dst_end - output_size
-                dst_end = output_size
-            src_slice[dim_axis] = slice(src_start, src_end)
-            dst_slice[dim_axis] = slice(dst_start, dst_end)
-        # Copy data
-        output[tuple(dst_slice)] = data[tuple(src_slice)]
-    return output
+    out = np.full(meta.new_shape, fill_value)
+    coord_axes = tuple(iterate(coord_axes))
+    in_start, in_stop = meta.source_slice
+    out_start, out_stop = meta.dest_slice
+    for idx in np.ndindex(in_start.shape):
+        source_ind = _create_slice_indexer(
+            in_start[idx], in_stop[idx], out.ndim, idx, coord_axes, dim_axis
+        )
+        dest_ind = _create_slice_indexer(
+            out_start[idx], out_stop[idx], out.ndim, idx, coord_axes, dim_axis
+        )
+        out[dest_ind] = data[source_ind]
+    return out
 
 
 def _validate_alignment_inputs(patch, kwargs):
@@ -152,41 +161,31 @@ def _validate_alignment_inputs(patch, kwargs):
     return dim_name, coord_name
 
 
-def _get_aligned_coords(patch, dim_name, shifted_data, mode, inds, dim_axis):
+def _get_aligned_coords(patch, dim_name, meta):
     """
     Get the aligned coordinate manager.
-
-    Parameters
-    ----------
-    patch
-        The original patch.
-    dim_name
-        Name of the dimension that was shifted.
-    shifted_data
-        The shifted data array.
-    mode
-        The alignment mode (full/valid/same).
-    inds
-        The shift indices.
-    dim_axis
-        The axis index of the shifted dimension.
     """
-    # Get the original coordinate for the shifted dimension
-    dim_coord = patch.get_coord(dim_name)
-    new_size = shifted_data.shape[dim_axis]
-    # Calculate how the coordinate needs to be adjusted based on mode
-    mode_params = _calculate_mode_parameters(mode, inds, len(dim_coord))
-    offset_samples = mode_params["start_offset_samples"]
-    # Update coordinate start and length
-    if offset_samples == 0:
-        new_coord = dim_coord.change_length(new_size)
-    else:
-        new_start = dim_coord.start + offset_samples * dim_coord.step
-        new_coord = dim_coord.update(start=new_start).change_length(new_size)
-    # Add reference coordinate with original dim values
-    ref_coord_name = f"reference_{dim_name}"
-    coords_dict = {dim_name: new_coord, ref_coord_name: (None, dim_coord.values)}
-    return patch.coords.update(**coords_dict)
+    coord = patch.get_coord(dim_name)
+    start_shift, end_shift = meta.start_shift, meta.end_shift
+    new_coord = coord.update(
+        min=coord.min() + coord.step * start_shift,
+    ).change_length(len(coord) - start_shift + end_shift)
+    return patch.coords.update(**{dim_name: new_coord})
+
+
+def _get_shift_indices(coord, reverse):
+    """
+    Get the indices  for shifting.
+
+    Positive values indicate a shift to the right, negative to left.
+    """
+    # First get naive indices, then subtract min.
+    inds = coord.get_next_index(coord.values)
+    out = inds - np.min(inds)
+    # Reverse index. This way the min value still is at 0 (reference)
+    if reverse:
+        out *= -1
+    return out
 
 
 @patch_function()
@@ -195,6 +194,7 @@ def align_to_coord(
     mode: Literal["full", "valid", "same"] = "same",
     relative: bool = False,
     samples: bool = False,
+    reverse: bool = False,
     fill_value: float = np.nan,
     **kwargs,
 ) -> PatchType:
@@ -220,6 +220,9 @@ def align_to_coord(
     samples
         If True, the values in the alignment coord indicate samples rather
         that values in the shift dimension's units.
+    reverse
+        If True, multiply the alignment coordinate values by -1 to reverse
+        a previous alignment operation.
     fill_value
         The value to insert in areas lacking data.
 
@@ -263,22 +266,28 @@ def align_to_coord(
     >>> # Apply the alignment
     >>> out = patch_coord.align_to_coord(time="shift_time", mode="full")
     """
+    # Validate inputs and get coordinates.
     dim_name, coord_name = _validate_alignment_inputs(patch, kwargs)
-    dim = patch.get_coord(dim_name, require_evenly_sampled=True)
+    # We only require evenly sampled dim when we might need to expand it.
+    must_be_even = mode == "full"
+    dim = patch.get_coord(dim_name, require_evenly_sampled=must_be_even)
     coord = patch.get_coord(coord_name)
-    # Get alignment indices.
-    inds = dim.get_next_index(coord.values, samples=samples, relative=relative)
-    # Get axes for shifting
+
+    # Get axes of shift and other dims.
     dim_axis = patch.dims.index(dim_name)
     coord_dims = patch.coords.dim_map[coord_name]
     coord_axes = tuple(patch.dims.index(x) for x in coord_dims)
+
+    # Get the metadata about shift and the indices for shifting.
+    inds = _get_shift_indices(coord, reverse)
+    meta = _calculate_shift_info(mode, inds, dim, dim_axis, patch.shape, reverse)
+
     # Apply shifts to data
     shifted_data = _apply_shifts_to_data(
-        patch.data, inds, dim_axis, coord_axes, mode, fill_value
+        patch.data, meta, dim_axis, coord_axes, fill_value
     )
     assert shifted_data.ndim == patch.data.ndim, "dimensionality changed"
-    # Get new coord manager
-    new_coords = _get_aligned_coords(
-        patch, dim_name, shifted_data, mode, inds, dim_axis
-    )
+
+    # Get new coordinates.
+    new_coords = _get_aligned_coords(patch, dim_name, meta)
     return patch.new(data=shifted_data, coords=new_coords)
