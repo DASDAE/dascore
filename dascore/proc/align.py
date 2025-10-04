@@ -52,7 +52,6 @@ def _calculate_shift_info(
     dim,
     dim_axis,
     patch_shape,
-    reverse,
 ):
     """
     Calculate metadata about the shift.
@@ -161,14 +160,25 @@ def _validate_alignment_inputs(patch, kwargs):
     return dim_name, coord_name
 
 
-def _get_aligned_coords(patch, dim_name, meta):
+def _get_aligned_coords(patch, dim_name, meta, shift_coord, samples, relative):
     """
     Get the aligned coordinate manager.
     """
     coord = patch.get_coord(dim_name)
     start_shift, end_shift = meta.start_shift, meta.end_shift
+
+    # Calculate new minimum based on mode
+    if samples or relative:
+        # Samples/Relative mode: use the calculated start_shift from metadata
+        # This preserves the original behavior where shifts are relative offsets
+        new_min = coord.min() + coord.step * start_shift
+    else:
+        # Absolute mode: shift coordinate values specify exact absolute positions
+        # The new minimum is the minimum value from the shift coordinate
+        new_min = np.min(shift_coord.values)
+
     new_coord = coord.update(
-        min=coord.min() + coord.step * start_shift,
+        min=new_min,
     ).change_length(len(coord) - start_shift + end_shift)
     return patch.coords.update(**{dim_name: new_coord})
 
@@ -215,11 +225,15 @@ def align_to_coord(
             patch, as only completely overlapped valid data are kept. This
             means no fill_values will occur in the patch.
     relative
-        If True, the values in the alignment coord are relative to alignment
-        dimension, else they are absolute.
+        If True, the values in the alignment coordinate specify offsets from
+        the original start position (in the dimension's units). If False and
+        samples is False (absolute mode), the values specify the exact absolute
+        positions where each trace should start.
     samples
-        If True, the values in the alignment coord indicate samples rather
-        than values in the shift dimension's units.
+        If True, the values in the alignment coordinate specify offsets in
+        sample counts from the original start position. If False and relative
+        is False (absolute mode), the values specify exact absolute positions
+        in the dimension's units.
     reverse
         If True, multiply the alignment coordinate values by -1 to reverse
         a previous alignment operation.
@@ -235,40 +249,27 @@ def align_to_coord(
     -------
     A patch with aligned coordinates.
 
-    Notes
-    -----
-    To understand the mode argument, consider a 2D patch with two traces,
-    an alignment dimension length of 10, and a relative shift of 5 samples.
-    For mode=="full" the output looks like this:
-        -----aaaaaaaaaa
-        bbbbbbbbbb-----
-    For mode=="same" the patch will look like this:
-        aaaaaaaaaa
-        bbbbb-----
-    For mode=="valid":
-        aaaaa
-        bbbbb
-    where a and b represent values in first and second trace, respectively,
-    and the - represents the fill values.
-
     Examples
     --------
     >>> import dascore as dc
     >>> import numpy as np
     >>> patch = dc.get_example_patch()
+    >>> # Select a smaller subset for examples
+    >>> patch = patch.select(distance=(0, 50))
     >>>
-    >>> # Create a suitable dimension for alignment.
-    >>> # This will shift each channel 1 time sample relative to previous
-    >>> time = patch.get_array("time")
+    >>> # Example 1: Absolute mode - align traces to specific times
+    >>> # Each trace will start at the specified absolute time value
+    >>> time = patch.get_coord("time")
     >>> distance = patch.get_array("distance")
-    >>> ref_times = time[np.arange(len(distance))]
-    >>> patch_coord = patch.update_coords(shift_time=("distance", ref_times))
-    >>>
-    >>> # Example 1: Apply the alignment, filling values with NaN
-    >>> out = patch_coord.align_to_coord(time="shift_time", mode="full")
+    >>> # Specify exact start times for each trace (as datetime64)
+    >>> dt = np.timedelta64(1, 'ms')  # 1 millisecond
+    >>> start_times = time.min() + np.arange(len(distance)) * dt
+    >>> patch_abs = patch.update_coords(abs_times=("distance", start_times))
+    >>> # Traces will now start at specified absolute times
+    >>> aligned_abs = patch_abs.align_to_coord(time="abs_times", mode="full")
     >>>
     >>> # Example 2: Round-trip alignment with reverse parameter
-    >>> shifts = np.array([0, 5, 10, 15, 20])  # shifts in samples
+    >>> shifts = np.arange(len(distance))  # shifts in samples
     >>> patch_shift = patch.update_coords(my_shifts=("distance", shifts))
     >>> # Forward alignment
     >>> aligned = patch_shift.align_to_coord(
@@ -286,7 +287,43 @@ def align_to_coord(
     ...     time="my_shifts", samples=True, mode="valid"
     ... )
     >>> # Result contains no NaN values, only the overlapping data
-    >>> assert not np.isnan(valid_aligned).any()
+    >>> assert not np.isnan(valid_aligned.data).any()
+
+    Notes
+    -----
+    **Alignment Meaning
+
+    The `relative` and `samples` parameters control how shift values are interpreted:
+
+    - **Absolute mode** (relative=False, samples=False): Shift coordinate values
+      specify the exact absolute position where each trace should start. For example,
+      if the shift coordinate contains [2.0, 2.5, 3.0], traces will start at times
+      2.0, 2.5, and 3.0 respectively.
+
+    - **Relative mode** (relative=True): Shift coordinate values specify offsets
+      from the original start position in the dimension's units. For example, if
+      the original start is 0.0 and shifts are [0.0, 0.5, 1.0], traces will start
+      at 0.0, 0.5, and 1.0.
+
+    - **Samples mode** (samples=True): Shift coordinate values specify offsets in
+      sample counts. For example, shifts of [0, 1, 2] with step=0.1 will offset
+      traces by 0, 0.1, and 0.2 in the dimension's units.
+
+    **Mode Parameter:**
+
+    To understand the mode argument, consider a 2D patch with two traces,
+    an alignment dimension length of 10, and a relative shift of 5 samples.
+    For mode=="full" the output looks like this:
+        -----aaaaaaaaaa
+        bbbbbbbbbb-----
+    For mode=="same" the patch will look like this:
+        aaaaaaaaaa
+        bbbbb-----
+    For mode=="valid":
+        aaaaa
+        bbbbb
+    where a and b represent values in first and second trace, respectively,
+    and the - represents the fill values.
     """
     # Validate inputs and get coordinates.
     dim_name, coord_name = _validate_alignment_inputs(patch, kwargs)
@@ -302,7 +339,7 @@ def align_to_coord(
 
     # Get the metadata about shift and the indices for shifting.
     inds = _get_shift_indices(coord, dim, reverse, samples, relative)
-    meta = _calculate_shift_info(mode, inds, dim, dim_axis, patch.shape, reverse)
+    meta = _calculate_shift_info(mode, inds, dim, dim_axis, patch.shape)
 
     # Apply shifts to data
     shifted_data = _apply_shifts_to_data(
@@ -311,5 +348,5 @@ def align_to_coord(
     assert shifted_data.ndim == patch.data.ndim, "dimensionality changed"
 
     # Get new coordinates.
-    new_coords = _get_aligned_coords(patch, dim_name, meta)
+    new_coords = _get_aligned_coords(patch, dim_name, meta, coord, samples, relative)
     return patch.new(data=shifted_data, coords=new_coords)

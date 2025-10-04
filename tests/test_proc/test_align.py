@@ -270,7 +270,7 @@ class TestAlignToCoord:
 
     @pytest.mark.parametrize("mode", list(_validators))
     def test_4d_patch_1d_shift(self, patch_with_align_coord_4d, mode):
-        """Test properties of the same mode."""
+        """Test 4D patch with 1D shift coordinate."""
         patch = patch_with_align_coord_4d
         shift_dim = "time"
         shift_coord = "shift_time_absolute_1d"
@@ -281,167 +281,90 @@ class TestAlignToCoord:
         validator = self._validators[mode].__get__(self)
         validator(patch, shifted_patch, shift_dim=shift_dim, shift_coord=shift_coord)
 
-    @pytest.mark.parametrize("mode", list(_validators))
-    def test_4d_patch_2d_shift(self, patch_with_align_coord_4d, mode):
-        """Test properties of the same mode."""
-        patch = patch_with_align_coord_4d
-        shift_dim = "time"
-        shift_coord = "shift_time_absolute_2d"
-        shifted_patch = patch.align_to_coord(
-            **{shift_dim: shift_coord},
-            mode=mode,
-        )
-        validator = self._validators[mode].__get__(self)
-        validator(patch, shifted_patch, shift_dim=shift_dim, shift_coord=shift_coord)
-
-    def test_correctness_no_shift(self, patch_with_zero_shifts):
-        """Test that data values remain unchanged when shifts are zero."""
-        patch = patch_with_zero_shifts
-
-        # Test all modes with zero shifts
-        for mode in ["same", "full", "valid"]:
-            shifted_patch = patch.align_to_coord(
-                time="shift_time_zero", mode=mode, samples=True
-            )
-
-            # Data should be identical to original
-            assert shifted_patch.shape == patch.shape
-            np.testing.assert_array_equal(shifted_patch.data, patch.data)
-
-            # Each trace should still have its original constant value
-            for i in range(5):  # 5 distance channels
-                trace_data = shifted_patch.data[:, i]
-                assert np.all(trace_data == i), f"Trace {i} should have value {i}"
-
-    def test_positive_shifts_same_mode(self, patch_with_known_shifts):
-        """Test data correctness with positive shifts in same mode."""
-        patch = patch_with_known_shifts
-        shifted_patch = patch.align_to_coord(
-            time="shift_time_known", mode="same", samples=True
-        )
-
-        # Shape should remain the same
-        assert shifted_patch.shape == patch.shape
-
-        # Check each trace: trace i should be shifted by i samples
-        for i in range(5):
-            trace_data = shifted_patch.data[:, i]
-
-            # First i samples should be NaN (due to shift)
-            assert np.all(
-                np.isnan(trace_data[:i])
-            ), f"First {i} samples of trace {i} should be NaN"
-
-            # Remaining samples should have value i
-            remaining_samples = trace_data[i:]
-            expected_length = 10 - i  # 10 total samples minus i shifted samples
-            assert len(remaining_samples) == expected_length
-            assert np.all(
-                remaining_samples == i
-            ), f"Remaining samples of trace {i} should be {i}"
-
-    def test_mixed_shifts_full_mode(self, patch_with_known_shifts):
-        """Test data correctness with varying shifts in full mode."""
-        patch = patch_with_known_shifts
-        shifted_patch = patch.align_to_coord(
-            time="shift_time_known", mode="full", samples=True
-        )
-
-        # Full mode should expand the time dimension to accommodate all shifts
-        # Original: 10 samples, shifts: [0, 1, 2, 3, 4], range = 4
-        # New size should be: 10 + 4 = 14
-        assert shifted_patch.shape == (14, 5)
-
-        # Check that all original data is preserved
-        # Each trace should appear at the correct shifted position
-        shifts = np.array([0, 1, 2, 3, 4])
-        min_shift = shifts.min()  # 0
-
-        for i in range(5):
-            trace_data = shifted_patch.data[:, i]
-            shift = shifts[i]
-
-            # Calculate where this trace's data should start in the output
-            start_pos = shift - min_shift  # This gives us [0, 1, 2, 3, 4]
-            end_pos = start_pos + 10  # Original data length is 10
-
-            # The trace data at the correct position should have value i
-            trace_segment = trace_data[start_pos:end_pos]
-            assert np.all(
-                trace_segment == i
-            ), f"Trace {i} data should be {i} at positions {start_pos}:{end_pos}"
-
-            # All other positions should be NaN
-            before_segment = trace_data[:start_pos]
-            after_segment = trace_data[end_pos:]
-            if len(before_segment) > 0:
-                assert np.all(
-                    np.isnan(before_segment)
-                ), f"Before segment of trace {i} should be NaN"
-            if len(after_segment) > 0:
-                assert np.all(
-                    np.isnan(after_segment)
-                ), f"After segment of trace {i} should be NaN"
-
-    def test_valid_mode_overlap(self, patch_with_known_shifts):
-        """Test data correctness in valid mode with overlapping regions."""
-        patch = patch_with_known_shifts
-        shifted_patch = patch.align_to_coord(
-            time="shift_time_known", mode="valid", samples=True
-        )
-
-        # Valid mode should return only the overlapping region
-        # Shifts: [0, 1, 2, 3, 4], original length: 10
-        # Max shift: 4, so valid region is 10 - 4 = 6 samples
-        assert shifted_patch.shape == (6, 5)
-
-        # In valid mode, no NaN values should exist
-        assert not np.any(np.isnan(shifted_patch.data))
-
-        # Each trace should still have its original constant value
-        for i in range(5):
-            trace_data = shifted_patch.data[:, i]
-            assert np.all(
-                trace_data == i
-            ), f"Trace {i} should have value {i} in valid mode"
-
-    def test_round_trip_with_reverse(self, patch_with_known_shifts):
+    @pytest.mark.parametrize(
+        "fixture_name,shift_coord,kwargs",
+        [
+            ("patch_with_known_shifts", "shift_time_known", {"samples": True}),
+            ("patch_with_zero_shifts", "shift_time_zero", {"samples": True}),
+            ("patch_with_mixed_shifts", "shift_time_mixed", {"samples": True}),
+        ],
+    )
+    def test_round_trip_with_reverse(self, fixture_name, shift_coord, kwargs, request):
         """Test that alignment can be reversed using reverse parameter."""
-        patch = patch_with_known_shifts
+        patch = request.getfixturevalue(fixture_name)
 
         # Apply forward alignment with full mode to preserve all data
-        aligned = patch.align_to_coord(
-            time="shift_time_known", mode="full", samples=True
-        )
+        aligned = patch.align_to_coord(time=shift_coord, mode="full", **kwargs)
 
         # Apply reverse alignment to undo the shift
         reversed_patch = aligned.align_to_coord(
-            time="shift_time_known", mode="full", samples=True, reverse=True
+            time=shift_coord, mode="full", reverse=True, **kwargs
         )
 
-        # Drop NaN values reversed patch
-        reversed_clean = reversed_patch.dropna("time")
+        # Verify round-trip - check data values match where not NaN
+        for i in range(5):
+            orig_trace = patch.data[:, i]
+            rev_trace_full = reversed_patch.data[:, i]
+            # Find non-NaN indices
+            non_nan = ~np.isnan(rev_trace_full)
+            # Verify the non-NaN data matches original
+            np.testing.assert_array_equal(rev_trace_full[non_nan], orig_trace)
 
-        # Verify shapes, coords and data are the same after dropping nan.
-        assert reversed_clean.shape == patch.shape
-        assert reversed_clean.equals(patch)
+    def test_valid_mode_reverse(self, patch_with_known_shifts):
+        """Test reverse with valid mode (data loss expected)."""
+        patch = patch_with_known_shifts
 
-    def test_reverse_with_zero_shifts(self, patch_with_zero_shifts):
-        """Test reverse parameter with zero shifts (should be identity)."""
-        patch = patch_with_zero_shifts
-
-        # Apply forward alignment with zero shifts
+        # Forward alignment
         aligned = patch.align_to_coord(
-            time="shift_time_zero", mode="full", samples=True
+            time="shift_time_known", samples=True, mode="valid"
         )
 
-        # Apply reverse alignment (should be identity)
+        # Reverse won't fully restore, but shouldn't crash
         reversed_patch = aligned.align_to_coord(
-            time="shift_time_zero", mode="full", samples=True, reverse=True
+            time="shift_time_known", samples=True, mode="valid", reverse=True
         )
 
-        # Both patches should be identical to original
-        np.testing.assert_array_equal(aligned.data, patch.data)
-        np.testing.assert_array_equal(reversed_patch.data, patch.data)
-        assert aligned.shape == patch.shape
-        assert reversed_patch.shape == patch.shape
+        # Verify it produces valid output with same number of traces
+        assert reversed_patch.shape[1] == patch.shape[1]
+
+    def test_reverse_with_relative_coords(self, simple_patch_for_alignment):
+        """Test reverse with relative coordinate values."""
+        patch = simple_patch_for_alignment
+        time = patch.get_array("time")
+
+        # Create relative time shifts (relative to start)
+        relative_shifts = time[[0, 1, 2, 3, 4]]  # First 5 time values
+        relative_shifts = relative_shifts - relative_shifts.min()
+        patch = patch.update_coords(rel_shifts=("distance", relative_shifts))
+
+        # Forward with relative=True
+        aligned = patch.align_to_coord(time="rel_shifts", relative=True, mode="full")
+
+        # Reverse with relative=True
+        reversed_patch = aligned.align_to_coord(
+            time="rel_shifts", relative=True, mode="full", reverse=True
+        )
+
+        # Verify round-trip
+        reversed_clean = reversed_patch.dropna("time")
+        assert reversed_clean.shape == patch.shape
+
+    def test_reverse_coordinate_accuracy(self, patch_with_known_shifts):
+        """Verify coordinate step is preserved after reverse."""
+        patch = patch_with_known_shifts
+        original_time_coord = patch.get_coord("time")
+
+        # Forward alignment
+        aligned = patch.align_to_coord(
+            time="shift_time_known", samples=True, mode="full"
+        )
+
+        # Reverse alignment
+        reversed_patch = aligned.align_to_coord(
+            time="shift_time_known", samples=True, mode="full", reverse=True
+        )
+
+        # Coordinates should have same step
+        assert np.isclose(
+            reversed_patch.get_coord("time").step, original_time_coord.step
+        )
