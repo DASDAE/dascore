@@ -157,6 +157,14 @@ class TestAlignToCoordValidation:
         with pytest.raises(ParameterError, match="to be strings"):
             patch.align_to_coord(time=None)
 
+    def test_invalid_mode_raises(self, patch_with_align_coord_2d):
+        """Test that invalid mode raises ParameterError."""
+        patch = patch_with_align_coord_2d
+        with pytest.raises(ParameterError, match="mode must be one of"):
+            patch.align_to_coord(
+                time="shift_time_samples", mode="invalid", samples=True
+            )
+
 
 class TestAlignToCoord:
     """Tests for aligning patches."""
@@ -368,3 +376,28 @@ class TestAlignToCoord:
         assert np.isclose(
             reversed_patch.get_coord("time").step, original_time_coord.step
         )
+
+    def test_explicit_starttimes(self, random_patch):
+        """
+        Tests absolute time are updated.
+        """
+        patch = random_patch.select(distance=(..., 10))
+        time_coord = patch.get_coord("time")
+        dist_coord = patch.get_coord("distance")
+        start = np.datetime64("1994-01-01")
+        times = np.array([start] * len(dist_coord))
+        # First test with no shifts
+        out = patch.update_coords(new_times=("distance", times)).align_to_coord(
+            time="new_times"
+        )
+        assert out.get_coord("time").min() == start
+        # Then test with shift
+        shifted_times = times + time_coord.step * np.arange(len(dist_coord)) * 10
+        out = patch.update_coords(new_times=("distance", shifted_times)).align_to_coord(
+            time="new_times", mode="full"
+        )
+        assert out.get_coord("time").min() == start
+        # Iterate over each trace and check its time.
+        for num, start in enumerate(shifted_times):
+            row_patch = out.select(distance=num, samples=True).dropna("time")
+            assert row_patch.get_coord("time").min() == start

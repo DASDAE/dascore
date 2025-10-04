@@ -1684,16 +1684,24 @@ class TestGetNextIndex:
             coord.get_next_index(max_value + step)
 
     def test_out_of_bounds_suppressed(self, evenly_sampled_coord):
-        """Tests for out of bounds values returning when specified."""
+        """Tests for out of bounds values computing actual indices."""
         coord = evenly_sampled_coord
         step = coord.step
         max_value = coord.max()
         min_value = coord.min()
         func = partial(coord.get_next_index, allow_out_of_bounds=True)
-        assert func(len(coord) + 10, samples=True) == len(coord) - 1
-        assert func(-len(coord) - 10, samples=True) == 0
-        assert func(min_value - step) == min_value
-        assert func(max_value + step) == max_value
+        # Samples mode: beyond end should compute actual index
+        assert func(len(coord) + 10, samples=True) == len(coord) + 10
+        # Samples mode: negative indices should compute actual index
+        assert func(-len(coord) - 10, samples=True) == -len(coord) - 10
+        # Absolute mode: below min should compute negative index
+        below_min_idx = func(min_value - step)
+        expected_below = int((min_value - step - min_value) / step)
+        assert below_min_idx == expected_below  # Should be -1
+        # Absolute mode: above max should compute index beyond end
+        above_max_idx = func(max_value + step)
+        expected_above = int((max_value + step - min_value) / step)
+        assert above_max_idx == expected_above  # Should be len(coord)
 
     def test_exact_values(self, evenly_sampled_coord):
         """Ensure using exact values contained in coord return index."""
@@ -1743,9 +1751,10 @@ class TestGetNextIndex:
         """Ensure get index works with array that has out of bounds values."""
         coord = evenly_sampled_coord
         values = coord.values
-        inputs = np.arange(3) + np.max(values)
+        inputs = np.arange(3) + np.max(values)  # [99, 100, 101]
         out = coord.get_next_index(inputs, allow_out_of_bounds=True)
-        assert np.allclose(out, 99)
+        # Should compute actual indices, not clamp to max
+        assert np.allclose(out, [99, 100, 101])
 
     def test_non_sorted_coord_raises(self, random_coord):
         """Ensure a non-sorted coord raises."""

@@ -56,10 +56,16 @@ def _calculate_shift_info(
     """
     Calculate metadata about the shift.
     """
-    # Note: shifts are either all >= 0 or <=0
+    # Validate mode parameter
+    valid_modes = ("full", "same", "valid")
+    if mode not in valid_modes:
+        msg = f"mode must be one of {valid_modes} but got '{mode}'"
+        raise ParameterError(msg)
+
+    # Convert shifts to array
     shifts = np.asarray(shifts, dtype=np.int64)
-    min_shift, max_shift = shifts.min(), shifts.max()
     n_samples = len(dim)
+    min_shift, max_shift = shifts.min(), shifts.max()
 
     if mode == "full":
         # Shift value to left/right most index in reference to stationary trace.
@@ -70,9 +76,8 @@ def _calculate_shift_info(
         start_shift = 0
         end_shift = 0
     else:
-        assert mode == "valid"
+        # mode == "valid"
         # Find overlapping region
-        # for forward, can only shift start time, reverse only endtime.
         start_shift = max_shift if max_shift > 0 else 0
         end_shift = min_shift if min_shift < 0 else 0
 
@@ -100,7 +105,7 @@ def _create_slice_indexer(start, stop, ndim, idx, coord_axes, dim_axis):
     """Create a slice indexer to go from start/stop idx to coord axes."""
     out = [slice(None)] * ndim
     out[dim_axis] = slice(start, stop)
-    for i, ax in zip(idx, coord_axes):
+    for i, ax in zip(idx, coord_axes, strict=True):
         out[ax] = i
     return tuple(out)
 
@@ -128,22 +133,22 @@ def _validate_alignment_inputs(patch, kwargs):
     """Ensure the inputs are usable."""
     # Must have exactly 1 key/value which must both be strings.
     if len(kwargs) != 1:
-        msg = "align_to_coords requires exactly one keyword argument"
+        msg = "align_to_coord requires exactly one keyword argument"
         raise ParameterError(msg)
     (dim_name, coord_name) = dict(kwargs).popitem()
     if not isinstance(coord_name, str):
-        msg = "align_to_coords requires keyword name and value to be strings."
+        msg = "align_to_coord requires keyword name and value to be strings."
         raise ParameterError(msg)
     # key must be a dimension and value a non-dimensional coord name.
     if dim_name not in patch.dims:
         msg = (
-            f"align_to_coords requires the keyword to be a dimension, but "
+            f"align_to_coord requires the keyword to be a dimension, but "
             f"{dim_name} is not one of the patch dimensions: {patch.dims}"
         )
         raise ParameterError(msg)
     if coord_name not in patch.coords.coord_map or coord_name in patch.dims:
         msg = (
-            f"align_to_coords requires the value to be the name of a non-dimensional "
+            f"align_to_coord requires the value to be the name of a non-dimensional "
             f"coordinate but '{coord_name}' is either not a coordinate or also "
             f"a dimension. Patch dimensions are: {patch.dims} and "
             f"patch coords: {patch.coords}"
@@ -153,7 +158,7 @@ def _validate_alignment_inputs(patch, kwargs):
     value_dims = patch.coords.dim_map[coord_name]
     if dim_name in value_dims:
         msg = (
-            f"align_to_coords requires the align coord not depend on the selected"
+            f"align_to_coord requires the align coord not depend on the selected"
             f" dimension but {dim_name} does."
         )
         raise ParameterError(msg)
@@ -190,7 +195,12 @@ def _get_shift_indices(coord, dim, reverse, samples, relative):
     Positive values indicate a shift to the right, negative to left.
     """
     # First get naive indices, then subtract min.
-    inds = dim.get_next_index(coord.values, samples=samples, relative=relative)
+    # In absolute mode (not samples, not relative), allow out of bounds
+    # since shift values define new absolute positions
+    allow_oob = not (samples or relative)
+    inds = dim.get_next_index(
+        coord.values, samples=samples, relative=relative, allow_out_of_bounds=allow_oob
+    )
     out = inds - np.min(inds)
     # Reverse index. This way the min value still is at 0 (reference)
     if reverse:
