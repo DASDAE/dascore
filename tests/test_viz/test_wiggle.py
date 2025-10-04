@@ -54,3 +54,19 @@ class TestWiggle:
         """Ensure show path is callable."""
         monkeypatch.setattr(plt, "show", lambda: None)
         random_patch.viz.wiggle(show=True)
+
+    def test_1d_patch(self, random_patch):
+        """Test that wiggle works with 1D patches (issue #462)."""
+        # Create a 1D patch by reducing one dimension
+        patch_1d = random_patch.mean("distance", dim_reduce="squeeze")
+        # This should work without raising an assertion error
+        ax = patch_1d.viz.wiggle()
+        assert isinstance(ax, plt.Axes)
+        # The remaining dimension should be on the x-axis
+        assert patch_1d.dims[0].lower() in ax.get_xlabel().lower()
+
+    def test_1d_patch_show(self, random_patch, monkeypatch):
+        """Test that show works with 1D patches (issue #462)."""
+        monkeypatch.setattr(plt, "show", lambda: None)
+        patch_1d = random_patch.mean("distance", dim_reduce="squeeze")
+        patch_1d.viz.wiggle(show=True)
