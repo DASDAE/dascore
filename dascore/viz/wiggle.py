@@ -93,6 +93,22 @@ def wiggle(
     >>> _ = patch.viz.wiggle()
     """
     ax = _get_ax(ax)
+
+    # Handle 1D patches (issue #462)
+    if len(patch.dims) == 1:
+        plot_dim = patch.dims[0]
+        x_values = patch.coords.get_array(plot_dim)
+        y_values = patch.data
+        ax.plot(x_values, y_values, color=color, alpha=alpha)
+        ax.set_xlabel(_get_dim_label(patch, plot_dim))
+        ax.set_ylabel("amplitude")
+        # Format time axis if applicable
+        if np.issubdtype(patch.get_coord(plot_dim).dtype, np.datetime64):
+            _format_time_axis(ax, plot_dim, "x")
+        if show:
+            plt.show()
+        return ax
+
     assert len(patch.dims) == 2, "Can only make wiggle plot of 2D Patch"
     # After transpose selected dim must be axis 0 and other axis 1
     patch = patch.transpose(dim, ...)
