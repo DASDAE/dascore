@@ -179,3 +179,14 @@ class TestWaterfall:
         assert (
             cb_label == expected_label
         ), f"Expected '{expected_label}', but got '{cb_label}'"
+
+    def test_incomplete_time_coord(self):
+        """Test waterfall plot with incomplete time coordinates (issue #534)."""
+        # Create a patch with aggregated time dimension (all NaN coordinates)
+        spool = dc.get_example_spool()
+        sub = spool.chunk(time=2, overlap=1)
+        aggs = dc.spool([x.max("time") for x in sub]).concatenate(time=None)[0]
+        # This should not raise an error
+        ax = aggs.viz.waterfall()
+        assert ax is not None
+        assert isinstance(ax, plt.Axes)
