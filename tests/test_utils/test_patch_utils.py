@@ -186,6 +186,29 @@ class TestHistory:
         # No new patch should have been created.
         assert out is random_patch
 
+    def test_patch_argument_truncated(self, random_patch):
+        """
+        Ensure patch arguments are truncated in history (issue #529).
+        """
+        from dascore.utils.patch import patch_function
+
+        @patch_function()
+        def func_with_patch_arg(patch, other_patch):
+            """Test function with patch argument."""
+            return patch.new(data=patch.data + 1)
+
+        other = random_patch.mean("time")
+        result = func_with_patch_arg(random_patch, other_patch=other)
+        history_str = result.attrs.history[0]
+
+        # History should contain truncated representation, not full patch string
+        assert "Patch..." in history_str
+        # Should not contain the full multi-line patch representation
+        assert "\n➤ Coordinates" not in history_str
+        assert "\n➤ Data" not in history_str
+        # Check it's reasonably short (less than 100 chars)
+        assert len(history_str) < 100
+
 
 class TestMergePatches:
     """Tests for merging patches together."""

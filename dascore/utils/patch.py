@@ -67,6 +67,9 @@ def _format_values(val):
             precision=FLOAT_PRECISION,
             threshold=dascore_styles["patch_history_array_threshold"],
         )
+    elif isinstance(val, dc.Patch):
+        # Truncate patch representations in history (issue #529)
+        out = "Patch..."
     else:
         out = str(val)
     return out
