@@ -65,7 +65,15 @@ def _get_extents(dims_r, coords):
     lims = {x: [] for x in dims_r}
     for dim in dims_r:
         array = coords[dim]
-        lims[dim] += [array.min(), array.max()]
+        # Use nanmin/nanmax to handle NaN/NaT values in coordinates
+        with suppress_warnings(RuntimeWarning):
+            array_min = np.nanmin(array)
+            array_max = np.nanmax(array)
+        # If all values are NaN/NaT, fall back to index-based extents
+        if np.isnan(array_min) or np.isnan(array_max):
+            array_min = 0
+            array_max = len(array) - 1
+        lims[dim] += [array_min, array_max]
     # find datetime coords and convert to numpy mtimes
     _convert_datetimes(coords, lims)
     _convert_timedeltas(coords, lims)
