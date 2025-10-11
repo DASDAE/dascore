@@ -2,23 +2,95 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from dataclasses import dataclass
+
+import h5py
 import numpy as np
 
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
-from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import iterate, maybe_get_items, unbyte
+from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
+from dascore.utils.models import UnitQuantity, UTF8Str
 
 # --- Getting format/version
 
-EXPECTED_ATTRS = (
+_EXPECTED_ATTRS = (
     "PulseRate",
     "PulseWidth",
     "NumberOfLoci",
     "schemaVersion",
     "uuid",
 )
+
+_ROOT_ATTRS = {
+    "PulseWidth": "pulse_width",
+    "PulseWidthUnits": "pulse_width_units",
+    "PulseWidthUnit": "pulse_width_units",
+    "PulseWidth.uom": "pulse_width_units",
+    "PulseRate": "pulse_rate",
+    "PulseRateUnit": "pulse_rate_units",
+    "PulseRateUnits": "pulse_rate_units",
+    "PulseRate.uom": "pulse_rate_units",
+    "GaugeLength": "gauge_length",
+    "GaugeLengthUnit": "gauge_length_units",
+    "GaugeLengthUnits": "gauge_length_units",
+    "GaugeLength.uom": "gauge_length_units",
+    "schemaVersion": "schema_version",
+}
+
+_FBE_NODE_ATTRS = {
+    "StartFrequency": "start_frequency",
+    "EndFrequency": "end_frequency",
+}
+
+_FBE_PARENT_ATTRS = {
+    "RawReference": "raw_reference",
+    "TransformSize": "transform_size",
+    "TransformType": "transform_type",
+    "WindowFunction": "window_function",
+    "WindowOverlap": "window_overlap",
+    "WindowSize": "window_size",
+}
+
+_NODE_ATTRS_PROCESSORS = {}
+_NODE_DATA_PROCESSORS = {}
+
+
+# --- Patch Attrs from ProdML files.
+
+
+class ProdMLRawPatchAttrs(dc.PatchAttrs):
+    """Patch attrs for raw data contained in ProdML."""
+
+    pulse_width: float = np.nan
+    pulse_width_units: UnitQuantity | None = None
+    gauge_length: float = np.nan
+    gauge_length_units: UnitQuantity | None = None
+    schema_version: UTF8Str = ""
+
+
+class ProdMLFbePatchAttrs(ProdMLRawPatchAttrs):
+    """Patch attrs for fbe (frequency band extracted) data in Prodml."""
+
+    window_type: UTF8Str = ""
+    raw_reference: UTF8Str = ""
+    window_size: int | None = None
+    window_overlap: int | None = None
+    start_frequency: float = 0
+    end_frequency: float = np.inf
+
+
+@dataclass
+class _ProdMLNodeInfo:
+    """An internal class for parsing the prodml node tree."""
+
+    h5_file: h5py.File
+    name: str
+    patch_type: str
+    node: h5py.Dataset | h5py.Group
+    parent_node: h5py.Dataset | h5py.Group
 
 
 def _get_prodml_version_str(hdf_fi) -> str:
@@ -28,16 +100,10 @@ def _get_prodml_version_str(hdf_fi) -> str:
     if acquisition is None:
         return ""
     attrs = acquisition.attrs
-    is_prodml = set(EXPECTED_ATTRS).issubset(set(attrs))
+    is_prodml = set(_EXPECTED_ATTRS).issubset(set(attrs))
     # in some prodml schemaVersion is str, in other float; this handles both.
     version_str = str(unbyte(attrs["schemaVersion"]))
     return version_str if is_prodml else ""
-
-
-def _get_raw_node_dict(acquisition_node):
-    """Get a dict of {Raw[x]: node}."""
-    out = {i: v for i, v in acquisition_node.items() if i.startswith("Raw")}
-    return dict(sorted(out.items()))
 
 
 def _get_distance_coord(acq):
@@ -61,7 +127,10 @@ def _get_distance_coord(acq):
 
 def _get_time_coord(node):
     """Get the time information from a Raw node."""
-    time_array = node["RawDataTime"]
+    time_names = [x for x in node.keys() if x.endswith("DataTime")]
+    assert len(time_names) == 1, f"Found bad time information in prodml {node=}"
+    time_name = time_names[0]
+    time_array = node[time_name]
     array_len = len(time_array)
     assert array_len > 0, "Missing time array in ProdML file."
     time_attrs = time_array.attrs
@@ -86,12 +155,58 @@ def _get_time_coord(node):
     return time_coord
 
 
+def _yield_data_nodes(fi) -> Iterator[_ProdMLNodeInfo]:
+    """
+    Iterate the data nodes contained in the prodml file and yield
+
+    Return a tuple of (acq_node, parent_node, data_node).
+
+    This accounts for raw data and processed data.
+    """
+    acq = fi["Acquisition"]
+    raw_arrays = {"RawDataTime", "RawData"}
+    # Get raw data.
+    raws = {i: v for i, v in acq.items() if i.lower().startswith("raw")}
+    # Get fbe from processed data.
+    processed = acq.get("Processed", {})
+    fbe = {i: v for i, v in processed.items() if i.lower().startswith("fbe")}
+    # Iterate each node and yield back.
+    for name, node in (fbe | raws).items():
+        # Patch type is first 3 chars of data array name.
+        patch_type = str(name.split("/")[-1].lower()[:3])
+        if patch_type == "raw":
+            # This is an empty data node.
+            if not raw_arrays.issubset(set(node)):
+                continue
+            raw_info = _ProdMLNodeInfo(
+                node=node,
+                name=name,
+                h5_file=fi,
+                patch_type=patch_type,
+                parent_node=acq,
+            )
+            yield raw_info
+        # need to iterate into sub fbe because it can have many bands.
+        if patch_type == "fbe":
+            subs = {i: v for i, v in node.items() if i.lower().startswith("fbedata[")}
+            for sub_name, sub_node in subs.items():
+                fbe_info = _ProdMLNodeInfo(
+                    node=sub_node,
+                    name=sub_name,
+                    h5_file=fi,
+                    patch_type=patch_type,
+                    parent_node=node,
+                )
+                yield fbe_info
+
+
 def _get_data_unit_and_type(node):
     """Get the data type and units."""
     attrs = node.attrs
     attr_map = {
         "RawDescription": "data_type",
         "RawDataUnit": "data_units",
+        "FbeDataUnit": "data_units",
     }
     out = maybe_get_items(attrs, attr_map)
     if (data_type := out.get("data_type")) is not None:
@@ -100,50 +215,78 @@ def _get_data_unit_and_type(node):
     return out
 
 
-def _get_prodml_attrs(fi, extras=None) -> list[dict]:
+@register_func(_NODE_ATTRS_PROCESSORS, key="raw")
+def _get_raw_node_attr_coords(node_info, d_coord, base_info):
+    """Get the raw data information."""
+    info = dict(base_info)
+    t_coord = _get_time_coord(node_info.node)
+    info.update(_get_data_unit_and_type(node_info.node))
+    coords = dc.get_coord_manager(
+        coords={"time": t_coord, "distance": d_coord},
+        dims=_get_dims_from_attrs(node_info.node["RawData"].attrs),
+    )
+    return ProdMLRawPatchAttrs(**info), coords
+
+
+@register_func(_NODE_ATTRS_PROCESSORS, key="fbe")
+def _get_processed_node_attr_coords(node_info, d_coord, base_info):
+    """Get information about the processed patches."""
+    out = dict(base_info)
+    t_coord = _get_time_coord(node_info.parent_node)
+    out.update(_get_data_unit_and_type(node_info.node))
+    out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
+    out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
+    # For some reason, the distance coords in raw and fbe data are not the
+    # same. For now, we just assume the FBE distance is a subset of the raw
+    # distance referenced by StartLocusIndex. It may be that the test file used
+    # develop this code was wrong and we need to revise this.
+    start_ind = unbyte(node_info.parent_node.attrs["NumberOfLoci"])
+    total_inds = unbyte(node_info.parent_node.attrs["NumberOfLoci"])
+    # Put the coords back together.
+    distance = d_coord[start_ind : start_ind + total_inds]
+    coords = dc.get_coord_manager(
+        coords={"time": t_coord, "distance": distance},
+        dims=_get_dims_from_attrs(node_info.parent_node.attrs),
+    )
+    return ProdMLFbePatchAttrs(**out), coords
+
+
+@register_func(_NODE_DATA_PROCESSORS, key="raw")
+def _get_raw_data(node_info):
+    """Get the data from a raw node."""
+    node = node_info.node
+    data_node = [x for x in list(node) if x.lower().endswith("data")]
+    assert len(data_node) == 1, "more than one data node found."
+    data = node[data_node[0]]
+    return data
+
+
+@register_func(_NODE_DATA_PROCESSORS, key="fbe")
+def _get_fbe_data(node_info):
+    """Get the data from a fbe node."""
+    node = node_info.node
+    return node[:]
+
+
+def _yield_prodml_attrs_coords(fi, extras=None):
     """Scan a prodML file, return metadata."""
-    _root_attrs = {
-        "PulseWidth": "pulse_width",
-        "PulseWidthUnits": "pulse_width_units",
-        "PulseWidthUnit": "pulse_width_units",
-        "PulseWidth.uom": "pulse_width_units",
-        "PulseRate": "pulse_rate",
-        "PulseRateUnit": "pulse_rate_units",
-        "PulseRateUnits": "pulse_rate_units",
-        "PulseRate.uom": "pulse_rate_units",
-        "GaugeLength": "gauge_length",
-        "GaugeLengthUnit": "gauge_length_units",
-        "GaugeLengthUnits": "gauge_length_units",
-        "GaugeLength.uom": "gauge_length_units",
-        "schemaVersion": "schema_version",
-    }
     acq = fi["Acquisition"]
-    base_info = maybe_get_items(acq.attrs, _root_attrs)
+    # Get the information common to all from root attributes.
+    base_info = maybe_get_items(acq.attrs, _ROOT_ATTRS)
+    base_info.update(extras if extras is not None else {})
     d_coord = _get_distance_coord(acq)
-    raw_nodes = _get_raw_node_dict(acq)
-
-    # Iterate each raw data node. I have only ever seen 1 in a file but since
-    # it is indexed like Raw[0] there might be more.
-    out = []
-    for node in raw_nodes.values():
-        info = dict(base_info)
-        t_coord = _get_time_coord(node)
-        info.update(_get_data_unit_and_type(node))
-        dims = _get_dims(node)
-        info["dims"] = dims
-        if extras is not None:
-            info.update(extras)
-        info["coords"] = {"time": t_coord, "distance": d_coord}
-        out.append(info)
-    return out
+    # Iterate the raw and processed data and return results in a list.
+    for node_info in _yield_data_nodes(fi):
+        func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
+        attr, coords = func(node_info, d_coord, base_info)
+        yield (attr, coords)
 
 
-def _get_dims(node):
+def _get_dims_from_attrs(attrs):
     """Get the dimension names in the form of a tuple."""
     # we use distance rather than locus, setup mapping to rename this.
     map_ = {"locus": "distance", "Locus": "distance", "Time": "time"}
-    data_attrs = node["RawData"].attrs
-    dims = unbyte(data_attrs.get("Dimensions", "time, distance"))
+    dims = unbyte(attrs.get("Dimensions", "time, distance"))
     if isinstance(dims, str):
         dims = dims.replace(",", " ")
         dims = tuple(map_.get(x, x) for x in dims.split())
@@ -153,22 +296,15 @@ def _get_dims(node):
     return dims
 
 
-def _get_data_attr(attrs, node, time, distance):
-    """Get a new attributes with adjusted time/distance and data array."""
-    dims = _get_dims(node)
-    cm = get_coord_manager(attrs["coords"], dims=dims)
-    new_cm, data = cm.select(array=node["RawData"], time=time, distance=distance)
-    return data, new_cm
-
-
-def _read_prodml(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
+def _read_prodml(fi, distance=None, time=None):
     """Read the prodml values into a patch."""
-    attr_list = _get_prodml_attrs(fi)
-    nodes = list(_get_raw_node_dict(fi["Acquisition"]).values())
     out = []
-    for attrs, node in zip(attr_list, nodes):
-        data, coords = _get_data_attr(attrs, node, time, distance)
+    iterator = zip(_yield_prodml_attrs_coords(fi), _yield_data_nodes(fi))
+    for (attrs, cm), info in iterator:
+        data_func = _NODE_DATA_PROCESSORS[info.patch_type]
+        data = data_func(info)
         if data.size:
-            pattrs = attr_cls(**attrs)
-            out.append(dc.Patch(data=data, attrs=pattrs, coords=coords))
+            if time is not None or distance is not None:
+                cm, data = cm.select(array=data, time=time, distance=distance)
+            out.append(dc.Patch(data=data, attrs=attrs, coords=cm))
     return out
