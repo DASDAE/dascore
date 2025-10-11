@@ -303,8 +303,8 @@ def _read_prodml(fi, distance=None, time=None):
     for (attrs, cm), info in iterator:
         data_func = _NODE_DATA_PROCESSORS[info.patch_type]
         data = data_func(info)
+        if time is not None or distance is not None:
+            cm, data = cm.select(array=data, time=time, distance=distance)
         if data.size:
-            if time is not None or distance is not None:
-                cm, data = cm.select(array=data, time=time, distance=distance)
             out.append(dc.Patch(data=data, attrs=attrs, coords=cm))
     return out
