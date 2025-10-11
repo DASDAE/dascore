@@ -84,6 +84,8 @@ def _read_opto_das(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     data_node = fi["data"]
     coords = attrs.pop("coords")
     cm, data = coords.select(array=data_node, distance=distance, time=time)
+    if not data.size:
+        return []
     attrs["coords"] = cm.to_summary_dict()
     attrs["dims"] = cm.dims
     return [dc.Patch(data=data, coords=cm, attrs=attr_cls(**attrs))]

@@ -56,6 +56,8 @@ class GDR_V1(FiberIO):  # noqa
         attr_dict, cm, data = _get_attrs_coords_and_data(resource, snap=snap)
         if kwargs:
             cm, data = _maybe_trim_data(cm, data, **kwargs)
+        if not data.size:  # skip empty patches.
+            return dc.spool([])
         attrs = GDRPatchAttrs(**attr_dict)
         patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
         return dc.spool([patch])

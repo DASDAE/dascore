@@ -11,7 +11,7 @@ from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
-from .utils import _get_attr, _get_patch, _get_version_string
+from .utils import _get_attr, _get_patches, _get_version_string
 
 
 class SilixaPatchAttrs(dc.PatchAttrs):
@@ -62,7 +62,7 @@ class SilixaH5V1(FiberIO):
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a single file with Silixa H5 data inside."""
-        patches = _get_patch(
+        patches = _get_patches(
             resource, time=time, distance=distance, attr_cls=SilixaPatchAttrs
         )
         return dc.spool(patches)

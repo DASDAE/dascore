@@ -315,10 +315,6 @@ class TestRead:
         with skip_missing():
             attrs_from_file = dc.scan(path)
         assert len(attrs_from_file)
-        # skip files that have more than one patch for now
-        # TODO just write better test logic to handle this case.
-        if len(attrs_from_file) > 1:
-            pytest.skip("Haven't implemented test for multipatch files.")
         attrs_init = attrs_from_file[0]
         for dim in attrs_init.dim_tuple:
             start = getattr(attrs_init, f"{dim}_min")
@@ -353,6 +349,33 @@ class TestRead:
             coord = patch.get_coord(dim)
             _assert_op_or_close(coord.min(), getattr(attrs, f"{dim}_min"), eq)
             _assert_op_or_close(coord.max(), trim_tuple[1], le)
+
+    def test_slice_out_all_patches_time(self, io_path_tuple):
+        """Ensure slicing outside of file time range returns an empty spool."""
+        io, path = io_path_tuple
+        with skip_missing():
+            attrs_from_file = dc.scan(path)
+        dims = {y for x in attrs_from_file for y in set(x.coords)}
+        if "time" not in dims:
+            pytest.skip("Test requires patch with time and distance dimensions.")
+        # First test on selecting outside time range.
+        end_time = np.max([x.coords["time"].max for x in attrs_from_file])
+        one_second = np.timedelta64(1, "s")
+        spool = io.read(path, time=(end_time + one_second, ...))
+        assert len(spool) == 0
+
+    def test_slice_out_all_patches_distance(self, io_path_tuple):
+        """Ensure slicing outside file distance range returns an empty spool."""
+        io, path = io_path_tuple
+        with skip_missing():
+            attrs_from_file = dc.scan(path)
+        dims = {y for x in attrs_from_file for y in set(x.coords)}
+        if "distance" not in dims:
+            pytest.skip("Test requires patch with time and distance dimensions.")
+        # The outside distance range.
+        max_dist = np.max([x.coords["distance"].max for x in attrs_from_file])
+        spool = io.read(path, distance=(max_dist + 1, ...))
+        assert len(spool) == 0
 
 
 class TestScan:

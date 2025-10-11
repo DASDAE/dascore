@@ -70,6 +70,8 @@ class Terra15FormatterV4(FiberIO):
             negligible.
         """
         patch = _read_terra15(resource, time, distance, snap_dims=snap_dims)
+        if not patch.data.size:
+            return dc.spool([])
         return dc.spool(patch)
 
 

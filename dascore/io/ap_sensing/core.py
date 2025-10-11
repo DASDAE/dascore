@@ -11,7 +11,7 @@ from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
-from .utils import _get_attrs_dict, _get_patch, _get_version_string
+from .utils import _get_attrs_dict, _get_patches, _get_version_string
 
 
 class APSensingPatchAttrs(dc.PatchAttrs):
@@ -61,7 +61,7 @@ class APSensingV10(FiberIO):
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a single file with APSensing data inside."""
-        patches = _get_patch(
+        patches = _get_patches(
             resource, time=time, distance=distance, attr_cls=APSensingPatchAttrs
         )
         return dc.spool(patches)

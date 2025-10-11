@@ -117,7 +117,10 @@ class DASDAEV1(FiberIO):
         except (KeyError, IndexError):
             return dc.spool([])
         for patch_group in waveform_group:
-            patches.append(_read_patch(patch_group, **kwargs))
+            patch = _read_patch(patch_group, **kwargs)
+            if not patch.data.size and kwargs:
+                continue
+            patches.append(patch)
         return dc.spool(patches)
 
     def scan(self, resource: PyTablesReader, **kwargs):

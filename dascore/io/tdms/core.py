@@ -59,5 +59,7 @@ class TDMSFormatterV4713(FiberIO):
         # trim data if required
         if time is not None or distance is not None:
             coords, data = coords.select(data, time=time, distance=distance)
+        if not data.size:
+            return dc.spool([])
         patch = Patch(data=data, coords=coords, attrs=attrs)
         return dc.spool(patch)

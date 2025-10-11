@@ -38,6 +38,8 @@ class H5Simple(FiberIO):
         """
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
         new_cm, new_data = _maybe_trim_data(cm, data, kwargs)
+        if not new_cm.size:
+            return dc.spool([])
         patch = dc.Patch(coords=new_cm, data=new_data[:], attrs=attrs)
         return dc.spool([patch])
 
