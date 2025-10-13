@@ -223,7 +223,7 @@ def _get_patches(
     # can be sliced before loading all data into memory.
     if time is not None or distance is not None:
         cm, data = cm.select(data, time=time, distance=distance)
-    patch = dc.Patch(data=array(data), coords=cm, attrs=patch_attrs)
     if not data.size:  # no data in this slice.
         return []
+    patch = dc.Patch(data=array(data), coords=cm, attrs=patch_attrs)
     return [patch]

@@ -239,9 +239,9 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info):
     # For some reason, the distance coords in raw and fbe data are not the
     # same. For now, we just assume the FBE distance is a subset of the raw
     # distance referenced by StartLocusIndex. It may be that the test file used
-    # develop this code was wrong and we need to revise this.
-    start_ind = unbyte(node_info.parent_node.attrs["NumberOfLoci"])
-    total_inds = unbyte(node_info.parent_node.attrs["NumberOfLoci"])
+    # develop this code was malformed and we need to revise this.
+    start_ind = node_info.parent_node.attrs.get("StartLocusIndex", 0)
+    total_inds = node_info.parent_node.attrs["NumberOfLoci"]
     # Put the coords back together.
     distance = d_coord[start_ind : start_ind + total_inds]
     coords = dc.get_coord_manager(
@@ -299,7 +299,7 @@ def _get_dims_from_attrs(attrs):
 def _read_prodml(fi, distance=None, time=None):
     """Read the prodml values into a patch."""
     out = []
-    iterator = zip(_yield_prodml_attrs_coords(fi), _yield_data_nodes(fi))
+    iterator = zip(_yield_prodml_attrs_coords(fi), _yield_data_nodes(fi), strict=True)
     for (attrs, cm), info in iterator:
         data_func = _NODE_DATA_PROCESSORS[info.patch_type]
         data = data_func(info)

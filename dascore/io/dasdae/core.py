@@ -21,6 +21,7 @@ from dascore.utils.patch import get_patch_names
 
 from .utils import (
     _get_contents_from_patch_groups,
+    _kwargs_empty,
     _read_patch,
     _save_patch,
     _write_meta,
@@ -118,7 +119,7 @@ class DASDAEV1(FiberIO):
             return dc.spool([])
         for patch_group in waveform_group:
             patch = _read_patch(patch_group, **kwargs)
-            if not patch.data.size and kwargs:
+            if not patch.data.size and not _kwargs_empty(kwargs):
                 continue
             patches.append(patch)
         return dc.spool(patches)

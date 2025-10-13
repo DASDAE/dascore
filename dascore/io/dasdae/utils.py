@@ -183,6 +183,15 @@ def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
     return out
 
 
+def _kwargs_empty(kwargs):
+    """Determine if the keyword arguments are effectively empty."""
+    # These keys get passed in from some spools, so don't count them.
+    pop_keys = {"file_version", "file_format", "path"}
+    # We also only count keys whose values are not None.
+    out = {i: v for i, v in kwargs.items() if v is not None and i not in pop_keys}
+    return not bool(out)
+
+
 def _get_patch_content_from_group(group):
     """Get patch content from a single node."""
     attrs = group._v_attrs
