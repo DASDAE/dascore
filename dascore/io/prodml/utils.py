@@ -264,8 +264,7 @@ def _get_raw_data(node_info):
 @register_func(_NODE_DATA_PROCESSORS, key="fbe")
 def _get_fbe_data(node_info):
     """Get the data from a fbe node."""
-    node = node_info.node
-    return node[:]
+    return node_info.node
 
 
 def _yield_prodml_attrs_coords(fi, extras=None):
