@@ -242,8 +242,18 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info):
     # same. For now, we just assume the FBE distance is a subset of the raw
     # distance referenced by StartLocusIndex. It may be that the test file used
     # develop this code was malformed and we need to revise this.
-    start_ind = node_info.parent_node.attrs.get("StartLocusIndex", 0)
-    total_inds = node_info.parent_node.attrs["NumberOfLoci"]
+    start_raw = node_info.parent_node.attrs.get("StartLocusIndex", 0)
+    total_raw = node_info.parent_node.attrs["NumberOfLoci"]
+    start_ind = int(
+        np.asarray(unbyte(start_raw))
+        if isinstance(start_raw, bytes | np.bytes_)
+        else np.asarray(start_raw).item()
+    )
+    total_inds = int(
+        np.asarray(unbyte(total_raw))
+        if isinstance(total_raw, bytes | np.bytes_)
+        else np.asarray(total_raw).item()
+    )
     # Put the coords back together.
     distance = d_coord[start_ind : start_ind + total_inds]
     coords = dc.get_coord_manager(
