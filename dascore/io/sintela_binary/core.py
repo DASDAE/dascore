@@ -15,7 +15,7 @@ from .utils import (
     _HEADER_SIZES,
     SYNC_WORD,
     _get_attrs_coords_header,
-    _get_patch,
+    _get_patches,
     _read_base_header,
 )
 
@@ -74,7 +74,8 @@ class SintelaBinaryV3(FiberIO):
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a single Sintela binary file."""
-        patch = _get_patch(
+        patch = _get_patches(
             resource, time=time, distance=distance, attr_class=SintelaPatchAttrs
         )
+
         return dc.spool(patch)

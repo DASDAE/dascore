@@ -47,10 +47,11 @@ class SegyV1_0(FiberIO):  # noqa
             data, coords = _get_filtered_data_and_coords(
                 fi, coords, time=time, channel=channel
             )
+        if not data.size:
+            return dc.spool([])
 
         patch = dc.Patch(coords=coords, data=data, attrs=attrs)
-        patch_trimmed = patch.select(time=time, channel=channel)
-        return dc.spool([patch_trimmed])
+        return dc.spool([patch])
 
     def scan(self, path, **kwargs) -> list[dc.PatchAttrs]:
         """

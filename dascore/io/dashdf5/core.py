@@ -68,6 +68,8 @@ class DASHDF5(FiberIO):
             time=time,
             channel=channel,
         )
+        if not data.size:
+            return dc.spool([])
         attrs = _get_cf_attrs(resource, coords_new)
         patch = dc.Patch(
             data=data, attrs=attrs, coords=coords_new, dims=coords_new.dims

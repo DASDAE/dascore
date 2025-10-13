@@ -222,15 +222,18 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
         if t2 is not None and t2 is not ...:
             in_time = np.logical_and(in_time, ~(t_start_end[:, 0] > t2))
         times = t_start_end[in_time]
-        tmin = times[:, 0].min()
-        tmax = times[:, 1].max()
         # get start/stop indexes for complete blocks
         start = np.argmax(in_time)
         stop = np.argmax(np.cumsum(in_time))
         total_slice[0] = slice(start, stop)
         # load data from disk.
         data_2d = data[tuple(total_slice)].reshape(-1, data.shape[-1])
+        # Bail out early, no size on array.
+        if not data_2d.size:
+            return data_2d, time_coord.empty()
         # Next, get mew time coord and slice.
+        tmin = times[:, 0].min()
+        tmax = times[:, 1].max()
         new_coord, time_slice = (
             get_coord(min=tmin, max=tmax, step=time_coord.step)
             .change_length(len(data_2d))
@@ -257,7 +260,11 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
         )
     else:  # no need to mess with blocks, all time is selected
         data_3d = data[tuple(total_slice)]
-        data = data_3d.reshape(-1, data_3d.shape[2])
+        # Distance has been selected out (no distance remains)
+        if not len(dist_coord):
+            data = np.zeros((len(time_coord), len(dist_coord)), dtype=data_3d.dtype)
+        else:
+            data = data_3d.reshape(-1, data_3d.shape[2])
     cm = get_coord_manager({"time": time_coord, "distance": dist_coord}, dims=cm.dims)
     return data, cm
 
@@ -267,6 +274,7 @@ def _read_febus(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     out = []
     for attr, cm, febus in _yield_attrs_coords(fi):
         data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
-        patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls(**attr))
-        out.append(patch)
+        if data.size:
+            patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls(**attr))
+            out.append(patch)
     return out

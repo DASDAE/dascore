@@ -10,7 +10,7 @@ from dascore.io import FiberIO
 from dascore.utils.models import UnitQuantity, UTF8Str
 
 from ...utils.hdf5 import H5Reader
-from .utils import _get_prodml_attrs, _get_prodml_version_str, _read_prodml
+from .utils import _get_prodml_version_str, _read_prodml, _yield_prodml_attrs_coords
 
 
 class ProdMLPatchAttrs(dc.PatchAttrs):
@@ -51,8 +51,10 @@ class ProdMLV2_0(FiberIO):  # noqa
             "file_format": self.name,
             "file_version": str(file_version),
         }
-        attrs = _get_prodml_attrs(resource, extras=extras)
-        return [ProdMLPatchAttrs(**x) for x in attrs]
+        out = []
+        for attr, coords in _yield_prodml_attrs_coords(resource, extras=extras):
+            out.append(attr.update(coords=coords))
+        return out
 
     def read(
         self,
@@ -62,9 +64,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a ProdML file."""
-        patches = _read_prodml(
-            resource, time=time, distance=distance, attr_cls=ProdMLPatchAttrs
-        )
+        patches = _read_prodml(resource, time=time, distance=distance)
         return dc.spool(patches)
 
 

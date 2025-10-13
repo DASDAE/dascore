@@ -12,6 +12,10 @@ from dascore.core.coords import get_coord
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_int
 
+# Keys not counted as true kwargs for determining if patch is filtered/selected.
+_KWARG_NON_KEYS = {"file_version", "file_format", "path"}
+
+
 # --- Functions for writing DASDAE format
 
 
@@ -181,6 +185,16 @@ def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
         with suppress_warnings(DeprecationWarning):
             out.append(dc.PatchAttrs(**contents))
     return out
+
+
+def _kwargs_empty(kwargs) -> bool:
+    """Determine if the keyword arguments are *effectively* empty."""
+    # These keys get passed in from some spools, so don't count them.
+    # We also only count keys whose values are not None.
+    out = {
+        i: v for i, v in kwargs.items() if v is not None and i not in _KWARG_NON_KEYS
+    }
+    return not bool(out)
 
 
 def _get_patch_content_from_group(group):

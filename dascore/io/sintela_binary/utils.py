@@ -213,7 +213,7 @@ def _get_attrs_coords_header(rid, attr_class=PatchAttrs, extras=None):
     return attr_class(**attrs), cm, header
 
 
-def _get_patch(
+def _get_patches(
     resource, attr_class=PatchAttrs, extras=None, time=None, distance=None, **kwargs
 ):
     """Get the patch from the sintela file."""
@@ -223,5 +223,7 @@ def _get_patch(
     # can be sliced before loading all data into memory.
     if time is not None or distance is not None:
         cm, data = cm.select(data, time=time, distance=distance)
+    if not data.size:  # no data in this slice.
+        return []
     patch = dc.Patch(data=array(data), coords=cm, attrs=patch_attrs)
-    return patch
+    return [patch]

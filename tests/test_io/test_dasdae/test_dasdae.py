@@ -131,7 +131,7 @@ class TestReadDASDAE:
         assert out[0].equals(random_patch)
 
     def test_round_trip_empty_patch(self, written_dascore_v1_empty):
-        """Ensure an emtpy patch can be deserialize."""
+        """Ensure an empty patch can be deserialized."""
         spool = dc.read(written_dascore_v1_empty)
         assert len(spool) == 1
         spool[0].equals(dc.Patch())

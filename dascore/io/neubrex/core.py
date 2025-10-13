@@ -71,6 +71,8 @@ class NeubrexRFSV1(FiberIO):
         attr_dict, cm, data = rfs_utils._get_attrs_coords_and_data(resource, snap)
         if kwargs:
             cm, data = rfs_utils._maybe_trim_data(cm, data, **kwargs)
+        if not data.size:
+            return dc.spool([])
         attrs = NeubrexRFSPatchAttrs(**attr_dict)
         patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
         return dc.spool([patch])
@@ -116,6 +118,8 @@ class NeubrexDASV1(FiberIO):
         attr_dict, cm, data = das_utils._get_attrs_coords_and_data(resource)
         if kwargs:
             cm, data = das_utils._maybe_trim_data(cm, data, **kwargs)
+        if not data.size:
+            return dc.spool([])
         attrs = NeubrexRFSPatchAttrs(**attr_dict)
         patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
         return dc.spool([patch])

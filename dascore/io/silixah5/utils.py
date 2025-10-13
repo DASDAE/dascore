@@ -101,7 +101,7 @@ def _get_attr(resource, attr_cls, extras=None):
     return attrs
 
 
-def _get_patch(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
+def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
     """Get a patch from ap_sensing file."""
     attrs = _get_attr_dict(resource)
     coords = attrs["coords"]
@@ -109,7 +109,9 @@ def _get_patch(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
     if time is not None or distance is not None:
         coords, data = coords.select(array=data, time=time, distance=distance)
         attrs["coords"] = coords
+    if not data.size:
+        return []
     expected_fields = set(attr_cls.model_fields)
     attrs_sub = {i: v for i, v in attrs.items() if i in expected_fields}
     attrs = attr_cls.model_validate(attrs_sub)
-    return dc.Patch(data=data[:], coords=coords, attrs=attrs)
+    return [dc.Patch(data=data[:], coords=coords, attrs=attrs)]
