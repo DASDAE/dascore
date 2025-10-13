@@ -74,9 +74,11 @@ class ProdMLRawPatchAttrs(dc.PatchAttrs):
 class ProdMLFbePatchAttrs(ProdMLRawPatchAttrs):
     """Patch attrs for fbe (frequency band extracted) data in Prodml."""
 
-    window_type: UTF8Str = ""
     raw_reference: UTF8Str = ""
+    transform_size: float = np.nan
+    transform_type: UTF8Str = ""
     window_size: int | None = None
+    window_function: UTF8Str = ""
     window_overlap: int | None = None
     start_frequency: float = 0
     end_frequency: float = np.inf
@@ -117,9 +119,9 @@ def _get_distance_coord(acq):
         return unbyte(ustr)
 
     attrs = acq.attrs
-    step = attrs["SpatialSamplingInterval"]
-    num_dist_channels = attrs["NumberOfLoci"]
-    start = attrs["StartLocusIndex"] * step
+    step = float(attrs["SpatialSamplingInterval"])
+    num_dist_channels = int(attrs["NumberOfLoci"])
+    start = int(attrs["StartLocusIndex"]) * step
     stop = start + num_dist_channels * step
     units = get_distance_units(attrs)
     return get_coord(start=start, stop=stop, units=units, step=step)
@@ -284,7 +286,12 @@ def _yield_prodml_attrs_coords(fi, extras=None):
 def _get_dims_from_attrs(attrs):
     """Get the dimension names in the form of a tuple."""
     # we use distance rather than locus, setup mapping to rename this.
-    map_ = {"locus": "distance", "Locus": "distance", "Time": "time"}
+    map_ = {
+        "locus": "distance",
+        "Locus": "distance",
+        "Time": "time",
+        "Distance": "distance",
+    }
     dims = unbyte(attrs.get("Dimensions", "time, distance"))
     if isinstance(dims, str):
         dims = dims.replace(",", " ")
@@ -298,10 +305,13 @@ def _get_dims_from_attrs(attrs):
 def _read_prodml(fi, distance=None, time=None):
     """Read the prodml values into a patch."""
     out = []
-    iterator = zip(_yield_prodml_attrs_coords(fi), _yield_data_nodes(fi), strict=True)
-    for (attrs, cm), info in iterator:
-        data_func = _NODE_DATA_PROCESSORS[info.patch_type]
-        data = data_func(info)
+    acq = fi["Acquisition"]
+    base_info = maybe_get_items(acq.attrs, _ROOT_ATTRS)
+    d_coord = _get_distance_coord(acq)
+    for info in _yield_data_nodes(fi):
+        attr_func = _NODE_ATTRS_PROCESSORS[info.patch_type]
+        attrs, cm = attr_func(info, d_coord, base_info)
+        data = _NODE_DATA_PROCESSORS[info.patch_type](info)
         if time is not None or distance is not None:
             cm, data = cm.select(array=data, time=time, distance=distance)
         if data.size:
