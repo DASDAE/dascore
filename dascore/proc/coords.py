@@ -608,6 +608,14 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     """
     dims = tuple(dims)
     old_dims = self.coords.dims
+    # Filter out ellipsis from dims to validate
+    dims_to_check = [d for d in dims if d is not ...]
+    # Check for invalid dimensions
+    if invalid_dims := set(dims_to_check) - set(old_dims):
+        invalid_list = sorted(invalid_dims)
+        valid_list = sorted(old_dims)
+        msg = f"Dimension(s) {invalid_list} not found in Patch dimensions: {valid_list}"
+        raise ParameterError(msg)
     new_coord = self.coords.transpose(*dims)
     new_dims = new_coord.dims
     axes = tuple(old_dims.index(x) for x in new_dims)
