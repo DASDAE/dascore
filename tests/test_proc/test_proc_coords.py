@@ -805,3 +805,90 @@ class TestGetAxis:
         match = "has no dimension"
         with pytest.raises(CoordError, match=match):
             random_patch.get_axis(dim="money")
+
+
+class TestTranspose:
+    """Tests for transposing patches."""
+
+    @pytest.fixture(scope="class")
+    def patch_5d(self):
+        """Create a 5D patch for testing transpose permutations."""
+        shape = (3, 4, 5, 6, 7)
+        dims = ("time", "distance", "x", "y", "z")
+        data = np.arange(np.prod(shape)).reshape(shape)
+        coords = {
+            "time": np.arange(shape[0]),
+            "distance": np.arange(shape[1]),
+            "x": np.arange(shape[2]),
+            "y": np.arange(shape[3]),
+            "z": np.arange(shape[4]),
+        }
+        patch = dc.Patch(data=data, dims=dims, coords=coords)
+        return patch
+
+    def test_transpose_invalid_dimension_raises_parameter_error(self, random_patch):
+        """Ensure transposing with invalid dimension raises clear ParameterError."""
+        msg = "not_a_dim.*not found in Patch dimensions"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.transpose("time", "not_a_dim")
+
+    def test_transpose_multiple_invalid_dimensions_raises(self, random_patch):
+        """Ensure multiple invalid dimensions are reported."""
+        msg = r"bad_dim1.*bad_dim2.*not found in Patch dimensions"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.transpose("bad_dim1", "bad_dim2")
+
+    def test_transpose_valid_dimensions_works(self, random_patch):
+        """Ensure transpose works with valid dimensions."""
+        dims = random_patch.dims[::-1]
+        # Transpose to reverse dimension order
+        out = random_patch.transpose(*dims)
+        # Should reverse the dimensions and shape
+        assert out.dims == dims
+        assert out.shape == (random_patch.shape[1], random_patch.shape[0])
+
+    def test_transpose_no_args(self, random_patch):
+        """Ensure transposing rotates dimensions."""
+        pa = random_patch.transpose()
+        assert pa.dims != random_patch.dims
+        assert pa.dims == random_patch.dims[::-1]
+
+    def test_transpose_5d_complete_reversal(self, patch_5d):
+        """Test complete reversal of all dimensions."""
+        out = patch_5d.transpose("z", "y", "x", "distance", "time")
+        assert out.dims == ("z", "y", "x", "distance", "time")
+        assert out.shape == (7, 6, 5, 4, 3)
+
+    def test_transpose_5d_move_first_to_last(self, patch_5d):
+        """Test moving first dimension to last."""
+        out = patch_5d.transpose("distance", "x", "y", "z", "time")
+        assert out.dims == ("distance", "x", "y", "z", "time")
+        assert out.shape == (4, 5, 6, 7, 3)
+
+    def test_transpose_5d_swap_adjacent(self, patch_5d):
+        """Test swapping adjacent dimensions."""
+        out = patch_5d.transpose("distance", "time", "x", "y", "z")
+        assert out.dims == ("distance", "time", "x", "y", "z")
+        assert out.shape == (4, 3, 5, 6, 7)
+
+    def test_transpose_5d_arbitrary_permutation(self, patch_5d):
+        """Test arbitrary permutation of dimensions."""
+        out = patch_5d.transpose("y", "time", "z", "x", "distance")
+        assert out.dims == ("y", "time", "z", "x", "distance")
+        assert out.shape == (6, 3, 7, 5, 4)
+
+    def test_transpose_5d_with_ellipsis(self, patch_5d):
+        """Test using ellipsis to move last dimension to first."""
+        out = patch_5d.transpose("z", ...)
+        assert out.dims[0] == "z"
+        assert out.shape[0] == 7
+        # Remaining dims should be in original order
+        assert out.dims == ("z", "time", "distance", "x", "y")
+
+    def test_transpose_5d_data_integrity(self, patch_5d):
+        """Test that transpose preserves data values."""
+        out = patch_5d.transpose("z", "y", "x", "distance", "time")
+        # Total size should be unchanged
+        assert patch_5d.data.size == out.data.size
+        # Data values should be the same, just rearranged
+        assert np.array_equal(np.sort(patch_5d.data.flat), np.sort(out.data.flat))
