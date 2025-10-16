@@ -364,6 +364,7 @@ class Patch:
     apply_ufunc = dascore.utils.array.apply_ufunc
     get_patch_names = get_patch_names
     get_axis = dascore.proc.get_axis
+    full = dascore.proc.full
 
     def get_patch_name(self, *args, **kwargs) -> str:
         """
