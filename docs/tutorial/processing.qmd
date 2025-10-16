@@ -165,7 +165,7 @@ patch = dc.get_example_patch("example_event_1")
 dt = patch.get_coord('time').step
 
 smoothed = patch.rolling(time=50*dt).mean()
-smoothed.viz.waterfall(scale=.1);
+smoothed.viz.waterfall();
 ```
 
 Notice the nan values at the start of the time axis. These can be trimmed with [`Patch.dropna`](`dascore.Patch.dropna`).

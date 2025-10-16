@@ -161,8 +161,8 @@ sp_lf = dc.spool(output_data_dir)
 sp_lf_merged = sp_lf.chunk(time=None, conflict="keep_first")
 pa_lf_merged = sp_lf_merged[0]
 
-# Visualize the results. Try different scale values for better visualization.
-pa_lf_merged.viz.waterfall(scale=0.5)
+# Visualize the results.
+pa_lf_merged.viz.waterfall()
 ```
 
 #### For any questions, please contact [Ahmad Tourei](https://github.com/ahmadtourei).
