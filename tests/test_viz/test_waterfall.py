@@ -16,7 +16,7 @@ def check_label_units(patch, ax):
     """Ensure patch label units match axis."""
     axis_dict = {0: "yaxis", 1: "xaxis"}
     dims = patch.dims
-    # Check coord-inate names
+    # Check coordinate names
     for coord_name in dims:
         coord = patch.coords.coord_map[coord_name]
         if is_datetime64(coord[0]):
@@ -204,3 +204,25 @@ class TestWaterfall:
         # More than two values
         with pytest.raises(ParameterError, match=msg):
             random_patch.viz.waterfall(scale=(0.1, 0.2, 0.9), scale_type="relative")
+
+    def test_invalid_scale_type_raises(self, random_patch):
+        """Ensure invalid scale_type values raise ParameterError."""
+        msg = "scale_type must be one of"
+        # Invalid string
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale_type="invalid")
+        # Typo
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale_type="relatve")
+        # Case sensitivity
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale_type="Relative")
+
+    def test_non_2d_patch_raises(self, random_patch):
+        """Ensure non-2D patches raise ParameterError."""
+        msg = "Can only make waterfall plot of 2D Patch"
+        # Test with 1D patch - select single value and squeeze
+        patch_1d = random_patch.select(distance=0, samples=True).squeeze()
+        assert len(patch_1d.dims) == 1
+        with pytest.raises(ParameterError, match=msg):
+            patch_1d.viz.waterfall()
