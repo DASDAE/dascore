@@ -441,7 +441,7 @@ def ricker_moveout(
 
 @register_func(EXAMPLE_PATCHES, key="delta_patch")
 def delta_patch(
-    dim="time",
+    dim: tuple[str, ...] | str = ("time", "distance"),
     shape=(10, 200),
     time_min="2020-01-01",
     time_step=1 / 250,
@@ -457,21 +457,21 @@ def delta_patch(
 
     Parameters
     ----------
-    dim : str
+    dim
         The dimension at the center of which to place the unit value.
-        Typically ``"time"`` or ``"distance"``.
-    shape : tuple of int
+        Typically, ``"time"`` or ``"distance"``.
+    shape
         The shape of the data as (distance, time). Defaults to (10, 200).
         This is used only if no existing ``patch`` is provided.
-    time_min : str or datetime64
+    time_min
         The start time of the patch.
-    time_step : float
+    time_step
         The time step in seconds between samples.
-    distance_min : float
+    distance_min
         The minimum distance coordinate.
-    distance_step : float
+    distance_step
         The distance step in meters between samples.
-    patch : dascore.Patch
+    patch
         If provided, creates the delta patch based on this existing patch.
         Default is None.
     """

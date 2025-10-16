@@ -12,6 +12,7 @@ from .filter import median_filter, pass_filter, sobel_filter, savgol_filter, gau
 from .resample import decimate, interpolate, resample
 from .rolling import rolling
 from .taper import taper, taper_range
+from .mute import mute
 from .units import convert_units, set_units, simplify_units
 from .whiten import whiten
 from .hampel import hampel_filter

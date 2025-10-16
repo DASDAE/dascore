@@ -73,6 +73,12 @@ class TestRickerMoveout:
 class TestDeltaPatch:
     """Tests for the delta_patch example."""
 
+    @pytest.mark.parametrize("shape", ((10, 10), (100, 100), (1, 10)))
+    def test_shape(self, shape):
+        """Ensure the shape parameter controls the shape of the patch."""
+        patch = dc.get_example_patch("delta_patch", shape=shape)
+        assert patch.shape == shape
+
     @pytest.mark.parametrize("invalid_dim", ["inv_dim", "", None, 123, 1.1])
     def test_delta_patch_invalid_dim(self, invalid_dim):
         """
