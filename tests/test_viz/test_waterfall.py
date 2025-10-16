@@ -226,3 +226,10 @@ class TestWaterfall:
         assert len(patch_1d.dims) == 1
         with pytest.raises(ParameterError, match=msg):
             patch_1d.viz.waterfall()
+
+    def test_constant_patch(self, random_patch):
+        """Ensure the plotting works on constant value patches."""
+        data = np.ones(random_patch.shape)
+        patch = random_patch.update(data=data)
+        ax = patch.viz.waterfall()
+        assert isinstance(ax, plt.Axes)

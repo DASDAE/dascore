@@ -16,7 +16,32 @@ import dascore as dc
 
 patch = dc.get_example_patch('example_event_2')
 
-patch.viz.waterfall(show=True, scale=(-50,50))
+# Default scaling uses IQR-based fence to handle outliers
+patch.viz.waterfall(show=True)
+```
+
+### Controlling color scaling
+
+The `scale` parameter controls the colorbar saturation. By default, waterfall uses a statistical fence (1.5×IQR) to exclude outliers and show the majority of the data clearly.
+
+```{python}
+import matplotlib.pyplot as plt
+import dascore as dc
+
+patch = dc.get_example_patch('example_event_2')
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+# Relative scaling: 0.2 means ±20% of dynamic range around mean
+patch.viz.waterfall(scale=0.2, scale_type="relative", ax=ax1)
+ax1.set_title("Relative scaling (scale=0.2)")
+
+# Absolute scaling: directly set colorbar limits
+patch.viz.waterfall(scale=(-50, 50), scale_type="absolute", ax=ax2)
+ax2.set_title("Absolute scaling (scale=(-50, 50))")
+
+plt.tight_layout()
+plt.show()
 ```
 
 ## Wiggle

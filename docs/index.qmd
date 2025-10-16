@@ -104,7 +104,7 @@ import dascore as dc
 
 patch = dc.get_example_patch('example_event_2')
 
-patch.viz.waterfall(show=True, scale=0.2);
+patch.viz.waterfall(show=True);
 ```
 
 # Installation

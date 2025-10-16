@@ -66,6 +66,7 @@ def _get_scale(scale, scale_type, patch):
             scale = np.asarray(
                 [q2 - diff * IQR_FENCE_MULTIPLIER, q3 + diff * IQR_FENCE_MULTIPLIER]
             )
+            return scale
         # Case 3: Sequence with relative scaling
         # Scale values represent fractions of the data range [0, 1]
         # and are mapped to [data_min, data_max]
@@ -82,7 +83,11 @@ def _get_scale(scale, scale_type, patch):
             data_range = dmax - dmin
             # Map [0, 1] to [data_min, data_max]
             scale = dmin + scale * data_range
-    # Case 4: Absolute scaling (default, no match needed)
+        # Case 4: Absolute scaling
+        case (scale, "absolute") if isinstance(scale, int | float):
+            scale = np.array([-abs(scale), abs(scale)])
+        # Case 5: Absolute scaling with sequence: no match needed.
+
     # Scale values are used directly as colorbar limits
     return scale
 
@@ -91,7 +96,7 @@ def _format_axis_labels(ax, patch, dims_r):
     """
     Format axis labels and handle time-like axes.
     """
-    for dim, x in zip(dims_r, ["x", "y"]):
+    for dim, x in zip(dims_r, ["x", "y"], strict=True):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
         coord = patch.get_coord(dim)
         if np.issubdtype(coord.dtype, np.datetime64):
