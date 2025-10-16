@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str
 from dascore.utils.time import is_datetime64, to_timedelta64
 
@@ -190,3 +191,16 @@ class TestWaterfall:
         ax = aggs.viz.waterfall()
         assert ax is not None
         assert isinstance(ax, plt.Axes)
+
+    def test_bad_relative_scale_raises(self, random_patch):
+        """Ensure malformed relative scales raise ParameterError."""
+        msg = "Relative scale"
+        # Negative value in scale.
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale=(-0.1, 0.9), scale_type="relative")
+        # Reversed order.
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale=(0.9, 0.1), scale_type="relative")
+        # More than two values
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale=(0.1, 0.2, 0.9), scale_type="relative")
