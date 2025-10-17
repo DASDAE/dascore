@@ -2,20 +2,103 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import dataclasses
+from collections import defaultdict
+from collections.abc import Mapping, Sized
 
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
+import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_axis_value, patch_function
 
 
-def _get_mute_params(patch, kwargs):
+@dataclasses.dataclass
+class _OriginNLines:
+    """Get a tuple of origin, line1, line2."""
+
+    origin: np.ndarray
+    line1: np.ndarray
+    line2: np.ndarray
+
+    @classmethod
+    def _check_degenerate(self, line):
+        """Ensure a line isn't degenerate else raise."""
+        if len(np.unique(line, axis=0)) != 2:
+            msg = f"Line specified for mute {line} is degenerate!"
+            raise ParameterError(msg)
+
+    @classmethod
+    def from_point_list(cls, points):
+        """"""
+        cls._check_degenerate(points[:2])
+        cls._check_degenerate(points[2:])
+
+        # We need to ensure one of the points is duplicated; this is the orign
+        unique, idx, counts = np.unique(
+            points, axis=0, return_index=True, return_counts=True
+        )
+        if len(unique) == len(points):
+            msg = (
+                f"No common point found in {points}. For unambiguous mute "
+                f"lines must share an origin."
+            )
+            raise ParameterError(msg)
+        gt_1_counts = counts > 1
+        origin = points[idx[gt_1_counts]]
+        others = points[idx[~gt_1_counts]]
+        l1, l2 = others
+        return cls(origin=origin, line1=l1, line2=l2)
+
+
+def _get_2d_mute_lines(vals, patch, dims, relative=True):
+    """
+    Return values which are two lines in absolute coordinate space,
+    (expressed as floats)
+    """
+
+    def _get_coord_float_values(coord, vals, relative):
+        """Get the coordinate float values relative to start of coords."""
+        out = dc.to_float(np.array(vals))
+        if not relative:
+            out = out - dc.to_float(coord.min())
+        return out
+
+    out = []
+    # Keep track of the axis that need to be filled in (eg None, paired w/ float)
+    fill_inds = defaultdict(list)
+    for ind, (dim, row) in enumerate(zip(dims, vals)):
+        coord = patch.get_coord(dim)
+        # In the case of single values (eg None, ..., or some other)
+        # We need to just mark them and come back later.
+        if not isinstance(row, Sized):
+            # We need to get the actual value from the coord.
+            if row is not None and row is not Ellipsis:
+                row = _get_coord_float_values(coord, vals, relative=relative)
+            fill_inds[dim].append(row)
+            out.append(None)
+        # Otherwise, we just run with it.
+        vals = _get_coord_float_values(coord, np.array(row), relative=relative)
+        out.append(vals)
+    # Now we can ascertain the line intended by None.
+    if fill_inds:
+        breakpoint()
+    # Then put the 4 points together. This gives us a len 4 array with rows
+    # as points from first line, then points from second.
+    points = np.stack(out, axis=-1).reshape(-1, 2)
+    origin_n_lines = _OriginNLines.from_point_list(points)
+    breakpoint()
+
+
+def _get_mute_params(patch, kwargs, relative=True):
     """
     Get (and validate) the muting parameters.
 
-    Returns arrays of dims, axes, and values.
+    Returns arrays of dims, axes, and values. Values has different meaning
+    based on the number of dimensions.
     """
     # Validate we have dimension specifications
     if not kwargs or len(kwargs) > 2:
@@ -27,111 +110,79 @@ def _get_mute_params(patch, kwargs):
     dim_ax_vals = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
     dims = [x[0] for x in dim_ax_vals]
     axes = np.array([x[1] for x in dim_ax_vals])
-    # Handle single dimension Mute.
+    val_list = [x[2] for x in dim_ax_vals]
     if len(dims) == 1:
-        vals = np.array([x[2] for x in dim_ax_vals])
-        if vals.size != 2:
+        vals = np.array(val_list)
+        if vals.size != 2:  # Handle single dimension Mute.
             msg = "Mute requires two boundaries when using a single dimension."
             raise ParameterError(msg)
-    else:
-        breakpoint()
-        print()
+    elif len(dims) > 1:  # Dealing with lines. .
+        vals = _get_2d_mute_lines(val_list, patch, dims, relative)
     return dims, axes, vals
 
 
-def _get_taper_vals(dims, taper, patch, samples):
-    """Get the taper values ordered by dimension, in samples."""
-    # Just broadcast taper to  same length as dims.
-    if taper is None:
-        return [0] * len(dims)
-    if not isinstance(taper, Mapping):
-        vals = [taper] * len(dims)
-    else:
-        # Otherwise each dimension's taper must be specified.
-        if not set(dims) == set(taper):
-            msg = (
-                f"If a taper dictionary is used in Mute, it must have all "
-                f"the same keys as the dimensions. Kwarg dims are {dims} and"
-                f"taper keys are {list(taper)}."
-            )
-            raise ParameterError(msg)
-        vals = [taper[dim] for dim in dims]
-    out = []
-    for dim, val in zip(dims, vals):
-        coord = patch.get_coord(dim)
-        if val is None:
-            out.append(0)
-        elif samples:
-            out.append(val)
+def _get_smooth_sigma(dims, smooth, patch):
+    """Get sigma values, in samples, for the gaussian kernel."""
+
+    def _broadcast_smooth_to_dims(dims, smooth):
+        """Broadcast smooth samples to dims length."""
+        # First, we need to get the smooth parameters to line up with the dims.
+        # For a single value, just broadcast to dim length.
+        if not isinstance(smooth, Mapping):
+            vals = [smooth] * len(dims)
         else:
+            # Otherwise each dimension's smooth must be specified.
+            if not set(dims) == set(smooth):
+                msg = (
+                    f"If a taper dictionary is used in Mute, it must have all "
+                    f"the same keys as the dimensions. Kwarg dims are {dims} and"
+                    f"taper keys are {list(smooth)}."
+                )
+                raise ParameterError(msg)
+            vals = [smooth[dim] for dim in dims]
+        return vals
+
+    def _convert_to_samples(smooth, dims, patch):
+        """Convert the smooth parameter to number of samples."""
+        out = []
+        for dim, val in zip(dims, smooth):
             coord = patch.get_coord(dim)
-            coord.coord_range(val)
-            out.append(val)
-    return np.array(out)
+            if val is None:
+                out.append(0)
+            elif isinstance(val, int | np.integer):
+                out.append(val)
+            elif isinstance(val, float | np.floating):
+                if not 0 <= val <= 1:
+                    msg = (
+                        f"Mute's smooth parameter for {dim} must be between 0 "
+                        f"and 1 when using a floating point value."
+                    )
+                    raise ParameterError(msg)
+                out.append(int(np.round(len(coord) * val)))
+            else:  # should capture quantities
+                out.append(coord.get_sample_count(val))
+        return out
+
+    smooth_by_dims = _broadcast_smooth_to_dims(dims, smooth)
+    smooth_ints = _convert_to_samples(smooth_by_dims, dims, patch)
+    # Now finagle into input for scipy's gaussian smooth.
+    return smooth_ints
 
 
-def _mute_patch_1d(
-    patch,
-    dim,
-    vals,
-    taper_samps,
-    window,
-    samples,
-    relative,
-    invert,
-):
-    """Apply mute to 1D patch using patch.range_taper."""
-    coord = patch.get_coord(dim)
-
-    if not samples:
-        # Get range represented by values. This is a bit ugly...
-        sel = coord.select(tuple(*vals), relative=relative)[1]
-        start = sel.start if sel.start is not None else 0
-        # stop can be None (open interval) or an exclusive upper bound
-        if sel.stop is None:
-            stop = len(coord)
-        else:
-            stop = sel.stop
-        trange = (start, stop)
-    else:
-        # vals is a 2D array with shape (1, 2), flatten to get (start, stop)
-        trange = vals.flatten() if vals.ndim > 1 else vals
-
-    # Handle edge case: if muting to the end with no taper, use 2-value form
-    # because 4-value form can't express "mute to the very last sample"
-    max_idx = len(coord) - 1
-    if taper_samps == 0 and trange[1] >= len(coord):
-        taper_dict = {dim: [trange[0], max_idx]}
-    else:
-        # Clamp taper boundaries to valid sample indices.
-        # taper_range uses exclusive upper bounds in 4-value form [a,b,c,d]
-        # which zeros indices [b, c).
-        taper_dict = {
-            dim: [
-                max(0, trange[0] - taper_samps),
-                trange[0],
-                min(max_idx, trange[1]),
-                min(max_idx, trange[1] + taper_samps),
-            ]
-        }
-    out = patch.taper_range(
-        invert=not invert,
-        samples=True,
-        window_type=window,
-        **taper_dict,
-    )
-    return out
+def _line_smooth(data, dims, axes, values, patch):
+    """
+    Mute data between two lines.
+    """
+    breakpoint()
 
 
 @patch_function()
 def mute(
     patch: PatchType,
     *,
-    taper: float | dict | None = None,
-    window_type: str = "hann",
+    smooth=None,
     invert: bool = False,
     relative: bool = True,
-    samples: bool = False,
     **kwargs,
 ) -> PatchType:
     """
@@ -144,31 +195,24 @@ def mute(
     ----------
     patch
         The patch instance.
-    taper
-        Taper width at mute boundaries. Can be:
-        - None: sharp mute (no taper)
-        - float (0.0-1.0): fraction of dimension range (e.g., 0.05 = 5%)
-          The number of samples in the mute is held constant across dimensions
-          by calculating the samples the fraction represents for each dimension
-          and using the minimum sample count. This helps avoid distorted mutes
-          based on dimensions with vastly different lengths.
-        - Quantity with units: absolute value (e.g., 0.02*dc.units.s)
-          Note: If multiple dimensions specified, must use dict.
-        - dict: (dim: taper_value) for dimension-specific taper
-          Values can be floats (fractions) or Quantities (absolute)
-        - Callable: custom function that receives and modifies envelope array.
-    window_type
-        Window function for tapering (only used for non-callable taper).
-        Options:
-            {sorted(WINDOW_FUNCTIONS)}.
+    smooth
+        Parameter controlling smoothing of the mute evenlope. Defines the sigma
+        Can be:
+        - None: sharp mute
+        - float (0.0-1.0): fraction of dimension range (e.g., 0.01 = 1%)
+          which is applied independently to each dimension involved in the
+          mute.
+        - int: Indicates number of samples for each dimension.
+        - Quantity with units, indicates values along a single dimension.
+          Only applicable if a single dimension is specified.
+        - dict: {dim: taper_value} for dimension-specific smooth
+          values which can be any of the above.
     invert
         If True, invert the taper such that the values outside the defined region
         are set to 0.
     relative
         If True (default), values are relative to coordinate edges.
         Positive values are offsets from start, negative from end.
-    samples
-        If True, values specified in samples rather than coordinate values.
     **kwargs
         Dimension specifications as (boundary_1, boundary_2) pairs.
         Each boundary can be:
@@ -181,7 +225,7 @@ def mute(
     >>> import dascore as dc
     >>> from scipy.ndimage import gaussian_filter
     >>>
-    >>> patch = dc.get_example_patch("ricker_moveout")
+    >>> patch = dc.get_example_patch().full(1)
     >>>
     >>>
     >>> # Mute first 0.5s (relative to start by default)
@@ -190,11 +234,8 @@ def mute(
     >>> # Mute everything except middle section
     >>> kept = patch.mute(time=(0.2, -0.2), mode="complement")
     >>>
-    >>> # Taper with absolute units
-    >>> muted = patch.mute(
-    ...     time=(0.2, 0.8),
-    ...     taper={'time': 0.02 * dc.units.s},
-    ... )
+    >>> # 1D Mute with smoothed absolute units for time.
+    >>> muted = patch.mute(time=(0.2, 0.8), smooth=0.02 * dc.units.s)
     >>>
     >>> # Classic first break mute: mute early arrivals
     >>> # Line from (t=0, d=0) to (t=0.3, d=300) defines velocity=1000 m/s
@@ -229,8 +270,8 @@ def mute(
     ...     time=([0, 0.375], [0, 0.25]),
     ...     distance=([0, 300], [0, 300]),
     ... )
-    >>> # Knock down edges with gaussian filter.
-    >>> smooth = envelope.gaussian_filter(time=5, distance=5, samples=True)
+    >>> # Knock down edges with rolling mean along the time dimension.
+    >>> smooth = envelope.rolling(time=5, samples=True).mean()
     >>> # Then multiply the two patches.
     >>> result = patch * smooth
 
@@ -241,29 +282,30 @@ def mute(
 
     - Currently, mute doesn't support more than 2 dimensions.
 
-    - For more control over tapering, use a patch with one values then apply
-      custom tapering/smooting before multiplying with the original patch.
-      See example section for more details.
+    - For more control over boundary smoothing, use a patch with one values
+      then apply custom tapering/smooting before multiplying with the
+      original patch. See example section for more details.
 
     See Also
     --------
-    [`Patch.select`](`dascore.Patch.select`)
-    [`Patch.taper_range`](`dascore.Patch.taper_range`)
+    - [`Patch.select`](`dascore.Patch.select`)
+    - [`Patch.taper_range`](`dascore.Patch.taper_range`)
+    - [`Patch.gaussian_filter`](`dacore.proc.filter.gaussian_filter`)
     """
-    dims, axes, values = _get_mute_params(patch, kwargs)
-    taper_vals = _get_taper_vals(dims, taper, patch, samples)
+    dims, axes, values = _get_mute_params(patch, kwargs, relative)
+    out = np.zeros_like(patch.data) if invert else np.ones_like(patch.data)
+    fill_val = 1 if invert else 0
     # Easy path for 1D mute.
     if len(dims) == 1:
-        out = _mute_patch_1d(
-            patch,
-            dims[0],
-            values,
-            taper_vals[0],
-            window=window_type if taper is not None else "boxcar",
-            samples=samples,
-            relative=relative,
-            invert=invert,
-        )
-        return out
-
-    breakpoint()
+        coord = patch.get_coord(dims[0])
+        args = (values[0][0], values[0][1])
+        _, c_index = coord.select(args, relative=relative)
+        index = broadcast_for_index(out.ndim, axes[0], c_index, slice(None))
+        out[index] = fill_val
+    else:
+        out = _line_smooth(out, dims, axes, values, patch)
+    # Apply smoothing.
+    if smooth is not None:
+        sigma = _get_smooth_sigma(dims, smooth, patch)
+        out = gaussian_filter(out, sigma=sigma, axes=tuple(axes))
+    return patch.update(data=patch.data * out)
