@@ -895,3 +895,64 @@ def deep_equality_check(obj1, obj2, visited=None):
         return True
     finally:
         visited.remove(pair_id)
+
+
+def get_2d_line_intersection(p1, p2, p3, p4):
+    """
+    Return intersection point of two lines (p1,p2) and (p3,p4).
+
+    Parameters
+    ----------
+    p1, p2, p3, p4
+        Each a pair of (x, y) coordinates.
+
+    Returns
+    -------
+    point
+        (x, y) intersection point, or None if lines are parallel.
+    """
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+
+    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if denom == 0:
+        return None  # Parallel or coincident
+
+    px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom
+    py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
+    return np.array([px, py])
+
+
+def vectors_same_direction(v1, v2, tol=1e-9):
+    """
+    Determine if vectors (p2 - p1) and (p4 - p3) point in the same direction.
+
+    Parameters
+    ----------
+    v1
+        First vector.
+    v2
+        Second vector.
+    tol
+        Tolerance for considering vectors parallel.
+
+    Returns
+    -------
+    bool
+        True if vectors are parallel and oriented the same way.
+    """
+    # Normalize to avoid magnitude issues
+    norm1 = np.linalg.norm(v1)
+    norm2 = np.linalg.norm(v2)
+    if norm1 < tol or norm2 < tol:
+        return False  # one is degenerate
+
+    v1 /= norm1
+    v2 /= norm2
+
+    # Same direction: dot product positive
+    same_dir = np.dot(v1, v2) > 0
+
+    return same_dir

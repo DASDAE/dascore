@@ -2,98 +2,284 @@
 
 from __future__ import annotations
 
-import dataclasses
 from collections import defaultdict
 from collections.abc import Mapping, Sized
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.ndimage import gaussian_filter
 
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
-from dascore.utils.misc import broadcast_for_index
+from dascore.utils.misc import (
+    get_2d_line_intersection,
+    vectors_same_direction,
+)
+from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value, patch_function
 
 
-@dataclasses.dataclass
-class _OriginNLines:
-    """Get a tuple of origin, line1, line2."""
+class _MuteGeometry(DascoreBaseModel):
+    """
+    Parent class for Mute Geometry.
+    """
 
-    origin: np.ndarray
-    line1: np.ndarray
-    line2: np.ndarray
+    dims: tuple[str, ...]
+    axes: tuple[int, ...]
+    relative: bool = True
 
     @classmethod
-    def _check_degenerate(self, line):
-        """Ensure a line isn't degenerate else raise."""
+    def from_params(cls, vals, dims, axes, patch, relative):
+        """Initialize Mute Geometry from input parameters."""
+
+    def _mask_array(
+        self,
+        array: NDArray,
+    ):
+        pass
+
+    def _apply_smoothing(self, array, smooth, patch):
+        """Apply smoothing to the array."""
+        sigma = self._get_smooth_sigma(smooth, patch)
+        return gaussian_filter(array, sigma=sigma, axes=tuple(self.axes))
+
+    def _get_smooth_sigma(self, smooth, patch):
+        """Get sigma values, in samples, for the gaussian kernel."""
+
+        def _broadcast_smooth_to_dims(dims, smooth):
+            """Broadcast smooth samples to dims length."""
+            # First, we need to get the smooth parameters to line up with the dims.
+            # For a single value, just broadcast to dim length.
+            if not isinstance(smooth, Mapping):
+                vals = [smooth] * len(dims)
+            else:
+                # Otherwise each dimension's smooth must be specified.
+                if not set(dims) == set(smooth):
+                    msg = (
+                        f"If a taper dictionary is used in Mute, it must have all "
+                        f"the same keys as the dimensions. Kwarg dims are {dims} and"
+                        f"taper keys are {list(smooth)}."
+                    )
+                    raise ParameterError(msg)
+                vals = [smooth[dim] for dim in dims]
+            return vals
+
+        def _convert_to_samples(smooth, dims, patch):
+            """Convert the smooth parameter to number of samples."""
+            out = []
+            for dim, val in zip(dims, smooth):
+                coord = patch.get_coord(dim)
+                if val is None:
+                    out.append(0)
+                elif isinstance(val, int | np.integer):
+                    out.append(val)
+                elif isinstance(val, float | np.floating):
+                    if not 0 <= val <= 1:
+                        msg = (
+                            f"Mute's smooth parameter for {dim} must be between 0 "
+                            f"and 1 when using a floating point value."
+                        )
+                        raise ParameterError(msg)
+                    out.append(int(np.round(len(coord) * val)))
+                else:  # should capture quantities
+                    out.append(coord.get_sample_count(val))
+            return out
+
+        smooth_by_dims = _broadcast_smooth_to_dims(self.dims, smooth)
+        smooth_ints = _convert_to_samples(smooth_by_dims, self.dims, patch)
+        # Now finagle into input for scipy's gaussian smooth.
+        return smooth_ints
+
+
+class _MuteGeometry1D(_MuteGeometry):
+    """
+    Private container to manage 1D Mute Geometry.
+    """
+
+    lims: tuple
+
+    @classmethod
+    def from_params(cls, vals, dims, axes, patch, relative):
+        """Initialize Mute Geometry from input parameters."""
+        vals = np.array(vals)
+        if vals.size != 2:  # Handle single dimension Mute.
+            msg = "Mute requires two boundaries when using a single dimension."
+            raise ParameterError(msg)
+        lims = (vals[0][0], vals[0][1])
+        return cls(dims=dims, axes=axes, relative=relative, lims=lims)
+
+    def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:
+        coord = patch.get_coord(self.dims[0])
+        _, c_index = coord.select(self.lims, relative=self.relative)
+        index = [slice(None)] * array.ndim
+        index[self.axes[0]] = c_index
+        array[tuple(index)] = fill_value
+        return array
+
+
+class _MuteGeometry2D(_MuteGeometry):
+    """
+    Private container to help manage the geometry of the slope filter.
+
+    Generally this is initialized with the `from_point_list` class method.
+
+    Parameters
+    ----------
+    origin
+        The shared origin for the two points.
+    line1
+        A numpy array of the un-normalized first line.
+    line2
+        A numpy array of the un-normalized second line.
+    norm
+        The corresponding coordinate range for each dimension (as float)
+    line1_norm
+        The first line divided by the norm.
+    line2_norm
+        The second line divided by the norm.
+
+    The mute region is selected by finding the cross product between each
+    normalized (scaled) line
+    """
+
+    origin: NDArray[np.floating]
+    norm: NDArray[np.floating]
+    line1_norm: NDArray[np.floating]
+    line2_norm: NDArray[np.floating]
+
+    @staticmethod
+    def _check_degenerate(line):
+        """Ensure a line isn't really a point else raise."""
         if len(np.unique(line, axis=0)) != 2:
             msg = f"Line specified for mute {line} is degenerate!"
             raise ParameterError(msg)
 
     @classmethod
-    def from_point_list(cls, points):
-        """"""
+    def _params_from_point_list(cls, points, patch, dims):
+        """Get the parameters from a list of points."""
         cls._check_degenerate(points[:2])
         cls._check_degenerate(points[2:])
-
         # We need to ensure one of the points is duplicated; this is the orign
-        unique, idx, counts = np.unique(
-            points, axis=0, return_index=True, return_counts=True
-        )
-        if len(unique) == len(points):
-            msg = (
-                f"No common point found in {points}. For unambiguous mute "
-                f"lines must share an origin."
-            )
+        origin = get_2d_line_intersection(*points)
+        norm = np.array([dc.to_float(patch.get_coord(x).coord_range()) for x in dims])
+        # Get vectors. Need to normalize in coord space and by l2.
+        v1 = ((points[1] - points[0]) - origin) / norm
+        v2 = ((points[3] - points[2]) - origin) / norm
+        v1_norm = v1 / np.linalg.norm(v1)
+        v2_norm = v2 / np.linalg.norm(v2)
+        # Ensure vectors are pointing in the same direction, otherwise the
+        # mute area is ambiguous.
+        if not vectors_same_direction(v1, v2):
+            msg = "Mute vectors must point in the same direction."
             raise ParameterError(msg)
-        gt_1_counts = counts > 1
-        origin = points[idx[gt_1_counts]]
-        others = points[idx[~gt_1_counts]]
-        l1, l2 = others
-        return cls(origin=origin, line1=l1, line2=l2)
-
-
-def _get_2d_mute_lines(vals, patch, dims, relative=True):
-    """
-    Return values which are two lines in absolute coordinate space,
-    (expressed as floats)
-    """
-
-    def _get_coord_float_values(coord, vals, relative):
-        """Get the coordinate float values relative to start of coords."""
-        out = dc.to_float(np.array(vals))
-        if not relative:
-            out = out - dc.to_float(coord.min())
+        out = dict(
+            origin=origin,
+            norm=norm,
+            line1_norm=v1_norm,
+            line2_norm=v2_norm,
+        )
         return out
 
-    out = []
-    # Keep track of the axis that need to be filled in (eg None, paired w/ float)
-    fill_inds = defaultdict(list)
-    for ind, (dim, row) in enumerate(zip(dims, vals)):
-        coord = patch.get_coord(dim)
-        # In the case of single values (eg None, ..., or some other)
-        # We need to just mark them and come back later.
-        if not isinstance(row, Sized):
-            # We need to get the actual value from the coord.
-            if row is not None and row is not Ellipsis:
-                row = _get_coord_float_values(coord, vals, relative=relative)
-            fill_inds[dim].append(row)
-            out.append(None)
-        # Otherwise, we just run with it.
-        vals = _get_coord_float_values(coord, np.array(row), relative=relative)
-        out.append(vals)
-    # Now we can ascertain the line intended by None.
-    if fill_inds:
-        breakpoint()
-    # Then put the 4 points together. This gives us a len 4 array with rows
-    # as points from first line, then points from second.
-    points = np.stack(out, axis=-1).reshape(-1, 2)
-    origin_n_lines = _OriginNLines.from_point_list(points)
-    breakpoint()
+    @classmethod
+    def from_params(cls, vals, dims, axes, patch, relative=True):
+        """
+        Return values which are two lines in absolute coordinate space,
+        (expressed as floats)
+        """
+
+        def _get_coord_float_values(coord, vals, relative):
+            """Get the coordinate float values relative to start of coords."""
+            out = dc.to_float(np.array(vals))
+            if not relative:
+                out = out - dc.to_float(coord.min())
+            return out
+
+        out = []
+        # Keep track of the axis that need to be filled in (eg None, paired w/ float)
+        fill_inds = defaultdict(list)
+        for ind, (dim, row) in enumerate(zip(dims, vals)):
+            coord = patch.get_coord(dim)
+            # In the case of single values (eg None, ..., or some other)
+            # We need to just mark them and come back later.
+            if not isinstance(row, Sized):
+                # We need to get the actual value from the coord.
+                if row is not None and row is not Ellipsis:
+                    row = _get_coord_float_values(coord, vals, relative=relative)
+                fill_inds[dim].append(row)
+                out.append(None)
+            # Otherwise, we just run with it.
+            vals = _get_coord_float_values(coord, np.array(row), relative=relative)
+            out.append(vals)
+        # Now we can ascertain the line intended by None.
+        if fill_inds:
+            raise NotImplementedError("Working on it.")
+        # Then put the 4 points together. This gives us a len 4 array with rows
+        # as points from first line, then points from second.
+        points = np.stack(out, axis=-1).reshape(-1, 2)
+        line_params = cls._params_from_point_list(points, patch, dims)
+        kwargs = dict(dims=dims, axes=axes, relative=relative) | line_params
+        return cls(**kwargs)
+
+    def _get_normalized_array_coord(self, array, patch):
+        """
+        Get an array that matches the dimensionality of envelope but of its
+        normalized, relative coordinates.
+        """
+        out = []
+        for dim in self.dims:
+            ax = patch.get_axis(dim)
+            coord = patch.get_coord(dim)
+
+            # Get the coordinate values normalized to coord range.
+            coord_vals = dc.to_float(coord.values)
+            coord_range = dc.to_float(coord.coord_range())
+            if self.relative:
+                coord_vals = coord_vals - dc.to_float(coord.min())
+
+            # First get values in coord.
+            norm_vals = (coord_vals - self.origin[ax]) / dc.to_float(coord_range)
+            # We need to transform coordinate values to values between 0 and 1.
+            # with the same dimensionality as array.
+            coord_inds = [None] * array.ndim
+            coord_inds[ax] = slice(None, len(coord))
+            norms = norm_vals[tuple(coord_inds)]
+
+            # Next, we set those values on an array with the same shape as array.
+            inds = [slice(None)] * array.ndim
+            inds[ax] = slice(None, len(coord))
+            carray = np.empty_like(array)
+            carray[tuple(inds)] = norms
+            out.append(carray)
+        # Return new axis as -1 so it will broadcast with lines.
+        out = np.stack(out, axis=-1)
+        return out
+
+    def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:
+        """Apply the mask to the output array."""
+        coord_norms = self._get_normalized_array_coord(array, patch)
+        # Get padded arrays with 0 z values for cross product.
+        array_widths = ((0, 0), (0, 0), (0, 1))
+        coord_z = np.pad(
+            coord_norms, pad_width=array_widths, mode="constant", constant_values=0
+        )
+        line_widths = (0, 1)
+        l1_z = np.pad(self.line1_norm, line_widths, mode="constant", constant_values=0)
+        l2_z = np.pad(self.line2_norm, line_widths, mode="constant", constant_values=0)
+        # The selected points will have different cross product sign and
+        # the same dot product sign.
+        cross1_z = np.cross(l1_z, coord_z)[:, :, 2]
+        cross2_z = np.cross(l2_z, coord_z)[:, :, 2]
+        ok_cross = cross1_z * cross2_z < 0
+        # Get dot product with each line.
+        dot1 = np.sum(self.line1_norm[None, :] * coord_norms, axis=-1)
+        dot2 = np.sum(self.line2_norm[None, :] * coord_norms, axis=-1)
+        ok_dot = dot1 * dot2 > 0
+        envelope = ok_cross & ok_dot
+        return envelope
 
 
-def _get_mute_params(patch, kwargs, relative=True):
+def _get_mute_geometry(patch, kwargs, relative=True):
     """
     Get (and validate) the muting parameters.
 
@@ -112,68 +298,14 @@ def _get_mute_params(patch, kwargs, relative=True):
     axes = np.array([x[1] for x in dim_ax_vals])
     val_list = [x[2] for x in dim_ax_vals]
     if len(dims) == 1:
-        vals = np.array(val_list)
-        if vals.size != 2:  # Handle single dimension Mute.
-            msg = "Mute requires two boundaries when using a single dimension."
-            raise ParameterError(msg)
+        geometry = _MuteGeometry1D.from_params(
+            val_list, dims, axes, patch, relative=relative
+        )
     elif len(dims) > 1:  # Dealing with lines. .
-        vals = _get_2d_mute_lines(val_list, patch, dims, relative)
-    return dims, axes, vals
-
-
-def _get_smooth_sigma(dims, smooth, patch):
-    """Get sigma values, in samples, for the gaussian kernel."""
-
-    def _broadcast_smooth_to_dims(dims, smooth):
-        """Broadcast smooth samples to dims length."""
-        # First, we need to get the smooth parameters to line up with the dims.
-        # For a single value, just broadcast to dim length.
-        if not isinstance(smooth, Mapping):
-            vals = [smooth] * len(dims)
-        else:
-            # Otherwise each dimension's smooth must be specified.
-            if not set(dims) == set(smooth):
-                msg = (
-                    f"If a taper dictionary is used in Mute, it must have all "
-                    f"the same keys as the dimensions. Kwarg dims are {dims} and"
-                    f"taper keys are {list(smooth)}."
-                )
-                raise ParameterError(msg)
-            vals = [smooth[dim] for dim in dims]
-        return vals
-
-    def _convert_to_samples(smooth, dims, patch):
-        """Convert the smooth parameter to number of samples."""
-        out = []
-        for dim, val in zip(dims, smooth):
-            coord = patch.get_coord(dim)
-            if val is None:
-                out.append(0)
-            elif isinstance(val, int | np.integer):
-                out.append(val)
-            elif isinstance(val, float | np.floating):
-                if not 0 <= val <= 1:
-                    msg = (
-                        f"Mute's smooth parameter for {dim} must be between 0 "
-                        f"and 1 when using a floating point value."
-                    )
-                    raise ParameterError(msg)
-                out.append(int(np.round(len(coord) * val)))
-            else:  # should capture quantities
-                out.append(coord.get_sample_count(val))
-        return out
-
-    smooth_by_dims = _broadcast_smooth_to_dims(dims, smooth)
-    smooth_ints = _convert_to_samples(smooth_by_dims, dims, patch)
-    # Now finagle into input for scipy's gaussian smooth.
-    return smooth_ints
-
-
-def _line_smooth(data, dims, axes, values, patch):
-    """
-    Mute data between two lines.
-    """
-    breakpoint()
+        geometry = _MuteGeometry2D.from_params(
+            val_list, dims, axes, patch, relative=relative
+        )
+    return geometry
 
 
 @patch_function()
@@ -292,20 +424,17 @@ def mute(
     - [`Patch.taper_range`](`dascore.Patch.taper_range`)
     - [`Patch.gaussian_filter`](`dacore.proc.filter.gaussian_filter`)
     """
-    dims, axes, values = _get_mute_params(patch, kwargs, relative)
-    out = np.zeros_like(patch.data) if invert else np.ones_like(patch.data)
+    # Get geometry object to set up the problem.
+    geo = _get_mute_geometry(patch, kwargs, relative)
+    # Initialize the output array which shares the dimensionality of the
+    # patch (so it will broadcast) but is as flat as possible.
+    out_shape = [patch.shape[ax] if ax in geo.axes else 1 for ax in range(patch.ndim)]
+    out = np.zeros(out_shape) if invert else np.ones(out_shape)
     fill_val = 1 if invert else 0
     # Easy path for 1D mute.
-    if len(dims) == 1:
-        coord = patch.get_coord(dims[0])
-        args = (values[0][0], values[0][1])
-        _, c_index = coord.select(args, relative=relative)
-        index = broadcast_for_index(out.ndim, axes[0], c_index, slice(None))
-        out[index] = fill_val
-    else:
-        out = _line_smooth(out, dims, axes, values, patch)
-    # Apply smoothing.
+    out = geo._apply_mask(out, patch, fill_val)
+    # Apply smoothing if requested.
     if smooth is not None:
-        sigma = _get_smooth_sigma(dims, smooth, patch)
-        out = gaussian_filter(out, sigma=sigma, axes=tuple(axes))
+        out = geo._apply_smoothing(out, smooth, patch)
+
     return patch.update(data=patch.data * out)

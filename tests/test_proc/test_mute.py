@@ -34,6 +34,31 @@ def _assert_coord_ranges(
         assert np.allclose(sub.data, 1)
 
 
+def _assert_point_values(
+    patch,
+    dims=None,
+    points=(),
+    expected_values=(),
+    relative=True,
+):
+    """Assert points in the patch are 0 or 1."""
+    assert len(points) == len(expected_values)
+    dims = dims if dims is not None else patch.dims
+    axes = tuple(patch.get_axis(x) for x in dims)
+
+    for vals, expected in zip(points, expected_values, strict=True):
+        # Get the index (in the data array) of the expected 0.
+        inds = (
+            patch.get_coord(dims[num]).get_next_index(
+                vals[axes.index(num)], relative=relative
+            )
+            if num in axes
+            else slice(None)
+            for num in range(patch.ndim)
+        )
+        assert np.isclose(patch.data[tuple(inds)], expected)
+
+
 @pytest.fixture(scope="session")
 def patch_ones(random_patch):
     """Return a patch filled with ones."""
@@ -154,7 +179,7 @@ class Test1DMute:
 class TestMuteLines:
     """Tests for muting between lines."""
 
-    def test_generate_raise(self, patch_ones):
+    def test_point_raise(self, patch_ones):
         """A degenerate line (point) should raise."""
         msg = "Line specified"
         with pytest.raises(ParameterError, match=msg):
@@ -163,28 +188,26 @@ class TestMuteLines:
                 distance=([0, 0], [0, 300]),
             )
 
-    def test_no_common_point_raises(self, patch_ones):
-        """Two lines without a common point should raise."""
-        msg = "No common point"
-        with pytest.raises(ParameterError, match=msg):
-            patch_ones.mute(
-                time=([10, 4], [0, 0.25]),
-                distance=([1, 6], [0, 300]),
-            )
+    # def test_no_common_point_raises(self, patch_ones):
+    #     """Two lines without a common point should raise."""
+    #     msg = "No common point"
+    #     with pytest.raises(ParameterError, match=msg):
+    #         patch_ones.mute(
+    #             time=([10, 4], [0, 0.25]),
+    #             distance=([1, 6], [0, 300]),
+    #         )
 
     def test_mute_lines(self, patch_ones):
         """Mute a rectangular region in 2D."""
-        breakpoint()
         muted = patch_ones.mute(
-            time=([0, 0.375], [0, 0.25]),
-            distance=([0, 300], [0, 300]),
+            time=([0, 2], [0, 4]),
+            distance=([0, 100], [0, 100]),
         )
-
-        # Check interior is muted
-        assert np.allclose(muted.data[10, 15], 0)
-        # Check corners are not muted
-        assert np.allclose(muted.data[0, 0], 1)
-        assert np.allclose(muted.data[-1, -1], 1)
+        points = [(145, 4), (182, 6), (100, 3), (180, 3), (60, 6), (50, 1)]
+        expected = [1, 1, 1, 0, 0, 0]
+        _assert_point_values(
+            muted, ("time", "distance"), points=points, expected_values=expected
+        )
 
     def test_mute_strips(self, patch_ones):
         """Mute strips along each dimension."""
