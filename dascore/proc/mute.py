@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sized
+from typing import ClassVar
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.linalg import norm
 from scipy.ndimage import gaussian_filter
 
 import dascore as dc
@@ -14,7 +16,6 @@ from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import (
     get_2d_line_intersection,
-    vectors_same_direction,
 )
 from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value, patch_function
@@ -138,6 +139,8 @@ class _MuteGeometry2D(_MuteGeometry):
         The first line divided by the norm.
     line2_norm
         The second line divided by the norm.
+    parallel
+        If True, the lines are parallel to each other.
 
     The mute region is selected by finding the cross product between each
     normalized (scaled) line
@@ -147,37 +150,46 @@ class _MuteGeometry2D(_MuteGeometry):
     norm: NDArray[np.floating]
     line1_norm: NDArray[np.floating]
     line2_norm: NDArray[np.floating]
+    parallel: bool
 
-    @staticmethod
-    def _check_degenerate(line):
-        """Ensure a line isn't really a point else raise."""
-        if len(np.unique(line, axis=0)) != 2:
-            msg = f"Line specified for mute {line} is degenerate!"
-            raise ParameterError(msg)
+    # For determining if any points are degenerate (norms close to 0)
+    # or parallel (dot products close to 1)
+    _tolerance: ClassVar[float] = 1e-9
 
     @classmethod
-    def _params_from_point_list(cls, points, patch, dims):
+    def _get_line_params(cls, points, patch, dims):
         """Get the parameters from a list of points."""
-        cls._check_degenerate(points[:2])
-        cls._check_degenerate(points[2:])
-        # We need to ensure one of the points is duplicated; this is the orign
-        origin = get_2d_line_intersection(*points)
-        norm = np.array([dc.to_float(patch.get_coord(x).coord_range()) for x in dims])
+        tol = cls._tolerance
+        # Get the origin (where two lines intersect), (nan, nan) if parallel.
+        coord_norm = np.array(
+            [dc.to_float(patch.get_coord(x).coord_range()) for x in dims]
+        )
+        origin = get_2d_line_intersection(*points) / coord_norm
         # Get vectors. Need to normalize in coord space and by l2.
-        v1 = ((points[1] - points[0]) - origin) / norm
-        v2 = ((points[3] - points[2]) - origin) / norm
-        v1_norm = v1 / np.linalg.norm(v1)
-        v2_norm = v2 / np.linalg.norm(v2)
-        # Ensure vectors are pointing in the same direction, otherwise the
-        # mute area is ambiguous.
-        if not vectors_same_direction(v1, v2):
-            msg = "Mute vectors must point in the same direction."
+        v1 = (points[1] - points[0]) / coord_norm
+        v2 = (points[3] - points[2]) / coord_norm
+        norm_v1, norm_v2 = norm(v1), norm(v2)
+        v1_norm, v2_norm = v1 / norm_v1, v2 / norm_v2
+        # Check if any points are degenerate.
+        if (norm_v1 < tol) or (norm_v2 < tol):
+            msg = f"A line provided to mute ({v1} or {v2}) is degenerate!"
             raise ParameterError(msg)
+        # Determine if vectors are parallel and point in same direction
+        parallel = (1 - np.dot(v1, v2)) < tol
+        same_direction = np.dot(v1_norm, v2_norm) >= 0
+        if not same_direction:
+            if not parallel:
+                msg = "Non-parallel mute vectors must point in the same direction."
+                raise ParameterError(msg)
+            else:
+                # If lines are parallel we can just reverse the direction of one.
+                v1 *= -1
         out = dict(
             origin=origin,
-            norm=norm,
-            line1_norm=v1_norm,
-            line2_norm=v2_norm,
+            norm=coord_norm,
+            line1_norm=v1 / norm_v1,
+            line2_norm=v2 / norm_v2,
+            parallel=parallel,
         )
         return out
 
@@ -217,7 +229,7 @@ class _MuteGeometry2D(_MuteGeometry):
         # Then put the 4 points together. This gives us a len 4 array with rows
         # as points from first line, then points from second.
         points = np.stack(out, axis=-1).reshape(-1, 2)
-        line_params = cls._params_from_point_list(points, patch, dims)
+        line_params = cls._get_line_params(points, patch, dims)
         kwargs = dict(dims=dims, axes=axes, relative=relative) | line_params
         return cls(**kwargs)
 
@@ -230,13 +242,11 @@ class _MuteGeometry2D(_MuteGeometry):
         for dim in self.dims:
             ax = patch.get_axis(dim)
             coord = patch.get_coord(dim)
-
             # Get the coordinate values normalized to coord range.
             coord_vals = dc.to_float(coord.values)
             coord_range = dc.to_float(coord.coord_range())
             if self.relative:
                 coord_vals = coord_vals - dc.to_float(coord.min())
-
             # First get values in coord.
             norm_vals = (coord_vals - self.origin[ax]) / dc.to_float(coord_range)
             # We need to transform coordinate values to values between 0 and 1.
@@ -244,7 +254,6 @@ class _MuteGeometry2D(_MuteGeometry):
             coord_inds = [None] * array.ndim
             coord_inds[ax] = slice(None, len(coord))
             norms = norm_vals[tuple(coord_inds)]
-
             # Next, we set those values on an array with the same shape as array.
             inds = [slice(None)] * array.ndim
             inds[ax] = slice(None, len(coord))
@@ -255,13 +264,15 @@ class _MuteGeometry2D(_MuteGeometry):
         out = np.stack(out, axis=-1)
         return out
 
-    def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:
-        """Apply the mask to the output array."""
-        coord_norms = self._get_normalized_array_coord(array, patch)
+    def _cross_product_ok(self, coord_array):
+        """
+        Determine if each point is in the region based on the cross product
+        requirement.
+        """
         # Get padded arrays with 0 z values for cross product.
         array_widths = ((0, 0), (0, 0), (0, 1))
         coord_z = np.pad(
-            coord_norms, pad_width=array_widths, mode="constant", constant_values=0
+            coord_array, pad_width=array_widths, mode="constant", constant_values=0
         )
         line_widths = (0, 1)
         l1_z = np.pad(self.line1_norm, line_widths, mode="constant", constant_values=0)
@@ -271,12 +282,24 @@ class _MuteGeometry2D(_MuteGeometry):
         cross1_z = np.cross(l1_z, coord_z)[:, :, 2]
         cross2_z = np.cross(l2_z, coord_z)[:, :, 2]
         ok_cross = cross1_z * cross2_z < 0
+        return ok_cross
+
+    def _dot_product_ok(self, coord_array):
         # Get dot product with each line.
-        dot1 = np.sum(self.line1_norm[None, :] * coord_norms, axis=-1)
-        dot2 = np.sum(self.line2_norm[None, :] * coord_norms, axis=-1)
+        dot1 = np.sum(self.line1_norm[None, :] * coord_array, axis=-1)
+        dot2 = np.sum(self.line2_norm[None, :] * coord_array, axis=-1)
         ok_dot = dot1 * dot2 > 0
-        envelope = ok_cross & ok_dot
-        return envelope
+        return ok_dot
+
+    def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:
+        """Apply the mask to the output array."""
+        coord_norms = self._get_normalized_array_coord(array, patch)
+        ok_cross = self._cross_product_ok(coord_norms)
+        # For parallel lines only cross product is needed to define region.
+        if self.parallel:
+            return ok_cross
+        ok_dot = self._dot_product_ok(coord_norms)
+        return ok_cross & ok_dot
 
 
 def _get_mute_geometry(patch, kwargs, relative=True):
@@ -358,7 +381,6 @@ def mute(
     >>> from scipy.ndimage import gaussian_filter
     >>>
     >>> patch = dc.get_example_patch().full(1)
-    >>>
     >>>
     >>> # Mute first 0.5s (relative to start by default)
     >>> muted = patch.mute(time=(0, 0.5))

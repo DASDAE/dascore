@@ -175,40 +175,6 @@ class Test1DMute:
         sub = muted1.select(time=(v1, v2), relative=True)
         assert not np.allclose(sub.data, 1)
 
-
-class TestMuteLines:
-    """Tests for muting between lines."""
-
-    def test_point_raise(self, patch_ones):
-        """A degenerate line (point) should raise."""
-        msg = "Line specified"
-        with pytest.raises(ParameterError, match=msg):
-            patch_ones.mute(
-                time=([0, 0], [0, 0.25]),
-                distance=([0, 0], [0, 300]),
-            )
-
-    # def test_no_common_point_raises(self, patch_ones):
-    #     """Two lines without a common point should raise."""
-    #     msg = "No common point"
-    #     with pytest.raises(ParameterError, match=msg):
-    #         patch_ones.mute(
-    #             time=([10, 4], [0, 0.25]),
-    #             distance=([1, 6], [0, 300]),
-    #         )
-
-    def test_mute_lines(self, patch_ones):
-        """Mute a rectangular region in 2D."""
-        muted = patch_ones.mute(
-            time=([0, 2], [0, 4]),
-            distance=([0, 100], [0, 100]),
-        )
-        points = [(145, 4), (182, 6), (100, 3), (180, 3), (60, 6), (50, 1)]
-        expected = [1, 1, 1, 0, 0, 0]
-        _assert_point_values(
-            muted, ("time", "distance"), points=points, expected_values=expected
-        )
-
     def test_mute_strips(self, patch_ones):
         """Mute strips along each dimension."""
         # Mute a time strip
@@ -220,6 +186,41 @@ class TestMuteLines:
         muted_dist = patch_ones.mute(distance=(10, 20))
         # All times should be affected equally
         assert np.allclose(muted_dist.data[15, :], muted_dist.data[15, 0])
+
+
+class TestMuteLines:
+    """Tests for muting between lines."""
+
+    def test_point_raise(self, patch_ones):
+        """A degenerate line (point) should raise."""
+        msg = "is degenerate"
+        with pytest.raises(ParameterError, match=msg):
+            patch_ones.mute(
+                time=([0, 0], [0, 0.25]),
+                distance=([0, 0], [0, 300]),
+            )
+
+    def test_not_same_direction(self, patch_ones):
+        """Create lines which do not point in the same directions."""
+        match = "point in the same direction"
+
+        with pytest.raises(ValueError, match=match):
+            patch_ones.mute(
+                time=[[0, 0], [1, -1]],
+                distance=[[1, -1], [-1, 1]],
+            )
+
+    def test_mute_lines(self, patch_ones):
+        """Mute non-parallel lines."""
+        muted = patch_ones.mute(
+            time=([0, 2], [0, 4]),
+            distance=([0, 100], [0, 100]),
+        )
+        points = [(145, 4), (182, 6), (100, 3), (180, 3), (60, 6), (50, 1)]
+        expected = [1, 1, 1, 0, 0, 0]
+        _assert_point_values(
+            muted, ("time", "distance"), points=points, expected_values=expected
+        )
 
 
 #
