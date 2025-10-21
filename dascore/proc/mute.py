@@ -128,7 +128,9 @@ class _MuteGeometry2D(_MuteGeometry):
     Parameters
     ----------
     origin
-        The shared origin for the two points.
+        The origin for each point. If lines are not parallel, this is the
+        shared origin. If they are parallel the first value of each point
+        is used.
     line1
         A numpy array of the un-normalized first line.
     line2
@@ -146,7 +148,7 @@ class _MuteGeometry2D(_MuteGeometry):
     normalized (scaled) line
     """
 
-    origin: NDArray[np.floating]
+    origin: tuple(NDArray[np.floating], NDArray[np.floating])
     norm: NDArray[np.floating]
     line1_norm: NDArray[np.floating]
     line2_norm: NDArray[np.floating]
@@ -164,10 +166,12 @@ class _MuteGeometry2D(_MuteGeometry):
         coord_norm = np.array(
             [dc.to_float(patch.get_coord(x).coord_range()) for x in dims]
         )
-        origin = get_2d_line_intersection(*points) / coord_norm
-        # Get vectors. Need to normalize in coord space and by l2.
-        v1 = (points[1] - points[0]) / coord_norm
-        v2 = (points[3] - points[2]) / coord_norm
+        origin = get_2d_line_intersection(*points)
+        # Get vectors with various stages of normalization.
+        # We need to first normalize in coord space and then by l2 norm.
+        l1 = points[1] - points[0]
+        l2 = points[3] - points[2]
+        v1, v2 = l1 / coord_norm, l2 / coord_norm
         norm_v1, norm_v2 = norm(v1), norm(v2)
         v1_norm, v2_norm = v1 / norm_v1, v2 / norm_v2
         # Check if any points are degenerate.
@@ -184,8 +188,13 @@ class _MuteGeometry2D(_MuteGeometry):
             else:
                 # If lines are parallel we can just reverse the direction of one.
                 v1 *= -1
+        # Get the origin tuple (origin for l1, origin for l2)
+        if parallel:
+            origin_tuple = (points[0], points[2])
+        else:
+            origin_tuple = (origin, origin)
         out = dict(
-            origin=origin,
+            origin=origin_tuple,
             norm=coord_norm,
             line1_norm=v1 / norm_v1,
             line2_norm=v2 / norm_v2,
@@ -238,28 +247,29 @@ class _MuteGeometry2D(_MuteGeometry):
         Get an array that matches the dimensionality of envelope but of its
         normalized, relative coordinates.
         """
-        out = []
+        out = [[], []]
         for dim in self.dims:
             ax = patch.get_axis(dim)
             coord = patch.get_coord(dim)
             # Get the coordinate values normalized to coord range.
             coord_vals = dc.to_float(coord.values)
             coord_range = dc.to_float(coord.coord_range())
-            if self.relative:
+            if self.relative or self.parallel:
                 coord_vals = coord_vals - dc.to_float(coord.min())
-            # First get values in coord.
-            norm_vals = (coord_vals - self.origin[ax]) / dc.to_float(coord_range)
+            # First get values in coord. Only relative to origin if there is one.
+            origin = 0.0 if self.parallel else self.origin[ax]
+            norm_vals = (coord_vals / dc.to_float(coord_range)) - origin
             # We need to transform coordinate values to values between 0 and 1.
             # with the same dimensionality as array.
             coord_inds = [None] * array.ndim
-            coord_inds[ax] = slice(None, len(coord))
+            coord_inds[ax] = slice(None)
             norms = norm_vals[tuple(coord_inds)]
             # Next, we set those values on an array with the same shape as array.
             inds = [slice(None)] * array.ndim
             inds[ax] = slice(None, len(coord))
             carray = np.empty_like(array)
             carray[tuple(inds)] = norms
-            out.append(carray)
+            out[0].append(carray)
         # Return new axis as -1 so it will broadcast with lines.
         out = np.stack(out, axis=-1)
         return out
@@ -277,8 +287,8 @@ class _MuteGeometry2D(_MuteGeometry):
         line_widths = (0, 1)
         l1_z = np.pad(self.line1_norm, line_widths, mode="constant", constant_values=0)
         l2_z = np.pad(self.line2_norm, line_widths, mode="constant", constant_values=0)
-        # The selected points will have different cross product sign and
-        # the same dot product sign.
+        # The selected points will have different cross product signs. Need to
+        # shift points relative to each line start if we have parallel lines.
         cross1_z = np.cross(l1_z, coord_z)[:, :, 2]
         cross2_z = np.cross(l2_z, coord_z)[:, :, 2]
         ok_cross = cross1_z * cross2_z < 0
@@ -293,7 +303,7 @@ class _MuteGeometry2D(_MuteGeometry):
 
     def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:
         """Apply the mask to the output array."""
-        coord_norms = self._get_normalized_array_coord(array, patch)
+        cnorms_1, cnorms_2 = self._get_normalized_array_coord(array, patch)
         ok_cross = self._cross_product_ok(coord_norms)
         # For parallel lines only cross product is needed to define region.
         if self.parallel:

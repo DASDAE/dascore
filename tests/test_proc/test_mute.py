@@ -48,15 +48,14 @@ def _assert_point_values(
 
     for vals, expected in zip(points, expected_values, strict=True):
         # Get the index (in the data array) of the expected 0.
-        inds = (
-            patch.get_coord(dims[num]).get_next_index(
-                vals[axes.index(num)], relative=relative
-            )
-            if num in axes
-            else slice(None)
-            for num in range(patch.ndim)
-        )
-        assert np.isclose(patch.data[tuple(inds)], expected)
+        inds = [slice(None)] * patch.ndim
+        for val, dim, ax in zip(vals, dims, axes, strict=True):
+            ax = patch.get_axis(dim)
+            coord = patch.get_coord(dim)
+            inds[ax] = coord.get_next_index(val, relative=relative)
+
+        patch_value = patch.data[tuple(inds)]
+        assert np.isclose(patch_value, expected)
 
 
 @pytest.fixture(scope="session")
@@ -211,7 +210,7 @@ class TestMuteLines:
             )
 
     def test_mute_lines(self, patch_ones):
-        """Mute non-parallel lines."""
+        """Test for muting non-parallel lines."""
         muted = patch_ones.mute(
             time=([0, 2], [0, 4]),
             distance=([0, 100], [0, 100]),
@@ -219,7 +218,15 @@ class TestMuteLines:
         points = [(145, 4), (182, 6), (100, 3), (180, 3), (60, 6), (50, 1)]
         expected = [1, 1, 1, 0, 0, 0]
         _assert_point_values(
-            muted, ("time", "distance"), points=points, expected_values=expected
+            muted, ("distance", "time"), points=points, expected_values=expected
+        )
+
+    def test_mute_lines_parallel(self, patch_ones):
+        """Test for muting parallel lines."""
+        breakpoint()
+        muted = patch_ones.mute(
+            time=([0, 7.0], [1, 8.0]),
+            distance=([0, 300], [1, 301]),
         )
 
 
