@@ -38,7 +38,7 @@ class _MuteGeometry(DascoreBaseModel):
         self,
         array: NDArray,
     ):
-        pass
+        """Apply the mask on the array for envelope calculation."""
 
     def _apply_smoothing(self, array, smooth, patch):
         """Apply smoothing to the array."""
@@ -148,7 +148,7 @@ class _MuteGeometry2D(_MuteGeometry):
     normalized (scaled) line
     """
 
-    origin: tuple(NDArray[np.floating], NDArray[np.floating])
+    origin: tuple[NDArray[np.floating], NDArray[np.floating]]
     norm: NDArray[np.floating]
     line1_norm: NDArray[np.floating]
     line2_norm: NDArray[np.floating]
@@ -173,7 +173,8 @@ class _MuteGeometry2D(_MuteGeometry):
         l2 = points[3] - points[2]
         v1, v2 = l1 / coord_norm, l2 / coord_norm
         norm_v1, norm_v2 = norm(v1), norm(v2)
-        v1_norm, v2_norm = v1 / norm_v1, v2 / norm_v2
+        with np.errstate(divide="ignore", invalid="ignore"):
+            v1_norm, v2_norm = v1 / norm_v1, v2 / norm_v2
         # Check if any points are degenerate.
         if (norm_v1 < tol) or (norm_v2 < tol):
             msg = f"A line provided to mute ({v1} or {v2}) is degenerate!"
@@ -229,6 +230,7 @@ class _MuteGeometry2D(_MuteGeometry):
                     row = _get_coord_float_values(coord, vals, relative=relative)
                 fill_inds[dim].append(row)
                 out.append(None)
+                continue
             # Otherwise, we just run with it.
             vals = _get_coord_float_values(coord, np.array(row), relative=relative)
             out.append(vals)
@@ -248,68 +250,74 @@ class _MuteGeometry2D(_MuteGeometry):
         normalized, relative coordinates.
         """
         out = [[], []]
-        for dim in self.dims:
-            ax = patch.get_axis(dim)
-            coord = patch.get_coord(dim)
-            # Get the coordinate values normalized to coord range.
-            coord_vals = dc.to_float(coord.values)
-            coord_range = dc.to_float(coord.coord_range())
-            if self.relative or self.parallel:
-                coord_vals = coord_vals - dc.to_float(coord.min())
-            # First get values in coord. Only relative to origin if there is one.
-            origin = 0.0 if self.parallel else self.origin[ax]
-            norm_vals = (coord_vals / dc.to_float(coord_range)) - origin
-            # We need to transform coordinate values to values between 0 and 1.
-            # with the same dimensionality as array.
-            coord_inds = [None] * array.ndim
-            coord_inds[ax] = slice(None)
-            norms = norm_vals[tuple(coord_inds)]
-            # Next, we set those values on an array with the same shape as array.
-            inds = [slice(None)] * array.ndim
-            inds[ax] = slice(None, len(coord))
-            carray = np.empty_like(array)
-            carray[tuple(inds)] = norms
-            out[0].append(carray)
+        for onum, origin in enumerate(self.origin):
+            for dim in self.dims:
+                ax = patch.get_axis(dim)
+                coord = patch.get_coord(dim)
+                # Get the coordinate values normalized to coord range.
+                coord_vals = dc.to_float(coord.values)
+                coord_range = dc.to_float(coord.coord_range())
+                if self.relative:
+                    coord_vals -= dc.to_float(coord.min())
+                # First get values in coord. Only relative to origin if there is one.
+                norm_vals = (coord_vals - origin[ax]) / dc.to_float(coord_range)
+                # We need to transform coordinate values to values between 0 and 1.
+                # with the same dimensionality as array.
+                coord_inds = [None] * array.ndim
+                coord_inds[ax] = slice(None)
+                norms = norm_vals[tuple(coord_inds)]
+                # Next, we set those values on an array with the same shape as array.
+                inds = [slice(None)] * array.ndim
+                inds[ax] = slice(None, len(coord))
+                carray = np.empty_like(array)
+                carray[tuple(inds)] = norms
+                out[onum].append(carray)
         # Return new axis as -1 so it will broadcast with lines.
-        out = np.stack(out, axis=-1)
+        out = [np.stack(x, axis=-1) for x in out]
         return out
 
-    def _cross_product_ok(self, coord_array):
+    def _cross_product_ok(self, coord_array_1, coord_array_2):
         """
         Determine if each point is in the region based on the cross product
         requirement.
         """
         # Get padded arrays with 0 z values for cross product.
         array_widths = ((0, 0), (0, 0), (0, 1))
-        coord_z = np.pad(
-            coord_array, pad_width=array_widths, mode="constant", constant_values=0
+        coord_1_z = np.pad(
+            coord_array_1, pad_width=array_widths, mode="constant", constant_values=0
+        )
+        coord_2_z = np.pad(
+            coord_array_2, pad_width=array_widths, mode="constant", constant_values=0
         )
         line_widths = (0, 1)
         l1_z = np.pad(self.line1_norm, line_widths, mode="constant", constant_values=0)
         l2_z = np.pad(self.line2_norm, line_widths, mode="constant", constant_values=0)
         # The selected points will have different cross product signs. Need to
         # shift points relative to each line start if we have parallel lines.
-        cross1_z = np.cross(l1_z, coord_z)[:, :, 2]
-        cross2_z = np.cross(l2_z, coord_z)[:, :, 2]
+        cross1_z = np.cross(l1_z, coord_1_z)[:, :, 2]
+        cross2_z = np.cross(l2_z, coord_2_z)[:, :, 2]
         ok_cross = cross1_z * cross2_z < 0
         return ok_cross
 
-    def _dot_product_ok(self, coord_array):
+    def _dot_product_ok(self, coord_array_1, coord_array_2):
         # Get dot product with each line.
-        dot1 = np.sum(self.line1_norm[None, :] * coord_array, axis=-1)
-        dot2 = np.sum(self.line2_norm[None, :] * coord_array, axis=-1)
+        dot1 = np.sum(self.line1_norm[None, :] * coord_array_1, axis=-1)
+        dot2 = np.sum(self.line2_norm[None, :] * coord_array_2, axis=-1)
         ok_dot = dot1 * dot2 > 0
         return ok_dot
 
     def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:
         """Apply the mask to the output array."""
         cnorms_1, cnorms_2 = self._get_normalized_array_coord(array, patch)
-        ok_cross = self._cross_product_ok(coord_norms)
+        ok_cross = self._cross_product_ok(cnorms_1, cnorms_2)
         # For parallel lines only cross product is needed to define region.
         if self.parallel:
-            return ok_cross
-        ok_dot = self._dot_product_ok(coord_norms)
-        return ok_cross & ok_dot
+            mask = ok_cross
+        else:
+            ok_dot = self._dot_product_ok(cnorms_1, cnorms_2)
+            mask = ok_cross & ok_dot
+        array[mask] = fill_value
+        return array
 
 
 def _get_mute_geometry(patch, kwargs, relative=True):
@@ -468,5 +476,4 @@ def mute(
     # Apply smoothing if requested.
     if smooth is not None:
         out = geo._apply_smoothing(out, smooth, patch)
-
     return patch.update(data=patch.data * out)

@@ -211,23 +211,46 @@ class TestMuteLines:
 
     def test_mute_lines(self, patch_ones):
         """Test for muting non-parallel lines."""
-        muted = patch_ones.mute(
-            time=([0, 2], [0, 4]),
-            distance=([0, 100], [0, 100]),
-        )
+        time = ([0, 2], [0, 4])
+        distance = ([0, 100], [0, 100])
+        dims = ("distance", "time")
+        muted = patch_ones.mute(time=time, distance=distance)
+        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+
         points = [(145, 4), (182, 6), (100, 3), (180, 3), (60, 6), (50, 1)]
-        expected = [1, 1, 1, 0, 0, 0]
+        expected = np.array([0, 0, 0, 1, 1, 1])
+        _assert_point_values(muted, dims, points=points, expected_values=expected)
         _assert_point_values(
-            muted, ("distance", "time"), points=points, expected_values=expected
+            inverted, dims, points=points, expected_values=-expected + 1
         )
 
     def test_mute_lines_parallel(self, patch_ones):
         """Test for muting parallel lines."""
-        breakpoint()
+        time = ([0, 7.0], [1, 8.0])
+        distance = ([0, 300], [1, 301])
         muted = patch_ones.mute(
-            time=([0, 7.0], [1, 8.0]),
-            distance=([0, 300], [1, 301]),
+            time=time,
+            distance=distance,
         )
+        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+
+        points = [(110, 3), (271, 7), (23, 1), (50, 6), (250, 1), (170, 3)]
+        expected = np.array([0, 0, 0, 1, 1, 1])
+        dims = ("distance", "time")
+        _assert_point_values(muted, dims, points=points, expected_values=expected)
+        _assert_point_values(
+            inverted, dims, points=points, expected_values=-expected + 1
+        )
+
+    def test_none_mutes(self, patch_ones):
+        """Ensure None can be used to specify vertical/horizontal lines."""
+        time = (0, [1, 8.0])
+        distance = (None, [1, 301])
+        muted = patch_ones.mute(
+            time=time,
+            distance=distance,
+        )
+
 
 
 #

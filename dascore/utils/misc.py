@@ -920,6 +920,9 @@ def get_2d_line_intersection(p1, p2, p3, p4):
     if np.isclose(denom, 0):
         np.array([np.nan, np.nan])
 
-    px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom
-    py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
+    num_x = (x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)
+    num_y = (x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        px = num_x / denom
+        py = num_y / denom
     return np.array([px, py])
