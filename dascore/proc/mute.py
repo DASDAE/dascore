@@ -41,8 +41,8 @@ class _MuteGeometry(DascoreBaseModel):
 
     def _apply_smoothing(self, array, smooth, patch):
         """Apply smoothing to the array."""
-        sigma = self._get_smooth_sigma(smooth, patch)
-        return gaussian_filter(array, sigma=sigma, axes=tuple(self.axes))
+        sigma, axes = self._get_smooth_sigma(smooth, patch)
+        return gaussian_filter(array, sigma=sigma, axes=axes)
 
     def _get_smooth_sigma(self, smooth, patch):
         """Get sigma values, in samples, for the gaussian kernel."""
@@ -53,17 +53,20 @@ class _MuteGeometry(DascoreBaseModel):
             # For a single value, just broadcast to dim length.
             if not isinstance(smooth, Mapping):
                 vals = [smooth] * len(dims)
+                axes = self.axes
             else:
-                # Otherwise each dimension's smooth must be specified.
-                if not set(dims) == set(smooth):
+                # Otherwise, the smooth dict must be a subset of the dimensions.
+                if not set(smooth).issubset(set(dims)):
                     msg = (
-                        f"If a taper dictionary is used in Mute, it must have all "
-                        f"the same keys as the dimensions. Kwarg dims are {dims} and"
-                        f"taper keys are {list(smooth)}."
+                        f"If a smooth dictionary is used in Mute, it must be a "
+                        f"subset of the dims in kwargs. Kwarg dims are {dims} and"
+                        f"smooth keys are {list(smooth)}."
                     )
                     raise ParameterError(msg)
-                vals = [smooth[dim] for dim in dims]
-            return vals
+                vals = [smooth[dim] for dim in dims if dim in smooth]
+                axes = [self.dims.index(x) for x in smooth]
+
+            return vals, axes
 
         def _convert_to_samples(smooth, dims, patch):
             """Convert the smooth parameter to number of samples."""
@@ -86,10 +89,10 @@ class _MuteGeometry(DascoreBaseModel):
                     out.append(coord.get_sample_count(val))
             return out
 
-        smooth_by_dims = _broadcast_smooth_to_dims(self.dims, smooth)
+        smooth_by_dims, axes = _broadcast_smooth_to_dims(self.dims, smooth)
         smooth_ints = _convert_to_samples(smooth_by_dims, self.dims, patch)
         # Now convert to input format for scipy's gaussian filter.
-        return smooth_ints
+        return smooth_ints, axes
 
 
 class _MuteGeometry1D(_MuteGeometry):
@@ -314,7 +317,8 @@ class _MuteGeometry2D(_MuteGeometry):
         requirement.
         """
         # Get padded arrays with 0 z values for cross product.
-        array_widths = ((0, 0), (0, 0), (0, 1))
+        # Create padding for all dimensions: (0,0) for all but last, (0,1) for last
+        array_widths = [(0, 0)] * (coord_array_1.ndim - 1) + [(0, 1)]
         coord_1_z = np.pad(
             coord_array_1, pad_width=array_widths, mode="constant", constant_values=0
         )
@@ -326,8 +330,9 @@ class _MuteGeometry2D(_MuteGeometry):
         l2_z = np.pad(self.line2_norm, line_widths, mode="constant", constant_values=0)
         # The selected points will have different cross product signs. Need to
         # shift points relative to each line start if we have parallel lines.
-        cross1_z = np.cross(l1_z, coord_1_z)[:, :, 2]
-        cross2_z = np.cross(l2_z, coord_2_z)[:, :, 2]
+        # Use ellipsis to handle arbitrary dimensions, indexing last dim with -1
+        cross1_z = np.cross(l1_z, coord_1_z)[..., 2]
+        cross2_z = np.cross(l2_z, coord_2_z)[..., 2]
         ok_cross = cross1_z * cross2_z < 0
         return ok_cross
 
@@ -436,7 +441,7 @@ def mute(
     >>> muted = patch.mute(time=(0, 0.5))
     >>>
     >>> # Mute everything except middle section
-    >>> kept = patch.mute(time=(0.2, -0.2), mode="complement")
+    >>> kept = patch.mute(time=(0.2, -0.2), invert=True)
     >>>
     >>> # 1D Mute with smoothed absolute units for time.
     >>> muted = patch.mute(time=(0.2, 0.8), smooth=0.02 * dc.units.s)

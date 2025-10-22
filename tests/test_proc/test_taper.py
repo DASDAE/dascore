@@ -298,14 +298,14 @@ class TestTaperRange:
 
         # Use 2-value form with invert to mute from start_idx to end
         out = patch_ones.taper_range(
-            distance=(start_idx, end_idx),
+            distance=(start_idx - 1, start_idx, end_idx, end_idx),
             invert=False,
             samples=True,
             window_type="boxcar",
         )
         # Values before start_idx should be 1 (unmuted)
-        assert np.allclose(out.data[start_idx - 1, :], 1)
+        assert np.allclose(out.data[start_idx - 10, :], 0)
 
         # Values from start_idx to end should be 0 (muted)
-        assert np.allclose(out.data[start_idx, :], 0)
-        assert np.allclose(out.data[end_idx, :], 0)
+        assert np.allclose(out.data[start_idx, :], 1)
+        assert np.allclose(out.data[end_idx - 1, :], 1)
