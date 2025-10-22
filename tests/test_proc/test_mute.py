@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import dascore as dc
 from dascore.exceptions import ParameterError
 
 
@@ -62,12 +61,6 @@ def _assert_point_values(
 def patch_ones(random_patch):
     """Return a patch filled with ones."""
     return random_patch.new(data=np.ones_like(random_patch.data))
-
-
-@pytest.fixture(scope="session")
-def ricker_patch():
-    """Return ricker moveout patch for velocity mute testing."""
-    return dc.get_example_patch("ricker_moveout")
 
 
 class TestMuteBasics:
@@ -205,7 +198,7 @@ class TestMuteLines:
         """Create lines which do not point in the same directions."""
         match = "point in the same direction"
 
-        with pytest.raises(ValueError, match=match):
+        with pytest.raises(ParameterError, match=match):
             patch_ones.mute(
                 time=[[0, 0], [1, -1]],
                 distance=[[1, -1], [-1, 1]],

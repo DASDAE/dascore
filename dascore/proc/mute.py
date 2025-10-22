@@ -88,7 +88,7 @@ class _MuteGeometry(DascoreBaseModel):
 
         smooth_by_dims = _broadcast_smooth_to_dims(self.dims, smooth)
         smooth_ints = _convert_to_samples(smooth_by_dims, self.dims, patch)
-        # Now finagle into input for scipy's gaussian smooth.
+        # Now convert to input format for scipy's gaussian filter.
         return smooth_ints
 
 
@@ -374,7 +374,7 @@ def _get_mute_geometry(patch, kwargs, relative=True):
         geometry = _MuteGeometry1D.from_params(
             val_list, dims, axes, patch, relative=relative
         )
-    elif len(dims) > 1:  # Dealing with lines. .
+    elif len(dims) > 1:  # Dealing with lines.
         geometry = _MuteGeometry2D.from_params(
             val_list, dims, axes, patch, relative=relative
         )
@@ -401,7 +401,7 @@ def mute(
     patch
         The patch instance.
     smooth
-        Parameter controlling smoothing of the mute evenlope. Defines the sigma
+        Parameter controlling smoothing of the mute envelope. Defines the sigma
         Can be:
         - None: sharp mute
         - float (0.0-1.0): fraction of dimension range (e.g., 0.01 = 1%)
@@ -446,7 +446,7 @@ def mute(
     >>> muted = patch.mute(
     ...     time=(0, [0, 0.3]),
     ...     distance=(None, [0, 300]),
-    ...     taper=0.02,
+    ...     smooth=0.02,
     ... )
     >>>
     >>> # Mute late arrivals: from velocity line to end
@@ -487,14 +487,14 @@ def mute(
     - Currently, mute doesn't support more than 2 dimensions.
 
     - For more control over boundary smoothing, use a patch with one values
-      then apply custom tapering/smooting before multiplying with the
+      then apply custom tapering/smoothing before multiplying with the
       original patch. See example section for more details.
 
     See Also
     --------
     - [`Patch.select`](`dascore.Patch.select`)
     - [`Patch.taper_range`](`dascore.Patch.taper_range`)
-    - [`Patch.gaussian_filter`](`dacore.proc.filter.gaussian_filter`)
+    - [`Patch.gaussian_filter`](`dascore.proc.filter.gaussian_filter`)
     """
     # Get geometry object to set up the problem.
     geo = _get_mute_geometry(patch, kwargs, relative)

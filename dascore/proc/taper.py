@@ -153,9 +153,7 @@ def _get_taper_coord_inds(coord, values, relative, samples):
             # None or ... means min_val in first half of list else max_val
             out[num] = 0 if (num / len(out)) < 0.5 else len(coord) - 1
         else:
-            out[num] = coord.get_next_index(
-                val, samples=samples, relative=relative, allow_out_of_bounds=True
-            )
+            out[num] = coord.get_next_index(val, samples=samples, relative=relative)
     # Always need a len 4 sequence
     if len(out) == 2:
         out = [0, *out, len(coord)]
