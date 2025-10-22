@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Mapping, Sized
 from typing import ClassVar
 
@@ -127,7 +126,7 @@ class _MuteGeometry2D(_MuteGeometry):
 
     Parameters
     ----------
-    origin
+    origins
         The origin for each point. If lines are not parallel, this is the
         shared origin. If they are parallel the first value of each point
         is used.
@@ -148,7 +147,7 @@ class _MuteGeometry2D(_MuteGeometry):
     normalized (scaled) line
     """
 
-    origin: tuple[NDArray[np.floating], NDArray[np.floating]]
+    origins: tuple[NDArray[np.floating], NDArray[np.floating]]
     norm: NDArray[np.floating]
     line1_norm: NDArray[np.floating]
     line2_norm: NDArray[np.floating]
@@ -159,7 +158,7 @@ class _MuteGeometry2D(_MuteGeometry):
     _tolerance: ClassVar[float] = 1e-9
 
     @classmethod
-    def _get_line_params(cls, points, patch, dims):
+    def _get_line_params(cls, points, patch, dims, fill_ind):
         """Get the parameters from a list of points."""
         tol = cls._tolerance
         # Get the origin (where two lines intersect), (nan, nan) if parallel.
@@ -175,40 +174,43 @@ class _MuteGeometry2D(_MuteGeometry):
         norm_v1, norm_v2 = norm(v1), norm(v2)
         with np.errstate(divide="ignore", invalid="ignore"):
             v1_norm, v2_norm = v1 / norm_v1, v2 / norm_v2
+        # Then get array for easier manipulation
+        v_norms = np.stack([v1_norm, v2_norm], axis=0)
+
         # Check if any points are degenerate.
         if (norm_v1 < tol) or (norm_v2 < tol):
             msg = f"A line provided to mute ({v1} or {v2}) is degenerate!"
             raise ParameterError(msg)
         # Determine if vectors are parallel and point in same direction
-        parallel = (1 - np.dot(v1, v2)) < tol
-        same_direction = np.dot(v1_norm, v2_norm) >= 0
+        dot = np.dot(v_norms[0], v_norms[1])
+        parallel = bool((1 - abs(dot)) < tol)
+        same_direction = bool(dot >= 0)
         if not same_direction:
-            if not parallel:
+            if parallel or fill_ind != -1:
+                preferred = fill_ind if fill_ind != -1 else 0
+                # Just reverse order of line
+                v_norms[preferred] *= -1
+            else:
                 msg = "Non-parallel mute vectors must point in the same direction."
                 raise ParameterError(msg)
-            else:
-                # If lines are parallel we can just reverse the direction of one.
-                v1 *= -1
+
         # Get the origin tuple (origin for l1, origin for l2)
         if parallel:
             origin_tuple = (points[0], points[2])
         else:
             origin_tuple = (origin, origin)
         out = dict(
-            origin=origin_tuple,
+            origins=origin_tuple,
             norm=coord_norm,
-            line1_norm=v1 / norm_v1,
-            line2_norm=v2 / norm_v2,
+            line1_norm=v_norms[0],
+            line2_norm=v_norms[1],
             parallel=parallel,
         )
         return out
 
-    @classmethod
-    def from_params(cls, vals, dims, axes, patch, relative=True):
-        """
-        Return values which are two lines in absolute coordinate space,
-        (expressed as floats)
-        """
+    @staticmethod
+    def _get_filled_value_list(patch, coords, value_list, relative):
+        """Create an array of points, swapping out implicit values."""
 
         def _get_coord_float_values(coord, vals, relative):
             """Get the coordinate float values relative to start of coords."""
@@ -217,30 +219,52 @@ class _MuteGeometry2D(_MuteGeometry):
                 out = out - dc.to_float(coord.min())
             return out
 
-        out = []
-        # Keep track of the axis that need to be filled in (eg None, paired w/ float)
-        fill_inds = defaultdict(list)
-        for ind, (dim, row) in enumerate(zip(dims, vals)):
-            coord = patch.get_coord(dim)
-            # In the case of single values (eg None, ..., or some other)
-            # We need to just mark them and come back later.
-            if not isinstance(row, Sized):
-                # We need to get the actual value from the coord.
-                if row is not None and row is not Ellipsis:
-                    row = _get_coord_float_values(coord, vals, relative=relative)
-                fill_inds[dim].append(row)
-                out.append(None)
-                continue
-            # Otherwise, we just run with it.
-            vals = _get_coord_float_values(coord, np.array(row), relative=relative)
-            out.append(vals)
-        # Now we can ascertain the line intended by None.
-        if fill_inds:
-            raise NotImplementedError("Working on it.")
+        # Output is dim by column and point by row.
+        out = np.full((4, 2), fill_value=np.nan, dtype=np.float64)
+        # Indicates an implicit value was used.
+        ifill_index = -1
+
+        for ind, (coord, row) in enumerate(zip(coords, value_list)):
+            coord = patch.get_coord(patch.dims[ind])
+            # We iterate each pair because it might be an implicit value.
+            for pair_ind, pair in enumerate(row):
+                is_sized = isinstance(pair, Sized)
+                # The range is clearly defined.
+                if is_sized:
+                    array_inds = (slice(pair_ind * 2, pair_ind * 2 + 2), ind)
+                    out[array_inds] = _get_coord_float_values(coord, pair, relative)
+                    continue
+                # This pair value is a place holder (None, ...)
+                elif not is_sized and (pair is None or pair is Ellipsis):
+                    continue
+                # This is an implicit value; here is where things get crazy.
+                # We handle this by creating a new set of points to sub into
+                # the output array. This new set shares a first point with the
+                # other line, as well as the point on the implicit dimension.
+                # The value for the non-implicit dimension is held fixed.
+                else:
+                    ifill_index = pair_ind
+                    other_col_ind = 0 if ind == 1 else 1
+                    fixed_vals = _get_coord_float_values(coord, [pair], relative)
+                    out[pair_ind * 2 : pair_ind * 2 + 2, ind] = fixed_vals
+                    out[pair_ind * 2 : pair_ind * 2 + 2, other_col_ind] = np.array(
+                        [0, 1]
+                    )
+        assert not np.any(np.isnan(out))
+        return out, ifill_index
+
+    @classmethod
+    def from_params(cls, vals, dims, axes, patch, relative=True):
+        """
+        Return values which are two lines in absolute coordinate space,
+        (expressed as floats)
+        """
+        coords = [patch.get_coord(x) for x in dims]
+        # Iterate over each row (consists of (start, stop))
+        points, fill_ind = cls._get_filled_value_list(patch, coords, vals, relative)
         # Then put the 4 points together. This gives us a len 4 array with rows
         # as points from first line, then points from second.
-        points = np.stack(out, axis=-1).reshape(-1, 2)
-        line_params = cls._get_line_params(points, patch, dims)
+        line_params = cls._get_line_params(points, patch, dims, fill_ind)
         kwargs = dict(dims=dims, axes=axes, relative=relative) | line_params
         return cls(**kwargs)
 
@@ -249,23 +273,30 @@ class _MuteGeometry2D(_MuteGeometry):
         Get an array that matches the dimensionality of envelope but of its
         normalized, relative coordinates.
         """
+
+        def _nan_normalize(array):
+            """Normalize along last axis, handle norm close to 0."""
+            array_norm = norm(array, axis=-1, keepdims=True)
+            array_norm[array_norm == 0] = -np.finfo(np.float64).min
+            return array / array_norm
+
         out = [[], []]
-        for onum, origin in enumerate(self.origin):
-            for dim in self.dims:
-                ax = patch.get_axis(dim)
-                coord = patch.get_coord(dim)
-                # Get the coordinate values normalized to coord range.
-                coord_vals = dc.to_float(coord.values)
-                coord_range = dc.to_float(coord.coord_range())
-                if self.relative:
-                    coord_vals -= dc.to_float(coord.min())
-                # First get values in coord. Only relative to origin if there is one.
-                norm_vals = (coord_vals - origin[ax]) / dc.to_float(coord_range)
+        for dim_num, dim in enumerate(self.dims):
+            ax = patch.get_axis(dim)
+            coord = patch.get_coord(dim)
+            # Get the coordinate values normalized to coord range.
+            coord_vals = dc.to_float(coord.values)
+            coord_range = dc.to_float(coord.coord_range())
+            if self.relative:
+                coord_vals -= dc.to_float(coord.min())
+            # Iterate over each origin.
+            for onum, origin in enumerate(self.origins):
                 # We need to transform coordinate values to values between 0 and 1.
                 # with the same dimensionality as array.
-                coord_inds = [None] * array.ndim
-                coord_inds[ax] = slice(None)
-                norms = norm_vals[tuple(coord_inds)]
+                norm_vals = (coord_vals - origin[dim_num]) / coord_range
+                bcast_inds = [None] * array.ndim
+                bcast_inds[ax] = slice(None)
+                norms = norm_vals[tuple(bcast_inds)]
                 # Next, we set those values on an array with the same shape as array.
                 inds = [slice(None)] * array.ndim
                 inds[ax] = slice(None, len(coord))
@@ -273,8 +304,9 @@ class _MuteGeometry2D(_MuteGeometry):
                 carray[tuple(inds)] = norms
                 out[onum].append(carray)
         # Return new axis as -1 so it will broadcast with lines.
-        out = [np.stack(x, axis=-1) for x in out]
-        return out
+        out_1 = [np.stack(x, axis=-1) for x in out]
+        out_norm = [_nan_normalize(x) for x in out_1]
+        return out_norm
 
     def _cross_product_ok(self, coord_array_1, coord_array_2):
         """
@@ -303,7 +335,7 @@ class _MuteGeometry2D(_MuteGeometry):
         # Get dot product with each line.
         dot1 = np.sum(self.line1_norm[None, :] * coord_array_1, axis=-1)
         dot2 = np.sum(self.line2_norm[None, :] * coord_array_2, axis=-1)
-        ok_dot = dot1 * dot2 > 0
+        ok_dot = (dot1 > 0) & (dot2 > 0)
         return ok_dot
 
     def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:

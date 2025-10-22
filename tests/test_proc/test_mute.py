@@ -190,6 +190,8 @@ class Test1DMute:
 class TestMuteLines:
     """Tests for muting between lines."""
 
+    _dims = ("distance", "time")
+
     def test_point_raise(self, patch_ones):
         """A degenerate line (point) should raise."""
         msg = "is degenerate"
@@ -213,15 +215,14 @@ class TestMuteLines:
         """Test for muting non-parallel lines."""
         time = ([0, 2], [0, 4])
         distance = ([0, 100], [0, 100])
-        dims = ("distance", "time")
         muted = patch_ones.mute(time=time, distance=distance)
         inverted = patch_ones.mute(time=time, distance=distance, invert=True)
 
         points = [(145, 4), (182, 6), (100, 3), (180, 3), (60, 6), (50, 1)]
         expected = np.array([0, 0, 0, 1, 1, 1])
-        _assert_point_values(muted, dims, points=points, expected_values=expected)
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)
         _assert_point_values(
-            inverted, dims, points=points, expected_values=-expected + 1
+            inverted, self._dims, points=points, expected_values=-expected + 1
         )
 
     def test_mute_lines_parallel(self, patch_ones):
@@ -236,21 +237,77 @@ class TestMuteLines:
 
         points = [(110, 3), (271, 7), (23, 1), (50, 6), (250, 1), (170, 3)]
         expected = np.array([0, 0, 0, 1, 1, 1])
-        dims = ("distance", "time")
-        _assert_point_values(muted, dims, points=points, expected_values=expected)
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)
         _assert_point_values(
-            inverted, dims, points=points, expected_values=-expected + 1
+            inverted, self._dims, points=points, expected_values=-expected + 1
         )
 
-    def test_none_mutes(self, patch_ones):
-        """Ensure None can be used to specify vertical/horizontal lines."""
-        time = (0, [1, 8.0])
-        distance = (None, [1, 301])
+    def test_implicit_with_positive_line(self, patch_ones):
+        """
+        Ensure None can be used to specify vertical/horizontal lines with
+        another line with positive direction.
+        """
+        time = (0, [0, 8.0])
+        distance = (None, [0, 301])
         muted = patch_ones.mute(
             time=time,
             distance=distance,
         )
+        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
 
+        points = [(50, 6), (250, 2)]
+        expected = np.array([1, 0])
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)
+        _assert_point_values(
+            inverted, self._dims, points=points, expected_values=-expected + 1
+        )
 
+    def test_implicit_with_negative_line(self, patch_ones):
+        """
+        Ensure None can be used to specify vertical/horizontal lines with
+        another line pointing in negative direction.
+        """
+        time = (4, [4.0, 0])
+        distance = (None, [150, 0])
+        muted = patch_ones.mute(
+            time=time,
+            distance=distance,
+        )
+        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
 
-#
+        points = [(50, 3), (10, 3), (50, 2), (100, 2)]
+        expected = np.array([0, 0, 0, 1])
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)
+        _assert_point_values(
+            inverted, self._dims, points=points, expected_values=-expected + 1
+        )
+
+    def test_two_implicit_parallel_lines(self, patch_ones):
+        """Ensure two implicit values can define parallel lines."""
+        time = (0, 2)
+        distance = (None, None)
+        muted = patch_ones.mute(
+            time=time,
+            distance=distance,
+        )
+        sub = muted.select(time=(2.1, ...), relative=True)
+        assert np.allclose(sub.data, 1)
+
+        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+        sub = inverted.select(time=(2.1, ...), relative=True)
+        assert np.allclose(sub.data, 0)
+
+    def test_two_implicit_orthogonal_lines(self, patch_ones):
+        """Ensure two implicit values can define orthogonal lines."""
+        time = (None, 2)
+        distance = (100, None)
+        muted = patch_ones.mute(
+            time=time,
+            distance=distance,
+        )
+        sub = muted.select(time=(2.1, ...), distance=(101, ...), relative=True)
+        assert np.allclose(sub.data, 0)
+
+        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+        sub = inverted.select(time=(2.1, ...), distance=(101, ...), relative=True)
+        assert np.allclose(sub.data, 1)
