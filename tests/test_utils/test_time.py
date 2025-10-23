@@ -173,6 +173,19 @@ class TestToDateTime64:
         with pytest.raises(NotImplementedError):
             to_datetime64(Dummy())
 
+    def test_immutable_inputs(self):
+        """Ensure immutable array inputs work."""
+        # See #575.
+        rand = np.random.RandomState(42)
+        array_no_nan = rand.random(100)
+        array_nan = rand.random(100)
+        array_nan[10] = np.nan
+
+        for array in [array_no_nan, array_nan]:
+            array.setflags(write=False)
+            time = to_datetime64(array_no_nan)
+            assert np.issubdtype(time.dtype, "M8")
+
 
 class TestToTimeDelta64:
     """Tests for creating timedeltas."""
@@ -300,6 +313,19 @@ class TestToTimeDelta64:
         dt_array = random_patch.get_coord("time").values
         out = to_timedelta64(dt_array)
         assert np.all(out.astype(np.int64) == dt_array.astype(np.int64))
+
+    def test_immutable_inputs(self):
+        """Ensure immutable array inputs work."""
+        # See #575.
+        rand = np.random.RandomState(42)
+        array_no_nan = rand.random(100)
+        array_nan = rand.random(100)
+        array_nan[10] = np.nan
+
+        for array in [array_no_nan, array_nan]:
+            array.setflags(write=False)
+            time = to_timedelta64(array_no_nan)
+            assert np.issubdtype(time.dtype, "m8")
 
 
 class TestToInt:
