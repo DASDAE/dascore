@@ -203,7 +203,11 @@ def _array_to_timedelta64(array: np.ndarray) -> np.datetime64:
 
     assert np.isreal(array[0])
     nans = pd.isnull(array)
-    array[nans] = 0
+    # Need to make copy to 1) not change original array and 2) handle
+    # immutable arrays. See #575.
+    if np.any(nans):
+        array = np.array(array)
+        array[nans] = 0
     # inf/NaN complain, salience these types of warnings for this block.
     with np.errstate(divide="ignore", invalid="ignore"):
         # separate seconds and factions, convert fractions to ns precision,
