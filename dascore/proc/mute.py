@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sized
 from typing import ClassVar
 
@@ -20,7 +21,7 @@ from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value, patch_function
 
 
-class _MuteGeometry(DascoreBaseModel):
+class _MuteGeometry(ABC, DascoreBaseModel):
     """
     Parent class for Mute Geometry.
     """
@@ -30,14 +31,13 @@ class _MuteGeometry(DascoreBaseModel):
     relative: bool = True
 
     @classmethod
+    @abstractmethod
     def from_params(cls, vals, dims, axes, patch, relative):
         """Initialize Mute Geometry from input parameters."""
 
-    def _mask_array(
-        self,
-        array: NDArray,
-    ):
-        """Apply the mask on the array for envelope calculation."""
+    @abstractmethod
+    def _apply_mask(self, array: NDArray, patch: dc.Patch, fill_value) -> NDArray:
+        """Apply the mask to the output array."""
 
     def _apply_smoothing(self, array, smooth, patch):
         """Apply smoothing to the array."""
@@ -280,7 +280,7 @@ class _MuteGeometry2D(_MuteGeometry):
         def _nan_normalize(array):
             """Normalize along last axis, handle norm close to 0."""
             array_norm = norm(array, axis=-1, keepdims=True)
-            array_norm[array_norm == 0] = -np.finfo(np.float64).min
+            array_norm[array_norm == 0] = np.finfo(np.float64).eps
             return array / array_norm
 
         out = [[], []]

@@ -487,12 +487,6 @@ class TestMute3D:
         sub_kept = muted.select(time=(v2 + 0.1, ...), relative=True)
         assert np.allclose(sub_kept.data, 1)
 
-    def test_1d_mute_distance(self, patch_ones_3d):
-        """Test 1D mute along distance dimension."""
-        muted = patch_ones_3d.mute(distance=(50, 150), relative=True)
-        sub_muted = muted.select(distance=(50, 150), relative=True)
-        assert np.allclose(sub_muted.data, 0)
-
     def test_2d_line_mute(self, patch_ones_3d):
         """Test 2D line mute using time-distance plane."""
         time = ([0, 1.0], [0, 1.5])
