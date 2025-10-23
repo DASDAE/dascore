@@ -176,15 +176,20 @@ class TestToDateTime64:
     def test_immutable_inputs(self):
         """Ensure immutable array inputs work."""
         # See #575.
-        rand = np.random.RandomState(42)
-        array_no_nan = rand.random(100)
-        array_nan = rand.random(100)
+        array_no_nan = random_state.random(100)
+        array_nan = random_state.random(100)
         array_nan[10] = np.nan
 
         for array in [array_no_nan, array_nan]:
             array.setflags(write=False)
             time = to_datetime64(array_no_nan)
             assert np.issubdtype(time.dtype, "M8")
+
+    def test_timedelta_array(self):
+        """Ensure timedelta arrays can be converted to datetime64."""
+        td = to_timedelta64(random_state.random(100))
+        out = to_datetime64(td)
+        assert np.issubdtype(out.dtype, "M8")
 
 
 class TestToTimeDelta64:
@@ -317,9 +322,8 @@ class TestToTimeDelta64:
     def test_immutable_inputs(self):
         """Ensure immutable array inputs work."""
         # See #575.
-        rand = np.random.RandomState(42)
-        array_no_nan = rand.random(100)
-        array_nan = rand.random(100)
+        array_no_nan = random_state.random(100)
+        array_nan = random_state.random(100)
         array_nan[10] = np.nan
 
         for array in [array_no_nan, array_nan]:
