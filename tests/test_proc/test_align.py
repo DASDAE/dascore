@@ -110,6 +110,26 @@ def patch_with_mixed_shifts(simple_patch_for_alignment):
     return patch.update_coords(shift_time_mixed=("distance", mixed_shifts))
 
 
+def _create_patch_with_shifts(start, stop, patch=None):
+    """
+    Create a simple patch with varying shift values.
+    """
+    # Get time range first to avoid selecting empty coords
+    patch = dc.get_example_patch() if patch is None else patch
+    time_coord = patch.get_coord("time")
+    time_min, time_max = time_coord.min(), time_coord.max()
+    time_mid = time_min + (time_max - time_min) / 2
+    # Select a subset for testing
+    patch = patch.select(time=(time_min, time_mid), distance=(0, 50), samples=False)
+    # Create shift values that vary across distance
+    distance = patch.get_array("distance")
+    # Shifts in seconds - varying from 0.0 to 0.1
+    shifts = np.linspace(start, stop, len(distance))
+    # Add the shift coordinate
+    patch = patch.update_coords(shifts=("distance", shifts))
+    return patch
+
+
 class TestAlignToCoordValidation:
     """Tests for align_to_coord validation logic."""
 
@@ -401,3 +421,51 @@ class TestAlignToCoord:
         for num, start in enumerate(shifted_times):
             row_patch = out.select(distance=num, samples=True).dropna("time")
             assert row_patch.get_coord("time").min() == start
+
+    def test_reverse_shift_with_same_mode(self):
+        """
+        Test that reverse shifting with mode='same' works correctly.
+
+        This reproduces the bug where destination array size doesn't match
+        source array size when traces are shifted by different amounts.
+        """
+        patch = _create_patch_with_shifts(start=0.0, stop=0.1)
+
+        aligned = patch.align_to_coord(
+            time="shifts", relative=False, reverse=False, mode="same"
+        )
+        # Now reverse it - this should bring us back to original
+        # This is where the bug occurs
+        reversed_patch = aligned.align_to_coord(
+            time="shifts", relative=False, reverse=True, mode="same"
+        )
+        # If we get here without ValueError, the bug is fixed
+        assert isinstance(reversed_patch, dc.Patch)
+        assert reversed_patch.shape == aligned.shape
+
+    def test_reverse_shift_with_larger_shifts(self, random_patch):
+        """
+        Test with larger varying shifts to ensure edge cases are handled.
+
+        This creates a more extreme case where the shifts vary significantly,
+        which makes the bug more likely to occur.
+        """
+        in_patch = random_patch
+        patch = _create_patch_with_shifts(start=0, stop=100, patch=in_patch)
+        # Align with samples=True, mode="same"
+        aligned = patch.align_to_coord(
+            relative=False,
+            reverse=False,
+            samples=True,
+            mode="same",
+            time="shifts",
+        )
+        # Reverse - this should work without broadcasting error
+        reversed_patch = aligned.align_to_coord(
+            relative=False,
+            reverse=True,
+            samples=True,
+            mode="same",
+            time="shifts",
+        )
+        assert isinstance(reversed_patch, dc.Patch)

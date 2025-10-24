@@ -38,11 +38,18 @@ def _get_source_indices(shifts, start_shift, end_shift, n_samples):
     return (start, end)
 
 
-def _get_dest_indices(shifts, start_shift, n_samples, output_size):
+def _get_dest_indices(shifts, start_shift, end_shift, n_samples, output_size):
     """Get indices in the output array."""
     start = np.maximum(0, shifts - start_shift)
-    max_ends = start + n_samples
-    end = np.where(max_ends > output_size, output_size, max_ends)
+    # Clamp source indices to valid range [0, n_samples]
+    min_start = -shifts + start_shift
+    source_start = np.clip(min_start, 0, n_samples)
+    max_end = n_samples - shifts + end_shift
+    source_end = np.clip(max_end, 0, n_samples)
+    # Compute source length, ensuring non-negative
+    source_length = np.maximum(source_end - source_start, 0)
+    # Destination end bounded to [0, output_size]
+    end = np.clip(start + source_length, 0, output_size)
     return (start, end)
 
 
@@ -84,7 +91,9 @@ def _calculate_shift_info(
     output_size = n_samples + end_shift - start_shift
     # get slices for start/stop
     source_inds = _get_source_indices(shifts, start_shift, end_shift, n_samples)
-    dest_inds = _get_dest_indices(shifts, start_shift, n_samples, output_size)
+    dest_inds = _get_dest_indices(
+        shifts, start_shift, end_shift, n_samples, output_size
+    )
     # determine shape
     shape = list(patch_shape)
     shape[dim_axis] = output_size
