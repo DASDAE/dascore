@@ -403,12 +403,17 @@ class TestSlopeFilter:
 
         assert isinstance(filtered_patch, dc.Patch)
 
-    def test_notch_filter(self, example_patch):
-        """Ensure notching can be performed with slope filter."""
+    def test_invert_filter(self, example_patch):
+        """Ensure  the  slope filter can be inverted."""
         filtered_patch = example_patch.slope_filter(
-            filt=[2e3, 2.2e3, 8e3, 2e4], notch=True
+            filt=[2e3, 2.2e3, 8e3, 2e4], invert=True
         )
         assert isinstance(filtered_patch, dc.Patch)
+
+    def test_notch_deprecated(self, example_patch):
+        """Ensure using notch param issues deprecation warning."""
+        with pytest.warns(DeprecationWarning):
+            example_patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4], notch=True)
 
     def test_different_params_not_equal(self, example_patch):
         """Ensure filter is sensitive to different parameters."""

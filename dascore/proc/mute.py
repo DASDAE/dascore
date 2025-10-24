@@ -7,18 +7,37 @@ from collections.abc import Mapping, Sized
 from typing import ClassVar
 
 import numpy as np
+from numpy.linalg import norm
 from numpy.typing import NDArray
-from scipy.linalg import norm
 from scipy.ndimage import gaussian_filter
 
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     get_2d_line_intersection,
 )
 from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value, patch_function
+
+_smooth_param = """
+smooth
+    Parameter controlling smoothing of the mute envelope. Defines the sigma
+    Can be:
+    - None: sharp mute
+    - float (0.0-1.0): fraction of dimension range (e.g., 0.01 = 1%)
+      which is applied independently to each dimension involved in the
+      mute.
+    - int: Indicates number of samples for each dimension.
+    - Quantity with units, indicates values along a single dimension.
+      Only applicable if a single dimension is specified.
+    - dict: {dim: taper_value} for dimension-specific smooth
+      values which can be any of the above.
+"""
+
+
+_smooth_type = None | float | int | tuple(float | int) | dict[str, float | int]
 
 
 class _MuteGeometry(ABC, DascoreBaseModel):
@@ -387,6 +406,7 @@ def _get_mute_geometry(patch, kwargs, relative=True):
 
 
 @patch_function()
+@compose_docstring(smooth_param=_smooth_param)
 def mute(
     patch: PatchType,
     *,
@@ -405,18 +425,7 @@ def mute(
     ----------
     patch
         The patch instance.
-    smooth
-        Parameter controlling smoothing of the mute envelope. Defines the sigma
-        Can be:
-        - None: sharp mute
-        - float (0.0-1.0): fraction of dimension range (e.g., 0.01 = 1%)
-          which is applied independently to each dimension involved in the
-          mute.
-        - int: Indicates number of samples for each dimension.
-        - Quantity with units, indicates values along a single dimension.
-          Only applicable if a single dimension is specified.
-        - dict: {dim: taper_value} for dimension-specific smooth
-          values which can be any of the above.
+    {smooth_param}
     invert
         If True, invert the taper such that the values outside the defined region
         are set to 0.
@@ -514,3 +523,45 @@ def mute(
     if smooth is not None:
         out = geo._apply_smoothing(out, smooth, patch)
     return patch.update(data=patch.data * out)
+
+
+@patch_function()
+@compose_docstring(_smooth_param=_smooth_param)
+def slope_mute(
+    patch: PatchType,
+    slopes: tuple[float, float] | NDArray,
+    *,
+    dims: tuple[str, str] = ("distance", "time"),
+    smooth: float | None = None,
+    invert: bool = False,
+) -> PatchType:
+    """
+    Apply a mute between specified slopes (eg velocities).
+
+    This facilitates common muting patterns for active source processing.
+    For more control, use [`Patch.mute`](`dascore.proc.mute.mute`).
+
+    Parameters
+    ----------
+    patch
+        The patch to filter.
+    slopes
+        A length 2 sequence which specifies the begining and ending slope
+        values. The dims parameter specifies how the slope is calculated.
+    dims
+        The dimensions used to determine slope. The first dim is in the
+        numerator and the second in the denominator. (eg distance, time)
+        represents a velocity since distance/time has units of |L|/|T|
+        (commonly m/s).
+    {_smooth_param}
+    invert
+        If True, invert the mute, meaning areas outside the given region
+        are muted
+
+    See Also
+    --------
+    - [`Patch.slope_filter`](`dascore.proc.filter.slope_filter`)
+    - [`Patch.mute`](`dascore.proc.mute.mute`)
+
+    The [FK recipe](`docs/recipes/fk.qmd`) provides addtional examples.
+    """
