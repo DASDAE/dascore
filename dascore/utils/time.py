@@ -95,7 +95,7 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
     # dealing with numerical data
     elif not np.issubdtype(array.dtype, np.datetime64) and np.isreal(array[0]):
         with np.errstate(divide="ignore", invalid="ignore"):
-            array = np.array(array)  # need to make copy to write
+            array = to_float(np.array(array))  # need to make copy to write
             array[nans] = 0  # temporary replace NaNs
             abs_array = np.abs(array)
             sign = np.sign(array)
