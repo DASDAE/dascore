@@ -38,10 +38,17 @@ def _get_source_indices(shifts, start_shift, end_shift, n_samples):
     return (start, end)
 
 
-def _get_dest_indices(shifts, start_shift, n_samples, output_size):
+def _get_dest_indices(shifts, start_shift, end_shift, n_samples, output_size):
     """Get indices in the output array."""
     start = np.maximum(0, shifts - start_shift)
-    max_ends = start + n_samples
+    # Calculate actual source data length for each trace
+    min_start = -shifts + start_shift
+    source_start = np.where(min_start < 0, 0, min_start)
+    max_end = n_samples - shifts + end_shift
+    source_end = np.where(max_end > n_samples, n_samples, max_end)
+    source_length = source_end - source_start
+    # Destination end is start + actual source length
+    max_ends = start + source_length
     end = np.where(max_ends > output_size, output_size, max_ends)
     return (start, end)
 
@@ -84,7 +91,9 @@ def _calculate_shift_info(
     output_size = n_samples + end_shift - start_shift
     # get slices for start/stop
     source_inds = _get_source_indices(shifts, start_shift, end_shift, n_samples)
-    dest_inds = _get_dest_indices(shifts, start_shift, n_samples, output_size)
+    dest_inds = _get_dest_indices(
+        shifts, start_shift, end_shift, n_samples, output_size
+    )
     # determine shape
     shape = list(patch_shape)
     shape[dim_axis] = output_size
