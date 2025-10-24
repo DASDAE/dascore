@@ -41,15 +41,15 @@ def _get_source_indices(shifts, start_shift, end_shift, n_samples):
 def _get_dest_indices(shifts, start_shift, end_shift, n_samples, output_size):
     """Get indices in the output array."""
     start = np.maximum(0, shifts - start_shift)
-    # Calculate actual source data length for each trace
+    # Clamp source indices to valid range [0, n_samples]
     min_start = -shifts + start_shift
-    source_start = np.where(min_start < 0, 0, min_start)
+    source_start = np.clip(min_start, 0, n_samples)
     max_end = n_samples - shifts + end_shift
-    source_end = np.where(max_end > n_samples, n_samples, max_end)
-    source_length = source_end - source_start
-    # Destination end is start + actual source length
-    max_ends = start + source_length
-    end = np.where(max_ends > output_size, output_size, max_ends)
+    source_end = np.clip(max_end, 0, n_samples)
+    # Compute source length, ensuring non-negative
+    source_length = np.maximum(source_end - source_start, 0)
+    # Destination end bounded to [0, output_size]
+    end = np.clip(start + source_length, 0, output_size)
     return (start, end)
 
 

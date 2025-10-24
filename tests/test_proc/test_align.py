@@ -463,7 +463,7 @@ class TestAlignToCoord:
         # Reverse - this should work without broadcasting error
         reversed_patch = aligned.align_to_coord(
             relative=False,
-            reverse=False,
+            reverse=True,
             samples=True,
             mode="same",
             time="shifts",
