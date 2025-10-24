@@ -20,8 +20,7 @@ from dascore.utils.plotting import (
     _get_extents,
 )
 
-# Constants
-IQR_FENCE_MULTIPLIER = 1.5  # Tukey's fence for outlier detection
+IQR_FENCE_MULTIPLIER = 3.0  # 3.0 looked better for some common cases than 1.5
 
 
 def _validate_scale_type(scale_type):
@@ -66,10 +65,11 @@ def _get_scale(scale, scale_type, patch):
         # a few extreme values from obscuring the majority of the data.
         case (None, "relative"):
             q2, q3 = np.nanpercentile(data, [25, 75])
+            dmin, dmax = np.nanmin(data), np.nanmax(data)
             diff = q3 - q2  # Interquartile range (IQR)
-            scale = np.asarray(
-                [q2 - diff * IQR_FENCE_MULTIPLIER, q3 + diff * IQR_FENCE_MULTIPLIER]
-            )
+            q_lower = np.nanmax([q2 - diff * IQR_FENCE_MULTIPLIER, dmin])
+            q_upper = np.nanmin([q3 + diff * IQR_FENCE_MULTIPLIER, dmax])
+            scale = np.asarray([q_lower, q_upper])
             return scale
         # Case 3: Sequence with relative scaling
         # Scale values represent fractions of the data range [0, 1]
@@ -137,6 +137,32 @@ def waterfall(
 ) -> plt.Axes:
     """
     Create a waterfall plot of the Patch data.
+
+    Parameters
+    ----------
+    patch
+        The Patch object.
+    ax
+        A matplotlib object, if None create one.
+    cmap
+        A matplotlib colormap string or instance. Set to None to not plot the
+        colorbar.
+    scale
+        If not None, controls the saturation level of the colorbar.
+        Values can either be a float, to set upper and lower limit to the same
+        value centered around the mean of the data, a length 2 tuple
+        specifying upper and lower limits, or None, which will automatically
+        determine limits based on a quartile fence. (uses q1 - 3.0 * (q3 - q1)
+        and q3 + 3.0 * (q3 - q1)).
+    scale_type
+        Controls the type of scaling specified by `scale` parameter. Options
+        are:
+            relative - scale based on half the dynamic range in patch
+            absolute - scale based on absolute values provided to `scale`
+    log
+        If True, visualize the common logarithm of the absolute values of patch data.
+    show
+        If True, show the plot, else just return axis.
 
     Examples
     --------
