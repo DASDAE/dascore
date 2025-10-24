@@ -34,13 +34,17 @@ def _validate_scale_type(scale_type):
 
 def _validate_patch_dims(patch):
     """Validate that patch is 2D for waterfall plotting."""
-    dims = patch.dims
-    if len(dims) != 2:
-        msg = (
-            f"Can only make waterfall plot of 2D Patch, "
-            f"but got {len(dims)}D patch with dims {dims}"
-        )
-        raise ParameterError(msg)
+    if patch.ndim != 2:
+        # Try squeezing out degenerate dims to visualize.
+        patch = patch.squeeze()
+        if patch.ndim != 2:
+            dims = patch.dims
+            msg = (
+                f"Can only make waterfall plot of 2D Patch, "
+                f"but got {patch.ndim}D patch with dims {dims}"
+            )
+            raise ParameterError(msg)
+    return patch
 
 
 def _get_scale(scale, scale_type, patch):
@@ -187,7 +191,7 @@ def waterfall(
       problem. To get the old behavior, simply set scale=1.0.
     """
     # Validate inputs
-    _validate_patch_dims(patch)
+    patch = _validate_patch_dims(patch)
 
     # Setup axes and data
     ax = _get_ax(ax)
