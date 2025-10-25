@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str
 from dascore.utils.time import is_datetime64, to_timedelta64
 
@@ -15,7 +16,7 @@ def check_label_units(patch, ax):
     """Ensure patch label units match axis."""
     axis_dict = {0: "yaxis", 1: "xaxis"}
     dims = patch.dims
-    # Check coord-inate names
+    # Check coordinate names
     for coord_name in dims:
         coord = patch.coords.coord_map[coord_name]
         if is_datetime64(coord[0]):
@@ -189,4 +190,46 @@ class TestWaterfall:
         # This should not raise an error
         ax = aggs.viz.waterfall()
         assert ax is not None
+        assert isinstance(ax, plt.Axes)
+
+    def test_bad_relative_scale_raises(self, random_patch):
+        """Ensure malformed relative scales raise ParameterError."""
+        msg = "Relative scale"
+        # Negative value in scale.
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale=(-0.1, 0.9), scale_type="relative")
+        # Reversed order.
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale=(0.9, 0.1), scale_type="relative")
+        # More than two values
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale=(0.1, 0.2, 0.9), scale_type="relative")
+
+    def test_invalid_scale_type_raises(self, random_patch):
+        """Ensure invalid scale_type values raise ParameterError."""
+        msg = "scale_type must be one of"
+        # Invalid string
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale_type="invalid")
+        # Typo
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale_type="relatve")
+        # Case sensitivity
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale_type="Relative")
+
+    def test_non_2d_patch_raises(self, random_patch):
+        """Ensure non-2D patches raise ParameterError."""
+        msg = "Can only make waterfall plot of 2D Patch"
+        # Test with 1D patch - select single value and squeeze
+        patch_1d = random_patch.select(distance=0, samples=True).squeeze()
+        assert len(patch_1d.dims) == 1
+        with pytest.raises(ParameterError, match=msg):
+            patch_1d.viz.waterfall()
+
+    def test_constant_patch(self, random_patch):
+        """Ensure the plotting works on constant value patches."""
+        data = np.ones(random_patch.shape)
+        patch = random_patch.update(data=data)
+        ax = patch.viz.waterfall()
         assert isinstance(ax, plt.Axes)

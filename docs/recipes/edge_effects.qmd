@@ -16,7 +16,7 @@ patch = (
     .pass_filter(time=(None, 300))
 )
 
-patch.viz.waterfall(show=True, scale=0.04);
+patch.viz.waterfall(show=True);
 ```
 
 ### Bandpass filtering with tapering
@@ -30,5 +30,5 @@ patch = (
     .pass_filter(time=(None, 300))
 )
 
-patch.viz.waterfall(show=True, scale=0.15);
+patch.viz.waterfall(show=True);
 ```

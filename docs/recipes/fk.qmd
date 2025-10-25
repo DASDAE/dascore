@@ -19,7 +19,7 @@ patch = (
     .set_units("mstrain/s", distance='m', time='s')
 )
 
-patch.viz.waterfall(scale=0.2);
+patch.viz.waterfall();
 
 ```
 
@@ -33,7 +33,7 @@ patch_filtered = (
     .pass_filter(time=(None, 300))
 )
 
-patch_filtered.viz.waterfall(show=True, scale=0.2);
+patch_filtered.viz.waterfall(show=True);
 ```
 
 We can transform and visualize the patch in the F-K domain using the discrete Fourier transform (DFT).
