@@ -594,3 +594,215 @@ class TestMute4D:
         # Outside region should be zeroed
         sub_zeroed = muted.select(time=(v2 + 0.1, ...), relative=True)
         assert np.allclose(sub_zeroed.data, 0)
+
+
+class TestSlopeMute:
+    """Tests for slope_mute functionality."""
+
+    _dims = ("distance", "time")
+
+    def test_slope_mute_basic(self, patch_ones):
+        """Test basic slope_mute with two velocities."""
+        # Mute between two velocities (20 m/s and 30 m/s)
+        # These values are reasonable for the example patch which has
+        # distance range ~300m and time range ~8s
+        slopes = (20.0, 30.0)
+        muted = patch_ones.slope_mute(slopes=slopes)
+
+        # Should return a patch with same shape
+        assert muted.shape == patch_ones.shape
+
+        # Test specific points using _assert_point_values
+        # Format: (distance, time) in relative coordinates
+        # At time=4s: 20 m/s line is at 80m, 30 m/s line is at 120m
+        # Points between the two slope lines should be muted (0)
+        # Points outside should be unmuted (1)
+        points = [
+            (50, 4.0),  # Low velocity (12.5 m/s, below both lines) - unmuted
+            (100, 4.0),  # Between the two velocities (25 m/s) - muted
+            (150, 4.0),  # High velocity (37.5 m/s, above both lines) - unmuted
+            (80, 2.0),  # Between slopes at earlier time (40 m/s) - unmuted
+            (50, 2.0),  # Very low velocity (25 m/s) - muted
+        ]
+        expected = [1, 0, 1, 1, 0]
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)
+
+    def test_slope_mute_with_array(self, patch_ones):
+        """Test slope_mute accepts numpy array."""
+        slopes = np.array([20.0, 30.0])
+        muted = patch_ones.slope_mute(slopes=slopes)
+        assert muted.shape == patch_ones.shape
+
+    def test_slope_mute_wrong_length_raises(self, patch_ones):
+        """Test that wrong length slopes raises error."""
+        with pytest.raises(ParameterError, match="length 2"):
+            patch_ones.slope_mute(slopes=(20.0,))
+        with pytest.raises(ParameterError, match="length 2"):
+            patch_ones.slope_mute(slopes=(20.0, 30.0, 40.0))
+
+    def test_slope_mute_invert(self, patch_ones):
+        """Test slope_mute with invert parameter."""
+        slopes = (20.0, 30.0)
+        muted = patch_ones.slope_mute(slopes=slopes, invert=False)
+        inverted = patch_ones.slope_mute(slopes=slopes, invert=True)
+
+        # Test that regions are inverted
+        points = [
+            (50, 4.0),  # Outside mute region (low velocity)
+            (100, 4.0),  # Inside mute region (between slopes)
+            (150, 4.0),  # Outside mute region (high velocity)
+        ]
+        expected_muted = [1, 0, 1]
+        expected_inverted = [0, 1, 0]
+        _assert_point_values(
+            muted, self._dims, points=points, expected_values=expected_muted
+        )
+        _assert_point_values(
+            inverted, self._dims, points=points, expected_values=expected_inverted
+        )
+
+    def test_slope_mute_with_smooth(self, patch_ones):
+        """Test slope_mute with smoothing parameter."""
+        slopes = (20.0, 30.0)
+        muted = patch_ones.slope_mute(slopes=slopes, smooth=0.02)
+
+        # With smoothing, should have intermediate values
+        assert muted.shape == patch_ones.shape
+        assert np.any((muted.data > 0.01) & (muted.data < 0.99))
+
+    def test_slope_mute_custom_dims(self, patch_ones_3d):
+        """Test slope_mute with custom dimension specification."""
+        # Use time-distance instead of distance-time
+        # slope = time/distance (inverse velocity, or slowness)
+        slopes = (0.001, 0.002)  # s/m
+        muted = patch_ones_3d.slope_mute(slopes=slopes, dims=("time", "distance"))
+
+        assert muted.shape == patch_ones_3d.shape
+        # Verify muting occurred - should have both 0s and 1s
+        assert np.any(muted.data == 0)
+        assert np.any(muted.data == 1)
+
+        # For slope = time/distance: at distance=200m (relative), mute region is
+        # time = 0.001*200 = 0.2s to 0.002*200 = 0.4s (relative)
+        # At time=0.3s relative (which is 15% of 2.0s range), dist=200m should be muted
+        time_idx = muted.get_coord("time").get_next_index(0.3, relative=True)
+        dist_idx = muted.get_coord("distance").get_next_index(200, relative=True)
+        # For 3D patch with dims (time, distance, depth), all depth values should
+        # be the same.
+        assert np.allclose(muted.data[time_idx, dist_idx, :], 0)
+
+    def test_slope_mute_preserves_unmuted_dimensions(self, patch_ones_3d):
+        """Test that slope_mute only affects specified dimensions."""
+        slopes = (20.0, 30.0)
+        muted = patch_ones_3d.slope_mute(slopes=slopes, dims=("distance", "time"))
+
+        # All depth slices should be affected identically
+        assert muted.shape == patch_ones_3d.shape
+        assert np.array_equal(muted.data[:, :, 0], muted.data[:, :, 1])
+        assert np.array_equal(muted.data[:, :, 0], muted.data[:, :, -1])
+
+    def test_slope_mute_steep_slopes(self, patch_ones):
+        """Test slope_mute with very steep slopes (high velocities)."""
+        # Use slopes near the max for the patch (37.5 m/s)
+        slopes = (35.0, 37.0)
+        muted = patch_ones.slope_mute(slopes=slopes)
+
+        assert muted.shape == patch_ones.shape
+        # With very high velocities, most of patch should be unmuted
+        # Only a small wedge near upper right should be muted
+        points = [
+            (250, 7.0),  # High distance, late time, between slopes - muted
+            (100, 4.0),  # Lower velocity - unmuted
+            (200, 2.0),  # Far higher velocity - unmuted
+        ]
+        expected = [0, 1, 1]
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)
+
+    def test_slope_mute_shallow_slopes(self, patch_ones):
+        """Test slope_mute with very shallow slopes (low velocities)."""
+        slopes = (5.0, 10.0)
+        muted = patch_ones.slope_mute(slopes=slopes)
+
+        assert muted.shape == patch_ones.shape
+        # With very low velocities, mute region should be at low distances
+        points = [
+            (20, 4.0),  # Low distance, velocity=5 m/s - unmuted (below slopes)
+            (30, 4.0),  # velocity=7.5 m/s, between slopes - muted
+            (50, 4.0),  # velocity=12.5 m/s, above slopes - unmuted
+            (15, 2.0),  # velocity=7.5 m/s, between slopes - muted
+        ]
+        expected = [1, 0, 1, 0]
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)
+
+    def test_slope_mute_zero_slope_raises(self, patch_ones):
+        """Test that zero slope raises appropriate error."""
+        slopes = (0.0, 30.0)
+        with pytest.raises(ParameterError, match="positive"):
+            patch_ones.slope_mute(slopes=slopes)
+
+    def test_slope_mute_negative_slopes(self, patch_ones):
+        """Test slope_mute behavior with negative slopes."""
+        slopes = (-20.0, -30.0)
+        # Negative slopes should cause error
+        with pytest.raises(ParameterError, match="positive"):
+            patch_ones.slope_mute(slopes=slopes)
+
+    def test_slope_mute_matches_manual_mute(self, patch_ones):
+        """Test that slope_mute produces same result as manual mute call."""
+        slopes = (20.0, 30.0)
+
+        # Get coordinate ranges
+        dist_range = dc.to_float(patch_ones.get_coord("distance").coord_range())
+        time_range = dc.to_float(patch_ones.get_coord("time").coord_range())
+
+        # Calculate endpoints manually
+        endpoints = []
+        for slope in slopes:
+            dist_at_max_time = slope * time_range
+            if dist_at_max_time <= dist_range:
+                endpoint = (dist_at_max_time, time_range)
+            else:
+                endpoint = (dist_range, dist_range / slope)
+            endpoints.append(endpoint)
+
+        # Manual mute call
+        manual_muted = patch_ones.mute(
+            distance=([0, endpoints[0][0]], [0, endpoints[1][0]]),
+            time=([0, endpoints[0][1]], [0, endpoints[1][1]]),
+            relative=True,
+        )
+
+        # slope_mute call
+        slope_muted = patch_ones.slope_mute(slopes=slopes)
+
+        # Should produce identical results
+        assert np.allclose(manual_muted.data, slope_muted.data)
+
+    def test_slope_mute_with_dict_smooth(self, patch_ones):
+        """Test slope_mute with dict smooth parameter."""
+        slopes = (20.0, 30.0)
+        smooth = {"distance": 5, "time": 0.01}
+        muted = patch_ones.slope_mute(slopes=slopes, smooth=smooth)
+
+        # Should have smooth transition
+        assert np.any((muted.data > 0.01) & (muted.data < 0.99))
+
+    def test_slope_mute_specific_velocity_wedge(self, patch_ones):
+        """Test muting specific velocity wedge with known points."""
+        # Define precise velocity wedge
+        slopes = (15.0, 25.0)  # m/s
+        muted = patch_ones.slope_mute(slopes=slopes)
+
+        # Test points at specific locations
+        # At time=4.0s:
+        #   - 15 m/s line is at distance=60m
+        #   - 25 m/s line is at distance=100m
+        # So between 60-100m should be muted
+        points = [
+            (50, 4.0),  # Below 15 m/s line - unmuted
+            (80, 4.0),  # Between 15-25 m/s - muted
+            (90, 4.0),  # Between 15-25 m/s - muted
+            (110, 4.0),  # Above 25 m/s line - unmuted
+        ]
+        expected = [1, 0, 0, 1]
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)

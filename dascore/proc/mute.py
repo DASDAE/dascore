@@ -37,7 +37,7 @@ smooth
 """
 
 
-_smooth_type = None | float | int | tuple(float | int) | dict[str, float | int]
+_smooth_type = None | float | int | tuple[float | int, ...] | dict[str, float | int]
 
 
 class _MuteGeometry(ABC, DascoreBaseModel):
@@ -558,10 +558,45 @@ def slope_mute(
         If True, invert the mute, meaning areas outside the given region
         are muted
 
+    Notes
+    -----
+    - Assumes the mute origin is at the start of each of the selected dimensions.
+      You can use [`Patch.flip`](`dascore.proc.basic.flip`) to set the other
+      end of a dimension to be the origin.
+
     See Also
     --------
     - [`Patch.slope_filter`](`dascore.proc.filter.slope_filter`)
     - [`Patch.mute`](`dascore.proc.mute.mute`)
-
-    The [FK recipe](`docs/recipes/fk.qmd`) provides addtional examples.
     """
+    # Convert slopes to array and validate
+    slopes_array = np.asarray(slopes)
+    if slopes_array.shape != (2,):
+        msg = "slopes must be a tuple or array of length 2"
+        raise ParameterError(msg)
+    # Check for zero or negative slopes
+    if np.any(slopes_array <= 0):
+        msg = "slopes must be positive (greater than zero)"
+        raise ParameterError(msg)
+    # Get the coordinate ranges for the dimensions (in relative coordinates)
+    coord0 = patch.get_coord(dims[0])
+    coord1 = patch.get_coord(dims[1])
+    range0 = dc.to_float(coord0.coord_range())
+    # The origin is always at the *start* of the coordinate.
+    origin = (dc.to_float(coord0[0]), dc.to_float(coord1[0]))
+    # Create endpoints for lines defined by each slope
+    endpoints = []
+    for slope in slopes_array:
+        # Slope is rise over run; we just need to multiply by run
+        # Note: it is fine if points exceed patch dims; mute will handle it.
+        point = (origin[0] + range0, origin[1] + slope * range0)
+        endpoints.append(point)
+    # Build kwargs for mute
+    mute_kwargs = {
+        dims[0]: ([origin[0], endpoints[0][0]], [origin[0], endpoints[1][0]]),
+        dims[1]: ([origin[1], endpoints[0][1]], [origin[1], endpoints[1][1]]),
+        "smooth": smooth,
+        "invert": invert,
+        "relative": False,
+    }
+    return mute(patch, **mute_kwargs)

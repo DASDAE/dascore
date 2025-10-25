@@ -440,6 +440,7 @@ class Patch:
     taper = dascore.proc.taper
     taper_range = dascore.proc.taper_range
     mute = dascore.proc.mute
+    slope_mute = dascore.proc.slope_mute
     rolling = dascore.proc.rolling
     whiten = dascore.proc.whiten
 
