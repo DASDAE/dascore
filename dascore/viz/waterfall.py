@@ -230,7 +230,19 @@ def waterfall(
     # Plot using imshow and set colorbar limits
     extents = _get_extents(dims_r, coords)
     scale = _get_scale(scale, scale_type, patch)
-    im = ax.imshow(data, extent=extents, aspect="auto", cmap=cmap, origin="lower")
+    im = ax.imshow(
+        data,
+        extent=extents,
+        aspect="auto",
+        cmap=cmap,
+        origin="lower",
+        # Note: these parameters are so that matplotlib versions > 3.10 behave
+        # like matplotlib < 3.9, which tends to work better for visualizing large
+        # DAS data. See # 512. We might consider making these parameters of the
+        # waterfall function in the future.
+        interpolation="antialiased",
+        interpolation_stage="data",
+    )
     im.set_clim(scale)
 
     # Format axis labels and handle time-like dimensions
