@@ -9,9 +9,10 @@ import pandas as pd
 from pydantic import Field
 
 import dascore as dc
-from dascore.constants import samples_arg_description
+from dascore.constants import PatchType, samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
+from dascore.utils.misc import broadcast_for_index
 from dascore.utils.models import DascoreBaseModel
 from dascore.utils.patch import get_dim_axis_value
 from dascore.utils.pd import rolling_df
@@ -33,17 +34,30 @@ class _PatchRollerInfo(DascoreBaseModel):
     roll_hist: str = ""
     func_kwargs: dict = Field(default_factory=dict)
 
-    def get_coords(self):
+    def _get_new_coord(self, include_nan=True):
         """
         Get the new coordinates for "rolled" patch.
 
         Accounts for centered or non-centered coordinates. If the window
         length is even, the first half value is used.
+
+        Parameters
+        ----------
+        include_nan : bool
+            If True, assume nans were filled in data array and account
+            for it.
         """
         coord = self.patch.get_coord(self.dim)
-        if self.step > 1:
-            coord = coord[:: self.step]
-        return self.patch.coords.update(**{self.dim: coord})
+        nan_index = self.get_nan_simulate_index(self.patch.shape)
+        start, stop = nan_index.start, nan_index.stop
+        nan_before, nan_after = self._get_nan_before_nan_after()
+        if include_nan:
+            start = (start + (self.window - 1)) % self.step
+            stop = len(coord) + stop % self.step
+        else:
+            start += np.ceil(nan_before / self.step) * self.step
+            stop -= np.floor(nan_after / self.step) * self.step
+        return coord[slice(int(start), int(stop), self.step)]
 
     def _get_attrs_with_apply_history(self, func_or_str):
         """Get new attrs that has history from apply attached."""
@@ -57,32 +71,152 @@ class _PatchRollerInfo(DascoreBaseModel):
         attrs = self.patch.attrs.update(history=new_history, coords={})
         return attrs
 
+    def _pad_roll_array(self, data, pre_apply=True):
+        """Pad array with NaNs to either full window or output length."""
+        nan_before, nan_after = self._get_nan_before_nan_after()
+        if not pre_apply:  # otherwise only to anticipated number of NaN in output.
+            nan_before = int(np.ceil(nan_before / self.step))
+            nan_after = int(np.floor(nan_after / self.step))
+        pad_width = [(0, 0)] * len(data.shape)
+        pad_width[self.axis] = (nan_before, nan_after)
+        padded = np.pad(data, pad_width, constant_values=np.nan)
+        return padded
+
+    def _get_nan_before_nan_after(self):
+        """Get the number of nan values before the array and after it."""
+        # These nan values can be fictitious; it's just for what makes
+        # the rolling window work.
+        nan_count = self.window - 1
+        # The num of nans at the start of the patch
+        if self.center:
+            nan_before = int(np.ceil(nan_count / 2))
+            nan_after = int(np.floor(nan_count / 2))
+        else:
+            nan_before = nan_count
+            nan_after = 0
+
+        assert nan_before + nan_after == nan_count
+        return nan_before, nan_after
+
+    def get_nan_simulate_index(self, shape=None):
+        """Get slice to simulate NaN padding (eg as if NaN were dropped)."""
+        shape = shape if shape is not None else self.patch.shape
+        nan_before, nan_after = self._get_nan_before_nan_after()
+        start = np.ceil(nan_before / self.step) * self.step - nan_before
+        end_offset = np.floor(nan_after / self.step) * self.step - nan_after
+        end = shape[self.axis] - end_offset
+        return slice(int(start), int(end))
+
+    def _get_start_index(self):
+        """
+        Get the start index to account for non-zero step size.
+        """
+        # The number of NaN in the patch.
+        nan_count = self.window - 1
+        # The num of nans at the start of the patch
+        if self.center:
+            neg_start = nan_count
+        else:
+            neg_start = int(np.ceil(nan_count / 2))
+        # The actually starting index accounting for steps
+        out = np.ceil(neg_start / self.step) * self.step - neg_start
+        return int(out)
+
+    def _get_trimmed_slide_view(self, include_nan=False):
+        """Get the trimmed slide view of the data."""
+        data = self.patch.data
+        if include_nan:
+            data = self._pad_roll_array(data, pre_apply=True)
+        else:
+            ax_slice = self.get_nan_simulate_index(data.shape)
+            inds = broadcast_for_index(data.ndim, self.axis, ax_slice)
+            data = data[inds]
+        # TODO look at replacing this with a call to `as_strided` that
+        # accounts for strides.
+        slide_view = np.lib.stride_tricks.sliding_window_view(
+            data,
+            self.window,
+            self.axis,
+        )
+        step_slicer = slice(None, None, self.step)
+        ind = broadcast_for_index(slide_view.ndim, self.axis, step_slicer)
+        return slide_view[ind]
+
+    def _get_relative_coord(self):
+        """Get the relative coordinate for windows."""
+        # Create coordinate for the new dimension (relative coordinate within window)
+        coord = self.patch.get_coord(self.dim, require_evenly_sampled=True)
+        # Get relative coord
+        coord_array = np.arange(self.window) * coord.step
+        relative_coord = dc.get_coord(data=coord_array, units=coord.units)
+        return relative_coord
+
+    def frame(
+        self,
+        dim: str | None = None,
+        include_nan: bool = False,
+    ) -> PatchType:
+        """
+        Create frames from rolling object.
+
+        This essentially expands the data from each *complete* moving window
+        into a new dimension. Data views are used as to not make copies.
+
+        The new dimension contains the samples from each *complete* window.
+        Its name is controlled by the `dim` parameter.
+
+        Parameters
+        ----------
+        dim
+            The name of the new dimension. If None, the new name is the
+            name of the dimension to which the roller was applied, but
+            prepended with "relative".
+        include_nan
+            If True, include windows that would normally have nan
+            values. See note on [`Patch.rolling`](`dascore.patch.rolling`)
+            for how window selection works. If `include_nan` == False, a data
+            view can be used rather than a copy.
+
+        Returns
+        -------
+        A patch with each of the moving windows expanded into the new
+        dimension.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>>
+        >>> # Expand 1D patch into 2D.
+        >>> patch1d = patch.mean("distance").squeeze()
+        >>> rolling = patch1d.rolling(time=1, step=2)
+        >>> expanded = rolling.frame()
+
+        Notes
+        -----
+        The windows are allways calculated to be consistent with the output
+        from other rolling operation.
+        """
+        framed_data = self._get_trimmed_slide_view(include_nan=include_nan)
+        # Set default dimension name if not provided
+        if dim is None:
+            dim = f"relative_{self.dim}"
+        relative_coord = self._get_relative_coord()
+        # Get new coord to replace old one.
+        new_coord = self._get_new_coord(include_nan=include_nan)
+        # And new coord
+        coord_map = dict(self.patch.coords.coord_map)
+        coord_map[dim] = relative_coord
+        coord_map[self.dim] = new_coord
+        # Create new dimensions list by appending the new dimension
+        new_dims = (*self.patch.dims, dim)
+        coords = dc.get_coord_manager(coords=coord_map, dims=new_dims)
+        attrs = self._get_attrs_with_apply_history("frame")
+        return self.patch.update(data=framed_data, coords=coords, attrs=attrs)
+
 
 class _NumpyPatchRoller(_PatchRollerInfo):
     """A class to apply roller operations to patches."""
-
-    def get_start_index(self):
-        """
-        Get the start index to account for non-zero step size.
-
-        This only applies for numpy engine.
-        """
-        wsize = self.window - 1
-        out = np.ceil(wsize / self.step) * self.step - wsize
-        return int(out)
-
-    def _pad_roll_array(self, data):
-        """Pad."""
-        num_nans = 1 + (self.window - 2) // self.step
-        pad_width = [(0, 0)] * len(data.shape)
-        pad_width[self.axis] = (num_nans, 0)
-        padded = np.pad(data, pad_width, constant_values=np.nan)
-        if self.step == 1:
-            assert padded.shape == self.patch.data.shape
-        if self.center:
-            # roll array along axis to center
-            padded = np.roll(padded, -(num_nans // 2), axis=self.axis)
-        return padded
 
     def apply(self, function):
         """
@@ -93,25 +227,17 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         function
             The function which is applied. Must accept an axis argument.
         """
-        # TODO look at replacing this with a call to `as_strided` that
-        # accounts for strides.
-        slide_view = np.lib.stride_tricks.sliding_window_view(
-            self.patch.data,
-            self.window,
-            self.axis,
-        )
-        # get slice to account for step (stride)
-        step_slice = [slice(None, None)] * len(self.patch.data.shape)
-        step_slice.append(slice(None, None))
-        # this accounts for NaNs that pad the start of the array.
-        start = self.get_start_index()
-        step_slice[self.axis] = slice(start, None, self.step)
-        # apply function, then pad with NaNs and roll
+        # We don't include the NaN, then we add them back later to save time.
+        trimmed_slide_view = self._get_trimmed_slide_view(include_nan=False)
         kwargs = self.func_kwargs
-        trimmed_slide_view = slide_view[tuple(step_slice)]
         raw = function(trimmed_slide_view, axis=-1, **kwargs).astype(np.float64)
-        out = self._pad_roll_array(raw)
-        new_coords = self.get_coords()
+        out = self._pad_roll_array(raw, pre_apply=False)
+
+        if self.step == 1:
+            assert out.shape == self.patch.data.shape
+
+        new_coord = self._get_new_coord()
+        new_coords = self.patch.coords.update(**{self.dim: new_coord})
         attrs = self._get_attrs_with_apply_history(function)
         return self.patch.update(data=out, coords=new_coords, attrs=attrs)
 
@@ -169,7 +295,8 @@ class _PandasPatchRoller(_PatchRollerInfo):
         # get rid of extra dims if original data doesn't have them.
         if len(data.shape) != len(self.patch.data.shape):
             data = np.squeeze(data)
-        coords = self.get_coords()
+        new_coord = self._get_new_coord()
+        coords = self.patch.coords.update(**{self.dim: new_coord})
         return self.patch.update(data=data, coords=coords, attrs=attrs)
 
     def _call_rolling_func(self, name, *args, **kwargs):
