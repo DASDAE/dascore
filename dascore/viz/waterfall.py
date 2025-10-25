@@ -20,7 +20,7 @@ from dascore.utils.plotting import (
     _get_extents,
 )
 
-IQR_FENCE_MULTIPLIER = 3.0  # 3.0 looked better for some common cases than 1.5
+IQR_FENCE_MULTIPLIER = 1.5
 
 
 def _validate_scale_type(scale_type):
@@ -61,8 +61,9 @@ def _get_scale(scale, scale_type, patch):
             mean = np.nanmean(data)
             scale = np.asarray([mean - scale * mod, mean + scale * mod])
         # Case 2: No scale specified with relative scaling
-        # Use Tukey's fence (1.5*IQR) to exclude outliers. This prevents
-        # a few extreme values from obscuring the majority of the data.
+        # Use Tukey's fence (C*IQR, C is normally 1.5) to exclude outliers.
+        # This prevents a few extreme values from obscuring the majority of the
+        # data at the cost of a slight performance penalty.
         case (None, "relative"):
             q2, q3 = np.nanpercentile(data, [25, 75])
             dmin, dmax = np.nanmin(data), np.nanmax(data)
