@@ -91,33 +91,33 @@ def patch_ones_4d():
     return dc.Patch(data=data, coords=coords, dims=dims)
 
 
-class TestMuteBasics:
+class TestLineMuteBasics:
     """Basic tests for mute functionality."""
 
     def test_mute_no_kwargs_raises(self, random_patch):
         """Mute without dimension specifications should raise."""
         with pytest.raises(ParameterError, match="one or two keyword"):
-            random_patch.mute()
+            random_patch.line_mute()
 
     def test_not_tuple_raises(self, random_patch):
         """Boundary must be tuple of length 2."""
         with pytest.raises(ParameterError, match="two boundaries when using"):
-            random_patch.mute(time=5)
+            random_patch.line_mute(time=5)
 
     def test_tuple_wrong_length_raises(self, random_patch):
         """Tuple must have exactly 2 elements."""
         with pytest.raises(ParameterError, match="two boundaries when using"):
-            random_patch.mute(time=(1, 2, 3))
+            random_patch.line_mute(time=(1, 2, 3))
 
     def test_smooth_bad_float(self, random_patch):
         """If a floating point value is used, it must be between 0 and 1."""
         with pytest.raises(ParameterError, match="smooth parameter for"):
-            random_patch.mute(time=(1, 2), smooth=1.1)
+            random_patch.line_mute(time=(1, 2), smooth=1.1)
         with pytest.raises(ParameterError, match="smooth parameter for"):
-            random_patch.mute(time=(1, 2), smooth=-0.01)
+            random_patch.line_mute(time=(1, 2), smooth=-0.01)
 
 
-class Test1DMute:
+class Test1DLineMute:
     """Test 1D block mutes (single dimension)."""
 
     def test_1d_mute_no_taper(self, patch_ones):
@@ -125,7 +125,7 @@ class Test1DMute:
         # Use relative=True (default) with numeric offset
         coord = patch_ones.get_coord("time")
         v1, v2 = _get_testable_coord_values(coord, relative=True)
-        muted = patch_ones.mute(time=(v1, v2), relative=True)
+        muted = patch_ones.line_mute(time=(v1, v2), relative=True)
         step = dc.to_float(coord.step)
         _assert_coord_ranges(
             patch=muted,
@@ -139,7 +139,7 @@ class Test1DMute:
         """Mute using None for interval ends."""
         coord = patch_ones.get_coord("distance")
         v1, v2 = _get_testable_coord_values(coord, relative=True)
-        muted1 = patch_ones.mute(distance=(v2, ...), relative=True)
+        muted1 = patch_ones.line_mute(distance=(v2, ...), relative=True)
         step = dc.to_float(coord.step)
         _assert_coord_ranges(
             patch=muted1,
@@ -153,7 +153,7 @@ class Test1DMute:
         """Test absolute coordinates work."""
         coord = patch_ones.get_coord("distance")
         v1, v2 = _get_testable_coord_values(coord, relative=False)
-        muted1 = patch_ones.mute(distance=(v1, v2), relative=False)
+        muted1 = patch_ones.line_mute(distance=(v1, v2), relative=False)
         step = dc.to_float(coord.step)
         _assert_coord_ranges(
             patch=muted1,
@@ -168,7 +168,7 @@ class Test1DMute:
         """Test that taper mute works with a single floating point value."""
         coord = patch_ones.get_coord("time")
         v1, v2 = _get_testable_coord_values(coord, relative=True)
-        muted1 = patch_ones.mute(time=(v1, v2), relative=True, smooth=0.01)
+        muted1 = patch_ones.line_mute(time=(v1, v2), relative=True, smooth=0.01)
         # With taper, we can't assert exact zeros/ones, just check shape
         assert muted1.shape == patch_ones.shape
         # Check that middle region has been modified (not all ones)
@@ -179,7 +179,7 @@ class Test1DMute:
         """Test that smooth can be a single integer which means samples."""
         coord = patch_ones.get_coord("time")
         v1, v2 = _get_testable_coord_values(coord, relative=True)
-        muted1 = patch_ones.mute(time=(v1, v2), relative=True, smooth=5)
+        muted1 = patch_ones.line_mute(time=(v1, v2), relative=True, smooth=5)
         # With taper, we can't assert exact zeros/ones, just check shape
         assert muted1.shape == patch_ones.shape
         # Check that middle region has been modified (not all ones)
@@ -191,7 +191,7 @@ class Test1DMute:
         coord = patch_ones.get_coord("time")
         v1, v2 = _get_testable_coord_values(coord, relative=True)
         smooth_val = 0.01 * coord.units
-        muted1 = patch_ones.mute(time=(v1, v2), relative=True, smooth=smooth_val)
+        muted1 = patch_ones.line_mute(time=(v1, v2), relative=True, smooth=smooth_val)
         # With taper, we can't assert exact zeros/ones, just check shape
         assert muted1.shape == patch_ones.shape
         # Check that middle region has been modified (not all ones)
@@ -201,12 +201,12 @@ class Test1DMute:
     def test_mute_strips(self, patch_ones):
         """Mute strips along each dimension."""
         # Mute a time strip
-        muted_time = patch_ones.mute(time=(0.5, 1.0))
+        muted_time = patch_ones.line_mute(time=(0.5, 1.0))
         # All distances should be affected equally
         assert np.allclose(muted_time.data[:, 10], muted_time.data[0, 10])
 
         # Mute a distance strip
-        muted_dist = patch_ones.mute(distance=(10, 20))
+        muted_dist = patch_ones.line_mute(distance=(10, 20))
         # All times should be affected equally
         assert np.allclose(muted_dist.data[15, :], muted_dist.data[15, 0])
 
@@ -220,7 +220,7 @@ class TestMuteLines:
         """A degenerate line (point) should raise."""
         msg = "is degenerate"
         with pytest.raises(ParameterError, match=msg):
-            patch_ones.mute(
+            patch_ones.line_mute(
                 time=([0, 0], [0, 0.25]),
                 distance=([0, 0], [0, 300]),
             )
@@ -230,7 +230,7 @@ class TestMuteLines:
         match = "point in the same direction"
 
         with pytest.raises(ParameterError, match=match):
-            patch_ones.mute(
+            patch_ones.line_mute(
                 time=[[0, 0], [1, -1]],
                 distance=[[1, -1], [-1, 1]],
             )
@@ -239,8 +239,8 @@ class TestMuteLines:
         """Test for muting non-parallel lines."""
         time = ([0, 2], [0, 4])
         distance = ([0, 100], [0, 100])
-        muted = patch_ones.mute(time=time, distance=distance)
-        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+        muted = patch_ones.line_mute(time=time, distance=distance)
+        inverted = patch_ones.line_mute(time=time, distance=distance, invert=True)
 
         points = [(145, 4), (182, 6), (100, 3), (180, 3), (60, 6), (50, 1)]
         expected = np.array([0, 0, 0, 1, 1, 1])
@@ -253,11 +253,11 @@ class TestMuteLines:
         """Test for muting parallel lines."""
         time = ([0, 7.0], [1, 8.0])
         distance = ([0, 300], [1, 301])
-        muted = patch_ones.mute(
+        muted = patch_ones.line_mute(
             time=time,
             distance=distance,
         )
-        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+        inverted = patch_ones.line_mute(time=time, distance=distance, invert=True)
 
         points = [(110, 3), (271, 7), (23, 1), (50, 6), (250, 1), (170, 3)]
         expected = np.array([0, 0, 0, 1, 1, 1])
@@ -273,11 +273,11 @@ class TestMuteLines:
         """
         time = (0, [0, 8.0])
         distance = (None, [0, 301])
-        muted = patch_ones.mute(
+        muted = patch_ones.line_mute(
             time=time,
             distance=distance,
         )
-        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+        inverted = patch_ones.line_mute(time=time, distance=distance, invert=True)
 
         points = [(50, 6), (250, 2)]
         expected = np.array([1, 0])
@@ -293,11 +293,11 @@ class TestMuteLines:
         """
         time = (4, [4.0, 0])
         distance = (None, [150, 0])
-        muted = patch_ones.mute(
+        muted = patch_ones.line_mute(
             time=time,
             distance=distance,
         )
-        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+        inverted = patch_ones.line_mute(time=time, distance=distance, invert=True)
 
         points = [(50, 3), (10, 3), (50, 2), (100, 2)]
         expected = np.array([0, 0, 0, 1])
@@ -310,14 +310,14 @@ class TestMuteLines:
         """Ensure two implicit values can define parallel lines."""
         time = (0, 2)
         distance = (None, None)
-        muted = patch_ones.mute(
+        muted = patch_ones.line_mute(
             time=time,
             distance=distance,
         )
         sub = muted.select(time=(2.1, ...), relative=True)
         assert np.allclose(sub.data, 1)
 
-        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+        inverted = patch_ones.line_mute(time=time, distance=distance, invert=True)
         sub = inverted.select(time=(2.1, ...), relative=True)
         assert np.allclose(sub.data, 0)
 
@@ -325,14 +325,14 @@ class TestMuteLines:
         """Ensure two implicit values can define orthogonal lines."""
         time = (None, 2)
         distance = (100, None)
-        muted = patch_ones.mute(
+        muted = patch_ones.line_mute(
             time=time,
             distance=distance,
         )
         sub = muted.select(time=(2.1, ...), distance=(101, ...), relative=True)
         assert np.allclose(sub.data, 0)
 
-        inverted = patch_ones.mute(time=time, distance=distance, invert=True)
+        inverted = patch_ones.line_mute(time=time, distance=distance, invert=True)
         sub = inverted.select(time=(2.1, ...), distance=(101, ...), relative=True)
         assert np.allclose(sub.data, 1)
 
@@ -352,8 +352,8 @@ class TestMuteLines:
         time = ([time_min, time_min + 1.0], [time_min, time_min + 1.5])
         distance = ([dist_min, dist_min + 100], [dist_min, dist_min + 100])
 
-        muted = patch_ones_3d.mute(time=time, distance=distance, relative=False)
-        inverted = patch_ones_3d.mute(
+        muted = patch_ones_3d.line_mute(time=time, distance=distance, relative=False)
+        inverted = patch_ones_3d.line_mute(
             time=time, distance=distance, relative=False, invert=True
         )
 
@@ -393,7 +393,7 @@ class TestMuteSmoothing:
         time = ([0, 2], [0, 4])
         distance = ([0, 100], [0, 100])
         smooth = {"time": 0.02, "distance": 5}
-        muted = patch_ones.mute(time=time, distance=distance, smooth=smooth)
+        muted = patch_ones.line_mute(time=time, distance=distance, smooth=smooth)
 
         # With smoothing, muted region should have intermediate values
         assert muted.shape == patch_ones.shape
@@ -405,7 +405,7 @@ class TestMuteSmoothing:
         time = ([0, 2], [0, 4])
         distance = ([0, 100], [0, 100])
         smooth = {"time": 0.02, "distance": None}
-        muted = patch_ones.mute(time=time, distance=distance, smooth=smooth)
+        muted = patch_ones.line_mute(time=time, distance=distance, smooth=smooth)
         assert muted.shape == patch_ones.shape
 
     def test_dict_smooth_mismatched_keys_raises(self, patch_ones):
@@ -415,13 +415,13 @@ class TestMuteSmoothing:
         smooth = {"time": 0.02, "oriely": 0.2}  # Missing distance key
         msg = "a smooth dictionary"
         with pytest.raises(ParameterError, match=msg):
-            patch_ones.mute(time=time, distance=distance, smooth=smooth)
+            patch_ones.line_mute(time=time, distance=distance, smooth=smooth)
 
     def test_smooth_creates_gradual_transition(self, patch_ones):
         """Verify smoothing creates gradual transitions with intermediate values."""
         coord = patch_ones.get_coord("time")
         v1, v2 = _get_testable_coord_values(coord, relative=True)
-        muted = patch_ones.mute(time=(v1, v2), relative=True, smooth=0.05)
+        muted = patch_ones.line_mute(time=(v1, v2), relative=True, smooth=0.05)
 
         # Check that the transition region has values between 0 and 1
         transition_region = muted.select(time=(v1 - 0.2, v2 + 0.2), relative=True).data
@@ -435,7 +435,7 @@ class TestMuteSmoothing:
         time = ([0, 2], [0, 4])
         distance = ([0, 100], [0, 100])
         smooth = 0.03
-        muted = patch_ones.mute(
+        muted = patch_ones.line_mute(
             time=time, distance=distance, smooth=smooth, invert=True
         )
 
@@ -448,7 +448,7 @@ class TestMuteSmoothing:
         time = ([0, 7.0], [1, 8.0])
         distance = ([0, 300], [1, 301])
         smooth = {"time": 5, "distance": 10}
-        muted = patch_ones.mute(time=time, distance=distance, smooth=smooth)
+        muted = patch_ones.line_mute(time=time, distance=distance, smooth=smooth)
 
         assert muted.shape == patch_ones.shape
         # Check for smooth transition
@@ -458,7 +458,7 @@ class TestMuteSmoothing:
         """Test edge case with very small smooth value (1 sample)."""
         coord = patch_ones.get_coord("time")
         v1, v2 = _get_testable_coord_values(coord, relative=True)
-        muted = patch_ones.mute(time=(v1, v2), relative=True, smooth=1)
+        muted = patch_ones.line_mute(time=(v1, v2), relative=True, smooth=1)
         # Should still work, just with minimal smoothing
         assert muted.shape == patch_ones.shape
 
@@ -467,7 +467,7 @@ class TestMuteSmoothing:
         time = ([0, 2], [0, 4])
         distance = ([0, 100], [0, 100])
         smooth = 0.05
-        muted = patch_ones.mute(time=time, distance=distance, smooth=smooth)
+        muted = patch_ones.line_mute(time=time, distance=distance, smooth=smooth)
         assert muted.shape == patch_ones.shape
 
 
@@ -477,7 +477,7 @@ class TestMute3D:
     def test_1d_mute_time(self, patch_ones_3d):
         """Test 1D mute along time dimension."""
         v1, v2 = 0.3, 0.8
-        muted = patch_ones_3d.mute(time=(v1, v2), relative=True)
+        muted = patch_ones_3d.line_mute(time=(v1, v2), relative=True)
 
         # Check that the muted region is zeroed
         sub_muted = muted.select(time=(v1, v2), relative=True)
@@ -491,7 +491,7 @@ class TestMute3D:
         """Test 2D line mute using time-distance plane."""
         time = ([0, 1.0], [0, 1.5])
         distance = ([0, 100], [0, 100])
-        muted = patch_ones_3d.mute(time=time, distance=distance)
+        muted = patch_ones_3d.line_mute(time=time, distance=distance)
 
         # Should maintain 3D shape
         assert muted.shape == patch_ones_3d.shape
@@ -506,7 +506,7 @@ class TestMute3D:
         """Test 2D line mute using distance-depth plane."""
         distance = ([0, 100], [0, 200])
         depth = ([0, 20], [0, 30])
-        muted = patch_ones_3d.mute(distance=distance, depth=depth)
+        muted = patch_ones_3d.line_mute(distance=distance, depth=depth)
 
         assert muted.shape == patch_ones_3d.shape
         assert np.any(muted.data == 0)
@@ -515,14 +515,14 @@ class TestMute3D:
     def test_smoothing_3d(self, patch_ones_3d):
         """Test that smooth parameter works correctly in 3D."""
         v1, v2 = 0.3, 0.8
-        muted = patch_ones_3d.mute(time=(v1, v2), relative=True, smooth=0.05)
+        muted = patch_ones_3d.line_mute(time=(v1, v2), relative=True, smooth=0.05)
         # With smoothing, should have intermediate values
         assert np.any((muted.data > 0.01) & (muted.data < 0.99))
 
     def test_invert_3d(self, patch_ones_3d):
         """Test invert parameter in 3D."""
         v1, v2 = 0.3, 0.8
-        muted = patch_ones_3d.mute(time=(v1, v2), relative=True, invert=True)
+        muted = patch_ones_3d.line_mute(time=(v1, v2), relative=True, invert=True)
 
         # With invert, the selected region should be kept
         sub_kept = muted.select(time=(v1, v2), relative=True)
@@ -539,7 +539,7 @@ class TestMute4D:
     def test_1d_mute_time(self, patch_ones_4d):
         """Test 1D mute along time dimension in 4D patch."""
         v1, v2 = 0.3, 0.8
-        muted = patch_ones_4d.mute(time=(v1, v2), relative=True)
+        muted = patch_ones_4d.line_mute(time=(v1, v2), relative=True)
 
         # Check that the muted region is zeroed
         sub_muted = muted.select(time=(v1, v2), relative=True)
@@ -551,7 +551,7 @@ class TestMute4D:
 
     def test_1d_mute_angle(self, patch_ones_4d):
         """Test 1D mute along angle dimension."""
-        muted = patch_ones_4d.mute(angle=(20, 60), relative=True)
+        muted = patch_ones_4d.line_mute(angle=(20, 60), relative=True)
         sub_muted = muted.select(angle=(20, 60), relative=True)
         assert np.allclose(sub_muted.data, 0)
 
@@ -559,7 +559,7 @@ class TestMute4D:
         """Test 2D line mute using depth-angle plane."""
         depth = ([0, 15], [0, 25])
         angle = ([0, 30], [0, 60])
-        muted = patch_ones_4d.mute(depth=depth, angle=angle)
+        muted = patch_ones_4d.line_mute(depth=depth, angle=angle)
 
         assert muted.shape == patch_ones_4d.shape
         assert np.any(muted.data == 0)
@@ -570,7 +570,7 @@ class TestMute4D:
         time = ([0, 0.8], [0, 1.2])
         distance = ([0, 80], [0, 80])
         smooth = {"time": 0.02, "distance": 5}
-        muted = patch_ones_4d.mute(time=time, distance=distance, smooth=smooth)
+        muted = patch_ones_4d.line_mute(time=time, distance=distance, smooth=smooth)
         # With smoothing, should have intermediate values
         assert muted.shape == patch_ones_4d.shape
         assert np.any((muted.data > 0.01) & (muted.data < 0.99))
@@ -578,14 +578,14 @@ class TestMute4D:
     def test_smoothing_1d_mute_in_4d(self, patch_ones_4d):
         """Test smoothing with 1D mute in 4D patch."""
         v1, v2 = 0.3, 0.8
-        muted = patch_ones_4d.mute(time=(v1, v2), relative=True, smooth=0.05)
+        muted = patch_ones_4d.line_mute(time=(v1, v2), relative=True, smooth=0.05)
         # Check for gradual transition
         assert np.any((muted.data > 0.01) & (muted.data < 0.99))
 
     def test_invert_4d(self, patch_ones_4d):
         """Test invert parameter in 4D."""
         v1, v2 = 0.3, 0.8
-        muted = patch_ones_4d.mute(time=(v1, v2), relative=True, invert=True)
+        muted = patch_ones_4d.line_mute(time=(v1, v2), relative=True, invert=True)
 
         # With invert, the selected region should be kept
         sub_kept = muted.select(time=(v1, v2), relative=True)
@@ -603,15 +603,10 @@ class TestSlopeMute:
 
     def test_slope_mute_basic(self, patch_ones):
         """Test basic slope_mute with two velocities."""
-        # Mute between two velocities (20 m/s and 30 m/s)
-        # These values are reasonable for the example patch which has
-        # distance range ~300m and time range ~8s
         slopes = (20.0, 30.0)
         muted = patch_ones.slope_mute(slopes=slopes)
-
         # Should return a patch with same shape
         assert muted.shape == patch_ones.shape
-
         # Test specific points using _assert_point_values
         # Format: (distance, time) in relative coordinates
         # At time=4s: 20 m/s line is at 80m, 30 m/s line is at 120m
@@ -645,7 +640,6 @@ class TestSlopeMute:
         slopes = (20.0, 30.0)
         muted = patch_ones.slope_mute(slopes=slopes, invert=False)
         inverted = patch_ones.slope_mute(slopes=slopes, invert=True)
-
         # Test that regions are inverted
         points = [
             (50, 4.0),  # Outside mute region (low velocity)
@@ -665,7 +659,6 @@ class TestSlopeMute:
         """Test slope_mute with smoothing parameter."""
         slopes = (20.0, 30.0)
         muted = patch_ones.slope_mute(slopes=slopes, smooth=0.02)
-
         # With smoothing, should have intermediate values
         assert muted.shape == patch_ones.shape
         assert np.any((muted.data > 0.01) & (muted.data < 0.99))
@@ -676,15 +669,13 @@ class TestSlopeMute:
         # slope = time/distance (inverse velocity, or slowness)
         slopes = (0.001, 0.002)  # s/m
         muted = patch_ones_3d.slope_mute(slopes=slopes, dims=("time", "distance"))
-
         assert muted.shape == patch_ones_3d.shape
         # Verify muting occurred - should have both 0s and 1s
         assert np.any(muted.data == 0)
         assert np.any(muted.data == 1)
-
         # For slope = time/distance: at distance=200m (relative), mute region is
         # time = 0.001*200 = 0.2s to 0.002*200 = 0.4s (relative)
-        # At time=0.3s relative (which is 15% of 2.0s range), dist=200m should be muted
+        # At time=0.3s relative (15% of 2.0s range), dist=200m should be muted
         time_idx = muted.get_coord("time").get_next_index(0.3, relative=True)
         dist_idx = muted.get_coord("distance").get_next_index(200, relative=True)
         # For 3D patch with dims (time, distance, depth), all depth values should
@@ -706,7 +697,6 @@ class TestSlopeMute:
         # Use slopes near the max for the patch (37.5 m/s)
         slopes = (35.0, 37.0)
         muted = patch_ones.slope_mute(slopes=slopes)
-
         assert muted.shape == patch_ones.shape
         # With very high velocities, most of patch should be unmuted
         # Only a small wedge near upper right should be muted
@@ -722,7 +712,6 @@ class TestSlopeMute:
         """Test slope_mute with very shallow slopes (low velocities)."""
         slopes = (5.0, 10.0)
         muted = patch_ones.slope_mute(slopes=slopes)
-
         assert muted.shape == patch_ones.shape
         # With very low velocities, mute region should be at low distances
         points = [
@@ -734,12 +723,6 @@ class TestSlopeMute:
         expected = [1, 0, 1, 0]
         _assert_point_values(muted, self._dims, points=points, expected_values=expected)
 
-    def test_slope_mute_zero_slope_raises(self, patch_ones):
-        """Test that zero slope raises appropriate error."""
-        slopes = (0.0, 30.0)
-        with pytest.raises(ParameterError, match="positive"):
-            patch_ones.slope_mute(slopes=slopes)
-
     def test_slope_mute_negative_slopes(self, patch_ones):
         """Test slope_mute behavior with negative slopes."""
         slopes = (-20.0, -30.0)
@@ -750,40 +733,30 @@ class TestSlopeMute:
     def test_slope_mute_matches_manual_mute(self, patch_ones):
         """Test that slope_mute produces same result as manual mute call."""
         slopes = (20.0, 30.0)
-
         # Get coordinate ranges
         dist_range = dc.to_float(patch_ones.get_coord("distance").coord_range())
-        time_range = dc.to_float(patch_ones.get_coord("time").coord_range())
-
         # Calculate endpoints manually
         endpoints = []
         for slope in slopes:
-            dist_at_max_time = slope * time_range
-            if dist_at_max_time <= dist_range:
-                endpoint = (dist_at_max_time, time_range)
-            else:
-                endpoint = (dist_range, dist_range / slope)
-            endpoints.append(endpoint)
-
+            endpoints.append(dist_range / slope)
         # Manual mute call
-        manual_muted = patch_ones.mute(
-            distance=([0, endpoints[0][0]], [0, endpoints[1][0]]),
-            time=([0, endpoints[0][1]], [0, endpoints[1][1]]),
+        manual_muted = patch_ones.line_mute(
+            distance=([0, dist_range], [0, dist_range]),
+            time=([0, endpoints[0]], [0, endpoints[1]]),
             relative=True,
         )
-
         # slope_mute call
         slope_muted = patch_ones.slope_mute(slopes=slopes)
-
-        # Should produce identical results
-        assert np.allclose(manual_muted.data, slope_muted.data)
+        # Should produce nearly identical results (rounding errors can produce
+        # minor differences)
+        equal = manual_muted.data == slope_muted.data
+        assert equal.sum() / equal.size > 0.9999
 
     def test_slope_mute_with_dict_smooth(self, patch_ones):
         """Test slope_mute with dict smooth parameter."""
         slopes = (20.0, 30.0)
         smooth = {"distance": 5, "time": 0.01}
         muted = patch_ones.slope_mute(slopes=slopes, smooth=smooth)
-
         # Should have smooth transition
         assert np.any((muted.data > 0.01) & (muted.data < 0.99))
 
@@ -792,7 +765,6 @@ class TestSlopeMute:
         # Define precise velocity wedge
         slopes = (15.0, 25.0)  # m/s
         muted = patch_ones.slope_mute(slopes=slopes)
-
         # Test points at specific locations
         # At time=4.0s:
         #   - 15 m/s line is at distance=60m
@@ -805,4 +777,28 @@ class TestSlopeMute:
             (110, 4.0),  # Above 25 m/s line - unmuted
         ]
         expected = [1, 0, 0, 1]
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)
+
+    def test_0_velocity(self, patch_ones):
+        """Ensure 0 velocity is ok."""
+        muted = patch_ones.slope_mute(slopes=(0, 100))
+        points = [
+            (250, 1.0),
+            (200, 1.0),
+            (250, 4.0),
+            (250, 5.0),
+        ]
+        expected = [1, 1, 0, 0]
+        _assert_point_values(muted, self._dims, points=points, expected_values=expected)
+
+    def test_inf_velocity(self, patch_ones):
+        """Ensure an infinite velocity is ok."""
+        muted = patch_ones.slope_mute(slopes=(100, np.inf))
+        points = [
+            (250, 1.0),
+            (200, 1.0),
+            (250, 4.0),
+            (250, 5.0),
+        ]
+        expected = [0, 0, 1, 1]
         _assert_point_values(muted, self._dims, points=points, expected_values=expected)

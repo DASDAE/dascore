@@ -309,8 +309,9 @@ class _MuteGeometry2D(_MuteGeometry):
             # Get the coordinate values normalized to coord range.
             coord_vals = dc.to_float(coord.values)
             coord_range = dc.to_float(coord.coord_range())
-            if self.relative:
-                coord_vals -= dc.to_float(coord.min())
+            # Since the points have already been converted to relative,
+            # even if they were absolute, we must do the same here.
+            coord_vals -= dc.to_float(coord.min())
             # Iterate over each origin.
             for onum, origin in enumerate(self.origins):
                 # We need to transform coordinate values to values between 0 and 1.
@@ -407,7 +408,7 @@ def _get_mute_geometry(patch, kwargs, relative=True):
 
 @patch_function()
 @compose_docstring(smooth_param=_smooth_param)
-def mute(
+def line_mute(
     patch: PatchType,
     *,
     smooth=None,
@@ -447,36 +448,36 @@ def mute(
     >>> patch = dc.get_example_patch().full(1)
     >>>
     >>> # Mute first 0.5s (relative to start by default)
-    >>> muted = patch.mute(time=(0, 0.5))
+    >>> muted = patch.line_mute(time=(0, 0.5))
     >>>
     >>> # Mute everything except middle section
-    >>> kept = patch.mute(time=(0.2, -0.2), invert=True)
+    >>> kept = patch.line_mute(time=(0.2, -0.2), invert=True)
     >>>
     >>> # 1D Mute with smoothed absolute units for time.
-    >>> muted = patch.mute(time=(0.2, 0.8), smooth=0.02 * dc.units.s)
+    >>> muted = patch.line_mute(time=(0.2, 0.8), smooth=0.02 * dc.units.s)
     >>>
     >>> # Classic first break mute: mute early arrivals
     >>> # Line from (t=0, d=0) to (t=0.3, d=300) defines velocity=1000 m/s
-    >>> muted = patch.mute(
+    >>> muted = patch.line_mute(
     ...     time=(0, [0, 0.3]),
     ...     distance=(None, [0, 300]),
     ...     smooth=0.02,
     ... )
     >>>
     >>> # Mute late arrivals: from velocity line to end
-    >>> muted = patch.mute(
+    >>> muted = patch.line_mute(
     ...     time=([0, 0.3], None),
     ...     distance=([0, 300], 0),
     ... )
     >>>
     >>> # Mute wedge between two velocity lines
-    >>> muted = patch.mute(
+    >>> muted = patch.line_mute(
     ...     time=([0, 0.375], [0, 0.25]),
     ...     distance=([0, 300], [0, 300]),
     ... )
     >>>
     >>> # Mute wedge outside two velocity lines
-    >>> muted = patch.mute(
+    >>> muted = patch.line_mute(
     ...     time=([0, 0.375], [0, 0.25]),
     ...     distance=([0, 300], [0, 300]),
     ...     invert=True,
@@ -484,7 +485,7 @@ def mute(
     >>>
     >>> # Apply custom tapering
     >>> ones = patch.full(1.0)
-    >>> envelope = ones.mute(
+    >>> envelope = ones.line_mute(
     ...     time=([0, 0.375], [0, 0.25]),
     ...     distance=([0, 300], [0, 300]),
     ... )
@@ -509,6 +510,7 @@ def mute(
     - [`Patch.select`](`dascore.Patch.select`)
     - [`Patch.taper_range`](`dascore.Patch.taper_range`)
     - [`Patch.gaussian_filter`](`dascore.proc.filter.gaussian_filter`)
+    - [`Patch.slope_mute`](`dascore.Patch.slope_mute`)
     """
     # Get geometry object to set up the problem.
     geo = _get_mute_geometry(patch, kwargs, relative)
@@ -546,7 +548,7 @@ def slope_mute(
     patch
         The patch to filter.
     slopes
-        A length 2 sequence which specifies the begining and ending slope
+        A length 2 sequence which specifies the beginning and ending slope
         values. The dims parameter specifies how the slope is calculated.
     dims
         The dimensions used to determine slope. The first dim is in the
@@ -558,6 +560,30 @@ def slope_mute(
         If True, invert the mute, meaning areas outside the given region
         are muted
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Mute data between velocities of 1000 m/s and 3000 m/s
+    >>> muted = patch.slope_mute(slopes=(1000, 3000))
+    >>>
+    >>> # Keep only data between two velocities (invert the mute)
+    >>> kept = patch.slope_mute(slopes=(1500, 2500), invert=True)
+    >>>
+    >>> # Apply smoothing to mute boundaries (5% of dimension range)
+    >>> smooth_mute = patch.slope_mute(slopes=(1000, 3000), smooth=0.05)
+    >>>
+    >>> # Use different dimension order (e.g., time/distance for slowness)
+    >>> # This mutes between slownesses of 0.0003 s/m and 0.001 s/m
+    >>> slowness_mute = patch.slope_mute(
+    ...     slopes=(0.0003, 0.001), dims=("time", "distance")
+    ... )
+    >>>
+    >>> # Flip distance axis to set origin at far end before muting
+    >>> flipped = patch.flip("distance")
+    >>> muted_flipped = flipped.slope_mute(slopes=(1000, 3000))
+
     Notes
     -----
     - Assumes the mute origin is at the start of each of the selected dimensions.
@@ -567,36 +593,42 @@ def slope_mute(
     See Also
     --------
     - [`Patch.slope_filter`](`dascore.proc.filter.slope_filter`)
-    - [`Patch.mute`](`dascore.proc.mute.mute`)
+    - [`Patch.line_mute`](`dascore.proc.mute.mute`)
     """
     # Convert slopes to array and validate
     slopes_array = np.asarray(slopes)
     if slopes_array.shape != (2,):
-        msg = "slopes must be a tuple or array of length 2"
+        msg = "slopes must be a sequence of length 2"
         raise ParameterError(msg)
     # Check for zero or negative slopes
-    if np.any(slopes_array <= 0):
-        msg = "slopes must be positive (greater than zero)"
+    if np.any(slopes_array < 0):
+        msg = "slopes must be positive."
         raise ParameterError(msg)
-    # Get the coordinate ranges for the dimensions (in relative coordinates)
-    coord0 = patch.get_coord(dims[0])
-    coord1 = patch.get_coord(dims[1])
-    range0 = dc.to_float(coord0.coord_range())
-    # The origin is always at the *start* of the coordinate.
-    origin = (dc.to_float(coord0[0]), dc.to_float(coord1[0]))
-    # Create endpoints for lines defined by each slope
-    endpoints = []
-    for slope in slopes_array:
-        # Slope is rise over run; we just need to multiply by run
-        # Note: it is fine if points exceed patch dims; mute will handle it.
-        point = (origin[0] + range0, origin[1] + slope * range0)
-        endpoints.append(point)
-    # Build kwargs for mute
+    # Get the coordinate information
+    coord_x, coord_y = (patch.get_coord(x, require_sorted=True) for x in dims)
+    origin = (dc.to_float(coord_x[0]), dc.to_float(coord_y[0]))
+    # Here we take the full range as to allow it to be negative if the
+    # coord is reversed sorted.
+    range_x = dc.to_float(coord_x[-1] - coord_x[0])
+    # Calculate endpoints for lines defined by each slope
+    dim0_vals = [[origin[0], origin[0] + range_x], [origin[0], origin[0] + range_x]]
+    dim1_vals = [[origin[1], None], [origin[1], None]]
+    for num, slope in enumerate(slopes_array):
+        # Special case for 0 and inf velocities
+        if np.isclose(slope, 0):
+            dim0_vals[num][1] = origin[0]
+            dim1_vals[num][1] = origin[1] + 1
+        elif np.isinf(slope):
+            dim0_vals[num][1] = origin[0] + 1
+            dim1_vals[num][1] = origin[1]
+        else:
+            # Slope is rise over run (e.g., distance/time for velocity)
+            dim1_vals[num][1] = origin[1] + range_x / slope
     mute_kwargs = {
-        dims[0]: ([origin[0], endpoints[0][0]], [origin[0], endpoints[1][0]]),
-        dims[1]: ([origin[1], endpoints[0][1]], [origin[1], endpoints[1][1]]),
+        dims[0]: dim0_vals,
+        dims[1]: dim1_vals,
         "smooth": smooth,
         "invert": invert,
         "relative": False,
     }
-    return mute(patch, **mute_kwargs)
+    return line_mute.func(patch, **mute_kwargs)
