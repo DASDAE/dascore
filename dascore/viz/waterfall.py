@@ -46,12 +46,11 @@ def _validate_patch_dims(patch):
     return patch
 
 
-def _get_scale(scale, scale_type, patch):
+def _get_scale(scale, scale_type, data):
     """
     Calculate the color bar scale limits based on scale and scale_type.
     """
     _validate_scale_type(scale_type)
-    data = patch.data
 
     match (scale, scale_type):
         # Case 1: Single value with relative scaling
@@ -153,8 +152,8 @@ def waterfall(
         Values can either be a float, to set upper and lower limit to the same
         value centered around the mean of the data, a length 2 tuple
         specifying upper and lower limits, or None, which will automatically
-        determine limits based on a quartile fence. (uses q1 - 3.0 * (q3 - q1)
-        and q3 + 3.0 * (q3 - q1)).
+        determine limits based on a quartile fence. (uses q1 - 1.5 * (q3 - q1)
+        and q3 + 1.5 * (q3 - q1)).
     scale_type
         Controls the type of scaling specified by `scale` parameter. Options
         are:
@@ -230,7 +229,7 @@ def waterfall(
 
     # Plot using imshow and set colorbar limits
     extents = _get_extents(dims_r, coords)
-    scale = _get_scale(scale, scale_type, patch)
+    scale = _get_scale(scale, scale_type, data)
     im = ax.imshow(
         data,
         extent=extents,
