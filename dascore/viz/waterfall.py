@@ -19,6 +19,7 @@ from dascore.utils.plotting import (
     _get_dim_label,
     _get_extents,
 )
+from dascore.utils.time import dtype_time_like
 
 IQR_FENCE_MULTIPLIER = 1.5
 
@@ -104,8 +105,7 @@ def _format_axis_labels(ax, patch, dims_r):
     """
     for dim, x in zip(dims_r, ["x", "y"], strict=True):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
-        coord = patch.get_coord(dim)
-        if np.issubdtype(coord.dtype, np.datetime64):
+        if dtype_time_like(patch.get_coord(dim).dtype):
             _format_time_axis(ax, dim, x)
             # Invert the y axis so origin is at the top. This follows the
             # convention for seismic shot gathers where time increases downward.
@@ -118,7 +118,7 @@ def _add_colorbar(ax, im, patch, log):
     Add a colorbar with appropriate labels to the plot.
     """
     cb = ax.get_figure().colorbar(im, ax=ax, fraction=0.05, pad=0.025)
-    data_type = str(patch.attrs["data_type"])
+    data_type = str(patch.attrs.get("data_type", ""))
     data_units = get_quantity_str(patch.attrs.data_units) or ""
     dunits = f" ({data_units})" if (data_type and data_units) else f"{data_units}"
     if log:
@@ -246,7 +246,8 @@ def waterfall(
         interpolation="antialiased",
         interpolation_stage="data",
     )
-    im.set_clim(scale)
+    if isinstance(scale, Sequence) and len(scale) == 2 and np.all(np.isfinite(scale)):
+        im.set_clim(scale)
     # Format axis labels and handle time-like dimensions
     _format_axis_labels(ax, patch, dims_r)
     # Add colorbar if requested

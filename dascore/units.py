@@ -401,7 +401,7 @@ def maybe_convert_percent_to_fraction(obj):
     """
     percent = get_unit("percent")
     out = []
-    obj = [obj] if isinstance(obj, Quantity | Unit) and obj.ndim == 0 else obj
+    obj = [obj] if isinstance(obj, Quantity) and obj.ndim == 0 else obj
     for val in iterate(obj):
         if hasattr(val, "units"):
             mag, unit = val.magnitude, val.units
