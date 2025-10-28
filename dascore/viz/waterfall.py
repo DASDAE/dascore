@@ -10,7 +10,7 @@ import numpy as np
 
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
-from dascore.units import get_quantity_str
+from dascore.units import get_quantity_str, maybe_convert_percent_to_fraction
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _format_time_axis,
@@ -51,11 +51,13 @@ def _get_scale(scale, scale_type, data):
     Calculate the color bar scale limits based on scale and scale_type.
     """
     _validate_scale_type(scale_type)
-
+    # This ensures we have a list of the previous scale parameters.
+    scale = maybe_convert_percent_to_fraction(scale)
     match (scale, scale_type):
         # Case 1: Single value with relative scaling
         # Scale is symmetric around the mean, using fraction of dynamic range
-        case (scale, "relative") if isinstance(scale, float | int):
+        case (scale, "relative") if len(scale) == 1:
+            scale = scale[0]
             mod = 0.5 * (np.nanmax(data) - np.nanmin(data))
             mean = np.nanmean(data)
             scale = np.asarray([mean - scale * mod, mean + scale * mod])
@@ -63,11 +65,11 @@ def _get_scale(scale, scale_type, data):
         # Use Tukey's fence (C*IQR, C is normally 1.5) to exclude outliers.
         # This prevents a few extreme values from obscuring the majority of the
         # data at the cost of a slight performance penalty.
-        case (None, "relative"):
-            q2, q3 = np.nanpercentile(data, [25, 75])
+        case ([], "relative"):
+            q1, q3 = np.nanpercentile(data, [25, 75])
             dmin, dmax = np.nanmin(data), np.nanmax(data)
-            diff = q3 - q2  # Interquartile range (IQR)
-            q_lower = np.nanmax([q2 - diff * IQR_FENCE_MULTIPLIER, dmin])
+            diff = q3 - q1  # Interquartile range (IQR)
+            q_lower = np.nanmax([q1 - diff * IQR_FENCE_MULTIPLIER, dmin])
             q_upper = np.nanmin([q3 + diff * IQR_FENCE_MULTIPLIER, dmax])
             scale = np.asarray([q_lower, q_upper])
             return scale
@@ -88,8 +90,8 @@ def _get_scale(scale, scale_type, data):
             # Map [0, 1] to [data_min, data_max]
             scale = dmin + scale * data_range
         # Case 4: Absolute scaling
-        case (scale, "absolute") if isinstance(scale, int | float):
-            scale = np.array([-abs(scale), abs(scale)])
+        case (scale, "absolute") if len(scale) == 1:
+            scale = np.array([-abs(scale[0]), abs(scale[0])])
         # Case 5: Absolute scaling with sequence: no match needed.
 
     # Scale values are used directly as colorbar limits
@@ -168,13 +170,16 @@ def waterfall(
     --------
     >>> # Plot with default scaling (uses 1.5*IQR fence to exclude outliers)
     >>> import dascore as dc
+    >>> from dascore.units import percent
     >>> patch = dc.get_example_patch("example_event_1").normalize("time")
     >>> _ = patch.viz.waterfall()
     >>>
-    >>> # Use relative scaling with a float to saturate at 10% of dynamic range
-    >>> # This centers the colorbar around the mean and extends ±10% of the
-    >>> # data's dynamic range in each direction
+    >>> # Use relative scaling with a tuple to show a specific fraction
+    >>> # of data range. Scale values of (0.1, 0.9) map to 10% and 90%
+    >>> # of the [data_min, data_max] range data's dynamic range
     >>> _ = patch.viz.waterfall(scale=0.1, scale_type="relative")
+    >>> # Likewise, percent units can be used for additional clarity
+    >>> _ = patch.viz.waterfall(scale=10*percent, scale_type="absolute")
     >>>
     >>> # Use relative scaling with a tuple to show the middle 80% of data range
     >>> # Scale values of (0.1, 0.9) map to 10th and 90th percentile of data
@@ -218,7 +223,6 @@ def waterfall(
     """
     # Validate inputs
     patch = _validate_patch_dims(patch)
-
     # Setup axes and data
     ax = _get_ax(ax)
     cmap = _get_cmap(cmap)
@@ -226,7 +230,6 @@ def waterfall(
     dims = patch.dims
     dims_r = tuple(reversed(dims))
     coords = {dim: patch.coords.get_array(dim) for dim in dims}
-
     # Plot using imshow and set colorbar limits
     extents = _get_extents(dims_r, coords)
     scale = _get_scale(scale, scale_type, data)
@@ -244,14 +247,11 @@ def waterfall(
         interpolation_stage="data",
     )
     im.set_clim(scale)
-
     # Format axis labels and handle time-like dimensions
     _format_axis_labels(ax, patch, dims_r)
-
     # Add colorbar if requested
     if cmap is not None:
         _add_colorbar(ax, im, patch, log)
-
     if show:
         plt.show()
     return ax

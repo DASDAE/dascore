@@ -277,7 +277,6 @@ def taper_range(
     >>> # Apply two non-overlapping tapers
     >>> taper_range = ((25,50,100,125), (150,175,200,225))
     >>> patch_tapered_5 = patch.taper_range(distance=taper_range)
-
     """
     dim, ax, values = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coord = patch.get_coord(dim, require_sorted=True)

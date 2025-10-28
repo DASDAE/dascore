@@ -233,3 +233,6 @@ class TestWaterfall:
         patch = random_patch.update(data=data)
         ax = patch.viz.waterfall()
         assert isinstance(ax, plt.Axes)
+
+    def test_precent_scale(self, random_patch):
+        """Ensure the percent unit works with scale."""

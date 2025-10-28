@@ -14,7 +14,7 @@ from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
 import dascore as dc
 from dascore.compat import is_array
 from dascore.exceptions import UnitError
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import iterate, unbyte
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
 str_or_none = TypeVar("str_or_none", None, str)
@@ -355,6 +355,60 @@ def quant_sequence_to_quant_array(sequence: Sequence[Quantity]) -> Quantity:
         raise UnitError(msg)
     array = np.array([x.magnitude for x in base_unit_sequence])
     return array * next(iter(units))
+
+
+def maybe_convert_percent_to_fraction(obj):
+    """
+    Iterate an object and convert any percentages to fractions.
+
+    Parameters
+    ----------
+    obj
+        The input object. Can be a single value or an iterable.
+
+    Returns
+    -------
+    list
+        A list where any percentage quantities are converted to their
+        fractional equivalents (e.g., 50% becomes 0.5).
+
+    Examples
+    --------
+    >>> from dascore.units import maybe_convert_percent_to_fraction, get_quantity
+    >>>
+    >>> # Convert a single percentage to fraction
+    >>> result = maybe_convert_percent_to_fraction(get_quantity("50%"))
+    >>> assert result == [0.5]
+    >>>
+    >>> # Convert a list with percentages
+    >>> result = maybe_convert_percent_to_fraction(
+    ...     [get_quantity("25%"), get_quantity("75%")]
+    ... )
+    >>> assert result == [0.25, 0.75]
+    >>>
+    >>> # Non-percentage values are unchanged
+    >>> result = maybe_convert_percent_to_fraction([get_quantity("10 m"), 5])
+    >>> assert result[0] == get_quantity("10 m")
+    >>> assert result[1] == 5
+    >>>
+    >>> # Mixed values
+    >>> result = maybe_convert_percent_to_fraction(
+    ...     [get_quantity("100%"), 0.5, get_quantity("2 Hz")]
+    ... )
+    >>> assert result[0] == 1.0
+    >>> assert result[1] == 0.5
+    >>> assert result[2] == get_quantity("2 Hz")
+    """
+    percent = get_unit("percent")
+    out = []
+    obj = [obj] if isinstance(obj, Quantity | Unit) and obj.ndim == 0 else obj
+    for val in iterate(obj):
+        if hasattr(val, "units"):
+            mag, unit = val.magnitude, val.units
+            if unit == percent:
+                val = mag / 100
+        out.append(val)
+    return out
 
 
 def __getattr__(name):

@@ -17,6 +17,7 @@ from dascore.units import (
     get_quantity_str,
     get_unit,
     invert_quantity,
+    maybe_convert_percent_to_fraction,
     quant_sequence_to_quant_array,
 )
 
@@ -353,3 +354,66 @@ class TestQuantSequenceToQuantArray:
         sequence = np.array([1, 2, 3])
         out = quant_sequence_to_quant_array(sequence)
         assert isinstance(out, Quantity)
+
+
+class TestMaybeConvertPercentToFraction:
+    """Tests for converting percentages to fractions."""
+
+    def test_single_percentage(self):
+        """Test converting a single percentage value."""
+        result = maybe_convert_percent_to_fraction(get_quantity("50%"))
+        assert len(result) == 1
+        assert result[0] == 0.5
+
+    def test_list_of_percentages(self):
+        """Test converting a list of percentages."""
+        result = maybe_convert_percent_to_fraction(
+            [get_quantity("25%"), get_quantity("75%"), get_quantity("100%")]
+        )
+        assert len(result) == 3
+        assert result[0] == 0.25
+        assert result[1] == 0.75
+        assert result[2] == 1.0
+
+    def test_non_percentage_quantity_unchanged(self):
+        """Test that non-percentage quantities remain unchanged."""
+        meter = get_quantity("10 m")
+        hz = get_quantity("5 Hz")
+        result = maybe_convert_percent_to_fraction([meter, hz])
+        assert len(result) == 2
+        assert result[0] == meter
+        assert result[1] == hz
+
+    def test_plain_numeric_values(self):
+        """Test that plain numeric values without units are unchanged."""
+        result = maybe_convert_percent_to_fraction([1, 2.5, 0])
+        assert result == [1, 2.5, 0]
+
+    def test_mixed_values(self):
+        """Test a mix of percentages, quantities, and plain values."""
+        percent_val = get_quantity("50%")
+        meter_val = get_quantity("10 m")
+        plain_val = 0.5
+        result = maybe_convert_percent_to_fraction([percent_val, plain_val, meter_val])
+        assert len(result) == 3
+        assert result[0] == 0.5  # 50% converted to fraction
+        assert result[1] == 0.5  # plain value unchanged
+        assert result[2] == meter_val  # quantity unchanged
+
+    def test_zero_percent(self):
+        """Test that 0% converts correctly."""
+        result = maybe_convert_percent_to_fraction(get_quantity("0%"))
+        assert len(result) == 1
+        assert result[0] == 0.0
+
+    def test_large_percentage(self):
+        """Test that percentages over 100% convert correctly."""
+        result = maybe_convert_percent_to_fraction(get_quantity("250%"))
+        assert len(result) == 1
+        assert result[0] == 2.5
+
+    def test_fractional_percentage(self):
+        """Test that fractional percentages convert correctly."""
+        result = maybe_convert_percent_to_fraction(get_quantity("12.5%"))
+        assert len(result) == 1
+        assert np.isclose(result[0], 0.125)
