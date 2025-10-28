@@ -398,7 +398,7 @@ patch = (
     .pass_filter(time=(None, 300))
 )
 
-patch.viz.waterfall(show=True, scale=0.2);
+patch.viz.waterfall(show=True);
 ```
 
 # Modifying patches

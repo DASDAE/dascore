@@ -44,7 +44,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 
 dependencies = [
      "h5py",
-     "matplotlib>=3.5",
+     "matplotlib>=3.8",
      "numpy>=1.24",
      "packaging",
      "pandas>=2.0",
