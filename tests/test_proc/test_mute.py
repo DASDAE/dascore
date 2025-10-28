@@ -138,7 +138,7 @@ class Test1DLineMute:
     def test_mute_open_interval(self, patch_ones):
         """Mute using None for interval ends."""
         coord = patch_ones.get_coord("distance")
-        v1, v2 = _get_testable_coord_values(coord, relative=True)
+        _v1, v2 = _get_testable_coord_values(coord, relative=True)
         muted1 = patch_ones.line_mute(distance=(v2, ...), relative=True)
         step = dc.to_float(coord.step)
         _assert_coord_ranges(

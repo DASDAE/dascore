@@ -832,5 +832,5 @@ class TestFull:
     def test_full_1(self, random_patch):
         """Ensure a patch can be created with 1s."""
         patch = random_patch.full(1.0)
-        patch.coords == random_patch.coords
+        assert patch.coords == random_patch.coords
         assert np.allclose(patch.data, 1.0)

@@ -501,7 +501,7 @@ def slope_filter(
     >>> patch_filtered = patch.slope_filter(
     ...     filt=filt,
     ... 	directional=False,
-    ...     notch=False
+    ...     invert=False
     ... )
     >>> # Plot results
     >>> fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 8))
@@ -510,8 +510,8 @@ def slope_filter(
     >>> ax2 = patch_filtered.viz.waterfall(ax=ax2, scale=0.5)
     >>> _ = ax2.set_title('Filtered')
     >>>
-    >>> # Example 2: Notch filter
-    >>> patch_filtered = patch.slope_filter(filt=filt, notch=True)
+    >>> # Example 2: Inverted (notch) filter
+    >>> patch_filtered = patch.slope_filter(filt=filt, invert=True)
     >>>
     >>> # Example 3: specify units
     >>> filt = np.array([2e3,2.2e3,8e3,2e4]) * dc.get_unit("m/s")
@@ -602,7 +602,7 @@ def slope_filter(
     # TODO remove in dascore 0.2.
     if notch is not None:
         msg = "The `notch` parameter of slope filter is deprecated. Use invert."
-        warnings.warn(msg, DeprecationWarning)
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
         invert = notch
 
     mask = _get_taper_mask(filt, slope, invert)

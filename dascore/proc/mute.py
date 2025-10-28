@@ -90,7 +90,7 @@ class _MuteGeometry(ABC, DascoreBaseModel):
         def _convert_to_samples(smooth, dims, patch):
             """Convert the smooth parameter to number of samples."""
             out = []
-            for dim, val in zip(dims, smooth):
+            for dim, val in zip(dims, smooth, strict=True):
                 coord = patch.get_coord(dim)
                 if val is None:
                     out.append(0)
@@ -246,7 +246,7 @@ class _MuteGeometry2D(_MuteGeometry):
         # Indicates an implicit value was used.
         ifill_index = -1
 
-        for ind, (coord, row) in enumerate(zip(coords, value_list)):
+        for ind, (coord, row) in enumerate(zip(coords, value_list, strict=True)):
             coord = patch.get_coord(patch.dims[ind])
             # We iterate each pair because it might be an implicit value.
             for pair_ind, pair in enumerate(row):
