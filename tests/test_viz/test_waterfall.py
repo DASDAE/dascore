@@ -234,5 +234,27 @@ class TestWaterfall:
         ax = patch.viz.waterfall()
         assert isinstance(ax, plt.Axes)
 
+    def test_constant_data_with_relative_scale(self, random_patch):
+        """Ensure constant data works with non-zero relative scale."""
+        data = np.ones(random_patch.shape) * 42.0
+        patch = random_patch.update(data=data)
+        # Should not raise, epsilon handling should prevent degenerate limits
+        ax = patch.viz.waterfall(scale=0.5, scale_type="relative")
+        assert isinstance(ax, plt.Axes)
+        # Verify colorbar limits are not identical
+        clim = ax.images[0].get_clim()
+        assert clim[0] != clim[1], "Colorbar limits should not be identical"
+
+    def test_scale_zero_raises(self, random_patch):
+        """Ensure scale=0 with relative scaling raises ParameterError."""
+        msg = "Relative scale value of 0"
+        with pytest.raises(ParameterError, match=msg):
+            random_patch.viz.waterfall(scale=0, scale_type="relative")
+        # Also test with constant data to ensure same behavior
+        data = np.ones(random_patch.shape)
+        patch = random_patch.update(data=data)
+        with pytest.raises(ParameterError, match=msg):
+            patch.viz.waterfall(scale=0, scale_type="relative")
+
     def test_precent_scale(self, random_patch):
         """Ensure the percent unit works with scale."""

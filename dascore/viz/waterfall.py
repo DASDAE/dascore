@@ -59,7 +59,15 @@ def _get_scale(scale, scale_type, data):
         # Scale is symmetric around the mean, using fraction of dynamic range
         case (scale, "relative") if len(scale) == 1:
             scale = scale[0]
+            if scale == 0:
+                msg = (
+                    "Relative scale value of 0 would produce degenerate colorbar limits"
+                )
+                raise ParameterError(msg)
             mod = 0.5 * (np.nanmax(data) - np.nanmin(data))
+            if mod == 0:
+                # Constant data, use small epsilon to avoid degenerate limits
+                mod = 1e-10
             mean = np.nanmean(data)
             scale = np.asarray([mean - scale * mod, mean + scale * mod])
         # Case 2: No scale specified with relative scaling
@@ -176,7 +184,7 @@ def waterfall(
     >>>
     >>> # Use relative scaling with a tuple to show a specific fraction
     >>> # of data range. Scale values of (0.1, 0.9) map to 10% and 90%
-    >>> # of the [data_min, data_max] range data's dynamic range
+    >>> # of the data's [min, max] range
     >>> _ = patch.viz.waterfall(scale=0.1, scale_type="relative")
     >>> # Likewise, percent units can be used for additional clarity
     >>> _ = patch.viz.waterfall(scale=10*percent, scale_type="absolute")
@@ -241,7 +249,7 @@ def waterfall(
         origin="lower",
         # Note: these parameters are so that matplotlib versions > 3.10 behave
         # like matplotlib < 3.9, which tends to work better for visualizing large
-        # DAS data. See # 512. We might consider making these parameters of the
+        # DAS data. See #512. We might consider making these parameters of the
         # waterfall function in the future.
         interpolation="antialiased",
         interpolation_stage="data",
