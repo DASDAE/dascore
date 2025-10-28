@@ -80,7 +80,7 @@ def _get_scale(scale, scale_type, data):
         case (scale, "relative"):
             scale = np.array(scale)
             # Validate scale parameters
-            if np.any(scale < 0) or scale[0] > scale[1] or len(scale) != 2:
+            if len(scale) != 2 or np.any(scale < 0) or scale[0] > scale[1]:
                 msg = (
                     "Relative scale values cannot be negative and the first "
                     f"value must be less than the second. You passed {scale}"
@@ -182,7 +182,7 @@ def waterfall(
     >>> _ = patch.viz.waterfall(scale=10*percent, scale_type="absolute")
     >>>
     >>> # Use relative scaling with a tuple to show the middle 80% of data range
-    >>> # Scale values of (0.1, 0.9) map to 10th and 90th percentile of data
+    >>> # Scale values of (0.1, 0.9) map to 10% and 90% of [data_min, data_max]
     >>> _ = patch.viz.waterfall(scale=(0.1, 0.9), scale_type="relative")
     >>>
     >>> # Use absolute scaling to set specific colorbar limits
