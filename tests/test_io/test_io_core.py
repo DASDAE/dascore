@@ -16,7 +16,11 @@ import rich.progress as prog
 import dascore
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
+from dascore.exceptions import (
+    InvalidFiberIOError,
+    InvalidFileHandlerError,
+    UnknownFiberFormatError,
+)
 from dascore.io.core import FiberIO, PatchFileSummary
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.io import BinaryReader, BinaryWriter
@@ -356,7 +360,7 @@ class TestScan:
         """
         fio = _FiberImplementer()
         bad_input = _FiberFormatTestV1()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(InvalidFileHandlerError):
             fio.scan(bad_input)
 
     def test_bad_checksum(self, monkeypatch, terra15_v6_path):

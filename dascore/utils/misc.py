@@ -9,7 +9,7 @@ import inspect
 import os
 import re
 import warnings
-from collections.abc import Generator, Iterable, Mapping, Sequence, Sized
+from collections.abc import Iterable, Mapping, Sequence, Sized
 from functools import cache
 from io import IOBase
 from pathlib import Path
@@ -194,66 +194,6 @@ def _get_nullish(dtype=np.floating):
     return np.nan
 
 
-def _iter_filesystem(
-    paths: str | Path | Iterable[str | Path],
-    ext: str | None = None,
-    timestamp: float | None = None,
-    skip_hidden: bool = True,
-    include_directories: bool = False,
-) -> Generator[str, str, None]:
-    """
-    Iterate contents of a filesystem like thing.
-
-    Options allow for filtering and terminating early.
-
-    Parameters
-    ----------
-    paths
-        The path to the base directory to traverse. Can also use a collection
-        of paths.
-    ext : str or None
-        The extensions of files to return.
-    timestamp : int or float
-        Time stamp indicating the minimum mtime to scan.
-    skip_hidden : bool
-        If True skip files or folders (they begin with a '.')
-    include_directories
-        If True, also yield directories. In this case, a "skip" can be
-        passed back to the generator to indicate the rest of the directory
-        contents should be skipped.
-
-    Yields
-    ------
-    Paths, as strings, meeting requirements.
-    """
-    # handle returning directories if requested.
-    if include_directories and os.path.isdir(paths):
-        if not (skip_hidden and str(paths).startswith(".")):
-            signal = yield paths
-            if signal is not None and signal == "skip":
-                yield None
-                return
-    try:  # a single path was passed
-        for entry in os.scandir(paths):
-            if entry.is_file() and (ext is None or entry.name.endswith(ext)):
-                if timestamp is None or entry.stat().st_mtime >= timestamp:
-                    if entry.name[0] != "." or not skip_hidden:
-                        yield entry.path
-            elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from _iter_filesystem(
-                    entry.path,
-                    ext=ext,
-                    timestamp=timestamp,
-                    skip_hidden=skip_hidden,
-                    include_directories=include_directories,
-                )
-    except (TypeError, AttributeError):  # multiple paths were passed
-        for path in paths:
-            yield from _iter_filesystem(path, ext, timestamp, skip_hidden)
-    except NotADirectoryError:  # a file path was passed, just return it
-        yield paths
-
-
 def iterate(obj):
     """
     Return an iterable from any object.
@@ -396,15 +336,6 @@ def _get_stencil_weights(array, ref_point, order):
     mat = (((array - ref_point)[:, np.newaxis] ** ell) / factorial(ell)).T
     weights = solve(mat, ell == order)
     return weights.flatten()
-
-
-def _maybe_make_parent_directory(path):
-    """Maybe make parent directories."""
-    path = Path(path)
-    if path.exists():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return
 
 
 def get_stencil_coefs(order, derivative=2):

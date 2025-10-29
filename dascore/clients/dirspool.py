@@ -14,6 +14,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS
 from dascore.core.spool import BaseSpool, DataFrameSpool
 from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
@@ -118,8 +119,9 @@ class DirectorySpool(DataFrameSpool):
         This is significantly faster than iterating rows.
         """
         df = df.copy(deep=False).replace("", None)
-        # note: need to add extra / here since we no longer store it in db.
-        df["path"] = (str(self.spool_path) + "/") + df["path"]
+        # Properly join paths using UPath
+        base_path = UPath(self.spool_path)
+        df["path"] = df["path"].apply(lambda p: str(base_path / p))
         return super()._df_to_dict_list(df)
 
     def _load_patch(self, kwargs) -> Self:

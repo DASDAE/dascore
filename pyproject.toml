@@ -43,18 +43,20 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
-     "h5py",
-     "matplotlib>=3.5",
-     "numpy>=1.24",
-     "packaging",
-     "pandas>=2.0",
-     "pooch>=1.2",
-     "pydantic>2.1",
-     "rich",
-     "tables>=3.7",
-     "typing_extensions>=4.12",
-     "pint",
-     "scipy>=1.15",
+    "fsspec",
+    "h5py",
+    "matplotlib>=3.5",
+    "numpy>=1.24",
+    "packaging",
+    "pandas>=2.0",
+    "pint",
+    "pooch>=1.2",
+    "pydantic>2.1",
+    "rich",
+    "scipy>=1.15",
+    "tables>=3.7",
+    "typing_extensions>=4.12",
+    "universal-pathlib",
 ]
 
 [project.optional-dependencies]
@@ -75,12 +77,14 @@ docs = [
 ]
 
 test = [
+    "aiohttp",
     "coverage>=7.4,<8",
     "pytest-cov>=4",
     "pre-commit",
     "pytest",
     "pytest-codeblocks",
     "pytest-cov",
+    "requests",
     "twine",
 ]
 

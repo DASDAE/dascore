@@ -7,6 +7,30 @@ execute:
 The following highlights some DASCore features for working with IO.
 
 
+## Reading from Remote Sources
+
+DASCore can read files directly from remote sources using [UPath](https://github.com/fsspec/universal_pathlib), which provides unified access to various storage backends:
+
+```python
+import dascore as dc
+from upath import UPath
+
+# Read from GitHub
+github_path = UPath("github://username:repo@/path/to/file.h5")
+spool = dc.spool(github_path)
+
+# Read from HTTP/HTTPS
+http_path = UPath("https://example.com/data/file.h5")
+spool = dc.spool(http_path)
+
+# Read from S3
+s3_path = UPath("s3://bucket-name/path/to/file.h5")
+spool = dc.spool(s3_path)
+```
+
+For authentication with private repositories or cloud storage, you can pass credentials directly to UPath or use environment variables. See the [remote file access recipe](../recipes/remote_file_access.qmd) for detailed examples.
+
+
 ## Writing Patches to Disk
 
 Patches can be written to disk using the `io` namespace. The following shows how to write a Patch to disk in the [DASDAE format](`dascore.io.dasdae`)

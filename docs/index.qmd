@@ -25,33 +25,21 @@ DASCore is part of the [DAS Data Analysis Ecosystem (DASDAE)](https://dasdae.org
 
 ## Read a file
 
-```{python}
+```python
 import dascore as dc
-# Import fetch to read DASCore example files 
-from dascore.utils.downloader import fetch 
 
-# Fetch a sample file path from DASCore
-file_path = fetch('terra15_das_1_trimmed.hdf5')
-# To read DAS data stored locally on your machine, simply replace the above line with:
-# file_path = "/path/to/data/directory/data.EXT"
-
+# file_path is a path to a directory, file, or remote uri. 
+file_path = "my/file/here.h5"
 spool = dc.spool(file_path)
 patch = spool[0]
 ```
 
 ## Working with a directory of DAS files
 
-```{python}
-#| output: false
+```python
 import dascore as dc
-# Import fetch to read DASCore example files 
-from dascore.utils.downloader import fetch
 
-# Fetch a sample file path from DASCore (just to get a usable path for the rest of the cell)
-directory_path = fetch('terra15_das_1_trimmed.hdf5').parent
-# To read a directory of DAS data stored locally on your machine, 
-# simply replace the above line with:
-# directory_path = "/path/to/data/directory/"
+directory_path = "/path/to/data/directory/"
 
 spool = (
     # Create a spool to interact with directory data

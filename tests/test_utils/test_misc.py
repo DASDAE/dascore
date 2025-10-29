@@ -13,9 +13,9 @@ import pandas as pd
 import pytest
 
 from dascore.exceptions import MissingOptionalDependencyError
+from dascore.utils.io import _iter_filesystem
 from dascore.utils.misc import (
     MethodNameSpace,
-    _iter_filesystem,
     cached_method,
     deep_equality_check,
     get_buffer_size,
@@ -162,7 +162,7 @@ class TestIterFS:
         """Just pass a single file and ensure it gets returned."""
         out = list(_iter_filesystem(dummy_text_file))
         assert len(out) == 1
-        assert out[0] == dummy_text_file
+        assert Path(out[0]) == dummy_text_file
 
     def test_no_directories(self, simple_dir):
         """Ensure no directories are included when include_directories=False."""

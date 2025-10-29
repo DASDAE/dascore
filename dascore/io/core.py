@@ -6,7 +6,6 @@ Das Data.
 from __future__ import annotations
 
 import inspect
-import os.path
 import warnings
 from collections import defaultdict
 from collections.abc import Generator
@@ -20,7 +19,7 @@ import pandas as pd
 from pydantic import ConfigDict, Field, model_validator
 
 import dascore as dc
-from dascore.compat import Progress
+from dascore.compat import Progress, UPath
 from dascore.constants import (
     PROGRESS_LEVELS,
     VALID_DATA_CATEGORIES,
@@ -28,6 +27,7 @@ from dascore.constants import (
     PatchType,
     SpoolType,
     max_lens,
+    path_types,
     timeable_types,
 )
 from dascore.core.attrs import str_validator
@@ -38,9 +38,13 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     UnknownFiberFormatError,
 )
-from dascore.utils.io import IOResourceManager, get_handle_from_resource
+from dascore.utils.io import (
+    IOResourceManager,
+    _iter_filesystem,
+    get_handle_from_resource,
+)
 from dascore.utils.mapping import FrozenDict
-from dascore.utils.misc import _iter_filesystem, cached_method, iterate, warn_or_raise
+from dascore.utils.misc import cached_method, iterate, warn_or_raise
 from dascore.utils.models import (
     CommaSeparatedStr,
     DascoreBaseModel,
@@ -335,10 +339,13 @@ class _FiberIOManager:
         """
         with IOResourceManager(path) as man:
             path = man.source
-            if not os.path.exists(path):
+            from dascore.compat import UPath
+
+            upath = UPath(path) if not isinstance(path, UPath) else path
+            if not upath.exists():
                 raise FileNotFoundError(f"{path} does not exist.")
             # get extension (str minus .)
-            suffix = Path(path).suffix
+            suffix = upath.suffix
             ext = suffix[1:] if suffix else None
             input_type = self._get_input_type_name(path)
             iterator = self.yield_fiberio(
@@ -377,7 +384,10 @@ class _FiberIOManager:
         # This effectively acts as a dispatch to determine which type of
         # FiberIO could possibly read the obj.
         out = "file"
-        if isinstance(obj, str | Path) and (path := Path(obj)).exists():
+        if (
+            isinstance(obj, str | Path | UPath)
+            and (path := (UPath(obj) if not isinstance(obj, UPath) else obj)).exists()
+        ):
             out = "directory" if path.is_dir() else "file"
         return out
 
@@ -585,7 +595,7 @@ class FiberIO:
 
 
 def read(
-    path: str | Path | IOResourceManager,
+    path: path_types | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     time: tuple[timeable_types | None, timeable_types | None] | None = None,
@@ -652,7 +662,7 @@ def read(
 
 
 def scan_to_df(
-    path: Path | str | PatchType | SpoolType | IOResourceManager | pd.DataFrame,
+    path: path_types | PatchType | SpoolType | IOResourceManager | pd.DataFrame,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -705,7 +715,10 @@ def scan_to_df(
 def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):
     """Yield scan candidates."""
     for el in iterate(patch_source):
-        if isinstance(el, str | Path) and (path := Path(el)).exists():
+        if (
+            isinstance(el, str | Path | UPath)
+            and (path := (UPath(el) if not isinstance(el, UPath) else el)).exists()
+        ):
             generator = _iter_filesystem(
                 path, ext=ext, timestamp=mtime, include_directories=include_directories
             )
@@ -782,7 +795,7 @@ def _handle_missing_optionals(outputs, optional_dep_dict):
 
 
 def scan(
-    path: Path | str | PatchType | SpoolType | IOResourceManager,
+    path: path_types | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -881,6 +894,12 @@ def scan(
                     )
                 else:
                     try:
+                        fiber_io, resource = _get_fiber_io_and_req_type(
+                            man,
+                            file_format=file_format,
+                            file_version=file_version,
+                            fiber_io_hint=fiber_io_hint,
+                        )
                         source = fiber_io.scan(resource, _pre_cast=True)
                     # This happens if the file is corrupt see #346.
                     except (OSError, InvalidFiberFileError, ValueError, TypeError):
@@ -948,7 +967,7 @@ def get_format(
 
 def write(
     patch_or_spool,
-    path: str | Path,
+    path: path_types,
     file_format: str,
     file_version: str | None = None,
     **kwargs,

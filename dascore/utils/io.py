@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import io
+import os
+import tempfile
 import typing
+from collections.abc import Generator, Iterable
 from functools import cache
 from inspect import isfunction, ismethod
 from pathlib import Path
@@ -12,10 +15,10 @@ from typing import Any, get_type_hints
 import numpy as np
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import PatchType
-from dascore.exceptions import PatchConversionError
+from dascore.exceptions import InvalidFileHandlerError, PatchConversionError
 from dascore.utils.misc import (
-    _maybe_make_parent_directory,
     cached_method,
     optional_import,
 )
@@ -23,11 +26,53 @@ from dascore.utils.time import to_float
 
 HANDLE_FUNCTIONS = {
     str: lambda x: str(x),
-    Path: lambda x: Path(x),
+    Path: lambda x: UPath(x),
+    UPath: lambda x: UPath(x) if not isinstance(x, UPath) else x,
 }
 
 
 RequiredType = typing.TypeVar("RequiredType")
+
+
+def _is_remote_path(path):
+    """Check if a path is a remote path (not local filesystem)."""
+    # Check if it has a protocol that's not file or local
+    protocol = getattr(path, "protocol", None)
+    return protocol not in (None, "file", "")
+
+
+def download_remote_to_temp(path):
+    """
+    Download a remote file to a temporary location.
+
+    This is needed for libraries like pytables that require local file paths.
+
+    Parameters
+    ----------
+    path : str | Path | UPath
+        The remote path to download
+
+    Returns
+    -------
+    Path
+        Path to the downloaded temporary file
+    """
+    path_obj = UPath(path) if not isinstance(path, UPath) else path
+    # Create temp file with same extension
+    suffix = path_obj.suffix or ".tmp"
+    fd, temp_path = tempfile.mkstemp(suffix=suffix)
+    try:
+        # Download the file
+        with path_obj.open("rb") as remote_file:
+            with open(temp_path, "wb") as local_file:
+                # Copy in chunks for memory efficiency
+                chunk_size = 8192
+                while chunk := remote_file.read(chunk_size):
+                    local_file.write(chunk)
+    finally:
+        os.close(fd)
+
+    return UPath(temp_path)
 
 
 class BinaryReader(io.BytesIO):
@@ -48,7 +93,7 @@ class BinaryReader(io.BytesIO):
             return open(resource, mode=cls.mode)
         except TypeError:
             msg = f"Couldn't get handle from {resource} using {cls}"
-            raise NotImplementedError(msg)
+            raise InvalidFileHandlerError(msg)
 
 
 class BinaryWriter(BinaryReader):
@@ -68,7 +113,7 @@ def _get_required_type(required_type, arg_name=None):
         if not is_func_y or not (hints := get_type_hints(required_type)):
             return required_type
         arg_name = arg_name if arg_name is not None else next(iter(hints))
-        return hints.get(arg_name)
+        required_type = hints.get(arg_name)
     return required_type
 
 
@@ -275,3 +320,87 @@ def obspy_to_patch(stream, dim="distance") -> PatchType:
         coords=coords,
     )
     return patch
+
+
+def _maybe_make_parent_directory(path):
+    """Maybe make parent directories."""
+    path = UPath(path) if not isinstance(path, UPath) else path
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return
+
+
+def _iter_filesystem(
+    paths: str | Path | UPath | Iterable[str | Path | UPath],
+    ext: str | None = None,
+    timestamp: float | None = None,
+    skip_hidden: bool = True,
+    include_directories: bool = False,
+) -> Generator[str, str, None]:
+    """
+    Iterate contents of a filesystem like thing.
+
+    Options allow for filtering and terminating early.
+
+    Parameters
+    ----------
+    paths
+        The path to the base directory to traverse. Can also use a collection
+        of paths.
+    ext : str or None
+        The extensions of files to return.
+    timestamp : int or float
+        Time stamp indicating the minimum mtime to scan.
+    skip_hidden : bool
+        If True skip files or folders (they begin with a '.')
+    include_directories
+        If True, also yield directories. In this case, a "skip" can be
+        passed back to the generator to indicate the rest of the directory
+        contents should be skipped.
+
+    Yields
+    ------
+    Paths, as strings, meeting requirements.
+    """
+    # Convert to UPath for universal handling
+    try:
+        path = UPath(paths) if not isinstance(paths, UPath) else paths
+    except (TypeError, ValueError):
+        # Multiple paths were passed
+        for p in paths:
+            yield from _iter_filesystem(
+                p, ext, timestamp, skip_hidden, include_directories
+            )
+        return
+    # handle returning directories if requested.
+    if include_directories and path.is_dir():
+        if not (skip_hidden and path.name.startswith(".")):
+            signal = yield str(path)
+            if signal is not None and signal == "skip":
+                yield None
+                return
+    try:
+        if path.is_dir():
+            # Iterate directory contents
+            for entry in path.iterdir():
+                if entry.is_file() and (ext is None or entry.name.endswith(ext)):
+                    if timestamp is None or entry.stat().st_mtime >= timestamp:
+                        if not skip_hidden or not entry.name.startswith("."):
+                            yield str(entry)
+                elif entry.is_dir() and not (
+                    skip_hidden and entry.name.startswith(".")
+                ):
+                    yield from _iter_filesystem(
+                        entry,
+                        ext=ext,
+                        timestamp=timestamp,
+                        skip_hidden=skip_hidden,
+                        include_directories=include_directories,
+                    )
+        elif path.is_file():
+            # A single file was passed, just return it
+            yield str(path)
+    except (OSError, PermissionError):
+        # Can't read directory or file doesn't exist, skip it
+        pass

@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.compat import UPath
 
 PatchType = TypeVar("PatchType", bound="dc.Patch")
 
@@ -43,7 +44,7 @@ MININT64 = np.iinfo(np.int64).min
 MAXINT64 = np.iinfo(np.int64).max
 
 # types used to represent paths
-path_types = str | Path
+path_types = str | Path | UPath
 
 # One second in numpy timedelta speak
 ONE_SECOND = np.timedelta64(1, "s")

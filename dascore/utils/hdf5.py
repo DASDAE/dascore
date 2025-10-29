@@ -25,12 +25,17 @@ from tables import ClosedNodeError
 from tables import File as PyTablesFile
 
 import dascore as dc
+from dascore.compat import BufferedReaderLike, BufferedWriterLike, UPath
 from dascore.constants import ONE_SECOND_IN_NS, max_lens
 from dascore.exceptions import InvalidFileHandlerError, InvalidIndexVersionError
 from dascore.io.core import PatchFileSummary
+from dascore.utils.io import (
+    _is_remote_path,
+    _maybe_make_parent_directory,
+    download_remote_to_temp,
+)
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
-    _maybe_make_parent_directory,
     _maybe_unpack,
     cached_method,
     suppress_warnings,
@@ -430,11 +435,14 @@ class PyTablesReader(PyTablesFile):
         if isinstance(resource, cls | PyTablesFile):
             return resource
         try:
+            # Check if this is a remote path and download if needed
+            if _is_remote_path(resource):
+                resource = download_remote_to_temp(resource)
             _maybe_make_parent_directory(resource)
             return cls.constructor(resource, mode=cls.mode)
         except TypeError:
             msg = f"Couldn't get handle from {resource} using {cls}"
-            raise NotImplementedError(msg)
+            raise InvalidFileHandlerError(msg)
 
 
 class PyTablesWriter(PyTablesReader):
@@ -446,14 +454,43 @@ class PyTablesWriter(PyTablesReader):
 class H5Reader(PyTablesReader):
     """A thin wrapper around h5py for reading files."""
 
-    mode = "r"
+    mode = "r"  # Note: 'rb' is not a valid mode for h5py.
     constructor = H5pyFile
+    protocol = BufferedReaderLike
+
+    @classmethod
+    def get_handle(cls, resource):
+        """
+        Get the File object from various sources.
+
+        For remote paths, this method attempts to stream the HDF5 file directly
+        using h5py's fileobj driver. This avoids downloading the entire file and
+        enables efficient access to remote data.
+
+        If streaming fails, it falls back to downloading the file to a temporary
+        location.
+        """
+        if isinstance(resource, cls | H5pyFile):
+            return resource
+        try:
+            if isinstance(resource, cls.protocol):
+                return cls.constructor(resource, cls.mode, driver="fileobj")
+            upath = UPath(resource)
+            if _is_remote_path(upath):
+                resource = upath.open(mode=f"{cls.mode}b")
+                return cls.constructor(resource, cls.mode, driver="fileobj")
+            _maybe_make_parent_directory(resource)
+            return cls.constructor(resource, mode=cls.mode)
+        except TypeError:
+            msg = f"Couldn't get handle from {resource} using {cls}"
+            raise InvalidFileHandlerError(msg)
 
 
 class H5Writer(H5Reader):
     """A thin wrapper around h5py for writing files."""
 
-    mode = "a"
+    mode = "ab"
+    protocol = BufferedWriterLike
 
 
 # These are left here for backward compatibility, but should not be

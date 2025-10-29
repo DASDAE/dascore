@@ -14,7 +14,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.compat import is_array
+from dascore.compat import UPath, is_array
 from dascore.constants import (
     PROGRESS_LEVELS,
     WARN_LEVELS,
@@ -694,9 +694,10 @@ def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSp
 
 @spool.register(str)
 @spool.register(Path)
+@spool.register(UPath)
 def _spool_from_str(path, **kwargs):
     """Get a spool from a path."""
-    path = Path(path)
+    path = UPath(path) if not isinstance(path, UPath) else path
     # A directory was passed, create Directory Spool
     if path.is_dir():
         from dascore.clients.dirspool import DirectorySpool

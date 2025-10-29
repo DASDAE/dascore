@@ -16,6 +16,7 @@ import pooch
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.utils.hdf5 import HDFPatchIndexManager
@@ -66,14 +67,15 @@ def _update_index_map(updates, cache_path) -> dict:
 def _directory_writable(path):
     """Return True if the directory is writable else False."""
     name = "._dascore_write_test_delete_me"
-    path = Path(path) / name
+    path = UPath(path) / name
     path.parent.mkdir(exist_ok=True, parents=True)
     try:
         open(path, "w").close()
-    except (PermissionError, IsADirectoryError):
+    except (PermissionError, IsADirectoryError, OSError):
         return False
     else:
-        os.remove(path)
+        with suppress(Exception):
+            UPath(path).unlink()
     return True
 
 
@@ -122,8 +124,8 @@ class DirectoryIndexer(AbstractIndexer):
 
     def __init__(self, path: str | Path, cache_size: int = 5, index_path=None):
         self.max_size = cache_size
-        self.path = Path(path).absolute()
-        self.index_path = Path(self._find_index_file(self.path, index_path))
+        self.path = UPath(path).absolute()
+        self.index_path = UPath(self._find_index_file(self.path, index_path))
         self._current_index = 0
         self._index_table = HDFPatchIndexManager(
             self.index_path,
@@ -135,10 +137,10 @@ class DirectoryIndexer(AbstractIndexer):
 
     def _find_index_file(self, data_path, index_path=None):
         """Find the path to the index file."""
-        data_path = Path(data_path).absolute()
+        data_path = UPath(data_path).absolute()
         # user specified index path
         if index_path:
-            update = {str(data_path): str(Path(index_path).absolute())}
+            update = {str(data_path): str(UPath(index_path).absolute())}
             _update_index_map(update, cache_path=str(self.index_map_path))
             return index_path
         # see if expected path is in data path

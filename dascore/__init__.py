@@ -13,6 +13,7 @@ from dascore.units import get_quantity, get_unit
 from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64, to_timedelta64, to_float
 from dascore.version import __last_version__, __version__
+from dascore.compat import UPath  # NOQA
 
 # flag for disabling progress bar when debugging
 _debug = False

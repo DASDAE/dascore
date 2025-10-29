@@ -14,6 +14,7 @@ import dascore as dc
 from dascore.exceptions import InvalidFileHandlerError
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import (
+    H5Reader,
     HDFPatchIndexManager,
     PyTablesWriter,
     extract_h5_attrs,
@@ -167,13 +168,35 @@ class TestHDFPatchIndexManager:
 class TestHDFReaders:
     """Tests for HDF5 readers."""
 
-    def test_get_handle(self, tmp_path_factory):
-        """Ensure we can get a handle with the class."""
+    @pytest.fixture(scope="class")
+    def h5_temp_path(self, tmp_path_factory):
+        """Get an h5 temp path."""
         path = tmp_path_factory.mktemp("hdf_handle_test") / "test_file.h5"
-        handle = PyTablesWriter.get_handle(path)
+        return path
+
+    def test_get_pytables_handle(self, h5_temp_path):
+        """Ensure we can get a handle with the class."""
+        handle = PyTablesWriter.get_handle(h5_temp_path)
         assert isinstance(handle, tables.File)
+        # Once we have the default handle it should just be returned.
         handle_2 = PyTablesWriter.get_handle(handle)
-        assert isinstance(handle_2, tables.File)
+        assert handle_2 is handle
+        # Invalid inputs should raise an Error.
+        msg = "Couldn't get handle from"
+        with pytest.raises(InvalidFileHandlerError, match=msg):
+            PyTablesWriter.get_handle(12)
+
+    def test_get_h5reader_handle(self, h5_temp_path):
+        """Ensure we can get a handle with the class."""
+        handle = H5Reader.get_handle(h5_temp_path)
+        assert isinstance(handle, h5py.File)
+        # Once we have the default handle it should just be returned.
+        handle_2 = H5Reader.get_handle(handle)
+        assert handle_2 is handle
+        # Invalid inputs should raise an Error.
+        msg = "Couldn't get handle from"
+        with pytest.raises(InvalidFileHandlerError, match=msg):
+            H5Reader.get_handle(12)
 
 
 class TestH5MatchesStructure:

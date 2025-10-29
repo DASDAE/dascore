@@ -9,12 +9,13 @@ import pytest
 from tables import File
 
 import dascore as dc
-from dascore.exceptions import PatchConversionError
+from dascore.exceptions import InvalidFileHandlerError, PatchConversionError
 from dascore.utils.hdf5 import HDF5Reader, HDF5Writer
 from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
     IOResourceManager,
+    download_remote_to_temp,
     get_handle_from_resource,
 )
 
@@ -85,13 +86,13 @@ class TestGetHandleFromResource:
     def test_not_implemented(self):
         """Tests for raising not implemented errors for types not supported."""
         bad_instance = _BadType()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(InvalidFileHandlerError):
             get_handle_from_resource(bad_instance, BinaryReader)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(InvalidFileHandlerError):
             get_handle_from_resource(bad_instance, BinaryWriter)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(InvalidFileHandlerError):
             get_handle_from_resource(bad_instance, HDF5Writer)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(InvalidFileHandlerError):
             get_handle_from_resource(bad_instance, HDF5Reader)
 
 
@@ -235,3 +236,14 @@ class TestObsPy:
         st = patch.io.to_obspy()
         assert isinstance(st, obspy.Stream)
         assert len(st) == len(patch.get_coord("distance"))
+
+
+class TestDownloadRemoteToTemp:
+    """Tests for downloading remote files to local cache."""
+
+    def test_download_file(self, tmp_path):
+        """Ensure a file can be downloaded to a local file."""
+        path = dc.UPath("memory://hello.txt")
+        path.write_text("some data")
+        out = download_remote_to_temp(path)
+        assert out.exists()
