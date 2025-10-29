@@ -145,6 +145,22 @@ class TestProcessingBenchmarks:
         patch = example_patch
         patch.wiener_filter(time=3, samples=True)
 
+    @pytest.mark.benchmark
+    def test_line_mute(self, example_patch):
+        """Time 2D line mute with velocity lines."""
+        patch = example_patch
+        patch.line_mute(
+            time=(0, [0, 0.3]),
+            distance=(None, [0, 300]),
+            smooth=0.02,
+        )
+
+    @pytest.mark.benchmark
+    def test_slope_mute(self, example_patch):
+        """Time slope mute between velocities."""
+        patch = example_patch
+        patch.slope_mute(slopes=(1000, 3000))
+
 
 class TestTransformBenchmarks:
     """Benchmarks for patch transform operations."""

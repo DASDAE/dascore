@@ -364,6 +364,7 @@ class Patch:
     apply_ufunc = dascore.utils.array.apply_ufunc
     get_patch_names = get_patch_names
     get_axis = dascore.proc.get_axis
+    full = dascore.proc.full
 
     def get_patch_name(self, *args, **kwargs) -> str:
         """
@@ -438,6 +439,8 @@ class Patch:
     standardize = dascore.proc.standardize
     taper = dascore.proc.taper
     taper_range = dascore.proc.taper_range
+    line_mute = dascore.proc.line_mute
+    slope_mute = dascore.proc.slope_mute
     rolling = dascore.proc.rolling
     whiten = dascore.proc.whiten
 

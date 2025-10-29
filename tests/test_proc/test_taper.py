@@ -26,6 +26,8 @@ def patch_ones(random_patch):
 @pytest.fixture(scope="session", params=sorted(WINDOW_FUNCTIONS))
 def time_tapered_patch(request, patch_ones):
     """Return a tapered trace."""
+    if "boxcar" in str(request.param):
+        pytest.skip("boxcar doesn't actually apply taper.")
     # first get a patch with all ones for easy testing
     patch = patch_ones.update(data=np.ones_like(patch_ones.data))
     out = taper(patch, time=0.05, window_type=request.param)
@@ -274,3 +276,36 @@ class TestTaperRange:
         assert np.allclose(out.select(distance=(55, 90)).data, 1)
         assert np.allclose(out.select(distance=(126, 149)).data, 0)
         assert np.allclose(out.select(distance=(225, ...)).data, 0)
+
+    def test_boxcar_window(self, patch_ones):
+        """The boxcar window is actually no taper."""
+        # With no invert, all values are 1.
+        out1 = patch_ones.taper_range(
+            distance=(10, 12), invert=False, samples=True, window_type="boxcar"
+        )
+        # With invert, all values are 0.
+        out2 = patch_ones.taper_range(
+            distance=(10, 12), invert=True, samples=True, window_type="boxcar"
+        )
+        assert np.allclose(out1.data, 1.0)
+        assert np.allclose(out2.data, 0.0)
+
+    def test_two_value_invert_mutes_to_last_sample(self, patch_ones):
+        """Ensure 2-value form with invert can mute from middle to the very end."""
+        coord = patch_ones.get_coord("distance")
+        start_idx = len(coord) // 4  # 75
+        end_idx = len(coord) - 1  # 299 (last valid index)
+
+        # Use 2-value form with invert to mute from start_idx to end
+        out = patch_ones.taper_range(
+            distance=(start_idx - 1, start_idx, end_idx, end_idx),
+            invert=False,
+            samples=True,
+            window_type="boxcar",
+        )
+        # Values before start_idx should be 1 (unmuted)
+        assert np.allclose(out.data[start_idx - 10, :], 0)
+
+        # Values from start_idx to end should be 0 (muted)
+        assert np.allclose(out.data[start_idx, :], 1)
+        assert np.allclose(out.data[end_idx - 1, :], 1)

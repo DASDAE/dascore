@@ -789,3 +789,31 @@ def flip(patch, *dims, flip_coords=True):
     data = np.flip(patch.data, axis=axes) if dims else patch.data
     coords = patch.coords.flip(*dims) if flip_coords else patch.coords
     return patch.new(data=data, coords=coords)
+
+
+@patch_function()
+def full(patch, fill_value):
+    """
+    Return an identical patch with the data replaced by fill_value.
+
+    Parameters
+    ----------
+    patch
+        The patch to fill.
+    fill_value
+        The value in the output patch.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # Get a patch identical to original but with data array containing
+    >>> # Only 1s.
+    >>> one_patch = patch.full(1.0)
+    >>>
+    >>> # Same thing, except for 0s.
+    >>> zero_patch = patch.full(0.0)
+    """
+    array = np.full(patch.data.shape, fill_value)
+    return patch.update(data=array)
