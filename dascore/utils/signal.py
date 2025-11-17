@@ -19,6 +19,7 @@ WINDOW_FUNCTIONS = dict(
     parzen=windows.parzen,
     triang=windows.triang,
     ramp=windows.triang,
+    boxcar=windows.boxcar,
 )
 
 

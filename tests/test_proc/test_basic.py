@@ -824,3 +824,13 @@ class TestFlip:
         """Ensure passing no dims does nothing."""
         out = random_patch.flip()
         assert out is random_patch
+
+
+class TestFull:
+    """Tests for creating patches filled with a single value."""
+
+    def test_full_1(self, random_patch):
+        """Ensure a patch can be created with 1s."""
+        patch = random_patch.full(1.0)
+        assert patch.coords == random_patch.coords
+        assert np.allclose(patch.data, 1.0)

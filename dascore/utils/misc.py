@@ -895,3 +895,34 @@ def deep_equality_check(obj1, obj2, visited=None):
         return True
     finally:
         visited.remove(pair_id)
+
+
+def get_2d_line_intersection(p1, p2, p3, p4):
+    """
+    Return intersection point of two lines (p1,p2) and (p3,p4).
+
+    Parameters
+    ----------
+    p1, p2, p3, p4
+        Each a pair of (x, y) coordinates.
+
+    Returns
+    -------
+    point
+        (x, y) intersection point. x and y are nan if lines are parallel.
+    """
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+
+    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if np.isclose(denom, 0):
+        return np.array([np.nan, np.nan])
+
+    num_x = (x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)
+    num_y = (x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        px = num_x / denom
+        py = num_y / denom
+    return np.array([px, py])
