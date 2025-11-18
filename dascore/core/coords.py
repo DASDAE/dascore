@@ -58,25 +58,32 @@ min_max_type = TypeVar("min_max_type")
 step_type = TypeVar("step_type")
 
 
-def ensure_consistent_dtype(value, name, dtype):
+def reconcile_dtype(value, target_dtype, name=None):
     """Ensure the values are consistent with dtype."""
     # For some reason all ints are getting converted to floats using default
     # pydantic type validation. This just fixes this manually.
     # TODO: See if this is needed in a few version after pydantic 2.1.1
-    if pd.isnull(value):
+    val_is_array = is_array(value)
+    if not val_is_array and pd.isnull(value):
         return value
-    elif np.issubdtype(dtype, np.datetime64):
+    elif np.issubdtype(target_dtype, np.datetime64):
         if name == "step":
             value = dc.to_timedelta64(value)
         else:
             value = dc.to_datetime64(value)
-    elif np.issubdtype(dtype, np.timedelta64):
+    elif np.issubdtype(target_dtype, np.timedelta64):
         value = dc.to_timedelta64(value)
-    # convert numpy numerics back to python
-    elif np.issubdtype(dtype, np.floating):
-        value = float(value) if value is not None else np.nan
-    elif np.issubdtype(dtype, np.integer):
-        value = int(value)
+    # Convert numpy numerics back to python
+    elif np.issubdtype(target_dtype, np.floating):
+        if not val_is_array:
+            value = np.nan if value is None else float(value)
+        else:
+            value = array(value).astype(np.float64)
+    elif np.issubdtype(target_dtype, np.integer):
+        if not val_is_array:
+            value = int(value)
+        else:
+            value = array(value).astype(np.int64)
     return value
 
 
@@ -117,7 +124,7 @@ class CoordSummary(DascoreBaseModel):
             data["dtype"] = str(dtype).split("[")[0]
             for name in ["min", "max", "step"]:
                 val = data.get(name)
-                data[name] = ensure_consistent_dtype(val, name, dtype)
+                data[name] = reconcile_dtype(val, name=name, target_dtype=dtype)
         return data
 
     def to_coord(self) -> CoordRange:
@@ -828,8 +835,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             msg = f"Coords must be sorted to use get_next_index, {self} is not."
             raise CoordError(msg)
         input_array_like = isinstance(value, Sized)
-        array = np.atleast_1d(value)
-
+        array = reconcile_dtype(np.atleast_1d(value), self.dtype)
         # handle samples
         if samples:
             min_val, max_val = 0, len(self) - 1

@@ -541,7 +541,7 @@ def slope_mute(
     Apply a mute between specified slopes (eg velocities).
 
     This facilitates common muting patterns for active source processing.
-    For more control, use [`Patch.mute`](`dascore.proc.mute.mute`).
+    For more control, use [`Patch.mute`](`dascore.proc.mute.line_mute`).
 
     Parameters
     ----------
@@ -593,7 +593,7 @@ def slope_mute(
     See Also
     --------
     - [`Patch.slope_filter`](`dascore.proc.filter.slope_filter`)
-    - [`Patch.line_mute`](`dascore.proc.mute.mute`)
+    - [`Patch.line_mute`](`dascore.proc.mute.line_mute`)
     """
     # Convert slopes to array and validate
     slopes_array = np.asarray(slopes)

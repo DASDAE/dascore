@@ -203,15 +203,17 @@ def _get_shift_indices(coord, dim, reverse, samples, relative):
 
     Positive values indicate a shift to the right, negative to left.
     """
-    # First get naive indices, then subtract min.
+    # First get naive indice
     # In absolute mode (not samples, not relative), allow out of bounds
     # since shift values define new absolute positions
     allow_oob = not (samples or relative)
     inds = dim.get_next_index(
         coord.values, samples=samples, relative=relative, allow_out_of_bounds=allow_oob
     )
-    out = inds - np.min(inds)
-    # Reverse index. This way the min value still is at 0 (reference)
+    # Use the point with the least shift as a reference.
+    ref = np.argmin(np.abs(inds))
+    out = inds - inds[ref]
+    # Reverse index if needed. This way the reference stays the same.
     if reverse:
         out *= -1
     return out

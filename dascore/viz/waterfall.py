@@ -19,7 +19,7 @@ from dascore.utils.plotting import (
     _get_dim_label,
     _get_extents,
 )
-from dascore.utils.time import dtype_time_like
+from dascore.utils.time import dtype_time_like, is_datetime64
 
 IQR_FENCE_MULTIPLIER = 1.5
 
@@ -113,12 +113,14 @@ def _format_axis_labels(ax, patch, dims_r):
     """
     for dim, x in zip(dims_r, ["x", "y"], strict=True):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
-        if dtype_time_like(patch.get_coord(dim).dtype):
+        # Check if special formatting is needed to make date times label correctly.
+        dtype = patch.get_coord(dim).dtype
+        if is_datetime64(dtype):
             _format_time_axis(ax, dim, x)
-            # Invert the y axis so origin is at the top. This follows the
-            # convention for seismic shot gathers where time increases downward.
-            if x == "y":
-                ax.invert_yaxis()
+        # Invert the y axis so origin is at the top. This follows the
+        # convention for seismic shot gathers where time increases downward.
+        if x == "y" and dtype_time_like(dtype):
+            ax.invert_yaxis()
 
 
 def _add_colorbar(ax, im, patch, log):
