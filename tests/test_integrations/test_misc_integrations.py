@@ -78,10 +78,10 @@ class TestAlignCoordCorrelation:
     def corr_shift(self, ricker_patch):
         """Perform the correlation without a shift, undo shift after."""
         out = (
-            ricker_patch.align_to_coord(time="shift", relative=True)
+            ricker_patch.align_to_coord(time="shift")
             .dropna("time")
             .correlate(distance=0)
-            .align_to_coord(lag_time="shift", reverse=True, relative=True)
+            .align_to_coord(lag_time="shift", reverse=True)
             .dropna("lag_time")
         )
         return out

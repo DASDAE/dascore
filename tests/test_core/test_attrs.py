@@ -212,7 +212,7 @@ class TestSummaryAttrs:
         json = random_summary.model_dump_json()
         assert isinstance(json, str)
 
-    def test_can_roundrip(self, random_summary):
+    def test_can_roundtrip(self, random_summary):
         """Ensure json can be round-tripped."""
         json = random_summary.model_dump_json()
         random_summary2 = PatchAttrs.model_validate_json(json)

@@ -23,7 +23,6 @@ def patch_with_align_coord_2d():
     shift_time_relative = shift_time_absolute - shift_time_absolute.min()
 
     return patch.update_coords(
-        shift_time_absolute=("distance", shift_time_absolute),
         shift_time_samples=("distance", shift_time_samples),
         shift_time_relative=("distance", shift_time_relative),
     )
@@ -52,11 +51,13 @@ def patch_with_align_coord_4d():
         "distance": distance,
         "dim3": [1, 2],
         "dim4": [2, 3],
-        "shift_time_absolute_1d": ("distance", shift_time_absolute),
         "shift_time_samples_1d": ("distance", shift_time_samples),
-        "shift_time_relative_1d": ("distance", shift_time_relative),
-        "shift_time_absolute_2d": (("distance", "dim3"), shift_time_2d),
-        "shift_time_absolute_3d": (("distance", "dim3", "dim4"), shift_time_3d),
+        "shift_time_1d": ("distance", shift_time_relative),
+        "shift_time_2d": (("distance", "dim3"), shift_time_2d - shift_time_2d.min()),
+        "shift_time_3d": (
+            ("distance", "dim3", "dim4"),
+            shift_time_3d - shift_time_3d.min(),
+        ),
     }
     dims = (*patch.dims, "dim3", "dim4")
     return dc.Patch(data=data2, coords=coords, dims=dims)
@@ -88,7 +89,7 @@ def patch_with_zero_shifts(simple_patch_for_alignment):
     """Patch with zero shifts for all channels."""
     patch = simple_patch_for_alignment
     distance = patch.get_array("distance")
-    zero_shifts = np.zeros(len(distance))
+    zero_shifts = np.zeros(len(distance), dtype=np.int64)
     return patch.update_coords(shift_time_zero=("distance", zero_shifts))
 
 
@@ -208,12 +209,8 @@ class TestAlignToCoord:
         if shift_coord.endswith("_samples"):
             # Shift coord is already in samples
             shift = shift_values
-        elif shift_coord.endswith("_relative"):
-            # Shift coord is relative to start, just divide by step
-            shift = shift_values / time.step
         else:
-            # Shift coord is in absolute units, convert to samples
-            shift = (shift_values - time.min()) / time.step
+            shift = shift_values / time.step
         # Need to broadcast up shift.
         if nan_count.ndim > shift.ndim:
             dims = shifted_patch.coords.dim_map[shift_coord]
@@ -258,19 +255,6 @@ class TestAlignToCoord:
     }
 
     @pytest.mark.parametrize("mode", list(_validators))
-    def test_shift_2d_absolute(self, patch_with_align_coord_2d, mode):
-        """Test the 2D case with various modes."""
-        patch = patch_with_align_coord_2d
-        shift_dim = "time"
-        shift_coord = "shift_time_absolute"
-        shifted_patch = patch.align_to_coord(
-            **{shift_dim: shift_coord},
-            mode=mode,
-        )
-        validator = self._validators[mode].__get__(self)
-        validator(patch, shifted_patch, shift_dim=shift_dim, shift_coord=shift_coord)
-
-    @pytest.mark.parametrize("mode", list(_validators))
     def test_shift_2d_samples(self, patch_with_align_coord_2d, mode):
         """Test the 2D case with various modes."""
         patch = patch_with_align_coord_2d
@@ -290,7 +274,6 @@ class TestAlignToCoord:
         shift_coord = "shift_time_relative"
         shifted_patch = patch.align_to_coord(
             **{shift_dim: shift_coord},
-            relative=True,
             mode=mode,
         )
         validator = self._validators[mode].__get__(self)
@@ -301,7 +284,7 @@ class TestAlignToCoord:
         """Test 4D patch with 1D shift coordinate."""
         patch = patch_with_align_coord_4d
         shift_dim = "time"
-        shift_coord = "shift_time_absolute_1d"
+        shift_coord = "shift_time_1d"
         shifted_patch = patch.align_to_coord(
             **{shift_dim: shift_coord},
             mode=mode,
@@ -355,8 +338,8 @@ class TestAlignToCoord:
         # Verify it produces valid output with same number of traces
         assert reversed_patch.shape[1] == patch.shape[1]
 
-    def test_reverse_with_relative_coords(self, simple_patch_for_alignment):
-        """Test reverse with relative coordinate values."""
+    def test_align_round_trip(self, simple_patch_for_alignment):
+        """Test round_trip with relative values."""
         patch = simple_patch_for_alignment
         time = patch.get_array("time")
 
@@ -365,12 +348,12 @@ class TestAlignToCoord:
         relative_shifts = relative_shifts - relative_shifts.min()
         patch = patch.update_coords(rel_shifts=("distance", relative_shifts))
 
-        # Forward with relative=True
-        aligned = patch.align_to_coord(time="rel_shifts", relative=True, mode="full")
+        # Forward
+        aligned = patch.align_to_coord(time="rel_shifts", mode="full")
 
-        # Reverse with relative=True
+        # Reverse
         reversed_patch = aligned.align_to_coord(
-            time="rel_shifts", relative=True, mode="full", reverse=True
+            time="rel_shifts", mode="full", reverse=True
         )
 
         # Verify round-trip
@@ -396,76 +379,3 @@ class TestAlignToCoord:
         assert np.isclose(
             reversed_patch.get_coord("time").step, original_time_coord.step
         )
-
-    def test_explicit_starttimes(self, random_patch):
-        """
-        Tests absolute time are updated.
-        """
-        patch = random_patch.select(distance=(..., 10))
-        time_coord = patch.get_coord("time")
-        dist_coord = patch.get_coord("distance")
-        start = np.datetime64("1994-01-01")
-        times = np.array([start] * len(dist_coord))
-        # First test with no shifts
-        out = patch.update_coords(new_times=("distance", times)).align_to_coord(
-            time="new_times"
-        )
-        assert out.get_coord("time").min() == start
-        # Then test with shift
-        shifted_times = times + time_coord.step * np.arange(len(dist_coord)) * 10
-        out = patch.update_coords(new_times=("distance", shifted_times)).align_to_coord(
-            time="new_times", mode="full"
-        )
-        assert out.get_coord("time").min() == start
-        # Iterate over each trace and check its time.
-        for num, start in enumerate(shifted_times):
-            row_patch = out.select(distance=num, samples=True).dropna("time")
-            assert row_patch.get_coord("time").min() == start
-
-    def test_reverse_shift_with_same_mode(self):
-        """
-        Test that reverse shifting with mode='same' works correctly.
-
-        This reproduces the bug where destination array size doesn't match
-        source array size when traces are shifted by different amounts.
-        """
-        patch = _create_patch_with_shifts(start=0.0, stop=0.1)
-
-        aligned = patch.align_to_coord(
-            time="shifts", relative=False, reverse=False, mode="same"
-        )
-        # Now reverse it - this should bring us back to original
-        # This is where the bug occurs
-        reversed_patch = aligned.align_to_coord(
-            time="shifts", relative=False, reverse=True, mode="same"
-        )
-        # If we get here without ValueError, the bug is fixed
-        assert isinstance(reversed_patch, dc.Patch)
-        assert reversed_patch.shape == aligned.shape
-
-    def test_reverse_shift_with_larger_shifts(self, random_patch):
-        """
-        Test with larger varying shifts to ensure edge cases are handled.
-
-        This creates a more extreme case where the shifts vary significantly,
-        which makes the bug more likely to occur.
-        """
-        in_patch = random_patch
-        patch = _create_patch_with_shifts(start=0, stop=100, patch=in_patch)
-        # Align with samples=True, mode="same"
-        aligned = patch.align_to_coord(
-            relative=False,
-            reverse=False,
-            samples=True,
-            mode="same",
-            time="shifts",
-        )
-        # Reverse - this should work without broadcasting error
-        reversed_patch = aligned.align_to_coord(
-            relative=False,
-            reverse=True,
-            samples=True,
-            mode="same",
-            time="shifts",
-        )
-        assert isinstance(reversed_patch, dc.Patch)
