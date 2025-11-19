@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -22,6 +23,12 @@ from dascore.utils.plotting import (
 from dascore.utils.time import dtype_time_like, is_datetime64
 
 IQR_FENCE_MULTIPLIER = 1.5
+
+mpl.rcParams.update(
+    {
+        "image.resample": True,
+    }
+)
 
 
 def _validate_scale_type(scale_type):
@@ -144,6 +151,7 @@ def waterfall(
     cmap="bwr",
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
+    interpolation: str | None = "antialiased",
     log: bool = False,
     show: bool = False,
 ) -> plt.Axes:
@@ -171,6 +179,11 @@ def waterfall(
         are:
             relative - scale based on half the dynamic range in patch
             absolute - scale based on absolute values provided to `scale`
+    interpolation
+        A value fed to matplotlib's imshow to handle downsampling large arrays,
+        which is relavent for DAS. Usually, "antialis" works well, but if the data
+        look smired disabling interpolation with None might help. Other options
+        are available, see matplotlib's documentation for more details.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
     show
@@ -253,11 +266,11 @@ def waterfall(
         # like matplotlib < 3.9, which tends to work better for visualizing large
         # DAS data. See #512. We might consider making these parameters of the
         # waterfall function in the future.
-        interpolation="antialiased",
+        interpolation=interpolation,
         interpolation_stage="data",
     )
-    if isinstance(scale, Sequence) and len(scale) == 2 and np.all(np.isfinite(scale)):
-        im.set_clim(scale)
+    if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
+        im.set_clim(np.asarray(scale))
     # Format axis labels and handle time-like dimensions
     _format_axis_labels(ax, patch, dims_r)
     # Add colorbar if requested

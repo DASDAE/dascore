@@ -205,9 +205,8 @@ def _get_shift_indices(coord_vals, dim, reverse, samples):
         samples=samples,
         relative=False if samples else True,
     )
-
     # Reverse index if needed. This way the reference stays the same.
-    inds = inds_abs * (sign_vals * (-1 if reverse else 1))
+    inds = inds_abs * (sign_vals.astype(np.int64) * (-1 if reverse else 1))
     return inds
 
 
