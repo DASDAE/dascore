@@ -215,8 +215,9 @@ def _get_coord_values(dim, coord, dim_name, coord_name, samples):
     """Validate the dimension and coordinate, return coordinate values."""
     coord_values = coord.values
     # Samples must be int-like, otherwise samples=True doesn't make sense.
+    cdtype = coord_values.dtype
     if samples:
-        if not np.issubdtype(coord_values.dtype, np.integer):
+        if dtype_time_like(cdtype) or not np.issubdtype(cdtype, np.integer):
             msg = (
                 f"Cannot align with samples=True since '{coord_name}' has a dtype "
                 f"of {coord.dtype}, not integer."
@@ -233,9 +234,9 @@ def _get_coord_values(dim, coord, dim_name, coord_name, samples):
         coord_values = get_compatible_values(coord.values, expected_dtype)
     if not np.issubdtype(expected_dtype, coord_values.dtype):
         msg = (
-            f"Can't align coordinates '{coord_name}' which has a dtype of "
-            f"{coord.dtype} with dimension '{dim_name}' which has a dtype of"
-            f" {dim.dtype}."
+            f"Incompatible dtype for coordinates '{coord_name}' which has a "
+            f"dtype of {coord.dtype} with dimension '{dim_name}' which has "
+            f"a dtype of {dim.dtype}."
         )
         raise ParameterError(msg)
     return coord_values

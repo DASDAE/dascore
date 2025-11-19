@@ -21,10 +21,12 @@ def patch_with_align_coord_2d():
     shift_time_samples = np.arange(len(distance))
     shift_time_absolute = time[shift_time_samples]
     shift_time_relative = shift_time_absolute - shift_time_absolute.min()
+    bad_type_coord = dc.to_datetime64(distance)
 
     return patch.update_coords(
         shift_time_samples=("distance", shift_time_samples),
         shift_time_relative=("distance", shift_time_relative),
+        bad_type_shift=("distance", bad_type_coord),
     )
 
 
@@ -111,26 +113,6 @@ def patch_with_mixed_shifts(simple_patch_for_alignment):
     return patch.update_coords(shift_time_mixed=("distance", mixed_shifts))
 
 
-def _create_patch_with_shifts(start, stop, patch=None):
-    """
-    Create a simple patch with varying shift values.
-    """
-    # Get time range first to avoid selecting empty coords
-    patch = dc.get_example_patch() if patch is None else patch
-    time_coord = patch.get_coord("time")
-    time_min, time_max = time_coord.min(), time_coord.max()
-    time_mid = time_min + (time_max - time_min) / 2
-    # Select a subset for testing
-    patch = patch.select(time=(time_min, time_mid), distance=(0, 50), samples=False)
-    # Create shift values that vary across distance
-    distance = patch.get_array("distance")
-    # Shifts in seconds - varying from 0.0 to 0.1
-    shifts = np.linspace(start, stop, len(distance))
-    # Add the shift coordinate
-    patch = patch.update_coords(shifts=("distance", shifts))
-    return patch
-
-
 class TestAlignToCoordValidation:
     """Tests for align_to_coord validation logic."""
 
@@ -185,6 +167,20 @@ class TestAlignToCoordValidation:
             patch.align_to_coord(
                 time="shift_time_samples", mode="invalid", samples=True
             )
+
+    def test_samples_non_int_raises(self, patch_with_align_coord_2d):
+        """Ensure non int coords raise when using samples=True"""
+        patch = patch_with_align_coord_2d
+        msg = "samples=True"
+        with pytest.raises(ParameterError, match=msg):
+            patch.align_to_coord(time="shift_time_relative", samples=True)
+
+    def test_bad_alignment_dim(self, patch_with_align_coord_2d):
+        """Ensure incompatible coord/dim dtypes raises."""
+        patch = patch_with_align_coord_2d
+        msg = "Incompatible dtype"
+        with pytest.raises(ParameterError, match=msg):
+            patch.align_to_coord(time="bad_type_shift")
 
 
 class TestAlignToCoord:
