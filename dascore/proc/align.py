@@ -307,7 +307,7 @@ def align_to_coord(
     >>> start_times = np.arange(len(distance)) * dt
     >>> patch_shift = patch.update_coords(shift_times=("distance", start_times))
     >>> # Traces are now shifted.
-    >>> aligned_abs = patch_shift.align_to_coord(time="abs_times", mode="full")
+    >>> aligned_abs = patch_shift.align_to_coord(time="shift_times", mode="full")
     >>>
     >>> # Example 2: Round-trip alignment with reverse parameter
     >>> # Use samples rather than absolute values.
