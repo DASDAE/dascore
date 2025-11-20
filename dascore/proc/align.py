@@ -271,10 +271,10 @@ def align_to_coord(
             patch, as only completely overlapped valid data are kept. This
             means no fill_values will occur in the patch.
     samples
-        If True, the values in the alignment coordinate specify offsets in
-        sample counts from the original start position. If False and relative
-        is False (absolute mode), the values specify exact absolute positions
-        in the dimension's units.
+        If True, the values in the alignment coordinate specify integer sample
+        offsets from the original start position. If False, the values specify
+        value offsets (such as timedelta64) relative to the start of the aligned
+        dimension.
     reverse
         If True, multiply the alignment coordinate values by -1 to reverse
         a previous alignment operation.
@@ -306,10 +306,10 @@ def align_to_coord(
     >>> start_times = np.arange(len(distance)) * dt
     >>> patch_shift = patch.update_coords(shift_times=("distance", start_times))
     >>> # Traces are now shifted.
-    >>> aligned_abs = patch_shift.align_to_coord(time="shift_times", mode="full")
+    >>> aligned_offsets = patch_shift.align_to_coord(time="shift_times", mode="full")
     >>>
     >>> # Example 2: Round-trip alignment with reverse parameter
-    >>> # Use samples rather than absolute values.
+    >>> # Use samples rather than value offsets.
     >>> shifts = np.arange(len(distance))  # shifts in samples
     >>> patch_shift = patch.update_coords(my_shifts=("distance", shifts))
     >>> # Forward alignment
@@ -335,7 +335,7 @@ def align_to_coord(
     **Mode Parameter**
 
     To understand the mode argument, consider a 2D patch with two traces,
-    an alignment dimension length of 10, and a relative shift of 5 samples.
+    an alignment dimension length of 10, and a shift of 5 samples.
 
     For mode=="full" the output looks like this:
         -----aaaaaaaaaa
@@ -348,6 +348,13 @@ def align_to_coord(
         bbbbb
     where a and b represent values in first and second trace, respectively,
     and the - represents the fill values.
+
+    **Alignment Semantics**
+
+    All alignment operations are purely relative: shifts specify offsets from the
+    original position. When samples=True, shifts are integer sample offsets. When
+    samples=False, shifts are value offsets (e.g., timedelta64 for time dimensions)
+    relative to the start of the aligned dimension.
     """
     # Validate inputs and get coordinates.
     dim_name, coord_name = _validate_alignment_inputs(patch, kwargs)
