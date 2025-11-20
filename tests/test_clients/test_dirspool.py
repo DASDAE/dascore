@@ -488,15 +488,14 @@ class TestFileSpoolIntegrations:
             assert coord.min() >= depth_tup[0]
             assert coord.max() <= depth_tup[1]
 
-    def test_differing_distances(self, dist_differ_spool, random_patch):
+    def test_differing_distances(self, dist_differ_spool):
         """Ensure iteration still works with conditions described in #583."""
-        dist = random_patch.get_coord("distance")
-        out = dist_differ_spool.select(distance=(dist.max() / 2, ...))
+        assert len(dist_differ_spool)
         # #583 would raise on iterating. Verify that a warning is issued when
         # a patch is skipped due to coordinate mismatch.
         with pytest.warns(UserWarning, match="Skipping patch at index.*#583"):
-            for _ in out:
-                pass
+            for patch in dist_differ_spool:
+                assert isinstance(patch, dc.Patch)
 
     @pytest.mark.xfail()
     def test_selected_out_distance_shortens_spool(self, dist_differ_spool):
@@ -506,9 +505,12 @@ class TestFileSpoolIntegrations:
             assert len(dist_differ_spool) == 1
 
     def test_iteration_unexpected_index_error(self, basic_file_spool):
-        """Ensure unexpected IndexErrors (not #583) are re-raised during iteration."""
+        """
+        Ensure unexpected IndexErrors (not #583) are re-raised during iteration.
+        """
         # TODO this can be deleted once the new indexing is implemented.
-        # Mock _get_patches_from_index to raise an IndexError with unexpected message
+        # Mock _get_patches_from_index to raise an IndexError with unexpected
+        # message
         with upatch.object(
             basic_file_spool,
             "_get_patches_from_index",
