@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -19,7 +20,7 @@ from dascore.utils.plotting import (
     _get_dim_label,
     _get_extents,
 )
-from dascore.utils.time import dtype_time_like
+from dascore.utils.time import dtype_time_like, is_datetime64
 
 IQR_FENCE_MULTIPLIER = 1.5
 
@@ -113,12 +114,14 @@ def _format_axis_labels(ax, patch, dims_r):
     """
     for dim, x in zip(dims_r, ["x", "y"], strict=True):
         getattr(ax, f"set_{x}label")(_get_dim_label(patch, dim))
-        if dtype_time_like(patch.get_coord(dim).dtype):
+        # Check if special formatting is needed to make date times label correctly.
+        dtype = patch.get_coord(dim).dtype
+        if is_datetime64(dtype):
             _format_time_axis(ax, dim, x)
-            # Invert the y axis so origin is at the top. This follows the
-            # convention for seismic shot gathers where time increases downward.
-            if x == "y":
-                ax.invert_yaxis()
+        # Invert the y axis so origin is at the top. This follows the
+        # convention for seismic shot gathers where time increases downward.
+        if x == "y" and dtype_time_like(dtype):
+            ax.invert_yaxis()
 
 
 def _add_colorbar(ax, im, patch, log):
@@ -142,6 +145,7 @@ def waterfall(
     cmap="bwr",
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
+    interpolation: str | None = "antialiased",
     log: bool = False,
     show: bool = False,
 ) -> plt.Axes:
@@ -169,6 +173,11 @@ def waterfall(
         are:
             relative - scale based on half the dynamic range in patch
             absolute - scale based on absolute values provided to `scale`
+    interpolation
+        A value fed to matplotlib's imshow to handle downsampling large arrays,
+        which is relevant for DAS. Usually, "antialiased" works well, but if the
+        data look smeared disabling interpolation with None might help. Other
+        options are available, see matplotlib's documentation for more details.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
     show
@@ -241,21 +250,22 @@ def waterfall(
     # Plot using imshow and set colorbar limits
     extents = _get_extents(dims_r, coords)
     scale = _get_scale(scale, scale_type, data)
-    im = ax.imshow(
-        data,
-        extent=extents,
-        aspect="auto",
-        cmap=cmap,
-        origin="lower",
-        # Note: these parameters are so that matplotlib versions > 3.10 behave
-        # like matplotlib < 3.9, which tends to work better for visualizing large
-        # DAS data. See #512. We might consider making these parameters of the
-        # waterfall function in the future.
-        interpolation="antialiased",
-        interpolation_stage="data",
-    )
-    if isinstance(scale, Sequence) and len(scale) == 2 and np.all(np.isfinite(scale)):
-        im.set_clim(scale)
+    with mpl.rc_context({"image.resample": True}):
+        im = ax.imshow(
+            data,
+            extent=extents,
+            aspect="auto",
+            cmap=cmap,
+            origin="lower",
+            # Note: these parameters are so that matplotlib versions > 3.10 behave
+            # like matplotlib < 3.9, which tends to work better for visualizing big
+            # DAS data. See #512. We might consider making these parameters of the
+            # waterfall function in the future.
+            interpolation=interpolation,
+            interpolation_stage="data",
+        )
+    if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
+        im.set_clim(np.asarray(scale))
     # Format axis labels and handle time-like dimensions
     _format_axis_labels(ax, patch, dims_r)
     # Add colorbar if requested

@@ -482,11 +482,6 @@ class TestGetSliceTuple:
 class TestSelect:
     """Generic tests for selecting values from coords."""
 
-    def test_select_end_end_time(self, coord):
-        """Ensure when time range is == (end, end) that dim has len 1."""
-        out = coord.select((coord.max(), coord.max()))[0]
-        assert len(out) == 1
-
     def test_intra_sample_select(self, coord):
         """
         Selecting ranges that fall within samples should become de-generate.
@@ -503,6 +498,11 @@ class TestSelect:
     def test_select_start_start_time(self, coord):
         """Ensure when time range is == (start, start) that dim has len 1."""
         out = coord.select((coord.min(), coord.min()))[0]
+        assert len(out) == 1
+
+    def test_select_end_end_time(self, coord):
+        """Ensure when time range is == (end, end) that dim has len 1."""
+        out = coord.select((coord.max(), coord.max()))[0]
         assert len(out) == 1
 
     def test_select_inclusive(self, long_coord):
