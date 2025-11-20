@@ -415,6 +415,20 @@ class TestIndexing:
 class TestFileSpoolIntegrations:
     """Small integration tests for the file spool."""
 
+    @pytest.fixture(scope="class")
+    def dist_differ_spool(self, tmp_path_factory, random_patch):
+        """Setup conditions for testing #538"""
+        out_path = tmp_path_factory.mktemp("multi_dis_dir")
+        distance = random_patch.get_coord("distance")
+        time = random_patch.get_coord("time")
+        patch2 = random_patch.select(distance=(None, distance.max() / 4)).update_coords(
+            time_min=time.max()
+        )
+        spool = dc.spool([random_patch, patch2])
+        dascore.examples.spool_to_directory(spool, path=out_path)
+        dist_range = (distance.max() / 2, ...)
+        return dc.spool(out_path).update().select(distance=dist_range)
+
     def test_one(self, diverse_spool_directory):
         """Small integration test with diverse spool."""
         network = "das2"
@@ -472,3 +486,19 @@ class TestFileSpoolIntegrations:
             coord = patch.get_coord("depth")
             assert coord.min() >= depth_tup[0]
             assert coord.max() <= depth_tup[1]
+
+    def test_differing_distances(self, dist_differ_spool, random_patch):
+        """Ensure iteration still works with conditions described in #538."""
+        dist = random_patch.get_coord("distance")
+        out = dist_differ_spool.select(distance=(dist.max() / 2, ...))
+        # #583 would raise on iterating. If this doesn't raise the test pases.
+        # We don't want to test the len of the spool, because it should actually
+        # be 1, but that won't be the case until we redo the indexing.
+        for _ in out:
+            pass
+
+    @pytest.mark.xfail()
+    def test_selected_out_distance(self, dist_differ_spool):
+        """Selecting outside of distance range should reduce spool length."""
+        # Need to implement new indexing before this will pass.
+        assert len(dist_differ_spool) == 1

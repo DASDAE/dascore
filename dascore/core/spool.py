@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import suppress
 from functools import singledispatch
 from pathlib import Path
 from typing import Literal, TypeVar
@@ -403,7 +404,9 @@ class DataFrameSpool(BaseSpool):
 
     def __iter__(self):
         for ind in range(len(self._df)):
-            yield self._unbox_patch(self._get_patches_from_index(ind))
+            # Note: we suppress index errors due to #583.
+            with suppress(IndexError):
+                yield self._unbox_patch(self._get_patches_from_index(ind))
 
     def _unbox_patch(self, patch_list):
         """Unbox a single patch from a patch list, check len."""
