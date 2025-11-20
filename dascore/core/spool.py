@@ -421,7 +421,7 @@ class DataFrameSpool(BaseSpool):
                     # This is the expected #583 case where patch coordinates don't align
                     msg = (
                         f"Skipping patch at index {ind} due to coordinate mismatch "
-                        f"(#583): {msg_str}",
+                        f"(#583): {msg_str}"
                     )
                     warnings.warn(msg, UserWarning, stacklevel=2)
                 else:
