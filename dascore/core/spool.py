@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import warnings
 from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
@@ -62,7 +63,15 @@ class BaseSpool(abc.ABC):
 
     @abc.abstractmethod
     def __iter__(self) -> PatchType:
-        """Iterate through the Patches in the spool."""
+        """
+        Iterate through the Patches in the spool.
+
+        Notes
+        -----
+        Iteration may skip patches in certain cases (e.g., when coordinate
+        mismatches occur as described in issue #583). Therefore, the number
+        of patches yielded during iteration may differ from len(spool).
+        """
 
     @abc.abstractmethod
     def __len__(self) -> int:
@@ -403,7 +412,21 @@ class DataFrameSpool(BaseSpool):
 
     def __iter__(self):
         for ind in range(len(self._df)):
-            yield self._unbox_patch(self._get_patches_from_index(ind))
+            try:
+                yield self._unbox_patch(self._get_patches_from_index(ind))
+            except IndexError as e:
+                # Check if this is the known #583 pattern (coordinate mismatch)
+                msg_str = str(e)
+                if "out of bounds" in msg_str:
+                    # This is the expected #583 case where patch coordinates don't align
+                    msg = (
+                        f"Skipping patch at index {ind} due to coordinate mismatch "
+                        f"(#583): {msg_str}"
+                    )
+                    warnings.warn(msg, UserWarning, stacklevel=2)
+                else:
+                    # Some other IndexError - re-raise it as it's a real bug
+                    raise
 
     def _unbox_patch(self, patch_list):
         """Unbox a single patch from a patch list, check len."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch as upatch
 
 import numpy as np
 import pandas as pd
@@ -15,7 +16,7 @@ from dascore.constants import ONE_SECOND
 from dascore.exceptions import ParameterError
 from dascore.io.core import PatchFileSummary
 from dascore.utils.hdf5 import HDFPatchIndexManager
-from dascore.utils.misc import register_func
+from dascore.utils.misc import register_func, suppress_warnings
 
 DIRECTORY_SPOOLS = []
 
@@ -415,6 +416,20 @@ class TestIndexing:
 class TestFileSpoolIntegrations:
     """Small integration tests for the file spool."""
 
+    @pytest.fixture(scope="class")
+    def dist_differ_spool(self, tmp_path_factory, random_patch):
+        """Setup conditions for testing #583"""
+        out_path = tmp_path_factory.mktemp("multi_dis_dir")
+        distance = random_patch.get_coord("distance")
+        time = random_patch.get_coord("time")
+        patch2 = random_patch.select(distance=(None, distance.max() / 4)).update_coords(
+            time_min=time.max()
+        )
+        spool = dc.spool([random_patch, patch2])
+        dascore.examples.spool_to_directory(spool, path=out_path)
+        dist_range = (distance.max() / 2, ...)
+        return dc.spool(out_path).update().select(distance=dist_range)
+
     def test_one(self, diverse_spool_directory):
         """Small integration test with diverse spool."""
         network = "das2"
@@ -472,3 +487,36 @@ class TestFileSpoolIntegrations:
             coord = patch.get_coord("depth")
             assert coord.min() >= depth_tup[0]
             assert coord.max() <= depth_tup[1]
+
+    def test_differing_distances(self, dist_differ_spool):
+        """Ensure iteration still works with conditions described in #583."""
+        assert len(dist_differ_spool)
+        # #583 would raise on iterating. Verify that a warning is issued when
+        # a patch is skipped due to coordinate mismatch.
+        with pytest.warns(UserWarning, match="Skipping patch at index.*#583"):
+            for patch in dist_differ_spool:
+                assert isinstance(patch, dc.Patch)
+
+    @pytest.mark.xfail()
+    def test_selected_out_distance_shortens_spool(self, dist_differ_spool):
+        """Selecting outside of distance range should reduce spool length."""
+        # Need to implement new indexing before this will pass.
+        with suppress_warnings(UserWarning):
+            assert len(dist_differ_spool) == 1
+
+    def test_iteration_unexpected_index_error(self, basic_file_spool):
+        """
+        Ensure unexpected IndexErrors (not #583) are re-raised during iteration.
+        """
+        # TODO this can be deleted once the new indexing is implemented.
+        # Mock _get_patches_from_index to raise an IndexError with unexpected
+        # message
+        with upatch.object(
+            basic_file_spool,
+            "_get_patches_from_index",
+            side_effect=IndexError("unexpected error from pandas"),
+        ):
+            # The iteration should re-raise the unexpected IndexError
+            with pytest.raises(IndexError, match="unexpected error from pandas"):
+                for _ in basic_file_spool:
+                    pass
