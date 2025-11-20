@@ -24,12 +24,6 @@ from dascore.utils.time import dtype_time_like, is_datetime64
 
 IQR_FENCE_MULTIPLIER = 1.5
 
-mpl.rcParams.update(
-    {
-        "image.resample": True,
-    }
-)
-
 
 def _validate_scale_type(scale_type):
     """Validate that scale_type is either 'relative' or 'absolute'."""
@@ -181,9 +175,9 @@ def waterfall(
             absolute - scale based on absolute values provided to `scale`
     interpolation
         A value fed to matplotlib's imshow to handle downsampling large arrays,
-        which is relavent for DAS. Usually, "antialis" works well, but if the data
-        look smired disabling interpolation with None might help. Other options
-        are available, see matplotlib's documentation for more details.
+        which is relavent for DAS. Usually, "antialiased" works well, but if the
+        data look smeared disabling interpolation with None might help. Other
+        options are available, see matplotlib's documentation for more details.
     log
         If True, visualize the common logarithm of the absolute values of patch data.
     show
@@ -256,19 +250,20 @@ def waterfall(
     # Plot using imshow and set colorbar limits
     extents = _get_extents(dims_r, coords)
     scale = _get_scale(scale, scale_type, data)
-    im = ax.imshow(
-        data,
-        extent=extents,
-        aspect="auto",
-        cmap=cmap,
-        origin="lower",
-        # Note: these parameters are so that matplotlib versions > 3.10 behave
-        # like matplotlib < 3.9, which tends to work better for visualizing large
-        # DAS data. See #512. We might consider making these parameters of the
-        # waterfall function in the future.
-        interpolation=interpolation,
-        interpolation_stage="data",
-    )
+    with mpl.rc_context({"image.resample": True}):
+        im = ax.imshow(
+            data,
+            extent=extents,
+            aspect="auto",
+            cmap=cmap,
+            origin="lower",
+            # Note: these parameters are so that matplotlib versions > 3.10 behave
+            # like matplotlib < 3.9, which tends to work better for visualizing big
+            # DAS data. See #512. We might consider making these parameters of the
+            # waterfall function in the future.
+            interpolation=interpolation,
+            interpolation_stage="data",
+        )
     if scale is not None and len(scale) == 2 and np.all(np.isfinite(scale)):
         im.set_clim(np.asarray(scale))
     # Format axis labels and handle time-like dimensions

@@ -355,23 +355,20 @@ def align_to_coord(
     must_be_even = mode == "full"
     dim = patch.get_coord(dim_name, require_evenly_sampled=must_be_even)
     coord = patch.get_coord(coord_name)
-    # Ensure valide dim and coordinate.
+    # Ensure valid dim and coordinate.
     coord_vals = _get_coord_values(dim, coord, dim_name, coord_name, samples)
     # Get axes of shift and other dims.
     dim_axis = patch.dims.index(dim_name)
     coord_dims = patch.coords.dim_map[coord_name]
     coord_axes = tuple(patch.dims.index(x) for x in coord_dims)
-
     # Get the metadata about shift and the indices for shifting.
     inds = _get_shift_indices(coord_vals, dim, reverse, samples)
     meta = _calculate_shift_info(mode, inds, dim, dim_axis, patch.shape)
-
     # Apply shifts to data
     shifted_data = _apply_shifts_to_data(
         patch.data, meta, dim_axis, coord_axes, fill_value
     )
     assert shifted_data.ndim == patch.data.ndim, "dimensionality changed"
-
     # Get new coordinates.
     new_coords = _get_aligned_coords(patch, dim_name, meta)
     return patch.new(data=shifted_data, coords=new_coords)
