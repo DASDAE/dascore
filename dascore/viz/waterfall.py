@@ -175,7 +175,7 @@ def waterfall(
             absolute - scale based on absolute values provided to `scale`
     interpolation
         A value fed to matplotlib's imshow to handle downsampling large arrays,
-        which is relavent for DAS. Usually, "antialiased" works well, but if the
+        which is relevant for DAS. Usually, "antialiased" works well, but if the
         data look smeared disabling interpolation with None might help. Other
         options are available, see matplotlib's documentation for more details.
     log

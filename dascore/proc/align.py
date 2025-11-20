@@ -231,7 +231,7 @@ def _get_coord_values(dim, coord, dim_name, coord_name, samples):
     # are expected should be timedelta64, but we can handle float/int too).
     if dtype_time_like(dim) and not dtype_time_like(coord):
         coord_values = get_compatible_values(coord.values, expected_dtype)
-    if not np.issubdtype(expected_dtype, coord_values.dtype):
+    if not np.can_cast(coord_values.dtype, expected_dtype, casting="safe"):
         msg = (
             f"Incompatible dtype for coordinates '{coord_name}' which has a "
             f"dtype of {coord.dtype} with dimension '{dim_name}' which has "
@@ -352,8 +352,9 @@ def align_to_coord(
     # Validate inputs and get coordinates.
     dim_name, coord_name = _validate_alignment_inputs(patch, kwargs)
     # We only require evenly sampled dim when we might need to expand it.
-    must_be_even = mode == "full"
-    dim = patch.get_coord(dim_name, require_evenly_sampled=must_be_even)
+    # Todo: this could technically be relaxed for modes other than "full" but
+    # would require re-working the implementation.
+    dim = patch.get_coord(dim_name, require_evenly_sampled=True)
     coord = patch.get_coord(coord_name)
     # Ensure valid dim and coordinate.
     coord_vals = _get_coord_values(dim, coord, dim_name, coord_name, samples)
