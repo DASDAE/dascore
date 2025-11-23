@@ -207,12 +207,12 @@ def _get_shift_indices(coord_vals, dim, reverse, samples, mode):
             relative=False if samples else True,
             allow_out_of_bounds=mode == "full",
         )
-    except ValueError:
+    except ValueError as err:
         msg = (
             f"Trace shift with align_to_coord results in some traces with no "
             f"overlaps. This is only possible with mode = 'full' not {mode}."
         )
-        raise ParameterError(msg)
+        raise ParameterError(msg) from err
     # Reverse index if needed. This way the reference stays the same.
     inds = inds_abs * (sign_vals.astype(np.int64) * (-1 if reverse else 1))
     return inds
