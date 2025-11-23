@@ -113,6 +113,17 @@ def patch_with_mixed_shifts(simple_patch_for_alignment):
     return patch.update_coords(shift_time_mixed=("distance", mixed_shifts))
 
 
+@pytest.fixture(scope="class")
+def patch_non_overlapping_shifts(random_patch):
+    """Patch with shifts that cause some traces to not overlap."""
+    sub = (
+        random_patch.select(distance=slice(0, 3), samples=True)
+        .select(time=slice(0, 10), samples=True)
+        .update_coords(shift=("distance", np.array([0, 8, 16])))
+    )
+    return sub
+
+
 class TestAlignToCoordValidation:
     """Tests for align_to_coord validation logic."""
 
@@ -375,3 +386,16 @@ class TestAlignToCoord:
         assert np.isclose(
             reversed_patch.get_coord("time").step, original_time_coord.step
         )
+
+    def test_align_no_overlap(self, patch_non_overlapping_shifts):
+        """Test that a patch with shifts that cause traces to not overlap."""
+        patch = patch_non_overlapping_shifts
+        msg = "some traces with no overlaps"
+        # Mode = valid and same should fail.
+        with pytest.raises(ParameterError, match=msg):
+            patch.align_to_coord(time="shift", mode="valid")
+        with pytest.raises(ParameterError, match=msg):
+            patch.align_to_coord(time="shift", mode="same")
+        # But full should work.
+        new = patch.align_to_coord(time="shift", mode="full")
+        assert new.dropna("time").data.size == 0
