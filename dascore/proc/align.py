@@ -169,8 +169,8 @@ def _validate_alignment_inputs(patch, kwargs):
     value_dims = patch.coords.dim_map[coord_name]
     if dim_name in value_dims:
         msg = (
-            f"align_to_coord requires the align coord not depend on the selected"
-            f" dimension but {dim_name} does."
+            f"align_to_coord requires the align coord not depend on the selected "
+            f"dimension but {dim_name} does."
         )
         raise ParameterError(msg)
     return dim_name, coord_name
@@ -191,7 +191,7 @@ def _get_aligned_coords(patch, dim_name, meta):
 
 def _get_shift_indices(coord_vals, dim, reverse, samples, mode):
     """
-    Get the indices  for shifting.
+    Get the indices for shifting.
 
     Positive values indicate a shift to the right, negative to left.
     """
@@ -271,8 +271,8 @@ def align_to_coord(
         Determines the output shape of the patch. Options are:
         "full" - Regardless of shift, all original data are preserved.
             This can result in patches with many fill values along the
-            aligned dimension. It also allows cases where some traces are
-            do not overlap at all.
+            aligned dimension. It also allows cases where some traces do
+            not overlap at all.
         "same" - The patch will retain its shape, however, only one trace
             (and traces that weren't shifted) will remain complete. Parts
             of shifted traces will be discarded.
