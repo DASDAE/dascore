@@ -169,8 +169,8 @@ def _validate_alignment_inputs(patch, kwargs):
     value_dims = patch.coords.dim_map[coord_name]
     if dim_name in value_dims:
         msg = (
-            f"align_to_coord requires the align coord not depend on the selected"
-            f" dimension but {dim_name} does."
+            f"align_to_coord requires the align coord not depend on the selected "
+            f"dimension but {dim_name} does."
         )
         raise ParameterError(msg)
     return dim_name, coord_name
@@ -189,9 +189,9 @@ def _get_aligned_coords(patch, dim_name, meta):
     return patch.coords.update(**{dim_name: new_coord})
 
 
-def _get_shift_indices(coord_vals, dim, reverse, samples):
+def _get_shift_indices(coord_vals, dim, reverse, samples, mode):
     """
-    Get the indices  for shifting.
+    Get the indices for shifting.
 
     Positive values indicate a shift to the right, negative to left.
     """
@@ -200,11 +200,19 @@ def _get_shift_indices(coord_vals, dim, reverse, samples):
     # Therefore, we need to insure positive values go into get_next_index.
     abs_vals = np.abs(coord_vals)
     sign_vals = np.sign(coord_vals)
-    inds_abs = dim.get_next_index(
-        abs_vals,
-        samples=samples,
-        relative=False if samples else True,
-    )
+    try:
+        inds_abs = dim.get_next_index(
+            abs_vals,
+            samples=samples,
+            relative=False if samples else True,
+            allow_out_of_bounds=mode == "full",
+        )
+    except ValueError as err:
+        msg = (
+            f"Trace shift with align_to_coord results in some traces with no "
+            f"overlaps. This is only possible with mode = 'full' not {mode}."
+        )
+        raise ParameterError(msg) from err
     # Reverse index if needed. This way the reference stays the same.
     inds = inds_abs * (sign_vals.astype(np.int64) * (-1 if reverse else 1))
     return inds
@@ -263,7 +271,8 @@ def align_to_coord(
         Determines the output shape of the patch. Options are:
         "full" - Regardless of shift, all original data are preserved.
             This can result in patches with many fill values along the
-            aligned dimension.
+            aligned dimension. It also allows cases where some traces do
+            not overlap at all.
         "same" - The patch will retain its shape, however, only one trace
             (and traces that weren't shifted) will remain complete. Parts
             of shifted traces will be discarded.
@@ -370,7 +379,7 @@ def align_to_coord(
     coord_dims = patch.coords.dim_map[coord_name]
     coord_axes = tuple(patch.dims.index(x) for x in coord_dims)
     # Get the metadata about shift and the indices for shifting.
-    inds = _get_shift_indices(coord_vals, dim, reverse, samples)
+    inds = _get_shift_indices(coord_vals, dim, reverse, samples, mode)
     meta = _calculate_shift_info(mode, inds, dim, dim_axis, patch.shape)
     # Apply shifts to data
     shifted_data = _apply_shifts_to_data(
