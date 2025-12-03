@@ -822,6 +822,24 @@ class TestEquals:
         assert non_2 != cm_basic
         assert cm_basic != non_2
 
+    def test_private_non_dimension_coord(self, cm_basic):
+        """Private, non-dimensional coords shouldn't affect comparisons."""
+        time = cm_basic.get_array("time")
+        new = cm_basic.update(_some_time=("time", time))
+        assert new == cm_basic
+
+    def test_private_dims_effect_equals(self, cm_basic):
+        """Private dimensions should affect the comparisons."""
+        time = cm_basic.get_array("time")
+        new_time = time + dc.to_timedelta64(10)
+        new = cm_basic.update(time=new_time)
+        assert new != cm_basic
+
+        new_priv = new.rename_coord(time="_time")
+        cm_priv = cm_basic.rename_coord(time="_time")
+        assert "_time" in new_priv.dims
+        assert new_priv != cm_priv
+
 
 class TestTranspose:
     """Test suite for transposing dimensions."""

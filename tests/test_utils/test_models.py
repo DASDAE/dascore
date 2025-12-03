@@ -32,6 +32,12 @@ class TestModelEquals:
         mod2 = _TestModel(_private=2)
         assert sensible_model_equals(mod1, mod2)
 
+    def test_private_disjoint(self):
+        """Private attrs not shared should not affect equality."""
+        mod1 = _TestModel(_private_1=1)
+        mod2 = _TestModel(_private_2=2)
+        assert sensible_model_equals(mod1, mod2)
+
     def test_new(self):
         """Ensure a new model can b e created."""
         mod = _TestModel(some_str="test")

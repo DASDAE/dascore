@@ -779,10 +779,15 @@ class CoordManager(DascoreBaseModel):
         """Return True if other coordinates are approx equal."""
         if not isinstance(other, self.__class__):
             return False
-        if not (coord_set := set(self.coord_map)) == set(other.coord_map):
+        if not set(self.dims) == set(other.dims):
+            return False
+        # Account for private coords (which don't have to be equal).
+        s1 = {x for x in self.coord_map if x in self.dims or not x.startswith("_")}
+        s2 = {x for x in other.coord_map if x in other.dims or not x.startswith("_")}
+        if not s1 == s2:
             return False
         cdict_1, cdict_2 = self.coord_map, other.coord_map
-        for name in coord_set:
+        for name in s1:
             if not cdict_1[name].approx_equal(cdict_2[name]):
                 return False
         return True
