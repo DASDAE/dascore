@@ -140,7 +140,7 @@ def _get_coords(patch_group, dims, attrs2):
         name = coord_name.replace("_cdims_", "")
         value = patch_group._v_attrs[coord_name]
         assert name in coord_dict, "Should already have loaded coordinate array"
-        coord_dim_dict[name] = (tuple(value.split(".")), coord_dict[name])
+        coord_dim_dict[name] = (tuple(value.split(",")), coord_dict[name])
         # add dimensions to coordinates that have them.
     cm = get_coord_manager(coord_dim_dict, dims=dims)
     return cm
@@ -165,7 +165,13 @@ def _read_patch(patch_group, **kwargs):
     # and the data = np.array(None) in except block. Not sure, why, removed
     # try except.
     if kwargs:
-        coords, data = coords.select(array=patch_group["data"], **kwargs)
+        # We need to remove any coordinates from kwargs that are multi-dim
+        # coords.
+        cmap = coords.dim_map
+        sub_kwargs = {
+            i: v for i, v in kwargs.items() if (i not in cmap) or (len(cmap[i]) == 1)
+        }
+        coords, data = coords.select(array=patch_group["data"], **sub_kwargs)
     else:
         data = patch_group["data"][:]
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)

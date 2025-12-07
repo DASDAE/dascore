@@ -265,6 +265,25 @@ class TestRoundTrips:
         patch = dc.spool(path, file_format="DASDAE")[0]
         assert isinstance(patch, dc.Patch)
 
+    def test_roundtrip_coord_multiple_dims(
+        self, tmp_path_factory, multi_dim_coords_patch
+    ):
+        """
+        Ensure a patch with a non-dimensional coordinate that is associated
+        with two dims can round-trip.
+        """
+        patch = multi_dim_coords_patch
+        folder = tmp_path_factory.mktemp("dasdae_multi_dim_coord")
+        path = folder / "multidimcoord.hdf"
+        patch.io.write(path, "dasdae")
+
+        # Ensure we can read it from a directory
+        patch2 = dc.spool(folder).update()[0]
+        # And from a single file
+        patch3 = dc.spool(path)[0]
+        # All of the patches should be equal.
+        assert patch == patch2 == patch3
+
     # Frustratingly, it doesn't seem pytables can store NaN values using
     # create_array, even when specifying an Atom with dflt=np.nan. See
     # https://github.com/PyTables/PyTables/issues/423
