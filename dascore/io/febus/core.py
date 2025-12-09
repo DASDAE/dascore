@@ -98,7 +98,7 @@ class Febus2(FiberIO):
 class Febus1(Febus2):
     """Support for Febus V 1.
 
-    This is here to support legacy febus (eg pubdas Valencia)
+    This is here to support legacy Febus (eg pubdas Valencia)
     """
 
     version = "1"

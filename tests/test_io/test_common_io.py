@@ -27,7 +27,7 @@ from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
-from dascore.io.febus import Febus2
+from dascore.io.febus import Febus1, Febus2
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
@@ -70,6 +70,7 @@ COMMON_IO_READ_TESTS = {
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     APSensingV10(): ("ap_sensing_1.hdf5",),
     Febus2(): ("febus_1.h5",),
+    Febus1(): ("valencia_febus_example.h5",),
     OptoDASV8(): ("opto_das_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
@@ -253,7 +254,7 @@ class TestGetFormat:
         for other_io, data_files in COMMON_IO_READ_TESTS.items():
             if isinstance(other_io, type(io_instance)):
                 continue
-            for key in data_files:
+            for key in iterate(data_files):
                 with skip_timeout():
                     path = fetch(key)
                 out = io_instance.get_format(path)

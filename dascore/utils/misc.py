@@ -926,3 +926,16 @@ def get_2d_line_intersection(p1, p2, p3, p4):
         px = num_x / denom
         py = num_y / denom
     return np.array([px, py])
+
+
+def tukey_fence(data, fence_multiplier=1.5) -> np.ndarray:
+    """
+    Apply Tukey's fence to determine data range without outliers.
+    """
+    q1, q3 = np.nanpercentile(data, [25, 75])
+    dmin, dmax = np.nanmin(data), np.nanmax(data)
+    diff = q3 - q1  # Interquartile range (IQR)
+    q_lower = np.nanmax([q1 - diff * fence_multiplier, dmin])
+    q_upper = np.nanmin([q3 + diff * fence_multiplier, dmax])
+    lower_and_top = np.asarray([q_lower, q_upper])
+    return lower_and_top
