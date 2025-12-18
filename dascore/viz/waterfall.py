@@ -12,6 +12,7 @@ import numpy as np
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, maybe_convert_percent_to_fraction
+from dascore.utils.misc import tukey_fence
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
     _format_time_axis,
@@ -21,8 +22,6 @@ from dascore.utils.plotting import (
     _get_extents,
 )
 from dascore.utils.time import dtype_time_like, is_datetime64
-
-IQR_FENCE_MULTIPLIER = 1.5
 
 
 def _validate_scale_type(scale_type):
@@ -76,13 +75,7 @@ def _get_scale(scale, scale_type, data):
         # This prevents a few extreme values from obscuring the majority of the
         # data at the cost of a slight performance penalty.
         case ([], "relative"):
-            q1, q3 = np.nanpercentile(data, [25, 75])
-            dmin, dmax = np.nanmin(data), np.nanmax(data)
-            diff = q3 - q1  # Interquartile range (IQR)
-            q_lower = np.nanmax([q1 - diff * IQR_FENCE_MULTIPLIER, dmin])
-            q_upper = np.nanmin([q3 + diff * IQR_FENCE_MULTIPLIER, dmax])
-            scale = np.asarray([q_lower, q_upper])
-            return scale
+            return tukey_fence(data)
         # Case 3: Sequence with relative scaling
         # Scale values represent fractions of the data range [0, 1]
         # and are mapped to [data_min, data_max]

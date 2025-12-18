@@ -1,5 +1,8 @@
 """DASCore - A library for fiber optic sensing."""
 from __future__ import annotations
+
+import warnings
+
 from rich import print  # noqa
 
 from dascore.core.patch import Patch
@@ -16,3 +19,6 @@ from dascore.version import __last_version__, __version__
 
 # flag for disabling progress bar when debugging
 _debug = False
+
+# Ensure warnings are issued only once (per warning/line)
+warnings.filterwarnings("once", category=UserWarning, module=r"dascore\..*")
