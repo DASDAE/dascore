@@ -24,7 +24,9 @@ from dascore.utils.misc import (
     maybe_get_items,
     maybe_mem_map,
     optional_import,
+    suppress_warnings,
     to_object_array,
+    tukey_fence,
     warn_or_raise,
 )
 
@@ -254,6 +256,43 @@ class TestGetStencilCoefficients:
         out = get_stencil_coefs(1, 2)
         expected = np.array([1, -2, 1])
         assert np.allclose(out, expected)
+
+
+class TestTukeyFence:
+    """Tests for Tukey fence outlier detection."""
+
+    def test_constant_data(self):
+        """Constant data should return the same value for both bounds."""
+        data = np.array([5.0, 5.0, 5.0, 5.0])
+        result = tukey_fence(data)
+        assert np.allclose(result, [5.0, 5.0])
+
+    def test_simple_range(self):
+        """Simple range should calculate fences correctly."""
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        result = tukey_fence(data)
+        # Q1=2, Q3=4, IQR=2, fences: 2-1.5*2=-1, 4+1.5*2=7
+        # But clamped to data range [1, 5]
+        assert np.allclose(result, [1.0, 5.0])
+
+    def test_all_nan(self):
+        """All-NaN data should return NaN bounds."""
+        data = np.array([np.nan, np.nan, np.nan])
+        with suppress_warnings():
+            result = tukey_fence(data)
+        assert np.isnan(result[0])
+        assert np.isnan(result[1])
+
+    def test_data_with_outliers(self):
+        """Data with outliers should exclude them from range."""
+        # Core data: 10-20, with outliers at 0 and 100
+        data = np.array([0.0, 10.0, 12.0, 15.0, 18.0, 20.0, 100.0])
+        result = tukey_fence(data)
+        # Q1=11, Q3=19, IQR=8, fences: 11-1.5*8=-1, 19+1.5*8=31
+        # Clamped: [0, 31], but 100 is excluded
+        expected_lower = max(11 - 1.5 * 8, 0.0)
+        expected_upper = min(19 + 1.5 * 8, 100.0)
+        assert np.allclose(result, [expected_lower, expected_upper])
 
 
 class TestCachedMethod:

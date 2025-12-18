@@ -152,16 +152,16 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     return out
 
 
-def _get_time_overlap_samples(feb, n_blocks, tstep=None):
+def _get_time_overlap_samples(feb, n_time_samps, tstep=None):
     """Determine the number of redundant samples in the time dimension."""
-    tstep = tstep if tstep is not None else _get_sample_spacing(feb, n_blocks)
+    tstep = tstep if tstep is not None else _get_sample_spacing(feb, n_time_samps)
     block_time = _get_block_time(feb)
     # Since the data have overlaps in each block's time dimension, we need to
     # trim the overlap off the time dimension to avoid having to merge blocks later.
     # However, sometimes the "BlockOverlap" is wrong, so we calculate it
     # manually here, rounding to nearest even number.
     expected_samples = int(np.round((block_time / tstep) / 2) * 2)
-    excess_rows = n_blocks - expected_samples
+    excess_rows = n_time_samps - expected_samples
     assert (
         excess_rows % 2 == 0
     ), "excess rows must be symmetric to distribute on both ends"
@@ -195,7 +195,7 @@ def _get_time_coord(feb):
             "It appears the Febus file extents specify a different range than "
             "found in the data array. Double check this is correct."
         )
-        warnings.warn(msg, UserWarning)
+        warnings.warn(msg, UserWarning, stacklevel=2)
     # Create time coord.
     # Need to account for removing overlap times. Also, time vector refers
     # to the center of the block, so this finds the first non-overlapping

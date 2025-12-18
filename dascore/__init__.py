@@ -21,4 +21,4 @@ from dascore.version import __last_version__, __version__
 _debug = False
 
 # Ensure warnings are issued only once (per warning/line)
-warnings.filterwarnings("once", category=UserWarning)
+warnings.filterwarnings("once", category=UserWarning, module=r"dascore\..*")
