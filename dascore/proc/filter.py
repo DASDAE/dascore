@@ -95,7 +95,9 @@ def _get_sos(sr, filt_min, filt_max, corners):
 
 
 @patch_function()
-def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchType:
+def pass_filter(
+    patch: PatchType, corners: int = 4, zerophase: bool = True, **kwargs
+) -> PatchType:
     """
     Apply a Butterworth pass filter (bandpass, highpass, or lowpass).
 
@@ -146,7 +148,9 @@ def pass_filter(patch: PatchType, corners=4, zerophase=True, **kwargs) -> PatchT
 
 
 @patch_function()
-def sobel_filter(patch: PatchType, dim: str, mode="reflect", cval=0.0) -> PatchType:
+def sobel_filter(
+    patch: PatchType, dim: str, mode: str = "reflect", cval: float = 0.0
+) -> PatchType:
     """
     Apply a Sobel filter.
 
@@ -200,7 +204,11 @@ def _create_size_and_axes(patch, kwargs, samples):
 @patch_function()
 @compose_docstring(sample_explanation=samples_arg_description)
 def median_filter(
-    patch: PatchType, samples=False, mode="reflect", cval=0.0, **kwargs
+    patch: PatchType,
+    samples: bool = False,
+    mode: str = "reflect",
+    cval: float = 0.0,
+    **kwargs,
 ) -> PatchType:
     """
     Apply 2-D median filter.
@@ -251,7 +259,7 @@ def median_filter(
 
 
 @patch_function()
-def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
+def notch_filter(patch: PatchType, q: float, **kwargs) -> PatchType:
     """
     Apply a second-order IIR notch digital filter on patch's data.
 
@@ -320,7 +328,12 @@ def notch_filter(patch: PatchType, q, **kwargs) -> PatchType:
 @patch_function()
 @compose_docstring(sample_explanation=samples_arg_description)
 def savgol_filter(
-    patch: PatchType, polyorder, samples=False, mode="interp", cval=0.0, **kwargs
+    patch: PatchType,
+    polyorder: int,
+    samples: bool = False,
+    mode: str = "interp",
+    cval: float = 0.0,
+    **kwargs,
 ) -> PatchType:
     """
     Applies Savgol filter along spenfied dimensions.
@@ -382,7 +395,12 @@ def savgol_filter(
 @patch_function()
 @compose_docstring(sample_explanation=samples_arg_description)
 def gaussian_filter(
-    patch: PatchType, samples=False, mode="reflect", cval=0.0, truncate=4.0, **kwargs
+    patch: PatchType,
+    samples: bool = False,
+    mode: str = "reflect",
+    cval: float = 0.0,
+    truncate: float = 4.0,
+    **kwargs,
 ) -> PatchType:
     """
     Applies a Gaussian filter along specified dimensions.
