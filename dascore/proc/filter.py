@@ -149,7 +149,7 @@ def pass_filter(
 
 @patch_function()
 def sobel_filter(
-    patch: PatchType, dim: str, mode: str = "reflect", cval: float = 0.0
+    patch: PatchType, dim: str, mode: str = "reflect", cval: float | int = 0.0
 ) -> PatchType:
     """
     Apply a Sobel filter.
