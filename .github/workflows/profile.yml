@@ -28,9 +28,12 @@ jobs:
       - name: Install dependencies
         run: pip install ".[profile]"
 
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v4
         with:
           mode: instrumentation
           run: ./.github/test_code.sh profile
-          token: ${{ secrets.CODSPEED_TOKEN }}  # Optional for public repos
+          token: ${{ secrets.CODSPEED_TOKEN }}
