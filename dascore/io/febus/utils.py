@@ -54,7 +54,7 @@ def _get_block_time(feb):
     # After removing outliers, the mean seems to work better than the median
     # for the test files we have. There is still a concerning amount of
     # variability.
-    return np.mean(d_time)
+    return _maybe_unpack(np.mean(d_time))
 
 
 @cache
