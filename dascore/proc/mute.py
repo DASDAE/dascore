@@ -235,11 +235,9 @@ class _MuteGeometry2D(_MuteGeometry):
         """Create an array of points, swapping out implicit values."""
 
         def _get_coord_float_values(coord, vals, relative):
-            """Get the coordinate float values relative to start of coords."""
-            out = dc.to_float(np.array(vals))
-            if not relative:
-                out = out - dc.to_float(coord.min())
-            return out
+            """Get coordinate values in float relative to coord minimum."""
+            compat = coord._get_compatible_value(np.array(vals), relative=relative)
+            return dc.to_float(compat - coord.min())
 
         # Output is dim by column and point by row.
         out = np.full((4, 2), fill_value=np.nan, dtype=np.float64)
@@ -420,7 +418,7 @@ def line_mute(
     Mute (zero out) data in a region specified by one or more lines.
 
     Each dimension accepts two boundary specifications that define
-    the mute region. Boundaries can be scalar values or arrays of values.
+    the mute region. Boundaries can be scalar values or length-2 sequences.
 
     Parameters
     ----------
@@ -437,14 +435,14 @@ def line_mute(
         Dimension specifications as (boundary_1, boundary_2) pairs.
         Each boundary can be:
         - Scalar: constant value (defines plane perpendicular to dimension)
-        - Array/list: coordinates defining line/curve/surface
+        - Length-2 sequence: coordinates defining a straight line (2D only)
         - None or ...: edge of coordinate (min or max)
 
     Examples
     --------
     >>> import dascore as dc
-    >>> from scipy.ndimage import gaussian_filter
     >>>
+    >>> # An example patch full of 1s with time on y axis and distance on x.
     >>> patch = dc.get_example_patch().full(1)
     >>>
     >>> # Mute first 0.5s (relative to start by default)
@@ -458,13 +456,16 @@ def line_mute(
     >>>
     >>> # Classic first break mute: mute early arrivals
     >>> # Line from (t=0, d=0) to (t=0.3, d=300) defines velocity=1000 m/s
+    >>> # The other line (defined by time=0 and distance=None) is t=0 (over all
+    >>> # distances).
     >>> muted = patch.line_mute(
     ...     time=(0, [0, 0.3]),
     ...     distance=(None, [0, 300]),
     ...     smooth=0.02,
     ... )
     >>>
-    >>> # Mute late arrivals: from velocity line to end
+    >>> # Mute late arrivals: from velocity line to a vertical line with
+    >>> # with distance=0 (over all times).
     >>> muted = patch.line_mute(
     ...     time=([0, 0.3], None),
     ...     distance=([0, 300], 0),
@@ -499,7 +500,8 @@ def line_mute(
     - By relative=True (the default) means values are offsets from coordinate
       edges. Use relative=False for absolute coordinate values.
 
-    - Currently, mute doesn't support more than 2 dimensions.
+    - Currently, mute doesn't support more than 2 dimensions, and 2D mutes
+      require straight-line boundaries.
 
     - For more control over boundary smoothing, use a patch with one values
       then apply custom tapering/smoothing before multiplying with the
