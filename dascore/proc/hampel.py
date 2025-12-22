@@ -99,10 +99,10 @@ def hampel_filter(
     patch: PatchType,
     *,
     threshold: float = 10.0,
-    samples=False,
-    approximate=True,
+    samples: bool = False,
+    approximate: bool = True,
     **kwargs,
-):
+) -> PatchType:
     """
     A Hampel filter implementation useful for removing spikes in data.
 

@@ -33,9 +33,9 @@ def _get_block_time(feb):
     # Some files have this set. We haven't yet seen any files where this
     # values exists and is wrong, so we trust it (for now). This is probably
     # much faster than reading the whole time vector.
-    br = feb.zone.attrs.get("BlockRate", 0) / 1_000
+    br = _maybe_unpack(feb.zone.attrs.get("BlockRate", 0) / 1_000)
     if br > 0:
-        return 1 / br
+        return float(1 / br)
     # Otherwise we have to try to use the time vector. Here be dragons.
     time_shape = feb.source["time"].shape
     # Not sure why but time has the shape of [1, n] for some files and just
@@ -54,7 +54,7 @@ def _get_block_time(feb):
     # After removing outliers, the mean seems to work better than the median
     # for the test files we have. There is still a concerning amount of
     # variability.
-    return np.mean(d_time)
+    return float(_maybe_unpack(np.mean(d_time)))
 
 
 @cache

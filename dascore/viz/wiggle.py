@@ -53,13 +53,13 @@ def _format_y_axis_ticks(ax, offsets, other_axis_ticks, max_ticks=10):
 @patch_function()
 def wiggle(
     patch: PatchType,
-    dim="time",
-    scale=1,
-    alpha=0.2,
-    color="black",
-    shade=False,
+    dim: str = "time",
+    scale: float = 1,
+    alpha: float = 0.2,
+    color: str = "black",
+    shade: bool = False,
     ax: plt.Axes | None = None,
-    show=False,
+    show: bool = False,
 ) -> plt.Figure:
     """
     Create a wiggle plot of patch data.

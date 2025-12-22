@@ -91,7 +91,8 @@ class TestDefiniteIntegration:
             out = patch.integrate(dim=dim, definite=True)
             assert out.shape[ax] == 1
             step = to_float(patch.get_coord(dim).step)
-            trap = getattr(np, "trapezoid", getattr(np, "trapz"))
+            trap_name = "trapezoid" if hasattr(np, "trapezoid") else "trapz"
+            trap = getattr(np, trap_name)
             expected_data = trap(patch.data, dx=step, axis=ax)
             ndims = len(patch.dims)
             indexer = broadcast_for_index(ndims, ax, None)

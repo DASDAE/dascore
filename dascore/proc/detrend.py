@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from scipy.signal import detrend as scipy_detrend
 
 from dascore.constants import PatchType
@@ -9,7 +11,9 @@ from dascore.utils.patch import patch_function
 
 
 @patch_function()
-def detrend(patch: PatchType, dim, type="linear") -> PatchType:
+def detrend(
+    patch: PatchType, dim: str, type: Literal["linear", "constant"] = "linear"
+) -> PatchType:
     """
     Perform detrending along a given dimension (distance or time) of a patch.
 

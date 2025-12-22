@@ -33,4 +33,4 @@ jobs:
         with:
           mode: instrumentation
           run: ./.github/test_code.sh profile
-          token: ${{ secrets.CODSPEED_TOKEN }}  # Optional for public repos
+          token: ${{ secrets.CODSPEED_TOKEN }}

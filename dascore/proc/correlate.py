@@ -35,7 +35,9 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
 
 
 @patch_function()
-def correlate_shift(patch, dim, undo_weighting=True):
+def correlate_shift(
+    patch: PatchType, dim: str, undo_weighting: bool = True
+) -> PatchType:
     """
     Apply a shift to the patch data to undo correlation in frequency domain.
 
@@ -87,7 +89,7 @@ def correlate_shift(patch, dim, undo_weighting=True):
 @patch_function()
 def correlate(
     patch: PatchType,
-    samples=False,
+    samples: bool = False,
     lag=None,
     **kwargs,
 ) -> PatchType:

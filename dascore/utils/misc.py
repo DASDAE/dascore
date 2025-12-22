@@ -461,9 +461,10 @@ def maybe_get_items(
 
 
 def _maybe_unpack(maybe_array):
-    """Unpack an array like object if it is size one, else return input."""
+    """Unpack a single-element array-like object, else return input unchanged."""
     size = getattr(maybe_array, "size", 0)
-    if size == 1:
+    shape = getattr(maybe_array, "shape", ())
+    if size == 1 and shape:
         maybe_array = maybe_array[0]
     return maybe_array
 
