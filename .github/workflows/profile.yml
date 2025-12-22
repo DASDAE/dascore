@@ -28,6 +28,10 @@ jobs:
       - name: Install dependencies
         run: pip install ".[profile]"
 
+      - uses: ./.github/actions/cache-test-data
+        with:
+          cache-number: 1
+
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v4
         with:
