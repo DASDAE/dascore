@@ -12,6 +12,10 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: install pyyaml
+      shell: bash
+      run: python -m pip install --quiet pyyaml
+
     - name: load shared variables
       id: load
       shell: bash
