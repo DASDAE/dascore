@@ -1,0 +1,20 @@
+# Shared variables used across all GitHub Actions workflows
+# Update these values to propagate changes to all workflows
+
+python:
+  # Default Python version for most workflows (docs, linting, coverage, etc.)
+  default: "3.13"
+
+  # Full test matrix versions (runtests.yml)
+  test_matrix:
+    - "3.11"
+    - "3.12"
+    - "3.13"
+    - "3.14"
+
+  # Minimum dependency test matrix versions (run_min_dep_tests.yml)
+  min_deps_matrix:
+    - "3.13"
+    - "3.14"
+
+# Add other shared variables here as needed

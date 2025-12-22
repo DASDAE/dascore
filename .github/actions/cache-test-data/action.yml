@@ -1,0 +1,45 @@
+name: "Cache Test Data"
+description: "Caches DASCore test data using Pooch cache directory"
+inputs:
+  cache-number:
+    description: "Cache number. Use != 1 to reset data cache"
+    required: false
+    default: "1"
+
+runs:
+  using: "composite"
+  steps:
+    - name: verify prerequisites
+      shell: bash -el {0}
+      run: |
+        if ! command -v python &> /dev/null; then
+          echo "❌ Error: Python is not installed or not in PATH"
+          echo "This action requires Python to be installed first."
+          exit 1
+        fi
+        if ! python -c "import pooch" 2>/dev/null; then
+          echo "❌ Error: Pooch is not installed"
+          echo "This action requires Pooch to be installed (pip install pooch or include in dependencies)."
+          exit 1
+        fi
+        echo "✅ Prerequisites verified: Python and Pooch are available"
+
+    - name: get data registry hash
+      shell: bash -el {0}
+      run: |
+        echo "DATA_REGISTRY_HASH=$(python -c "import pooch; print(pooch.file_hash('dascore/data_registry.txt'))")" >> $GITHUB_ENV
+
+    - name: get data cache path
+      shell: bash -el {0}
+      run: |
+        echo "DATA_CACHE_PATH=$(python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
+
+    - name: cache test data
+      uses: actions/cache@v4
+      id: cache-test-data
+      with:
+        enableCrossOsArchive: true
+        path: ${{ env.DATA_CACHE_PATH }}
+        key: data-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}
+        restore-keys: |
+          data-${{ env.DATA_REGISTRY_HASH }}-

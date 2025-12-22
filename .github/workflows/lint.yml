@@ -15,12 +15,14 @@ jobs:
           fetch-tags: "true"
           fetch-depth: '0'
 
+      - uses: ./.github/actions/load-shared-vars
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_DEFAULT }}
 
       - name: install linting packages
         run: uv tool install pre-commit

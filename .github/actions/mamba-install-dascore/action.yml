@@ -64,43 +64,15 @@ runs:
       run: |
         git fetch --tags --force
 
-    - name: get data registry hash
-      shell: bash
-      run: |
-        echo "DATA_REGISTRY_HASH=$(sha256sum dascore/data_registry.txt | cut -d' ' -f1)" >> $GITHUB_ENV
-
     - name: install dascore
       if: "${{ inputs.install-package == 'true' }}"
       shell: bash -l {0}
       run: |
         pip install -e .${{ inputs.install-group-str }}
 
-    - name: set data cache path
-      shell: bash -el {0}
-      run: |
-        echo "DATA_CACHE_PATH=$(python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
-
-    - name: cache test data
-      uses: actions/cache@v4
-      id: cache-test-data
+    - uses: ./.github/actions/cache-test-data
       with:
-        enableCrossOsArchive: true
-        path: ${{ env.DATA_CACHE_PATH }}
-        key: data-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}
-        restore-keys: |
-          data-${{ env.DATA_REGISTRY_HASH }}-
-
-    - name: verify cache status
-      shell: bash -el {0}
-      run: |
-        if [[ "${{ steps.cache-test-data.outputs.cache-hit }}" == "true" ]]; then
-          echo "✅ Cache hit! Using cached test data from: ${{ env.DATA_CACHE_PATH }}"
-          echo "Cache key: data-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}"
-        else
-          echo "❌ Cache miss. Test data will be downloaded fresh."
-          echo "Cache key: data-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}"
-        fi
-        ls -la "${{ env.DATA_CACHE_PATH }}" || echo "Cache directory does not exist yet"
+        cache-number: ${{ inputs.cache-number }}
 
     # Print out the package info for current environment
     - name: print package info

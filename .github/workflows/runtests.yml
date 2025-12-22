@@ -25,27 +25,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Load Python version matrix from shared-vars.yml
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      python-matrix: ${{ steps.load-vars.outputs.test-matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/load-shared-vars
+        id: load-vars
+
   # Runs the tests on combinations of the supported python/os matrix.
   test_code:
-
+    needs: setup
     timeout-minutes: 25
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.10', '3.11', "3.12", "3.13"]
+        python-version: ${{ fromJson(needs.setup.outputs.python-matrix) }}
 
     # only run if CI isn't turned off
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
 
     env:
       # set conda environment file with dependencies
-      env_file: "environment.yml"
+      env_file: 'environment.yml'
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-tags: "true"
+          fetch-tags: 'true'
           fetch-depth: '0'
 
       - uses: ./.github/actions/mamba-install-dascore

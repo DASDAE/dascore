@@ -8,9 +8,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  python_version: "3.13"
-
 jobs:
   benchmarks:
     name: Run benchmarks
@@ -21,12 +18,18 @@ jobs:
           fetch-tags: "true"
           fetch-depth: '0'
 
+      - uses: ./.github/actions/load-shared-vars
+
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ env.python_version }}
+          python-version: ${{ env.PYTHON_DEFAULT }}
 
       - name: Install dependencies
         run: pip install ".[profile]"
+
+      - uses: ./.github/actions/cache-test-data
+        with:
+          cache-number: 1
 
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v4
