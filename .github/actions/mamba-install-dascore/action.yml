@@ -65,9 +65,9 @@ runs:
         git fetch --tags --force
 
     - name: get data registry hash
-      shell: bash
+      shell: bash -el {0}
       run: |
-        echo "DATA_REGISTRY_HASH=$(sha256sum dascore/data_registry.txt | cut -d' ' -f1)" >> $GITHUB_ENV
+        echo "DATA_REGISTRY_HASH=$(python -c "import hashlib; print(hashlib.sha256(open('dascore/data_registry.txt', 'rb').read()).hexdigest())")" >> $GITHUB_ENV
 
     - name: install dascore
       if: "${{ inputs.install-package == 'true' }}"
