@@ -14,6 +14,8 @@ jobs:
           fetch-tags: "true"
           fetch-depth: '0'
 
+      - uses: ./.github/actions/load-shared-vars
+
       - name: setup conda
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -21,7 +23,7 @@ jobs:
           channels: conda-forge,defaults
           channel-priority: true
           environment-file: environment.yml
-          python-version: 3.11
+          python-version: ${{ env.PYTHON_DEFAULT }}
 
       - name: create dists
         shell: bash -l {0}

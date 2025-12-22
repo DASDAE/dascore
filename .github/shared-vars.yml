@@ -1,0 +1,8 @@
+# Shared variables used across all GitHub Actions workflows
+# Update these values to propagate changes to all workflows
+
+python:
+  # Default Python version for most workflows (docs, linting, coverage, etc.)
+  default: "3.13"
+
+# Add other shared variables here as needed

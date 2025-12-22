@@ -37,9 +37,11 @@ jobs:
           fetch-tags: "true"
           fetch-depth: '0'
 
+      - uses: ./.github/actions/load-shared-vars
+
       - uses: ./.github/actions/mamba-install-dascore
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_DEFAULT }}
           environment-file: './.github/doc_environment.yml'
 
       - uses: ./.github/actions/prep_doc_build
