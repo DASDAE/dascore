@@ -135,7 +135,7 @@ def _add_colorbar(ax, im, patch, log):
 def waterfall(
     patch: PatchType,
     ax: plt.Axes | None = None,
-    cmap="bwr",
+    cmap: str = "bwr",
     scale: float | Sequence[float] | None = None,
     scale_type: Literal["relative", "absolute"] = "relative",
     interpolation: str | None = "antialiased",

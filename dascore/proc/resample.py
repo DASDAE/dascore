@@ -40,7 +40,7 @@ def _apply_scipy_decimation(patch, factor, ftype, axis):
 def decimate(
     patch: PatchType,
     filter_type: Literal["iir", "fir", None] = "iir",
-    copy=True,
+    copy: bool = True,
     **kwargs,
 ) -> PatchType:
     """
@@ -155,7 +155,11 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
 
 @patch_function()
 def resample(
-    patch: PatchType, window=None, interp_kind="linear", samples=False, **kwargs
+    patch: PatchType,
+    window=None,
+    interp_kind: str = "linear",
+    samples: bool = False,
+    **kwargs,
 ) -> PatchType:
     """
     Resample along a single dimension using Fourier Method and interpolation.

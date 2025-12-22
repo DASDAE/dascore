@@ -15,10 +15,10 @@ from dascore.utils.patch import get_patch_window_size, patch_function
 def wiener_filter(
     patch: PatchType,
     *,
-    noise=None,
-    samples=False,
+    noise: float | None = None,
+    samples: bool = False,
     **kwargs,
-):
+) -> PatchType:
     """
     Apply a Wiener filter to reduce noise in the patch data.
 

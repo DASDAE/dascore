@@ -22,7 +22,7 @@ from dascore.utils.patch import patch_function
 
 
 @patch_function()
-def snap_coords(patch: PatchType, *coords, reverse=False):
+def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     """
     Snap coordinates to evenly spaced samples.
 
@@ -59,7 +59,7 @@ def snap_coords(patch: PatchType, *coords, reverse=False):
 
 
 @patch_function()
-def sort_coords(patch: PatchType, *coords, reverse=False):
+def sort_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     """
     Sort one or more coordinates.
 
