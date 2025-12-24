@@ -23,11 +23,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Load Python version matrix from shared-vars.yml
+  # Load Python version matrix from shared vars
   setup:
     runs-on: ubuntu-latest
     outputs:
-      python-matrix: ${{ steps.load-vars.outputs.min-deps-matrix }}
+      # Shared values live in .github/actions/load-shared-vars/action.yml
+      python-matrix: ${{ steps.load-vars.outputs.python-min-deps-matrix }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/load-shared-vars
@@ -41,6 +42,7 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-latest, macos-latest, windows-latest ]
+        # Defined in .github/actions/load-shared-vars/action.yml
         python-version: ${{ fromJson(needs.setup.outputs.python-matrix) }}
 
     # only run if CI isn't turned off
