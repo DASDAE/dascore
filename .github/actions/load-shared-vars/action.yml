@@ -18,13 +18,10 @@ runs:
       id: load
       shell: bash
       run: |
-        {
-          echo "PYTHON_DEFAULT=3.13"
-          echo 'PYTHON_TEST_MATRIX=["3.11","3.12","3.13","3.14"]'
-          echo 'PYTHON_MIN_DEPS_MATRIX=["3.13","3.14"]'
-        } >> "$GITHUB_ENV"
+        python_default="3.13"
+        python_test_matrix='["3.11","3.12","3.13","3.14"]'
+        python_min_deps_matrix='["3.13","3.14"]'
 
-        {
-          echo 'python-test-matrix=["3.11","3.12","3.13","3.14"]'
-          echo 'python-min-deps-matrix=["3.13","3.14"]'
-        } >> "$GITHUB_OUTPUT"
+        echo "PYTHON_DEFAULT=$python_default" >> "$GITHUB_ENV"
+        echo "python-test-matrix=$python_test_matrix" >> "$GITHUB_OUTPUT"
+        echo "python-min-deps-matrix=$python_min_deps_matrix" >> "$GITHUB_OUTPUT"
