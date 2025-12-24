@@ -23,6 +23,7 @@ jobs:
           channels: conda-forge,defaults
           channel-priority: true
           environment-file: environment.yml
+          # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ env.PYTHON_DEFAULT }}
 
       - name: create dists
