@@ -236,8 +236,8 @@ class TestToTimeDelta64:
     def test_pandas_time_delta(self):
         """Ensure pandas timedelta still works."""
         expected = np.timedelta64(1, "s")
-        ptd = pd.Timedelta(1, "s")
-        out = to_timedelta64(ptd)
+        pdf = pd.Timedelta(1, "s")
+        out = to_timedelta64(pdf)
         assert expected == out
 
     def test_str_roundtrip(self, timedelta64):
@@ -397,7 +397,7 @@ class TestToInt:
         with pytest.raises(NotImplementedError):
             to_int(Dummy())
 
-    def test_empy_dt_array(self):
+    def test_empty_dt_array(self):
         """Ensure an empty datatime array gets converted to int."""
         array = np.empty(0, dtype="datetime64[ns]")
         out = to_int(array)

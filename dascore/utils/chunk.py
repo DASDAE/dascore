@@ -447,7 +447,7 @@ class ChunkManager:
         output dataframe with column '_group'. The _group column is used
         to link the two dataframes together.
         """
-        if df.empty:  # empy df, do nothing
+        if df.empty:  # empty df, do nothing
             return df.assign(_group=None), df.assign(_group=None)
         # get series of start/stop along requested dimension
         start, stop, step = get_interval_columns(df, self._name)

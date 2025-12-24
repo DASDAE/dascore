@@ -214,3 +214,21 @@ filterwarnings = [
 [tool.ruff.format]
 # Use `\n` line endings for all files
 line-ending = "lf"
+
+[tool.typos.files]
+extend-exclude = ["docs/_static/logo.svg"]
+
+[tool.typos.default]
+# Ignore identifiers after a dot, plus text in [] or quotes (often API names/keys).
+extend-ignore-re = [
+    "\\b[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*\\b",
+    "\\[[^\\]]*\\]",
+    "\"[^\"]*\"",
+    "'[^']*'",
+]
+
+[tool.typos.default.extend-words]
+nin = "nin"
+df = "df"
+ser = "ser"
+ar = "ar"

@@ -251,7 +251,7 @@ class TestGetStencilCoefficients:
         expected = np.array([1, -8, 0, 8, -1]) / 12.0
         assert np.allclose(out, expected)
 
-    def test_3_point_2nd_derivative(self):
+    def test_3_point_2and_derivative(self):
         """3 point 2nd derivative."""
         out = get_stencil_coefs(1, 2)
         expected = np.array([1, -2, 1])

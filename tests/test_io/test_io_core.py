@@ -118,7 +118,7 @@ class TestPatchFileSummary:
         out = PatchFileSummary(d_time=10)
         assert out.time_step == dc.to_timedelta64(10)
 
-    def test_dim_typle(self):
+    def test_dim_tuple(self):
         """Ensure patch file summaries can be converted to tuples."""
         out = PatchFileSummary(d_time=10, dims="time,distance")
         assert out.dim_tuple == ("time", "distance")

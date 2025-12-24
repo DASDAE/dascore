@@ -353,7 +353,7 @@ def forge_dts():
 
 
 @register_func(EXAMPLE_PATCHES, key="nd_patch")
-def nd_patch(dim_count=3, coord_lens=10):
+def and_patch(dim_count=3, coord_lens=10):
     """
     Make an N dimensional Patch.
 

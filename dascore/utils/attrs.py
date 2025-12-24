@@ -81,7 +81,7 @@ def combine_patch_attrs(
         merge_coords = _get_merge_coords(model_dicts)
         merge_dict_list = _get_merge_dict_list(merge_coords)
         out = {}
-        # empy dicts
+        # empty dicts
         if not merge_dict_list:
             return dict(merge_dict_list)
         # all these should be equal else raise.
