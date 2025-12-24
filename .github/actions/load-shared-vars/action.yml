@@ -1,68 +1,30 @@
+# This is where global configurations are added.
+
 name: "Load Shared Variables"
-description: "Loads shared variables from .github/shared-vars.yml and sets them as environment variables and outputs"
+description: "Loads shared variables and sets them as environment variables and outputs"
 
 outputs:
-  test-matrix:
+  python-test-matrix:
     description: "Python version matrix for full tests"
-    value: ${{ steps.load.outputs.test-matrix }}
-  min-deps-matrix:
+    value: ${{ steps.load.outputs.python-test-matrix }}
+  python-min-deps-matrix:
     description: "Python version matrix for minimum dependency tests"
-    value: ${{ steps.load.outputs.min-deps-matrix }}
+    value: ${{ steps.load.outputs.python-min-deps-matrix }}
 
 runs:
   using: "composite"
   steps:
-    - name: install pyyaml
-      shell: bash
-      run: python -m pip install --quiet pyyaml
-
     - name: load shared variables
       id: load
       shell: bash
       run: |
-        # Read shared-vars.yml and set environment variables
-        python << 'EOF'
-        import yaml
-        import os
-        import json
+        {
+          echo "PYTHON_DEFAULT=3.13"
+          echo 'PYTHON_TEST_MATRIX=["3.11","3.12","3.13","3.14"]'
+          echo 'PYTHON_MIN_DEPS_MATRIX=["3.13","3.14"]'
+        } >> "$GITHUB_ENV"
 
-        def flatten_dict(d, parent_key='', sep='_'):
-            """Recursively flatten nested dictionary into env var format."""
-            items = []
-            for k, v in d.items():
-                new_key = f"{parent_key}{sep}{k}".upper() if parent_key else k.upper()
-                if isinstance(v, dict):
-                    items.extend(flatten_dict(v, new_key, sep=sep).items())
-                elif isinstance(v, list):
-                    # Convert lists to JSON strings for use in workflows
-                    items.append((new_key, json.dumps(v)))
-                else:
-                    items.append((new_key, str(v)))
-            return dict(items)
-
-        # Load shared variables file
-        with open('.github/shared-vars.yml', 'r') as f:
-            config = yaml.safe_load(f)
-
-        # Flatten all variables
-        env_vars = flatten_dict(config)
-
-        # Write to GITHUB_ENV
-        with open(os.environ['GITHUB_ENV'], 'a') as env_file:
-            for key, value in sorted(env_vars.items()):
-                env_file.write(f"{key}={value}\n")
-                print(f"✅ Set {key}={value}")
-
-        # Also output specific matrices for job outputs
-        python_config = config.get('python', {})
-        test_matrix = python_config.get('test_matrix', [])
-        min_deps_matrix = python_config.get('min_deps_matrix', [])
-
-        # Write to GITHUB_OUTPUT for action outputs
-        with open(os.environ['GITHUB_OUTPUT'], 'a') as output_file:
-            output_file.write(f"test-matrix={json.dumps(test_matrix)}\n")
-            output_file.write(f"min-deps-matrix={json.dumps(min_deps_matrix)}\n")
-
-        print(f"📋 Output test-matrix: {test_matrix}")
-        print(f"📋 Output min-deps-matrix: {min_deps_matrix}")
-        EOF
+        {
+          echo 'python-test-matrix=["3.11","3.12","3.13","3.14"]'
+          echo 'python-min-deps-matrix=["3.13","3.14"]'
+        } >> "$GITHUB_OUTPUT"

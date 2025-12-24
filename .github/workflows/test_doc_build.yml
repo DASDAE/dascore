@@ -20,6 +20,7 @@ jobs:
 
       - uses: ./.github/actions/mamba-install-dascore
         with:
+          # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ env.PYTHON_DEFAULT }}
           environment-file: './.github/doc_environment.yml'
           cache-number: 1

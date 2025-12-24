@@ -31,3 +31,8 @@ repos:
     rev: 0.6.1
     hooks:
     -   id: nbstripout
+
+-   repo: https://github.com/rhysd/actionlint
+    rev: v1.6.27
+    hooks:
+    -   id: actionlint
