@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from io import BufferedReader, BufferedWriter
 from pathlib import Path
 
@@ -62,8 +63,8 @@ class TestGetHandleFromResource:
     def test_path_to_hdf5_writer(self, tmp_path):
         """Ensure we get a reader from tmp path reader."""
         path = tmp_path / "test_hdf_writer.h5"
-        handle = get_handle_from_resource(path, HDF5Writer)
-        assert isinstance(handle, File)
+        with closing(get_handle_from_resource(path, HDF5Writer)) as handle:
+            assert isinstance(handle, File)
 
     def test_get_path(self, tmp_path):
         """Ensure we can get a path."""

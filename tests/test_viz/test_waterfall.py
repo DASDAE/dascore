@@ -256,5 +256,5 @@ class TestWaterfall:
         with pytest.raises(ParameterError, match=msg):
             patch.viz.waterfall(scale=0, scale_type="relative")
 
-    def test_precent_scale(self, random_patch):
+    def test_percent_scale(self, random_patch):
         """Ensure the percent unit works with scale."""

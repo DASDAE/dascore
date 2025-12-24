@@ -75,8 +75,8 @@ class FileSpool(DataFrameSpool):
         Note: If the file format supports indexing (e.g. DASDAE) this will
         trigger an indexing of the file.
         """
-        formater = FiberIO.manager.get_fiberio(
+        formatter = FiberIO.manager.get_fiberio(
             format=self._file_format, version=self._file_version
         )
-        getattr(formater, "index", lambda x: None)(self._path)
+        getattr(formatter, "index", lambda x: None)(self._path)
         return self

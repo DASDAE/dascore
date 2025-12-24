@@ -72,14 +72,14 @@ class RSFV1(FiberIO):
         data = patch.data.astype(np.float32)
         dtype = np.dtype(data.dtype)
         file_esize = dtype.itemsize
-        file_formt = 'data_format="native_float"'
+        file_format = 'data_format="native_float"'
 
         data_bytes = data.astype(np.float32).tobytes("F")
 
         hdr_str = f"DASCORE {dc.__version__}   {dt.datetime.now()} \n"
 
         length = len(axis_lengs)
-        hdr_info = [hdr_str, file_formt, f"esize={file_esize}"]
+        hdr_info = [hdr_str, file_format, f"esize={file_esize}"]
         for i in range(length):
             hdr_info.append(f"n{i+1}={axis_lengs[i]}")
             if axis_names[i] == "time":

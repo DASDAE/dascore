@@ -75,7 +75,7 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
         numba = _DummyNumba()
         has_numba = False
 
-    def _wraper(func):
+    def _wrapper(func):
         # Add numba to the functions global namespace so that it can be used
         # within the function without having to import it.
         globs = getattr(func, "__globals__", {})
@@ -105,4 +105,4 @@ def maybe_numba_jit(required=False, _missing_numba=False, **compiler_kwargs):
         out_func.func = func  # make original func accessible via .func
         return out_func
 
-    return _wraper
+    return _wrapper

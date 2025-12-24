@@ -59,7 +59,7 @@ class TestRolling:
         out = trans.rolling(time=time_step * self.window).sum()
         assert np.allclose(out.dropna("time").data, expected.transpose())
 
-    def test_rolling_timdelta(self, random_patch):
+    def test_rolling_timedelta(self, random_patch):
         """Ensure rolling works with timedeltas."""
         time_step = random_patch.get_coord("time").step
         time = time_step * self.window

@@ -49,7 +49,7 @@ class TestSpoolBasics:
         out = str(random_spool)
         assert "object at" not in out
 
-    def test_spool_from_emtpy_sequence(self):
+    def test_spool_from_empty_sequence(self):
         """Ensure a spool can be created from empty list."""
         out = dc.spool([])
         assert isinstance(out, BaseSpool)
