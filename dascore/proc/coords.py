@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 
+from dascore.compat import array_at_least, get_array_namespace
 from dascore.constants import PatchType, select_values_description
 from dascore.core.coords import BaseCoord
 from dascore.exceptions import (
@@ -619,7 +620,8 @@ def transpose(self: PatchType, *dims: str) -> PatchType:
     new_coord = self.coords.transpose(*dims)
     new_dims = new_coord.dims
     axes = tuple(old_dims.index(x) for x in new_dims)
-    new_data = np.transpose(self.data, axes)
+    xp = get_array_namespace(self.data)
+    new_data = xp.transpose(self.data, axes)
     return self.new(data=new_data, coords=new_coord)
 
 
@@ -668,7 +670,7 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     dim_dict.update(dim_kwargs)
     # Remove duplicate dims and convert non ints to arrays.
     kwargs = {
-        i: (i, np.atleast_1d(v) if not isinstance(v, int) else v)
+        i: (i, array_at_least(v, 1) if not isinstance(v, int) else v)
         for i, v in dim_dict.items()
         if i not in patch.dims
     }
@@ -678,11 +680,12 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     ndim = patch.ndim
     # First get data with empty dimensions
     insert_inds = [x + ndim for x in range(len(kwargs))]
-    data = np.expand_dims(patch.data, insert_inds)
+    xp = get_array_namespace(patch.data)
+    data = xp.expand_dims(patch.data, insert_inds)
     shapes = list(data.shape)
     for ind, (_, cdata) in zip(insert_inds, kwargs.values()):
         shapes[ind] = cdata if isinstance(cdata, int) else len(cdata)
-    data = np.broadcast_to(data, shapes)
+    data = xp.broadcast_to(data, shapes)
     coords = patch.coords.update(**kwargs)
     return patch.update(data=data, coords=coords)
 
@@ -717,7 +720,8 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
         axes = None
     else:
         axes = tuple(self.get_axis(x) for x in iterate(dim))
-    data = np.squeeze(self.data, axis=axes)
+    xp = get_array_namespace(self.data)
+    data = xp.squeeze(self.data, axis=axes)
     return self.new(data=data, coords=coords)
 
 
@@ -780,13 +784,17 @@ def add_distance_to(
         )
         raise PatchError(msg)
     # Create 2d arrays from coords and origin.
-    coord_array = np.stack([patch.get_array(x) for x in origin.index], axis=1)
-    origin_array = np.atleast_2d(origin.values)
+    xp = get_array_namespace(patch.data)
+    coord_array = xp.stack([patch.get_array(x) for x in origin.index], axis=1)
+    origin_array = xp.asarray(origin.values)
+    origin_array = xp.reshape(origin_array, (1, -1))
     # Translate coords to origin and take norm.
-    distance = np.linalg.norm(origin_array - coord_array, axis=1, ord=ord)
+    distance = xp.linalg.norm(origin_array - coord_array, axis=1, ord=ord)
     # Add attrs and coords to new patch
     dims = next(iter(associated_dims))
-    new_coords = {f"{prefix}_{i}": (None, np.atleast_1d(v)) for i, v in origin.items()}
+    new_coords = {
+        f"{prefix}_{i}": (None, array_at_least(v, 1)) for i, v in origin.items()
+    }
     new_coords[f"{prefix}_distance"] = (dims, distance)
     out = patch.update_coords.func(patch, **new_coords)
     return out

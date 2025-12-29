@@ -13,7 +13,7 @@ from scipy.signal import chirp as spy_chirp
 
 import dascore as dc
 import dascore.core
-from dascore.compat import random_state
+from dascore.compat import array_at_least, random_state
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
@@ -71,8 +71,8 @@ def random_patch(
     rand = np.random.RandomState(13)
     array = rand.random(shape)
     # create attrs
-    t1 = np.atleast_1d(np.datetime64(time_min))[0]
-    d1 = np.atleast_1d(distance_min)
+    t1 = array_at_least(np.datetime64(time_min), 1)[0]
+    d1 = array_at_least(distance_min, 1)
     attrs = dict(
         distance_step=distance_step,
         time_step=to_timedelta64(time_step),
@@ -220,8 +220,8 @@ def sin_wave_patch(
     # Get time and distance coords
     distance = np.arange(1, channel_count + 1, 1)
     time = to_timedelta64(t_array) + np.datetime64(time_min)
-    freqs = np.atleast_1d(frequency)
-    amps = np.broadcast_to(np.atleast_1d(amplitude), shape=freqs.shape)
+    freqs = array_at_least(frequency, 1)
+    amps = np.broadcast_to(array_at_least(amplitude, 1), shape=freqs.shape)
     # init empty data and add frequencies.
     data = np.zeros((len(time), len(distance)))
     for amp, freq in zip(amps, freqs):

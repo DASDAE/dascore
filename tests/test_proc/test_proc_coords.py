@@ -8,7 +8,7 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
-from dascore.compat import is_array
+from dascore.compat import array_at_least, is_array
 from dascore.core.coords import BaseCoord
 from dascore.exceptions import (
     CoordError,
@@ -634,7 +634,7 @@ class TestSqueeze:
     @pytest.fixture(scope="class")
     def flat_patch(self):
         """Create a patch with a degenerate dimension."""
-        data = np.atleast_2d(np.arange(10))
+        data = array_at_least(np.arange(10), 2)
         coords = {"time": np.arange(10), "distance": np.array([1])}
         dims = ("distance", "time")
         out = dc.Patch(data=data, dims=dims, coords=coords)

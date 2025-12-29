@@ -10,6 +10,7 @@ import numpy
 import numpy as np
 import pandas as pd
 
+from dascore.compat import array_at_least
 from dascore.constants import attr_conflict_description, numeric_types, timeable_types
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
@@ -66,7 +67,7 @@ def get_intervals(
         out = np.asarray([start, stop])
         if is_datetime64(start):
             out = to_datetime64(out)
-        return np.atleast_2d(out)
+        return array_at_least(out, 2)
 
     if is_datetime64(start):
         # need to ensure we have numpy datetimes, not pandas

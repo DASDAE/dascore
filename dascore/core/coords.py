@@ -20,7 +20,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.compat import array, is_array
+from dascore.compat import array, array_at_least, is_array
 from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import (
@@ -345,7 +345,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             If True, the array is of dtype in and refers to samples in the
             coordinate.
         """
-        array = np.atleast_1d(array)
+        array = array_at_least(array, 1)
         if samples:
             coord, inds = self._order_by_sample_array(array)
         else:
@@ -828,7 +828,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             msg = f"Coords must be sorted to use get_next_index, {self} is not."
             raise CoordError(msg)
         input_array_like = isinstance(value, Sized)
-        array = np.atleast_1d(value)
+        array = array_at_least(value, 1)
 
         # handle samples
         if samples:
@@ -928,7 +928,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
                 float_data = dc.to_float(data)
                 dfunc = dc.to_datetime64 if is_datetime64(data) else dc.to_timedelta64
                 out = dfunc(func(float_data))
-            return np.atleast_1d(out)
+            return array_at_least(out, 1)
 
         if dim_reduce == "empty":
             new_coord = self.update(shape=(1,), start=None, stop=None, data=None)
@@ -1211,7 +1211,7 @@ class CoordRange(BaseCoord):
         if (value := self._get_compatible_value(value)) is None:
             return value
         input_is_array = isinstance(value, Sized)
-        array = np.atleast_1d(value)
+        array = array_at_least(value, 1)
         func = np.ceil if forward else np.floor
         start, step = self.start, self.step
         # Due to float weirdness we need a little bit of a fudge factor here.
@@ -1481,7 +1481,7 @@ class CoordMonotonicArray(CoordArray):
         """
         if (new_value := self._get_compatible_value(value)) is None:
             return new_value
-        values = np.atleast_1d(self.values)
+        values = array_at_least(self.values, 1)
         # since search sorted only works on ascending monotonic arrays we
         # negative descending arrays to get the same effect.
         if self.reverse_sorted:
@@ -1491,7 +1491,7 @@ class CoordMonotonicArray(CoordArray):
         # out = np.atleast_1d(np.searchsorted(values, new_value, side=side))
         # Search values. Ensure the returned index is in bounds (eg values GT
         # coord max should still have a range in coords.
-        new_value = np.atleast_1d(new_value)
+        new_value = array_at_least(new_value, 1)
         right = np.searchsorted(values, new_value, side="right")
         # right_ok = (right < len(self)) & (right < 0)
         left = np.searchsorted(values, new_value, side="left")
@@ -1692,7 +1692,7 @@ def get_coord(
         if isinstance(data, BaseCoord):  # just return coordinate
             return data
         if not isinstance(data, np.ndarray):
-            data = np.atleast_1d(data)
+            data = array_at_least(data, 1)
         if np.size(data) == 0:
             dtype = dtype or data.dtype
             return CoordPartial(shape=data.shape, units=units, step=step, dtype=dtype)

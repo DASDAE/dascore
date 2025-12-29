@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dascore.compat import random_state
+from dascore.compat import array_at_least, random_state
 from dascore.exceptions import TimeError
 from dascore.utils.time import (
     get_max_min_times,
@@ -151,7 +151,7 @@ class TestToDateTime64:
 
     def test_datetime_non_ns_array(self):
         """Non-ns datetime arrays should be converted to ns precision."""
-        ar = np.atleast_1d(np.datetime64("2012-01-01"))
+        ar = array_at_least(np.datetime64("2012-01-01"), 1)
         out = to_datetime64(ar)
         assert out.dtype == np.dtype("<M8[ns]")
 

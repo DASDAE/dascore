@@ -10,7 +10,7 @@ from collections.abc import Iterable
 import numpy as np
 
 import dascore as dc
-from dascore.compat import array, is_array
+from dascore.compat import array, get_array_namespace, is_array
 from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
@@ -51,6 +51,13 @@ def _clear_units_if_bool_dtype(patch):
     return patch
 
 
+def _get_namespace_ufunc(operator, *arrays):
+    """Prefer array namespace operator when available."""
+    xp = get_array_namespace(*arrays)
+    name = getattr(operator, "__name__", "")
+    return getattr(xp, name, operator)
+
+
 def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     """
     Create a patch from a unary ufunc.
@@ -71,7 +78,8 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     -----
     We assume the shape of the array won't change.
     """
-    out = operator(patch.data, *args, **kwargs)
+    op = _get_namespace_ufunc(operator, patch.data)
+    out = op(patch.data, *args, **kwargs)
     return patch.new(data=out)
 
 
@@ -147,7 +155,8 @@ def _apply_binary_ufunc(
         """Simply apply the operator, account for reversal."""
         if reversed:
             array1, array2 = array2, array1
-        return operator(array1, array2, *args, **kwargs)
+        op = _get_namespace_ufunc(operator, array1, array2)
+        return op(array1, array2, *args, **kwargs)
 
     def _apply_op_units(patch, other, operator, attrs, reversed=False):
         """Apply the operation handling units attached to array."""

@@ -53,6 +53,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.compat import get_array_namespace
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import BaseCoord, CoordSummary, get_coord
 from dascore.exceptions import (
@@ -694,7 +695,9 @@ class CoordManager(DascoreBaseModel):
             dimensions. Otherwise, only NonCoords can change shape.
         """
         # This guarantees the shapes are compatible
-        target_shape = np.broadcast_shapes(self.shape, shape)
+        xp = get_array_namespace(array) if array is not None else np
+        broadcast_shapes = getattr(xp, "broadcast_shapes", np.broadcast_shapes)
+        target_shape = broadcast_shapes(self.shape, shape)
         # Now just determine which dims need to be expanded and if they can.
         new_coords = {}
         dims = self.dims
@@ -709,7 +712,7 @@ class CoordManager(DascoreBaseModel):
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
                 raise PatchBroadcastError(msg)
-        out = array if array is None else np.broadcast_to(array, target_shape)
+        out = array if array is None else xp.broadcast_to(array, target_shape)
         return self.update_coords(**new_coords), out
 
     def _check_multiple_relative(self, kwargs):

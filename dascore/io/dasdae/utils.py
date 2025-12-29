@@ -6,6 +6,7 @@ import numpy as np
 from tables import NodeError
 
 import dascore as dc
+from dascore.compat import array_at_least
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
@@ -212,7 +213,7 @@ def _get_patch_content_from_group(group):
         new_key = key.replace("_attrs_", "")
         # need to unpack 0 dim arrays.
         if isinstance(value, np.ndarray) and not value.shape:
-            value = np.atleast_1d(value)[0]
+            value = array_at_least(value, 1)[0]
         out[new_key] = value
     # rename dims
     out["dims"] = out.pop("_dims")

@@ -1,0 +1,155 @@
+# Array API Migration Plan for Patch
+
+References:
+- https://data-apis.org/array-api/latest/
+- https://numpy.org/devdocs/reference/array_api.html
+
+Below is an ordered checklist from easiest to most challenging. Each entry corresponds to a Patch method (including properties and aliases) and reflects the expected effort to move from strict NumPy usage to the Array API. Items checked in the Easiest section are already Array API agnostic and required no code changes.
+
+## Easiest
+- [x] __str__ / __repr__ / __rich__ (display only)
+- [x] dims
+- [x] ndim
+- [x] coord_shapes
+- [x] attrs
+- [x] coords
+- [x] data
+- [x] shape
+- [x] size
+- [x] dtype
+- [x] seconds
+- [x] channel_count
+- [x] T
+- [x] viz
+- [x] tran
+- [x] io
+- [x] get_patch_name
+- [x] get_patch_names
+- [x] update
+- [x] new
+- [x] update_attrs
+- [x] check_coords
+- [x] check_attrs
+- [x] get_coord
+- [x] get_array
+- [x] pipe
+- [x] set_dims
+- [x] rename_coords
+- [x] update_coords
+- [x] drop_coords
+- [x] drop_private_coords
+- [x] coords_from_df
+- [x] get_axis
+- [x] assign_coords (deprecated)
+- [x] set_units
+- [x] convert_units
+- [x] simplify_units
+
+## Medium
+- [x] equals
+- [x] squeeze
+- [x] append_dims
+- [x] transpose
+- [x] add_distance_to
+- [ ] snap_coords
+- [ ] sort_coords
+- [x] make_broadcastable_to
+- [x] full
+- [x] select
+- [x] order
+- [ ] iselect (deprecated)
+- [ ] align_to_coord
+- [x] flip
+- [ ] __add__ / __radd__
+- [ ] __sub__ / __rsub__
+- [ ] __mul__ / __rmul__
+- [ ] __truediv__ / __rtruediv__
+- [ ] __floordiv__ / __rfloordiv__
+- [ ] __pow__ / __rpow__
+- [ ] __mod__ / __rmod__
+- [ ] __gt__ / __ge__ / __lt__ / __le__
+- [ ] __neg__
+- [x] abs
+- [x] conj
+- [x] real
+- [x] imag
+- [ ] angle
+- [x] where
+- [x] flip
+- [x] roll
+- [ ] pad
+- [ ] interpolate
+- [x] normalize
+- [x] standardize
+- [x] dropna
+- [x] fillna
+- [ ] aggregate
+- [ ] min
+- [ ] max
+- [ ] mean
+- [ ] median
+- [ ] std
+- [ ] sum
+- [ ] any
+- [ ] all
+- [ ] first
+- [ ] last
+- [x] add
+- [x] subtract
+- [x] multiply
+- [x] divide
+- [x] exp
+- [x] log
+- [x] log10
+- [x] log2
+- [x] is_finite
+- [x] isnan
+- [x] isinf
+- [x] maximum
+- [x] minimum
+
+## Hard
+- [ ] correlate
+- [ ] correlate_shift
+- [ ] decimate
+- [ ] detrend
+- [ ] resample
+- [ ] iresample (deprecated)
+- [ ] rolling
+- [ ] taper
+- [ ] taper_range
+- [ ] line_mute
+- [ ] slope_mute
+- [ ] pass_filter
+- [ ] hampel_filter
+- [ ] sobel_filter
+- [ ] median_filter
+- [ ] notch_filter
+- [ ] savgol_filter
+- [ ] gaussian_filter
+- [ ] slope_filter
+- [ ] wiener_filter
+- [ ] whiten
+
+## Hardest (FFT, spectral, and advanced transforms)
+- [ ] differentiate
+- [ ] integrate
+- [ ] rfft
+- [ ] dft
+- [ ] idft
+- [ ] stft
+- [ ] istft
+- [ ] spectrogram
+- [ ] hilbert
+- [ ] envelope
+- [ ] phase_weighted_stack
+- [ ] dispersion_phase_shift
+- [ ] tau_p
+- [ ] velocity_to_strain_rate
+- [ ] velocity_to_strain_rate_edgeless
+- [ ] radians_to_strain
+
+## Special (NumPy protocol hooks)
+- [ ] __array__
+- [ ] __array_function__
+- [ ] __array_ufunc__

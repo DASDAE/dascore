@@ -10,7 +10,7 @@ import pandas as pd
 from scipy.fft import next_fast_len
 
 import dascore as dc
-from dascore.compat import array
+from dascore.compat import array, get_array_namespace
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
@@ -191,9 +191,10 @@ def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -
         if not_equal:
             return False
     # Test data equality or proximity.
-    if close and not np.allclose(self.data, other.data):
+    xp = get_array_namespace(self.data)
+    if close and not bool(xp.allclose(self.data, other.data)):
         return False
-    elif not close and not np.equal(self.data, other.data).all():
+    elif not close and not bool(xp.all(xp.equal(self.data, other.data))):
         return False
     return True
 
@@ -263,7 +264,8 @@ def abs(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch() # generate example patch
     >>> out = pa.abs() # take absolute value of generated example patch data
     """
-    return patch.new(data=np.abs(patch.data))
+    xp = get_array_namespace(patch.data)
+    return patch.new(data=xp.abs(patch.data))
 
 
 @patch_function()
@@ -280,7 +282,8 @@ def conj(patch: PatchType) -> PatchType:
     >>> dft = pa.dft(None)  # multi-dim dft
     >>> conj = dft.conj()
     """
-    return patch.new(data=np.conj(patch.data))
+    xp = get_array_namespace(patch.data)
+    return patch.new(data=xp.conj(patch.data))
 
 
 @patch_function()
@@ -294,7 +297,8 @@ def real(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.real()
     """
-    return patch.new(data=np.real(patch.data))
+    xp = get_array_namespace(patch.data)
+    return patch.new(data=xp.real(patch.data))
 
 
 @patch_function()
@@ -308,7 +312,8 @@ def imag(patch: PatchType) -> PatchType:
     >>> pa = dascore.get_example_patch()
     >>> out = pa.imag()
     """
-    return patch.new(data=np.imag(patch.data))
+    xp = get_array_namespace(patch.data)
+    return patch.new(data=xp.imag(patch.data))
 
 
 @patch_function()
@@ -360,13 +365,14 @@ def normalize(
     >>> # Bit normalization (sign only)
     >>> bit_norm = patch.normalize(dim="time", norm="bit")
     """
+    xp = get_array_namespace(self.data)
     axis = self.get_axis(dim)
     data = self.data
     if norm in {"l1", "l2"}:
         order = int(norm[-1])
-        norm_values = np.linalg.norm(self.data, axis=axis, ord=order)
+        norm_values = xp.linalg.norm(self.data, axis=axis, ord=order)
     elif norm == "max":
-        norm_values = np.max(data, axis=axis)
+        norm_values = xp.max(data, axis=axis)
     elif norm == "bit":
         pass
     else:
@@ -376,13 +382,14 @@ def normalize(
         )
         raise ValueError(msg)
     if norm == "bit":
-        new_data = np.divide(
-            data, np.abs(data), out=np.zeros_like(data), where=np.abs(data) != 0
-        )
+        abs_data = xp.abs(data)
+        new_data = xp.where(abs_data != 0, data / abs_data, xp.zeros_like(data))
     else:
-        expanded_norm = np.expand_dims(norm_values, axis=axis)
-        new_data = np.divide(
-            data, expanded_norm, out=np.zeros_like(data), where=expanded_norm != 0
+        expanded_norm = xp.expand_dims(norm_values, axis=axis)
+        new_data = xp.where(
+            expanded_norm != 0,
+            data / expanded_norm,
+            xp.zeros_like(data),
         )
     return self.new(data=new_data)
 
@@ -420,10 +427,11 @@ def standardize(
     standardized_distance = patch.standardize('distance')
     ```
     """
+    xp = get_array_namespace(self.data)
     axis = self.get_axis(dim)
     data = self.data
-    mean = np.mean(data, axis=axis, keepdims=True)
-    std = np.std(data, axis=axis, keepdims=True)
+    mean = xp.mean(data, axis=axis, keepdims=True)
+    std = xp.std(data, axis=axis, keepdims=True)
     new_data = (data - mean) / std
     return self.new(data=new_data)
 
@@ -472,10 +480,11 @@ def dropna(
     >>> # drop all distance labels that have all null values
     >>> out = patch.dropna("distance", how="all")
     """
+    xp = get_array_namespace(patch.data)
     axis = patch.get_axis(dim)
-    func = np.any if how == "any" else np.all
+    func = xp.any if how == "any" else xp.all
     if include_inf:
-        to_drop = ~np.isfinite(patch.data)
+        to_drop = ~xp.isfinite(patch.data)
     else:
         to_drop = pd.isnull(patch.data)
     # need to iterate each non-dim axis and collapse with func
@@ -526,13 +535,12 @@ def fillna(patch: PatchType, value, include_inf=True) -> PatchType:
     >>> # Replace all occurrences of NaN with 5
     >>> out = patch.fillna(5)
     """
+    xp = get_array_namespace(patch.data)
     if include_inf:
-        to_replace = ~np.isfinite(patch.data)
+        to_replace = ~xp.isfinite(patch.data)
     else:
         to_replace = pd.isnull(patch.data)
-    new_data = patch.data.copy()
-    new_data[to_replace] = value
-
+    new_data = xp.where(to_replace, value, patch.data)
     return patch.new(data=new_data)
 
 
@@ -681,11 +689,13 @@ def roll(patch, samples=False, update_coord=False, **kwargs):
     coord = patch.get_coord(dim)
     value = coord.get_sample_count(input_value, samples=samples)
 
-    roll_arr = np.roll(arr, value, axis=axis)
+    xp = get_array_namespace(arr)
+    roll_arr = xp.roll(arr, value, axis=axis)
 
     # update coords if True
     if update_coord:
-        roll_coord_arr = np.roll(coord.values, value)
+        coord_ns = get_array_namespace(coord.values)
+        roll_coord_arr = coord_ns.roll(coord.values, value)
         new_coord = coord.update(values=roll_coord_arr)
         patch = patch.update_coords(**{dim: new_coord})
 
@@ -744,14 +754,19 @@ def where(
             patch, cond = align_patch_coords(patch, cond)
 
     cond_array, other_array = array(cond), array(other)
+    xp = get_array_namespace(patch.data, cond_array, other_array)
 
     # Ensure condition is boolean
-    if not np.issubdtype(cond_array.dtype, np.bool_):
+    if hasattr(xp, "isdtype"):
+        is_bool = xp.isdtype(cond_array.dtype, "bool")
+    else:
+        is_bool = np.issubdtype(cond_array.dtype, np.bool_)
+    if not is_bool:
         msg = "Condition must be a boolean array or patch with boolean data"
         raise ValueError(msg)
 
     # Use numpy.where to apply condition
-    new_data = np.where(cond_array, patch.data, other_array)
+    new_data = xp.where(cond_array, patch.data, other_array)
     return patch.new(data=new_data)
 
 
@@ -786,7 +801,8 @@ def flip(patch, *dims, flip_coords=True):
     if not dims:
         return patch  # no-op
     axes = tuple(patch.get_axis(name) for name in dims)
-    data = np.flip(patch.data, axis=axes) if dims else patch.data
+    xp = get_array_namespace(patch.data)
+    data = xp.flip(patch.data, axis=axes) if dims else patch.data
     coords = patch.coords.flip(*dims) if flip_coords else patch.coords
     return patch.new(data=data, coords=coords)
 
@@ -815,5 +831,6 @@ def full(patch, fill_value):
     >>> # Same thing, except for 0s.
     >>> zero_patch = patch.full(0.0)
     """
-    array = np.full(patch.data.shape, fill_value)
+    xp = get_array_namespace(patch.data)
+    array = xp.full(patch.data.shape, fill_value)
     return patch.update(data=array)

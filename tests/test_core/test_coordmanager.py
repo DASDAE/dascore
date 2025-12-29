@@ -10,7 +10,7 @@ from rich.text import Text
 import dascore as dc
 import dascore.proc.coords
 from dascore import to_datetime64
-from dascore.compat import random_state
+from dascore.compat import array_at_least, random_state
 from dascore.core.coordmanager import (
     CoordManager,
     get_coord_manager,
@@ -1068,8 +1068,8 @@ class TestUpdate:
     def test_coord_with_new_dim(self, coord_manager):
         """Ensure a new dimension can be added."""
         # should work for single name input as well as tuple.
-        cm1 = coord_manager.update(bob=("bob", np.atleast_1d(1)))
-        cm2 = coord_manager.update(bob=(("bob",), np.atleast_1d(1)))
+        cm1 = coord_manager.update(bob=("bob", array_at_least(1, 1)))
+        cm2 = coord_manager.update(bob=(("bob",), array_at_least(1, 1)))
         assert cm1 == cm2
         for cm in [cm1, cm2]:
             assert cm.ndim == (coord_manager.ndim + 1)

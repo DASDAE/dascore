@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 
 import dascore as dc
+from dascore.compat import array_at_least
 from dascore.constants import PatchType
 from dascore.utils.patch import (
     get_dim_axis_value,
@@ -26,7 +27,7 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
     coord_source = patch.get_coord(dim)
     index_source = coord_source.get_next_index(source, samples=samples)
     selecter = [slice(None), slice(None), None]
-    selecter[source_axis] = np.atleast_1d(index_source)
+    selecter[source_axis] = array_at_least(index_source, 1)
     source = patch.data[tuple(selecter)]
     # Now transpose source so source dim is list. Essentially we just
     # need to swap the source axis with the last axis.
@@ -216,7 +217,7 @@ def correlate(
     fft_prod = fft_patch_array * np.conj(source_fft)
     # Create frequency domain patch with results
     source = getattr(source, "magnitude", source)  # strips units
-    new_coord = dc.get_coord(values=np.atleast_1d(source))
+    new_coord = dc.get_coord(values=array_at_least(source, 1))
     dim_name = f"source_{dim}"
     cm = patch.coords.update(**{dim_name: (dim_name, new_coord)})
     out = patch.update(data=fft_prod, coords=cm)

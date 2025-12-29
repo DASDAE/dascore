@@ -251,9 +251,6 @@ def brady_hs_das_dts_coords_path():
     return out
 
 
-# --- Patch fixtures
-
-
 @pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def terra15_das_patch(terra15_das_example_path) -> Patch:

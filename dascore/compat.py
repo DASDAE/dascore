@@ -30,14 +30,48 @@ with suppress(ImportError):
 
 def array(array):
     """Wrapper function for creating 'immutable' arrays."""
-    out = np.asarray(array)
+    xp = get_array_namespace(array)
+    out = xp.asarray(array)
     # Setting the write flag to false makes the array immutable unless
-    # the flag is switched back.
-    out.setflags(write=False)
+    # the flag is switched back. TODO: check on pytorch.
+    if hasattr(out, "setflags"):
+        out.setflags(write=False)
     return out
 
 
+def get_array_namespace(*arrays):
+    """Return Array API namespace for the first array with __array_namespace__."""
+    for arr in arrays:
+        if hasattr(arr, "__array_namespace__"):
+            return arr.__array_namespace__()
+    return np
+
+
 def is_array(maybe_array):
-    """Determine if an object is array like."""
-    # This is here so that we can support other array types in the future.
-    return isinstance(maybe_array, np.ndarray)
+    """
+    Determine if an object is array like (compatible with array api).
+    """
+    array_ns = getattr(maybe_array, "__array_namespace__", None)
+    as_array = getattr(array_ns, "asarray", None)
+    return as_array is not None
+
+
+def array_at_least(array, nd: int):
+    """
+    Expand an array to be a certain dimensionality if it isn't already.
+
+    Parameters
+    ----------
+    array
+        A numeric array.
+    nd
+        The number of dimensions the array out to have.
+    """
+    xp = get_array_namespace(array)
+    array = xp.asarray(array)
+    while array.ndim < nd:
+        array = xp.expand_dims(array, 0)
+    if array.ndim < nd:
+        msg = f"Failed to promote {array} to dimension {nd}."
+        raise ValueError(msg)
+    return array
