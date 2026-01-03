@@ -236,8 +236,8 @@ class TestToTimeDelta64:
     def test_pandas_time_delta(self):
         """Ensure pandas timedelta still works."""
         expected = np.timedelta64(1, "s")
-        pdf = pd.Timedelta(1, "s")
-        out = to_timedelta64(pdf)
+        pandas_time_delta = pd.Timedelta(1, "s")
+        out = to_timedelta64(pandas_time_delta)
         assert expected == out
 
     def test_str_roundtrip(self, timedelta64):
