@@ -111,7 +111,7 @@ class TestChunk:
         assert len(spool_2) == 10
         patches = list(spool_2)
         durations = [x.attrs["time_max"] - x.attrs["time_min"] for x in patches]
-        # there should ba a single duration
+        # there should be a single duration
         assert len(set(durations)) == 1
         duration = durations[0] / one_sec
         assert np.abs(duration - 1) <= (2.2 * dt / one_sec)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from io import BufferedReader, BufferedWriter
 from pathlib import Path
 
@@ -42,28 +43,25 @@ class TestGetHandleFromResource:
         """Ensure we get a reader from tmp path reader."""
         path = tmp_path / "test_read_buffer.txt"
         path.touch()
-        handle = get_handle_from_resource(path, BinaryReader)
-        assert isinstance(handle, BufferedReader)
-        handle.close()
+        with closing(get_handle_from_resource(path, BinaryReader)) as handle:
+            assert isinstance(handle, BufferedReader)
 
     def test_path_to_buffered_writer(self, tmp_path):
         """Ensure we get a reader from tmp path reader."""
         path = tmp_path / "test_buffered_writer.txt"
-        handle = get_handle_from_resource(path, BinaryWriter)
-        assert isinstance(handle, BufferedWriter)
-        handle.close()
+        with closing(get_handle_from_resource(path, BinaryWriter)) as handle:
+            assert isinstance(handle, BufferedWriter)
 
     def test_path_to_hdf5_reader(self, generic_hdf5):
         """Ensure we get a reader from tmp path reader."""
-        handle = get_handle_from_resource(generic_hdf5, HDF5Reader)
-        assert isinstance(handle, File)
-        handle.close()
+        with closing(get_handle_from_resource(generic_hdf5, HDF5Reader)) as handle:
+            assert isinstance(handle, File)
 
     def test_path_to_hdf5_writer(self, tmp_path):
         """Ensure we get a reader from tmp path reader."""
         path = tmp_path / "test_hdf_writer.h5"
-        handle = get_handle_from_resource(path, HDF5Writer)
-        assert isinstance(handle, File)
+        with closing(get_handle_from_resource(path, HDF5Writer)) as handle:
+            assert isinstance(handle, File)
 
     def test_get_path(self, tmp_path):
         """Ensure we can get a path."""

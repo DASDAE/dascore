@@ -190,7 +190,7 @@ class TestGetContents:
         new_df = diverse_ind(station=exact_name)
         assert (new_df["station"] == exact_name).all()
 
-    def test_emtpy_index(self, empty_index):
+    def test_empty_index(self, empty_index):
         """An empty index should return an empty dataframe."""
         df = empty_index()
         assert df.empty

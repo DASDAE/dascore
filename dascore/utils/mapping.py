@@ -6,10 +6,15 @@ We can't simply use types.MappingProxyType because it can't be pickled.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from collections.abc import Mapping as ABCMap
+from typing import TypeVar
+
+K = TypeVar("K")
+V = TypeVar("V")
 
 
-class FrozenDict(ABCMap):
+class FrozenDict(ABCMap[K, V]):
     """
     An immutable wrapper around dictionaries that implements the complete
     :py:class:`collections.Mapping` interface. It can be used as a drop-in
@@ -25,13 +30,13 @@ class FrozenDict(ABCMap):
     """
 
     def __init__(self, *args, **kwargs):
-        self._dict = dict(*args, **kwargs)
+        self._dict: dict[K, V] = dict(*args, **kwargs)
         self._hash = None
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: K) -> V:
         return self._dict[key]
 
-    def __contains__(self, key):
+    def __contains__(self, key: object) -> bool:
         return key in self._dict
 
     def new(self, **kwargs):
@@ -40,10 +45,10 @@ class FrozenDict(ABCMap):
         contents.update(kwargs)
         return self.__class__(**contents)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[K]:
         return iter(self._dict)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._dict)
 
     def __repr__(self):

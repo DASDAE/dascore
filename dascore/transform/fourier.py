@@ -354,7 +354,7 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
         time = dc.to_timedelta64(time)
     # Get new dimensions
     new_dims = list(_get_stft_dims(dim, patch.dims, axis))
-    # Make dict of coordinates nd return coord manager.
+    # Make dict of coordinates and return coord manager.
     coord_map = dict(patch.coords.coord_map)
     new_units = invert_quantity(coord.units)
     coord_map.update(

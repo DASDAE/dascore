@@ -122,9 +122,9 @@ def merge_coord_managers(
                 )
                 raise CoordMergeError(msg)
             snap_coords = _snap_coords(merge_coords)
-            datas = [x.data for x in snap_coords]
+            data = [x.data for x in snap_coords]
             dims = managers[0].dim_map[dim]
-            new_data = np.concatenate(datas, axis=axis)
+            new_data = np.concatenate(data, axis=axis)
             out[coord_name] = (dims, new_data)
         return out
 
