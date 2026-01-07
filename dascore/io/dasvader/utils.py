@@ -103,21 +103,6 @@ def _get_coord_manager(h5, rec):
     )
 
 
-#
-# def _get_dasvader_coords_attrs(h5) -> dict:
-#     """Scan a DASVader file, return metadata and coordinates."""
-#     rec = h5["dDAS"][()]
-#     atrib = _parse_attrib(h5)
-#     time_coord = _get_time_coord(h5, rec)
-#     distance_coord = _get_distance_coord(rec)
-#     coords = dc.get_coord_manager(
-#         coords={"time": time_coord, "distance": distance_coord},
-#         dims=("time", "distance"),
-#     )
-#     attrs = _get_attr_dict(atrib)
-#     return coords, attrs
-
-
 # --- Reading
 
 
