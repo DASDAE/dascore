@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.compat import array
 from dascore.core.coords import get_coord
-from dascore.utils.misc import maybe_get_items
+from dascore.utils.misc import maybe_get_items, unbyte
 
 _JULIA_EPOCH_MS = 62135596800000
 
@@ -52,9 +52,19 @@ def _julia_ms_to_datetime64(ms_values):
 # --- Metadata parsing
 
 
+def _dataset_to_dict(atrib) -> dict:
+    """
+    Convert the compound dataset to a python dict.
+    """
+    data = atrib[()]
+    assert isinstance(data, np.void)
+    return {name: unbyte(data[name]) for name in data.dtype.names}
+
+
 def _get_attr_dict(atrib) -> dict:
     """Map DASVader attrib values to PatchAttrs fields."""
-    attrs = maybe_get_items(atrib, attrs_map)
+    attrs = _dataset_to_dict(atrib)
+    attrs = maybe_get_items(attrs, attrs_map)
     attrs["data_category"] = "DAS"
     return attrs
 
@@ -133,7 +143,7 @@ def _read_dasvader(h5, distance=None, time=None):
     data = array(data)
     if not data.size:
         return []
-    attrs = _get_attr_dict(rec["atrib"])
+    attrs = _get_attr_dict(h5[rec["atrib"]])
     # attrs["coords"] = cm.to_summary_dict()
     # attrs["dims"] = cm.dims
     return [dc.Patch(data=data, coords=cm, attrs=dc.PatchAttrs(**attrs))]

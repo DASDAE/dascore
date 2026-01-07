@@ -34,7 +34,7 @@ class DASVaderV1(FiberIO):
         """Scan a DASVader file, return summary information about the file."""
         rec = resource["dDAS"][()]
         cm = _get_coord_manager(resource, rec)
-        attrs = _get_attr_dict(resource)
+        attrs = _get_attr_dict(resource[rec["atrib"]])
         attrs.update(
             {
                 "path": resource.filename,
