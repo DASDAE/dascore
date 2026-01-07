@@ -133,7 +133,7 @@ def _read_dasvader(h5, distance=None, time=None):
     data = array(data)
     if not data.size:
         return []
-    attrs = _get_attr_dict(h5)
+    attrs = _get_attr_dict(rec["atrib"])
     # attrs["coords"] = cm.to_summary_dict()
     # attrs["dims"] = cm.dims
     return [dc.Patch(data=data, coords=cm, attrs=dc.PatchAttrs(**attrs))]
