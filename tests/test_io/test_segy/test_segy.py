@@ -24,7 +24,7 @@ class TestSegyGetFormat:
             f.write(b"abd")
         return path
 
-    def test_get_formate_small_file(self, small_file):
+    def test_get_format_small_file(self, small_file):
         """
         Ensure a file that is too small to contain segy header doesn't throw
         an error.

@@ -162,9 +162,9 @@ class TestTaperRange:
         """Ensure both dimensions work."""
         for ax, dim in enumerate(patch_ones.dims):
             coord = patch_ones.get_coord(dim)
-            clen = len(coord)
-            ind1 = int(clen / 3)
-            ind2 = int(2 * clen / 3)
+            coord_len = len(coord)
+            ind1 = int(coord_len / 3)
+            ind2 = int(2 * coord_len / 3)
             val1, val2 = coord[ind1], coord[ind2]
             out = patch_ones.taper_range(**{dim: (val1, val2)})
             data = out.data
@@ -182,9 +182,9 @@ class TestTaperRange:
         """Ensure inverting results in 0s near the peaks of taper."""
         dim, ax = "time", patch_ones.get_axis("time")
         coord = patch_ones.get_coord(dim)
-        clen = len(coord)
-        ind1 = int(clen / 3)
-        ind2 = int(2 * clen / 3)
+        coord_len = len(coord)
+        ind1 = int(coord_len / 3)
+        ind2 = int(2 * coord_len / 3)
         val1, val2 = coord[ind1], coord[ind2]
         out = patch_ones.taper_range(**{dim: (val1, val2)}, invert=True)
         data = out.data
@@ -202,8 +202,13 @@ class TestTaperRange:
         """Ensure the range works with 4 values specifying taper limits."""
         dim = "time"
         coord = patch_ones.get_coord(dim)
-        clen = len(coord)
-        inds = int(clen / 6), int(2 * clen / 6), int(4 * clen / 6), int(5 * clen / 6)
+        coord_len = len(coord)
+        inds = (
+            int(coord_len / 6),
+            int(2 * coord_len / 6),
+            int(4 * coord_len / 6),
+            int(5 * coord_len / 6),
+        )
         vals = [coord[x] for x in inds]
         out = patch_ones.taper_range(**{dim: vals}, invert=False)
 

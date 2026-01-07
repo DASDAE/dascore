@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 
 import h5py
@@ -170,10 +171,10 @@ class TestHDFReaders:
     def test_get_handle(self, tmp_path_factory):
         """Ensure we can get a handle with the class."""
         path = tmp_path_factory.mktemp("hdf_handle_test") / "test_file.h5"
-        handle = PyTablesWriter.get_handle(path)
-        assert isinstance(handle, tables.File)
-        handle_2 = PyTablesWriter.get_handle(handle)
-        assert isinstance(handle_2, tables.File)
+        with closing(PyTablesWriter.get_handle(path)) as handle:
+            assert isinstance(handle, tables.File)
+            handle_2 = PyTablesWriter.get_handle(handle)
+            assert isinstance(handle_2, tables.File)
 
 
 class TestH5MatchesStructure:

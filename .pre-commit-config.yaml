@@ -32,6 +32,14 @@ repos:
     hooks:
     -   id: nbstripout
 
+    # Catches common typos in code and doc files.
+-   repo: https://github.com/crate-ci/typos
+    rev: v1.22.4
+    hooks:
+    -   id: typos
+        files: \.(py|qmd)$
+
+    # Lints github actions.
 -   repo: https://github.com/rhysd/actionlint
     rev: v1.6.27
     hooks:

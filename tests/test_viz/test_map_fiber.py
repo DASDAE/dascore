@@ -13,7 +13,7 @@ def check_label_units(patch, ax, dims, color="distance"):
     """Ensure patch label units match axis."""
     axis_dict = {0: "xaxis", 1: "yaxis"}
     # dims = []
-    # Check coord-inate names
+    # Check coord-innate names
     for coord_name in dims:
         coord = patch.coords.coord_map[coord_name]
         if is_datetime64(coord[0]):
