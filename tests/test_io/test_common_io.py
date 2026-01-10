@@ -27,6 +27,7 @@ from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
+from dascore.io.dasvader import DASVaderV1
 from dascore.io.febus import Febus1, Febus2
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
@@ -57,6 +58,7 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    DASVaderV1(): ("das_vader_1.jld2",),
     SintelaBinaryV3(): ("sintela_binary_v3_test_1.raw",),
     GDR_V1(): ("gdr_1.h5",),
     NeubrexDASV1(): ("neubrex_das_1.h5",),
