@@ -43,8 +43,11 @@ def _step_range_len_to_params(sr):
 
 def _julia_ms_to_datetime64(ms_values):
     """Convert Julia DateTime milliseconds to numpy datetime64[ms]."""
-    while isinstance(ms_values, np.void):
+    # Here we just prevent infinite loops.
+    count = 0
+    while isinstance(ms_values, np.void) and count < 10:
         ms_values = ms_values[0]
+        count += 1
     unix_ms = np.asarray(ms_values, dtype="int64") - _JULIA_EPOCH_MS
     return dc.to_datetime64(unix_ms / 1_000)
 
