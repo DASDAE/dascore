@@ -58,6 +58,8 @@ from dascore.utils.misc import all_close, iterate
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
+    Febus1(): ("valencia_febus_example.h5",),
+    Febus2(): ("febus_1.h5", "febus_2.h5"),
     DASVaderV1(): ("das_vader_1.jld2",),
     SintelaBinaryV3(): ("sintela_binary_v3_test_1.raw",),
     GDR_V1(): ("gdr_1.h5",),
@@ -71,8 +73,6 @@ COMMON_IO_READ_TESTS = {
     ),
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     APSensingV10(): ("ap_sensing_1.hdf5",),
-    Febus2(): ("febus_1.h5",),
-    Febus1(): ("valencia_febus_example.h5",),
     OptoDASV8(): ("opto_das_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
