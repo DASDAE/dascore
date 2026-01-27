@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections import namedtuple
 from functools import cache
 
@@ -59,7 +60,8 @@ def _get_zone_time(feb):
     zone = feb.zone
     block_time = _get_block_time(feb)
     extents, spacing = zone.attrs["Extent"], zone.attrs["Spacing"]
-    overlap = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", [0]))[0]
+    overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 0))
+    overlap = np.atleast_1d(_maybe_unpack(overlap_attr))[0]
     shape = feb.zone[feb.data_name].shape
     # We need to determine if this a v1 file (no version in attrs). See # 589
     # and # 587. This could perhaps be made more robust in the future.
@@ -72,7 +74,7 @@ def _get_zone_time(feb):
     else:
         # In these versions of the files the extents appear to be wrong, but
         # they don't have overlaps so we can just use the shape.
-        dt = 1 / float(zone.attrs["SamplingRate"])
+        dt = 1 / float(_maybe_unpack(zone.attrs["SamplingRate"]))
         block_no_pad = shape[1]
     # Apparently, if the extents are set to 0 the overlapping edges are still
     # in the file, otherwise they have been removed.
@@ -88,7 +90,10 @@ def _get_zone_time(feb):
     # the Febus parser. Just assert for now.
     missing_gauge = feb.zone.attrs.get("GaugeLength", None) is None
     flat = shape == 1
-    msg = "Complex Febus file found. Either contact the DASCore developers " "or "
+    msg = (
+        "Complex Febus file found. Either contact the DASCore developers or "
+        "use the python library made by Febus."
+    )
     assert not (missing_gauge or flat), msg
     # Next determine where the data actually live.
     idx_start, idx_stop = get_data_index(
