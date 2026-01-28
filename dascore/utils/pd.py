@@ -406,7 +406,7 @@ def list_ser_to_str(ser: pd.Series) -> pd.Series:
         if isinstance(val, (list | tuple | np.ndarray)):
             return bool(pd.isnull(np.asarray(val, dtype=object)).any())
         null = pd.isnull(val)
-        return bool(null.any()) if isinstance(null | np.ndarray) else bool(null)
+        return bool(null.any()) if isinstance(null, np.ndarray) else bool(null)
 
     values = [
         ""
