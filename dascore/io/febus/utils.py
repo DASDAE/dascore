@@ -52,9 +52,9 @@ def _get_zone_time(feb):
         to_remove = block_pad - block_no_pad
         # Need to handle even/odd cases to see which samples to remove.
         assert to_remove >= 0
-        qotient, reminder = divmod(to_remove, 2)
-        start = int(max(0, qotient))
-        end = int(block_pad - 1 - (reminder + qotient))
+        quotient, reminder = divmod(to_remove, 2)
+        start = int(max(0, quotient))
+        end = int(block_pad - 1 - (reminder + quotient))
         return start, end
 
     zone = feb.zone
@@ -89,7 +89,7 @@ def _get_zone_time(feb):
     # Perform checks to make sure this is DAS data. If not, you need to use
     # the Febus parser. Just assert for now.
     missing_gauge = feb.zone.attrs.get("GaugeLength", None) is None
-    flat = shape == 1
+    flat = len(shape) == 2
     msg = (
         "Complex Febus file found. Either contact the DASCore developers or "
         "use the python library made by Febus."
