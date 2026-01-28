@@ -20,6 +20,7 @@ from dascore.utils.pd import (
     get_column_names_from_dim,
     get_dim_names_from_columns,
     get_interval_columns,
+    list_ser_to_str,
 )
 from dascore.utils.time import (
     is_datetime64,
@@ -194,9 +195,13 @@ class ChunkManager:
     def _get_continuity_group_number(self, start, stop, step) -> pd.Series:
         """Return a series of ints indicating continuity group."""
         # start by sorting according to start time
-        arg_ser = start.argsort()
-        args = arg_ser.index[arg_ser.values]
-        start_sorted, stop_sorted, step_sorted = start[args], stop[args], step[args]
+        # Use positional argsort to avoid pandas label/return-type changes
+        args = np.argsort(start.to_numpy())
+        start_sorted, stop_sorted, step_sorted = (
+            start.iloc[args],
+            stop.iloc[args],
+            step.iloc[args],
+        )
         # next get cummax of endtimes and detect gaps
         stop_cum_max = stop_sorted.cummax()
         end_markers = stop_cum_max.shift() + step_sorted * self._tolerance
@@ -270,6 +275,9 @@ class ChunkManager:
 
             assert len(vals) == 1, "Haven't yet implemented non-homogenous merging"
             out[col] = vals[0]
+        if "dims" in out.columns:
+            # Keep dims dtype consistent with patches_to_df/list_ser_to_str.
+            out["dims"] = list_ser_to_str(out["dims"])
         # add the group number for getting instruction df later
         out["_group"] = gnum
         return out

@@ -80,7 +80,9 @@ class TestChunk:
         # these should be (nearly) identical.
         common = set(chunk_df.columns) & set(new_content.columns)
         cols = sorted(common - {"history"})  # no need to compare history
-        assert chunk_df[cols].equals(new_content[cols])
+        comp1, comp2 = chunk_df[cols], new_content[cols]
+        equal_cols = (comp1 == comp2) | (pd.isnull(comp1) & pd.isnull(comp2))
+        assert equal_cols.all().all()
 
     def test_merge_empty_spool(self, tmp_path_factory):
         """Ensure merge doesn't raise on empty spools."""
