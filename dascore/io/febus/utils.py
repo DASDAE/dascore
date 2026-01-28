@@ -42,18 +42,19 @@ def _get_zone_time(feb):
     Danger: Here be dragons.
     """
 
-    def get_data_index(bsize_overlap, bsize_no_overlap) -> tuple[int, int]:
+    def get_data_index(block_pad, block_no_pad) -> tuple[int, int]:
         """
         Compute the index of data, removing redundancy.
 
         # Note: This function is based on a similar function in Febus'
         febus_optics_lib.
         """
-        to_remove = bsize_overlap - bsize_no_overlap
-        # Need to handle even/odd casses to see which samples to remove.
+        to_remove = block_pad - block_no_pad
+        # Need to handle even/odd cases to see which samples to remove.
+        assert to_remove >= 0
         qotient, reminder = divmod(to_remove, 2)
         start = int(max(0, qotient))
-        end = int(bsize_overlap - 1 - (reminder + qotient))
+        end = int(block_pad - 1 - (reminder + qotient))
         return start, end
 
     zone = feb.zone
@@ -68,23 +69,23 @@ def _get_zone_time(feb):
     # When the file has a version, the spacing can be trusted, otherise
     # use spatial sampling.
     if has_version:
-        block_no_pad = 1 + extents[3] - extents[2]
-        dt = spacing[1] / 1_000 if block_no_pad != 0 else block_time
+        block_pad = 1 + extents[3] - extents[2]
+        dt = spacing[1] / 1_000 if block_pad != 0 else block_time
     else:
         # In these versions of the files the extents appear to be wrong, but
         # they don't have overlaps so we can just use the shape.
         dt = 1 / float(_maybe_unpack(zone.attrs["SamplingRate"]))
-        block_no_pad = shape[1]
+        block_pad = shape[1]
     # Apparently, if the extents are set to 0 the overlapping edges are still
     # in the file, otherwise they have been removed.
     # This does not, however, mean the block dimension match the actual
     # data length. We need to handle that issue separately.
-    assert block_no_pad > 1
+    assert block_pad > 1
     overlaps_removed = extents[2] != 0
     if overlaps_removed:
-        block_pad = int(round(block_time / dt))
+        block_no_pad = int(round(block_time / dt))
     else:
-        block_pad = int(round(block_no_pad / (1 + (overlap / 100)), 0))
+        block_no_pad = int(round(block_pad / (1 + (overlap / 100)), 0))
     # Perform checks to make sure this is DAS data. If not, you need to use
     # the Febus parser. Just assert for now.
     missing_gauge = feb.zone.attrs.get("GaugeLength", None) is None
@@ -96,8 +97,8 @@ def _get_zone_time(feb):
     assert not (missing_gauge or flat), msg
     # Next determine where the data actually live.
     idx_start, idx_stop = get_data_index(
-        block_no_pad,
         block_pad,
+        block_no_pad,
     )
     return _FebusTime(block_time, dt, idx_start, idx_stop)
 
