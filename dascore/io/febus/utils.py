@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections import namedtuple
 from functools import cache
 
@@ -25,6 +24,83 @@ _FebusSlice = namedtuple(
     "FebusSlice",
     ["group", "group_name", "source", "source_name", "zone", "zone_name", "data_name"],
 )
+
+
+_FebusTime = namedtuple(
+    "FebusTime",
+    ["block_time", "time_step", "idx_start", "idx_stop"],
+)
+
+
+def _get_zone_time(feb):
+    """
+    Attempt to get time information for the current zone.
+
+    The files are very inconsistent accross versions, so, to try to support
+    as many febus files as possible, this function does a lot of heavy lifting.
+
+    Danger: Here be dragons.
+    """
+
+    def get_data_index(block_pad, block_no_pad) -> tuple[int, int]:
+        """
+        Compute the index of data, removing redundancy.
+
+        # Note: This function is based on a similar function in Febus'
+        febus_optics_lib.
+        """
+        to_remove = block_pad - block_no_pad
+        # Need to handle even/odd cases to see which samples to remove.
+        assert to_remove >= 0
+        quotient, reminder = divmod(to_remove, 2)
+        start = int(max(0, quotient))
+        end = int(block_pad - 1 - (reminder + quotient))
+        return start, end
+
+    zone = feb.zone
+    block_time = _get_block_time(feb)
+    extents, spacing = zone.attrs["Extent"], zone.attrs["Spacing"]
+    overlap_attr = zone.attrs.get("Overlap", zone.attrs.get("BlockOverlap", 0))
+    overlap = np.atleast_1d(_maybe_unpack(overlap_attr))[0]
+    shape = feb.zone[feb.data_name].shape
+    # We need to determine if this a v1 file (no version in attrs). See # 589
+    # and # 587. This could perhaps be made more robust in the future.
+    has_version = "Version" in feb.zone.attrs
+    # When the file has a version, the spacing can be trusted, otherise
+    # use spatial sampling.
+    if has_version:
+        block_pad = 1 + extents[3] - extents[2]
+        dt = spacing[1] / 1_000 if block_pad != 0 else block_time
+    else:
+        # In these versions of the files the extents appear to be wrong, but
+        # they don't have overlaps so we can just use the shape.
+        dt = 1 / float(_maybe_unpack(zone.attrs["SamplingRate"]))
+        block_pad = shape[1]
+    # Apparently, if the extents are set to 0 the overlapping edges are still
+    # in the file, otherwise they have been removed.
+    # This does not, however, mean the block dimension match the actual
+    # data length. We need to handle that issue separately.
+    assert block_pad > 1
+    overlaps_removed = extents[2] != 0
+    if overlaps_removed:
+        block_no_pad = int(round(block_time / dt))
+    else:
+        block_no_pad = int(round(block_pad / (1 + (overlap / 100)), 0))
+    # Perform checks to make sure this is DAS data. If not, you need to use
+    # the Febus parser. Just assert for now.
+    missing_gauge = feb.zone.attrs.get("GaugeLength", None) is None
+    flat = len(shape) == 2
+    msg = (
+        "Complex Febus file found. Either contact the DASCore developers or "
+        "use the python library made by Febus."
+    )
+    assert not (missing_gauge or flat), msg
+    # Next determine where the data actually live.
+    idx_start, idx_stop = get_data_index(
+        block_pad,
+        block_no_pad,
+    )
+    return _FebusTime(block_time, dt, idx_start, idx_stop)
 
 
 @cache
@@ -55,28 +131,6 @@ def _get_block_time(feb):
     # for the test files we have. There is still a concerning amount of
     # variability.
     return float(_maybe_unpack(np.mean(d_time)))
-
-
-@cache
-def _get_sample_spacing(feb: _FebusSlice, n_time_samps: int):
-    """
-    Determine the temporal sample spacing (in seconds).
-    """
-    # Note: This is a bit dicey, but we are trying to account for variability
-    # seen in real Febus Files. In some files the zone Spacing attr indicates one
-    # sample rate, while zone.attrs['SamplingRate'] indicates another. It
-    # varies as to which one is actually right, so we try to figure that
-    # out here.
-    ts_1 = feb.zone.attrs["Spacing"][1] / 1_000  # value in ms, convert to s.
-    # In most cases sample_rate is either bogus or in Hz. It isn't even mentioned
-    # in some Febus documentation.
-    ts_2 = _maybe_unpack(1.0 / feb.zone.attrs["SamplingRate"])
-    # Get the block time. This doesn't account for overlap, so it wont be exact.
-    block_time = _get_block_time(feb)
-    # Get candidate times, return the closet to the block_time.
-    ts_array = np.array([ts_1, ts_2])
-    block_time_array = ts_array * n_time_samps
-    return ts_array[np.argmin(np.abs(block_time_array - block_time))]
 
 
 def _flatten_febus_info(fi) -> tuple[_FebusSlice, ...]:
@@ -152,22 +206,6 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     return out
 
 
-def _get_time_overlap_samples(feb, n_time_samps, tstep=None):
-    """Determine the number of redundant samples in the time dimension."""
-    tstep = tstep if tstep is not None else _get_sample_spacing(feb, n_time_samps)
-    block_time = _get_block_time(feb)
-    # Since the data have overlaps in each block's time dimension, we need to
-    # trim the overlap off the time dimension to avoid having to merge blocks later.
-    # However, sometimes the "BlockOverlap" is wrong, so we calculate it
-    # manually here, rounding to nearest even number.
-    expected_samples = int(np.round((block_time / tstep) / 2) * 2)
-    excess_rows = n_time_samps - expected_samples
-    assert (
-        excess_rows % 2 == 0
-    ), "excess rows must be symmetric to distribute on both ends"
-    return excess_rows
-
-
 def _get_time_coord(feb):
     """Get the time coordinate contained in the febus slice."""
     time = feb.source["time"]
@@ -176,32 +214,20 @@ def _get_time_coord(feb):
     t_0 = time[first_slice]
     # Number of time blocks in the data cube.
     shape = feb.zone[feb.data_name].shape
-    n_time_samps = shape[1]
-    n_blocks = shape[0]
-    # Get spacing between time samples (in s) and the total time of each block.
-    time_step = _get_sample_spacing(feb, n_time_samps)
-    excess_rows = _get_time_overlap_samples(feb, n_time_samps, tstep=time_step)
-    total_time_rows = (n_time_samps - excess_rows) * n_blocks
+    num_blocks = shape[0]
+    time_info = _get_zone_time(feb)
+    time_step = time_info.time_step
+    total_time_rows = time_info.idx_stop - time_info.idx_start + 1
     # Get origin info, these are offsets from time to get to the first simple
     # of the block. These should always be non-positive.
     time_offset = feb.zone.attrs["Origin"][1] / 1_000  # also convert to s
     assert time_offset <= 0, "time offset must be non positive"
-    # Get the start/stop indices for the zone. We assume zones never sub-slice
-    # time (only distance). However, some files (eg Valencia) have an incorrect
-    # value set here, so we only warn.
-    extent = feb.zone.attrs["Extent"]
-    if (extent[3] - extent[2] + 1) != n_time_samps:
-        msg = (
-            "It appears the Febus file extents specify a different range than "
-            "found in the data array. Double check this is correct."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=2)
     # Create time coord.
     # Need to account for removing overlap times. Also, time vector refers
     # to the center of the block, so this finds the first non-overlapping
     # sample.
-    total_start = t_0 + time_offset + (excess_rows // 2) * time_step
-    total_end = total_start + total_time_rows * time_step
+    total_start = t_0 + time_offset + time_info.idx_start * time_step
+    total_end = total_start + (total_time_rows * time_step) * num_blocks
     time_coord = get_coord(
         start=dc.to_datetime64(total_start),
         stop=dc.to_datetime64(total_end),
@@ -210,7 +236,7 @@ def _get_time_coord(feb):
     # Note: we have found some files in which the sampling rate is 1/3e-4
     # because we use datetime64 we lose some precision which has caused
     # slight differences in shape of the patch.
-    out = time_coord.change_length(total_time_rows)
+    out = time_coord.change_length(total_time_rows * num_blocks)
     return out
 
 
@@ -305,14 +331,13 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
         )
         return data_2d[time_slice], new_coord
 
+    time_info = _get_zone_time(febus)
     dist_coord, time_coord = cm.coord_map["distance"], cm.coord_map["time"]
     data = febus.zone[febus.data_name]
     data_shape = data.shape
-    skip_rows = _get_time_overlap_samples(febus, data_shape[1]) // 2
-    # This handles the case where excess_rows == 0
-    data_slice = slice(skip_rows, -skip_rows if skip_rows else None)
+    data_slice = slice(time_info.idx_start, time_info.idx_stop + 1)
     total_slice = list(broadcast_for_index(3, 1, data_slice))
-    total_time_rows = data_shape[1] - 2 * skip_rows
+    total_time_rows = time_info.idx_stop - time_info.idx_start + 1
     if distance:
         dist_coord, total_slice[2] = dist_coord.select(distance)
     if time:  # need to sub-select blocks to get data we are after.

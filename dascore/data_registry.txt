@@ -34,3 +34,4 @@ sintela_binary_v3_test_1.raw 4c0afae1ab60b73ddcb3c4f7ac55b976d4d18d1ffc9ea6cd2df
 prodml_fbe_1.h5 1e7fa0e63bd701ae5f65e5c1adfb02957594b4e334a6933a38cae2481ecdeabb https://github.com/dasdae/test_data/raw/master/das/prodml_fbe_1.h5
 valencia_febus_example.h5 ecfd61dfe7356d327890cb56b6acf2a9ef92206bd3bdc8c7cae387ab707ffc8f https://github.com/dasdae/test_data/raw/master/das/valencia_febus_example.h5
 das_vader_1.jld2 cbeace6bfcc17711796886ba072ae68bb792903c38a052d592ed968885933d8e https://github.com/dasdae/test_data/raw/master/das/das_vader_1.jld2
+febus_2.h5 c118960a94e37fbff0eb5c33856d34cdfe81609902c4feaedab9949498d31c23 https://github.com/dasdae/test_data/raw/master/das/febus_2.h5

@@ -6,6 +6,7 @@ import h5py
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore.io.febus import Febus2
 from dascore.io.febus.utils import _flatten_febus_info
 from dascore.utils.downloader import fetch
@@ -41,3 +42,16 @@ class TestFebus:
             time_offset = feb.zone.attrs["Origin"][1] / 1_000
             time_start = feb.source["time"][0] + time_offset
             assert np.isclose(to_float(time.min()), time_start)
+
+    def test_valencia_data_sampling_rate(self):
+        """
+        The valencia file has two indicated sampling rates. One from
+        the spacing array (500 Hz) and one from the sampling_rate attributes (250).
+        Looking at the entire archive on pubDAS, it is clear the correct value
+        is 250, otherwise there 50% gaps every file. This test just ensure that
+        The sampling rate doesnt change.
+        """
+        patch = dc.get_example_patch("valencia_febus_example.h5")
+        time = patch.get_coord("time")
+        sampling_rate = np.timedelta64(1, "s") / time.step
+        assert np.isclose(sampling_rate, 250)
