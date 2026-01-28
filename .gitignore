@@ -81,9 +81,10 @@ docs/_quarto.yml
 docs/**/*.ipynb
 .cross_ref.json
 
-# profile stuff from asv
+# profile stuff
 .asv
 .codspeed
+prof/
 
 # misc
 scratch/**
@@ -93,9 +94,6 @@ uv.lock
 docs/index_files
 docs/index.quarto_ipynb
 
-# Claude stuff
+# Agent stuff
 .claude
 CLAUDE.md
-
-# profile stuff
-prof/

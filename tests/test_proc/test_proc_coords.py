@@ -100,6 +100,42 @@ class TestDropCoords:
             random_patch.drop_coords("time")
 
 
+class TestGetCoordPatch:
+    """Tests for fetching coordinate data as a patch."""
+
+    def test_keep_dims_true(self, random_patch):
+        """Ensure output keeps dims and broadcasts along other axes."""
+        time = random_patch.coords.get_array("time")
+        out = random_patch.get_coord_patch("time")
+        expected_shape = [1] * random_patch.ndim
+        expected_shape[random_patch.dims.index("time")] = len(time)
+        assert out.shape == tuple(expected_shape)
+        assert out.dims == random_patch.dims
+        assert np.all(out.data == time.reshape(expected_shape))
+
+    def test_keep_dims_false(self, random_patch):
+        """Ensure output is 1D with only the requested coord."""
+        time = random_patch.coords.get_array("time")
+        out = random_patch.get_coord_patch("time", keep_dims=False)
+        assert out.dims == ("time",)
+        assert out.shape == (len(time),)
+        assert np.all(out.data == time)
+        assert set(out.coords.coord_map) == {"time"}
+
+    def test_keep_dims_roundtrip(self, random_patch):
+        """Ensure keep_dims and non-keep_dims outputs can be chained."""
+        time = random_patch.coords.get_array("time")
+        keep = random_patch.get_coord_patch("time")
+        no_keep = keep.get_coord_patch("time", keep_dims=False)
+        assert no_keep.dims == ("time",)
+        assert np.all(no_keep.data == time)
+
+        flat = random_patch.get_coord_patch("time", keep_dims=False)
+        back = flat.get_coord_patch("time")
+        assert back.dims == ("time",)
+        assert np.all(back.data == time)
+
+
 class TestCoordsFromDf:
     """Tests for attaching coordinate(s) to a patch."""
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -10,7 +11,8 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError, UnitError
 from dascore.transform.differentiate import differentiate
-from dascore.units import convert_units, get_factor_and_unit, get_unit
+from dascore.units import convert_units, get_factor_and_unit, get_unit, invert_quantity
+from dascore.utils.array import get_tapered_outer_coord_division_and_mask
 from dascore.utils.patch import patch_function
 
 
@@ -274,3 +276,89 @@ def radians_to_strain(
     new_attrs = patch.attrs.update(data_units=new_units)
     new_data = patch.data * const * d_factor
     return patch.update(data=new_data, attrs=new_attrs)
+
+
+@patch_function(required_coords=("time", "distance"))
+def strain_to_particle_fk(
+    patch: PatchType,
+    filt: Sequence[float] | Sequence[dc.Quantity] | None = None,
+    water_level: float = 1e-6,
+):
+    """
+    Scale the strain/strain_rate data to a particle velocity/acceleration.
+
+    This is done in the FK domain by simply dividing by the velocity.
+
+    Parameters
+    ----------
+    patch
+        The patch object.
+    filt
+        A length 4 array of the form [va, vb, vc, vd].
+    water_level
+        If not None, the water level of the wave number. Can also be a percent,
+        in which case it is a percent of the maximum.
+
+    Notes
+    -----
+    - If neither filt nor water_level are specified the results can be wildely
+    unstable due to small numbers in the wavenumber.
+
+    - [DASPy](https://github.com/HMZ-03/DASPy) has several more methods for
+      converting to particle velocity.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch("example_event_2")
+    >>>
+    >>> # Basic usage with filter
+    >>> filt = [100, 400, 5000, 6000]
+    >>> out = patch.strain_to_particle_fk(filt=filt)
+    >>>
+    >>> # Water level as a float
+    >>> out = patch.strain_to_particle_fk(water_level=1e-3)
+    >>>
+    >>> # Water level as a percent
+    >>> out = patch.strain_to_particle_fk(water_level=dc.get_quantity("10%"))
+    """
+
+    def _update_data_units(fk_patch, fk_dims):
+        """Update data units by velocity units if dims have units."""
+        data_units = dc.get_quantity(fk_patch.attrs.data_units)
+        coord_unit_1 = dc.get_quantity(fk_patch.get_coord(fk_dims[-1]).units)
+        coord_unit_2 = dc.get_quantity(fk_patch.get_coord(fk_dims[-2]).units)
+        if data_units is None:
+            return fk_patch.attrs
+        coord_unit_1 = coord_unit_1 or dc.get_quantity("1")
+        coord_unit_2 = coord_unit_2 or dc.get_quantity("1")
+        slope_units = coord_unit_1 / coord_unit_2
+        vel_units = invert_quantity(slope_units)
+        return fk_patch.attrs.update(data_units=data_units * vel_units)
+
+    if filt is None and water_level is None:
+        msg = (
+            "Warning: using strain_to_particle_fk without the filt or "
+            "water_level parameters usually results in unstable results!"
+        )
+        warnings.warn(msg)
+    fk_dims = ("ft_time", "ft_distance")
+    fk_patch = patch.dft.func(patch, dim=("time", "distance"), real="time")
+    transformed = patch is not fk_patch
+
+    slope, mask = get_tapered_outer_coord_division_and_mask(
+        fk_patch,
+        fk_dims,
+        filt=filt,
+        invert=False,
+        directional=True,
+        water_level=water_level,
+    )
+    new_attrs = _update_data_units(fk_patch, fk_dims)
+    velocities = slope * mask
+    new_data = np.zeros_like(fk_patch.data)
+    np.divide(fk_patch.data, velocities, out=new_data, where=velocities != 0)
+    new = fk_patch.new(data=new_data, attrs=new_attrs)
+    if transformed:
+        new = new.idft()
+    return new

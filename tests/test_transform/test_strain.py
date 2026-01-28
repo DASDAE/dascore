@@ -213,6 +213,87 @@ class TestStaggeredStrainRateConversion:
             patch.velocity_to_strain_rate_edgeless(step_multiple=0)
 
 
+class TestStrainToParticleFK:
+    """Tests for converting strain to particle velocity in FK domain."""
+
+    def test_warns_without_filt_or_water_level(self, random_patch):
+        """Ensure warning is raised when filt and water_level are None."""
+        match = "strain_to_particle_fk"
+        with pytest.warns(UserWarning, match=match):
+            out = random_patch.strain_to_particle_fk(filt=None, water_level=None)
+        assert isinstance(out, dc.Patch)
+
+    def test_output_shape_and_dims(self, random_patch):
+        """Ensure output preserves input shape and dims."""
+        filt = [2e3, 2.2e3, 8e3, 2e4]
+        out = random_patch.strain_to_particle_fk(filt=filt)
+        assert out.shape == random_patch.shape
+        assert out.dims == random_patch.dims
+
+    def test_water_level_float(self, random_patch):
+        """Ensure water_level as float runs and preserves shape/dims."""
+        out = random_patch.strain_to_particle_fk(water_level=1e-3)
+        assert out.shape == random_patch.shape
+        assert out.dims == random_patch.dims
+
+    def test_water_level_percent(self, random_patch):
+        """Ensure water_level as percent runs and preserves shape/dims."""
+        out = random_patch.strain_to_particle_fk(water_level=dc.get_quantity("10%"))
+        assert out.shape == random_patch.shape
+        assert out.dims == random_patch.dims
+
+    def test_water_level_invalid_raises(self, random_patch):
+        """Ensure invalid water_level types raise."""
+        with pytest.raises((TypeError, UnitError)):
+            random_patch.strain_to_particle_fk(water_level="bad")
+
+    def test_water_level_wrong_units_raises(self, random_patch):
+        """Ensure water_level with non-percent units raises."""
+        with pytest.raises(UnitError):
+            random_patch.strain_to_particle_fk(water_level=dc.get_quantity("1 m"))
+
+    def test_fk_input_returns_fk_patch(self, random_patch):
+        """Ensure FK input returns FK-domain patch."""
+        fk_patch = random_patch.dft(dim=("time", "distance"), real="time")
+        out = fk_patch.strain_to_particle_fk(filt=[2e3, 2.2e3, 8e3, 2e4])
+        assert out.shape == fk_patch.shape
+        assert out.dims == fk_patch.dims
+
+    def test_units_converted(self, random_patch):
+        """Ensure output units are updated by velocity units."""
+        patch = random_patch.set_units(time="s", distance="m").update_attrs(
+            data_units="strain"
+        )
+        out = patch.strain_to_particle_fk(filt=[1e3, 1.5e3, 5e3, 1e4])
+        expected = dc.get_quantity("strain") * dc.get_quantity("m/s")
+        assert dc.get_quantity(out.attrs.data_units) == expected
+
+    def test_units_one_dim_only(self, random_patch):
+        """If only one dim has units, keep existing data units."""
+        new_time = np.arange(random_patch.shape[random_patch.get_axis("time")])
+        new_dist = np.arange(random_patch.shape[random_patch.get_axis("distance")])
+        patch = (
+            random_patch.update_coords(time=new_time, distance=new_dist)
+            .set_units(time="s", distance="")
+            .update_attrs(data_units="strain")
+        )
+        out = patch.strain_to_particle_fk(filt=[1e3, 1.5e3, 5e3, 1e4])
+        expected = dc.get_quantity("strain") / dc.get_quantity("s")
+        assert dc.get_quantity(out.attrs.data_units) == expected
+
+    def test_units_no_dim_units(self, random_patch):
+        """If no dims have units, keep existing data units."""
+        new_time = np.arange(random_patch.shape[random_patch.get_axis("time")])
+        new_dist = np.arange(random_patch.shape[random_patch.get_axis("distance")])
+        patch = (
+            random_patch.update_coords(time=new_time, distance=new_dist)
+            .set_units(time="", distance="")
+            .update_attrs(data_units="strain")
+        )
+        out = patch.strain_to_particle_fk(filt=[1e3, 1.5e3, 5e3, 1e4])
+        assert dc.get_quantity(out.attrs.data_units) == dc.get_quantity("strain")
+
+
 class TestRadianToStrain:
     """Tests for converting from radian to strain (rate)."""
 

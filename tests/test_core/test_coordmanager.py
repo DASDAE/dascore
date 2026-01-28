@@ -90,6 +90,15 @@ class TestBasicCoordManager:
         for key in set(expected):
             assert np.all(expected[key] == np.array(c_dict[key]))
 
+    def test_get_array_make_broadcastable(self, cm_basic):
+        """Ensure make_broadcastable shapes arrays for broadcasting."""
+        time = cm_basic.get_array("time")
+        out = cm_basic.get_array("time", make_broadcastable=True)
+        expected_shape = [1] * cm_basic.ndim
+        expected_shape[cm_basic.dims.index("time")] = len(time)
+        assert out.shape == tuple(expected_shape)
+        assert np.all(out == time.reshape(expected_shape))
+
     def test_membership(self, coord_manager):
         """Coord membership should work for coord names."""
         coords = list(coord_manager.coord_map)

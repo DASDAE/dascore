@@ -9,11 +9,15 @@ import pytest
 from pint import DimensionalityError
 
 import dascore as dc
-import dascore.proc.coords
 from dascore import get_quantity
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
-from dascore.utils.array import PatchUFunc, apply_array_func, apply_ufunc
+from dascore.utils.array import (
+    PatchUFunc,
+    apply_array_func,
+    apply_ufunc,
+    get_tapered_outer_coord_division_and_mask,
+)
 
 
 class TestApplyUfunc:
@@ -520,3 +524,56 @@ class TestApplyArrayFunc:
         assert result.coords.equals(random_patch.coords)  # coords should be preserved
         assert result.attrs == random_patch.attrs  # attrs should be preserved
         assert np.allclose(result.data, np.abs(random_patch.data) + 1)
+
+
+class TestTaperedOuterCoordDivision:
+    """Tests for tapered outer coordinate division and mask."""
+
+    @staticmethod
+    def _make_patch(time_vals, distance_vals):
+        """Create a simple Patch with specified coords."""
+        time = dc.get_coord(values=np.asarray(time_vals))
+        distance = dc.get_coord(values=np.asarray(distance_vals))
+        data = np.zeros((len(time_vals), len(distance_vals)))
+        return dc.Patch(
+            data=data,
+            coords={"time": time, "distance": distance},
+            dims=("time", "distance"),
+        )
+
+    def test_water_level_scalar(self):
+        """Ensure scalar water_level is added to the denominator."""
+        patch = self._make_patch([1.0, 2.0], [2.0, 4.0, 6.0])
+        slope, mask = get_tapered_outer_coord_division_and_mask(
+            patch, patch.dims, water_level=2.0
+        )
+        array1 = patch.get_array("distance", make_broadcastable=True)
+        array2 = patch.get_array("time", make_broadcastable=True)
+        expected = array1 / (array2 + 2.0)
+        assert np.allclose(slope, expected)
+        assert mask.shape == (1, 1)
+        assert np.all(mask == 1.0)
+
+    def test_water_level_percent(self):
+        """Ensure percent water_level scales by max abs of denominator."""
+        patch = self._make_patch([1.0, 2.0], [2.0, 4.0, 6.0])
+        water_level = dc.get_quantity("10%")
+        slope, _ = get_tapered_outer_coord_division_and_mask(
+            patch, patch.dims, water_level=water_level
+        )
+        array1 = patch.get_array("distance", make_broadcastable=True)
+        array2 = patch.get_array("time", make_broadcastable=True)
+        expected = array1 / (array2 + 0.1 * np.nanmax(np.abs(array2)))
+        assert np.allclose(slope, expected)
+
+    def test_mask_pass_band(self):
+        """Ensure mask passes inner band and attenuates outside."""
+        patch = self._make_patch([1.0, 1.0], [0.0, 1.0, 2.0, 3.0])
+        filt = np.array([0.5, 1.0, 2.0, 2.5])
+        _, mask = get_tapered_outer_coord_division_and_mask(
+            patch, patch.dims, filt=filt, invert=False, directional=True
+        )
+        mask_row = mask[0]
+        assert np.isclose(mask_row[0], 0.0)  # slope 0.0 outside
+        assert np.isclose(mask_row[1], 1.0)  # slope 1.0 in pass band
+        assert np.isclose(mask_row[3], 0.0)  # slope 3.0 outside

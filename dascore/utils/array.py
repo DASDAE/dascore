@@ -7,13 +7,23 @@ from __future__ import annotations
 import inspect
 from collections.abc import Iterable
 
+import numpy
 import numpy as np
 
 import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import DEFAULT_ATTRS_TO_IGNORE, PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
-from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.units import (
+    DimensionalityError,
+    Quantity,
+    Unit,
+    convert_units,
+    get_quantity,
+    invert_quantity,
+    maybe_convert_percent_to_fraction,
+    quant_sequence_to_quant_array,
+)
 from dascore.utils.misc import iterate
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
@@ -521,3 +531,85 @@ def patch_array_function(self, func, types, args, kwargs):
     # Only handle functions involving Patches
     assert any(issubclass(t, dc.Patch) for t in types)
     return apply_array_func(func, *args, **kwargs)
+
+
+def get_tapered_outer_coord_division_and_mask(
+    patch, dims, filt=None, invert=False, directional=True, water_level=None
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Get a tapered version of the outer product of two coordinate values.
+
+    This is used primarily for fk style slope filters.
+    """
+
+    def _get_slope_array(patch, dims, directional=True, water_level=None):
+        """Get an array which specifies slope."""
+        dim1, dim2 = dims[-1], dims[-2]
+        array1 = patch.get_array(dim1, make_broadcastable=True)
+        array2 = patch.get_array(dim2, make_broadcastable=True)
+        # Add water level if it is a scalar. If it is a dc.Quantity it must be
+        # a percentage. For percentages, scale by the max absolute value.
+        if water_level is not None:
+            water_vals = maybe_convert_percent_to_fraction(water_level)
+            water_val = water_vals[0]
+            if hasattr(water_val, "units"):
+                msg = "water_level must be a scalar or a percent quantity."
+                raise UnitError(msg)
+            if isinstance(water_level, dc.units.Quantity):
+                water_val *= np.nanmax(np.abs(array2))
+            array2 = array2 + water_val
+        with numpy.errstate(divide="ignore", invalid="ignore"):
+            slope = array1 / array2
+        if not directional:
+            slope = np.abs(slope)
+        return slope
+
+    def _maybe_transform_units(filt, patch, dims):
+        """Handle units on filter."""
+        # Hand the units/partial units in sequence.
+        units = getattr(filt, "units", None)
+        try:
+            filt = np.array(filt)
+        except ValueError:
+            filt = quant_sequence_to_quant_array(filt)
+        if units:
+            filt = filt * dc.get_quantity(units)
+        if not isinstance(filt, dc.units.Quantity):
+            return filt
+        array, units = filt.magnitude, filt.units
+        coord_unit_1 = patch.get_coord(dims[-1]).units
+        coord_unit_2 = patch.get_coord(dims[-2]).units
+        if not (coord_unit_1 and coord_unit_2):
+            msg = (
+                f"Units of {units} specified in Patch, but units "
+                f"are not defined for both specified dimensions: {dims}."
+            )
+            raise UnitError(msg)
+        new_units = coord_unit_1 / coord_unit_2
+        # Determine if we need to flip units.
+        if new_units.dimensionality == (1 / units).dimensionality:
+            array, units = np.sort(1 / array), invert_quantity(units)
+        out = convert_units(array, new_units, units)
+        return out
+
+    slope = _get_slope_array(
+        patch, dims, directional=directional, water_level=water_level
+    )
+    mask = np.ones(shape=[1] * slope.ndim, dtype=slope.dtype)
+    if filt is not None:
+        filt = _maybe_transform_units(filt, patch, dims)
+
+        fac = np.where(
+            (slope >= filt[0]) & (slope <= filt[1]),
+            1.0 - np.sin(0.5 * np.pi * (slope - filt[0]) / (filt[1] - filt[0])),
+            1.0,
+        )
+        fac = np.where((slope >= filt[1]) & (slope <= filt[2]), 0.0, fac)
+        fac = np.where(
+            (slope >= filt[2]) & (slope <= filt[3]),
+            np.sin(0.5 * np.pi * (slope - filt[2]) / (filt[3] - filt[2])),
+            fac,
+        )
+        fac = fac if invert else 1.0 - fac
+        mask = fac
+    return slope, mask

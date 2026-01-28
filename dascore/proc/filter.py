@@ -7,7 +7,6 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 
 from __future__ import annotations
 
-import sys
 import warnings
 from collections.abc import Sequence
 
@@ -21,17 +20,14 @@ from scipy.signal import savgol_filter as np_savgol_filter
 
 import dascore as dc
 from dascore.constants import PatchType, samples_arg_description
-from dascore.exceptions import FilterValueError, ParameterError, UnitError
+from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import (
-    convert_units,
     get_filter_units,
     get_inverted_quant,
-    invert_quantity,
-    quant_sequence_to_quant_array,
 )
+from dascore.utils.array import get_tapered_outer_coord_division_and_mask
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
-    broadcast_for_index,
     check_filter_kwargs,
     check_filter_range,
 )
@@ -548,74 +544,10 @@ def slope_filter(
             msg = f"Cant apply slope filter. {missing} are missing from patch."
             raise ParameterError(msg)
 
-    def _get_taper_mask(filt, slope, invert):
-        """Get a mask for applying taper and attenuation."""
-        fac = np.where(
-            (slope >= filt[0]) & (slope <= filt[1]),
-            1.0 - np.sin(0.5 * np.pi * (slope - filt[0]) / (filt[1] - filt[0])),
-            1.0,
-        )
-        fac = np.where((slope >= filt[1]) & (slope <= filt[2]), 0.0, fac)
-        fac = np.where(
-            (slope >= filt[2]) & (slope <= filt[3]),
-            np.sin(0.5 * np.pi * (slope - filt[2]) / (filt[3] - filt[2])),
-            fac,
-        )
-        fac = fac if invert else 1.0 - fac
-        return fac
-
-    def _get_slope_array(dft_patch, directional, freq_dims):
-        """Get an array which specifies slope."""
-        dim1, dim2 = freq_dims[-1], freq_dims[-2]
-        dims = dft_patch.dims
-        ndims = dft_patch.ndim
-        coord1 = dft_patch.get_array(dim1)
-        coord2 = dft_patch.get_array(dim2) + sys.float_info.epsilon
-        # Need to add appropriate blank dims to keep overall shape of patch.
-        ax1, ax2 = dims.index(dim1), dims.index(dim2)
-        shape_1 = broadcast_for_index(ndims, ax1, value=slice(None), fill=None)
-        shape_2 = broadcast_for_index(ndims, ax2, value=slice(None), fill=None)
-        # Then just allow broadcasting to do its magic
-        slope = coord1[shape_1] / coord2[shape_2]
-        if not directional:
-            slope = np.abs(slope)
-        return slope
-
-    def _maybe_transform_units(filt, dft_patch, freq_dims):
-        """Handle units on filter."""
-        # Hand the units/partial units in sequence.
-        units = getattr(filt, "units", None)
-        try:
-            filt = np.array(filt)
-        except ValueError:
-            filt = quant_sequence_to_quant_array(filt)
-        if units:
-            filt = filt * dc.get_quantity(units)
-        if not isinstance(filt, dc.units.Quantity):
-            return filt
-        array, units = filt.magnitude, filt.units
-        coord_unit_1 = dft_patch.get_coord(freq_dims[-1]).units
-        coord_unit_2 = dft_patch.get_coord(freq_dims[-2]).units
-        if not (coord_unit_1 and coord_unit_2):
-            msg = (
-                f"Units of {units} specified in Patch.slope_filter, but units "
-                f"are not defined for both specified dimensions: {dims}."
-            )
-            raise UnitError(msg)
-        new_units = coord_unit_1 / coord_unit_2
-        # Determine if we need to flip units.
-        if new_units.dimensionality == (1 / units).dimensionality:
-            array, units = np.sort(1 / array), invert_quantity(units)
-        out = convert_units(array, new_units, units)
-        return out
-
     _check_inputs(patch, filt, dims)
     freq_dims = tuple(f"ft_{x}" for x in dims)
     dft_patch = patch.dft.func(patch, dims)
     transformed = patch is not dft_patch
-
-    slope = _get_slope_array(dft_patch, directional, freq_dims)
-    filt = _maybe_transform_units(filt, dft_patch, freq_dims)
 
     # TODO remove in dascore 0.2.
     if notch is not None:
@@ -623,9 +555,10 @@ def slope_filter(
         warnings.warn(msg, DeprecationWarning, stacklevel=2)
         invert = notch
 
-    mask = _get_taper_mask(filt, slope, invert)
-    new_data = dft_patch.data * mask
-    out = dft_patch.update(data=new_data)
+    _, mask = get_tapered_outer_coord_division_and_mask(
+        dft_patch, freq_dims, filt=filt, invert=invert, directional=directional
+    )
+    out = dft_patch.update(data=dft_patch.data * mask)
     if transformed:
         out = out.idft().real()
     return out

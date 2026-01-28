@@ -255,6 +255,11 @@ class CoordManager(DascoreBaseModel):
         >>> new_time = np.arange(len(coords.get_array('time')))
         >>> new_coords = coords.update(time=new_time)
         >>> assert 'time' in new_coords
+
+        Parameters
+        ----------
+        **kwargs
+            Mapping of coordinate names to new values (or None to drop).
         """
 
         def _get_dim_change_drop(coord_map, dim_map):
@@ -461,7 +466,7 @@ class CoordManager(DascoreBaseModel):
         coord_map
             A mapping of {name: coord}
         dim_map
-            A mapping of {coord_name:
+            A mapping of {coord_name: dims}.
         """
         out = self.__class__(
             dims=dims if dims is not None else self.dims,
@@ -485,6 +490,8 @@ class CoordManager(DascoreBaseModel):
         ----------
         *coords
             The name of the coordinate or dimension.
+        array
+            An array to index alongside coordinate drops.
         """
         dim_drop_list = []
         coords_to_drop = {x for x in iterate(coords)}
@@ -776,7 +783,14 @@ class CoordManager(DascoreBaseModel):
     __repr__ = __str__
 
     def equals(self, other) -> bool:
-        """Return True if other coordinates are approx equal."""
+        """
+        Return True if other coordinates are approx equal.
+
+        Parameters
+        ----------
+        other
+            The coordinate manager to compare against.
+        """
         if not isinstance(other, self.__class__):
             return False
         if not set(self.dims) == set(other.dims):
@@ -814,7 +828,14 @@ class CoordManager(DascoreBaseModel):
         return len(self.dims)
 
     def validate_data(self, data):
-        """Ensure data conforms to coordinates."""
+        """
+        Ensure data conforms to coordinates.
+
+        Parameters
+        ----------
+        data
+            An array to validate against coordinate manager shape.
+        """
         data = np.asarray([]) if data is None else data
         if self.shape != data.shape:
             msg = (
@@ -840,7 +861,14 @@ class CoordManager(DascoreBaseModel):
         return out
 
     def set_units(self, **kwargs):
-        """Set the units of the coordinate manager."""
+        """
+        Set the units of the coordinate manager.
+
+        Parameters
+        ----------
+        **kwargs
+            Mapping of coord_name: units.
+        """
         new_coords = dict(self.coord_map)
         for name, units in kwargs.items():
             new_coords[name] = new_coords[name].set_units(units)
@@ -850,6 +878,11 @@ class CoordManager(DascoreBaseModel):
         """
         Convert units in coords according to kwargs. Will raise if incompatible
         Coordinates are specified.
+
+        Parameters
+        ----------
+        **kwargs
+            Mapping of coord_name: units.
         """
         new_coords = dict(self.coord_map)
         for name, units in kwargs.items():
@@ -864,7 +897,14 @@ class CoordManager(DascoreBaseModel):
         return self.new(coord_map=new_coords)
 
     def transpose(self, *dims: str | type(Ellipsis)) -> Self:
-        """Transpose the coordinates."""
+        """
+        Transpose the coordinates.
+
+        Parameters
+        ----------
+        *dims
+            New dimension order; use ... to fill unspecified dimensions.
+        """
 
         def _get_transpose_dims(new, old):
             """Get a full tuple of dimensions for transpose, allowing for ..."""
@@ -1063,27 +1103,77 @@ class CoordManager(DascoreBaseModel):
         return self.coord_map[coord_name]
 
     def min(self, coord_name: str):
-        """Return the minimum value of a coordinate."""
+        """
+        Return the minimum value of a coordinate.
+
+        Parameters
+        ----------
+        coord_name
+            The name of the coordinate.
+        """
         return self.get_coord(coord_name).min()
 
     def max(self, coord_name: str):
-        """Return the maximum value of a coordinate."""
+        """
+        Return the maximum value of a coordinate.
+
+        Parameters
+        ----------
+        coord_name
+            The name of the coordinate.
+        """
         return self.get_coord(coord_name).max()
 
     def step(self, coord_name: str):
-        """Return the coordinate step."""
+        """
+        Return the coordinate step.
+
+        Parameters
+        ----------
+        coord_name
+            The name of the coordinate.
+        """
         return self.get_coord(coord_name).step
 
-    def get_array(self, coord_name: str) -> np.ndarray:
-        """Return the coordinate values as a numpy array."""
-        return np.asarray(self.get_coord(coord_name))
+    def get_array(self, coord_name: str, make_broadcastable=False) -> np.ndarray:
+        """
+        Return the coordinate values as an array.
+
+        Parameters
+        ----------
+        coord_name
+            The name of the coordinate.
+        make_broadcastable
+            If True, return an array with the same shape as coordmanager,
+            but all lengths are 1 except the corresponding dimension.
+        """
+        out = np.asarray(self.get_coord(coord_name))
+        if make_broadcastable:
+            shape = [1] * self.ndim
+            shape[self.dims.index(coord_name)] = len(out)
+            out = out.reshape(shape)
+        return out
 
     def coord_size(self, coord_name: str) -> int:
-        """Return the coordinate size."""
+        """
+        Return the coordinate size.
+
+        Parameters
+        ----------
+        coord_name
+            The name of the coordinate.
+        """
         return self.get_coord(coord_name).size
 
     def coord_range(self, coord_name: str):
-        """Return a scaler value for the coordinate (e.g., number of seconds)."""
+        """
+        Return a scaler value for the coordinate (e.g., number of seconds).
+
+        Parameters
+        ----------
+        coord_name
+            The name of the coordinate.
+        """
         return self.get_coord(coord_name).coord_range()
 
     def flip(self, *dims):

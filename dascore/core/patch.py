@@ -346,6 +346,7 @@ class Patch:
     check_attrs = check_patch_attrs
     get_coord = dascore.proc.get_coord
     get_array = dascore.proc.get_array
+    get_coord_patch = dascore.proc.get_coord_patch
     pipe = dascore.proc.pipe
     set_dims = dascore.proc.set_dims
     squeeze = dascore.proc.coords.squeeze
@@ -483,6 +484,7 @@ class Patch:
     spectrogram = transform.spectrogram
     velocity_to_strain_rate = transform.velocity_to_strain_rate
     velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
+    strain_to_particle_fk = transform.strain_to_particle_fk
     dispersion_phase_shift = transform.dispersion_phase_shift
     tau_p = transform.tau_p
     hilbert = transform.hilbert

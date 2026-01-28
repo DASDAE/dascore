@@ -9,7 +9,7 @@ import pandas as pd
 from scipy.interpolate import interp1d
 
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord
+from dascore.core.coords import BaseCoord, CoordPartial
 from dascore.exceptions import (
     CoordError,
     ParameterError,
@@ -153,7 +153,8 @@ def get_array(
     name: str | None = None,
     require_sorted: bool = False,
     require_evenly_sampled: bool = False,
-) -> BaseCoord:
+    make_broadcastable: bool = False,
+) -> np.ndarray:
     """
     Get an array associated with patch data or a coordinate.
 
@@ -165,6 +166,9 @@ def get_array(
         If True, require the coordinate to be sorted or raise Error.
     require_evenly_sampled
         If True, require the coordinate to be evenly sampled or raise Error.
+    make_broadcastable
+        If True, make sure the output array is broadcastable to the orignal
+        shape of the patch.
 
     Raises
     ------
@@ -191,13 +195,67 @@ def get_array(
     """
     if name is None:
         return self.data
-    coord = get_coord(
+    # This is here to run the checks on the coord.
+    _ = get_coord(
         self,
         name,
         require_sorted=require_sorted,
         require_evenly_sampled=require_evenly_sampled,
     )
-    return coord.data
+    # But then it is less redundant to just use coord managers' function.
+    return self.coords.get_array(name, make_broadcastable=make_broadcastable)
+
+
+@patch_function()
+def get_coord_patch(
+    patch: PatchType, coord_name: str, keep_dims: bool = True
+) -> PatchType:
+    """
+    Get a patch with coordinate data from coord_name as data.
+
+    This is primarily a helper function for various broadcasting functions.
+
+    Parameters
+    ----------
+    patch
+        The input patch.
+    coord_name
+        The name of the coordinate to return.
+    keep_dims
+        If True, keep all the dimensions in the old patch, otherwise just
+        keep the new ones. Kept dimensions that are not coord_name are length
+        1 coordinate partials.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>>
+    >>> # 1) Get an example patch.
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> # 2) Return a patch whose data are the time coordinate. All
+    >>> # Other dimensions are kept but with empty length 1 coordinates.
+    >>> time_patch = patch.get_coord_patch("time", keep_dims=True)
+    >>> expected_shape = [1] * patch.ndim
+    >>> expected_shape[patch.dims.index("time")] = len(patch.get_array("time"))
+    >>> assert time_patch.shape == tuple(expected_shape)
+    >>>
+    >>> # 3) Return a 1D patch with only the distance coordinate as data.
+    >>> dist_patch = patch.get_coord_patch("distance", keep_dims=False)
+    >>> assert dist_patch.dims == ("distance",)
+    """
+    coord = patch.get_coord(coord_name)
+    array = patch.coords.get_array(coord_name, make_broadcastable=keep_dims)
+    if keep_dims:
+        coords = {
+            name: (coord if name == coord_name else CoordPartial(shape=(1,)))
+            for name in patch.dims
+        }
+        dims = patch.dims
+    else:
+        coords = {coord_name: coord}
+        dims = (coord_name,)
+    return patch.new(data=array, coords=coords, dims=dims, attrs=patch.attrs)
 
 
 @patch_function()
