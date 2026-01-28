@@ -233,6 +233,11 @@ class TestToTimeDelta64:
         out2 = to_timedelta64(out)
         assert out == td == out2
 
+    def test_np_timedelta64_normalizes_to_ns(self, timedelta64):
+        """Ensure numpy timedelta64 input is normalized to ns precision."""
+        out = to_timedelta64(timedelta64)
+        assert out.dtype == np.dtype("timedelta64[ns]")
+
     def test_pandas_time_delta(self):
         """Ensure pandas timedelta still works."""
         expected = np.timedelta64(1, "s")
@@ -286,6 +291,16 @@ class TestToTimeDelta64:
         out = to_timedelta64(td)
         assert isinstance(out, np.timedelta64)
         assert out == to_timedelta64(3600)
+
+    def test_pandas_string_array(self):
+        """Ensure pandas StringArray converts to timedelta64[ns]."""
+        arr = pd.array(["1s", "2s", None], dtype="string")
+        out = to_timedelta64(arr)
+        expected = np.array(
+            [np.timedelta64(1, "s"), np.timedelta64(2, "s"), np.timedelta64("NaT")]
+        ).astype("timedelta64[ns]")
+        assert np.all(out[:2] == expected[:2])
+        assert pd.isnull(out[2])
 
     def test_unsupported_type(self):
         """Ensure unsupported types raise."""

@@ -399,7 +399,23 @@ def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):
 
 def list_ser_to_str(ser: pd.Series) -> pd.Series:
     """Convert a column of str sequences to a string with commas separating values."""
-    values = [",".join(x) if not isinstance(x, str) else x for x in ser.values]
+
+    def _is_null(val) -> bool:
+        if pd.api.types.is_scalar(val):
+            return bool(pd.isnull(val))
+        if isinstance(val, (list | tuple | np.ndarray)):
+            return bool(pd.isnull(np.asarray(val, dtype=object)).any())
+        null = pd.isnull(val)
+        return bool(null.any()) if isinstance(null, np.ndarray) else bool(null)
+
+    values = [
+        ""
+        if _is_null(x)
+        else ",".join(str(item) for item in x)
+        if isinstance(x, (list | tuple | np.ndarray))
+        else str(x)
+        for x in ser.values
+    ]
     return pd.Series(values, index=ser.index, dtype=object)
 
 
