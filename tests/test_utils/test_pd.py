@@ -15,6 +15,7 @@ from dascore.utils.pd import (
     fill_defaults_from_pydantic,
     filter_df,
     get_interval_columns,
+    list_ser_to_str,
     patch_to_dataframe,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
@@ -133,6 +134,43 @@ class TestFilterDfBasic:
         con = (ser >= 20) & (ser <= 30)
         out = filter_df(example_df, age_min=20, age_max=30)
         assert all(con == out)
+
+
+class TestListSerToStr:
+    """Tests for converting list-like series to strings."""
+
+    def test_mixed_values(self):
+        """Ensure scalars, sequences, and nulls are handled correctly."""
+        ser = pd.Series(
+            [
+                [1, 2],
+                ("a", "b"),
+                np.array([3, 4]),
+                "hi",
+                7,
+                None,
+                np.nan,
+                pd.NA,
+                [None, 1],
+                pd.Index([1, 2]),
+                pd.Index([np.nan]),
+            ]
+        )
+        out = list_ser_to_str(ser)
+        expected = [
+            "1,2",
+            "a,b",
+            "3,4",
+            "hi",
+            "7",
+            "",
+            "",
+            "",
+            "",
+            "Index([1, 2], dtype='int64')",
+            "",
+        ]
+        assert out.tolist() == expected
 
 
 class TestFilterDfAdvanced:
