@@ -454,7 +454,7 @@ class TestMap:
         """A ProcessPoolExecutor."""
         try:
             return ProcessPoolExecutor()
-        except PermissionError as exc:
+        except (PermissionError, OSError, RuntimeError) as exc:
             pytest.skip(f"ProcessPoolExecutor unavailable: {exc}")
 
     def test_simple(self, random_spool):

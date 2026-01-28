@@ -399,7 +399,14 @@ def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):
 
 def list_ser_to_str(ser: pd.Series) -> pd.Series:
     """Convert a column of str sequences to a string with commas separating values."""
-    values = [",".join(x) if not isinstance(x, str) else x for x in ser.values]
+    values = [
+        ",".join(x)
+        if not isinstance(x, str) and not pd.isnull(x)
+        else str(x)
+        if not pd.isnull(x)
+        else ""
+        for x in ser.values
+    ]
     return pd.Series(values, index=ser.index, dtype=object)
 
 
