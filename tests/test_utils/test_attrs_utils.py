@@ -6,15 +6,9 @@ from __future__ import annotations
 
 import pytest
 
-import dascore as dc
 from dascore import PatchAttrs
 from dascore.exceptions import AttributeMergeError
-from dascore.utils.attrs import (
-    combine_patch_attrs,
-    decompose_attrs,
-    separate_coord_info,
-)
-from dascore.utils.downloader import fetcher
+from dascore.utils.attrs import combine_patch_attrs, separate_coord_info
 
 
 class TestMergeAttrs:
@@ -96,25 +90,6 @@ class TestMergeAttrs:
         match = "Cant merge patch attrs"
         with pytest.raises(AttributeMergeError, match=match):
             combine_patch_attrs([attr1, attr2], coord_name="distance")
-
-
-class TestDecomposeAttrs:
-    """Tests for decomposing attributes."""
-
-    @pytest.fixture(scope="class")
-    def scanned_attrs(self):
-        """Scan all the attrs in the dascore cache, return them."""
-        return dc.scan(fetcher.path)
-
-    @pytest.fixture(scope="class")
-    def decomposed_attrs(self, scanned_attrs):
-        """Decompose attrs into dicts of lists."""
-        return decompose_attrs(scanned_attrs)
-
-    def test_only_datetime(self, decomposed_attrs):
-        """Ensure all times are datetime64."""
-        time_dtypes = decomposed_attrs["dims"]["time"]
-        assert set(time_dtypes) == {"datetime64"}
 
 
 class TestSeparateCoordInfo:

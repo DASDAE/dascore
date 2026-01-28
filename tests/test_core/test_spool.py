@@ -452,7 +452,10 @@ class TestMap:
     @pytest.fixture(scope="class")
     def proc_client(self):
         """A ProcessPoolExecutor."""
-        return ProcessPoolExecutor()
+        try:
+            return ProcessPoolExecutor()
+        except PermissionError as exc:
+            pytest.skip(f"ProcessPoolExecutor unavailable: {exc}")
 
     def test_simple(self, random_spool):
         """Simplest case for mapping a function on all patches."""
