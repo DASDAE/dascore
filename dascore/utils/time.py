@@ -189,6 +189,12 @@ def _float_to_timedelta64(num: float | int) -> np.datetime64:
     return _array_to_timedelta64(ar)[0]
 
 
+@to_timedelta64.register(np.timedelta64)
+def _pass_time_delta(time_delta):
+    """Simply return the time delta as ns precision."""
+    return time_delta.astype("<m8[ns]")
+
+
 @to_timedelta64.register(np.ndarray)
 @to_timedelta64.register(list)
 @to_timedelta64.register(tuple)
@@ -241,12 +247,6 @@ def _string_array_to_timedelta64(arr: pd.arrays.StringArray):
     """Convert pandas StringArray to timedelta64."""
     out = pd.to_timedelta(arr, errors="coerce")
     return out.to_numpy(dtype="timedelta64[ns]")
-
-
-@to_timedelta64.register(np.timedelta64)
-def _pass_time_delta(time_delta):
-    """Simply return the time delta as ns precision."""
-    return time_delta.astype("<m8[ns]")
 
 
 @to_timedelta64.register(pd.Timedelta)
