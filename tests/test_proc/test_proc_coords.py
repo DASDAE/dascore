@@ -775,7 +775,7 @@ class TestAddDistanceTo:
             random_patch_with_xyz.add_distance_to(ser)
 
     def test_bad_association_raises(self, random_patch_with_xyz):
-        """Ensure a PatchError is raised if coords dont share a dimension."""
+        """Ensure a PatchError is raised if coords don't share a dimension."""
         ser = pd.Series({"x": 1000, "y": 42, "time": 15})
         msg = "must be associated with the same dimension"
         with pytest.raises(PatchError, match=msg):

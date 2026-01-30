@@ -78,10 +78,10 @@ def differentiate(
     step: int = 1,
 ) -> PatchType:
     r"""
-    Calculate first derivative along dimension(s) using centeral diferences.
+    Calculate first derivative along dimension(s) using central differences.
 
     The shape of the output patch is the same as the input patch. Derivative
-    along edges are calculated with the same order (accuarcy) as centeral
+    along edges are calculated with the same order (accuracy) as central
     points using non-centered stencils.
 
     Parameters

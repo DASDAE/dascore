@@ -288,7 +288,7 @@ new_coord = get_coord(data=np.random.rand(distance_length))
 # Add it to the coord manager associated with distance dimension.
 new_cm_1 = cm.update(new_coord=("distance", new_coord))
 
-# Add the coordinate but dont associate it with any dimension.
+# Add the coordinate but don't associate it with any dimension.
 new_cm_2 = cm.update(new_coord=(None, new_coord))
 ```
 

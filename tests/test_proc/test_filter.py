@@ -113,7 +113,7 @@ class TestPassFilter:
         assert not np.any(pd.isnull(out.data))
 
     def test_uneven_sampling_raises(self, wacky_dim_patch):
-        """A nice error message should be raised if the samples arent even."""
+        """A nice error message should be raised if the samples aren't even."""
         match = "is not evenly sampled"
         with pytest.raises(CoordDataError, match=match):
             wacky_dim_patch.pass_filter(time=(10, 100))
@@ -375,8 +375,8 @@ class TestSlopeFilter:
 
     def test_attenuated_slopes(self, event_patch_1):
         """Ensure attenuated slopes are much lower in absolute values."""
-        # For some reason when padding isn't performed the attenation can
-        # be slightly off, need to look into thos.
+        # For some reason when padding isn't performed the attuation can
+        # be slightly off, need to look into those.
         example_patch = event_patch_1.pad(time="fft", distance="fft")
         filt = [2e3, 2.2e3, 8e3, 2e4]
         filtered_patch = example_patch.slope_filter(filt=filt)

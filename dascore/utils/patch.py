@@ -61,7 +61,7 @@ def _format_values(val):
         out = ",".join(_format_values(x) for x in val)
         out = f"({out})" if isinstance(val, tuple) else f"[{out}]"
     elif isinstance(val, np.ndarray):
-        # make sure numpy strings arent too long!
+        # make sure numpy strings aren't too long!
         out = np.array2string(
             val,
             precision=FLOAT_PRECISION,
@@ -418,10 +418,10 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     patches = [x.transpose(*dims) for x in df["patch"]]
     axis = patches[0].get_axis(merge_dim)
     # get data, coords, attrs for merging patch together.
-    datas = [x.data for x in patches]
+    data = [x.data for x in patches]
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
-    new_data = np.concatenate(datas, axis=axis)
+    new_data = np.concatenate(data, axis=axis)
     # Determine if conflicting non-dimensional coords should be dropped.
     conf = merge_kwargs.get("conflicts", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False

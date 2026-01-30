@@ -620,7 +620,7 @@ def sanitize_range_param(select) -> tuple:
     if len(select) != 2:
         msg = "Range indices must be a length 2 sequence."
         raise ParameterError(msg)
-    # swap out ellipses for None so downstream funcs dont have to
+    # swap out ellipses for None so downstream funcs don't have to
     select = tuple(None if x is ... else x for x in select)
     return select
 

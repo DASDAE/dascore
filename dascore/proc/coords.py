@@ -182,7 +182,7 @@ def get_array(
     >>> # Get an array of distance values
     >>> distance_array = patch.get_array("distance")
     >>>
-    >>> # Get an array of time values. Raise an error if they arent sorted.
+    >>> # Get an array of time values. Raise an error if they aren't sorted.
     >>> time_array = patch.get_array("time", require_sorted=True)
 
     See Also

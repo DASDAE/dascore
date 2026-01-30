@@ -244,7 +244,7 @@ class NumpyDocStrParser:
         Style the parameters block.
         """
         lines = param_str.split("\n")
-        # parameters dont have spaces at the start
+        # parameters don't have spaces at the start
         param_start = [num for num, x in enumerate(lines) if not x.startswith(" ")]
         param_start.append(len(lines))
         # parse parameters into (parameter): txt
@@ -547,7 +547,7 @@ def write_api_markdown(data_dict, api_path, address_dict, debug=False):
         # remove path from files to delete
         if path in files_to_delete:
             files_to_delete.remove(path)
-        # dont render non-target file if debugging
+        # don't render non-target file if debugging
         if debug and data["name"] != "read":
             continue
         # render and write

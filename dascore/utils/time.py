@@ -132,7 +132,7 @@ def _pass_datetime(datetime):
 @to_datetime64.register(datetime)
 def _datetime_to_datetime64(dt: datetime):
     """Convert python datetime to datetime64."""
-    # because pandas NaT has datettime in its MRO we need to check
+    # because pandas NaT has datetime in its MRO we need to check
     # if this is nullish and return NaT if so.
     if pd.isnull(dt):
         return np.datetime64("NaT")
@@ -155,7 +155,7 @@ def to_timedelta64(obj: float | np.ndarray | str | timedelta):
     Parameters
     ----------
     obj
-        An object to convert to timedelta64. Can be a float, str or arary of
+        An object to convert to timedelta64. Can be a float, str or array of
         such. Floats are interpreted as seconds and strings must conform to
         the output style of timedeltas (e.g. str(time_delta)).
 

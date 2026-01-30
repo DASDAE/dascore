@@ -62,7 +62,7 @@ class TestToQuartoCode:
         assert out1 == out2
 
     def test_options(self):
-        """Ensure quarto options cary forward."""
+        """Ensure quarto options carry forward."""
         code1 = """
         >>> #| fold: true
         >>> print("bob")

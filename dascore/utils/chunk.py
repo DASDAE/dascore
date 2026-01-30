@@ -303,7 +303,7 @@ class ChunkManager:
                 for num, x in enumerate(chunk2src_inds)
             ]
         )
-        # use pandex index to map back to actual indices
+        # use pandas index to map back to actual indices
         source_inds = s_index.values[source_inds_]
         chunk_inds = c_index.values[chunk_inds_]
         out = {

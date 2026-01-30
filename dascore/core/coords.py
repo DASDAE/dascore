@@ -145,7 +145,7 @@ def _get_coord_filter_validators(dtype):
 
     def _is_sub_dtype(dtype1, dtype2):
         """Helper function to get sub dtypes."""
-        # uncomment these if validators that arent numpy types are needed.
+        # uncomment these if validators that aren't numpy types are needed.
         # with suppress(TypeError):
         #     if issubclass(dtype1, dtype2):
         if np.issubdtype(dtype1, dtype2):
@@ -214,7 +214,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     @model_validator(mode="before")
     @classmethod
     def check_time_units(cls, data: Any) -> Any:
-        """Ensure time units are s if dattype is time-like."""
+        """Ensure time units are s if dtype is time-like."""
         if isinstance(data, dict):
             # This handles the coord range case.
             is_timey = False

@@ -1,4 +1,4 @@
-"""Find all python files which dont have "from __future__ import annotation"."""
+"""Find all python files which don't have "from __future__ import annotation"."""
 
 from __future__ import annotations
 
