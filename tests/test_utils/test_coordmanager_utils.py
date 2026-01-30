@@ -124,7 +124,7 @@ class TestMergeCoordManagers:
             merge_coord_managers([cm1, cm2], "distance")
 
     def test_unequal_non_merge_coords(self, cm_basic):
-        """When coords that won't be merged arent equal merge should fail."""
+        """When coords that won't be merged aren't equal merge should fail."""
         cm1 = cm_basic
         dist = cm1.coord_map["distance"]
         new_dist = dist.update_limits(min=dist.max())

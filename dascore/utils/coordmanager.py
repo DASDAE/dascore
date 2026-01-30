@@ -117,7 +117,7 @@ def merge_coord_managers(
                 # TODO: we might try to convert all the units to a common
                 # unit in the future.
                 msg = (
-                    f"Cannot merge coordinates {coord_name}, they dont all "
+                    f"Cannot merge coordinates {coord_name}, they don't all "
                     f"share the same units. Units found are: {set(units)}"
                 )
                 raise CoordMergeError(msg)

@@ -21,13 +21,13 @@ class TestModelEquals:
         assert sensible_model_equals({}, {})
 
     def test_arrays_not_equal(self):
-        """Ensure when arrays aren't equal models arent."""
+        """Ensure when arrays aren't equal models aren't."""
         mod1 = _TestModel(array=np.arange(10))
         mod2 = _TestModel(array=np.arange(10) + 10)
         assert not sensible_model_equals(mod1, mod2)
 
     def test_private(self):
-        """When private attrs arent equal the models should still be."""
+        """When private attrs aren't equal the models should still be."""
         mod1 = _TestModel(_private=1)
         mod2 = _TestModel(_private=2)
         assert sensible_model_equals(mod1, mod2)

@@ -124,7 +124,7 @@ def parse_project(obj, key=None):
         data["data_type"] = dtype
         data["short_description"] = docstr.split("\n")[0]
         data["object"] = obj
-        # get sub-motdules, methods, functions, etc. (just one level deep)
+        # get sub-modules, methods, functions, etc. (just one level deep)
 
         subs = list(inspect.getmembers(obj)) + list(
             _yield_get_submodules(obj, base_path)
@@ -215,7 +215,7 @@ def get_alias_mapping(module, key=None):
         obj = _unwrap_obj(obj)
         obj_id = str(id(obj))
         path = _get_file_path(obj)
-        # dont let base module be re-index
+        # don't let base module be re-indexed
         if obj is base_mod and not allow_base:
             return
         # skip things outside of this module

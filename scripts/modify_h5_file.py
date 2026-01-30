@@ -60,7 +60,7 @@ def copy_h5(path_old, path_new, attrs_to_replace=None, funcs=None):
         A dict of attributes which will be replaced with new values.
     funcs
         A dict of functions whose keys are addresses and values are
-        custome functions to apply.
+        custom functions to apply.
     """
     replace = attrs_to_replace if attrs_to_replace else {}
     funcs = funcs if funcs else {}

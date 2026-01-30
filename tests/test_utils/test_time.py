@@ -87,7 +87,7 @@ class TestToDateTime64:
         assert out == expected
 
     def test_non_ns_datetime64(self):
-        """Tests that a non-nano second datatime gets converted to one."""
+        """Tests that a non-nano second datetime gets converted to one."""
         datetimes = [
             np.datetime64("2011-01-01", "s"),
             np.datetime64("2011-01-01", "ms"),
@@ -162,7 +162,7 @@ class TestToDateTime64:
         assert out.equals(ser)
 
     def test_datetime(self):
-        """Ensure datatime works."""
+        """Ensure datetime works."""
         dt = datetime.fromisoformat("2021-01-02")
         out = to_datetime64(dt)
         assert isinstance(out, np.datetime64)
@@ -390,7 +390,7 @@ class TestToInt:
         assert np.all(to_int(array) == array)
 
     def test_non_ns_datetime64(self):
-        """Tests that a non-nano second datatime gets converted to one."""
+        """Tests that a non-nano second datetime gets converted to one."""
         datetimes = [
             np.datetime64("2011-01-01", "s"),
             np.datetime64("2011-01-01", "ms"),
@@ -413,7 +413,7 @@ class TestToInt:
             to_int(Dummy())
 
     def test_empty_dt_array(self):
-        """Ensure an empty datatime array gets converted to int."""
+        """Ensure an empty datetime array gets converted to int."""
         array = np.empty(0, dtype="datetime64[ns]")
         out = to_int(array)
         assert np.issubdtype(out.dtype, np.integer)

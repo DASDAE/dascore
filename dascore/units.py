@@ -266,7 +266,7 @@ def get_filter_units(
         The units to which the filter should be applied. The returned
         units will be 1/to_units.
     dim
-        The dimension name the opration is applied on. Only used for
+        The dimension name the operation is applied on. Only used for
         raising a more helpful error message.
 
     Examples

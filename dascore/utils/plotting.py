@@ -37,7 +37,7 @@ def _get_extents(dims_r, coords):
     """Get the extents used for each dimension."""
 
     def _convert_datetimes(coords, lims):
-        """Convert numpy datetimes to matplotlib style datettimes."""
+        """Convert numpy datetimes to matplotlib style datetimes."""
         time_dims = [
             i for i, v in coords.items() if np.issubdtype(v.dtype, np.datetime64)
         ]
@@ -85,7 +85,7 @@ def _format_time_axis(ax, dim, axis_name):
     """
     Function to handle formatting time axis for image-type plots.
 
-    Tries to snape all axis labels to "nice" values and adds reference
+    Tries to snap all axis labels to "nice" values and adds reference
     start time.
     """
     # Set label to not include units

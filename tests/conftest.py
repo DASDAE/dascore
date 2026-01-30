@@ -37,7 +37,7 @@ SPOOL_FIXTURES = []
 PATCH_FIXTURES = []
 
 # By default DASCore only issues a warning once per line. This ensures
-# they get issued every time so tests around warning behavior arent flakey.
+# they get issued every time so tests around warning behavior aren't flaky.
 warnings.filterwarnings("default", category=UserWarning)
 
 # --- Pytest configuration
