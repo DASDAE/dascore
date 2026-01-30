@@ -375,7 +375,7 @@ class TestSlopeFilter:
 
     def test_attenuated_slopes(self, event_patch_1):
         """Ensure attenuated slopes are much lower in absolute values."""
-        # For some reason when padding isn't performed the attuation can
+        # For some reason when padding isn't performed the attenuation can
         # be slightly off, need to look into those.
         example_patch = event_patch_1.pad(time="fft", distance="fft")
         filt = [2e3, 2.2e3, 8e3, 2e4]
