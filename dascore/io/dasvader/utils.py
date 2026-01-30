@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from h5py.h5r import Reference
 
 import dascore as dc
 from dascore.compat import array
@@ -59,9 +60,25 @@ def _dataset_to_dict(atrib) -> dict:
     """
     Convert the compound dataset to a python dict.
     """
+
+    def _resolve_ref(h5, value):
+        """Resolve h5py references to concrete values."""
+        if not isinstance(value, Reference):
+            return value
+        obj = h5[value]
+        out = obj[()]
+        if isinstance(out, np.ndarray) and out.size == 1:
+            return out.item()
+        return out
+
     data = atrib[()]
     assert isinstance(data, np.void)
-    return {name: unbyte(data[name]) for name in data.dtype.names}
+    h5 = atrib.file
+    out = {}
+    for name in data.dtype.names:
+        val = _resolve_ref(h5, data[name])
+        out[name] = unbyte(val)
+    return out
 
 
 def _get_attr_dict(atrib) -> dict:
@@ -116,7 +133,7 @@ def _is_dasvader_jld2(h5) -> bool:
     dtype_names = getattr(dtypes, "names", None)
     if dtype_names is None:
         return False
-    expected = {"data", "time", "htime", "offset", "atrib", "name"}
+    expected = {"data", "time", "htime", "offset", "atrib"}
     return expected.issubset(set(dtype_names))
 
 
