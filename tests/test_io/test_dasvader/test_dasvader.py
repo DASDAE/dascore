@@ -2,6 +2,7 @@
 Tests specific to DASvader format.
 """
 
+import numpy as np
 import pytest
 from h5py.h5r import Reference
 
@@ -20,3 +21,10 @@ class TestDASVader:
         """Ensure all attributes are resolted (no hf references)"""
         for attr, value in das_vader_patch.attrs.items():
             assert not isinstance(value, Reference)
+
+    def test_time_matches_julia_epoch(self, das_vader_patch):
+        """Ensure Julia epoch offset is correct for htime decoding."""
+        expected = np.datetime64("2023-08-24T14:06:17.550", "ms")
+        got = das_vader_patch.coords.time.min()
+        diff = np.abs(got - expected)
+        assert diff <= np.timedelta64(1, "ms")

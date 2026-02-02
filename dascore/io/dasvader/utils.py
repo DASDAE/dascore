@@ -10,7 +10,12 @@ from dascore.compat import array
 from dascore.core.coords import get_coord
 from dascore.utils.misc import maybe_get_items, unbyte
 
-_JULIA_EPOCH_MS = 62135596800000
+# Julia DateTime "instant" values (Dates.value) are milliseconds since
+# 0000-12-31T00:00:00 (Rata Die epoch). Note that Dates.epochms2datetime(0)
+# is 0000-01-01, which is *not* the epoch used by Dates.value/JLD2 storage.
+# Therefore the Unix epoch offset for JLD2 DateTime integers is 62135683200000 ms.
+_JULIA_EPOCH_MS = 62135683200000
+
 
 attrs_map = {
     "GaugeLength": "gauge_length",
@@ -43,7 +48,7 @@ def _step_range_len_to_params(sr):
 
 
 def _julia_ms_to_datetime64(ms_values):
-    """Convert Julia DateTime milliseconds to numpy datetime64[ms]."""
+    """Convert Julia DateTime milliseconds to numpy datetime64[ns]."""
     # Here we just prevent infinite loops.
     count = 0
     while isinstance(ms_values, np.void) and count < 10:
