@@ -502,10 +502,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         other_data = other.data if isinstance(other, BaseCoord) else other
         # Addition/subtraction treat scalars as values in current units.
         if hasattr(other_data, "units") and operator in (np.add, np.subtract):
-            other_data = convert_units(other_data.magnitude, self.units, other_data.units)
+            other_data = convert_units(
+                other_data.magnitude,
+                self.units,
+                other_data.units,
+            )
         lhs, rhs = (other_data, self.data) if reversed else (self.data, other_data)
         out = operator(lhs, rhs)
-        units = self.units if not np.issubdtype(np.asarray(out).dtype, np.bool_) else None
+        units = (
+            self.units if not np.issubdtype(np.asarray(out).dtype, np.bool_) else None
+        )
         return self._get_coord_output(out, units=units)
 
     def __add__(self, other):
@@ -553,7 +559,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         method_func = ufunc if method == "__call__" else getattr(ufunc, method)
         converted = [x.data if isinstance(x, BaseCoord) else x for x in inputs]
         out = method_func(*converted, **kwargs)
-        units = self.units if not np.issubdtype(np.asarray(out).dtype, np.bool_) else None
+        units = (
+            self.units if not np.issubdtype(np.asarray(out).dtype, np.bool_) else None
+        )
         return self._get_coord_output(out, units=units)
 
     def __array_function__(self, func, types, args, kwargs):
@@ -573,7 +581,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return obj
 
         out = func(*_convert(args), **_convert(kwargs))
-        units = self.units if not np.issubdtype(np.asarray(out).dtype, np.bool_) else None
+        units = (
+            self.units if not np.issubdtype(np.asarray(out).dtype, np.bool_) else None
+        )
         return self._get_coord_output(out, units=units)
 
     @cached_method
