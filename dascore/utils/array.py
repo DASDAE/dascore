@@ -521,3 +521,94 @@ def patch_array_function(self, func, types, args, kwargs):
     # Only handle functions involving Patches
     assert any(issubclass(t, dc.Patch) for t in types)
     return apply_array_func(func, *args, **kwargs)
+
+
+def _maybe_get_array_output_dtype(output):
+    """Return the dtype for numpy-like output, including quantities."""
+    if hasattr(output, "magnitude"):
+        return output.magnitude.dtype
+    return np.asarray(output).dtype
+
+
+def _get_coord_output(data, coord_factory, coord_type, units=None):
+    """Return coordinate output when array-like, else scalar-like output."""
+    if isinstance(data, coord_type):
+        return data
+    if hasattr(data, "magnitude") and hasattr(data, "units"):
+        if np.isscalar(data.magnitude) or np.ndim(data.magnitude) == 0:
+            return data
+        return coord_factory(data=data.magnitude, units=data.units)
+    if np.isscalar(data) or np.ndim(data) == 0:
+        return data.item() if hasattr(data, "item") else data
+    return coord_factory(data=data, units=units)
+
+
+def coord_array_ufunc(
+    coord,
+    ufunc,
+    method,
+    inputs,
+    kwargs,
+    *,
+    coord_type,
+    coord_factory,
+):
+    """Apply numpy ufunc dispatch for coordinate-like classes."""
+    method_func = ufunc if method == "__call__" else getattr(ufunc, method)
+    converted = [x.data if isinstance(x, coord_type) else x for x in inputs]
+    out = method_func(*converted, **kwargs)
+    is_bool = np.issubdtype(_maybe_get_array_output_dtype(out), np.bool_)
+    units = coord.units if not is_bool else None
+    return _get_coord_output(out, coord_factory, coord_type, units=units)
+
+
+def coord_array_function(
+    coord,
+    func,
+    types,
+    args,
+    kwargs,
+    *,
+    coord_type,
+    coord_factory,
+    unit_converter,
+):
+    """Apply numpy array-function dispatch for coordinate-like classes."""
+    if not any(issubclass(t, coord_type) for t in types):
+        return NotImplemented
+
+    def _iter_coords(obj):
+        if isinstance(obj, coord_type):
+            yield obj
+        elif isinstance(obj, tuple | list):
+            for item in obj:
+                yield from _iter_coords(item)
+        elif isinstance(obj, dict):
+            for item in obj.values():
+                yield from _iter_coords(item)
+
+    target_units = coord.units
+    coord_inputs = tuple(_iter_coords((args, kwargs)))
+    for arg in coord_inputs:
+        if target_units is None and arg.units is not None:
+            target_units = arg.units
+        if target_units is not None and arg.units is not None:
+            _ = unit_converter(arg.data, target_units, arg.units)
+
+    def _convert(obj):
+        if isinstance(obj, coord_type):
+            if target_units is None or obj.units is None:
+                return obj.data
+            return unit_converter(obj.data, target_units, obj.units)
+        if isinstance(obj, tuple):
+            return tuple(_convert(x) for x in obj)
+        if isinstance(obj, list):
+            return [_convert(x) for x in obj]
+        if isinstance(obj, dict):
+            return {k: _convert(v) for k, v in obj.items()}
+        return obj
+
+    out = func(*_convert(args), **_convert(kwargs))
+    is_bool = np.issubdtype(_maybe_get_array_output_dtype(out), np.bool_)
+    units = target_units if not is_bool else None
+    return _get_coord_output(out, coord_factory, coord_type, units=units)

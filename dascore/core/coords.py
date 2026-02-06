@@ -32,6 +32,7 @@ from dascore.units import (
     get_quantity_str,
     percent,
 )
+from dascore.utils.array import coord_array_function, coord_array_ufunc
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
@@ -430,9 +431,122 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     __repr__ = __str__
 
+    __array_priority__ = 1000.0
+
     def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""
         return self.data
+
+    def _get_coord_output(self, data, units=None):
+        """Return output from operations as a coordinate when possible."""
+        if isinstance(data, BaseCoord):
+            return data
+        if hasattr(data, "magnitude") and hasattr(data, "units"):
+            if np.isscalar(data.magnitude) or np.ndim(data.magnitude) == 0:
+                return data
+            return get_coord(data=data.magnitude, units=data.units)
+        if np.isscalar(data) or np.ndim(data) == 0:
+            return data.item() if hasattr(data, "item") else data
+        return get_coord(data=data, units=units)
+
+    def _binary_coord_op(self, operator, other, reversed=False):
+        """Apply a binary operator and return a new coordinate."""
+        self_data = self.data
+        other_data = other.data if isinstance(other, BaseCoord) else other
+
+        use_self_units = not (
+            operator is np.power and reversed and not hasattr(other_data, "units")
+        )
+        if self.units is not None and use_self_units:
+            self_data = self_data * get_quantity(self.units)
+
+        if isinstance(other, BaseCoord) and other.units is not None:
+            other_data = other_data * get_quantity(other.units)
+
+        if operator in (np.add, np.subtract):
+            has_other_units = hasattr(other_data, "units")
+            if self.units is not None and not has_other_units:
+                other_data = other_data * get_quantity(self.units)
+            elif self.units is not None and has_other_units:
+                other_data = convert_units(
+                    other_data.magnitude,
+                    self.units,
+                    other_data.units,
+                ) * get_quantity(self.units)
+
+        lhs, rhs = (other_data, self_data) if reversed else (self_data, other_data)
+        out = operator(lhs, rhs)
+        out_dtype = (
+            out.magnitude.dtype if hasattr(out, "magnitude") else np.asarray(out).dtype
+        )
+        is_bool = np.issubdtype(out_dtype, np.bool_)
+        units = self.units if not is_bool else None
+        return self._get_coord_output(out, units=units)
+
+    def __add__(self, other):
+        return self._binary_coord_op(np.add, other)
+
+    def __sub__(self, other):
+        return self._binary_coord_op(np.subtract, other)
+
+    def __mul__(self, other):
+        return self._binary_coord_op(np.multiply, other)
+
+    def __truediv__(self, other):
+        return self._binary_coord_op(np.divide, other)
+
+    def __floordiv__(self, other):
+        return self._binary_coord_op(np.floor_divide, other)
+
+    def __pow__(self, other):
+        return self._binary_coord_op(np.power, other)
+
+    def __mod__(self, other):
+        return self._binary_coord_op(np.mod, other)
+
+    __radd__ = __add__
+
+    def __rsub__(self, other):
+        return self._binary_coord_op(np.subtract, other, reversed=True)
+
+    __rmul__ = __mul__
+
+    def __rtruediv__(self, other):
+        return self._binary_coord_op(np.divide, other, reversed=True)
+
+    def __rfloordiv__(self, other):
+        return self._binary_coord_op(np.floor_divide, other, reversed=True)
+
+    def __rpow__(self, other):
+        return self._binary_coord_op(np.power, other, reversed=True)
+
+    def __rmod__(self, other):
+        return self._binary_coord_op(np.mod, other, reversed=True)
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        """Support numpy ufunc operations and return coordinate outputs."""
+        return coord_array_ufunc(
+            self,
+            ufunc,
+            method,
+            inputs,
+            kwargs,
+            coord_type=BaseCoord,
+            coord_factory=get_coord,
+        )
+
+    def __array_function__(self, func, types, args, kwargs):
+        """Support NumPy array-function protocol for coordinates."""
+        return coord_array_function(
+            self,
+            func,
+            types,
+            args,
+            kwargs,
+            coord_type=BaseCoord,
+            coord_factory=get_coord,
+            unit_converter=convert_units,
+        )
 
     @cached_method
     def min(self):
