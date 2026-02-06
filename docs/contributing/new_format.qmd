@@ -203,7 +203,7 @@ Next we need to write tests for the format (you weren't thinking of skipping thi
 
 Once the test file is added to the data registry, you can register the new format so a suite of tests run automatically. This is done by adding the format to the appropriate data structures in `tests/test_io/test_common_io.py`. The comments at the top of the file will guide you through this process.
 
-For some formats, the generic tests will be sufficient. For others, additional test cases may be required. These are placed in test_io folder. In our example, we would create the folder `dascore/tests/test_io/test_jingle`. Assuming you added a file called "jingle_test_file.jgl" to DASCore's data registry, then we could create the test file `dascore/tests/test_io/test_jingle/test_jingle.py` and its contents might look something like this:
+For some formats, the generic tests will be sufficient. For others, additional test cases may be required. Place these in the `tests/test_io` folder. In our example, we would create the folder `dascore/tests/test_io/test_jingle`. Assuming you added a file called "jingle_test_file.jgl" to DASCore's data registry, then we could create the test file `dascore/tests/test_io/test_jingle/test_jingle.py` and its contents might look something like this:
 
 
 ```{python filename="tests/test_io/test_jingle/test_jingle.py"}
@@ -238,7 +238,7 @@ class TestJingleIO:
 
 ## Register Plugin
 
-Now that the Jingle format support is implemented and tested, the final step is to register the jingle `FiberIO` subclasses in DASCore's entry points. This is done under the [project.entry-points."dascore.fiber_io"] section in DASCore's `pyproject.`toml file. For example, after adding jingle, the `pyproject.toml` section might look like this:
+Now that the Jingle format support is implemented and tested, the final step is to register the jingle `FiberIO` subclasses in DASCore's entry points. This is done under the `[project.entry-points."dascore.fiber_io"]` section in DASCore's `pyproject.toml` file. For example, after adding jingle, the `pyproject.toml` section might look like this:
 
 ```default
 [project.entry-points."dascore.fiber_io"]
