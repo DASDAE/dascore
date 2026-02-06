@@ -430,9 +430,98 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
 
     __repr__ = __str__
 
+    __array_priority__ = 1000.0
+
     def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""
         return self.data
+
+    def _get_coord_output(self, data, units=None):
+        """Return output from operations as a coordinate when possible."""
+        if isinstance(data, BaseCoord):
+            return data
+        if hasattr(data, "magnitude") and hasattr(data, "units"):
+            return get_coord(data=data.magnitude, units=data.units)
+        return get_coord(data=data, units=units)
+
+    def _binary_coord_op(self, operator, other, reversed=False):
+        """Apply a binary operator and return a new coordinate."""
+        other_data = other.data if isinstance(other, BaseCoord) else other
+        # Addition/subtraction treat scalars as values in current units.
+        if hasattr(other_data, "units") and operator in (np.add, np.subtract):
+            other_data = convert_units(other_data.magnitude, self.units, other_data.units)
+        lhs, rhs = (other_data, self.data) if reversed else (self.data, other_data)
+        out = operator(lhs, rhs)
+        units = self.units if not np.issubdtype(np.asarray(out).dtype, np.bool_) else None
+        return self._get_coord_output(out, units=units)
+
+    def __add__(self, other):
+        return self._binary_coord_op(np.add, other)
+
+    def __sub__(self, other):
+        return self._binary_coord_op(np.subtract, other)
+
+    def __mul__(self, other):
+        return self._binary_coord_op(np.multiply, other)
+
+    def __truediv__(self, other):
+        return self._binary_coord_op(np.divide, other)
+
+    def __floordiv__(self, other):
+        return self._binary_coord_op(np.floor_divide, other)
+
+    def __pow__(self, other):
+        return self._binary_coord_op(np.power, other)
+
+    def __mod__(self, other):
+        return self._binary_coord_op(np.mod, other)
+
+    __radd__ = __add__
+
+    def __rsub__(self, other):
+        return self._binary_coord_op(np.subtract, other, reversed=True)
+
+    __rmul__ = __mul__
+
+    def __rtruediv__(self, other):
+        return self._binary_coord_op(np.divide, other, reversed=True)
+
+    def __rfloordiv__(self, other):
+        return self._binary_coord_op(np.floor_divide, other, reversed=True)
+
+    def __rpow__(self, other):
+        return self._binary_coord_op(np.power, other, reversed=True)
+
+    def __rmod__(self, other):
+        return self._binary_coord_op(np.mod, other, reversed=True)
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        """Support numpy ufunc operations and return coordinate outputs."""
+        method_func = ufunc if method == "__call__" else getattr(ufunc, method)
+        converted = [x.data if isinstance(x, BaseCoord) else x for x in inputs]
+        out = method_func(*converted, **kwargs)
+        units = self.units if not np.issubdtype(np.asarray(out).dtype, np.bool_) else None
+        return self._get_coord_output(out, units=units)
+
+    def __array_function__(self, func, types, args, kwargs):
+        """Support NumPy array-function protocol for coordinates."""
+        if not any(issubclass(t, BaseCoord) for t in types):
+            return NotImplemented
+
+        def _convert(obj):
+            if isinstance(obj, BaseCoord):
+                return obj.data
+            if isinstance(obj, tuple):
+                return tuple(_convert(x) for x in obj)
+            if isinstance(obj, list):
+                return [_convert(x) for x in obj]
+            if isinstance(obj, dict):
+                return {k: _convert(v) for k, v in obj.items()}
+            return obj
+
+        out = func(*_convert(args), **_convert(kwargs))
+        units = self.units if not np.issubdtype(np.asarray(out).dtype, np.bool_) else None
+        return self._get_coord_output(out, units=units)
 
     @cached_method
     def min(self):

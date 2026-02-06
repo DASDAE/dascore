@@ -1895,6 +1895,60 @@ class TestChangeLength:
             BaseCoord.change_length(coord, 10)
 
 
+
+
+class TestCoordinateArithmetic:
+    """Tests for coordinate arithmetic behavior (issue #566)."""
+
+    def test_basic_arithmetic_returns_coord(self):
+        """Ensure basic arithmetic operations return coordinates."""
+        coord = get_coord(data=[1, 2, 3], units="m")
+
+        out = coord + 1
+        assert isinstance(out, BaseCoord)
+        assert out.units == coord.units
+        np.testing.assert_array_equal(out.values, np.array([2, 3, 4]))
+
+        out2 = 10 - coord
+        assert isinstance(out2, BaseCoord)
+        assert out2.units == coord.units
+        np.testing.assert_array_equal(out2.values, np.array([9, 8, 7]))
+
+    def test_numpy_ufunc_returns_coord(self):
+        """Ensure numpy ufunc dispatch returns coordinates."""
+        coord = get_coord(data=[1, 4, 9], units="m")
+        out = np.sqrt(coord)
+
+        assert isinstance(out, BaseCoord)
+        assert out.units == coord.units
+        np.testing.assert_allclose(out.values, np.array([1.0, 2.0, 3.0]))
+
+    def test_numpy_array_function_returns_coord(self):
+        """Ensure numpy array functions return coordinates where possible."""
+        coord = get_coord(data=[3, 4], units="m")
+        out = np.linalg.norm(coord)
+
+        assert isinstance(out, BaseCoord)
+        assert out.units == coord.units
+        np.testing.assert_allclose(out.values, np.array([5.0]))
+
+    def test_tuple_list_dict_conversions(self):
+        """Ensure tuple/list/dict conversion paths are exercised."""
+        coord1 = get_coord(data=[1, 2], units="m")
+        coord2 = get_coord(data=[3, 4], units="m")
+
+        out_tuple = np.concatenate((coord1, coord2))
+        assert isinstance(out_tuple, BaseCoord)
+        np.testing.assert_array_equal(out_tuple.values, np.array([1, 2, 3, 4]))
+
+        out_list = np.concatenate([coord1, coord2])
+        assert isinstance(out_list, BaseCoord)
+        np.testing.assert_array_equal(out_list.values, np.array([1, 2, 3, 4]))
+
+        out_kwargs = np.mean(a=coord1)
+        assert isinstance(out_kwargs, BaseCoord)
+        np.testing.assert_allclose(out_kwargs.values, np.array([1.5]))
+
 class TestIssues:
     """Tests for special issues related to coords."""
 
