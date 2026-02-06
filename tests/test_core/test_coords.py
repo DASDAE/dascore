@@ -1900,28 +1900,51 @@ class TestChangeLength:
 class TestCoordinateArithmetic:
     """Tests for coordinate arithmetic behavior (issue #566)."""
 
-    def test_basic_arithmetic_returns_coord(self):
-        """Ensure basic arithmetic operations return coordinates."""
-        coord = get_coord(data=[1, 2, 3], units="m")
+    @pytest.mark.parametrize(
+        "func, expected, other",
+        [
+            (lambda coord, val: coord + val, lambda vals, val: vals + val, 2),
+            (lambda coord, val: coord - val, lambda vals, val: vals - val, 2),
+            (lambda coord, val: coord * val, lambda vals, val: vals * val, 2),
+            (lambda coord, val: coord / val, lambda vals, val: vals / val, 2),
+            (lambda coord, val: coord // val, lambda vals, val: vals // val, 2),
+            (lambda coord, val: coord**val, lambda vals, val: vals**val, 2),
+            (lambda coord, val: coord % val, lambda vals, val: vals % val, 3),
+            (lambda coord, val: val + coord, lambda vals, val: val + vals, 2),
+            (lambda coord, val: val - coord, lambda vals, val: val - vals, 10),
+            (lambda coord, val: val * coord, lambda vals, val: val * vals, 2),
+            (lambda coord, val: val / coord, lambda vals, val: val / vals, 10),
+            (lambda coord, val: val // coord, lambda vals, val: val // vals, 10),
+            (lambda coord, val: val**coord, lambda vals, val: val**vals, 2),
+            (lambda coord, val: val % coord, lambda vals, val: val % vals, 10),
+        ],
+    )
+    def test_all_dunder_binary_ops(self, func, expected, other):
+        """Ensure all new arithmetic dunder paths return coordinates."""
+        coord = get_coord(data=[2, 4, 8], units="m")
 
-        out = coord + 1
+        out = func(coord, other)
         assert isinstance(out, BaseCoord)
         assert out.units == coord.units
-        np.testing.assert_array_equal(out.values, np.array([2, 3, 4]))
+        np.testing.assert_allclose(out.values, expected(coord.values, other))
 
-        out2 = 10 - coord
-        assert isinstance(out2, BaseCoord)
-        assert out2.units == coord.units
-        np.testing.assert_array_equal(out2.values, np.array([9, 8, 7]))
-
-    def test_numpy_ufunc_returns_coord(self):
-        """Ensure numpy ufunc dispatch returns coordinates."""
+    def test_numpy_ufunc_call_returns_coord(self):
+        """Ensure numpy ufunc __call__ dispatch returns coordinates."""
         coord = get_coord(data=[1, 4, 9], units="m")
         out = np.sqrt(coord)
 
         assert isinstance(out, BaseCoord)
         assert out.units == coord.units
         np.testing.assert_allclose(out.values, np.array([1.0, 2.0, 3.0]))
+
+    def test_numpy_ufunc_accumulate_returns_coord(self):
+        """Ensure numpy ufunc method dispatch (e.g. accumulate) returns coordinates."""
+        coord = get_coord(data=[1, 2, 3], units="m")
+        out = np.add.accumulate(coord)
+
+        assert isinstance(out, BaseCoord)
+        assert out.units == coord.units
+        np.testing.assert_array_equal(out.values, np.array([1, 3, 6]))
 
     def test_numpy_array_function_returns_coord(self):
         """Ensure numpy array functions return coordinates where possible."""
@@ -1948,6 +1971,12 @@ class TestCoordinateArithmetic:
         out_kwargs = np.mean(a=coord1)
         assert isinstance(out_kwargs, BaseCoord)
         np.testing.assert_allclose(out_kwargs.values, np.array([1.5]))
+
+    def test_array_function_returns_not_implemented_for_non_coord_types(self):
+        """Ensure non-coordinate array_function dispatch returns NotImplemented."""
+        coord = get_coord(data=[1, 2, 3], units="m")
+        out = coord.__array_function__(np.mean, (np.ndarray,), (coord,), {})
+        assert out is NotImplemented
 
 class TestIssues:
     """Tests for special issues related to coords."""
