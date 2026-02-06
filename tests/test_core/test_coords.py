@@ -259,6 +259,18 @@ class TestBasics:
         out = str(coord)
         assert isinstance(out, str)
 
+    def test_scalar_arithmetic_behaves_like_array(self):
+        """Coordinates should support simple arithmetic like ndarrays."""
+        coord = get_coord(data=[1, 2, 3])
+        assert np.array_equal(coord + 1, np.array([2, 3, 4]))
+        assert np.array_equal(1 + coord, np.array([2, 3, 4]))
+        assert np.array_equal(coord - 1, np.array([0, 1, 2]))
+
+    def test_numpy_ufunc_arithmetic(self):
+        """Numpy ufuncs should operate directly on coordinates."""
+        coord = get_coord(data=[1, 2, 3])
+        assert np.array_equal(np.add(coord, 2), np.array([3, 4, 5]))
+
     def test_rich(self, coord):
         """Each coord should have nice rich printing."""
         out = coord.__rich__()

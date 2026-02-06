@@ -188,7 +188,7 @@ def get_compatible_values(val, dtype):
     return val
 
 
-class BaseCoord(DascoreBaseModel, abc.ABC):
+class BaseCoord(np.lib.mixins.NDArrayOperatorsMixin, DascoreBaseModel, abc.ABC):
     """
     Coordinate interface.
 
@@ -433,6 +433,17 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""
         return self.data
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        """Apply numpy ufuncs to coordinates like ndarrays."""
+        converted = [x.data if isinstance(x, BaseCoord) else x for x in inputs]
+        out = kwargs.get("out")
+        if out is not None:
+            kwargs["out"] = tuple(
+                x.data if isinstance(x, BaseCoord) else x for x in out
+            )
+        result = getattr(ufunc, method)(*converted, **kwargs)
+        return result
 
     @cached_method
     def min(self):
