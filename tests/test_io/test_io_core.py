@@ -208,6 +208,20 @@ class TestFormatManager:
         name_ver = [(x.name, x.version) for x in out]
         assert len(name_ver) == len(set(name_ver))
 
+    def test_known_formats_empty_entry_points(self, format_manager):
+        """Known formats should tolerate an empty/non-string entry-point index."""
+        format_manager.__dict__.pop("_eps", None)
+        format_manager.__dict__.pop("known_formats", None)
+        format_manager._eps = pd.Series(dtype=object)
+        assert isinstance(format_manager.known_formats, set)
+
+    def test_load_plugins_empty_entry_points(self, format_manager):
+        """Loading plugins should no-op when no entry points are present."""
+        format_manager.__dict__.pop("_eps", None)
+        format_manager.__dict__.pop("known_formats", None)
+        format_manager._eps = pd.Series(dtype=object)
+        format_manager.load_plugins()
+
 
 class TestFormatter:
     """Tests for adding file supports through Formatter."""

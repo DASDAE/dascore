@@ -129,7 +129,7 @@ class _FiberIOManager:
     @cached_property
     def known_formats(self):
         """Return names of known formats."""
-        formats = self._eps.index.str.split("__").str[0]
+        formats = [name.split("__", maxsplit=1)[0] for name in self._eps.index]
         return set(formats) | set(self._format_version)
 
     @property
@@ -179,7 +179,8 @@ class _FiberIOManager:
         formats = {format} if format is not None else unloaded
         # Load one, or all, formats
         for form in formats:
-            for eps in self._eps.loc[self._eps.index.str.startswith(form)]:
+            entries = [name for name in self._eps.index if name.startswith(form)]
+            for eps in self._eps.loc[entries]:
                 self.register_fiberio(eps()())
         # The selected format(s) should now be loaded
         assert set(formats).isdisjoint(self.unloaded_formats)
