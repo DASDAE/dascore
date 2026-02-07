@@ -35,9 +35,9 @@ A single file can be loaded like this:
 
 ```{python}
 #| code-fold: true
-# This codeblock is just to get a usable path for the next cell.
+# This code block is only here to create a usable path for the next cell.
 import dascore as dc
-# Import fetch to read DASCore example files 
+# Import fetch to read DASCore example files.
 from dascore.utils.downloader import fetch
 
 
@@ -50,7 +50,7 @@ path = fetch("terra15_das_1_trimmed.hdf5")
 ```{python}
 import dascore as dc
 
-# path should be a path to your file. EG,
+# path should point to your file, e.g.
 # path = mydata.hdf5
 
 pa = dc.spool(path)[0]
@@ -221,13 +221,13 @@ DASCore Patches offer a few shortcuts for quickly accessing commonly used inform
 import dascore as dc
 
 patch = dc.get_example_patch()
-print(patch.seconds) # to get the number of seconds in the patch.
-print(patch.channel_count) # to get the number of channels in the patch.
+print(patch.seconds)  # number of seconds in the patch
+print(patch.channel_count)  # number of channels in the patch
 ```
 
-These only work for patches with dimensions "time" and "distance" but can help new users who may be unfamiliar with datetimes and coordinates. 
+These shortcuts only work for patches with dimensions "time" and "distance", but they can help new users who may be unfamiliar with datetimes and coordinates.
 
-The "name" of the patch, which is the filename that would be used if the patch were saved to disk by DASCore, can be generated via the [`Spool.get_patch_names`](`dascore.BaseSpool.get_patch_names`) to get a series of the names of the managed patches, or [`Patch.get_patch_name`](`dascore.Patch.get_patch_name`) to get a string of the patch name.
+The "name" of a patch (the filename DASCore would use if the patch were saved to disk) can be generated with [`Patch.get_patch_name`](`dascore.Patch.get_patch_name`). For a spool, use [`Spool.get_patch_names`](`dascore.BaseSpool.get_patch_names`) to get the names of its managed patches.
 
 ```python 
 import dascore as dc
@@ -536,7 +536,7 @@ import dascore as dc
 # This patch has latitude and longitude coordinates
 patch = dc.get_example_patch("random_patch_with_lat_lon")
 
-# Drop latitude, this wont affect the data or other coordinates
+# Drop latitude, this won't affect the data or other coordinates
 patch_dropped_lat = patch.drop_coords("latitude")
 print(patch_dropped_lat.coords)
 ```
