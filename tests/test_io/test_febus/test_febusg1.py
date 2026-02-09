@@ -4,6 +4,7 @@ Tests for the G1 csv files.
 Note: These can't just be includes in the common_io tests because these
 files only have one timestep.
 """
+
 from io import BytesIO, StringIO
 
 import pytest
@@ -26,7 +27,6 @@ def g1_path(request):
     The paths to the g1 times series files.
     """
     return fetch(request.param)
-
 
 
 class TestG1GetFormat:
