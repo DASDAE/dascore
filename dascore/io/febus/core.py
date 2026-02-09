@@ -117,7 +117,7 @@ class FebusG1CSV1(FiberIO):
     A CSV format used by Febus' G1 for storing DSTS files.
     """
 
-    name = "febusg1csv"
+    name = "febus_g1_csv"
     preferred_extensions = ("bsl", "mtx")
     version = "1"
 
