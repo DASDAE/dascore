@@ -31,7 +31,7 @@ RequiredType = typing.TypeVar("RequiredType")
 
 
 class BinaryReader(io.BytesIO):
-    """Base file for binary things."""
+    """Base file for reading binary files."""
 
     mode = "rb"
     reset_offset = True
@@ -56,6 +56,18 @@ class BinaryWriter(BinaryReader):
 
     mode = "ab"
     reset_offset = False
+
+
+class TextReader(BinaryReader):
+    """Base class for reading text files."""
+
+    mode = "r"
+
+
+class TextWriter(BinaryWriter):
+    """Base class for writing text files."""
+
+    mode = "a"
 
 
 @cache

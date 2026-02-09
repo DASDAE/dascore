@@ -8,7 +8,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.febus import Febus2
-from dascore.io.febus.utils import _flatten_febus_info
+from dascore.io.febus.a1utils import _flatten_febus_info
 from dascore.utils.downloader import fetch
 from dascore.utils.time import to_float
 

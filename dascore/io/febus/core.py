@@ -10,13 +10,15 @@ import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
+from dascore.utils.io import TextReader
 from dascore.utils.models import UTF8Str
 
-from .utils import (
+from .a1utils import (
     _get_febus_version_str,
     _read_febus,
     _yield_attrs_coords,
 )
+from .g1utils import _get_g1_coords_and_attrs, _get_g1_patch, _is_g1_file
 
 
 class FebusPatchAttrs(dc.PatchAttrs):
@@ -41,6 +43,10 @@ class FebusPatchAttrs(dc.PatchAttrs):
     zone: str = ""
 
     folog_a1_software_version: UTF8Str = ""
+
+
+class FebusBOTDRStrainAttrs(dc.PatchAttrs):
+    """Attributes for BOTDR (DTSS) systems written in strain."""
 
 
 class Febus2(FiberIO):
@@ -102,3 +108,37 @@ class Febus1(Febus2):
     """
 
     version = "1"
+
+
+class FebusG1CSV1(FiberIO):
+    """
+    A CSV format used by Febus' G1 for storing DSTS files.
+    """
+
+    name = "febusg1_csv"
+    preferred_extensions = ("bsl", "mtx")
+    version = "1"
+
+    def get_format(self, resource: TextReader, **kwargs) -> tuple[str, str] | bool:
+        """Get the name/version of a G1 file else return False."""
+        is_g1_file = _is_g1_file(resource)
+        resource.seek(0)  # proactively set resource back to position 0.
+        return (self.name, self.version) if is_g1_file else False
+
+    def scan(self, resource: TextReader, **kwargs) -> dc.PatchAttrs:
+        """Get the coords and attrs of a G1 file."""
+        coords, attrs = _get_g1_coords_and_attrs(resource)
+        attrs.update(
+            {
+                "path": getattr(resource, "name", ""),
+                "file_format": self.name,
+                "file_version": str(self.version),
+            }
+        )
+        attrs = FebusBOTDRStrainAttrs(coords=coords, **attrs)
+        return [attrs]
+
+    def read(self, resource: TextReader, **kwargs):
+        """Read a G1 file, return a Patch object."""
+        pa = _get_g1_patch(resource, attr_cls=FebusBOTDRStrainAttrs)
+        return [pa]
