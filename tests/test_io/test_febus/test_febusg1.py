@@ -139,3 +139,9 @@ class TestMisc:
         fiber = FebusG1CSV1()
         with pytest.warns(UserWarning, match=self.mtx_text):
             fiber.scan(g1_mtx_buffer)
+
+    def test_directory_spool(self, two_patch_directory):
+        """Ensure a directory spool works and can read files."""
+        spool = dc.spool(two_patch_directory).update()
+        patch = spool[0]
+        assert isinstance(patch, dc.Patch)
