@@ -4,6 +4,8 @@ IO module for reading Febus data.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 import dascore as dc
@@ -127,7 +129,12 @@ class FebusG1CSV1(FiberIO):
 
     def scan(self, resource: TextReader, **kwargs) -> list[dc.PatchAttrs]:
         """Get the coords and attrs of a G1 file."""
-        coords, attrs = _get_g1_coords_and_attrs(resource)
+        # Handle case of unsupported files (eg spectrum).
+        try:
+            coords, attrs = _get_g1_coords_and_attrs(resource)
+        except NotImplementedError as f:
+            warnings.warn(str(f))
+            return []
         attrs.update(
             {
                 "path": getattr(resource, "name", ""),

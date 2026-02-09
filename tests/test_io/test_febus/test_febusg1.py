@@ -13,7 +13,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.febus.core import FebusG1CSV1
-from dascore.io.febus.g1utils import _get_g1_coords_and_attrs, _is_g1_file
+from dascore.io.febus.g1utils import _is_g1_file
 from dascore.utils.downloader import fetch
 
 g1_files = (
@@ -29,6 +29,26 @@ def g1_path(request):
     The paths to the g1 times series files.
     """
     return fetch(request.param)
+
+
+@pytest.fixture(scope="module")
+def g1_mtx_buffer():
+    """Get a buffer with an mtx file"""
+    text = "\n".join(
+        [
+            "Param;sampling resolution;0.1",
+            "Param;fiberFrom;0",
+            "Param;fiberTo;1",
+            "Param;start time;1683721503.0;2023-05-10T12:25:03+0000",
+            "Param;end time;1683721504.0;2023-05-10T12:25:04+0000",
+            "Param;mode;strain",
+            "Param;channel;1",
+            "0.0",
+        ]
+    )
+    resource = StringIO(text)
+    resource.name = "febg1_C1_2023-05-10T12.25.03+0000.mtx"
+    return resource
 
 
 class TestG1GetFormat:
@@ -84,28 +104,11 @@ class TestG1Read:
         patch = spool[0]
         assert isinstance(patch, dc.Patch)
 
-    def test_read_mtx_raises_not_implemented(self):
-        """Ensure reading g1 spectra (.mtx) files raises NotImplementedError."""
-        text = "\n".join(
-            [
-                "Param;sampling resolution;0.1",
-                "Param;fiberFrom;0",
-                "Param;fiberTo;1",
-                "Param;start time;1683721503.0;2023-05-10T12:25:03+0000",
-                "Param;end time;1683721504.0;2023-05-10T12:25:04+0000",
-                "Param;mode;strain",
-                "Param;channel;1",
-                "0.0",
-            ]
-        )
-        resource = StringIO(text)
-        resource.name = "febg1_C1_2023-05-10T12.25.03+0000.mtx"
-        with pytest.raises(NotImplementedError, match="cannot yet parse spectra"):
-            _get_g1_coords_and_attrs(resource)
-
 
 class TestMisc:
     """Misc integration tests for G1 files."""
+
+    mtx_text = "cannot yet parse spectra"
 
     @pytest.fixture(scope="class")
     def g1_two_file_directory(self, tmp_path_factory):
@@ -122,3 +125,17 @@ class TestMisc:
         # These weren't directly adjacent files so we adjust the tolerance.
         merged = spool.chunk(time=None, tolerance=3)
         assert len(merged) == 1
+
+    def test_mtx_read_raises(self, g1_mtx_buffer):
+        """
+        Ensure reading g1 spectra (.mtx) files Raises NotImplementedError with read
+        """
+        fiber = FebusG1CSV1()
+        with pytest.raises(NotImplementedError, match=self.mtx_text):
+            fiber.read(g1_mtx_buffer)
+
+    def test_mtx_scan_warns(self, g1_mtx_buffer):
+        """Mtx scan should just issue a warning and return empty."""
+        fiber = FebusG1CSV1()
+        with pytest.warns(UserWarning, match=self.mtx_text):
+            fiber.scan(g1_mtx_buffer)
