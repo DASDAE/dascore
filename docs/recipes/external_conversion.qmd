@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-Although DASCore provides a lot of the functionality needed for DFOS processing, is not intended to do absolutely everything, and some other libraries might be better suited for a particular task. In addition to making it simple to access the underlying data as shown in the [patch tutorial](../tutorial/patch.qmd), DASCore provides convenience functions to convert data to formats used by other libraries. Here are a few examples:
+Although DASCore provides much of the functionality needed for DFOS processing, it is not intended to do everything, and other libraries may be better suited for specific tasks. In addition to making it simple to access the underlying data as shown in the [patch tutorial](../tutorial/patch.qmd), DASCore provides convenience functions to convert data to formats used by other libraries. Here are a few examples:
 
 
 ## [Pandas](https://pandas.pydata.org/)
@@ -50,5 +50,5 @@ patch_from_dar = dc.io.obspy_to_patch(stream)
 ```
 
 :::{.callout-note}
-As explained in the [`obspy_to_patch` docs](`dascore.utils.io.obspy_to_patch`), there must be a value in the stats dict which indicates values for a non-time dimension. For example, each trace might have a 'distance' key in its stats dict which DASCore uses to construct the distance dimensional coordinate.
+As explained in the [`obspy_to_patch` docs](`dascore.utils.io.obspy_to_patch`), the stats dictionary must include a value for at least one non-time dimension. For example, each trace might include a `distance` key in `stats`, which DASCore uses to construct the distance coordinate.
 :::
