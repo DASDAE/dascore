@@ -125,7 +125,7 @@ class FebusG1CSV1(FiberIO):
         resource.seek(0)  # proactively set resource back to position 0.
         return (self.name, self.version) if is_g1_file else False
 
-    def scan(self, resource: TextReader, **kwargs) -> dc.PatchAttrs:
+    def scan(self, resource: TextReader, **kwargs) -> list[dc.PatchAttrs]:
         """Get the coords and attrs of a G1 file."""
         coords, attrs = _get_g1_coords_and_attrs(resource)
         attrs.update(
@@ -138,7 +138,7 @@ class FebusG1CSV1(FiberIO):
         attrs = FebusBOTDRStrainAttrs(coords=coords, **attrs)
         return [attrs]
 
-    def read(self, resource: TextReader, **kwargs):
+    def read(self, resource: TextReader, **kwargs) -> dc.BaseSpool:
         """Read a G1 file, return a Patch object."""
         pa = _get_g1_patch(resource, attr_cls=FebusBOTDRStrainAttrs)
-        return [pa]
+        return dc.spool([pa])

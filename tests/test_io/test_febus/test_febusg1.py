@@ -78,7 +78,7 @@ class TestG1Read:
     """Tests for reading G1 files into patches."""
 
     def test_read(self, g1_path):
-        """Ensure attrs can be extracted from G1 files."""
+        """Ensure a G1 file is read into a Patch with expected data."""
         spool = dc.read(g1_path)
         assert len(spool) == 1
         patch = spool[0]
