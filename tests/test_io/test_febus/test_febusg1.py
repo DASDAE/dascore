@@ -5,7 +5,9 @@ Note: These can't just be includes in the common_io tests because these
 files only have one timestep.
 """
 
+import shutil
 from io import BytesIO, StringIO
+from pathlib import Path
 
 import pytest
 
@@ -100,3 +102,22 @@ class TestG1Read:
         resource.name = "febg1_C1_2023-05-10T12.25.03+0000.mtx"
         with pytest.raises(NotImplementedError, match="cannot yet parse spectra"):
             _get_g1_coords_and_attrs(resource)
+
+
+class TestMisc:
+    """Misc integration tests for G1 files."""
+
+    @pytest.fixture(scope="class")
+    def g1_two_file_directory(self, tmp_path_factory):
+        """Create a directory with only the two tracked G1 files."""
+        out_dir = Path(tmp_path_factory.mktemp("g1_two_file_directory"))
+        for name in g1_files[:2]:
+            src = fetch(name)
+            shutil.copy2(src, out_dir / Path(src).name)
+        return out_dir
+
+    def test_chunk_all_time_merges_to_single_patch(self, g1_two_file_directory):
+        """Ensure chunk(time=None) merges both g1 files into one patch."""
+        spool = dc.spool(g1_two_file_directory)
+        merged = spool.chunk(time=None)
+        assert len(merged) == 1
