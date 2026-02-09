@@ -119,5 +119,6 @@ class TestMisc:
     def test_chunk_all_time_merges_to_single_patch(self, g1_two_file_directory):
         """Ensure chunk(time=None) merges both g1 files into one patch."""
         spool = dc.spool(g1_two_file_directory)
-        merged = spool.chunk(time=None)
+        # These weren't directly adjacent files so we adjust the tolerance.
+        merged = spool.chunk(time=None, tolerance=3)
         assert len(merged) == 1
