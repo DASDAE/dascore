@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import dascore as dc
 from dascore.compat import random_state
 from dascore.exceptions import TimeError
 from dascore.utils.time import (
@@ -190,6 +191,15 @@ class TestToDateTime64:
         td = to_timedelta64(random_state.random(100))
         out = to_datetime64(td)
         assert np.issubdtype(out.dtype, "M8")
+
+    def test_pandas_string_array(self):
+        """Ensure pandas StringArray converts to datetime64[ns]."""
+        arr = pd.array(self.date_strs, dtype="string")
+        out = to_datetime64(arr)
+        expected = np.array([dc.to_datetime64(x) for x in self.date_strs]).astype(
+            "datetime64[ns]"
+        )
+        assert np.all(out == expected)
 
 
 class TestToTimeDelta64:

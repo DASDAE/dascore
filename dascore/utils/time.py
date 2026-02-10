@@ -119,7 +119,7 @@ def _float_to_datetime(ser: pd.Series) -> pd.Series:
 @to_datetime64.register(pd.arrays.StringArray)
 def _string_array_to_datetime64(arr: pd.arrays.StringArray):
     """Convert pandas StringArray to datetime64."""
-    out = pd.to_datetime(arr, errors="coerce")
+    out = pd.to_datetime(arr, errors="coerce", format="mixed")
     return out.to_numpy(dtype="datetime64[ns]")
 
 

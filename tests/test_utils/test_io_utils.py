@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import closing
-from io import BufferedReader, BufferedWriter
+from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
 from pathlib import Path
 
 import pytest
@@ -16,6 +16,7 @@ from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
     IOResourceManager,
+    TextReader,
     get_handle_from_resource,
 )
 
@@ -51,6 +52,24 @@ class TestGetHandleFromResource:
         path = tmp_path / "test_buffered_writer.txt"
         with closing(get_handle_from_resource(path, BinaryWriter)) as handle:
             assert isinstance(handle, BufferedWriter)
+
+    def test_path_to_text_reader(self, tmp_path):
+        """Ensure text reader opens text streams."""
+        path = tmp_path / "test_text_reader.txt"
+        path.write_text("hello")
+        with closing(get_handle_from_resource(path, TextReader)) as handle:
+            assert isinstance(handle, TextIOBase)
+
+    def test_stringio_to_text_reader(self):
+        """Ensure StringIO is accepted by TextReader."""
+        resource = StringIO("abc")
+        out = get_handle_from_resource(resource, TextReader)
+        assert out is resource
+
+    def test_binary_stream_not_text_reader(self):
+        """Ensure binary streams are rejected by TextReader."""
+        with pytest.raises(NotImplementedError):
+            get_handle_from_resource(BytesIO(b"abc"), TextReader)
 
     def test_path_to_hdf5_reader(self, generic_hdf5):
         """Ensure we get a reader from tmp path reader."""
@@ -138,6 +157,38 @@ class TestIOResourceManager:
                 raise ValueError("Waaagh!")
         except ValueError:
             assert fi.closed
+
+
+class TestTextReader:
+    """Tests for TextReader behavior."""
+
+    def test_get_handle_from_path_reads_text(self, tmp_path):
+        """Ensure TextReader opens paths in text mode."""
+        path = tmp_path / "text_reader_path.txt"
+        path.write_text("line1\nline2\n")
+        with closing(TextReader.get_handle(path)) as handle:
+            assert isinstance(handle, TextIOBase)
+            assert handle.readline() == "line1\n"
+
+    def test_get_handle_stringio_resets_offset(self):
+        """Ensure StringIO input has its offset reset."""
+        resource = StringIO("abc")
+        _ = resource.read(1)
+        out = TextReader.get_handle(resource)
+        assert out is resource
+        assert out.tell() == 0
+        assert out.read(1) == "a"
+
+    def test_get_handle_text_file_resets_offset(self, tmp_path):
+        """Ensure open text handles are accepted and reset."""
+        path = tmp_path / "text_reader_reset.txt"
+        path.write_text("abcdef")
+        with open(path, encoding="utf-8") as fi:
+            _ = fi.read(2)
+            out = TextReader.get_handle(fi)
+            assert out is fi
+            assert out.tell() == 0
+            assert out.read(1) == "a"
 
 
 class TestXarray:

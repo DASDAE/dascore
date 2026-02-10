@@ -31,7 +31,7 @@ RequiredType = typing.TypeVar("RequiredType")
 
 
 class BinaryReader(io.BytesIO):
-    """Base file for binary things."""
+    """Base file for reading binary files."""
 
     mode = "rb"
     reset_offset = True
@@ -56,6 +56,32 @@ class BinaryWriter(BinaryReader):
 
     mode = "ab"
     reset_offset = False
+
+
+class TextReader(BinaryReader):
+    """Base class for reading text files."""
+
+    mode = "r"
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get a text handle from a resource."""
+        if isinstance(resource, cls | io.TextIOBase):
+            if cls.reset_offset:
+                resource.seek(0)
+            return resource
+        try:
+            _maybe_make_parent_directory(resource)
+            return open(resource, mode=cls.mode, encoding="utf-8")
+        except TypeError:
+            msg = f"Couldn't get handle from {resource} using {cls}"
+            raise NotImplementedError(msg)
+
+
+class TextWriter(BinaryWriter):
+    """Base class for writing text files."""
+
+    mode = "a"
 
 
 @cache
