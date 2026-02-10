@@ -119,5 +119,5 @@ def _get_g1_patch(resource, attr_cls):
     resource.seek(0)
     data = np.loadtxt(resource, skiprows=data_start_line)
     data = np.asarray(data).reshape(coords.shape)
-    attrs = attr_cls(**attrs)
+    attrs = attr_cls(**{i: v for i, v in attrs.items() if not i.startswith("_")})
     return dc.Patch(data=data, coords=coords, attrs=attrs)

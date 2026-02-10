@@ -133,7 +133,7 @@ class FebusG1CSV1(FiberIO):
         try:
             coords, attrs = _get_g1_coords_and_attrs(resource)
         except NotImplementedError as f:
-            warnings.warn(str(f))
+            warnings.warn(str(f), stacklevel=2)
             return []
         attrs.update(
             {
@@ -142,7 +142,8 @@ class FebusG1CSV1(FiberIO):
                 "file_version": str(self.version),
             }
         )
-        attrs = FebusBOTDRStrainAttrs(coords=coords, **attrs)
+        attrs_no_private = {i: v for i, v in attrs.items() if not i.startswith("_")}
+        attrs = FebusBOTDRStrainAttrs(coords=coords, **attrs_no_private)
         return [attrs]
 
     def read(self, resource: TextReader, **kwargs) -> dc.BaseSpool:

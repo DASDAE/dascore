@@ -31,7 +31,7 @@ def g1_path(request):
     return fetch(request.param)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def g1_mtx_buffer():
     """Get a buffer with an mtx file"""
     text = "\n".join(
