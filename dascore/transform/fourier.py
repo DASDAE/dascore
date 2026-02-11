@@ -354,8 +354,9 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
         time = dc.to_timedelta64(time)
     # Get new dimensions
     new_dims = list(_get_stft_dims(dim, patch.dims, axis))
-    # Make dict of coordinates and return coord manager.
-    coord_map = dict(patch.coords.coord_map)
+    # Match dft behavior by removing coords associated with transformed dim,
+    # while keeping the transformed dim itself as a non-dimensional coord.
+    coord_map = patch.coords.disassociate_coord(dim).get_coord_tuple_map()
     new_units = invert_quantity(coord.units)
     coord_map.update(
         {
@@ -431,6 +432,8 @@ def stft(
     - If an array is passed for taper_window that has a different length
       than specified in kwargs, artificial enriching of frequency resolution
       (equivalent to zero padding in time domain) can occur.
+    - Non-dimensional coordinates associated with transformed coordinates
+      are dropped in the output.
 
     See Also
     --------

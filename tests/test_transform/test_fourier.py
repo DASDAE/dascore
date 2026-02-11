@@ -341,6 +341,19 @@ class TestSTFT:
         out = random_patch.stft(time=1, overlap=None)
         assert isinstance(out, dc.Patch)
 
+    def test_non_dim_coord_associated_with_transform(self):
+        """See #611."""
+        patch = dc.get_example_patch("random_das", shape=(10, 200))
+        aux_time = np.arange(len(patch.get_coord("time")), dtype=float)
+        aux_dist = np.arange(len(patch.get_coord("distance")), dtype=float)
+        patch = patch.update_coords(
+            aux_time=("time", aux_time),
+            aux_dist=("distance", aux_dist),
+        )
+        out = patch.stft(time=0.1)
+        assert "aux_time" not in out.coords.coord_map
+        assert "aux_dist" in out.coords.coord_map
+
 
 class TestInverseSTFT:
     """Tests for the inverse short-time Fourier transform."""

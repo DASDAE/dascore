@@ -70,3 +70,8 @@ inverse =  transformed.istft()
 
 transformed.abs().select(distance=0, samples=True).squeeze().viz.waterfall();
 ```
+
+:::{.callout-note}
+`stft` drops non-dimensional coordinates associated with the transformed
+dimension, matching `dft` behavior.
+:::
