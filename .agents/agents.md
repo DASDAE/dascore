@@ -63,7 +63,7 @@ pytest dascore --doctest-modules
 ## Test authoring conventions
 
 - Put tests under `tests/` mirroring package structure.
-- Group tests in classes. 
+- Group tests in classes.
 - Place fixtures as close as practical to usage (class, module, then `conftest.py`).
 
 ## Code conventions
@@ -100,7 +100,7 @@ Before handing off:
 2. Relevant tests pass locally.
 3. Lint/format checks pass.
 4. Docs updated for user-visible behavior changes.
-5. No unrelated refactors bundled with bugfixes.
+5. No unrelated refactors bundled with bug fixes.
 
 ## When uncertain
 
