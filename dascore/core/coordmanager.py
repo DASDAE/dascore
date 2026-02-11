@@ -514,6 +514,9 @@ class CoordManager(DascoreBaseModel):
 
         These coordinates will no longer be associated with a dimension in
         the coord manager but can still be retrieved.
+        If one of the provided names is a dimension, coordinates associated
+        with that dimension are dropped unless they are also explicitly listed
+        in ``coord``.
 
         Parameters
         ----------
