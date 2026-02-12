@@ -23,7 +23,7 @@ git fetch --all --tags
 
 2. Determine the next version number:
 - Consider only tags that start with `v` and match strict semver:
-  `^v[0-9]+\\.[0-9]+\\.[0-9]+$` (ignore pre-release/build suffixes).
+  `^v[0-9]+\.[0-9]+\.[0-9]+$` (ignore pre-release/build suffixes).
 - Find the latest existing release tag from that set (e.g., `v1.2.3`).
 - If no matching tags exist, use `v0.0.0` as the base.
 - Bump according to `release_type`:
