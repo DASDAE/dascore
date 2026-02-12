@@ -14,7 +14,7 @@ Draft the next release version and changelog from merged PRs.
 
 ## Workflow
 
-0. Ask for elevated permissions to run `git fetch` and `gh issue view` commands with network access.
+0. Ask for elevated permissions with network access to run `git fetch --all --tags` and the GitHub CLI PR commands used to collect merged PRs (for example `gh pr list`, `gh pr view`, or `gh api`).
 1. Fetch the latest refs and tags:
 
 ```bash
