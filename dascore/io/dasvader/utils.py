@@ -16,7 +16,6 @@ from dascore.utils.misc import maybe_get_items, unbyte
 # Therefore the Unix epoch offset for JLD2 DateTime integers is 62135683200000 ms.
 _JULIA_EPOCH_MS = 62135683200000
 
-
 attrs_map = {
     "GaugeLength": "gauge_length",
     "Hostname": "host_name",
@@ -27,6 +26,9 @@ attrs_map = {
     "PulseWidth": "pulse_width",
     "FiberLength": "fiber_length",
 }
+
+DATA_NAMES = {"data", "strainrate"}
+EXPECTED = {"time", "htime", "offset"}
 
 
 # --- Helpers
@@ -119,9 +121,12 @@ def _get_distance_coord(rec):
 
 def _get_coord_manager(h5, rec):
     """Get the coordinate manager for the contained patch."""
+    names = set(_get_reference_names(h5))
     time = _get_time_coord(h5, rec)
     dist = _get_distance_coord(rec)
-    dims = ("distance", "time")
+    # The data axis is transposed based on if they are stored in "strainrate"
+    # or "data" reference.
+    dims = ("distance", "time") if "data" in names else ("time", "distance")
     return dc.get_coord_manager(
         {"time": time, "distance": dist},
         dims=dims,
@@ -131,29 +136,40 @@ def _get_coord_manager(h5, rec):
 # --- Reading
 
 
+def _get_reference_names(h5):
+    """Get a set of the reference names."""
+    return h5.get("dDAS").dtype.names
+
+
 def _is_dasvader_jld2(h5) -> bool:
     """Return True if file contains DASVader JLD2 data."""
-    dset = h5.get("dDAS", None)
-    dtypes = getattr(dset, "dtype", None)
-    dtype_names = getattr(dtypes, "names", None)
-    if dtype_names is None:
+    try:
+        dtype_names = _get_reference_names(h5)
+    except AttributeError:
         return False
-    expected = {"data", "time", "htime", "offset", "atrib"}
-    return expected.issubset(set(dtype_names))
+    # Certain refs that all dasvader files have.
+    has_expected = EXPECTED.issubset(set(dtype_names))
+    # Data name can change.
+    has_data = DATA_NAMES & set(dtype_names)
+    return has_data and has_expected
 
 
 def _read_dasvader(h5, distance=None, time=None):
     """Read DASVader data into a Patch."""
     rec = h5["dDAS"][()]
     cm = _get_coord_manager(h5, rec)
+    # First, figure out what the data name is (this changes in different
+    # dasvader iterations), but if we get to here it has at least one.
+    ref_names = set(_get_reference_names(h5))
+    data_name = "data" if "data" in ref_names else next(iter(DATA_NAMES & ref_names))
     # data is a reference here; need to resolve it with h5 File.
-    data = h5[rec["data"]]
+    data = h5[rec[data_name]]
     if distance is not None or time is not None:
         cm, data = cm.select(data, distance=distance, time=time)
     data = array(data)
     if not data.size:
         return []
-    attrs = _get_attr_dict(h5[rec["atrib"]])
+    attrs = _get_attr_dict(h5[rec["atrib"]]) if "atrib" in ref_names else {}
     # attrs["coords"] = cm.to_summary_dict()
     # attrs["dims"] = cm.dims
     return [dc.Patch(data=data, coords=cm, attrs=dc.PatchAttrs(**attrs))]
