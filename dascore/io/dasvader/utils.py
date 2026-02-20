@@ -27,8 +27,8 @@ attrs_map = {
     "FiberLength": "fiber_length",
 }
 
-data_names = {"data", "strainrate"}
-expected = {"time", "htime", "offset"}
+DATA_NAMES = {"data", "strainrate"}
+EXPECTED = {"time", "htime", "offset"}
 
 
 # --- Helpers
@@ -138,20 +138,19 @@ def _get_coord_manager(h5, rec):
 
 def _get_reference_names(h5):
     """Get a set of the reference names."""
-    dset = h5.get("dDAS", None)
-    dtypes = getattr(dset, "dtype", None)
-    dtype_names = getattr(dtypes, "names", None)
-    return dtype_names
+    return h5.get("dDAS").dtype.names
 
 
 def _is_dasvader_jld2(h5) -> bool:
     """Return True if file contains DASVader JLD2 data."""
-    if (dtype_names := _get_reference_names(h5)) is None:
+    try:
+        dtype_names = _get_reference_names(h5)
+    except AttributeError:
         return False
     # Certain refs that all dasvader files have.
-    has_expected = expected.issubset(set(dtype_names))
+    has_expected = EXPECTED.issubset(set(dtype_names))
     # Data name can change.
-    has_data = data_names & set(dtype_names)
+    has_data = DATA_NAMES & set(dtype_names)
     return has_data and has_expected
 
 
@@ -160,9 +159,9 @@ def _read_dasvader(h5, distance=None, time=None):
     rec = h5["dDAS"][()]
     cm = _get_coord_manager(h5, rec)
     # First, figure out what the data name is (this changes in different
-    # dasvader iterations), but if we get to hear it has at least one.
+    # dasvader iterations), but if we get to here it has at least one.
     ref_names = set(_get_reference_names(h5))
-    data_name = next(iter(data_names & ref_names))
+    data_name = "data" if "data" in ref_names else next(iter(DATA_NAMES & ref_names))
     # data is a reference here; need to resolve it with h5 File.
     data = h5[rec[data_name]]
     if distance is not None or time is not None:
