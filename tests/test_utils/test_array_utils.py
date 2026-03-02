@@ -10,6 +10,7 @@ from pint import DimensionalityError
 
 import dascore as dc
 import dascore.proc.coords
+import dascore.utils.array as array_utils
 from dascore import get_quantity
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
@@ -467,6 +468,52 @@ class TestPatchUFunc:
 
 class TestApplyArrayFunc:
     """Tests for apply array func."""
+
+    def test_reduce_signature_fallback(self, monkeypatch, random_patch):
+        """Fallback to dummy signatures when ufunc introspection fails."""
+        real_signature = array_utils.inspect.signature
+
+        def _signature(obj):
+            if obj is np.add.reduce:
+                raise TypeError("simulated signature failure")
+            return real_signature(obj)
+
+        monkeypatch.setattr(array_utils.inspect, "signature", _signature)
+        out = apply_array_func(np.add.reduce, random_patch, axis=1)
+        assert isinstance(out, dc.Patch)
+        assert out.shape[1] == 1
+
+    def test_accumulate_signature_fallback(self, monkeypatch, random_patch):
+        """Fallback to dummy signatures when accumulate introspection fails."""
+        real_signature = array_utils.inspect.signature
+
+        def _signature(obj):
+            if obj is np.add.accumulate:
+                raise ValueError("simulated signature failure")
+            return real_signature(obj)
+
+        monkeypatch.setattr(array_utils.inspect, "signature", _signature)
+        out = apply_array_func(np.add.accumulate, random_patch, axis=1)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == random_patch.shape
+
+    def test_unknown_signature_failure_reraises(self, monkeypatch, random_patch):
+        """Unknown callables with introspection failure should re-raise."""
+
+        def shape_changing_func(data):
+            return data[0]
+
+        shape_changing_func.__name__ = "not_a_ufunc_method"
+        real_signature = array_utils.inspect.signature
+
+        def _signature(obj):
+            if obj is shape_changing_func:
+                raise TypeError("simulated signature failure")
+            return real_signature(obj)
+
+        monkeypatch.setattr(array_utils.inspect, "signature", _signature)
+        with pytest.raises(TypeError, match="simulated signature failure"):
+            apply_array_func(shape_changing_func, random_patch)
 
     def test_function_without_axis_parameter_error(self, random_patch):
         """Test that functions without axis parameter that change shape raise error."""
