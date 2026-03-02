@@ -93,6 +93,7 @@ def _get_attr_dict(atrib) -> dict:
     attrs = _dataset_to_dict(atrib)
     attrs = maybe_get_items(attrs, attrs_map)
     attrs["data_category"] = "DAS"
+    attrs["data_units"] = "nanostrain"
     return attrs
 
 
