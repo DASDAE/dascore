@@ -186,6 +186,7 @@ def patch_function(
     required_attrs: attr_type = None,
     history: Literal["full", "method_name", None] = "full",
     validate_call: bool = False,
+    namespace: str | None = None,
 ):
     """
     Decorator to mark a function as a patch method.
@@ -208,6 +209,14 @@ def patch_function(
         If True, use pydantic to validate the function call. This can save
         quite a lot of code in validation checks, but does have some overhead.
         See [validate_call](https://docs.pydantic.dev/latest/api/validate_call/).
+    namespace
+        If provided, the function is also attached as a method on the named
+        accessor namespace of Patch (e.g. ``patch.qc.snr()``).  A dynamic
+        accessor class is created and registered if one does not already exist
+        for that name.  The function is still returned as a standalone callable.
+        Note: Patch must be fully defined before this decorator fires, so this
+        parameter is intended for use in external packages, not during DASCore's
+        own initialization.
 
     Examples
     --------
@@ -280,6 +289,11 @@ def patch_function(
         # matches pydantic naming.
         _func.raw_function = getattr(func, "raw_function", func)
         _func.__wrapped__ = func
+
+        if namespace is not None:
+            from dascore.core.accessor import _attach_to_patch_accessor
+
+            _attach_to_patch_accessor(namespace, _func)
 
         return _func
 

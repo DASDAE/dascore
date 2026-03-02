@@ -22,7 +22,6 @@ from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
-from dascore.viz import VizPatchNameSpace
 
 
 class Patch:
@@ -489,15 +488,6 @@ class Patch:
     envelope = transform.envelope
     phase_weighted_stack = transform.phase_weighted_stack
 
-    # --- Method Namespaces
-    # Note: these can't be cached_property (from functools) or references
-    # to self stick around and keep large arrays in memory.
-
-    @property
-    def viz(self) -> VizPatchNameSpace:
-        """The visualization namespace."""
-        return VizPatchNameSpace(self)
-
     @property
     @deprecate(
         "The tran namespace is deprecated. Its methods can now be "
@@ -507,8 +497,3 @@ class Patch:
     def tran(self) -> Self:
         """The transformation namespace."""
         return self
-
-    @property
-    def io(self) -> dc.io.PatchIO:
-        """Return a patch IO object for saving patches to various formats."""
-        return dc.io.PatchIO(self)

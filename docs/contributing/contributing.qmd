@@ -11,6 +11,7 @@ To start, clone DASCore and [install it in development mode](dev_install.qmd). I
 
 Review how [DASCore's testing](testing.qmd) works, [how DASCore is documented](documentation.qmd),
 [DASCore style and linting](style_and_linting.qmd), and the [general guidelines](general_guidelines.qmd).
+For planned contributor-facing architecture work, see [extending DASCore](extending_dascore.qmd).
 
 
 

@@ -58,26 +58,6 @@ def register_func(list_or_dict: list | dict, key=None):
     return wrapper
 
 
-def _pass_through_method(func):
-    """Decorator for marking functions as methods on namedspace parent class."""
-
-    @functools.wraps(func)
-    def _func(self, *args, **kwargs):
-        obj = self._obj
-        return func(obj, *args, **kwargs)
-
-    return _func
-
-
-class _NameSpaceMeta(type):
-    """Metaclass for namespace class."""
-
-    def __setattr__(cls, key, value):
-        if callable(value):
-            value = _pass_through_method(value)
-        super().__setattr__(key, value)
-
-
 @contextlib.contextmanager
 def suppress_warnings(category=Warning):
     """
@@ -119,19 +99,6 @@ def warn_or_raise(
     if behavior == "raise":
         raise exception(msg)
     warnings.warn(msg, warning)
-
-
-class MethodNameSpace(metaclass=_NameSpaceMeta):
-    """A namespace for class methods."""
-
-    def __init__(self, obj):
-        self._obj = obj
-
-    def __init_subclass__(cls, **kwargs):
-        """Wrap all public methods."""
-        for key, val in vars(cls).items():
-            if callable(val):  # passes to _NameSpaceMeta settattr
-                setattr(cls, key, val)
 
 
 def broadcast_for_index(

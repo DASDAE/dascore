@@ -1,0 +1,104 @@
+---
+title: Extending DASCore
+---
+
+# Overview
+
+DASCore exposes a first-class accessor system so that external packages and
+internal namespaces can attach namespaced APIs to `Patch` and `Spool` without
+modifying those classes.
+
+Accessors are registered with a decorator, attached as descriptors, and
+instantiated fresh on each attribute access (no caching). This is the same
+model used by pandas.
+
+# Writing an Accessor
+
+## Patch accessor
+
+```python
+import dascore as dc
+
+@dc.register_patch_accessor("qc")
+class QCAccessor:
+    def __init__(self, patch):
+        self._patch = patch
+        if "time" not in patch.dims:
+            raise AttributeError("qc accessor requires a time dimension")
+
+    def snr(self):
+        ...
+```
+
+```python
+patch.qc.snr()
+```
+
+## Spool accessor
+
+```python
+@dc.register_spool_accessor("event")
+class EventAccessor:
+    def __init__(self, spool):
+        self._spool = spool
+
+    def by_time(self, start, stop):
+        ...
+```
+
+```python
+spool.event.by_time(t1, t2)
+```
+
+## Validation
+
+Raise `AttributeError` in `__init__` when the accessor is incompatible with
+the host object. The descriptor converts this to a `RuntimeError` with context
+so that Python's attribute machinery does not silently swallow the message.
+
+Methods that only apply to certain configurations should validate lazily inside
+the method rather than blocking the whole namespace in `__init__`.
+
+## Conflict policy
+
+Registering a name that already exists on the host class raises
+`AccessorRegistrationError` immediately. Silent replacement is not permitted.
+This is stricter than pandas and xarray (which warn and replace) to prevent
+surprising namespace shadowing in a scientific library context.
+
+Registering the same class under the same name twice is a no-op.
+
+# Replacing `MethodNameSpace`
+
+`MethodNameSpace` used a metaclass to transparently wrap every method so that
+it received the host object as its first argument. Accessor classes store the
+host object in `__init__` instead, which is simpler and consistent with
+pandas/xarray.
+
+The migration pattern is straightforward. The standalone functions that
+implement the logic do not change; only the namespace glue changes.
+
+Before (MethodNameSpace):
+
+```python
+class VizPatchNameSpace(MethodNameSpace):
+    waterfall = waterfall      # called as waterfall(patch, ...)
+    spectrogram = spectrogram
+```
+
+After (accessor):
+
+```python
+@dc.register_patch_accessor("viz")
+class VizPatchAccessor:
+    def __init__(self, patch):
+        self._patch = patch
+
+    def waterfall(self, **kwargs):
+        return waterfall(self._patch, **kwargs)
+
+    def spectrogram(self, **kwargs):
+        return spectrogram(self._patch, **kwargs)
+```
+
+The public call sites (`patch.viz.waterfall(...)`) are unchanged.
