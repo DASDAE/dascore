@@ -548,6 +548,12 @@ class TestSelect:
         # Distance coordinate should remain unchanged
         self._assert_coord_unchanged(patch_with_coord, selected_patch, "distance")
 
+    def test_select_single_numpy_int(self, random_patch):
+        """Ensure a single numpy int behaves the same as a python int."""
+        sub1 = random_patch.select(time=10, samples=True)
+        sub2 = random_patch.select(time=np.int64(10), samples=True)
+        assert sub1 == sub2
+
 
 class TestOrder:
     """Tests for ordering Patches."""

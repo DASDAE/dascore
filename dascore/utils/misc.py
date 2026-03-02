@@ -695,7 +695,9 @@ def _to_slice(limits):
     if isinstance(limits, slice):
         return limits
     # ints should be interpreted as Slice(int, int+1) to not collapse dim.
-    if isinstance(limits, int):
+    if isinstance(limits, int | np.integer):
+        # Convert numpy scalars to Python ints to avoid dtype overflow on +1.
+        limits = int(limits)
         if limits == -1:  # -1 case needs open interval to work
             return slice(-1, None)
         return slice(limits, limits + 1)
