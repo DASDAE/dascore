@@ -474,7 +474,7 @@ class TestApplyArrayFunc:
         real_signature = array_utils.inspect.signature
 
         def _signature(obj):
-            if obj is np.add.reduce:
+            if getattr(obj, "__name__", None) == "reduce":
                 raise TypeError("simulated signature failure")
             return real_signature(obj)
 
@@ -488,7 +488,7 @@ class TestApplyArrayFunc:
         real_signature = array_utils.inspect.signature
 
         def _signature(obj):
-            if obj is np.add.accumulate:
+            if getattr(obj, "__name__", None) == "accumulate":
                 raise ValueError("simulated signature failure")
             return real_signature(obj)
 
@@ -507,7 +507,7 @@ class TestApplyArrayFunc:
         real_signature = array_utils.inspect.signature
 
         def _signature(obj):
-            if obj is shape_changing_func:
+            if getattr(obj, "__name__", None) == "not_a_ufunc_method":
                 raise TypeError("simulated signature failure")
             return real_signature(obj)
 
