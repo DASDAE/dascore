@@ -384,12 +384,14 @@ def _reassemble_patch(result, patch, func, args, kwargs):
     # to the array so we can adjust the coords accordingly.
     try:
         sig = inspect.signature(func)
-    # For some reason, some ufuncs methods like reduce don't have signatures.
-    except (ValueError, AttributeError):
+    # Some ufunc methods can fail introspection on certain numpy/python combos.
+    except (ValueError, AttributeError, TypeError):
         ufunc_method_name = {"reduce": _dummy_reduce, "accumulate": _dummy_accumulate}
         name = getattr(func, "__name__", None)
-        assert name in ufunc_method_name
-        sig = inspect.signature(ufunc_method_name[name])
+        if name in ufunc_method_name:
+            sig = inspect.signature(ufunc_method_name[name])
+        else:
+            raise
 
     if "axis" in sig.parameters:
         dims, inds = _get_dims_and_inds_from_signature(patch, sig, args, kwargs)
