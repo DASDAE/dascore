@@ -165,7 +165,7 @@ def integrate_amp_squared(x, signal):
     """Integrate the square of the abs of signal with x coordinates."""
     dx = x[1] - x[0]  # x must be evenly sampled.
     amp_sq = np.abs(signal) ** 2
-    return np.trapz(amp_sq, dx=dx)
+    return np.trapezoid(amp_sq, dx=dx)
 
 # Check for first sine wave
 fft1_energy = integrate_amp_squared(freqs1, n_scaled_fft1)
