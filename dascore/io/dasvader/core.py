@@ -7,7 +7,13 @@ from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
-from .utils import _get_attr_dict, _get_coord_manager, _is_dasvader_jld2, _read_dasvader
+from .utils import (
+    _get_attr_dict,
+    _get_coord_manager,
+    _get_reference_names,
+    _is_dasvader_jld2,
+    _read_dasvader,
+)
 
 
 class DASVaderV1(FiberIO):
@@ -34,7 +40,8 @@ class DASVaderV1(FiberIO):
         """Scan a DASVader file, return summary information about the file."""
         rec = resource["dDAS"][()]
         cm = _get_coord_manager(resource, rec)
-        attrs = _get_attr_dict(resource[rec["atrib"]])
+        ref_names = set(_get_reference_names(resource))
+        attrs = _get_attr_dict(resource[rec["atrib"]]) if "atrib" in ref_names else {}
         attrs.update(
             {
                 "path": resource.filename,
