@@ -138,7 +138,11 @@ def _get_coord_manager(h5, rec):
 
 
 def _get_reference_names(h5):
-    """Get a set of the reference names."""
+    """Return field names from ``h5.get("dDAS").dtype.names``.
+
+    Returns a tuple of field names, or ``None`` if the dtype has no named
+    fields.
+    """
     return h5.get("dDAS").dtype.names
 
 
