@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Mapping, Sequence
 
 import numpy as np
@@ -20,6 +21,11 @@ from dascore.utils.array import PatchUFunc, patch_array_function, patch_array_uf
 from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
+from dascore.utils.namespace import (
+    NamespaceManager,
+    get_registered_method_namespaces,
+    register_method_namespace,
+)
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
 from dascore.viz import VizPatchNameSpace
@@ -103,9 +109,28 @@ class Patch:
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
 
+    @classmethod
+    def register_namespace(cls, name, namespace_cls, *, overwrite: bool = False):
+        """Register a method namespace on Patch."""
+        return register_method_namespace(cls, name, namespace_cls, overwrite=overwrite)
+
+    @classmethod
+    def get_registered_namespaces(cls):
+        """Return the registered method namespaces on Patch."""
+        return get_registered_method_namespaces(cls)
+
     def __eq__(self, other):
         """Compare one Patch."""
         return dascore.proc.equals(self, other)
+
+    def __getattr__(self, item):
+        """Try loading a lazily registered namespace before failing."""
+        manager = self.__class__._namespace_manager
+        if manager.load_plugin(item):
+            descriptor = inspect.getattr_static(self.__class__, item)
+            return descriptor.__get__(self, self.__class__)
+        msg = f"{self.__class__.__name__!r} object has no attribute {item!r}"
+        raise AttributeError(msg)
 
     def __add__(self, other):
         return dascore.utils.array.apply_ufunc(np.add, self, other)
@@ -512,3 +537,6 @@ class Patch:
     def io(self) -> dc.io.PatchIO:
         """Return a patch IO object for saving patches to various formats."""
         return dc.io.PatchIO(self)
+
+
+Patch._namespace_manager = NamespaceManager(Patch, "dascore.patch_namespace")

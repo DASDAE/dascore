@@ -2,7 +2,7 @@
 Module for static, matplotlib-based visualizations and figure generation.
 """
 from __future__ import annotations
-from dascore.utils.misc import MethodNameSpace
+from dascore.utils.namespace import MethodNameSpace
 
 from .spectrogram import spectrogram
 from .waterfall import waterfall

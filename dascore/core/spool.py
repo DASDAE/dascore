@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import inspect
 import warnings
 from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import singledispatch
@@ -31,6 +32,11 @@ from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor, _spool_map, deep_equality_check
+from dascore.utils.namespace import (
+    NamespaceManager,
+    get_registered_method_namespaces,
+    register_method_namespace,
+)
 from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
@@ -56,6 +62,16 @@ class BaseSpool(abc.ABC):
     """Spool Abstract Base Class (ABC) for defining Spool interface."""
 
     _rich_style = "bold"
+
+    @classmethod
+    def register_namespace(cls, name, namespace_cls, *, overwrite: bool = False):
+        """Register a method namespace on BaseSpool."""
+        return register_method_namespace(cls, name, namespace_cls, overwrite=overwrite)
+
+    @classmethod
+    def get_registered_namespaces(cls):
+        """Return the registered method namespaces on BaseSpool."""
+        return get_registered_method_namespaces(cls)
 
     @abc.abstractmethod
     def __getitem__(self, item: int | slice | np.ndarray) -> PatchType:
@@ -97,6 +113,23 @@ class BaseSpool(abc.ABC):
         my_dict = self.__dict__
         other_dict = getattr(other, "__dict__", {})
         return deep_equality_check(my_dict, other_dict)
+
+    def __getattr__(self, item):
+        """Try loading a lazily registered namespace before failing."""
+        manager = self.__class__._namespace_manager
+        if manager.load_plugin(item):
+            descriptor = inspect.getattr_static(self.__class__, item)
+            return descriptor.__get__(self, self.__class__)
+        if item == "viz":
+            msg = (
+                "'Spool' has no 'viz' namespace. "
+                "Apply 'viz' on a Patch object. "
+                "(you can merge a subset of the spool into a single patch using "
+                "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
+            )
+            raise AttributeError(msg)
+        msg = f"{self.__class__.__name__!r} object has no attribute {item!r}"
+        raise AttributeError(msg)
 
     @abc.abstractmethod
     @compose_docstring(conflict_desc=attr_conflict_description)
@@ -334,6 +367,9 @@ class BaseSpool(abc.ABC):
             "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
         )
         raise AttributeError(msg)
+
+
+BaseSpool._namespace_manager = NamespaceManager(BaseSpool, "dascore.spool_namespace")
 
 
 class DataFrameSpool(BaseSpool):

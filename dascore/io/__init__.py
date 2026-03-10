@@ -14,7 +14,7 @@ from dascore.utils.hdf5 import (
     H5Reader,
     H5Writer,
 )
-from dascore.utils.misc import MethodNameSpace
+from dascore.utils.namespace import MethodNameSpace
 from dascore.utils.pd import dataframe_to_patch, patch_to_dataframe
 from dascore.utils.io import (
     xarray_to_patch,
