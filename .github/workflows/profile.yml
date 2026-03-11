@@ -62,21 +62,15 @@ jobs:
 
       - uses: ./.github/actions/load-shared-vars
 
-      - uses: actions/setup-python@v6
+      - uses: ./.github/actions/mamba-install-dascore
         with:
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ env.PYTHON_DEFAULT }}
-
-      - name: Install dependencies
-        run: pip install ".[profile]"
-
-      - uses: ./.github/actions/cache-test-data
-        with:
-          mode: restore
+          install-group-str: "[profile]"
           cache-number: 1
 
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v4
         with:
-          mode: instrumentation
+          mode: simulation
           run: ./.github/test_code.sh profile
