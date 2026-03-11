@@ -31,7 +31,7 @@ from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor, _spool_map, deep_equality_check
-from dascore.utils.namespace import NamespaceOwner, SpoolNameSpace
+from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
@@ -58,7 +58,6 @@ class BaseSpool(NamespaceOwner, abc.ABC):
 
     _rich_style = "bold"
     _namespace_entry_point_group = "dascore.spool_namespace"
-    _namespace_base_class = SpoolNameSpace
     _namespace_attr_errors: ClassVar[dict[str, str]] = {
         "viz": (
             "'Spool' has no 'viz' namespace. "

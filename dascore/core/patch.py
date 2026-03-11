@@ -21,7 +21,7 @@ from dascore.utils.array import PatchUFunc, patch_array_function, patch_array_uf
 from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
-from dascore.utils.namespace import NamespaceOwner, PatchNameSpace
+from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
 
@@ -105,7 +105,6 @@ class Patch(NamespaceOwner):
         self._data = array(self.coords.validate_data(data))
 
     _namespace_entry_point_group = "dascore.patch_namespace"
-    _namespace_base_class = PatchNameSpace
 
     def __eq__(self, other):
         """Compare one Patch."""
