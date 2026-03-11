@@ -5,6 +5,18 @@ inputs:
     description: "Cache number. Use != 1 to reset data cache"
     required: false
     default: "1"
+  mode:
+    description: "One of restore, save, or restore-save"
+    required: false
+    default: "restore"
+
+outputs:
+  cache-hit:
+    description: "True if an exact cache key was restored"
+    value: ${{ steps.restore-test-data.outputs.cache-hit }}
+  cache-key:
+    description: "The cache key derived from OS and registry hash"
+    value: ${{ env.DATA_CACHE_KEY }}
 
 runs:
   using: "composite"
@@ -34,12 +46,27 @@ runs:
       run: |
         echo "DATA_CACHE_PATH=$(python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
 
-    - name: cache test data
-      uses: actions/cache@v4
+    - name: get data cache key
+      shell: bash -el {0}
+      run: |
+        echo "DATA_CACHE_KEY=data-${{ runner.os }}-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}" >> $GITHUB_ENV
+
+    - name: restore test data cache
+      if: ${{ inputs.mode == 'restore' || inputs.mode == 'restore-save' }}
+      uses: actions/cache/restore@v4
+      id: restore-test-data
+      with:
+        enableCrossOsArchive: true
+        path: ${{ env.DATA_CACHE_PATH }}
+        key: ${{ env.DATA_CACHE_KEY }}
+        restore-keys: |
+          data-${{ runner.os }}-${{ env.DATA_REGISTRY_HASH }}-
+
+    - name: save test data cache
+      if: ${{ inputs.mode == 'save' || inputs.mode == 'restore-save' }}
+      uses: actions/cache/save@v4
       id: cache-test-data
       with:
         enableCrossOsArchive: true
         path: ${{ env.DATA_CACHE_PATH }}
-        key: data-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}
-        restore-keys: |
-          data-${{ env.DATA_REGISTRY_HASH }}-
+        key: ${{ env.DATA_CACHE_KEY }}

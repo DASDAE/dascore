@@ -13,8 +13,46 @@ permissions:
   id-token: write # required for OIDC authentication with CodSpeed
 
 jobs:
+  prime_test_data_cache:
+    name: Prime test data cache
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: "true"
+          fetch-depth: '0'
+
+      - uses: ./.github/actions/load-shared-vars
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      - name: Install dascore for cache priming
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - uses: ./.github/actions/cache-test-data
+        id: cache-test-data
+        with:
+          mode: restore
+          cache-number: 1
+
+      - name: Download all registered test data
+        if: steps.cache-test-data.outputs.cache-hit != 'true'
+        run: python .github/scripts/cache_test_data.py
+
+      - name: Save primed test data cache
+        if: steps.cache-test-data.outputs.cache-hit != 'true'
+        uses: ./.github/actions/cache-test-data
+        with:
+          mode: save
+          cache-number: 1
+
   benchmarks:
     name: Run benchmarks
+    needs: prime_test_data_cache
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +72,7 @@ jobs:
 
       - uses: ./.github/actions/cache-test-data
         with:
+          mode: restore
           cache-number: 1
 
       - name: Run benchmarks

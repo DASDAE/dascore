@@ -1,0 +1,63 @@
+name: PrimeTestDataCache
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1"
+  push:
+    branches:
+      - master
+    paths:
+      - "dascore/data_registry.txt"
+      - ".github/actions/cache-test-data/action.yml"
+      - ".github/scripts/cache_test_data.py"
+      - ".github/workflows/prime_test_data_cache.yml"
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "dascore/data_registry.txt"
+      - ".github/actions/cache-test-data/action.yml"
+      - ".github/scripts/cache_test_data.py"
+      - ".github/workflows/prime_test_data_cache.yml"
+
+jobs:
+  prime_test_data_cache:
+    name: Prime test data cache (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/load-shared-vars
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      - name: Install dascore
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      # The cache key is tied to runner.os and the registry hash, so a hit means
+      # every file for this OS is already available in the pooch cache.
+      - uses: ./.github/actions/cache-test-data
+        id: cache-test-data
+        with:
+          mode: restore
+
+      - name: Download all registered test data
+        if: steps.cache-test-data.outputs.cache-hit != 'true'
+        shell: bash
+        run: python .github/scripts/cache_test_data.py
+
+      - name: Save primed test data cache
+        if: steps.cache-test-data.outputs.cache-hit != 'true'
+        uses: ./.github/actions/cache-test-data
+        with:
+          mode: save
