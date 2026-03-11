@@ -73,4 +73,7 @@ jobs:
         uses: CodSpeedHQ/action@v4
         with:
           mode: simulation
-          run: ./.github/test_code.sh profile
+          # CodSpeed does not inherit the shell activation done by the
+          # micromamba setup step, so run benchmarks explicitly inside the
+          # dascore environment to ensure pytest and pytest-codspeed resolve.
+          run: micromamba run -n dascore ./.github/test_code.sh profile
