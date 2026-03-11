@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import functools
 import inspect
-from importlib.metadata import entry_points
-from typing import Any
+from typing import ClassVar
 
 from dascore.exceptions import ParameterError
+from dascore.utils.plugins import get_entry_point_loaders, load_entry_point
 
 
 def _pass_through_method(func):
@@ -43,6 +43,49 @@ class MethodNameSpace(metaclass=_NameSpaceMeta):
                 setattr(cls, key, val)
 
 
+def _register_namespace_subclass(
+    cls: type[MethodNameSpace],
+    registry: dict[str, type[MethodNameSpace]],
+    base_name: str,
+):
+    """Register a namespace subclass by its declared name."""
+    name = cls.__dict__.get("name")
+    if name is None:
+        return
+    if not isinstance(name, str) or not name.isidentifier():
+        msg = f"{name!r} is not a valid namespace name."
+        raise ParameterError(msg)
+    current = registry.get(name)
+    if current is not None and current is not cls:
+        msg = f"{base_name}.{name} is already registered."
+        raise ParameterError(msg)
+    registry[name] = cls
+
+
+class PatchNameSpace(MethodNameSpace):
+    """A namespace for Patch methods."""
+
+    name: ClassVar[str | None] = None
+    _namespace_subclasses: ClassVar[dict[str, type[MethodNameSpace]]] = {}
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        _register_namespace_subclass(cls, PatchNameSpace._namespace_subclasses, "Patch")
+
+
+class SpoolNameSpace(MethodNameSpace):
+    """A namespace for Spool methods."""
+
+    name: ClassVar[str | None] = None
+    _namespace_subclasses: ClassVar[dict[str, type[MethodNameSpace]]] = {}
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        _register_namespace_subclass(
+            cls, SpoolNameSpace._namespace_subclasses, "BaseSpool"
+        )
+
+
 class _MethodNamespaceDescriptor:
     """Descriptor for binding a method namespace to an object."""
 
@@ -55,21 +98,50 @@ class _MethodNamespaceDescriptor:
         return self._namespace_cls(obj)
 
 
-def register_method_namespace(
+def _bind_method_namespace(
     owner_cls: type,
     name: str,
     namespace_cls: type[MethodNameSpace],
     *,
     overwrite: bool = False,
 ) -> type[MethodNameSpace]:
-    """Register a namespace on a class."""
+    """
+    Bind a namespace class to an owner class under an attribute name.
+
+    This is the low-level step which turns a namespace subclass into an
+    accessible attribute such as ``Patch.viz`` or ``spool.my_ext``.
+    It performs three tasks:
+
+    1. Validate that ``name`` is a legal attribute name.
+    2. Validate that ``namespace_cls`` matches the expected namespace base
+       for ``owner_cls`` (for example, ``PatchNameSpace`` for ``Patch``).
+    3. Attach a descriptor to ``owner_cls`` and record the binding in the
+       owner's namespace registry.
+
+    Parameters
+    ----------
+    owner_cls
+        The class which should expose the namespace attribute.
+    name
+        The attribute name users will access on the owner.
+    namespace_cls
+        The namespace class to bind to ``owner_cls``.
+    overwrite
+        If ``True``, replace an existing binding for ``name``.
+
+    Returns
+    -------
+    type[MethodNameSpace]
+        The namespace class that was bound.
+    """
     if not isinstance(name, str) or not name.isidentifier():
         msg = f"{name!r} is not a valid namespace name."
         raise ParameterError(msg)
+    expected_base = getattr(owner_cls, "_namespace_base_class", MethodNameSpace)
     if not inspect.isclass(namespace_cls) or not issubclass(
-        namespace_cls, MethodNameSpace
+        namespace_cls, expected_base
     ):
-        msg = "namespace_cls must be a MethodNameSpace subclass."
+        msg = f"namespace_cls must be a {expected_base.__name__} subclass."
         raise ParameterError(msg)
 
     sentinel = object()
@@ -87,31 +159,69 @@ def register_method_namespace(
     return namespace_cls
 
 
-def get_registered_method_namespaces(owner_cls: type) -> dict[str, type[MethodNameSpace]]:
+def _get_registered_method_namespaces(
+    owner_cls: type,
+) -> dict[str, type[MethodNameSpace]]:
     """Return registered method namespaces for a class."""
     return dict(getattr(owner_cls, "_method_namespace_registry", {}))
 
 
-class NamespaceManager:
-    """Manage lazily loaded method namespaces from entry points."""
+def _get_namespace_subclasses(
+    namespace_base: type[MethodNameSpace],
+) -> dict[str, type[MethodNameSpace]]:
+    """Return known namespace subclasses for a namespace base."""
+    return dict(getattr(namespace_base, "_namespace_subclasses", {}))
 
-    def __init__(self, owner_cls: type, entry_point_group: str):
-        self._owner_cls = owner_cls
-        self._entry_point_group = entry_point_group
-        self._loaded_names: set[str] = set()
 
-    @functools.cached_property
-    def _eps(self) -> dict[str, Any]:
-        """Return cached entry points keyed by namespace name."""
-        return {x.name: x.load for x in entry_points(group=self._entry_point_group)}
+def _get_namespace_owner_cls(owner_cls: type) -> type:
+    """Return the canonical class used to bind namespaces."""
+    # Bind onto the shared owner class (eg BaseSpool) rather than each
+    # concrete runtime subclass so one binding is reused everywhere.
+    for cls in owner_cls.__mro__:
+        if cls.__dict__.get("_namespace_entry_point_group") is not None:
+            return cls
+    return owner_cls
 
-    def load_plugin(self, name: str) -> bool:
-        """Load a namespace plugin by name if it is available."""
-        if name in self._loaded_names:
-            return name in get_registered_method_namespaces(self._owner_cls)
-        if name not in self._eps:
-            return False
-        namespace_cls = self._eps[name]()
-        register_method_namespace(self._owner_cls, name, namespace_cls)
-        self._loaded_names.add(name)
+
+def load_namespace(owner_cls: type, name: str) -> bool:
+    """Load and register a namespace from entry points if available."""
+    owner_cls = _get_namespace_owner_cls(owner_cls)
+    if name in _get_registered_method_namespaces(owner_cls):
         return True
+    namespace_base = getattr(owner_cls, "_namespace_base_class", MethodNameSpace)
+    namespace_cls = _get_namespace_subclasses(namespace_base).get(name)
+    if namespace_cls is not None:
+        # Namespace subclasses self-register by name at import time; delay the
+        # actual descriptor binding until the attribute is first requested.
+        _bind_method_namespace(owner_cls, name, namespace_cls)
+        return True
+    group = getattr(owner_cls, "_namespace_entry_point_group", None)
+    if not group:
+        return False
+    if name not in get_entry_point_loaders(group):
+        return False
+    _bind_method_namespace(owner_cls, name, load_entry_point(group, name))
+    return True
+
+
+class NamespaceOwner:
+    """Mixin for classes with lazily-loadable method namespaces."""
+
+    _namespace_entry_point_group: str | None = None
+    _namespace_attr_errors: ClassVar[dict[str, str]] = {}
+    _namespace_base_class: type[MethodNameSpace] = MethodNameSpace
+
+    @classmethod
+    def get_registered_namespaces(cls):
+        """Return registered method namespaces on the class."""
+        return _get_registered_method_namespaces(cls)
+
+    def __getattr__(self, item):
+        """Try loading a lazily registered namespace before failing."""
+        if load_namespace(self.__class__, item):
+            descriptor = inspect.getattr_static(self.__class__, item)
+            return descriptor.__get__(self, self.__class__)
+        if item in self.__class__._namespace_attr_errors:
+            raise AttributeError(self.__class__._namespace_attr_errors[item])
+        msg = f"{self.__class__.__name__!r} object has no attribute {item!r}"
+        raise AttributeError(msg)

@@ -1,0 +1,115 @@
+---
+title: Extending DASCore
+---
+
+This page explains how to extend DASCore with `Patch` and `Spool` namespaces. Use it when you want users to write code like `patch.my_plugin.some_method()` or `spool.my_plugin.some_method()` from a separate package.
+
+## When to use a namespace
+
+A namespace is appropriate when you want to group related functionality under a stable access point instead of adding many methods directly to `Patch` or `BaseSpool`. Good candidates include:
+
+- Optional integrations that should live in a separate package.
+- Domain-specific processing that is useful to a subset of users.
+- Functionality that needs extra dependencies which should not become core DASCore dependencies.
+
+If you are adding support for a new file format, see [Adding a New Format](new_format.qmd). File formats use `FiberIO` plugins, not method namespaces.
+
+## The namespace model
+
+DASCore namespaces inherit from either `PatchNameSpace` or `SpoolNameSpace`. Namespace methods receive the parent object, so they look like normal `Patch` or `Spool` methods. Using `patch` or `spool` as the first argument name can make this explicit:
+
+```{python}
+from dascore.constants import PatchType
+from dascore.utils.namespace import PatchNameSpace
+
+
+class MyPatchNamespace(PatchNameSpace):
+    """Patch extension methods."""
+    
+    @dc.patch_method
+    def peak_to_peak(patch: PatchType) -> float:
+        """Return peak-to-peak amplitude."""
+        return patch.data.max() - patch.data.min()
+```
+
+## Local, non-plugin use
+
+If you are not using entry-point plugins, importing a namespace subclass is enough. Give the subclass a `name`, then import it somewhere before users access `patch.<name>` or `spool.<name>`.
+
+This is mainly useful for:
+
+- Experiments in a notebook or script.
+- Tests which define temporary namespaces inline.
+- Private/local code where packaging an entry-point plugin is unnecessary.
+
+Example:
+
+```{python}
+import dascore as dc
+from dascore.constants import PatchType
+from dascore.utils.namespace import PatchNameSpace
+
+
+class MyPatchNamespace(PatchNameSpace):
+    name = "my_ext"
+
+    def peak_to_peak(patch: PatchType) -> float:
+        return patch.data.max() - patch.data.min()
+
+
+patch = dc.get_example_patch()
+value = patch.my_ext.peak_to_peak()
+```
+
+The namespace `name` must be a valid Python identifier. If another namespace of the same type already uses that name, DASCore raises an error when the subclass is defined.
+
+## Packaging an extension plugin
+
+For reusable extensions, this is the preferred approach. Define the namespace class in your package and register it with an entry point in `pyproject.toml`.
+
+### Patch namespace example
+
+Suppose your package is named `dascore-extra` and you want to expose `patch.my_ext`.
+
+`dascore_extra/patch_namespace.py`
+
+```{python}
+from dascore.constants import PatchType
+from dascore.utils.namespace import PatchNameSpace
+
+
+class MyPatchNamespace(PatchNameSpace):
+    """Patch methods provided by dascore-extra."""
+
+    name = "my_ext"
+
+    def peak_to_peak(patch: PatchType) -> float:
+        return patch.data.max() - patch.data.min()
+```
+
+`pyproject.toml`
+
+```default
+[project.entry-points."dascore.patch_namespace"]
+my_ext = "dascore_extra.patch_namespace:MyPatchNamespace"
+```
+
+After installation, DASCore loads the namespace the first time `patch.my_ext` is accessed.
+
+### Spool namespaces
+
+Spool namespaces use the same pattern. The only changes are:
+
+- Inherit from `SpoolNameSpace` and write methods against a `Spool`.
+- Register the namespace in the `dascore.spool_namespace` entry point group instead of `dascore.patch_namespace`.
+
+## Related guides
+
+- [Contributing](contributing.qmd)
+- [Documentation](documentation.qmd)
+- [Testing](testing.qmd)
+- [Adding a New Format](new_format.qmd)
+
+:::{.callout-note}
+[Pandas](https://pandas.pydata.org/pandas-docs/stable/development/extending.html) and [Xarray](https://docs.xarray.dev/en/stable/internals/extending-xarray.html) expose similar extension points through accessors. DASCore's namespace system serves a similar purpose, but simplifies the implementation API (eg no need to know about the accessor).
+:::

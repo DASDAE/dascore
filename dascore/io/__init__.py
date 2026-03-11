@@ -14,7 +14,7 @@ from dascore.utils.hdf5 import (
     H5Reader,
     H5Writer,
 )
-from dascore.utils.namespace import MethodNameSpace
+from dascore.utils.namespace import PatchNameSpace
 from dascore.utils.pd import dataframe_to_patch, patch_to_dataframe
 from dascore.utils.io import (
     xarray_to_patch,
@@ -24,7 +24,9 @@ from dascore.utils.io import (
 )
 
 
-class PatchIO(MethodNameSpace):
+class PatchIO(PatchNameSpace):
+    name = "io"
+
     write = write
     to_dataframe = patch_to_dataframe
     to_xarray = patch_to_xarray

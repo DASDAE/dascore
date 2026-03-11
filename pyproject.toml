@@ -143,6 +143,10 @@ WAV = "dascore.io.wav.core:WavIO"
 XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
 GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
 
+[project.entry-points."dascore.patch_namespace"]
+io = "dascore.io:PatchIO"
+viz = "dascore.viz:VizPatchNameSpace"
+
 
 # --- External tool configuration
 
