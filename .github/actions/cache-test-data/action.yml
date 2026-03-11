@@ -5,6 +5,18 @@ inputs:
     description: "Cache number. Use != 1 to reset data cache"
     required: false
     default: "1"
+  mode:
+    description: "One of restore, save, or restore-save"
+    required: false
+    default: "restore"
+
+outputs:
+  cache-hit:
+    description: "True if an exact cache key was restored"
+    value: ${{ steps.restore-test-data.outputs.cache-hit }}
+  cache-key:
+    description: "The cache key derived from the registry hash"
+    value: ${{ env.DATA_CACHE_KEY }}
 
 runs:
   using: "composite"
@@ -17,29 +29,59 @@ runs:
           echo "This action requires Python to be installed first."
           exit 1
         fi
-        if ! python -c "import pooch" 2>/dev/null; then
-          echo "❌ Error: Pooch is not installed"
-          echo "This action requires Pooch to be installed (pip install pooch or include in dependencies)."
-          exit 1
-        fi
-        echo "✅ Prerequisites verified: Python and Pooch are available"
+        echo "✅ Prerequisites verified: Python is available"
 
     - name: get data registry hash
       shell: bash -el {0}
       run: |
-        echo "DATA_REGISTRY_HASH=$(python -c "import pooch; print(pooch.file_hash('dascore/data_registry.txt'))")" >> $GITHUB_ENV
+        python - <<'PY' >> "$GITHUB_ENV"
+        from hashlib import sha256
+        from pathlib import Path
+
+        registry_path = Path("dascore/data_registry.txt")
+        print(f"DATA_REGISTRY_HASH={sha256(registry_path.read_bytes()).hexdigest()}")
+        PY
 
     - name: get data cache path
       shell: bash -el {0}
       run: |
-        echo "DATA_CACHE_PATH=$(python -c "import pooch; print(pooch.os_cache('dascore'))")" >> $GITHUB_ENV
+        python - <<'PY' >> "$GITHUB_ENV"
+        import os
+        import sys
+        from pathlib import Path
 
-    - name: cache test data
-      uses: actions/cache@v4
+        home = Path.home()
+        if sys.platform == "win32":
+            cache_root = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+        elif sys.platform == "darwin":
+            cache_root = home / "Library" / "Caches"
+        else:
+            cache_root = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache"))
+
+        print(f"DATA_CACHE_PATH={cache_root / 'dascore'}")
+        PY
+
+    - name: get data cache key
+      shell: bash -el {0}
+      run: |
+        echo "DATA_CACHE_KEY=data-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}" >> $GITHUB_ENV
+
+    - name: restore test data cache
+      if: ${{ inputs.mode == 'restore' || inputs.mode == 'restore-save' }}
+      uses: actions/cache/restore@v4
+      id: restore-test-data
+      with:
+        enableCrossOsArchive: true
+        path: ${{ env.DATA_CACHE_PATH }}
+        key: ${{ env.DATA_CACHE_KEY }}
+        restore-keys: |
+          data-${{ env.DATA_REGISTRY_HASH }}-
+
+    - name: save test data cache
+      if: ${{ inputs.mode == 'save' || inputs.mode == 'restore-save' }}
+      uses: actions/cache/save@v4
       id: cache-test-data
       with:
         enableCrossOsArchive: true
         path: ${{ env.DATA_CACHE_PATH }}
-        key: data-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}
-        restore-keys: |
-          data-${{ env.DATA_REGISTRY_HASH }}-
+        key: ${{ env.DATA_CACHE_KEY }}
