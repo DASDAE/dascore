@@ -39,6 +39,7 @@ jobs:
   prime_test_data_cache:
     needs: setup
     timeout-minutes: 20
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:

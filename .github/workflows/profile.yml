@@ -6,6 +6,12 @@ on:
     branches:
       - master
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
   workflow_dispatch:
 
 permissions:
@@ -15,6 +21,9 @@ permissions:
 jobs:
   prime_test_data_cache:
     name: Prime test data cache
+    if: >
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'benchmark')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +61,9 @@ jobs:
 
   benchmarks:
     name: Run benchmarks
+    if: >
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'benchmark')
     needs: prime_test_data_cache
     runs-on: ubuntu-latest
     steps:
