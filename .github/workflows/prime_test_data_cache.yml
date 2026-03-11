@@ -23,11 +23,8 @@ on:
 
 jobs:
   prime_test_data_cache:
-    name: Prime test data cache (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+    name: Prime shared test data cache
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +41,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      # The cache key is tied to runner.os and the registry hash, so a hit means
-      # every file for this OS is already available in the pooch cache.
+      # The cache key is shared across OSes. Each consuming job restores this
+      # archive into the platform-specific cache path that pooch uses locally.
       - uses: ./.github/actions/cache-test-data
         id: cache-test-data
         with:
