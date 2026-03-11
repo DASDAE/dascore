@@ -17,14 +17,13 @@ inputs:
 
   install-package:
     description: "If true, install dascore"
-    default: true
+    default: "true"
     required: false
-    type: boolean
 
   cache-number:
     description: "Cache number. Use != 1 to reset data cache"
     required: false
-    default: 1
+    default: "1"
 
 runs:
   using: "composite"
