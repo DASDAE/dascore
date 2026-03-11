@@ -74,6 +74,12 @@ class TestNamespace:
         assert out["bob"] is Namespace1
         assert out["bill"] is Namespace2
 
+    def test_registered_namespaces_are_immutable(self):
+        """Ensure registry discovery returns an immutable snapshot."""
+        out = ParentClass.get_registered_namespaces()
+        with pytest.raises(TypeError):
+            out["bob"] = Namespace2
+
     def test_unregistered_namespaces(self):
         """Ensure a namespace not registered fails with the default message."""
         inst = ParentClass()
@@ -113,6 +119,17 @@ class TestNamespace:
         assert out["other"] is OtherNamespace
         assert "other" not in ParentClass.get_registered_namespaces()
 
+    def test_unknown_group_does_not_create_registry_bucket(self):
+        """Ensure looking up an unknown group does not mutate the registry."""
+
+        class UnknownParent(NamespaceOwner):
+            _namespace_entry_point_group = "dascore.unknown_parent"
+
+        assert "dascore.unknown_parent" not in _MethodNameSpace._registry
+        out = UnknownParent.get_registered_namespaces()
+        assert not out
+        assert "dascore.unknown_parent" not in _MethodNameSpace._registry
+
     def test_namespace_collision_warns_and_last_wins(self):
         """Ensure duplicate names warn and the later namespace replaces the first."""
 
@@ -150,3 +167,23 @@ class TestNamespace:
         out = DistinctBase._registry["dascore.distinct_test"]
         assert out["first"] is FirstNamespace
         assert out["second"] is SecondNamespace
+
+    def test_init_subclass_is_cooperative(self):
+        """Ensure parent __init_subclass__ hooks still run."""
+
+        class HookMixin:
+            hook_called = False
+
+            def __init_subclass__(cls, **kwargs):
+                super().__init_subclass__(**kwargs)
+                cls.hook_called = True
+
+        class CooperativeBase(HookMixin, _MethodNameSpace):
+            entry_point_group = "dascore.cooperative_test"
+
+        class CooperativeNamespace(CooperativeBase):
+            name = "cooperative"
+
+        assert CooperativeNamespace.hook_called
+        out = CooperativeBase._registry["dascore.cooperative_test"]
+        assert out["cooperative"] is CooperativeNamespace

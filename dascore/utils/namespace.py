@@ -8,6 +8,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from typing import ClassVar
 
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.plugins import maybe_load_entry_point
 
 
@@ -54,6 +55,7 @@ class _MethodNameSpace(metaclass=_NameSpaceMeta):
 
     def __init_subclass__(cls, **kwargs):
         """Wrap all public methods."""
+        super().__init_subclass__(**kwargs)
         for key, val in vars(cls).items():
             if callable(val):  # passes to _NameSpaceMeta settattr
                 setattr(cls, key, val)
@@ -95,7 +97,8 @@ class NamespaceOwner:
     @classmethod
     def get_registered_namespaces(cls):
         """Return registered method namespaces on the class."""
-        return _MethodNameSpace._registry[cls._namespace_entry_point_group]
+        registry = _MethodNameSpace._registry.get(cls._namespace_entry_point_group, {})
+        return FrozenDict(registry)
 
     def __getattr__(self, item):
         """Try loading a lazily registered namespace before failing."""
