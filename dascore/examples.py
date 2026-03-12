@@ -341,6 +341,22 @@ def forge_dss():
     return dc.spool(path)[0]
 
 
+@register_func(EXAMPLE_PATCHES, key="febus_dss_mine_tight")
+def febus_dss_mine_1():
+    """
+    DSS file from a tight-buffered fiber at a mine with Febus interrogator
+    """
+    return dc.spool(fetch("dss_ug_mine_tight.h5"))[0]
+
+
+@register_func(EXAMPLE_PATCHES, key="febus_dss_mine_loose")
+def febus_dss_mine_2():
+    """
+    DSS file from a loose-buffered fiber at a mine with Febus interrogator
+    """
+    return dc.spool(fetch("dss_ug_mine_loose.h5"))[0]
+
+
 @register_func(EXAMPLE_PATCHES, key="forge_dts")
 def forge_dts():
     """
