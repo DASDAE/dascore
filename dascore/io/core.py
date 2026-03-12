@@ -11,7 +11,6 @@ import warnings
 from collections import defaultdict
 from collections.abc import Generator
 from functools import cache, cached_property, wraps
-from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Annotated, Literal, get_type_hints
 
@@ -48,6 +47,7 @@ from dascore.utils.models import (
     TimeDelta64,
 )
 from dascore.utils.pd import _model_list_to_df
+from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
 
 
@@ -122,9 +122,7 @@ class _FiberIOManager:
         Get the unloaded entry points registered to this domain into a dict of
         {name: ep}.
         """
-        fiber_io_eps = entry_points(group="dascore.fiber_io")
-        out = {x.name: x.load for x in fiber_io_eps}
-        return pd.Series(out)
+        return pd.Series(get_entry_point_loaders("dascore.fiber_io"))
 
     @cached_property
     def known_formats(self):

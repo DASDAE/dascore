@@ -7,7 +7,7 @@ import warnings
 from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import singledispatch
 from pathlib import Path
-from typing import Literal, TypeVar
+from typing import ClassVar, Literal, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -31,6 +31,7 @@ from dascore.utils.display import get_dascore_text, get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import CacheDescriptor, _spool_map, deep_equality_check
+from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import (
     _force_patch_merge,
     _spool_up,
@@ -52,10 +53,19 @@ from dascore.utils.pd import (
 T = TypeVar("T")
 
 
-class BaseSpool(abc.ABC):
+class BaseSpool(NamespaceOwner, abc.ABC):
     """Spool Abstract Base Class (ABC) for defining Spool interface."""
 
     _rich_style = "bold"
+    _namespace_entry_point_group = "dascore.spool_namespace"
+    _namespace_attr_errors: ClassVar[dict[str, str]] = {
+        "viz": (
+            "'Spool' has no 'viz' namespace. "
+            "Apply 'viz' on a Patch object. "
+            "(you can merge a subset of the spool into a single patch using "
+            "the Chunk function. i.e., spool.chunk(time=None)[0].viz.waterfall())"
+        )
+    }
 
     @abc.abstractmethod
     def __getitem__(self, item: int | slice | np.ndarray) -> PatchType:

@@ -11,6 +11,7 @@ from typing_extensions import Self
 import dascore as dc
 import dascore.proc.coords
 import dascore.utils.io
+import dascore.viz
 from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
@@ -20,12 +21,12 @@ from dascore.utils.array import PatchUFunc, patch_array_function, patch_array_uf
 from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
+from dascore.utils.namespace import NamespaceOwner
 from dascore.utils.patch import check_patch_attrs, check_patch_coords, get_patch_names
 from dascore.utils.time import to_float
-from dascore.viz import VizPatchNameSpace
 
 
-class Patch:
+class Patch(NamespaceOwner):
     """
     A Class for managing data and metadata.
 
@@ -102,6 +103,8 @@ class Patch:
         self._coords = coords
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
+
+    _namespace_entry_point_group = "dascore.patch_namespace"
 
     def __eq__(self, other):
         """Compare one Patch."""
@@ -494,11 +497,6 @@ class Patch:
     # to self stick around and keep large arrays in memory.
 
     @property
-    def viz(self) -> VizPatchNameSpace:
-        """The visualization namespace."""
-        return VizPatchNameSpace(self)
-
-    @property
     @deprecate(
         "The tran namespace is deprecated. Its methods can now be "
         "accessed as normal patch methods (eg patch.dft)",
@@ -507,8 +505,3 @@ class Patch:
     def tran(self) -> Self:
         """The transformation namespace."""
         return self
-
-    @property
-    def io(self) -> dc.io.PatchIO:
-        """Return a patch IO object for saving patches to various formats."""
-        return dc.io.PatchIO(self)

@@ -184,6 +184,9 @@ website:
         - text: "Adding a new format"
           href: contributing/new_format.qmd
 
+        - text: "Extending DASCore"
+          href: contributing/extending_dascore.qmd
+
         - text: "Publish a new release"
           href: contributing/publish_a_new_release.qmd
 
