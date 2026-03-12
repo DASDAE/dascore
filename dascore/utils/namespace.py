@@ -5,7 +5,6 @@ from __future__ import annotations
 import functools
 import warnings
 from collections import defaultdict
-from collections.abc import Mapping
 from typing import ClassVar
 
 from dascore.utils.mapping import FrozenDict
@@ -48,7 +47,9 @@ class _MethodNameSpace(metaclass=_NameSpaceMeta):
     entry_point_group: ClassVar[str | None] = None
 
     # This is where the namespaces are stored.
-    _registry: ClassVar[Mapping[str, dict]] = defaultdict(dict)
+    _registry: ClassVar[defaultdict[str | None, dict[str, type[_MethodNameSpace]]]] = (
+        defaultdict(dict)
+    )
 
     def __init__(self, obj):
         self._obj = obj
@@ -108,7 +109,9 @@ class NamespaceOwner:
         # Once loaded the registry should be populated.
         registry = _MethodNameSpace._registry.get(self._namespace_entry_point_group, {})
         if item in registry:
-            return registry[item](self)
+            instance = registry[item](self)
+            self.__dict__[item] = instance
+            return instance
 
         # If that fails, see if there is anything specific for this name to raise.
         if item in self._namespace_attr_errors:

@@ -47,7 +47,7 @@ class Namespace2(ParentClassNamespace):
 
     name = "bill"
 
-    def func1(self, expected_type):
+    def func1(self):
         """First func."""
         return self.name
 
@@ -58,8 +58,13 @@ class TestNamespace:
     def test_discoverable(self):
         """The Parent class should have the namespaces available."""
         inst = ParentClass()
-        bob = getattr(inst, "bob")
+        bob = inst.bob
         assert isinstance(bob, ParentClassNamespace)
+
+    def test_discoverable_is_cached(self):
+        """The same namespace instance should be returned on repeated access."""
+        inst = ParentClass()
+        assert inst.bob is inst.bob
 
     def test_parent_type_bound(self):
         """Ensure the parent type is bound the instances."""
