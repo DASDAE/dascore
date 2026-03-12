@@ -15,7 +15,11 @@ def get_entry_point_loaders(entry_point_group: str) -> dict[str, Any]:
 
 @functools.cache
 def maybe_load_entry_point(entry_point_group: str, name: str) -> Any:
-    """Load and cache a single entry-point target by group and name."""
+    """
+    Load and cache a single entry-point target by group and name.
+
+    If it does not exist, simply return None.
+    """
     loader = get_entry_point_loaders(entry_point_group).get(name)
     if loader is not None:
         return loader()
