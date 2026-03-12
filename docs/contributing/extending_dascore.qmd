@@ -19,6 +19,7 @@ If you are adding support for a new file format, see [Adding a New Format](new_f
 DASCore namespaces inherit from either `PatchNameSpace` or `SpoolNameSpace`. Namespace methods receive the parent object, so they look like normal `Patch` or `Spool` methods. Using `patch` or `spool` as the first argument name can make this explicit:
 
 ```{python}
+import dascore as dc
 from dascore.constants import PatchType
 from dascore.utils.namespace import PatchNameSpace
 
@@ -26,7 +27,7 @@ from dascore.utils.namespace import PatchNameSpace
 class MyPatchNamespace(PatchNameSpace):
     """Patch extension methods."""
     
-    @dc.patch_method
+    @dc.patch_function
     def peak_to_peak(patch: PatchType) -> float:
         """Return peak-to-peak amplitude."""
         return patch.data.max() - patch.data.min()
@@ -53,6 +54,7 @@ from dascore.utils.namespace import PatchNameSpace
 class MyPatchNamespace(PatchNameSpace):
     name = "my_ext"
 
+    @dc.patch_function()
     def peak_to_peak(patch: PatchType) -> float:
         return patch.data.max() - patch.data.min()
 
@@ -74,6 +76,7 @@ Suppose your package is named `dascore-extra` and you want to expose `patch.my_e
 `dascore_extra/patch_namespace.py`
 
 ```{python}
+import dascore as dc
 from dascore.constants import PatchType
 from dascore.utils.namespace import PatchNameSpace
 
@@ -82,7 +85,8 @@ class MyPatchNamespace(PatchNameSpace):
     """Patch methods provided by dascore-extra."""
 
     name = "my_ext"
-
+    
+    dc.patch_function()
     def peak_to_peak(patch: PatchType) -> float:
         return patch.data.max() - patch.data.min()
 ```
