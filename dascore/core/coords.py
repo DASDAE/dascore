@@ -1091,6 +1091,13 @@ class CoordRange(BaseCoord):
     @classmethod
     def validate_start_stop_step_len(cls, values):
         """Coerce the needed values from the inputs."""
+
+        def _maybe_unbox_scalar(value):
+            """Extract scalar from a 1-element array-like value."""
+            if isinstance(value, np.ndarray) and value.ndim > 0 and value.size == 1:
+                return value.reshape(-1)[0]
+            return value
+
         req_values = ("start", "stop", "step", "shape")
         _attrs = [values.get(x, None) for x in req_values]
         valid_count = sum(not pd.isnull(x) for x in _attrs)
@@ -1116,9 +1123,15 @@ class CoordRange(BaseCoord):
                 if isinstance(start, int) and isinstance(stop, int):
                     step = int(step) if np.isclose(np.round(step), step) else step
         if step != 0:
-            int_val = int(np.ceil(np.round((stop - start) / step, 1)))
+            span = _maybe_unbox_scalar(np.round((stop - start) / step, 1))
+            int_val = int(np.ceil(span))
             stop = start + step * int_val
-        length = 1 if start == stop else int(np.round((stop - start) / step))
+        start_equal_stop = _maybe_unbox_scalar(start == stop)
+        length = (
+            1
+            if start_equal_stop
+            else int(_maybe_unbox_scalar(np.round((stop - start) / step)))
+        )
         shape = (length,)
         values.update(dict(start=start, stop=stop, shape=shape, step=step))
         # step should have the same sign as stop-start, see #321.
