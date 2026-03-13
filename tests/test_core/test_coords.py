@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import pickle
+import warnings
 from functools import partial
 from io import BytesIO
 from typing import ClassVar
@@ -1113,6 +1114,16 @@ class TestCoordRange:
         sample_rate = 1 / sample_rate
         out = get_coord(data=t_array, step=sample_rate)
         assert out.shape == out.data.shape == (len(out),)
+
+    def test_len_one_array_like_start_no_deprecation(self):
+        """Array-like scalar start should not emit numpy scalar conversion warning."""
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter("always", DeprecationWarning)
+            coord = get_coord(shape=601, start=np.array([0]), step=1)
+        assert coord.start == 0
+        assert coord.stop == 601
+        assert coord.shape == (601,)
+        assert not any(issubclass(x.category, DeprecationWarning) for x in records)
 
     def test_properties_coord_range(self, evenly_sampled_coord):
         """Test key properties for evenly sampled."""
