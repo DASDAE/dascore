@@ -169,6 +169,12 @@ class TestBasicCoordManager:
         out = get_coord_manager(input_dict, dims=list(input_dict))
         assert set(out.dims) == set(input_dict)
 
+    def test_scalar_data_ok_for_no_dims(self):
+        """Ensure scalar data validates for coordinate managers with no dims."""
+        cm = get_coord_manager()
+        out = cm.validate_data(np.array(1.0))
+        assert out.shape == ()
+
     def test_bad_datashape_raises(self, cm_basic):
         """Ensure a bad datashape raises."""
         match = "match the coordinate manager shape"

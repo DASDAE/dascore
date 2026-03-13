@@ -819,6 +819,8 @@ class CoordManager(DascoreBaseModel):
     def validate_data(self, data):
         """Ensure data conforms to coordinates."""
         data = np.asarray([]) if data is None else data
+        if not self.dims and data.shape == ():
+            return data
         if self.shape != data.shape:
             msg = (
                 f"Data array has a shape of {data.shape} which doesnt match "
