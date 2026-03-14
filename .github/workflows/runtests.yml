@@ -42,7 +42,10 @@ jobs:
     needs: setup
     timeout-minutes: 20
     if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -59,25 +62,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      # Prime the shared test-data cache once. Each downstream OS restores this
-      # archive into the platform-specific cache path that pooch uses locally.
+      # Prime each OS-specific pooch cache once, then let downstream jobs
+      # restore the matching archive.
       - uses: ./.github/actions/cache-test-data
         id: cache-test-data
         with:
-          mode: restore
+          mode: restore-save
           cache-number: ${{ env.CACHE_NUMBER }}
-
-      - name: Download all registered test data
-        if: steps.cache-test-data.outputs.cache-hit != 'true'
-        shell: bash
-        run: python .github/scripts/cache_test_data.py
-
-      - name: Save primed test data cache
-        if: steps.cache-test-data.outputs.cache-hit != 'true'
-        uses: ./.github/actions/cache-test-data
-        with:
-          mode: save
-          cache-number: ${{ env.CACHE_NUMBER }}
+          prime-on-miss: "true"
 
   test_code:
     needs: [setup, prime_test_data_cache]

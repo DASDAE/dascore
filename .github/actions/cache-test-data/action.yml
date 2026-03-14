@@ -9,13 +9,17 @@ inputs:
     description: "One of restore, save, or restore-save"
     required: false
     default: "restore"
+  prime-on-miss:
+    description: "If true and mode includes restore, fetch all registered files on cache miss before saving"
+    required: false
+    default: "false"
 
 outputs:
   cache-hit:
     description: "True if an exact cache key was restored"
     value: ${{ steps.restore-test-data.outputs.cache-hit }}
   cache-key:
-    description: "The cache key derived from the registry hash"
+    description: "The cache key derived from OS, data version, and registry hash"
     value: ${{ env.DATA_CACHE_KEY }}
 
 runs:
@@ -29,59 +33,53 @@ runs:
           echo "This action requires Python to be installed first."
           exit 1
         fi
-        echo "✅ Prerequisites verified: Python is available"
+        if ! python -c "import pooch" 2>/dev/null; then
+          echo "❌ Error: Pooch is not installed"
+          echo "This action requires Pooch to be installed."
+          exit 1
+        fi
+        echo "✅ Prerequisites verified: Python and Pooch are available"
 
-    - name: get data registry hash
+    - name: get data cache metadata
       shell: bash -el {0}
       run: |
         python - <<'PY' >> "$GITHUB_ENV"
+        import pooch
         from hashlib import sha256
         from pathlib import Path
+        import runpy
 
         registry_path = Path("dascore/data_registry.txt")
+        constants = runpy.run_path("dascore/constants.py")
+        data_version = constants["DATA_VERSION"]
+
         print(f"DATA_REGISTRY_HASH={sha256(registry_path.read_bytes()).hexdigest()}")
-        PY
-
-    - name: get data cache path
-      shell: bash -el {0}
-      run: |
-        python - <<'PY' >> "$GITHUB_ENV"
-        import os
-        import sys
-        from pathlib import Path
-
-        home = Path.home()
-        if sys.platform == "win32":
-            cache_root = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
-        elif sys.platform == "darwin":
-            cache_root = home / "Library" / "Caches"
-        else:
-            cache_root = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache"))
-
-        print(f"DATA_CACHE_PATH={cache_root / 'dascore'}")
+        print(f"DATA_CACHE_PATH={pooch.os_cache('dascore')}")
+        print(f"DATA_VERSION={data_version}")
         PY
 
     - name: get data cache key
       shell: bash -el {0}
       run: |
-        echo "DATA_CACHE_KEY=data-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}" >> $GITHUB_ENV
+        echo "DATA_CACHE_KEY=data-${{ runner.os }}-${{ env.DATA_VERSION }}-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}" >> $GITHUB_ENV
 
     - name: restore test data cache
       if: ${{ inputs.mode == 'restore' || inputs.mode == 'restore-save' }}
       uses: actions/cache/restore@v4
       id: restore-test-data
       with:
-        enableCrossOsArchive: true
         path: ${{ env.DATA_CACHE_PATH }}
         key: ${{ env.DATA_CACHE_KEY }}
-        restore-keys: |
-          data-${{ env.DATA_REGISTRY_HASH }}-
+
+    - name: Download all registered test data
+      if: ${{ inputs.mode == 'restore-save' && inputs.prime-on-miss == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: python .github/scripts/cache_test_data.py
 
     - name: save test data cache
-      if: ${{ inputs.mode == 'save' || inputs.mode == 'restore-save' }}
+      if: ${{ inputs.mode == 'save' || (inputs.mode == 'restore-save' && (inputs.prime-on-miss != 'true' || steps.restore-test-data.outputs.cache-hit != 'true')) }}
       uses: actions/cache/save@v4
       id: cache-test-data
       with:
-        enableCrossOsArchive: true
         path: ${{ env.DATA_CACHE_PATH }}
         key: ${{ env.DATA_CACHE_KEY }}

@@ -27,20 +27,9 @@ jobs:
       - uses: ./.github/actions/cache-test-data
         id: cache-test-data
         with:
-          mode: restore
+          mode: restore-save
           cache-number: 1
-
-      - name: Download all registered test data
-        if: steps.cache-test-data.outputs.cache-hit != 'true'
-        shell: bash
-        run: python .github/scripts/cache_test_data.py
-
-      - name: Save primed test data cache
-        if: steps.cache-test-data.outputs.cache-hit != 'true'
-        uses: ./.github/actions/cache-test-data
-        with:
-          mode: save
-          cache-number: 1
+          prime-on-miss: "true"
 
   calc_coverage:
     needs: prime_test_data_cache
