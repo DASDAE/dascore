@@ -26,7 +26,7 @@ runs:
   using: "composite"
   steps:
     - name: verify prerequisites
-      shell: bash -el {0}
+      shell: bash {0}
       run: |
         if ! command -v python &> /dev/null; then
           echo "❌ Error: Python is not installed or not in PATH"
@@ -41,7 +41,7 @@ runs:
         echo "✅ Prerequisites verified: Python and Pooch are available"
 
     - name: get data cache metadata
-      shell: bash -el {0}
+      shell: bash {0}
       run: |
         python - <<'PY' >> "$GITHUB_ENV"
         import pooch
@@ -59,7 +59,7 @@ runs:
         PY
 
     - name: get data cache key
-      shell: bash -el {0}
+      shell: bash {0}
       run: |
         echo "DATA_CACHE_KEY=data-${{ runner.os }}-${{ env.DATA_VERSION }}-${{ env.DATA_REGISTRY_HASH }}-${{ inputs.cache-number }}" >> $GITHUB_ENV
 
@@ -73,7 +73,7 @@ runs:
 
     - name: Download all registered test data
       if: ${{ inputs.mode == 'restore-save' && inputs.prime-on-miss == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}
-      shell: bash
+      shell: bash {0}
       run: python .github/scripts/cache_test_data.py
 
     - name: save test data cache
