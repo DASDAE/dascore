@@ -175,6 +175,13 @@ class TestBasicCoordManager:
         out = cm.validate_data(np.array(1.0))
         assert out.shape == ()
 
+    def test_python_scalar_data_ok_for_no_dims(self):
+        """Ensure python scalars are converted and validate with no dims."""
+        cm = get_coord_manager()
+        out = cm.validate_data(1.0)
+        assert isinstance(out, np.ndarray)
+        assert out.shape == ()
+
     def test_bad_datashape_raises(self, cm_basic):
         """Ensure a bad datashape raises."""
         match = "match the coordinate manager shape"
