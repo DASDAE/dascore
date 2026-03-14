@@ -6,33 +6,7 @@ on:
       - master
 
 jobs:
-  prime_test_data_cache:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/load-shared-vars
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_DEFAULT }}
-
-      - name: Install dascore for cache priming
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-
-      - uses: ./.github/actions/cache-test-data
-        id: cache-test-data
-        with:
-          mode: restore-save
-          cache-number: 1
-          prime-on-miss: "true"
-
   calc_coverage:
-    needs: prime_test_data_cache
     runs-on: ubuntu-latest
 
     steps:
@@ -48,6 +22,12 @@ jobs:
           # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ env.PYTHON_DEFAULT }}
           cache-number: 1
+
+      - uses: ./.github/actions/cache-test-data
+        with:
+          mode: restore-save
+          cache-number: 1
+          prime-on-miss: "true"
 
       - name: run test suite
         shell: bash -l {0}
