@@ -33,19 +33,15 @@ runs:
           echo "This action requires Python to be installed first."
           exit 1
         fi
-        if ! python -c "import pooch" 2>/dev/null; then
-          echo "❌ Error: Pooch is not installed"
-          echo "This action requires Pooch to be installed."
-          exit 1
-        fi
-        echo "✅ Prerequisites verified: Python and Pooch are available"
+        echo "✅ Prerequisites verified: Python is available"
 
     - name: get data cache metadata
       shell: bash {0}
       run: |
         python - <<'PY' >> "$GITHUB_ENV"
         import ast
-        import pooch
+        import os
+        import sys
         from hashlib import sha256
         from pathlib import Path
 
@@ -67,8 +63,18 @@ runs:
         if data_version is None:
             raise RuntimeError("Unable to determine DATA_VERSION from dascore/constants.py")
 
+        home = Path.home()
+        if sys.platform == "win32":
+            local_app_data = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+            cache_path = local_app_data / "dascore" / "dascore" / "Cache"
+        elif sys.platform == "darwin":
+            cache_path = home / "Library" / "Caches" / "dascore"
+        else:
+            cache_root = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache"))
+            cache_path = cache_root / "dascore"
+
         print(f"DATA_REGISTRY_HASH={sha256(registry_path.read_bytes()).hexdigest()}")
-        print(f"DATA_CACHE_PATH={pooch.os_cache('dascore')}")
+        print(f"DATA_CACHE_PATH={cache_path}")
         print(f"DATA_VERSION={data_version}")
         PY
 
