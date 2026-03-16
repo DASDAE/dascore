@@ -64,12 +64,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache-number: ${{ env.CACHE_NUMBER }}
-
-      - uses: ./.github/actions/cache-test-data
-        with:
-          mode: restore-save
-          cache-number: ${{ env.CACHE_NUMBER }}
-          prime-on-miss: "true"
+          prepare-test-data: "true"
 
       # Runs test suite and calculates coverage
       - name: run test suite

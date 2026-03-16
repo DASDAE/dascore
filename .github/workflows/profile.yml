@@ -39,12 +39,7 @@ jobs:
           python-version: ${{ env.PYTHON_DEFAULT }}
           install-group-str: "[profile]"
           cache-number: 1
-
-      - uses: ./.github/actions/cache-test-data
-        with:
-          mode: restore-save
-          cache-number: 1
-          prime-on-miss: "true"
+          prepare-test-data: "true"
 
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v4
