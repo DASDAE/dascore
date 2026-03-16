@@ -2,6 +2,8 @@
 
 This file gives AI/code agents a practical checklist for contributing safely to DASCore.
 
+Keep Markdown prose unwrapped. Do not hard-wrap paragraphs in `.md` files unless a specific format requires it.
+
 ## Scope and priorities
 
 1. Keep changes minimal, targeted, and test-backed.
@@ -17,6 +19,8 @@ This file gives AI/code agents a practical checklist for contributing safely to 
 ## Environment setup
 
 Follow `docs/contributing/dev_install.qmd`.
+
+The default Python environment for this repo uses the repository name as the environment name. For this repo, activate it with `mamba activate dascore`. If that environment is unavailable, stop and report it clearly instead of guessing another environment.
 
 Typical setup:
 
@@ -65,6 +69,9 @@ pytest dascore --doctest-modules
 - Put tests under `tests/` mirroring package structure.
 - Group tests in classes.
 - Place fixtures as close as practical to usage (class, module, then `conftest.py`).
+- Write tests that focus on boundaries, not implementation details.
+- Keep test names short; put extra detail in the docstring when needed.
+
 
 ## Code conventions
 
@@ -75,6 +82,7 @@ pytest dascore --doctest-modules
 - Prefer non-inplace dataframe operations unless inplace is explicitly required.
 - Add type hints for public functions/methods.
 - Use NumPy-style docstrings for public APIs.
+- Add a short explanatory comment for private helpers when intent is not obvious.
 - Keep comments meaningful; do not restate obvious code.
 
 ## Documentation changes
