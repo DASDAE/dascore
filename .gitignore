@@ -93,9 +93,10 @@ uv.lock
 docs/index_files
 docs/index.quarto_ipynb
 
-# Claude stuff
+# Agent stuff
 .claude
 CLAUDE.md
+.agents/worktrees/
 
 # profile stuff
 prof/
