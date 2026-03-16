@@ -4,6 +4,7 @@ Utilities for working with patches and arrays.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 from collections.abc import Iterable
 
@@ -523,3 +524,56 @@ def patch_array_function(self, func, types, args, kwargs):
     # Only handle functions involving Patches
     assert any(issubclass(t, dc.Patch) for t in types)
     return apply_array_func(func, *args, **kwargs)
+
+
+def hash_numpy_array(arr: np.ndarray) -> str:
+    """
+    Return a stable hash for a NumPy array.
+
+    Fast path:
+        - zero-copy for C-contiguous arrays
+    Fallback:
+        - makes one contiguous copy for non-contiguous arrays
+
+    The hash includes:
+        - dtype
+        - shape
+        - raw array bytes
+
+    Returns
+    -------
+    str
+        32-character hex string (16-byte BLAKE2b digest).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.array import hash_numpy_array
+    >>> a = np.array([1.0, 2.0, 3.0])
+    >>> h = hash_numpy_array(a)
+    >>> assert isinstance(h, str) and len(h) == 32
+    >>> # Same data always produces the same hash
+    >>> assert hash_numpy_array(a) == hash_numpy_array(a.copy())
+    >>> # Different dtype produces a different hash
+    >>> assert hash_numpy_array(a) != hash_numpy_array(a.astype(np.float32))
+    """
+    arr = np.asarray(arr)
+    if arr.dtype == object:
+        msg = "hash_numpy_array does not support object arrays."
+        raise ParameterError(msg)
+
+    h = hashlib.blake2b(digest_size=16)
+
+    # Include dtype and shape so arrays with identical raw bytes but different
+    # interpretations do not collide.
+    h.update(arr.dtype.str.encode("ascii"))
+    h.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
+
+    if arr.flags.c_contiguous:
+        # Zero-copy fast path
+        h.update(memoryview(arr).cast("B"))
+    else:
+        # Canonicalize layout; this copies once
+        h.update(np.ascontiguousarray(arr).view(np.uint8))
+
+    return h.hexdigest()
