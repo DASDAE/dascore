@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import cache
+from hashlib import sha256
 from importlib.resources import files
 from pathlib import Path
 
@@ -22,6 +24,34 @@ fetcher = pooch.create(
     env="DFS_DATA_DIR",
 )
 fetcher.load_registry(REGISTRY_PATH)
+
+
+@dataclass(frozen=True)
+class TestDataCacheInfo:
+    """Metadata needed to restore or prime the CI test-data cache."""
+
+    registry_path: Path
+    cache_path: Path
+    data_version: str
+    registry_hash: str
+
+    def get_key(self, runner_os: str, cache_number: str | int) -> str:
+        """Return the GitHub Actions cache key for the given OS and cache number."""
+        return (
+            f"data-{runner_os}-{self.data_version}-{self.registry_hash}-{cache_number}"
+        )
+
+
+@cache
+def get_test_data_cache_info() -> TestDataCacheInfo:
+    """Return the metadata needed to populate the CI test-data cache."""
+    registry_path = Path(REGISTRY_PATH)
+    return TestDataCacheInfo(
+        registry_path=registry_path,
+        cache_path=Path(fetcher.path).parent,
+        data_version=DATA_VERSION,
+        registry_hash=sha256(registry_path.read_bytes()).hexdigest(),
+    )
 
 
 @cache

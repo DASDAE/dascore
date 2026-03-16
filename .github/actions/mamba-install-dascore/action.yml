@@ -25,6 +25,11 @@ inputs:
     required: false
     default: "1"
 
+  prepare-test-data:
+    description: "If true, restore, prime, and save the test-data cache after installation"
+    required: false
+    default: "false"
+
 runs:
   using: "composite"
   steps:
@@ -69,9 +74,33 @@ runs:
       run: |
         pip install -e .${{ inputs.install-group-str }}
 
-    - uses: ./.github/actions/cache-test-data
+    - name: export test data cache env
+      shell: bash -el {0}
+      env:
+        INPUT_CACHE_NUMBER: ${{ inputs.cache-number }}
+        RUNNER_OS: ${{ runner.os }}
+      run: |
+        python .github/scripts/export_test_data_cache_env.py >> "$GITHUB_ENV"
+
+    - name: restore test data cache
+      if: "${{ inputs.prepare-test-data == 'true' }}"
+      id: restore-test-data
+      uses: actions/cache/restore@v4
       with:
-        cache-number: ${{ inputs.cache-number }}
+        path: ${{ env.DATA_CACHE_PATH }}
+        key: ${{ env.DATA_CACHE_KEY }}
+
+    - name: prime test data cache
+      if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"
+      shell: bash -el {0}
+      run: python .github/scripts/cache_test_data.py
+
+    - name: save test data cache
+      if: "${{ inputs.prepare-test-data == 'true' && steps.restore-test-data.outputs.cache-hit != 'true' }}"
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.DATA_CACHE_PATH }}
+        key: ${{ env.DATA_CACHE_KEY }}
 
     # Print out the package info for current environment
     - name: print package info

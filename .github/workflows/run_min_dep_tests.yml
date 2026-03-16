@@ -57,19 +57,10 @@ jobs:
       - uses: ./.github/actions/mamba-install-dascore
         with:
           python-version: ${{ matrix.python-version }}
-          install-package: false
           environment-file: './.github/min_deps_environment.yml'
+          install-group-str: "[test]"
           cache-number: 1
-
-      - name: Install dascore (min deps)
-        shell: bash -l {0}
-        run: pip install -e .[test]
-
-      - uses: ./.github/actions/cache-test-data
-        with:
-          mode: restore-save
-          cache-number: 1
-          prime-on-miss: "true"
+          prepare-test-data: "true"
 
       # Runs test suite and calculates coverage
       - name: run test suite

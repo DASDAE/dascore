@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-from dascore.utils.downloader import fetch, get_registry_df
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from dascore.utils.downloader import fetch, get_registry_df  # noqa: E402
 
 
 def main() -> None:
