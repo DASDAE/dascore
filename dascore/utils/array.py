@@ -558,6 +558,9 @@ def hash_numpy_array(arr: np.ndarray) -> str:
     >>> assert hash_numpy_array(a) != hash_numpy_array(a.astype(np.float32))
     """
     arr = np.asarray(arr)
+    if arr.dtype == object:
+        msg = "hash_numpy_array does not support object arrays."
+        raise ParameterError(msg)
 
     h = hashlib.blake2b(digest_size=16)
 

@@ -583,6 +583,11 @@ class TestHashNumpyArray:
         assert isinstance(result, str)
         assert len(result) == 32
 
+    def test_copy_same_hash(self):
+        """A copy of an array produces the same hash."""
+        a = np.array([1.0, 2.0, 3.0])
+        assert hash_numpy_array(a) == hash_numpy_array(a.copy())
+
     def test_different_values_different_hash(self):
         """Different data produces a different hash."""
         a = np.array([1, 2, 3])
@@ -600,6 +605,11 @@ class TestHashNumpyArray:
         a = np.arange(6).reshape(2, 3)
         b = np.arange(6).reshape(3, 2)
         assert hash_numpy_array(a) != hash_numpy_array(b)
+
+    def test_object_array_raises(self):
+        """Object arrays are not supported."""
+        with pytest.raises(ParameterError):
+            hash_numpy_array(np.array([1, "a"], dtype=object))
 
     def test_non_contiguous_matches_contiguous(self):
         """A non-C-contiguous view hashes identically to its contiguous copy."""
