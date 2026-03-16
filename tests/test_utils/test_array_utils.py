@@ -14,7 +14,12 @@ import dascore.utils.array as array_utils
 from dascore import get_quantity
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import furlongs, m, s
-from dascore.utils.array import PatchUFunc, apply_array_func, apply_ufunc
+from dascore.utils.array import (
+    PatchUFunc,
+    apply_array_func,
+    apply_ufunc,
+    hash_numpy_array,
+)
 
 
 class TestApplyUfunc:
@@ -567,3 +572,39 @@ class TestApplyArrayFunc:
         assert result.coords.equals(random_patch.coords)  # coords should be preserved
         assert result.attrs == random_patch.attrs  # attrs should be preserved
         assert np.allclose(result.data, np.abs(random_patch.data) + 1)
+
+
+class TestHashNumpyArray:
+    """Tests for hash_numpy_array."""
+
+    def test_returns_hex_string_of_length_32(self):
+        """Output is a 32-character hex string (16-byte digest)."""
+        result = hash_numpy_array(np.array([1, 2, 3]))
+        assert isinstance(result, str)
+        assert len(result) == 32
+
+    def test_different_values_different_hash(self):
+        """Different data produces a different hash."""
+        a = np.array([1, 2, 3])
+        b = np.array([1, 2, 4])
+        assert hash_numpy_array(a) != hash_numpy_array(b)
+
+    def test_different_dtype_different_hash(self):
+        """Same raw shape but different dtype produces a different hash."""
+        a = np.array([1, 2, 3], dtype=np.int32)
+        b = np.array([1, 2, 3], dtype=np.int64)
+        assert hash_numpy_array(a) != hash_numpy_array(b)
+
+    def test_different_shape_different_hash(self):
+        """Same values but reshaped produce a different hash."""
+        a = np.arange(6).reshape(2, 3)
+        b = np.arange(6).reshape(3, 2)
+        assert hash_numpy_array(a) != hash_numpy_array(b)
+
+    def test_non_contiguous_matches_contiguous(self):
+        """A non-C-contiguous view hashes identically to its contiguous copy."""
+        base = np.arange(12).reshape(3, 4)
+        # Fortran-order (non-C-contiguous)
+        non_contig = np.asfortranarray(base)
+        assert not non_contig.flags.c_contiguous
+        assert hash_numpy_array(base) == hash_numpy_array(non_contig)
