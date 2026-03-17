@@ -1124,7 +1124,7 @@ class CoordRange(BaseCoord):
                     step = int(step) if np.isclose(np.round(step), step) else step
         if step != 0:
             span = _maybe_unbox_scalar(np.round((stop - start) / step, 1))
-            int_val = int(np.ceil(span))
+            int_val = int(_maybe_unbox_scalar(np.ceil(span)))
             stop = start + step * int_val
         start_equal_stop = _maybe_unbox_scalar(start == stop)
         length = (
