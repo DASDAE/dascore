@@ -314,10 +314,10 @@ class TestSelect:
         )
         assert len(out)
         for patch in out:
-            attrs = patch.attrs
-            assert attrs["network"] == "das2"
-            assert attrs["tag"].startswith("ran")
-            assert attrs["time_max"] <= new_max
+            summary = patch.summary
+            assert patch.attrs["network"] == "das2"
+            assert patch.attrs["tag"].startswith("ran")
+            assert summary["time_max"] <= new_max
 
     def test_multiple_range_selects(self, adjacent_spool_no_overlap):
         """Ensure multiple range selects can be used in one call."""
@@ -339,10 +339,10 @@ class TestSelect:
         assert (new_contents["distance_max"] <= distance_max).all()
         # then check patches
         for patch in new_spool:
-            assert patch.attrs["time_min"] >= time_min
-            assert patch.attrs["time_max"] <= time_max
-            assert patch.attrs["distance_min"] >= distance_min
-            assert patch.attrs["distance_max"] <= distance_max
+            assert patch.summary["time_min"] >= time_min
+            assert patch.summary["time_max"] <= time_max
+            assert patch.summary["distance_min"] >= distance_min
+            assert patch.summary["distance_max"] <= distance_max
 
     def test_split_ellipses(self, diverse_spool):
         """Ensure ... can be used for an open interval."""

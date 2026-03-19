@@ -489,7 +489,7 @@ class DataFrameSpool(BaseSpool):
             patch: dc.Patch = patch.select(**select_kwargs)
             # its unfortunate, but currently we need to regenerate the patch
             # dict because the index doesn't carry all the dimensional info
-            info = patch.attrs.flat_dump(exclude=["history"])
+            info = patch.summary.flat_dump(exclude=["history"])
             info["patch"] = patch
             out.append(info)
         if len(out) > expected_len:
@@ -510,6 +510,8 @@ class DataFrameSpool(BaseSpool):
             current.copy(deep=False)[cols2keep]
             .assign(
                 source_index=source.index,
+                # This tracks the current spool row after spool operations.
+                # It is not the source patch identity within a file.
                 current_index=source.index,
                 _modified=lambda x: _column_or_value(x, "_modified", False),
             )
@@ -529,6 +531,18 @@ class DataFrameSpool(BaseSpool):
     @abc.abstractmethod
     def _load_patch(self, kwargs) -> dc.Patch:
         """Given a row from the managed dataframe, return a patch."""
+
+    def _read_and_resolve_patch(self, final_kwargs) -> dc.Patch:
+        """Read patches for one instruction row and resolve to one patch."""
+        from dascore.io.core import _select_patch_from_spool
+
+        source_patch_id = final_kwargs.get("source_patch_id", "")
+        spool = dc.read(**final_kwargs)
+        # Some readers consume source_patch_id internally and return the one
+        # matching patch without preserving that reload metadata on the patch.
+        if source_patch_id and len(spool) == 1:
+            return spool[0]
+        return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
 
     @compose_docstring(doc=BaseSpool.chunk.__doc__)
     def chunk(

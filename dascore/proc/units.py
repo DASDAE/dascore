@@ -9,15 +9,18 @@ from dascore.units import convert_units as u_covert_units
 from dascore.utils.patch import patch_function
 
 
-def _update_attrs_coord_units(patch: dc.Patch, data_units, coords):
-    """Update attributes with new units."""
-    attrs = patch.attrs
-    # set data units
-    attrs = attrs.update(
-        data_units=data_units,
-        coords=coords.to_summary_dict(),
-    )
-    return attrs
+def _replace_data_units(
+    attrs: dc.PatchAttrs, data_units, preserve_existing_data_units: bool = False
+):
+    """Return attrs with updated data units; coordinate units live on coords."""
+    out = attrs.model_dump(exclude_unset=True)
+    if data_units not in (None, ""):
+        out["data_units"] = data_units
+    elif preserve_existing_data_units:
+        out["data_units"] = attrs.data_units
+    else:
+        out["data_units"] = None
+    return dc.PatchAttrs.from_dict(out)
 
 
 @patch_function()
@@ -56,7 +59,7 @@ def set_units(
     >>> patch_removed_units = patch_with_units.set_units(None)
     """
     new_coords = patch.coords.set_units(**kwargs)
-    new_attrs = _update_attrs_coord_units(patch, data_units, new_coords)
+    new_attrs = _replace_data_units(patch.attrs, data_units)
     return patch.new(attrs=new_attrs, coords=new_coords)
 
 
@@ -105,12 +108,18 @@ def convert_units(
     if data_units is not None:
         current_units = patch.attrs.data_units
         data = u_covert_units(patch.data, data_units, current_units)
-        attrs = patch.attrs.update(data_units=data_units, coords={})
+        attrs = patch.attrs.model_dump(exclude_unset=True)
+        attrs["data_units"] = data_units
     else:
         data = patch.data
         attrs = None
     # then update coords and attrs
     coords = patch.coords.convert_units(**kwargs)
+    attrs = _replace_data_units(
+        patch.attrs,
+        attrs.get("data_units") if attrs else None,
+        preserve_existing_data_units=True,
+    )
     return patch.new(data=data, coords=coords, attrs=attrs)
 
 
@@ -141,5 +150,5 @@ def simplify_units(
     data = patch.data * d_factor if d_factor != 1 else patch.data
     # update coords and coord units in attrs
     coords = patch.coords.simplify_units()
-    new_attrs = attrs.update(data_units=d_units, coords=coords.to_summary_dict())
+    new_attrs = _replace_data_units(patch.attrs, d_units)
     return patch.new(data=data, coords=coords, attrs=new_attrs, dims=patch.dims)

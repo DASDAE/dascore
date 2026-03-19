@@ -13,6 +13,7 @@ from dascore.core.coordmanager import CoordManager
 from dascore.utils.misc import (
     _maybe_unpack,
     broadcast_for_index,
+    iterate,
     maybe_get_items,
     tukey_fence,
     unbyte,
@@ -283,6 +284,11 @@ def _yield_attrs_coords(fi) -> tuple[dict, CoordManager]:
         yield attr, cm, febus
 
 
+def _get_source_patch_id(feb: _FebusSlice) -> str:
+    """Return a stable patch identifier for Febus multi-patch files."""
+    return f"{feb.group_name}:{feb.source_name}:{feb.zone_name}"
+
+
 def _get_data_new_cm(cm, febus, distance=None, time=None):
     """
     Get the data from febus file, maybe filtering on time/distance.
@@ -358,12 +364,19 @@ def _get_data_new_cm(cm, febus, distance=None, time=None):
     return data, cm
 
 
-def _read_febus(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
+def _read_febus(
+    fi, distance=None, time=None, source_patch_id=None, attr_cls=dc.PatchAttrs
+):
     """Read the febus values into a patch."""
     out = []
+    source_patch_ids = {
+        str(value) for value in iterate(source_patch_id) if value not in (None, "")
+    }
     for attr, cm, febus in _yield_attrs_coords(fi):
+        if source_patch_ids and _get_source_patch_id(febus) not in source_patch_ids:
+            continue
         data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
         if data.size:
-            patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls(**attr))
+            patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls.from_dict(attr))
             out.append(patch)
     return out

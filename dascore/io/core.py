@@ -31,10 +31,12 @@ from dascore.constants import (
 )
 from dascore.core.attrs import str_validator
 from dascore.core.spool import DataFrameSpool
+from dascore.core.summary import PatchSummary
 from dascore.exceptions import (
     InvalidFiberFileError,
     InvalidFiberIOError,
     MissingOptionalDependencyError,
+    PatchAttributeError,
     UnknownFiberFormatError,
 )
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
@@ -46,7 +48,6 @@ from dascore.utils.models import (
     DateTime64,
     TimeDelta64,
 )
-from dascore.utils.pd import _model_list_to_df
 from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
 
@@ -78,6 +79,7 @@ class PatchFileSummary(DascoreBaseModel):
     file_version: str = ""
     file_format: str = ""
     path: str | Path = ""
+    source_patch_id: str = ""
 
     @property
     def dim_tuple(self):
@@ -98,6 +100,131 @@ class PatchFileSummary(DascoreBaseModel):
     def flat_dump(self):
         """Alias for dump, for compatibility with PatchAttrs.flat_dump."""
         return self.model_dump()
+
+
+def _scan_result_to_summary(
+    attrs: PatchSummary,
+    *,
+    path: str | Path | None = None,
+    file_format: str | None = None,
+    file_version: str | None = None,
+    source_patch_id: str | None = None,
+) -> PatchSummary:
+    """Convert scan metadata into a patch summary."""
+    summary_path = "" if path in (None, "") else path
+    summary_format = "" if file_format in (None, "") else file_format
+    summary_version = "" if file_version in (None, "") else file_version
+    summary_source_patch_id = (
+        "" if source_patch_id in (None, "") else str(source_patch_id)
+    )
+    if isinstance(attrs, PatchSummary):
+        raw_attrs = attrs.attrs.model_dump()
+        nested_path = raw_attrs.get("path", "")
+        nested_format = raw_attrs.get("file_format", "")
+        nested_version = raw_attrs.get("file_version", "")
+        nested_source_patch_id = raw_attrs.get("source_patch_id", "")
+        return PatchSummary.model_construct(
+            attrs=attrs.attrs,
+            coords=dict(attrs.coords),
+            dims=tuple(attrs.dims),
+            shape=tuple(attrs.shape),
+            dtype=attrs.dtype,
+            path=summary_path or attrs.path or nested_path,
+            file_format=summary_format or attrs.file_format or nested_format,
+            file_version=summary_version or attrs.file_version or nested_version,
+            source_patch_id=(
+                summary_source_patch_id
+                or attrs.source_patch_id
+                or str(nested_source_patch_id)
+            ),
+        )
+    if isinstance(attrs, dc.PatchAttrs):
+        msg = (
+            "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
+            "Return PatchSummary instead. See docs/contributing/new_format.qmd."
+        )
+        raise ValueError(msg)
+    msg = (
+        "_scan_result_to_summary only accepts PatchSummary. "
+        f"Got {type(attrs).__name__}."
+    )
+    raise TypeError(msg)
+
+
+def _patch_to_summary(
+    patch: dc.Patch,
+    *,
+    path: str | Path | None = None,
+    file_format: str | None = None,
+    file_version: str | None = None,
+) -> PatchSummary:
+    """Convert a loaded patch into a summary tied to its source."""
+    return _scan_result_to_summary(
+        patch.summary,
+        path=path or "",
+        file_format=file_format,
+        file_version=file_version,
+    )
+
+
+def _select_patch_from_spool(spool, source_patch_id: object = "") -> dc.Patch:
+    """Select one loaded patch from a spool using source identity."""
+    if len(spool) == 0:
+        msg = "index of [0] is out of bounds for spool."
+        raise IndexError(msg)
+    if source_patch_id not in (None, ""):
+        source_patch_id = str(source_patch_id)
+        try:
+            index = int(source_patch_id)
+        except (TypeError, ValueError):
+            index = None
+        if index is not None and 0 <= index < len(spool):
+            return spool[index]
+        msg = "Patch could not be uniquely resolved after applying load filters."
+        raise PatchAttributeError(msg)
+    if len(spool) == 1:
+        return spool[0]
+    msg = "Patch could not be uniquely resolved after applying load filters."
+    raise PatchAttributeError(msg)
+
+
+def _load_patch_summary(summary: PatchSummary, **kwargs) -> dc.Patch:
+    """Internal helper for reloading a patch from a PatchSummary."""
+    source_patch_id = summary.source_patch_id
+    read_kwargs = {
+        "path": summary.path,
+        "file_format": summary.file_format or None,
+        "file_version": summary.file_version or None,
+        "source_patch_id": source_patch_id or None,
+    }
+    read_kwargs.update(kwargs)
+    path = read_kwargs.pop("path", None)
+    if path in (None, ""):
+        msg = "PatchSummary cannot load data because it has no source path."
+        raise PatchAttributeError(msg)
+    spool = dc.read(path, **read_kwargs)
+    if source_patch_id and len(spool) == 1:
+        return spool[0]
+    try:
+        return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
+    except IndexError as exc:
+        msg = "Patch could not be resolved after applying load filters."
+        raise PatchAttributeError(msg) from exc
+
+
+def _get_reloadable_source_path(resource, fallback: str | Path | None = None) -> str:
+    """Return a reloadable filesystem path for resources that expose one."""
+    candidates = [fallback, resource]
+    for name in ("source", "filename", "name", "path"):
+        candidates.append(getattr(resource, name, None))
+    for candidate in candidates:
+        if candidate in (None, ""):
+            continue
+        if isinstance(candidate, IOResourceManager):
+            candidate = candidate.source
+        if isinstance(candidate, str | Path):
+            return str(candidate)
+    return ""
 
 
 class _FiberIOManager:
@@ -474,13 +601,24 @@ class FiberIO:
 
         *kwargs should include support for selecting expected dimensions. For
         example, distance=(100, 200) would only read data with distance from
-        100 to 200.
+        100 to 200. Multi-patch formats may also accept `source_patch_id` to
+        load one or more logical patches from the source.
         """
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, resource, **kwargs) -> list[dc.PatchAttrs]:
-        """Returns a list of summary info for patches contained in file."""
+    def scan(self, resource, **kwargs) -> list[PatchSummary]:
+        """
+        Return patch metadata for the contents of a resource.
+
+        `scan()` should return `PatchSummary` objects and should not populate
+        source metadata such as `path`, `file_format`, or `file_version`.
+        DASCore attaches those fields in the higher-level `dc.scan(...)` and
+        `dc.scan_to_df(...)` pipeline.
+
+        Multi-patch formats should still set `source_patch_id` when needed so
+        DASCore can reload the same logical patch later.
+        """
         # default scan method reads in the file and returns required attributes
         # however, this can be very slow, so each parser should implement scan
         # when possible.
@@ -489,14 +627,7 @@ class FiberIO:
         except NotImplementedError:
             msg = f"FiberIO: {self.name} has no scan or read method"
             raise NotImplementedError(msg)
-        out = []
-        for pa in spool:
-            new = pa.attrs.update(
-                file_format=self.name,
-                path=str(resource),
-            )
-            out.append(new)
-        return out
+        return [_patch_to_summary(pa) for pa in spool]
 
     def write(self, spool: SpoolType, resource, **kwargs):
         """Write the spool to a resource (eg path, stream, etc.)."""
@@ -620,6 +751,7 @@ def read(
 
     Examples
     --------
+    >>> import numpy as np
     >>> import dascore as dc
     >>> from dascore.utils.downloader import fetch
     >>>
@@ -697,7 +829,12 @@ def scan_to_df(
         timestamp=timestamp,
         progress=progress,
     )
-    df = _model_list_to_df(info, exclude=exclude)
+    records = []
+    for item in info:
+        records.append(item.flat_dump(exclude=exclude))
+    df = pd.DataFrame(records)
+    if "dims" in df.columns:
+        df["dims"] = df["dims"].astype(str)
     return df
 
 
@@ -787,9 +924,9 @@ def scan(
     ext: str | None = None,
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
-) -> list[dc.PatchAttrs]:
+) -> list[PatchSummary]:
     """
-    Scan a potential patch source, return a list of PatchAttrs.
+    Scan a potential patch source, return a list of patch summaries.
 
     Parameters
     ----------
@@ -812,17 +949,21 @@ def scan(
 
     Returns
     -------
-    A list of [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) or subclasses
-    which may have extra fields.
+    A list of [`PatchSummary`](`dascore.PatchSummary`) instances.
 
     Examples
     --------
+    >>> import numpy as np
     >>> import dascore as dc
     >>> from dascore.utils.downloader import fetch
     >>>
     >>> file_path = fetch("prodml_2.1.h5")
     >>>
-    >>> attr_list = dc.scan(file_path)
+    >>> patch_list = dc.scan(file_path)
+    >>> summary = patch_list[0]
+    >>> from dascore.io.core import _load_patch_summary
+    >>> patch = _load_patch_summary(summary)
+    >>> assert patch.dtype == np.dtype(summary.dtype)
 
     See also [`iter_fs_contents`](`dascore.utils.misc.iter_fs_contents`)
     """
@@ -848,9 +989,17 @@ def scan(
     )
     try:
         for patch_source in tracker:
-            # just pull attrs from patch
+            # Normalize direct patch inputs to summary objects.
             if isinstance(patch_source, dc.Patch):
-                out.append(patch_source.attrs)
+                out.append(
+                    _patch_to_summary(
+                        patch_source,
+                        path=_get_reloadable_source_path(
+                            patch_source.summary.path,
+                            fallback=patch_source.summary.path,
+                        ),
+                    )
+                )
                 continue
             with IOResourceManager(patch_source) as man:
                 try:
@@ -888,8 +1037,16 @@ def scan(
                     except MissingOptionalDependencyError as ex:
                         missing_optional_deps[ex.msg.split(" ")[0]] += 1
                         continue
+                source_path = _get_reloadable_source_path(resource, fallback=man.source)
                 for attr in source:
-                    out.append(dc.PatchAttrs.from_dict(attr))
+                    out.append(
+                        _scan_result_to_summary(
+                            attr,
+                            path=source_path,
+                            file_format=fiber_io.name,
+                            file_version=fiber_io.version,
+                        )
+                    )
     # Ensure ctl + c exists scan.
     except KeyboardInterrupt:
         getattr(progress, "stop", lambda: None)()

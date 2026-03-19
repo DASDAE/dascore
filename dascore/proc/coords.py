@@ -220,8 +220,7 @@ def rename_coords(self: PatchType, **kwargs) -> PatchType:
     >>> assert 'fragrance' in pa2.dims
     """
     new_coord = self.coords.rename_coord(**kwargs)
-    attrs = self.attrs.rename_dimension(**kwargs)
-    return self.new(coords=new_coord, dims=new_coord.dims, attrs=attrs)
+    return self.new(coords=new_coord, dims=new_coord.dims, attrs=self.attrs)
 
 
 @patch_function()
@@ -467,8 +466,8 @@ def select(
     >>> lt_dist = patch.select(distance=(..., 300))
     >>>
     >>> # select time (1 second from start to -1 second from end)
-    >>> t1 = patch.attrs.time_min + dc.to_timedelta64(1)
-    >>> t2 = patch.attrs.time_max - dc.to_timedelta64(1)
+    >>> t1 = patch.summary.time_min + dc.to_timedelta64(1)
+    >>> t2 = patch.summary.time_max - dc.to_timedelta64(1)
     >>> new_time1 = patch.select(time=(t1, t2))
     >>>
     >>> # this can be accomplished more simply using the relative keyword

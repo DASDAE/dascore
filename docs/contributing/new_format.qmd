@@ -85,9 +85,16 @@ class JingleV1(FiberIO):
         Used to get metadata about a file without reading the whole file.
 
         This should return a list of
-        [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) objects
-        from the [dascore.core.attrs](`dascore.core.attrs`) module, or a
-        format-specific subclass.
+        [`PatchSummary`](`dascore.PatchSummary`) objects. DASCore will also
+        normalize a loaded `Patch` to a summary if needed, but new formats
+        should return `PatchSummary` instances directly. Returning
+        [`PatchAttrs`](`dascore.PatchAttrs`) from `scan()` is no longer
+        supported.
+
+        `scan()` should only return patch metadata. Do not populate source
+        metadata such as `path`, `file_format`, or `file_version` inside the
+        `FiberIO` implementation; DASCore adds those fields in the higher-level
+        `dc.scan(...)` / `dc.scan_to_df(...)` pipeline.
         """
 
     def write(self, patch, path, **kwargs):
@@ -106,6 +113,21 @@ Note that each of these methods should have `**kwargs` at the end. This allows c
 :::{.callout-warning}
 It is very important that the `scan` method returns *exactly* the same patch information as reading the patch would, otherwise the lazy merge planning done by spool can be wrong!
 :::
+
+## `source_patch_id`
+
+If a single file can produce more than one patch, your format should usually provide a `source_patch_id` for each patch summary returned by `scan`.
+
+`source_patch_id` is the per-patch identifier DASCore uses to get back to the same logical patch later. This matters most for `dc.spool(...)`, where DASCore may first `scan()` a file, store patch metadata, and only call `read()` for one patch much later.
+
+The rule is simple:
+
+- `scan()` should emit a stable `source_patch_id` for each patch.
+- `read(..., source_patch_id=...)` should use that value to return the matching patch, or patches if given multiple ids.
+- `source_patch_id` belongs on the summary/reload path, not on patch attrs.
+- `path`, `file_format`, and `file_version` are owned by the calling DASCore scan layer, not by `FiberIO.scan()`.
+
+For some formats, a numeric patch index is enough if patch ordering is stable. For others, a native identifier such as a group name, node name, or source/zone tuple is better. If your format only ever produces one patch per file, you usually do not need to set `source_patch_id`.
 
 
 ## Support for Streams/Buffers

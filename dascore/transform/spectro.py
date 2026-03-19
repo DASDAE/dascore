@@ -40,7 +40,6 @@ def _get_transformed_coord(coord, freqs):
 def _get_new_attrs(patch, cm, dim):
     """Update attributes."""
     new = dict(patch.attrs)
-    new["dims"] = cm.dims
     new["data_units"] = _get_data_units_from_dims(patch, dim, mul)
     return PatchAttrs(**new)
 

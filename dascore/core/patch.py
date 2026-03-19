@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Final
 
 import numpy as np
 from rich.text import Text
@@ -17,6 +18,7 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
+from dascore.core.summary import PatchSummary
 from dascore.utils.array import PatchUFunc, patch_array_function, patch_array_ufunc
 from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
@@ -55,18 +57,18 @@ class Patch(NamespaceOwner):
 
     Notes
     -----
-    - If coordinates and dims are not provided, they will be extracted from
-    attrs, if possible.
-
-    - If coords and attrs are provided, attrs will have priority. This means
-    if there is a conflict between information contained in both, the coords
-    will be recalculated.
+    Coordinates are owned by the patch/coord manager, not by attrs.
+    Use `Patch.summary` when you need a combined view of attrs plus
+    coordinate summary metadata.
     """
 
     data: ArrayLike
     coords: CoordManager
     dims: tuple[str, ...]
-    attrs: PatchAttrs | Mapping
+    attrs: PatchAttrs
+    _data: ArrayLike
+
+    _namespace_entry_point_group: Final[str] = "dascore.patch_namespace"
 
     def __init__(
         self,
@@ -75,36 +77,30 @@ class Patch(NamespaceOwner):
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
     ):
+        # Init empty patch
+        if all(x is None for x in (data, coords, dims, attrs)):
+            data = np.asarray([])
+            coords = {}
+            dims = ()
+            attrs = dc.PatchAttrs()
+        # Init Patch from Patch-like
         if isinstance(data, DataArray | self.__class__):
             data, attrs, coords = data.data, data.attrs, data.coords
+        if attrs is None:
+            attrs = dc.PatchAttrs()
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
-        # Try to generate coords from ranges in attrs
-        if coords is None and attrs is not None:
-            attrs = dc.PatchAttrs.from_dict(attrs)
-            coords = attrs.coords_from_dims()
-            dims = dims if dims is not None else attrs.dim_tuple
-        # Ensure required info is here
-        non_attrs = [x is None for x in [data, coords, dims]]
-        if any(non_attrs) and not all(non_attrs):
+        # By this point, everything should be defined.
+        if any(x is None for x in (data, coords, dims, attrs)):
             msg = "data, coords, and dims must be defined to init Patch."
             raise ValueError(msg)
-
-        shape = None if not hasattr(data, "shape") else data.shape
+        data = array(data)
+        shape = data.shape
         coords = get_coord_manager(coords, dims=dims, shape=shape)
-        # the only case we allow attrs to include coords is if they are both
-        # dicts, in which case attrs might have unit info for coords.
-        if isinstance(attrs, Mapping) and attrs:
-            coords, attrs = coords.update_from_attrs(attrs)
-        else:
-            # ensure attrs conforms to coords
-            attrs = dc.PatchAttrs.from_dict(attrs).update(coords=coords)
-        assert coords.dims == attrs.dim_tuple, "dim mismatch on coords and attrs"
+        attrs = dc.PatchAttrs.from_dict(attrs)
         self._coords = coords
         self._attrs = attrs
         self._data = array(self.coords.validate_data(data))
-
-    _namespace_entry_point_group = "dascore.patch_namespace"
 
     def __eq__(self, other):
         """Compare one Patch."""
@@ -182,20 +178,23 @@ class Patch(NamespaceOwner):
 
     def __array__(self, dtype=None, copy=None):
         """Used to convert Patches to arrays."""
-        data = self.data
         # dascore.utils.misc.to_object_array stores patch references in numpy
         # object arrays. When that function is called it tries to make a copy
         # of the array data with dtype == object, which takes a TON of memory.
         # For now, just don't let this method convert to object dtype arrays.
         if np.issubdtype(dtype, np.dtype(object)):
-            dtype = None
+            out = np.empty((), dtype=object)
+            out[()] = self
+            return out
+        data = self.data
         out = data.astype(dtype) if dtype is not None else data
         out = out if not copy else np.copy(out)
         return out
 
     def __rich__(self):
         dascore_text = get_dascore_text()
-        patch_text = Text("Patch ⚡", style="bold")
+        name = "Patch ⚡"
+        patch_text = Text(name, style="bold")
         header = Text.assemble(dascore_text, " ", patch_text)
         line = Text("-" * len(header))
         coords = self.coords.__rich__()
@@ -210,6 +209,10 @@ class Patch(NamespaceOwner):
         return str(out)
 
     __repr__ = __str__
+
+    def flat_dump(self, exclude=None) -> dict:
+        """Return a flat summary dict for dataframe-oriented helpers."""
+        return self.summary.flat_dump(exclude=exclude)
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -241,7 +244,7 @@ class Patch(NamespaceOwner):
     @property
     def attrs(self) -> PatchAttrs:
         """
-        Return the patch attributes.
+        Return the patch's non-coordinate metadata.
 
         Examples
         --------
@@ -253,6 +256,13 @@ class Patch(NamespaceOwner):
         >>> assert hasattr(attrs, 'data_type')
         """
         return self._attrs
+
+    @property
+    def summary(self):
+        """
+        Return a metadata-only summary of the patch.
+        """
+        return PatchSummary.from_patch(self)
 
     @property
     def coords(self) -> CoordManager:

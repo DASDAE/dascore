@@ -8,6 +8,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import SpoolType
+from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import (
     H5Reader,
@@ -16,7 +17,7 @@ from dascore.utils.hdf5 import (
     PyTablesReader,
     PyTablesWriter,
 )
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import iterate, unbyte
 from dascore.utils.patch import get_patch_names
 
 from .utils import (
@@ -92,7 +93,7 @@ class DASDAEV1(FiberIO):
         df = (
             dc.scan_to_df(patches)
             .assign(
-                path=lambda x: get_patch_names(x),
+                source_patch_id=lambda x: get_patch_names(x),
                 file_format=self.name,
                 file_version=self.version,
             )
@@ -113,11 +114,18 @@ class DASDAEV1(FiberIO):
     def read(self, resource: PyTablesReader, **kwargs) -> SpoolType:
         """Read a dascore file."""
         patches = []
+        source_patch_ids = {
+            str(value)
+            for value in iterate(kwargs.pop("source_patch_id", None))
+            if value not in (None, "")
+        }
         try:
             waveform_group = resource.root["/waveforms"]
         except (KeyError, IndexError):
             return dc.spool([])
         for patch_group in waveform_group:
+            if source_patch_ids and patch_group._v_name not in source_patch_ids:
+                continue
             patch = _read_patch(patch_group, **kwargs)
             if not patch.data.size and not _kwargs_empty(kwargs):
                 continue
@@ -139,14 +147,15 @@ class DASDAEV1(FiberIO):
         """
         indexer = HDFPatchIndexManager(resource.filename)
         if indexer.has_index:
-            # We need to change the path back to the file rather than internal
-            # HDF5 path so it works with FileSpool and such.
-            records = indexer.get_index().assign(path=str(resource)).to_dict("records")
-            return [dc.PatchAttrs(**x) for x in records]
+            records = (
+                indexer.get_index()
+                .drop(columns=["path", "file_format", "file_version"], errors="ignore")
+                .to_dict("records")
+            )
+            return [PatchSummary(**record) for record in records]
         else:
-            file_format = self.name
             version = resource.root._v_attrs.__DASDAE_version__
-            return _get_contents_from_patch_groups(resource, version, file_format)
+            return _get_contents_from_patch_groups(resource, version)
 
     def index(self, path):
         """Index the dasdae file."""

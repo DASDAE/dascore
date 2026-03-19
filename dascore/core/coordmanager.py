@@ -24,12 +24,12 @@ print(cm)
 
 ```{python}
 import numpy as np
-# Get array of coordinate values
-time = cm['time']
+# Get the coordinate object
+time = cm["time"]
 
 # Filter data array
 # this gets a new coord manager and a view of the trimmed data.
-_sorted_time = np.sort(time)
+_sorted_time = np.sort(time.values)
 t1 = _sorted_time[5]
 t2 = _sorted_time[-5]
 new_cm, new_data = cm.select(time=(t1, t2), array=data)
@@ -41,7 +41,6 @@ print(new_cm)
 
 from __future__ import annotations
 
-import warnings
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from itertools import zip_longest
@@ -210,16 +209,9 @@ class CoordManager(DascoreBaseModel):
         """Ensure mapping fields are immutable."""
         return FrozenDict(v)
 
-    def __getitem__(self, item) -> np.ndarray:
-        # in order to not break backward compatibility, we need to return
-        # the array. Start the deprecation cycle to be consistent.
-        msg = (
-            "Currently coords[coord_name] returns a numpy array, but in a "
-            "future dascore version it will return a BaseCoord instance. "
-            "Use patch.coords.get_array(coord_name) instead."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=6)
-        return self.get_coord(item).values
+    def __getitem__(self, item) -> BaseCoord:
+        """Return a coordinate by name."""
+        return self.get_coord(item)
 
     def __getattr__(self, item) -> BaseCoord:
         try:
@@ -336,13 +328,6 @@ class CoordManager(DascoreBaseModel):
             }
             out[name] = coord.update(**diff)
         coords = self.new(coord_map=out)
-        # anything not used in coord_info should be put back.
-        # for example, data_units might get put in its own coord called data.
-        for unused_dim in set(coord_info) - set(coords.dims):
-            for key, val in coord_info[unused_dim].items():
-                attr_info[f"{unused_dim}_{key}"] = val
-        attr_info["coords"] = coords.to_summary_dict()
-        attr_info["dims"] = coords.dims
         attrs = dc.PatchAttrs.from_dict(attr_info)
         return coords, attrs
 
@@ -1180,9 +1165,6 @@ def get_coord_manager(
     >>> quality = np.random.random((len(distance), len(time)))
     >>> coords['quality'] = (("distance", "time"), quality)
     >>> cm = get_coord_manager(coords=coords, dims=dims)
-    >>> # Get coordinate manager from typical patch attribute dict
-    >>> attrs = dc.get_example_patch().attrs
-    >>> cm = get_coord_manager(attrs=attrs)
     """
     if coords is not None and attrs is not None:
         msg = (
@@ -1202,8 +1184,6 @@ def get_coord_manager(
     if dims is None:
         if isinstance(coords, Mapping) and all(isinstance(x, str) for x in coords):
             dims = tuple(i for i, v in coords.items() if not isinstance(v, tuple))
-        elif (attrs is not None and "dims" in attrs) or hasattr(attrs, "dims"):
-            dims = tuple(attrs["dims"].split(","))
         else:
             dims = ()
     coords = {} if coords is None else coords

@@ -435,7 +435,7 @@ class TestPad:
         original_shape = random_patch.shape
         new_shape = padded_patch.shape
         distance_axis = random_patch.get_axis("distance")
-        ch_spacing = random_patch.attrs["distance_step"]
+        ch_spacing = random_patch.coords["distance"].step
         assert (
             new_shape[distance_axis] == original_shape[distance_axis] + 14 * ch_spacing
         )
@@ -451,8 +451,9 @@ class TestPad:
         original_shape = random_patch.shape
         new_shape = padded_patch.shape
         distance_axis = random_patch.get_axis("distance")
-        ch_spacing = random_patch.attrs["distance_step"]
-        dist_max = random_patch.attrs["distance_max"]
+        dist_coord = random_patch.coords["distance"]
+        ch_spacing = dist_coord.step
+        dist_max = dist_coord.max()
         assert (
             new_shape[distance_axis] == original_shape[distance_axis] + 8 * ch_spacing
         )

@@ -98,7 +98,7 @@ def map_fiber(
     if isinstance(color, str):
         assert color in patch.coords, f"{color} not found in patch coordinates"
         data_type = color
-        data_units = patch.attrs.coords[color].units
+        data_units = patch.coords.coord_map[color].units
         color = patch.coords.get_array(color)
     else:
         data_type = ""

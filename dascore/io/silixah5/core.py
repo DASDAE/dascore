@@ -8,6 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
+from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
@@ -43,16 +44,18 @@ class SilixaH5V1(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
         """Scan a Silixa HDF5 file, return summary information on the contents."""
-        file_version = _get_version_string(resource, self.version)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
-        attrs = _get_attr(resource, SilixaPatchAttrs, extras=extras)
-        return [attrs]
+        attrs, coords = _get_attr(resource, SilixaPatchAttrs)
+        return [
+            PatchSummary.model_construct(
+                attrs=attrs,
+                coords=coords.to_summary_dict(),
+                dims=coords.dims,
+                shape=coords.shape,
+                dtype=str(resource["Acoustic"].dtype),
+            )
+        ]
 
     def read(
         self,

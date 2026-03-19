@@ -9,10 +9,11 @@ import numpy as np
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.models import UTF8Str
 
-from .utils import _load_patches, _paths_to_attrs, _read_xml_metadata
+from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
 
 
 class BinaryPatchAttrs(dc.PatchAttrs):
@@ -21,7 +22,6 @@ class BinaryPatchAttrs(dc.PatchAttrs):
     pulse_width_ns: float = np.nan
     gauge_length: float = np.nan
     instrument_id: UTF8Str = ""
-    distance_units: UTF8Str = ""
     zone_name: UTF8Str = ""
 
 
@@ -36,24 +36,20 @@ class XMLBinaryV1(FiberIO):
     # File extension for data files.
     _data_extension = ".raw"
 
-    def scan(self, resource, timestamp=None, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource, timestamp=None, **kwargs) -> list[PatchSummary]:
         """Scan the contents of the directory."""
         path = Path(resource)
+        if path.is_file():
+            path = path.parent
         metadata = _read_xml_metadata(path / self._metadata_name)
         data_files = list(path.glob(f"*{self._data_extension}"))
-        extra_attrs = {
-            "file_version": self.version,
-            "file_format": self.name,
-        }
         # Need to update time
-        attrs = _paths_to_attrs(
+        return _paths_to_scan_patches(
             data_files,
             metadata,
             timestamp=timestamp,
             attr_cls=BinaryPatchAttrs,
-            extra_attrs=extra_attrs,
         )
-        return attrs
 
     def read(self, resource, time=None, distance=None, **kwargs) -> dc.BaseSpool:
         """
@@ -88,6 +84,8 @@ class XMLBinaryV1(FiberIO):
     def get_format(self, resource, **kwargs) -> tuple[str, str] | bool:
         """Determine if directory is an XML Binary type."""
         path = Path(resource)
+        if path.is_file():
+            path = path.parent
         index_path = path / self._metadata_name
         if not index_path.exists():
             return False

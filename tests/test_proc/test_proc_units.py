@@ -29,11 +29,7 @@ class TestSetUnits:
             expected_quant = get_quantity(unit_str)
             coord = patch.get_coord(dim)
             new = patch.set_units(**{dim: unit_str})
-            attr = new.attrs
-            # first check attributes
-            attr_name = f"{dim}_units"
-            assert hasattr(attr, attr_name)
-            value = getattr(new.attrs, attr_name)
+            value = getattr(new.summary, f"{dim}_units")
             # time shouldn't ever be a anything other than s
             if dtype_time_like(coord.dtype):
                 expected_quant = get_quantity("s")
@@ -50,9 +46,7 @@ class TestSetUnits:
         non_dims = set(cmap) - set(patch.dims)
         for coord_name in non_dims:
             new = patch.set_units(**{coord_name: unit_str})
-            # coord string should show up in the attrs
-            attr_name = f"{coord_name}_units"
-            assert getattr(new.attrs, attr_name) == get_quantity(unit_str)
+            assert getattr(new.summary, f"{coord_name}_units") == get_quantity(unit_str)
             # and the coord should be set
             coord = new.get_coord(coord_name)
             assert coord.units == get_quantity(unit_str)
@@ -62,7 +56,7 @@ class TestSetUnits:
         out = random_patch.set_units("m/s", distance="ft")
         assert isinstance(random_patch, dc.Patch)
         assert get_quantity(out.attrs.data_units) == get_quantity("m/s")
-        assert get_quantity(out.attrs.distance_units) == get_quantity("ft")
+        assert get_quantity(out.summary.distance_units) == get_quantity("ft")
 
     def test_remove_units(self, random_patch):
         """Ensure set coords can remove units."""
@@ -126,7 +120,7 @@ class TestConvertUnits:
         out = patch.convert_units("ft/s", distance="m")
         assert isinstance(random_patch, dc.Patch)
         assert get_quantity(out.attrs.data_units) == get_quantity("ft/s")
-        assert get_quantity(out.attrs.distance_units) == get_quantity("m")
+        assert get_quantity(out.summary.distance_units) == get_quantity("m")
 
 
 class TestSimplifyUnits:
@@ -146,8 +140,9 @@ class TestSimplifyUnits:
         """Test to simplify all parts of the patch."""
         out = patch_complicated_units.simplify_units()
         attrs = out.attrs
+        summary = out.summary
         assert isinstance(out, dc.Patch)
         # test attrs
         assert get_quantity(attrs.data_units) == get_quantity("m/s")
-        assert get_quantity(attrs.time_units) == get_quantity("s")
-        assert get_quantity(attrs.distance_units) == get_quantity("m")
+        assert get_quantity(summary.time_units) == get_quantity("s")
+        assert get_quantity(summary.distance_units) == get_quantity("m")

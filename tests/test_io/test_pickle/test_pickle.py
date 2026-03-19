@@ -94,10 +94,11 @@ class TestScan:
     def test_scan_attrs_eq_read_attrs(self, pickle_patch_path):
         """Ensure read/scan produce the same attrs."""
         scan_list = dc.scan(pickle_patch_path)
-        patch_attrs_list = [x.attrs for x in dc.read(pickle_patch_path)]
+        patch_summaries = [x.summary for x in dc.read(pickle_patch_path)]
 
-        for scan_attrs, patch_attrs in zip(scan_list, patch_attrs_list):
+        for scan_attrs, patch_summary in zip(scan_list, patch_summaries):
+            scan_attrs = scan_attrs.summary
             for attr in self.comp_attrs:
                 scan_attr = getattr(scan_attrs, attr)
-                patch_attr = getattr(patch_attrs, attr)
+                patch_attr = getattr(patch_summary, attr)
                 assert scan_attr == patch_attr

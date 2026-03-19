@@ -431,6 +431,13 @@ class TestCoordSummary:
         out = CoordSummary(**data)
         assert np.dtype(out.dtype) == np.dtype(type(data["min"]))
 
+    def test_json_serializer(self):
+        """JSON serialization should stringify values."""
+        summary = CoordSummary(min=1.0, max=2.0, step=0.5, units="m")
+        dumped = summary.model_dump(mode="json")
+        assert dumped["units"] == "m"
+        assert dumped["min"] == "1.0"
+
 
 class TestGetSliceTuple:
     """Tests for getting slice tuples."""
@@ -1015,6 +1022,12 @@ class TestCoordRange:
             assert np.all(np.equal(values1, values2))
         else:
             np.allclose(values1, values2 / factor)
+
+    def test_update_convert_units_branch(self):
+        """Updating units should route through convert_units."""
+        coord = get_coord(data=np.arange(5.0), units="m")
+        out = coord.update(units="ft")
+        assert out.units == get_quantity("ft")
 
     def test_select_date_string(self, evenly_sampled_date_coord):
         """Ensure string selection works with datetime objects."""

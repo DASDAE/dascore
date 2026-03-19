@@ -223,6 +223,7 @@ def _get_raw_node_attr_coords(node_info, d_coord, base_info):
     info = dict(base_info)
     t_coord = _get_time_coord(node_info.node)
     info.update(_get_data_unit_and_type(node_info.node))
+    info["dtype"] = str(node_info.node["RawData"].dtype)
     coords = dc.get_coord_manager(
         coords={"time": t_coord, "distance": d_coord},
         dims=_get_dims_from_attrs(node_info.node["RawData"].attrs),
@@ -236,6 +237,7 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info):
     out = dict(base_info)
     t_coord = _get_time_coord(node_info.parent_node)
     out.update(_get_data_unit_and_type(node_info.node))
+    out["dtype"] = str(node_info.node.dtype)
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
     # For some reason, the distance coords in raw and fbe data are not the
@@ -252,7 +254,7 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info):
         coords={"time": t_coord, "distance": distance},
         dims=_get_dims_from_attrs(node_info.parent_node.attrs),
     )
-    return ProdMLFbePatchAttrs(**out), coords
+    return ProdMLFbePatchAttrs.from_dict(out), coords
 
 
 @register_func(_NODE_DATA_PROCESSORS, key="raw")
@@ -282,7 +284,7 @@ def _yield_prodml_attrs_coords(fi, extras=None):
     for node_info in _yield_data_nodes(fi):
         func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
         attr, coords = func(node_info, d_coord, base_info)
-        yield (attr, coords)
+        yield attr, coords, node_info.name
 
 
 def _get_dims_from_attrs(attrs):
@@ -304,13 +306,18 @@ def _get_dims_from_attrs(attrs):
     return dims
 
 
-def _read_prodml(fi, distance=None, time=None):
+def _read_prodml(fi, distance=None, time=None, source_patch_id=None):
     """Read the prodml values into a patch."""
     out = []
     acq = fi["Acquisition"]
     base_info = maybe_get_items(acq.attrs, _ROOT_ATTRS)
     d_coord = _get_distance_coord(acq)
+    source_patch_ids = {
+        str(value) for value in iterate(source_patch_id) if value not in (None, "")
+    }
     for info in _yield_data_nodes(fi):
+        if source_patch_ids and info.name not in source_patch_ids:
+            continue
         attr_func = _NODE_ATTRS_PROCESSORS[info.patch_type]
         attrs, cm = attr_func(info, d_coord, base_info)
         data = _NODE_DATA_PROCESSORS[info.patch_type](info)

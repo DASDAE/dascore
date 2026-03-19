@@ -92,8 +92,6 @@ def _get_patch_attrs(fid, extras=None):
     coord_manager = get_coord_manager(
         {"time": time, "distance": dist}, dims=("distance", "time")
     )
-    attrs = dc.PatchAttrs(
-        coords=coord_manager, data_type=data_type, **({} if extras is None else extras)
-    )
+    attrs = dc.PatchAttrs(data_type=data_type, **({} if extras is None else extras))
     offsets = fid.tell(), int(measurement_count), int(sensor_num)
     return attrs, coord_manager, offsets

@@ -36,10 +36,8 @@ def patch_random_start(event_patch_1):
     random_starttime = dc.to_datetime64("2020-01-02T02:12:11.02232")
     attrs = dict(event_patch_1.attrs)
     coords = {i: v for i, v in event_patch_1.coords.items()}
-    time = coords["time"] - coords["time"].min()
+    time = coords["time"].values - coords["time"].min()
     coords["time"] = time + random_starttime
-    attrs["time_min"] = coords["time"].min()
-    attrs["time_max"] = coords["time"].max()
     patch = event_patch_1.update(attrs=attrs, coords=coords)
     return patch
 

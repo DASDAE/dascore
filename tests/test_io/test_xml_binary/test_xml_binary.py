@@ -137,6 +137,12 @@ class TestGetFormat:
         out = fiber_io.get_format(directory_bad_xml)
         assert not out
 
+    def test_file_path_uses_parent_directory(self, binary_xml_directory):
+        """A data-file path should resolve format metadata from its parent."""
+        fiber_io = XMLBinaryV1()
+        raw_path = next(binary_xml_directory.glob("*.raw"))
+        assert fiber_io.get_format(raw_path) == (fiber_io.name, fiber_io.version)
+
 
 class TestScanContents:
     """Test scanning contents of xml binary directory."""
@@ -145,6 +151,13 @@ class TestScanContents:
         """Ensure the default test case has two patches."""
         fiber = XMLBinaryV1()
         out = fiber.scan(binary_xml_directory)
+        assert len(out) == 2
+
+    def test_scan_file_path_uses_parent_directory(self, binary_xml_directory):
+        """Scanning a raw file should resolve metadata from the parent dir."""
+        fiber = XMLBinaryV1()
+        raw_path = next(binary_xml_directory.glob("*.raw"))
+        out = fiber.scan(raw_path)
         assert len(out) == 2
 
     def test_mtime(self, binary_xml_directory):

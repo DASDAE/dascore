@@ -92,7 +92,11 @@ delta_pa = dc.get_example_patch("delta_patch", dim="time", patch=pa_chunked_sp)
 # Apply the low-pass filter on the delta patch
 delta_pa_low_passed = delta_pa.pass_filter(time=(None, cutoff_freq * filter_safety_factor))
 # Resample the low-passed filtered patch
-new_time_ax = np.arange(delta_pa.attrs["time_min"], delta_pa.attrs["time_max"], np.timedelta64(dt, "s"))
+new_time_ax = np.arange(
+    delta_pa.summary.time_min,
+    delta_pa.summary.time_max,
+    np.timedelta64(dt, "s"),
+)
 delta_pa_lfp = delta_pa_low_passed.interpolate(time=new_time_ax)
 
 # Identify the indices where the absolute value of the data exceeds the threshold
@@ -138,7 +142,11 @@ for patch in sp_chunked_overlap:
     # Apply the low-pass filter on the delta patch
     pa_low_passed = patch.pass_filter(time=(..., cutoff_freq * filter_safety_factor))
     # Resample the low-passed filter patch
-    new_time_ax = np.arange(pa_low_passed.attrs["time_min"], pa_low_passed.attrs["time_max"], np.timedelta64(dt, "s"))
+    new_time_ax = np.arange(
+        pa_low_passed.summary.time_min,
+        pa_low_passed.summary.time_max,
+        np.timedelta64(dt, "s"),
+    )
     pa_lfp = (
         pa_low_passed.interpolate(time=new_time_ax)
         .update_coords(time_step=dt)   # Update sampling interval

@@ -209,7 +209,6 @@ def _get_attrs_coords_header(rid, attr_class=PatchAttrs, extras=None):
     coords = {"time": _get_time_coord(header), "distance": _get_dist_coord(header)}
     cm = get_coord_manager(coords=coords, dims=DIMS)
     attrs = _get_attr_dict(header, extras)
-    attrs["coords"] = cm
     return attr_class(**attrs), cm, header
 
 
