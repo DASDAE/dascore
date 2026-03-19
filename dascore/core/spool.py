@@ -587,7 +587,9 @@ class DataFrameSpool(BaseSpool):
     ):
         """Create a new instance from dataframes."""
         new = self.__class__(self)
-        df_, source_, inst_ = self._get_dummy_dataframes(df)
+        source_ = inst_ = None
+        if source_df is None or instruction_df is None:
+            _, source_, inst_ = self._get_dummy_dataframes(df)
         new._df = df
         new._source_df = source_df if source_df is not None else source_
         new._instruction_df = instruction_df if instruction_df is not None else inst_
