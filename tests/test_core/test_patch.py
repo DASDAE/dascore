@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import operator
 import weakref
 from pathlib import Path
@@ -462,6 +463,20 @@ class TestPatchSummary:
     def test_patch_summary_is_cached(self, random_patch):
         """Patch.summary should reuse the same summary instance."""
         assert random_patch.summary is random_patch.summary
+
+    def test_summary_cache_does_not_keep_patch_alive(self):
+        """Holding a summary must not keep the source patch from being GC'd."""
+        patch = dc.get_example_patch()
+        patch_ref = weakref.ref(patch)
+        summary = patch.summary
+
+        del patch
+        gc.collect()
+
+        assert patch_ref() is None
+        assert summary.dims
+        assert summary.dtype
+        assert "time_min" in summary.flat_dump()
 
     def test_scan_result_to_summary_noop_returns_same_summary(self, random_patch):
         """Summary conversion should avoid rebuilding unchanged summaries."""
