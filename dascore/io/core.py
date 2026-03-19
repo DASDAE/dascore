@@ -118,25 +118,16 @@ def _scan_result_to_summary(
         "" if source_patch_id in (None, "") else str(source_patch_id)
     )
     if isinstance(attrs, PatchSummary):
-        raw_attrs = attrs.attrs.model_dump()
-        nested_path = raw_attrs.get("path", "")
-        nested_format = raw_attrs.get("file_format", "")
-        nested_version = raw_attrs.get("file_version", "")
-        nested_source_patch_id = raw_attrs.get("source_patch_id", "")
         return PatchSummary.model_construct(
             attrs=attrs.attrs,
             coords=dict(attrs.coords),
             dims=tuple(attrs.dims),
             shape=tuple(attrs.shape),
             dtype=attrs.dtype,
-            path=summary_path or attrs.path or nested_path,
-            file_format=summary_format or attrs.file_format or nested_format,
-            file_version=summary_version or attrs.file_version or nested_version,
-            source_patch_id=(
-                summary_source_patch_id
-                or attrs.source_patch_id
-                or str(nested_source_patch_id)
-            ),
+            path=summary_path or attrs.path,
+            file_format=summary_format or attrs.file_format,
+            file_version=summary_version or attrs.file_version,
+            source_patch_id=summary_source_patch_id or attrs.source_patch_id,
         )
     if isinstance(attrs, dc.PatchAttrs):
         msg = (

@@ -16,7 +16,6 @@ import rich.progress as prog
 import dascore
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.core.summary import PatchSummary
 from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
 from dascore.io.core import (
     FiberIO,
@@ -171,48 +170,6 @@ class TestScanResultToSummary:
         )
         with pytest.raises(ValueError, match=msg):
             _scan_result_to_summary(patch.attrs)
-
-    def test_patch_summary_promotes_nested_file_metadata(self):
-        """PatchSummary inputs should recover file metadata from attrs extras."""
-        patch = dc.get_example_patch()
-        malformed = PatchSummary(
-            attrs=patch.attrs.update(
-                path="example.h5",
-                file_format="fmt",
-                file_version="1",
-            ),
-            coords=patch.coords.to_summary_dict(),
-            dims=patch.dims,
-            shape=patch.shape,
-            dtype=str(patch.data.dtype),
-            source_patch_id="patch-1",
-        )
-        restored = _scan_result_to_summary(malformed)
-        assert restored.path == "example.h5"
-        assert restored.file_format == "fmt"
-        assert restored.file_version == "1"
-        assert restored.source_patch_id == "patch-1"
-        assert restored.attrs.model_dump()["path"] == "example.h5"
-        assert restored.attrs.model_dump()["file_format"] == "fmt"
-        assert restored.attrs.model_dump()["file_version"] == "1"
-
-    def test_patch_summary_promotes_nested_version(self):
-        """Nested legacy file metadata should be promoted when top-level is blank."""
-        patch = dc.get_example_patch()
-        attrs = dc.PatchAttrs.model_construct(
-            **patch.attrs.model_dump(),
-            file_version="2.1",
-        )
-        malformed = PatchSummary(
-            attrs=attrs,
-            coords=patch.coords.to_summary_dict(),
-            dims=patch.dims,
-            shape=patch.shape,
-            dtype=str(patch.data.dtype),
-        )
-        restored = _scan_result_to_summary(malformed)
-
-        assert restored.file_version == "2.1"
 
 
 class TestFormatManager:

@@ -15,8 +15,6 @@ from dascore.core.coords import CoordSummary
 from dascore.utils.attrs import separate_coord_info
 from dascore.utils.models import DascoreBaseModel
 
-_SUMMARY_ONLY_FIELDS = {"source_patch_id"}
-
 
 def _to_coord_summary(value: Any, dims: tuple[str, ...] = ()) -> CoordSummary:
     """Normalize a coordinate summary input."""
