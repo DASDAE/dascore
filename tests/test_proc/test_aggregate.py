@@ -97,6 +97,33 @@ class TestBasicAggregations:
         assert isinstance(out, dascore.Patch)
         assert np.issubdtype(out.dtype, np.bool_)
 
+    def test_mean_monotonic_time_with_associated_coord(self, random_patch):
+        """Regression for #635: monotonic time reduction should drop sibling coords."""
+        ntime = len(random_patch.get_coord("time"))
+        base = dc.to_datetime64("2024-01-01")
+        offsets = np.cumsum(np.arange(ntime) + 1).astype("timedelta64[ns]")
+        patch = random_patch.update_coords(
+            time=base + offsets,
+            auxiliary=("time", np.arange(ntime)),
+        )
+
+        out = patch.mean("time")
+
+        assert out.shape == (len(patch.get_coord("distance")), 1)
+        assert out.coords.shape == out.shape
+        assert "auxiliary" not in out.coords
+
+    def test_mean_single_sample_monotonic_time_keeps_value(self, random_patch):
+        """Regression for #635: 1-sample monotonic coords should keep their value."""
+        time = np.array([dc.to_datetime64("2024-01-01T00:00:00")])
+        patch = random_patch.select(time=(0, 1), samples=True).update_coords(time=time)
+
+        out = patch.mean("time")
+
+        assert out.shape == patch.shape
+        assert out.coords.shape == patch.coords.shape
+        assert out.get_coord("time").values[0] == time[0]
+
 
 class TestApplyOperators:
     """Ensure aggregated patches can be used as operators for arithmetic."""
