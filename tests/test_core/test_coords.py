@@ -1657,6 +1657,8 @@ class TestGetSampleCount:
             shape=500,
         )
         assert coord.get_sample_count(0.1) == 1
+        assert coord.get_sample_count(0.2) == 2
+        assert coord.get_sample_count(1.00000000005 * coord.step) == 2
 
 
 class TestGetNextIndex:
