@@ -783,7 +783,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         else:
             compat_val = self._get_compatible_value(value, relative=True)
             duration = compat_val - self.min()
-            samples = int(np.ceil(duration / self.step))
+            ratio = duration / self.step
+            if np.issubdtype(self.dtype, np.floating):
+                nearest = np.round(ratio)
+                # Adding a relative float value to coord.min() and subtracting
+                # it back can introduce a small cancellation error. Snap only
+                # those float-coordinate ratios that fall within that drift.
+                tol = 10 * abs(np.spacing(self.min()) / self.step)
+                if abs(ratio - nearest) <= tol:
+                    ratio = nearest
+            samples = int(np.ceil(ratio))
         if enforce_lt_coord and samples > len(self):
             msg = (
                 f"value of {value} with samples={samples }results in a window "
