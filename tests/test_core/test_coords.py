@@ -1649,6 +1649,15 @@ class TestGetSampleCount:
         with pytest.raises(ParameterError, match=match):
             evenly_sampled_coord.get_sample_count("bob", samples=True)
 
+    def test_float_roundoff_doesnt_overcount(self):
+        """Exact one-step float windows shouldn't round up to two samples."""
+        coord = get_coord(
+            start=np.float64(849.0999999998644),
+            step=np.float64(0.09999999999990905),
+            shape=500,
+        )
+        assert coord.get_sample_count(0.1) == 1
+
 
 class TestGetNextIndex:
     """Tests for finding the next index after a value."""

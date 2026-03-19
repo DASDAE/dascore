@@ -783,7 +783,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         else:
             compat_val = self._get_compatible_value(value, relative=True)
             duration = compat_val - self.min()
-            samples = int(np.ceil(duration / self.step))
+            # Normalize near-integer ratios before ceiling to avoid float drift
+            # turning exact one-step windows into two samples.
+            ratio = np.round(duration / self.step, decimals=10)
+            samples = int(np.ceil(ratio))
         if enforce_lt_coord and samples > len(self):
             msg = (
                 f"value of {value} with samples={samples }results in a window "
