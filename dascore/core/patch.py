@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from functools import cached_property
 from typing import Final
 
 import numpy as np
@@ -257,7 +258,7 @@ class Patch(NamespaceOwner):
         """
         return self._attrs
 
-    @property
+    @cached_property
     def summary(self):
         """
         Return a metadata-only summary of the patch.

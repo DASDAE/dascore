@@ -137,7 +137,7 @@ class PatchSummary(DascoreBaseModel):
     @classmethod
     def from_patch(cls, patch: dc.Patch) -> PatchSummary:
         """Create a summary from a loaded patch."""
-        return cls(
+        return cls.model_construct(
             attrs=patch.attrs,
             coords=patch.coords.to_summary_dict(),
             dims=patch.dims,
@@ -152,7 +152,16 @@ class PatchSummary(DascoreBaseModel):
     def flat_dump(self, dim_tuple: bool = False, exclude=None) -> dict[str, Any]:
         """Return a flat dict suitable for indexing/dataframes."""
         exclude = set(() if exclude is None else exclude)
-        out = self.attrs.model_dump(exclude=exclude)
+        attrs = self.attrs
+        out = {
+            name: getattr(attrs, name)
+            for name in type(attrs).model_fields
+            if name not in exclude
+        }
+        extra = getattr(attrs, "__pydantic_extra__", None) or {}
+        for name, value in extra.items():
+            if name not in exclude:
+                out[name] = value
         summary_meta = {
             "dims": ",".join(self.dims),
             "dtype": self.dtype,
@@ -168,7 +177,12 @@ class PatchSummary(DascoreBaseModel):
         for coord_name, summary in self.coords.items():
             if coord_name in exclude:
                 continue
-            summary_dict = summary.model_dump()
+            summary_dict = {}
+            for field in type(summary).model_fields:
+                if field == "dims":
+                    summary_dict[field] = getattr(summary, field)
+                else:
+                    summary_dict[field] = getattr(summary, field)
             # Some callers still want {(min, max)} tuples for dimensional coords
             # instead of the fully expanded flat summary columns.
             if dim_tuple:

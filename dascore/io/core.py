@@ -111,6 +111,11 @@ def _scan_result_to_summary(
     source_patch_id: str | None = None,
 ) -> PatchSummary:
     """Convert scan metadata into a patch summary."""
+    if isinstance(attrs, PatchSummary) and all(
+        value in (None, "")
+        for value in (path, file_format, file_version, source_patch_id)
+    ):
+        return attrs
     summary_path = "" if path in (None, "") else path
     summary_format = "" if file_format in (None, "") else file_format
     summary_version = "" if file_version in (None, "") else file_version

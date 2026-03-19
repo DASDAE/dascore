@@ -18,7 +18,11 @@ from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import CoordError, ParameterError, PatchAttributeError
-from dascore.io.core import _load_patch_summary, _select_patch_from_spool
+from dascore.io.core import (
+    _load_patch_summary,
+    _scan_result_to_summary,
+    _select_patch_from_spool,
+)
 from dascore.proc.basic import apply_operator
 from dascore.utils.misc import suppress_warnings
 
@@ -454,6 +458,22 @@ class TestPatchSummary:
         """Model validation should accept PatchSummary instances unchanged."""
         summary = random_patch.summary
         assert dc.PatchSummary.model_validate(summary) is summary
+
+    def test_patch_summary_is_cached(self, random_patch):
+        """Patch.summary should reuse the same summary instance."""
+        assert random_patch.summary is random_patch.summary
+
+    def test_scan_result_to_summary_noop_returns_same_summary(self, random_patch):
+        """Summary conversion should avoid rebuilding unchanged summaries."""
+        summary = random_patch.summary
+        assert _scan_result_to_summary(summary) is summary
+
+    def test_scan_result_to_summary_override_returns_new_summary(self, random_patch):
+        """Summary conversion should still apply explicit source overrides."""
+        summary = random_patch.summary
+        out = _scan_result_to_summary(summary, path="some_path")
+        assert out is not summary
+        assert out.path == "some_path"
 
     def test_non_mapping_validate_passthrough_raises(self):
         """Non-mapping validation should fall through to pydantic errors."""
