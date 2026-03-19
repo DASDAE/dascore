@@ -113,6 +113,17 @@ class TestBasicAggregations:
         assert out.coords.shape == out.shape
         assert "auxiliary" not in out.coords
 
+    def test_mean_single_sample_monotonic_time_keeps_value(self, random_patch):
+        """Regression for #635: 1-sample monotonic coords should keep their value."""
+        time = np.array([dc.to_datetime64("2024-01-01T00:00:00")])
+        patch = random_patch.select(time=(0, 1), samples=True).update_coords(time=time)
+
+        out = patch.mean("time")
+
+        assert out.shape == patch.shape
+        assert out.coords.shape == patch.coords.shape
+        assert out.get_coord("time").values[0] == time[0]
+
 
 class TestApplyOperators:
     """Ensure aggregated patches can be used as operators for arithmetic."""

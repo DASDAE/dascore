@@ -931,7 +931,10 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return np.atleast_1d(out)
 
         if dim_reduce == "empty":
-            # Use a partial coord so array-backed coords also collapse to len 1.
+            # Preserve concrete single-sample coords; only synthesize a partial
+            # coord when reduction actually collapses a longer coordinate.
+            if len(self) == 1:
+                return self
             new_coord = get_coord(shape=(1,), units=self.units, dtype=self.dtype)
         elif dim_reduce == "squeeze":
             return None
