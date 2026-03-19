@@ -931,7 +931,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return np.atleast_1d(out)
 
         if dim_reduce == "empty":
-            new_coord = self.update(shape=(1,), start=None, stop=None, data=None)
+            # Use a partial coord so array-backed coords also collapse to len 1.
+            new_coord = get_coord(shape=(1,), units=self.units, dtype=self.dtype)
         elif dim_reduce == "squeeze":
             return None
         elif (func := _AGG_FUNCS.get(dim_reduce)) or callable(dim_reduce):
