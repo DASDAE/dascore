@@ -1,13 +1,17 @@
 name: TestDocBuild
 
 on:
+  push:
+    branches:
+      - dev
   pull_request:
     types: [labeled, synchronize]
 
 jobs:
   test_build_docs:
     if: |
-      (github.event.action == 'labeled' && github.event.label.name == 'documentation')
+      github.event_name == 'push'
+      || (github.event.action == 'labeled' && github.event.label.name == 'documentation')
       || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'documentation'))
     runs-on: ubuntu-latest
     steps:
@@ -59,6 +63,7 @@ jobs:
 
       # Determine if the automated documentation comment exists.
       - name: Find Comment
+        if: github.event_name == 'pull_request'
         uses: peter-evans/find-comment@v3
         id: fc
         with:
@@ -68,6 +73,7 @@ jobs:
 
       # Create a comment with a download link to build docs
       - name: Create or update comment
+        if: github.event_name == 'pull_request'
         uses: peter-evans/create-or-update-comment@v4
         with:
           comment-id: ${{ steps.fc.outputs.comment-id }}
