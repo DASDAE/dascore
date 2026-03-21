@@ -137,6 +137,6 @@ smoothed_patch = delta_patch.gaussian_filter(
     distance=15,
 ) 
 
-ax = smoothed_patch.viz.waterfall()
+ax = smoothed_patch.viz.waterfall(scale=1)
 ax.set_title("gaussian smoothing kernel");
 ```

@@ -787,7 +787,16 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         else:
             compat_val = self._get_compatible_value(value, relative=True)
             duration = compat_val - self.min()
-            samples = int(np.ceil(duration / self.step))
+            ratio = duration / self.step
+            if np.issubdtype(self.dtype, np.floating):
+                nearest = np.round(ratio)
+                # Adding a relative float value to coord.min() and subtracting
+                # it back can introduce a small cancellation error. Snap only
+                # those float-coordinate ratios that fall within that drift.
+                tol = 10 * abs(np.spacing(self.min()) / self.step)
+                if abs(ratio - nearest) <= tol:
+                    ratio = nearest
+            samples = int(np.ceil(ratio))
         if enforce_lt_coord and samples > len(self):
             msg = (
                 f"value of {value} with samples={samples }results in a window "
@@ -935,7 +944,11 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             return np.atleast_1d(out)
 
         if dim_reduce == "empty":
-            new_coord = self.update(shape=(1,), start=None, stop=None, data=None)
+            # Preserve concrete single-sample coords; only synthesize a partial
+            # coord when reduction actually collapses a longer coordinate.
+            if len(self) == 1:
+                return self
+            new_coord = get_coord(shape=(1,), units=self.units, dtype=self.dtype)
         elif dim_reduce == "squeeze":
             return None
         elif (func := _AGG_FUNCS.get(dim_reduce)) or callable(dim_reduce):
