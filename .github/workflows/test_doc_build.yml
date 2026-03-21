@@ -63,6 +63,7 @@ jobs:
 
       # Determine if the automated documentation comment exists.
       - name: Find Comment
+        if: github.event_name == 'pull_request'
         uses: peter-evans/find-comment@v3
         id: fc
         with:
@@ -72,6 +73,7 @@ jobs:
 
       # Create a comment with a download link to build docs
       - name: Create or update comment
+        if: github.event_name == 'pull_request'
         uses: peter-evans/create-or-update-comment@v4
         with:
           comment-id: ${{ steps.fc.outputs.comment-id }}
