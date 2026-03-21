@@ -151,7 +151,7 @@ class TestRolling:
         window = random.randint(1, patch.shape[axis])
         step = random.randint(1, patch.shape[axis])
         # setup patch and apply mean.
-        channel_spacing = patch.attrs["distance_step"]
+        channel_spacing = patch.coords["distance"].step
         roller = patch.rolling(
             distance=(window * channel_spacing) * m,
             step=(step * channel_spacing) * m,

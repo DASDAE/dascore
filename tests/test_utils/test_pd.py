@@ -10,6 +10,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.utils.pd import (
+    _model_list_to_df,
     adjust_segments,
     dataframe_to_patch,
     fill_defaults_from_pydantic,
@@ -134,6 +135,27 @@ class TestFilterDfBasic:
         con = (ser >= 20) & (ser <= 30)
         out = filter_df(example_df, age_min=20, age_max=30)
         assert all(con == out)
+
+
+class TestModelListToDf:
+    """Tests for flattening patch-like objects to dataframes."""
+
+    def test_uses_flat_dump_and_serializes_dims(self, random_patch):
+        """Patch-like objects with flat_dump should convert into dataframes."""
+        df = _model_list_to_df([random_patch], exclude={"history"})
+        assert len(df) == 1
+        assert df.loc[0, "dims"] == ",".join(random_patch.dims)
+
+    def test_uses_summary_fallback_when_item_has_no_flat_dump(self, random_patch):
+        """Objects with only .summary should still convert cleanly."""
+
+        class SummaryOnly:
+            def __init__(self, summary):
+                self.summary = summary
+
+        df = _model_list_to_df([SummaryOnly(random_patch.summary)], exclude={"history"})
+        assert len(df) == 1
+        assert df.loc[0, "dims"] == ",".join(random_patch.dims)
 
 
 class TestListSerToStr:

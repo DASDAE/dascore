@@ -237,7 +237,6 @@ def patch_to_obspy(patch: PatchType):
     traces = []
     for data, other_val in zip(patch.data, other_vals):
         stats = patch.attrs.model_dump()
-        stats.pop("coords")
         stats.update(base_stats)
         stats[other_dim] = other_val
         trace = obspy.Trace(data=data, header=stats)

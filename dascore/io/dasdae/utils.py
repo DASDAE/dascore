@@ -8,12 +8,13 @@ from tables import NodeError
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import get_coord
-from dascore.utils.misc import suppress_warnings
+from dascore.core.coords import CoordSummary, get_coord
+from dascore.core.summary import PatchSummary
+from dascore.utils.attrs import separate_coord_info
 from dascore.utils.time import to_int
 
 # Keys not counted as true kwargs for determining if patch is filtered/selected.
-_KWARG_NON_KEYS = {"file_version", "file_format", "path"}
+_KWARG_NON_KEYS = {"file_version", "file_format", "path", "source_patch_id"}
 
 
 # --- Functions for writing DASDAE format
@@ -67,6 +68,7 @@ def _save_array(data, name, group, h5):
     array_node = _create_or_squash_array(h5, group, name, data)
     array_node._v_attrs["is_datetime64"] = is_dt
     array_node._v_attrs["is_timedelta64"] = is_td
+    return array_node
 
 
 def _save_coords(patch, patch_group, h5):
@@ -77,7 +79,14 @@ def _save_coords(patch, patch_group, h5):
         # First save coordinate arrays
         data = coord.values
         save_name = f"_coord_{name}"
-        _save_array(data, save_name, patch_group, h5)
+        array_node = _save_array(data, save_name, patch_group, h5)
+        step = coord.step
+        if step is not None:
+            is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
+            array_node._v_attrs["step"] = to_int(step) if is_td else step
+            array_node._v_attrs["step_is_timedelta64"] = is_td
+        if coord.units is not None:
+            array_node._v_attrs["units"] = str(coord.units)
         # then save dimensions of coordinates
         save_name = f"_cdims_{name}"
         patch_group._v_attrs[save_name] = ",".join(dims)
@@ -107,8 +116,7 @@ def _get_attrs(patch_group):
         if isinstance(val, np.ndarray) and not val.shape:
             val = np.asarray([val])[0]
         out[key] = val
-    with suppress_warnings(DeprecationWarning):
-        return PatchAttrs(**out)
+    return out
 
 
 def _read_array(table_array):
@@ -121,6 +129,34 @@ def _read_array(table_array):
     return data
 
 
+def _translate_legacy_attrs(attrs):
+    """Normalize legacy DASDAE attr payloads to flat coord metadata."""
+    out = dict(attrs)
+    coords = out.pop("coords", {})
+    if hasattr(coords, "to_summary_dict"):
+        coords = coords.to_summary_dict()
+    for name, summary in coords.items():
+        if hasattr(summary, "to_summary"):
+            summary = summary.to_summary()
+        if hasattr(summary, "model_dump"):
+            summary = summary.model_dump()
+        if not isinstance(summary, dict):
+            continue
+        for field in ("units", "step"):
+            key = f"{name}_{field}"
+            value = summary.get(field)
+            if key not in out and value not in (None, ""):
+                out[key] = value
+    dims = out.get("dims", "")
+    dims = tuple(dims.split(",")) if isinstance(dims, str) else tuple(dims or ())
+    for name in dims:
+        old_name = f"d_{name}"
+        new_name = f"{name}_step"
+        if new_name not in out and old_name in out:
+            out[new_name] = out.pop(old_name)
+    return out
+
+
 def _get_coords(patch_group, dims, attrs2):
     """Get the coordinates from a patch group."""
     coord_dict = {}  # just store coordinates here
@@ -128,10 +164,14 @@ def _get_coords(patch_group, dims, attrs2):
     for coord in [x for x in patch_group if x.name.startswith("_coord_")]:
         name = coord.name.replace("_coord_", "")
         array = _read_array(coord)
+        units = getattr(coord._v_attrs, "units", None)
+        step = getattr(coord._v_attrs, "step", None)
+        if getattr(coord._v_attrs, "step_is_timedelta64", False):
+            step = np.timedelta64(step, "ns")
         coord = get_coord(
             data=array,
-            units=getattr(attrs2, f"{name}_units", None),
-            step=getattr(attrs2, f"{name}_step", None),
+            units=units or attrs2.get(f"{name}_units", None),
+            step=step if step is not None else attrs2.get(f"{name}_step", None),
         )
         coord_dict[name] = coord
     # associates coordinates with dimensions
@@ -158,9 +198,11 @@ def _get_dims(patch_group):
 
 def _read_patch(patch_group, **kwargs):
     """Read a patch group, return Patch."""
-    attrs = _get_attrs(patch_group)
+    attrs = _translate_legacy_attrs(_get_attrs(patch_group))
     dims = _get_dims(patch_group)
     coords = _get_coords(patch_group, dims, attrs)
+    _, attr_info = separate_coord_info(attrs, dims=dims)
+    attrs = PatchAttrs.from_dict(attr_info)
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
     # try except.
@@ -181,15 +223,13 @@ def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
     """Get the contents from each patch group."""
     out = []
     for group in h5.iter_nodes("/waveforms"):
-        contents = _get_patch_content_from_group(group)
-        # populate file info
-        contents["file_version"] = file_version
-        contents["file_format"] = file_format
-        contents["path"] = h5.filename
-        # suppressing warnings because old dasdae files will issue warning
-        # due to d_dim rather than dim_step. TODO fix test files in the future
-        with suppress_warnings(DeprecationWarning):
-            out.append(dc.PatchAttrs(**contents))
+        out.append(
+            _get_patch_content_from_group(
+                group,
+                file_version=file_version,
+                file_format=file_format,
+            )
+        )
     return out
 
 
@@ -203,7 +243,59 @@ def _kwargs_empty(kwargs) -> bool:
     return not bool(out)
 
 
-def _get_patch_content_from_group(group):
+def _read_array_sample(table_array, index):
+    """Read one array sample and restore datetime-like dtypes when needed."""
+    out = table_array[index]
+    if table_array._v_attrs["is_datetime64"]:
+        out = np.asarray([out]).view("datetime64[ns]")[0]
+    if table_array._v_attrs["is_timedelta64"]:
+        out = np.asarray([out]).view("timedelta64[ns]")[0]
+    return out
+
+
+def _get_coord_summary_from_node(coord_node, dims):
+    """Build a coord summary from a saved coord node without reading it all."""
+    units = getattr(coord_node._v_attrs, "units", None)
+    step = getattr(coord_node._v_attrs, "step", None)
+    if getattr(coord_node._v_attrs, "step_is_timedelta64", False):
+        step = np.timedelta64(step, "ns")
+    if (
+        step is None
+        and len(coord_node.shape) == 1
+        and coord_node.shape
+        and coord_node.shape[0] > 1
+    ):
+        data = _read_array(coord_node)
+        coord = get_coord(data=data, units=units)
+        return coord.to_summary(dims=dims)
+    if len(coord_node.shape) > 1:
+        data = _read_array(coord_node)
+        coord = get_coord(data=data, units=units, step=step)
+        return coord.to_summary(dims=dims)
+    coord_len = int(coord_node.shape[0]) if coord_node.shape else 0
+    if coord_len:
+        first = _read_array_sample(coord_node, 0)
+        if step is not None and coord_len > 1:
+            last = first + (step * (coord_len - 1))
+        else:
+            last = _read_array_sample(coord_node, coord_len - 1)
+        min_val, max_val = (first, last) if first <= last else (last, first)
+        dtype = str(np.asarray(first).dtype).split("[")[0]
+    else:
+        min_val = max_val = np.nan
+        dtype = str(coord_node.dtype).split("[")[0]
+    return CoordSummary.model_construct(
+        dtype=dtype,
+        min=min_val,
+        max=max_val,
+        step=step,
+        units=units,
+        dims=dims,
+        len=coord_len,
+    )
+
+
+def _get_patch_content_from_group(group, file_version="", file_format="DASDAE"):
     """Get patch content from a single node."""
     attrs = group._v_attrs
     out = {}
@@ -216,4 +308,24 @@ def _get_patch_content_from_group(group):
         out[new_key] = value
     # rename dims
     out["dims"] = out.pop("_dims")
-    return out
+    out = _translate_legacy_attrs(out)
+    dims = tuple(out["dims"].split(","))
+    legacy_coords, attr_info = separate_coord_info(out, dims=dims)
+    coord_map = {}
+    for name, summary in legacy_coords.items():
+        if {"min", "max"} <= set(summary):
+            coord_map[name] = CoordSummary(**summary)
+    for coord_node in [x for x in group if x.name.startswith("_coord_")]:
+        name = coord_node.name.replace("_coord_", "")
+        coord_dims = tuple(getattr(attrs, f"_cdims_{name}", "").split(","))
+        coord_map[name] = _get_coord_summary_from_node(coord_node, coord_dims)
+    data_nodes = [x for x in group if x.name == "data"]
+    dtype = str(data_nodes[0].dtype) if data_nodes else ""
+    return PatchSummary.model_construct(
+        attrs=PatchAttrs.from_dict(attr_info),
+        coords=coord_map,
+        dims=dims,
+        shape=(),
+        dtype=dtype,
+        source_patch_id=group._v_name,
+    )

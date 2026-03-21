@@ -28,7 +28,7 @@ def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
     path = tmp_path_factory.mktemp("out_of_order_index")
     spool = dc.spool(path)
     # sort patches by starttime
-    patch_list = sorted(random_spool, key=lambda x: x.attrs.time_min)
+    patch_list = sorted(random_spool, key=lambda x: x.summary.time_min)
     # write patches to disk out of order.
     patch_list[-1].io.write(path / "patch_3.h5", "dasdae")
     spool.update()
@@ -51,21 +51,12 @@ def one_directory_spool(one_file_dir):
 @register_func(DIRECTORY_SPOOLS)
 def non_distance_dir_spool(tmp_path_factory):
     """Create a directory with a single DAS file."""
-    # patch one simulates a patch that has time but no distance
+    # Simulate a patch that has time but no canonical distance coordinate.
     pa1 = dascore.examples.get_example_patch("random_das").rename_coords(
         distance="depth"
     )
-    # patch2 has neither time nor distance but time in attrs.
-    pa2 = (
-        dascore.examples.get_example_patch("random_das")
-        .update_attrs(time_min=pa1.attrs.time_max)
-        .rename_coords(time="timey", distance="depth")
-    )
-    coord = pa2.get_coord("timey")
-    pa2 = pa2.update_attrs(time_min=coord.min(), time_max=coord.max())
-    spool = dc.spool([pa1, pa2])
     path = tmp_path_factory.mktemp("no_distance_spool")
-    dascore.examples.spool_to_directory(spool, path)
+    dc.write(pa1, path / "patch_1.h5", "dasdae")
     return dc.spool(path).update()
 
 
@@ -102,6 +93,17 @@ class TestDirectorySpoolBasics:
         new = diverse_directory_spool.select(station="big_gaps")
         contents = new.get_contents()
         assert (contents["station"] == "big_gaps").all()
+
+    def test_sorted_multi_patch_uses_source_patch_id(self, tmp_path):
+        """Sorted directory spool rows should reload the intended source patch."""
+        path = tmp_path / "directory"
+        path.mkdir()
+        patch_2 = dc.get_example_patch()
+        patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
+        dc.write(dc.spool([patch_1, patch_2]), path / "multi_patch.h5", "dasdae")
+        spool = DirectorySpool(path).update().sort("time")
+        patch = spool[0]
+        assert patch.summary.time_min == patch_2.summary.time_min
 
 
 class TestDirectoryIndex:
@@ -222,8 +224,8 @@ class TestSelect:
         assert (df["time_max"] <= new_max).all()
         # as well as the patches produced
         for patch in spool:
-            assert patch.attrs["time_min"] >= new_min
-            assert patch.attrs["time_max"] <= new_max
+            assert patch.summary["time_min"] >= new_min
+            assert patch.summary["time_max"] <= new_max
 
     def test_sub_select_tag_equals(self, basic_file_spool, spool_tag):
         """Ensure selecting stations works."""
@@ -255,10 +257,10 @@ class TestSelect:
         assert (new_content["time_max"] <= new_max).all()
         # then check patches
         for patch in out:
-            attrs = patch.attrs
-            assert attrs["network"] == "das2"
-            assert attrs["tag"].startswith("ran")
-            assert attrs["time_max"] <= new_max
+            summary = patch.summary
+            assert patch.attrs["network"] == "das2"
+            assert patch.attrs["tag"].startswith("ran")
+            assert summary["time_max"] <= new_max
         # ensure raises when selecting off the end of the spool
         with pytest.raises(IndexError):
             out[len(new_content)]
@@ -270,7 +272,7 @@ class TestSelect:
         spool1 = basic_file_spool.select(time=(None, dt))
         spool2 = basic_file_spool.select(time=(None, time_str))
         for pa1, pa2 in zip(spool1, spool2):
-            assert pa1.attrs["time_max"] == pa2.attrs["time_max"]
+            assert pa1.summary["time_max"] == pa2.summary["time_max"]
 
     def test_select_non_zero_index(self, diverse_directory_spool):
         """
@@ -295,8 +297,8 @@ class TestSelect:
     def test_select_correct_history_str(self, diverse_directory_spool):
         """Ensure no history string is added for selecting. See #142/#147."""
         spool = diverse_directory_spool
-        t1 = spool[0].attrs.time_min
-        dt = spool[0].attrs.time_step
+        t1 = spool[0].summary.time_min
+        dt = spool[0].summary.time_step
         selected_spool = spool.select(time=(t1, t1 + 30 * dt))
         patch = selected_spool[0]
         history = patch.attrs.history
@@ -348,9 +350,9 @@ class TestBasicChunk:
         assert len(new) == 1
         patch = new[0]
         content = spool.get_contents()
-        assert patch.attrs.time_min == content["time_min"].min()
-        assert patch.attrs.time_max == content["time_max"].max()
-        assert patch.attrs.time_step == spool[0].attrs.time_step
+        assert patch.summary.time_min == content["time_min"].min()
+        assert patch.summary.time_max == content["time_max"].max()
+        assert patch.summary.time_step == spool[0].summary.time_step
 
     def test_chunk_out_of_order_index(self, dir_spool_index_out_of_order):
         """Ensure when the index isn't ordered chunk can still work."""
@@ -359,11 +361,11 @@ class TestBasicChunk:
         chunk = spool.chunk(time=time)
         for patch in chunk:
             assert isinstance(patch, dc.Patch)
-            dur = (patch.attrs.time_max - patch.attrs.time_min) / ONE_SECOND
+            dur = (patch.summary.time_max - patch.summary.time_min) / ONE_SECOND
             diff = np.abs(dur - time)
             # because we try to avoid overlaps, the segments can be up to 2
             # samples shorter than what was asked for. Maybe revisit this?
-            assert diff <= 2 * (patch.attrs.time_step / ONE_SECOND)
+            assert diff <= 2 * (patch.summary.time_step / ONE_SECOND)
 
     def test_chunk_redundant_index(self, directory_spool_redundant_index):
         """Ensure redundant indices are handled effectively with chunking"""
@@ -443,12 +445,12 @@ class TestFileSpoolIntegrations:
         )
         for patch in spool:
             assert isinstance(patch, dc.Patch)
-            attrs = patch.attrs
-            assert attrs["network"] == network
-            assert attrs["time_max"] <= endtime
-            patch_duration = (attrs["time_max"] - attrs["time_min"]) / ONE_SECOND
+            summary = patch.summary
+            assert patch.attrs["network"] == network
+            assert summary["time_max"] <= endtime
+            patch_duration = (summary["time_max"] - summary["time_min"]) / ONE_SECOND
             diff = patch_duration - duration
-            assert abs(diff) <= 1.5 * attrs["time_step"] / ONE_SECOND
+            assert abs(diff) <= 1.5 * summary["time_step"] / ONE_SECOND
 
     def test_chunk_select(self, dir_spool_index_out_of_order):
         """Ensure chunking can be performed first, then selecting."""
@@ -473,7 +475,7 @@ class TestFileSpoolIntegrations:
         # str should work
         assert str(non_distance_dir_spool)
         contents = non_distance_dir_spool.get_contents()
-        assert len(contents) == 2
+        assert len(contents) == 1
         for patch in non_distance_dir_spool:
             assert isinstance(patch, dc.Patch)
 

@@ -75,7 +75,7 @@ class TestApplyUfunc:
         """Ensure un-alignable coords returns degenerate patch."""
         time = random_patch.get_coord("time")
         new_time = time.max() + time.step
-        new = random_patch.update_attrs(time_min=new_time)
+        new = random_patch.update_coords(time_min=new_time)
         out = apply_ufunc(np.multiply, new, random_patch)
         assert 0 in set(out.shape)
         assert out.data.size == 0

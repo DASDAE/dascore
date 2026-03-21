@@ -61,7 +61,7 @@ class TestTaperBasics:
 
     def test_time_dt_unchanged(self, time_tapered_patch, random_patch):
         """Ensure each taper type runs."""
-        attrs1, attrs2 = random_patch.attrs, time_tapered_patch.attrs
+        attrs1, attrs2 = random_patch.summary, time_tapered_patch.summary
         assert attrs1.time_units == attrs2.time_units
         assert attrs1.time_step == attrs2.time_step
 

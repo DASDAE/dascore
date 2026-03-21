@@ -101,6 +101,8 @@ class CoordSummary(DascoreBaseModel):
     max: min_max_type
     step: step_type | None = None
     units: UnitQuantity | None = None
+    dims: tuple[str, ...] = ()
+    len: int | None = None
 
     @model_serializer(when_used="json")
     def ser_model(self) -> dict[str, str]:
@@ -737,6 +739,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             step=self.step,
             dtype=self.dtype,
             units=self.units,
+            dims=dims,
+            len=len(self),
         )
 
     def update(self, **kwargs):
@@ -1073,6 +1077,7 @@ class CoordPartial(BaseCoord):
             step=np.nan,
             dtype=self.dtype,
             units=None,
+            dims=dims,
         )
 
 

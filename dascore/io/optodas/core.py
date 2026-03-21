@@ -6,6 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
+from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.models import UnitQuantity, UTF8Str
@@ -41,17 +42,19 @@ class OptoDASV8(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
         """Scan a OptoDAS file, return summary information about the file's contents."""
-        file_version = _get_opto_das_version_str(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
-        attrs = _get_opto_das_attrs(resource)
-        attrs.update(extras)
-        return [OptoDASPatchAttrs(**attrs)]
+        attrs, coords = _get_opto_das_attrs(resource)
+        attrs = OptoDASPatchAttrs.from_dict(attrs)
+        return [
+            PatchSummary.model_construct(
+                attrs=attrs,
+                coords=coords.to_summary_dict(),
+                dims=coords.dims,
+                shape=coords.shape,
+                dtype=str(resource["data"].dtype),
+            )
+        ]
 
     def read(
         self,

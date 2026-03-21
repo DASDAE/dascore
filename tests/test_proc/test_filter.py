@@ -77,7 +77,7 @@ class TestPassFilterChecks:
 
     def test_high_time_raises(self, random_patch):
         """Ensure too high freq band in time axis raises."""
-        nyquest = 0.5 / (random_patch.attrs.time_step / dc.to_timedelta64(1))
+        nyquest = 0.5 / (random_patch.coords["time"].step / dc.to_timedelta64(1))
         hz = dc.get_quantity("Hz")
         filt = (1 * hz, nyquest * 1.1 * hz)
         match = "possible filter bounds are"

@@ -164,6 +164,15 @@ class TestHDFPatchIndexManager:
         meta = index._read_metadata()
         assert meta is not None
 
+    def test_encode_table_skips_missing_encoded_columns(self, index_manager):
+        """Missing encoder columns should be ignored safely."""
+        df = dc.scan_to_df(dc.get_example_spool())
+        index_manager._column_encoders = dict(index_manager._column_encoders) | {
+            "missing_column": lambda x: x
+        }
+        out = index_manager.encode_table(df.copy(), path=None)
+        assert "path" in out.columns
+
 
 class TestHDFReaders:
     """Tests for HDF5 readers."""

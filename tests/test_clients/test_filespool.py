@@ -6,6 +6,7 @@ import pytest
 
 import dascore as dc
 from dascore.clients.filespool import FileSpool
+from dascore.exceptions import PatchAttributeError
 from dascore.utils.hdf5 import HDFPatchIndexManager
 
 
@@ -53,10 +54,30 @@ class TestBasic:
     def test_chunk(self, terra15_file_spool):
         """Ensure chunking along time axis works with FileSpool."""
         spool = terra15_file_spool
-        attrs = spool[0].attrs
-        duration = attrs.time_max - attrs.time_min
+        summary = spool[0].summary
+        duration = summary.time_max - summary.time_min
         dt = duration / 3
         spool = terra15_file_spool.chunk(time=dt, keep_partial=True)
         assert len(spool) == 3
         for patch in spool:
             assert isinstance(patch, dc.Patch)
+
+    def test_sorted_multi_patch_uses_source_patch_id(self, tmp_path):
+        """Sorting should not change which source patch gets reloaded."""
+        path = tmp_path / "multi_patch.h5"
+        patch_2 = dc.get_example_patch()
+        patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
+        dc.write(dc.spool([patch_1, patch_2]), path, "dasdae", file_version="1")
+        spool = FileSpool(path).sort("time")
+        patch = spool[0]
+        assert patch.summary.time_min == patch_2.summary.time_min
+
+    def test_multi_patch_without_source_patch_id_raises(self, tmp_path):
+        """Multi-patch reload should fail instead of guessing from row index."""
+        path = tmp_path / "multi_patch.h5"
+        spool = dc.examples.get_example_spool("random_das", length=2)
+        dc.write(spool, path, "dasdae", file_version="1")
+        file_spool = FileSpool(path)
+        kwargs = {"path": str(path), "file_format": "DASDAE", "file_version": "1"}
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            file_spool._load_patch(kwargs)

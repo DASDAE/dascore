@@ -82,14 +82,25 @@ class TestG1GetFormat:
 class TestG1Scan:
     """Tests for determining g1 coords attributes."""
 
-    def test_scan(self, g1_path):
-        """Ensure attrs can be extracted from G1 files."""
+    def test_raw_scan_excludes_source_metadata(self, g1_path):
+        """Direct G1 scan should return patch-only metadata."""
         g1 = FebusG1CSV1()
         attrs = g1.scan(g1_path)
         assert len(attrs) == 1
         attr = attrs[0]
-        assert isinstance(attr, dc.PatchAttrs)
-        assert str(g1_path) == attr.path
+        assert isinstance(attr, dc.PatchSummary)
+        assert not attr.path
+        assert not attr.file_format
+        assert not attr.file_version
+
+    def test_public_scan_adds_source_metadata(self, g1_path):
+        """Public scan should attach reload metadata for G1 files."""
+        g1 = FebusG1CSV1()
+        attrs = dc.scan(g1_path)
+        assert len(attrs) == 1
+        attr = attrs[0]
+        assert isinstance(attr, dc.PatchSummary)
+        assert str(g1_path) == str(attr.path)
         assert attr.file_format == g1.name
         assert attr.file_version == g1.version
 

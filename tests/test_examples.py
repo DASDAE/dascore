@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.examples as dc_examples
 from dascore.examples import EXAMPLE_PATCHES
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.time import to_float
@@ -34,6 +35,26 @@ class TestGetExamplePatch:
         """Ensure the registered example patches can all be loaded."""
         patch = dc.get_example_patch(name)
         assert isinstance(patch, dc.Patch)
+
+    def test_file_backed_examples_use_direct_read(self, monkeypatch):
+        """File-backed examples should not depend on FileSpool patch resolution."""
+        patch = dc.get_example_patch()
+
+        def _fetch(_name):
+            return "ignored-path"
+
+        def _read(_path):
+            return [patch]
+
+        def _spool(_path):
+            raise AssertionError("file-backed examples should load via dc.read")
+
+        monkeypatch.setattr(dc_examples, "fetch", _fetch)
+        monkeypatch.setattr(dc_examples.dc, "read", _read)
+        monkeypatch.setattr(dc_examples.dc, "spool", _spool)
+
+        out = dc_examples.example_event_1()
+        assert isinstance(out, dc.Patch)
 
 
 class TestGetExampleSpool:

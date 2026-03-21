@@ -70,22 +70,18 @@ def _get_attr_dict(header):
     return out
 
 
-def _get_opto_das_attrs(fi) -> dict:
-    """Scan a OptoDAS file, return metadata."""
+def _get_opto_das_attrs(fi) -> tuple[dict, dascore.core.CoordManager]:
+    """Scan a OptoDAS file, return metadata and coordinates."""
     cm = _get_coord_manager(fi)
     attrs = _get_attr_dict(fi["header"])
-    attrs["coords"] = cm
-    return attrs
+    return attrs, cm
 
 
 def _read_opto_das(fi, distance=None, time=None, attr_cls=dc.PatchAttrs):
     """Read the OptoDAS values into a patch."""
-    attrs = _get_opto_das_attrs(fi)
+    attrs, coords = _get_opto_das_attrs(fi)
     data_node = fi["data"]
-    coords = attrs.pop("coords")
     cm, data = coords.select(array=data_node, distance=distance, time=time)
     if not data.size:
         return []
-    attrs["coords"] = cm.to_summary_dict()
-    attrs["dims"] = cm.dims
-    return [dc.Patch(data=data, coords=cm, attrs=attr_cls(**attrs))]
+    return [dc.Patch(data=data, coords=cm, attrs=attr_cls.from_dict(attrs))]

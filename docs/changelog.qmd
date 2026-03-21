@@ -1,3 +1,11 @@
 # Changelog
 
 The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes from one version to another.
+
+## Unreleased API Changes
+
+- `dc.scan(...)` now returns [`PatchSummary`](`dascore.PatchSummary`) objects rather than `PatchAttrs`.
+- Scan results carry metadata, coordinates, and source information without loading data. File-backed summaries contain enough source information for lazy reloads.
+- `Patch.attrs` now contains non-coordinate metadata only.
+- Coordinate summaries such as `time_min`, `time_max`, `distance_step`, and coordinate units are exposed through `Patch.summary`, not through `Patch.attrs`.
+- `Patch.attrs` and `PatchAttrs` no longer own coordinate summaries. Use [`PatchSummary`](`dascore.PatchSummary`) values exposed through `Patch.summary` for metadata views and coordinate APIs such as [`Patch.update_coords`](`dascore.Patch.update_coords`) for coordinate changes.

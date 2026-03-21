@@ -13,8 +13,7 @@ from dascore.utils.misc import suppress_warnings
 
 def _get_dim_label(patch, dim):
     """Create a label for the given dimension, including units if defined."""
-    attrs = patch.attrs
-    maybe_units = attrs.get(f"{dim}_units")
+    maybe_units = patch.get_coord(dim).units if dim in patch.coords else None
     unit_str = f"({get_quantity_str(maybe_units)})" if maybe_units else ""
     return str(dim) + unit_str
 
@@ -64,7 +63,7 @@ def _get_extents(dims_r, coords):
     # and we want first dim to go from top to bottom
     lims = {x: [] for x in dims_r}
     for dim in dims_r:
-        array = coords[dim]
+        array = coords.get_array(dim) if hasattr(coords, "get_array") else coords[dim]
         # Use nanmin/nanmax to handle NaN/NaT values in coordinates
         with suppress_warnings(RuntimeWarning):
             array_min = np.nanmin(array)

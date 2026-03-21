@@ -82,7 +82,7 @@ class TestProcessingBenchmarks:
         """Selecting on time/distance dimension"""
         patch = example_patch
         patch.select(distance=(100, 200))
-        t1 = patch.attrs["time_min"] + np.timedelta64(1, "s")
+        t1 = patch.get_coord("time").min() + np.timedelta64(1, "s")
         t2 = t1 + np.timedelta64(3, "s")
         patch.select(time=(None, t1))
         patch.select(time=(t1, None))

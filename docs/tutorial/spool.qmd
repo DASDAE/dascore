@@ -6,6 +6,8 @@ execute:
 
 Spools are containers/managers of [patches](patch.qmd). The spool interface is designed to manage a variety of data sources, including a group of patches loaded into memory, archives of local files, and a variety of remote resources.
 
+For file-backed spools, DASCore first scans metadata and coordinate summaries, then loads patch data only when you access a patch from the spool. This means methods like `get_contents()` work from patch summary metadata, while `spool[0]` or iteration materializes loaded patches.
+
 # Data Sources
 
 The simplest way to get the appropriate spool for a specified input is to use the [`spool`](`dascore.spool`) function, which knows about many different input types and returns an appropriate [`BaseSpool`](`dascore.core.spool.BaseSpool`) subclass instance.
@@ -101,6 +103,8 @@ for patch in spool:
 new_spool = spool[1:]
 ```
 
+For file-backed spools, indexing or iteration is the point where DASCore loads the underlying patch data. Metadata-only operations such as `get_contents()` and `select(...)` can usually run without loading full patch arrays.
+
 An array can also be used (just like numpy) to select/re-arrange spool contents. For example, a boolean array can be used to de-select patches:
 
 ```{python}
@@ -152,6 +156,8 @@ from IPython.display import display
 
 display(contents.drop(columns=['patch']))
 ```
+
+The columns returned by `get_contents()` come from the same patch summary metadata exposed by `Patch.summary`, so fields such as `time_min`, `time_max`, and `distance_step` are available without loading the underlying patch data. Source metadata such as `path`, `file_format`, and `source_patch_id` are also available for file-backed spools.
 
 # select
 

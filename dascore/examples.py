@@ -25,6 +25,11 @@ EXAMPLE_PATCHES = {}
 EXAMPLE_SPOOLS = {}
 
 
+def _load_example_patch_from_file(path: str | Path) -> dc.Patch:
+    """Load the first patch from an example file without FileSpool indirection."""
+    return dc.read(path)[0]
+
+
 @register_func(EXAMPLE_PATCHES, key="random_das")
 def random_patch(
     *,
@@ -73,36 +78,24 @@ def random_patch(
     # create attrs
     t1 = np.atleast_1d(np.datetime64(time_min))[0]
     d1 = np.atleast_1d(distance_min)
+    time_step = to_timedelta64(time_step)
     attrs = dict(
-        distance_step=distance_step,
-        time_step=to_timedelta64(time_step),
         category="DAS",
-        time_min=t1,
         network=network,
         station=station,
         tag=tag,
-        time_units="s",
-        distance_units="m",
     )
-    # need to pop out dim attrs if coordinates provided.
-    if time_array is not None:
-        attrs.pop("time_min")
-        # need to keep time_step if time_array is len 1 to get coord range
-        if len(time_array) > 1:
-            attrs.pop("time_step")
-    else:
+    if time_array is None:
         time_array = dascore.core.get_coord(
-            data=t1 + np.arange(array.shape[1]) * attrs["time_step"],
-            step=attrs["time_step"],
-            units=attrs["time_units"],
+            data=t1 + np.arange(array.shape[1]) * time_step,
+            step=time_step,
+            units="s",
         )
-    if dist_array is not None:
-        attrs.pop("distance_step")
-    else:
+    if dist_array is None:
         dist_array = dascore.core.get_coord(
-            data=d1 + np.arange(array.shape[0]) * attrs["distance_step"],
-            step=attrs["distance_step"],
-            units=attrs["distance_units"],
+            data=d1 + np.arange(array.shape[0]) * distance_step,
+            step=distance_step,
+            units="m",
         )
     coords = dict(distance=dist_array, time=time_array)
     # assemble and output.
@@ -181,9 +174,8 @@ def wacky_dim_coord_patch():
     time_ar = dc.to_datetime64(np.cumsum(random_state.random(1_000)))
     patch = random_patch(shape=shape, dist_array=dist_ar, time_array=time_ar)
     # check attrs
-    attrs = patch.attrs
-    assert pd.isnull(attrs.coords["time"].step)
-    assert pd.isnull(attrs.coords["time"].step)
+    time_coord = patch.coords.coord_map["time"]
+    assert pd.isnull(time_coord.step)
     return patch
 
 
@@ -299,7 +291,7 @@ def example_event_1():
     An induced event recorded on a borehole fiber  from @stanvek2022fracture.
     """
     path = fetch("example_dasdae_event_1.h5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_PATCHES, key="example_event_2")
@@ -308,7 +300,7 @@ def example_event_2():
     [`example_event_1`](`dascore.examples.example_event_1`) with pre-processing.
     """
     path = fetch("example_dasdae_event_1.h5")
-    patch = dc.spool(path)[0].update_attrs(data_type="strain_rate")
+    patch = _load_example_patch_from_file(path).update_attrs(data_type="strain_rate")
     # We convert time to relative time in seconds to match the figure in
     # the publication.
     delta_time = patch.coords.get_array("time") - patch.coords.min("time")
@@ -327,7 +319,7 @@ def deformation_rate_event_1():
     An event recorded in an underground mine by a Terra15 unit.
     """
     path = fetch("deformation_rate_event_1.hdf5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_PATCHES, key="forge_dss")
@@ -338,7 +330,7 @@ def forge_dss():
     https://gdr.openei.org/submissions/1565
     """
     path = fetch("neubrex_dss_forge.h5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_PATCHES, key="febus_dss_mine_tight")
@@ -346,7 +338,7 @@ def febus_dss_mine_1():
     """
     DSS file from a tight-buffered fiber at a mine with Febus interrogator
     """
-    return dc.spool(fetch("dss_ug_mine_tight.h5"))[0]
+    return _load_example_patch_from_file(fetch("dss_ug_mine_tight.h5"))
 
 
 @register_func(EXAMPLE_PATCHES, key="febus_dss_mine_loose")
@@ -354,7 +346,7 @@ def febus_dss_mine_2():
     """
     DSS file from a loose-buffered fiber at a mine with Febus interrogator
     """
-    return dc.spool(fetch("dss_ug_mine_loose.h5"))[0]
+    return _load_example_patch_from_file(fetch("dss_ug_mine_loose.h5"))
 
 
 @register_func(EXAMPLE_PATCHES, key="forge_dts")
@@ -365,7 +357,7 @@ def forge_dts():
     https://gdr.openei.org/submissions/1565
     """
     path = fetch("neubrex_dts_forge.h5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_PATCHES, key="nd_patch")
@@ -515,16 +507,10 @@ def delta_patch(
 
         coords = {"distance": dist_coord, "time": time_coord}
         attrs = dict(
-            time_min=t0,
-            time_step=time_step_td,
-            distance_min=distance_min,
-            distance_step=distance_step,
             category="DAS",
             network="",
             station="",
             tag="delta",
-            time_units="s",
-            distance_units="m",
         )
 
         # Depending on the selected dimension, place a line of ones at the midpoint
@@ -587,8 +573,8 @@ def random_spool(time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), **k
     for _ in range(length):
         patch = random_patch(time_min=time_min, **kwargs)
         out.append(patch)
-        diff = to_timedelta64(time_gap) + patch.attrs.coords["time"].step
-        time_min = patch.attrs["time_max"] + diff
+        diff = to_timedelta64(time_gap) + patch.coords.step("time")
+        time_min = patch.coords.max("time") + diff
     return dc.spool(out)
 
 
@@ -623,7 +609,7 @@ def diverse_spool():
     spool_overlaps = random_spool(
         time_gap=-np.timedelta64(10, "ms"), station="overlaps"
     )
-    time_step = spool_big_gaps[0].attrs.coords["time"].step
+    time_step = spool_big_gaps[0].coords.step("time")
     dt = to_timedelta64(time_step / np.timedelta64(1, "s"))
     spool_small_gaps = random_spool(time_gap=dt, station="smallg")
     spool_way_late = random_spool(

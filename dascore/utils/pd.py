@@ -425,7 +425,13 @@ def _model_list_to_df(mod_list: Sequence[dc.PatchAttrs], exclude=None) -> pd.Dat
 
     Optionally, exclude certain columns
     """
-    df = pd.DataFrame([x.flat_dump(exclude=exclude) for x in mod_list])
+    records = []
+    for item in mod_list:
+        if hasattr(item, "flat_dump"):
+            records.append(item.flat_dump(exclude=exclude))
+        else:
+            records.append(item.summary.flat_dump(exclude=exclude))
+    df = pd.DataFrame(records)
     if "dims" in df.columns:
         df["dims"] = list_ser_to_str(df["dims"])
     return df
@@ -561,6 +567,9 @@ def dataframe_to_patch(
     # get data
     data = df.to_numpy()
     dims = _get_column_names(df, attrs)
+    if isinstance(attrs, Mapping):
+        attrs = dict(attrs)
+        attrs.pop("dims", None)
     coords = {dims[0]: df.index.to_numpy(), dims[1]: df.columns.to_numpy()}
     return dc.Patch(data=data, dims=dims, coords=coords, attrs=attrs)
 

@@ -77,7 +77,7 @@ def _get_cf_coords(hdf_fi, minimal=False) -> dc.core.CoordManager:
 
 def _get_cf_attrs(hdf_fi, coords=None, extras=None):
     """Get attributes for CF file."""
-    out = {"coords": coords or _get_cf_coords(hdf_fi)}
+    out = {}
     out.update(extras or {})
     for n1, n2 in _ROOT_ATTR_MAPPING.items():
         out[n1] = hdf_fi.attrs.get(n2)
@@ -85,4 +85,4 @@ def _get_cf_attrs(hdf_fi, coords=None, extras=None):
         out[n1] = getattr(hdf_fi.get("das", {}), "attrs", {}).get(n2)
     for n1, n2 in _CRS_MAPPING.items():
         out[n1] = getattr(hdf_fi.get("crs", {}), "attrs", {}).get(n2)
-    return dc.PatchAttrs(**out)
+    return dc.PatchAttrs.from_dict(out)

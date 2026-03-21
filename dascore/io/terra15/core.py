@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import timeable_types
+from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
@@ -35,15 +36,10 @@ class Terra15FormatterV4(FiberIO):
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
         """Scan a terra15 v2 file, return summary information."""
-        version, data_node = _get_version_data_node(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(version),
-        }
-        return _scan_terra15(resource, data_node, extras)
+        _version, data_node = _get_version_data_node(resource)
+        return _scan_terra15(resource, data_node)
 
     def read(
         self,
