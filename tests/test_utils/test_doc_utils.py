@@ -88,6 +88,15 @@ class TestGetPluginTable:
         assert "zug" in df["namespace"].values
         assert "derzug" in df["package_name"].values
 
+    def test_empty_registry_returns_empty_dataframe(self, monkeypatch, tmp_path):
+        """An empty registry directory returns a DataFrame with the correct columns."""
+        import dascore.utils.namespace as ns_module
+
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        df = get_plugin_table()
+        assert list(df.columns) == ["namespace", "package_name", "package_url"]
+        assert df.empty
+
 
 class TestObjToDocDF:
     """Tests for generating documentation dataframes."""
