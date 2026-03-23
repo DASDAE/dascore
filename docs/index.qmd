@@ -14,9 +14,9 @@ Version-specific documentation builds are attached to the [release pages](https:
 DASCore is a Python library for distributed acoustic sensing (DAS). It provides:
 
 1. IO support for [many DAS data formats](supported_formats.qmd)
-2. Plugin support for [known third-party namespaces](supported_plugins.qmd)
-3. Common processing routines
-4. Basic visualizations
+2. Common processing routines
+3. Basic visualizations
+4. Plugin support for [known third-party namespaces](supported_plugins.qmd)
 
 :::{.callout-note}
 DASCore is part of the [DAS Data Analysis Ecosystem (DASDAE)](https://dasdae.org). 
