@@ -292,6 +292,23 @@ class TestPluginRegistry:
             inst.cool_ns
         assert str(exc_info.value) == msg
 
+    def test_getattr_plugin_hit_hasattr_returns_false(
+        self, _clear_registry_cache, monkeypatch, tmp_path
+    ):
+        """Hasattr returns False for a registered-but-uninstalled namespace."""
+        csv_path = tmp_path / "ParentClass.csv"
+        df = pd.DataFrame(
+            {
+                "package_name": ["coolpkg"],
+                "package_url": ["https://example.com/coolpkg"],
+                "namespace": ["cool_ns"],
+            }
+        )
+        df.to_csv(csv_path, index=False)
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        inst = ParentClass()
+        assert not hasattr(inst, "cool_ns")
+
     def test_getattr_unknown_attr_raises_default_error(
         self, _clear_registry_cache, monkeypatch, tmp_path
     ):
