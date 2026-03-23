@@ -19,6 +19,7 @@ if frames:
     combined = (
         pd.concat(frames, ignore_index=True)
         .drop_duplicates(subset="namespace")
+        .sort_values("namespace")
         [["namespace", "package_name", "package_url"]]
     )
     combined["package_name"] = combined.apply(
