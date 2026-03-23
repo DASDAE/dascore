@@ -11,7 +11,7 @@ from dascore.examples import EXAMPLE_PATCHES
 from dascore.utils.docs import (
     compose_docstring,
     format_dtypes,
-    get_plugin_table_str,
+    get_plugin_table,
     objs_to_doc_df,
 )
 
@@ -79,14 +79,14 @@ class TestDocsting:
         assert len(set(white_space_counts)) == 1
 
 
-class TestGetPluginTableStr:
-    """Tests for get_plugin_table_str."""
+class TestGetPluginTable:
+    """Tests for get_plugin_table."""
 
     def test_contains_registered_namespace(self):
-        """Registered namespaces should appear in the table string."""
-        out = get_plugin_table_str()
-        assert "zug" in out
-        assert "derzug" in out
+        """Registered namespaces should appear in the returned DataFrame."""
+        df = get_plugin_table()
+        assert "zug" in df["namespace"].values
+        assert "derzug" in df["package_name"].values
 
 
 class TestObjToDocDF:
