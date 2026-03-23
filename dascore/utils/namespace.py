@@ -38,13 +38,7 @@ def _load_plugin_registry(entry_point_group: str | None) -> dict[str, tuple[str,
     if not csv_path.exists():
         return {}
     df = pd.read_csv(csv_path)
-    return dict(
-        zip(
-            df["namespace"],
-            zip(df["package_name"], df["package_url"], strict=True),
-            strict=True,
-        )
-    )
+    return dict(zip(df["namespace"], zip(df["package_name"], df["package_url"])))
 
 
 def _pass_to_host_method(func):

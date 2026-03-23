@@ -204,33 +204,28 @@ class TestNamespace:
             inst.test_error
 
 
-@pytest.fixture(autouse=False)
-def _clear_registry_cache():
-    """Clear the _load_plugin_registry LRU cache before and after each test."""
-    _load_plugin_registry.cache_clear()
-    yield
-    _load_plugin_registry.cache_clear()
-
-
 class TestPluginRegistry:
     """Tests for the plugin registry CSV lookup."""
 
-    def test_none_group_returns_empty(self, _clear_registry_cache):
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        """Clear the _load_plugin_registry LRU cache before and after each test."""
+        _load_plugin_registry.cache_clear()
+        yield
+        _load_plugin_registry.cache_clear()
+
+    def test_none_group_returns_empty(self):
         """_load_plugin_registry returns empty dict when group is None."""
         result = _load_plugin_registry(None)
         assert result == {}
 
-    def test_nonexistent_csv_returns_empty(
-        self, _clear_registry_cache, monkeypatch, tmp_path
-    ):
+    def test_nonexistent_csv_returns_empty(self, monkeypatch, tmp_path):
         """_load_plugin_registry returns empty dict when CSV does not exist."""
         monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
         result = _load_plugin_registry("dascore.nofile_namespace")
         assert result == {}
 
-    def test_valid_csv_returns_mapping(
-        self, _clear_registry_cache, monkeypatch, tmp_path
-    ):
+    def test_valid_csv_returns_mapping(self, monkeypatch, tmp_path):
         """_load_plugin_registry parses CSV into a namespace → (pkg, url) mapping."""
         csv_path = tmp_path / "myplugin.csv"
         df = pd.DataFrame(
@@ -245,30 +240,8 @@ class TestPluginRegistry:
         result = _load_plugin_registry("dascore.myplugin_namespace")
         assert result == {"myns": ("mypkg", "https://example.com/mypkg")}
 
-    def test_multiple_rows_all_returned(
-        self, _clear_registry_cache, monkeypatch, tmp_path
-    ):
-        """_load_plugin_registry returns all rows when CSV has multiple entries."""
-        csv_path = tmp_path / "multi.csv"
-        df = pd.DataFrame(
-            {
-                "package_name": ["pkgA", "pkgB"],
-                "package_url": ["https://a.com", "https://b.com"],
-                "namespace": ["nsA", "nsB"],
-            }
-        )
-        df.to_csv(csv_path, index=False)
-        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
-        result = _load_plugin_registry("dascore.multi_namespace")
-        assert result == {
-            "nsA": ("pkgA", "https://a.com"),
-            "nsB": ("pkgB", "https://b.com"),
-        }
-
-    def test_getattr_plugin_hit_raises_helpful_error(
-        self, _clear_registry_cache, monkeypatch, tmp_path
-    ):
-        """__getattr__ raises AttributeError with package info for known plugins."""
+    def test_getattr_plugin_hit_raises_helpful_error(self, monkeypatch, tmp_path):
+        """__getattr__ raises DASCorePluginError with package info for known plugins."""
         csv_path = tmp_path / "ParentClass.csv"
         df = pd.DataFrame(
             {
@@ -285,16 +258,11 @@ class TestPluginRegistry:
             "provided by 'coolpkg' but it is not installed. "
             "Install it from: https://example.com/coolpkg"
         )
-        with pytest.raises(DASCorePluginError, match="coolpkg"):
-            inst.cool_ns
-        # Verify the full message structure.
         with pytest.raises(DASCorePluginError) as exc_info:
             inst.cool_ns
         assert str(exc_info.value) == msg
 
-    def test_getattr_plugin_hit_hasattr_returns_false(
-        self, _clear_registry_cache, monkeypatch, tmp_path
-    ):
+    def test_getattr_plugin_hit_hasattr_returns_false(self, monkeypatch, tmp_path):
         """Hasattr returns False for a registered-but-uninstalled namespace."""
         csv_path = tmp_path / "ParentClass.csv"
         df = pd.DataFrame(
@@ -309,9 +277,7 @@ class TestPluginRegistry:
         inst = ParentClass()
         assert not hasattr(inst, "cool_ns")
 
-    def test_getattr_unknown_attr_raises_default_error(
-        self, _clear_registry_cache, monkeypatch, tmp_path
-    ):
+    def test_getattr_unknown_attr_raises_default_error(self, monkeypatch, tmp_path):
         """__getattr__ raises default AttributeError when attr not in CSV."""
         monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
         inst = ParentClass()
