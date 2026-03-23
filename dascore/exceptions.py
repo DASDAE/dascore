@@ -109,3 +109,7 @@ class UnitError(ValueError, DASCoreError):
 
 class AttributeMergeError(ValueError, DASCoreError):
     """Raised when something is wrong with combining attributes."""
+
+
+class DASCorePluginError(ValueError, DASCoreError):
+    """Raised when something is wrong with plugins."""
