@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 import dascore.utils.namespace as ns_module
+from dascore.exceptions import DASCorePluginError
 from dascore.utils.namespace import (
     NamespaceOwner,
     _load_plugin_registry,
@@ -280,14 +281,14 @@ class TestPluginRegistry:
         monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
         inst = ParentClass()
         msg = (
-            "ParentClass has no attribute 'cool_ns'. "
-            "It is provided by the 'coolpkg' package. "
+            "ParentClass has a registered namespace of 'cool_ns' "
+            "provided by 'coolpkg' but it is not installed. "
             "Install it from: https://example.com/coolpkg"
         )
-        with pytest.raises(AttributeError, match="coolpkg"):
+        with pytest.raises(DASCorePluginError, match="coolpkg"):
             inst.cool_ns
         # Verify the full message structure.
-        with pytest.raises(AttributeError) as exc_info:
+        with pytest.raises(DASCorePluginError) as exc_info:
             inst.cool_ns
         assert str(exc_info.value) == msg
 
