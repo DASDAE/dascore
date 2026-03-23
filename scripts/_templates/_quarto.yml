@@ -79,6 +79,9 @@ website:
         - text: Formats
           href: supported_formats.qmd
 
+        - text: Plugins
+          href: supported_plugins.qmd
+
         - text: Changelog
           href: changelog.qmd
 

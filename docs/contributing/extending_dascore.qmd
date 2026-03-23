@@ -100,6 +100,25 @@ my_ext = "dascore_extra.patch_namespace:MyPatchNamespace"
 
 After installation, DASCore loads the namespace the first time `patch.my_ext` is accessed.
 
+### Registering your plugin with DASCore
+
+Once your package is published, consider opening a pull request to [DASCore](https://github.com/DASDAE/dascore) to add it to the plugin registry. This lets users see a helpful message pointing to your package when they try to use your namespace without having it installed.
+
+Add a row to `dascore/plugin_registry/patch.csv` (or `spool.csv` for a spool namespace):
+
+```
+package_name,package_url,namespace
+dascore-extra,https://github.com/yourorg/dascore-extra,my_ext
+```
+
+With that row in place, `patch.my_ext` raises a descriptive error for users who have not yet installed your package:
+
+```
+DASCorePluginError: Patch has a registered namespace of 'my_ext' provided by
+'dascore-extra' but it is not installed. Install it from:
+https://github.com/yourorg/dascore-extra
+```
+
 ### Spool namespaces
 
 Spool namespaces use the same pattern. The only changes are:

@@ -1,0 +1,19 @@
+---
+title: Supported Third-Party Plugins
+execute:
+    warning: false
+---
+
+Known third-party packages that provide namespaces for DASCore's `Patch` and `Spool` objects.
+
+```{python}
+#| echo: false
+#| output: asis
+from dascore.utils.docs import get_plugin_table
+
+df = get_plugin_table()
+df["package_name"] = df.apply(
+    lambda r: f"[{r['package_name']}]({r['package_url']})", axis=1
+)
+print(df[["namespace", "package_name"]].to_markdown(index=False, stralign="center") + "\n: {.striped}")
+```

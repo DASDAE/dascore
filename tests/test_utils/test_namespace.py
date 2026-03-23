@@ -5,10 +5,14 @@ from __future__ import annotations
 import warnings
 from typing import ClassVar
 
+import pandas as pd
 import pytest
 
+import dascore.utils.namespace as ns_module
+from dascore.exceptions import DASCorePluginError
 from dascore.utils.namespace import (
     NamespaceOwner,
+    _load_plugin_registry,
     _MethodNameSpace,
 )
 
@@ -192,3 +196,66 @@ class TestNamespace:
         assert CooperativeNamespace.hook_called
         out = CooperativeBase._registry["dascore.cooperative_test"]
         assert out["cooperative"] is CooperativeNamespace
+
+    def test_custom_attr_error_message(self):
+        """Ensure _namespace_attr_errors messages are raised verbatim."""
+        inst = ParentClass()
+        with pytest.raises(AttributeError, match="test_error emitted"):
+            inst.test_error
+
+
+class TestPluginRegistry:
+    """Tests for the plugin registry CSV lookup."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        """Clear the _load_plugin_registry LRU cache before and after each test."""
+        _load_plugin_registry.cache_clear()
+        yield
+        _load_plugin_registry.cache_clear()
+
+    @pytest.fixture()
+    def parent_class_registry(self, monkeypatch, tmp_path):
+        """Patch _PLUGIN_REGISTRY_DIR with a CSV for ParentClass containing cool_ns."""
+        df = pd.DataFrame(
+            {
+                "package_name": ["coolpkg"],
+                "package_url": ["https://example.com/coolpkg"],
+                "namespace": ["cool_ns"],
+            }
+        )
+        df.to_csv(tmp_path / "ParentClass.csv", index=False)
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        return ParentClass()
+
+    def test_none_group_returns_empty(self):
+        """_load_plugin_registry returns empty dict when group is None."""
+        result = _load_plugin_registry(None)
+        assert result == {}
+
+    def test_nonexistent_csv_returns_empty(self, monkeypatch, tmp_path):
+        """_load_plugin_registry returns empty dict when CSV does not exist."""
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        result = _load_plugin_registry("dascore.nofile_namespace")
+        assert result == {}
+
+    def test_getattr_plugin_hit_raises_helpful_error(self, parent_class_registry):
+        """__getattr__ raises DASCorePluginError with package info for known plugins."""
+        msg = (
+            "ParentClass has a registered namespace of 'cool_ns' "
+            "provided by 'coolpkg' but it is not installed. "
+            "Install it from: https://example.com/coolpkg"
+        )
+        with pytest.raises(DASCorePluginError) as exc_info:
+            parent_class_registry.cool_ns
+        assert str(exc_info.value) == msg
+        assert not hasattr(parent_class_registry, "cool_ns")
+
+    def test_getattr_unknown_attr_raises_default_error(self, monkeypatch, tmp_path):
+        """__getattr__ raises default AttributeError when attr not in CSV."""
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        inst = ParentClass()
+        with pytest.raises(
+            AttributeError, match="ParentClass has no attribute 'totally_unknown'"
+        ):
+            inst.totally_unknown

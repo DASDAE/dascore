@@ -8,7 +8,12 @@ import pandas as pd
 
 from dascore.core.attrs import PatchAttrs
 from dascore.examples import EXAMPLE_PATCHES
-from dascore.utils.docs import compose_docstring, format_dtypes, objs_to_doc_df
+from dascore.utils.docs import (
+    compose_docstring,
+    format_dtypes,
+    get_plugin_table,
+    objs_to_doc_df,
+)
 
 
 class TestFormatDtypes:
@@ -72,6 +77,25 @@ class TestDocsting:
         white_space_counts = [self.count_white_space(x) for x in list_lines]
         # all whitespace counts should be the same for the list lines.
         assert len(set(white_space_counts)) == 1
+
+
+class TestGetPluginTable:
+    """Tests for get_plugin_table."""
+
+    def test_contains_registered_namespace(self):
+        """Registered namespaces should appear in the returned DataFrame."""
+        df = get_plugin_table()
+        assert "zug" in df["namespace"].values
+        assert "derzug" in df["package_name"].values
+
+    def test_empty_registry_returns_empty_dataframe(self, monkeypatch, tmp_path):
+        """An empty registry directory returns a DataFrame with the correct columns."""
+        import dascore.utils.namespace as ns_module
+
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        df = get_plugin_table()
+        assert list(df.columns) == ["namespace", "package_name", "package_url"]
+        assert df.empty
 
 
 class TestObjToDocDF:
