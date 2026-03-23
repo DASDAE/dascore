@@ -1,0 +1,27 @@
+---
+title: Supported Third-Party Plugins
+execute:
+    warning: false
+---
+
+Known third-party packages that provide namespaces for DASCore's `Patch` and `Spool` objects.
+
+```{python}
+#| echo: false
+#| output: asis
+import pandas as pd
+from pathlib import Path
+
+registry_dir = Path("../dascore/plugin_registry")
+frames = []
+for csv_path in sorted(registry_dir.glob("*.csv")):
+    df = pd.read_csv(csv_path)
+    df.insert(0, "type", csv_path.stem.capitalize())
+    frames.append(df)
+
+if frames:
+    combined = pd.concat(frames, ignore_index=True)
+    print(combined.to_markdown(index=False, stralign="center") + "\n: {.striped}")
+else:
+    print("No third-party plugins registered yet.")
+```

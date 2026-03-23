@@ -5,10 +5,40 @@ from __future__ import annotations
 import functools
 import warnings
 from collections import defaultdict
+from pathlib import Path
 from typing import ClassVar
 
+import pandas as pd
+
+from dascore.exceptions import DASCorePluginError
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.plugins import maybe_load_entry_point
+
+_PLUGIN_REGISTRY_DIR = Path(__file__).parent.parent / "plugin_registry"
+
+
+@functools.cache
+def _load_plugin_registry(entry_point_group: str | None) -> dict[str, tuple[str, str]]:
+    """Load plugin registry CSV for the given entry point group.
+
+    Parameters
+    ----------
+    entry_point_group
+        The entry point group string (e.g. "dascore.patch_namespace").
+
+    Returns
+    -------
+    A mapping of namespace name to (package_name, package_url).
+    """
+    if entry_point_group is None:
+        return {}
+    # "dascore.patch_namespace" -> "patch"
+    stem = entry_point_group.split(".")[-1].replace("_namespace", "")
+    csv_path = _PLUGIN_REGISTRY_DIR / f"{stem}.csv"
+    if not csv_path.exists():
+        return {}
+    df = pd.read_csv(csv_path)
+    return dict(zip(df["namespace"], zip(df["package_name"], df["package_url"])))
 
 
 def _pass_to_host_method(func):
@@ -112,6 +142,17 @@ class NamespaceOwner:
             instance = registry[item](self)
             self.__dict__[item] = instance
             return instance
+
+        # Check plugin registry for a known third-party package that provides this.
+        plugin_registry = _load_plugin_registry(self._namespace_entry_point_group)
+        if item in plugin_registry:
+            package_name, package_url = plugin_registry[item]
+            msg = (
+                f"{self.__class__.__name__} has a registered namespace of '{item}' "
+                f"provided by '{package_name}' but it is not installed. "
+                f"Install it from: {package_url}"
+            )
+            raise DASCorePluginError(msg)
 
         # If that fails, see if there is anything specific for this name to raise.
         if item in self._namespace_attr_errors:
