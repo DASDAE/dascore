@@ -214,6 +214,20 @@ class TestPluginRegistry:
         yield
         _load_plugin_registry.cache_clear()
 
+    @pytest.fixture()
+    def parent_class_registry(self, monkeypatch, tmp_path):
+        """Patch _PLUGIN_REGISTRY_DIR with a CSV for ParentClass containing cool_ns."""
+        df = pd.DataFrame(
+            {
+                "package_name": ["coolpkg"],
+                "package_url": ["https://example.com/coolpkg"],
+                "namespace": ["cool_ns"],
+            }
+        )
+        df.to_csv(tmp_path / "ParentClass.csv", index=False)
+        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
+        return ParentClass()
+
     def test_none_group_returns_empty(self):
         """_load_plugin_registry returns empty dict when group is None."""
         result = _load_plugin_registry(None)
@@ -225,57 +239,17 @@ class TestPluginRegistry:
         result = _load_plugin_registry("dascore.nofile_namespace")
         assert result == {}
 
-    def test_valid_csv_returns_mapping(self, monkeypatch, tmp_path):
-        """_load_plugin_registry parses CSV into a namespace → (pkg, url) mapping."""
-        csv_path = tmp_path / "myplugin.csv"
-        df = pd.DataFrame(
-            {
-                "package_name": ["mypkg"],
-                "package_url": ["https://example.com/mypkg"],
-                "namespace": ["myns"],
-            }
-        )
-        df.to_csv(csv_path, index=False)
-        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
-        result = _load_plugin_registry("dascore.myplugin_namespace")
-        assert result == {"myns": ("mypkg", "https://example.com/mypkg")}
-
-    def test_getattr_plugin_hit_raises_helpful_error(self, monkeypatch, tmp_path):
+    def test_getattr_plugin_hit_raises_helpful_error(self, parent_class_registry):
         """__getattr__ raises DASCorePluginError with package info for known plugins."""
-        csv_path = tmp_path / "ParentClass.csv"
-        df = pd.DataFrame(
-            {
-                "package_name": ["coolpkg"],
-                "package_url": ["https://example.com/coolpkg"],
-                "namespace": ["cool_ns"],
-            }
-        )
-        df.to_csv(csv_path, index=False)
-        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
-        inst = ParentClass()
         msg = (
             "ParentClass has a registered namespace of 'cool_ns' "
             "provided by 'coolpkg' but it is not installed. "
             "Install it from: https://example.com/coolpkg"
         )
         with pytest.raises(DASCorePluginError) as exc_info:
-            inst.cool_ns
+            parent_class_registry.cool_ns
         assert str(exc_info.value) == msg
-
-    def test_getattr_plugin_hit_hasattr_returns_false(self, monkeypatch, tmp_path):
-        """Hasattr returns False for a registered-but-uninstalled namespace."""
-        csv_path = tmp_path / "ParentClass.csv"
-        df = pd.DataFrame(
-            {
-                "package_name": ["coolpkg"],
-                "package_url": ["https://example.com/coolpkg"],
-                "namespace": ["cool_ns"],
-            }
-        )
-        df.to_csv(csv_path, index=False)
-        monkeypatch.setattr(ns_module, "_PLUGIN_REGISTRY_DIR", tmp_path)
-        inst = ParentClass()
-        assert not hasattr(inst, "cool_ns")
+        assert not hasattr(parent_class_registry, "cool_ns")
 
     def test_getattr_unknown_attr_raises_default_error(self, monkeypatch, tmp_path):
         """__getattr__ raises default AttributeError when attr not in CSV."""
