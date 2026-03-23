@@ -97,6 +97,35 @@ def compose_docstring(**kwargs: str | Sequence[str]):
     return _wrap
 
 
+def get_plugin_table_str() -> str:
+    """
+    Return a markdown table string of registered third-party plugins.
+
+    Reads all CSV files in the plugin registry, deduplicates on namespace,
+    sorts alphabetically, and renders a single markdown table with the
+    namespace name and a hyperlinked package name.
+    """
+    from dascore.utils.namespace import _PLUGIN_REGISTRY_DIR
+
+    frames = [pd.read_csv(p) for p in sorted(_PLUGIN_REGISTRY_DIR.glob("*.csv"))]
+    if not frames:
+        return "No third-party plugins registered yet."
+    combined = (
+        pd.concat(frames, ignore_index=True)
+        .drop_duplicates(subset="namespace")
+        .sort_values("namespace")[["namespace", "package_name", "package_url"]]
+    )
+    combined["package_name"] = combined.apply(
+        lambda r: f"[{r['package_name']}]({r['package_url']})", axis=1
+    )
+    return (
+        combined[["namespace", "package_name"]].to_markdown(
+            index=False, stralign="center"
+        )
+        + "\n: {.striped}"
+    )
+
+
 def objs_to_doc_df(doc_dict, cross_reference=True):
     """
     Convert a dictionary of documentable entities to a pandas dataframe.

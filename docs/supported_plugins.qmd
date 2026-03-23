@@ -9,24 +9,6 @@ Known third-party packages that provide namespaces for DASCore's `Patch` and `Sp
 ```{python}
 #| echo: false
 #| output: asis
-import pandas as pd
-from pathlib import Path
-
-registry_dir = Path("../dascore/plugin_registry")
-frames = [pd.read_csv(p) for p in sorted(registry_dir.glob("*.csv"))]
-
-if frames:
-    combined = (
-        pd.concat(frames, ignore_index=True)
-        .drop_duplicates(subset="namespace")
-        .sort_values("namespace")
-        [["namespace", "package_name", "package_url"]]
-    )
-    combined["package_name"] = combined.apply(
-        lambda r: f"[{r['package_name']}]({r['package_url']})", axis=1
-    )
-    out = combined[["namespace", "package_name"]].to_markdown(index=False, stralign="center")
-    print(out + "\n: {.striped}")
-else:
-    print("No third-party plugins registered yet.")
+from dascore.utils.docs import get_plugin_table_str
+print(get_plugin_table_str())
 ```
