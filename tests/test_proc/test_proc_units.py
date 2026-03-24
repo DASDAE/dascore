@@ -29,7 +29,7 @@ class TestSetUnits:
             expected_quant = get_quantity(unit_str)
             coord = patch.get_coord(dim)
             new = patch.set_units(**{dim: unit_str})
-            value = getattr(new.summary, f"{dim}_units")
+            value = new.summary.get_coord_summary(dim).units
             # time shouldn't ever be a anything other than s
             if dtype_time_like(coord.dtype):
                 expected_quant = get_quantity("s")
@@ -46,7 +46,9 @@ class TestSetUnits:
         non_dims = set(cmap) - set(patch.dims)
         for coord_name in non_dims:
             new = patch.set_units(**{coord_name: unit_str})
-            assert getattr(new.summary, f"{coord_name}_units") == get_quantity(unit_str)
+            assert new.summary.get_coord_summary(coord_name).units == get_quantity(
+                unit_str
+            )
             # and the coord should be set
             coord = new.get_coord(coord_name)
             assert coord.units == get_quantity(unit_str)
@@ -56,7 +58,9 @@ class TestSetUnits:
         out = random_patch.set_units("m/s", distance="ft")
         assert isinstance(random_patch, dc.Patch)
         assert get_quantity(out.attrs.data_units) == get_quantity("m/s")
-        assert get_quantity(out.summary.distance_units) == get_quantity("ft")
+        assert get_quantity(
+            out.summary.get_coord_summary("distance").units
+        ) == get_quantity("ft")
 
     def test_remove_units(self, random_patch):
         """Ensure set coords can remove units."""
@@ -120,7 +124,9 @@ class TestConvertUnits:
         out = patch.convert_units("ft/s", distance="m")
         assert isinstance(random_patch, dc.Patch)
         assert get_quantity(out.attrs.data_units) == get_quantity("ft/s")
-        assert get_quantity(out.summary.distance_units) == get_quantity("m")
+        assert get_quantity(
+            out.summary.get_coord_summary("distance").units
+        ) == get_quantity("m")
 
 
 class TestSimplifyUnits:
@@ -144,5 +150,9 @@ class TestSimplifyUnits:
         assert isinstance(out, dc.Patch)
         # test attrs
         assert get_quantity(attrs.data_units) == get_quantity("m/s")
-        assert get_quantity(summary.time_units) == get_quantity("s")
-        assert get_quantity(summary.distance_units) == get_quantity("m")
+        assert get_quantity(summary.get_coord_summary("time").units) == get_quantity(
+            "s"
+        )
+        assert get_quantity(
+            summary.get_coord_summary("distance").units
+        ) == get_quantity("m")

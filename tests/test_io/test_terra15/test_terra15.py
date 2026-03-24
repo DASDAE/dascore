@@ -41,9 +41,9 @@ class TestTerra15:
         t1, t2 = file_t1 + new_dur, file_t1 + 2 * new_dur
         out = dc.read(terra15_v6_path, time=(t1, t2))[0]
         assert isinstance(out, dc.Patch)
-        summary = out.summary
-        assert summary.time_min >= t1
-        assert summary.time_max <= t2
+        time_summary = out.summary.get_coord_summary("time")
+        assert time_summary.min >= t1
+        assert time_summary.max <= t2
 
     def test_time_slice_no_snap(self, terra15_v6_path):
         """Ensure no snapping returns raw time."""
@@ -54,9 +54,9 @@ class TestTerra15:
         t1, t2 = file_t1 + new_dur, file_t1 + 2 * new_dur
         out = dc.read(terra15_v6_path, time=(t1, t2), snap_dims=False)[0]
         assert isinstance(out, dc.Patch)
-        summary = out.summary
-        assert summary.time_min >= t1
-        assert summary.time_max <= t2
+        time_summary = out.summary.get_coord_summary("time")
+        assert time_summary.min >= t1
+        assert time_summary.max <= t2
 
     def test_units(self, terra15_das_patch):
         """All units should be defined on terra15 patch."""

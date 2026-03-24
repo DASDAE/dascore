@@ -238,7 +238,7 @@ class TestBasicCoordManager:
         expected = (
             np.max(coord_array)
             - np.min(coord_array)
-            + random_patch.summary["time_step"]
+            + random_patch.get_coord("time").step
         )
         assert random_patch.coords.coord_range("time") == expected
 
@@ -1275,7 +1275,7 @@ class TestSnap:
     ):
         """Ensure snapping creates expected dt from merged df."""
         spool = memory_spool_small_dt_differences
-        expected_dt = get_middle_value([x.summary.time_step for x in spool])
+        expected_dt = get_middle_value([x.get_coord("time").step for x in spool])
         snapped = cm_dt_small_diff.snap()[0]
         assert snapped.coord_map["time"].step == expected_dt
 

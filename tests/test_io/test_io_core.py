@@ -392,8 +392,9 @@ class TestScan:
         summary = random_patch.summary
         assert len(out) == 1
         ser = out.iloc[0]
-        assert to_datetime64(ser["time_min"]) == to_datetime64(summary["time_min"])
-        assert to_datetime64(ser["time_max"]) == to_datetime64(summary["time_max"])
+        time_summary = summary.get_coord_summary("time")
+        assert to_datetime64(ser["time_min"]) == to_datetime64(time_summary.min)
+        assert to_datetime64(ser["time_max"]) == to_datetime64(time_summary.max)
 
     def test_scan_patch_returns_summary(self, random_patch):
         """Direct patch scan should normalize to a PatchSummary."""

@@ -369,7 +369,7 @@ class TestMergeCompatibleCoordsAttrs:
 
     def test_incompatible_coords(self, random_patch):
         """Ensure an incompatible error is raised for coords that don't match."""
-        new_time = random_patch.summary.time_max
+        new_time = random_patch.get_coord("time").max()
         new = random_patch.update_coords(time_min=new_time)
         match = "coordinates are not equal"
         with pytest.raises(IncompatiblePatchError, match=match):

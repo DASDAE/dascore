@@ -219,8 +219,8 @@ import dascore as dc
 patch = dc.get_example_patch()
 
 print(patch.attrs.tag)
-print(patch.summary.time_min)
-print(patch.summary.distance_step)
+print(patch.get_coord("time").min())
+print(patch.get_coord("distance").step)
 ```
 
 For tabular use, [`Patch.flat_dump`](`dascore.Patch.flat_dump`) returns a flat dictionary combining attrs with coordinate summary fields.

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
+from dascore.exceptions import PatchAttributeError
 
 
 @pytest.fixture(scope="class")
@@ -191,7 +192,9 @@ class TestMisc:
     def test_patch_summary_exposes_coord_summaries(self, random_patch_with_lat_lon):
         """Patch summary should expose coordinate summary accessors."""
         summary = random_patch_with_lat_lon.summary
-        assert summary.time_min == random_patch_with_lat_lon.coords.min("time")
+        assert summary.get_coord_summary(
+            "time"
+        ).min == random_patch_with_lat_lon.coords.min("time")
         assert (
             random_patch_with_lat_lon.summary.get_coord_summary("time")
             == random_patch_with_lat_lon.coords.to_summary_dict()["time"]
@@ -206,14 +209,14 @@ class TestUpdateAttrs:
         attrs = PatchAttrs.from_dict(random_attrs).update(tag="miles")
         assert attrs.tag == "miles"
 
-    def test_update_allows_coord_like_fields(self, random_attrs):
-        """Flat coordinate-like fields are now treated as plain attrs."""
-        out = PatchAttrs.from_dict(random_attrs).update(distance_units="miles")
-        assert out.distance_units == "miles"
+    def test_update_rejects_coord_like_fields(self, random_attrs):
+        """Flat coordinate-like fields should go through update_coords instead."""
+        with pytest.raises(PatchAttributeError, match="update_coords"):
+            PatchAttrs.from_dict(random_attrs).update(time_min=1)
 
     def test_update_rejects_nested_coords(self, random_patch):
         """Passing coords directly should fail."""
-        with pytest.raises(ValueError, match="no longer accepts coordinate metadata"):
+        with pytest.raises(PatchAttributeError, match="coordinate metadata"):
             PatchAttrs.from_dict(random_patch.attrs).update(coords=random_patch.coords)
 
     def test_update_ignores_dims(self, random_attrs):
@@ -242,4 +245,4 @@ class TestSeparateConstruction:
             coords={"time": coord, "distance": [0]},
             dims=("distance", "time"),
         )
-        assert patch.summary.time_min == coord.min()
+        assert patch.summary.get_coord_summary("time").min == coord.min()

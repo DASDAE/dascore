@@ -259,7 +259,7 @@ def brady_hs_das_dts_coords_path():
 def terra15_das_patch(terra15_das_example_path) -> Patch:
     """Read the terra15 data, return contained DataArray."""
     out = read(terra15_das_example_path, "terra15")[0]
-    attr_time = out.summary["time_max"]
+    attr_time = out.summary.get_coord_summary("time").max
     coortime_step = out.coords.coord_map["time"].max()
     assert attr_time == coortime_step
     return out
@@ -463,15 +463,16 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
     overlapping.
     """
     pa1 = random_patch
-    t2 = random_patch.summary["time_max"]
-    time_step = random_patch.summary["time_step"]
+    time_coord = random_patch.get_coord("time")
+    t2 = time_coord.max()
+    time_step = time_coord.step
 
     pa2 = random_patch.new(coords=random_patch.coords.update(time_min=t2 + time_step))
-    t3 = pa2.summary["time_max"]
+    t3 = pa2.get_coord("time").max()
 
     pa3 = pa2.new(coords=pa2.coords.update(time_min=t3 + time_step))
 
-    expectetime_step = pa3.summary["time_max"] - pa1.summary["time_min"]
+    expectetime_step = pa3.get_coord("time").max() - pa1.get_coord("time").min()
     actual_time = pa3.coords.max("time") - pa1.coords.min("time")
     assert expectetime_step == actual_time
     return dc.spool([pa2, pa1, pa3])
@@ -552,7 +553,7 @@ def memory_spool_small_dt_differences(random_spool):
     """Create a memory spool with slightly different time_steps."""
     out = []
     for num, patch in enumerate(random_spool):
-        dt = patch.summary.time_step + num * np.timedelta64(1, "ns")
+        dt = patch.get_coord("time").step + num * np.timedelta64(1, "ns")
         new = patch.new(coords=patch.coords.update(time_step=dt))
         out.append(new)
     spool = dc.spool(out)

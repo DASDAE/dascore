@@ -30,7 +30,10 @@ class TestProdMLSourcePatchId:
         spool = dc.read(prodml_fbe_path, source_patch_id=target.source_patch_id)
         assert len(spool) == 1
         assert "source_patch_id" not in spool[0].attrs.model_dump()
-        assert spool[0].summary.time_min == target.time_min
+        assert (
+            spool[0].summary.get_coord_summary("time").min
+            == target.get_coord_summary("time").min
+        )
 
     def test_read_multiple_source_patch_ids(self, prodml_fbe_path):
         """Reading by multiple source_patch_id values should return each match."""
@@ -38,7 +41,7 @@ class TestProdMLSourcePatchId:
         targets = [summaries[0].source_patch_id, summaries[1].source_patch_id]
         spool = dc.read(prodml_fbe_path, source_patch_id=targets)
         assert len(spool) == 2
-        assert {patch.summary.time_min for patch in spool} == {
-            summaries[0].time_min,
-            summaries[1].time_min,
+        assert {patch.summary.get_coord_summary("time").min for patch in spool} == {
+            summaries[0].get_coord_summary("time").min,
+            summaries[1].get_coord_summary("time").min,
         }

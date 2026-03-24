@@ -54,8 +54,8 @@ class TestBasic:
     def test_chunk(self, terra15_file_spool):
         """Ensure chunking along time axis works with FileSpool."""
         spool = terra15_file_spool
-        summary = spool[0].summary
-        duration = summary.time_max - summary.time_min
+        time_coord = spool[0].get_coord("time")
+        duration = time_coord.max() - time_coord.min()
         dt = duration / 3
         spool = terra15_file_spool.chunk(time=dt, keep_partial=True)
         assert len(spool) == 3
@@ -70,7 +70,7 @@ class TestBasic:
         dc.write(dc.spool([patch_1, patch_2]), path, "dasdae", file_version="1")
         spool = FileSpool(path).sort("time")
         patch = spool[0]
-        assert patch.summary.time_min == patch_2.summary.time_min
+        assert patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
     def test_multi_patch_without_source_patch_id_raises(self, tmp_path):
         """Multi-patch reload should fail instead of guessing from row index."""

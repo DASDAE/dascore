@@ -111,13 +111,13 @@ class TestInit:
     def test_start_time_inferred_from_dt64_coords(self, random_dt_coord):
         """Ensure the time_min and time_max attrs can be inferred from coord time."""
         patch = random_dt_coord
-        assert patch.summary["time_min"] == self.time1
+        assert patch.summary.get_coord_summary("time").min == self.time1
 
     def test_end_time_inferred_from_dt64_coords(self, random_dt_coord):
         """Ensure the time_min and time_max attrs can be inferred from coord time."""
         patch = random_dt_coord
         time = patch.coords.coord_map["time"].max()
-        assert patch.summary["time_max"] == time
+        assert patch.summary.get_coord_summary("time").max == time
 
     def test_init_from_array(self, random_patch):
         """Ensure a trace can be created from raw components; array, coords, attrs."""
@@ -136,7 +136,7 @@ class TestInit:
 
     def test_max_time_populated(self, random_patch):
         """Ensure the time_max is populated when not explicitly given."""
-        end_time = random_patch.summary["time_max"]
+        end_time = random_patch.summary.get_coord_summary("time").max
         assert not pd.isnull(end_time)
 
     def test_min_max_populated(self, random_patch):
@@ -235,9 +235,11 @@ class TestInit:
         scanned = dc.scan(path)
         target = scanned[1]
         assert target.source_patch_id
-        loaded = _load_patch_summary(target, time=(target.time_min, target.time_max))
-        assert loaded.summary.time_min == target.summary.time_min
-        assert loaded.summary.time_max == target.summary.time_max
+        time_summary = target.get_coord_summary("time")
+        loaded = _load_patch_summary(target, time=(time_summary.min, time_summary.max))
+        loaded_time_summary = loaded.summary.get_coord_summary("time")
+        assert loaded_time_summary.min == time_summary.min
+        assert loaded_time_summary.max == time_summary.max
 
     def test_load_patch_summary_requires_path_for_in_memory_summary(self, random_patch):
         """In-memory summaries cannot be reloaded without a source path."""
@@ -252,7 +254,7 @@ class TestInit:
             _load_patch_summary(scanned)
 
     def test_load_patch_summary_passes_source_patch_id_to_read(self, monkeypatch):
-        """Reload should forward source_patch_id and accept a single filtered patch."""
+        """Reload should forward source_patch_id before validating the result."""
         patch = dc.get_example_patch()
         summary = PatchSummary(
             attrs=patch.attrs,
@@ -273,8 +275,8 @@ class TestInit:
             return dc.spool([patch])
 
         monkeypatch.setattr(dc, "read", fake_read)
-        out = _load_patch_summary(summary)
-        assert out == patch
+        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
+            _load_patch_summary(summary)
         assert called["path"] == summary.path
         assert called["kwargs"]["source_patch_id"] == "node-1"
 
@@ -362,14 +364,12 @@ class TestNew:
 class TestPatchSummary:
     """Tests for patch summary helpers and selection fallbacks."""
 
-    def test_summary_mapping_methods(self, random_patch):
-        """Summary should behave like a small mapping."""
+    def test_summary_uses_structured_access(self, random_patch):
+        """Summary should expose coord summaries explicitly."""
         summary = random_patch.summary
-        assert summary["time_min"] == random_patch.coords.min("time")
-        assert summary.get("missing", 1) == 1
-        assert "time_min" in dict(summary.items())
-        with pytest.raises(KeyError):
-            _ = summary["missing"]
+        time_summary = summary.get_coord_summary("time")
+        assert time_summary.min == random_patch.coords.min("time")
+        assert time_summary.step == random_patch.get_coord("time").step
 
     def test_scan_returns_summary(self, random_patch):
         """Scanning a patch should return a PatchSummary."""
@@ -429,25 +429,31 @@ class TestPatchSummary:
         assert "time_min" not in out
         assert "distance_min" not in out
 
-    def test_summary_missing_coord_get(self, random_patch):
-        """Missing coord summaries should return the provided default."""
-        assert random_patch.summary.get("missing_min", None) is None
-
     def test_summary_unknown_coord_field_raises(self, random_patch):
-        """Unknown coord-derived fields should raise, not return None."""
+        """Flattened coord access should no longer be supported."""
         summary = random_patch.summary
         with pytest.raises(AttributeError, match="time_missing"):
             _ = summary.time_missing
-        with pytest.raises(KeyError, match="time_missing"):
-            _ = summary["time_missing"]
         assert not hasattr(summary, "time_missing")
 
-    def test_summary_iter_and_len(self, random_patch):
-        """Summary should support iteration and length like a mapping."""
+    def test_summary_flattened_lookup_is_removed(self, random_patch):
+        """Flattened summary item access should no longer work."""
         summary = random_patch.summary
-        keys = set(iter(summary))
-        assert "time_min" in keys
-        assert len(summary) == len(summary.flat_dump())
+        with pytest.raises(TypeError):
+            _ = summary["time_min"]
+
+    def test_flat_dump_prefers_coord_values_over_attrs(self, random_patch):
+        """flat_dump should overlay coord summaries on top of attrs."""
+        attrs = dc.PatchAttrs(**(random_patch.attrs.model_dump() | {"time_step": 10}))
+        summary = dc.PatchSummary(
+            attrs=attrs,
+            coords=random_patch.coords.to_summary_dict(),
+            dims=random_patch.dims,
+            shape=random_patch.shape,
+            dtype=str(random_patch.dtype),
+        )
+        out = summary.flat_dump()
+        assert out["time_step"] == random_patch.get_coord("time").step
 
     def test_from_patch_roundtrip(self, random_patch):
         """PatchSummary should normalize Patch inputs directly."""
@@ -753,31 +759,33 @@ class TestUpdateAttrs:
         """Coordinate updates should happen through update_coords."""
         t1 = np.datetime64("2000-01-01")
         pa = random_patch.update_coords(time_min=t1)
-        assert pa.summary["time_min"] == t1
+        assert pa.summary.get_coord_summary("time").min == t1
         assert pa.coords.min("time") == t1
 
     def test_update_startttime2(self, random_patch):
         """Updating start time should update end time as well."""
-        duration = random_patch.summary["time_max"] - random_patch.summary["time_min"]
+        time_coord = random_patch.get_coord("time")
+        duration = time_coord.max() - time_coord.min()
         new_start = np.datetime64("2000-01-01")
         pa1 = random_patch.update_coords(time_min=str(new_start))
-        assert pa1.summary["time_min"] == new_start
-        assert pa1.summary["time_max"] == new_start + duration
+        time_summary = pa1.summary.get_coord_summary("time")
+        assert time_summary.min == new_start
+        assert time_summary.max == new_start + duration
 
     def test_update_attrs_rejects_coordinate_fields(self, random_patch):
-        """Flat coordinate-style attrs now flow through update_attrs unchanged."""
-        out = random_patch.update_attrs(time_step=10)
-        assert out.attrs.time_step == 10
+        """Flat coordinate-style attrs should go through update_coords."""
+        with pytest.raises(ValueError, match="update_coords"):
+            random_patch.update_attrs(time_step=10)
 
     def test_update_non_sorted_coord(self, wacky_dim_patch):
         """Ensure update_coords updates non-sorted coordinates."""
         # test updating dist max
         pa = wacky_dim_patch.update_coords(distance_max=10)
-        assert pa.summary.distance_max == 10
+        assert pa.summary.get_coord_summary("distance").max == 10
         assert not np.any(pd.isnull(pa.coords.get_array("distance")))
         # test update dist min
         pa = wacky_dim_patch.update_coords(distance_min=10)
-        assert pa.summary.distance_min == 10
+        assert pa.summary.get_coord_summary("distance").min == 10
         assert not np.any(pd.isnull(pa.coords.get_array("distance")))
 
     def test_update_attrs_rejects_coordinate_units(self, random_patch):

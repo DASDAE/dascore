@@ -69,7 +69,10 @@ class TestFebus:
         out = dc.read(febus_path, source_patch_id=target.source_patch_id)
         assert len(out) == 1
         assert "source_patch_id" not in out[0].attrs.model_dump()
-        assert out[0].summary.time_min == target.time_min
+        assert (
+            out[0].summary.get_coord_summary("time").min
+            == target.get_coord_summary("time").min
+        )
 
     def test_read_source_patch_id_sequence_input(self, febus_path):
         """Reading Febus with a sequence source_patch_id input should work."""
@@ -77,7 +80,10 @@ class TestFebus:
         targets = [summaries[0].source_patch_id]
         out = dc.read(febus_path, source_patch_id=targets)
         assert len(out) == 1
-        assert out[0].summary.time_min == summaries[0].time_min
+        assert (
+            out[0].summary.get_coord_summary("time").min
+            == summaries[0].get_coord_summary("time").min
+        )
 
     def test_read_source_patch_id_non_matching_returns_empty(self, febus_path):
         """A non-matching source_patch_id should filter out Febus patches."""

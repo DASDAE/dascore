@@ -152,16 +152,9 @@ class PatchSummary(DascoreBaseModel):
     def flat_dump(self, dim_tuple: bool = False, exclude=None) -> dict[str, Any]:
         """Return a flat dict suitable for indexing/dataframes."""
         exclude = set(() if exclude is None else exclude)
-        attrs = self.attrs
-        out = {
-            name: getattr(attrs, name)
-            for name in type(attrs).model_fields
-            if name not in exclude
-        }
-        extra = getattr(attrs, "__pydantic_extra__", None) or {}
-        for name, value in extra.items():
-            if name not in exclude:
-                out[name] = value
+        # Build flattened attrs first, then overlay coord summaries so coord-
+        # derived fields win over any attr using the same simplified key.
+        out = self.attrs.flat_dump(exclude=exclude)
         summary_meta = {
             "dims": ",".join(self.dims),
             "dtype": self.dtype,
@@ -203,45 +196,6 @@ class PatchSummary(DascoreBaseModel):
                         value = np.nan
                 out[f"{coord_name}_{field}"] = value
         return out
-
-    def __getitem__(self, item):
-        try:
-            return getattr(self, item)
-        except AttributeError as exc:
-            raise KeyError(item) from exc
-
-    def __iter__(self):
-        return iter(self.flat_dump())
-
-    def __len__(self):
-        return len(self.flat_dump())
-
-    def __getattr__(self, item):
-        # Keep summary access ergonomic during the attrs/coords split by falling
-        # back to non-coordinate attrs first, then flattened coord fields.
-        try:
-            return getattr(self.attrs, item)
-        except AttributeError:
-            split = item.rsplit("_", 1)
-            if len(split) == 2:
-                coord_name, field = split
-                if coord_name in self.coords:
-                    coord = self.coords[coord_name]
-                    if field in type(coord).model_fields:
-                        return getattr(coord, field)
-            msg = f"{self.__class__.__name__} has no attribute '{item}'"
-            raise AttributeError(msg) from None
-
-    def get(self, item, default=None):
-        """Return item if present else default."""
-        try:
-            return self[item]
-        except KeyError:
-            return default
-
-    def items(self):
-        """Yield summary items like a mapping."""
-        yield from self.flat_dump().items()
 
     @property
     def dim_tuple(self) -> tuple[str, ...]:

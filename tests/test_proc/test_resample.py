@@ -143,7 +143,7 @@ class TestResample:
         axis = patch.get_axis("time")
         new_dt = 2 * step
         new = patch.resample(time=new_dt)
-        assert new_dt == new.summary["time_step"]
+        assert new_dt == new.get_coord("time").step
         assert np.all(np.diff(new.coords.get_array("time")) == new_dt)
         # ensure only the time dimension has changed.
         shape1, shape2 = random_patch.data.shape, new.data.shape
@@ -155,11 +155,11 @@ class TestResample:
 
     def test_upsample_time(self, random_patch):
         """Test increasing the temporal sampling rate."""
-        current_dt = random_patch.summary["time_step"]
+        current_dt = random_patch.get_coord("time").step
         axis = random_patch.get_axis("time")
         new_dt = current_dt / 2
         new = random_patch.resample(time=new_dt)
-        assert new_dt == new.summary["time_step"]
+        assert new_dt == new.get_coord("time").step
         assert np.all(np.diff(new.coords.get_array("time")) == new_dt)
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
@@ -170,11 +170,11 @@ class TestResample:
 
     def test_upsample_time_float(self, random_patch):
         """Test int as time sampling rate."""
-        current_dt = random_patch.summary["time_step"]
+        current_dt = random_patch.get_coord("time").step
         axis = random_patch.get_axis("time")
         new_dt = current_dt / 2
         new = random_patch.resample(time=new_dt / np.timedelta64(1, "s"))
-        assert new_dt == new.summary["time_step"]
+        assert new_dt == new.get_coord("time").step
         assert np.all(np.diff(new.coords.get_array("time")) == new_dt)
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
@@ -185,11 +185,11 @@ class TestResample:
 
     def test_resample_distance(self, random_patch):
         """Ensure distance dimension is also resample-able."""
-        current_dx = random_patch.summary["distance_step"]
+        current_dx = random_patch.get_coord("distance").step
         new_dx = current_dx / 2
         new = random_patch.resample(distance=new_dx)
         axis = random_patch.get_axis("distance")
-        assert new_dx == new.summary["distance_step"]
+        assert new_dx == new.get_coord("distance").step
         assert np.allclose(np.diff(new.coords.get_array("distance")), new_dx)
         shape1, shape2 = random_patch.data.shape, new.data.shape
         for ax, (len1, len2) in enumerate(zip(shape1, shape2)):
@@ -202,30 +202,36 @@ class TestResample:
         """Tests for resampling to a non-int sampling rate."""
         new_step = 1.232132323222
         out = random_patch.resample(distance=new_step)
-        assert out.summary["distance_max"] <= random_patch.summary["distance_max"]
-        assert np.allclose(out.summary["distance_step"], new_step)
+        assert (
+            out.get_coord("distance").max() <= random_patch.get_coord("distance").max()
+        )
+        assert np.allclose(out.get_coord("distance").step, new_step)
 
     def test_slightly_above_current_rate(self, random_patch):
         """Tests for resampling slightly above current rate."""
         start, stop, step = get_start_stop_step(random_patch, "distance")
         new_step = step + 0.0000001
         out = random_patch.resample(distance=new_step)
-        assert out.summary["distance_max"] <= random_patch.summary["distance_max"]
-        assert np.allclose(out.summary["distance_step"], new_step)
+        assert (
+            out.get_coord("distance").max() <= random_patch.get_coord("distance").max()
+        )
+        assert np.allclose(out.get_coord("distance").step, new_step)
 
     def test_slightly_under_current_rate(self, random_patch):
         """Tests for resampling slightly under current rate."""
         start, stop, step = get_start_stop_step(random_patch, "distance")
         new_step = step - 0.0000001
         out = random_patch.resample(distance=new_step)
-        assert out.summary["distance_max"] <= random_patch.summary["distance_max"]
-        assert np.allclose(out.summary["distance_step"], new_step)
+        assert (
+            out.get_coord("distance").max() <= random_patch.get_coord("distance").max()
+        )
+        assert np.allclose(out.get_coord("distance").step, new_step)
 
     def test_odd_time(self, random_patch):
         """Tests resampling to odd time interval."""
         dt = np.timedelta64(1234567, "ns")
         out = random_patch.resample(time=dt)
-        new_dt = out.summary["time_step"]
+        new_dt = out.get_coord("time").step
         assert np.isclose(float(new_dt), float(dt))
         assert out.attrs
 
@@ -252,7 +258,7 @@ class TestResample:
         """Ensure docstring examples runs."""
         patch = random_patch
         time = patch.coords.get_array("time")
-        ts = patch.summary.time_step
+        ts = patch.get_coord("time").step
         new_time = np.arange(time.min(), time.max(), 0.5 * ts)
         uptime = patch.interpolate(time=new_time)
         assert isinstance(uptime, dc.Patch)

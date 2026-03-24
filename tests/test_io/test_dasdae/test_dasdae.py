@@ -155,8 +155,9 @@ class TestReadDASDAE:
         array = patch_2.coords.get_array("time")
         assert np.issubdtype(array.dtype, np.datetime64)
         # test attrs
-        for name in ("time_min", "time_max"):
-            assert isinstance(patch_2.summary[name], np.datetime64)
+        time_summary = patch_2.summary.get_coord_summary("time")
+        for value in (time_summary.min, time_summary.max):
+            assert isinstance(value, np.datetime64)
 
     def test_read_file_no_wavegroup(self, generic_hdf5):
         """Ensure an h5 with no wavegroup returns empty patch."""
@@ -173,7 +174,10 @@ class TestReadDASDAE:
         target = scanned[1].source_patch_id
         out = dc.read(path, source_patch_id=target)
         assert len(out) == 1
-        assert out[0].summary.time_min == scanned[1].time_min
+        assert (
+            out[0].summary.get_coord_summary("time").min
+            == scanned[1].get_coord_summary("time").min
+        )
 
     def test_read_multiple_source_patch_ids(self, tmp_path):
         """Reading with multiple source patch ids should return each match."""
@@ -184,9 +188,9 @@ class TestReadDASDAE:
         targets = [scanned[0].source_patch_id, scanned[2].source_patch_id]
         out = dc.read(path, source_patch_id=targets)
         assert len(out) == 2
-        assert {patch.summary.time_min for patch in out} == {
-            scanned[0].time_min,
-            scanned[2].time_min,
+        assert {patch.summary.get_coord_summary("time").min for patch in out} == {
+            scanned[0].get_coord_summary("time").min,
+            scanned[2].get_coord_summary("time").min,
         }
 
 

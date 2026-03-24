@@ -13,7 +13,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import attr_conflict_description
-from dascore.exceptions import AttributeMergeError
+from dascore.exceptions import AttributeMergeError, PatchAttributeError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     _dict_list_diffs,
@@ -52,10 +52,7 @@ def combine_patch_attrs(
     def _get_model_dict_list(mod_list):
         """Get list of model dicts with optional dropped attrs."""
         model_dicts = [
-            _to_patch_attrs(x).model_dump(exclude_defaults=True)
-            if not isinstance(x, dict)
-            else x
-            for x in mod_list
+            _to_patch_attrs(x).model_dump(exclude_defaults=True) for x in mod_list
         ]
         # drop attributes specified.
         if drop := set(iterate(drop_attrs)):
@@ -114,6 +111,24 @@ def combine_patch_attrs(
     )
     cls = first_class if first_class is not dict else dc.PatchAttrs
     return cls(**mod_dict_list[0])
+
+
+def _raise_if_coord_attr_updates(update_map) -> None:
+    """Reject flat coord-summary keys in attr update calls."""
+    if update_map is None:
+        return
+    coord_info, _ = separate_coord_info(update_map)
+    bad_keys = []
+    for coord_name, info in coord_info.items():
+        for field in info:
+            bad_keys.append(f"{coord_name}_{field}")
+    if bad_keys:
+        names = ", ".join(sorted(bad_keys))
+        msg = (
+            "PatchAttrs.update does not accept coordinate metadata. "
+            f"Received: {names}. Use update_coords(...) instead."
+        )
+        raise PatchAttributeError(msg)
 
 
 def separate_coord_info(

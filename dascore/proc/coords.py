@@ -466,8 +466,8 @@ def select(
     >>> lt_dist = patch.select(distance=(..., 300))
     >>>
     >>> # select time (1 second from start to -1 second from end)
-    >>> t1 = patch.summary.time_min + dc.to_timedelta64(1)
-    >>> t2 = patch.summary.time_max - dc.to_timedelta64(1)
+    >>> t1 = patch.get_coord("time").min() + dc.to_timedelta64(1)
+    >>> t2 = patch.get_coord("time").max() - dc.to_timedelta64(1)
     >>> new_time1 = patch.select(time=(t1, t2))
     >>>
     >>> # this can be accomplished more simply using the relative keyword

@@ -165,6 +165,11 @@ def _patch_to_summary(
 
 def _select_patch_from_spool(spool, source_patch_id: object = "") -> dc.Patch:
     """Select one loaded patch from a spool using source identity."""
+
+    def _matches_patch_name(patch: dc.Patch, source_id: str) -> bool:
+        """Return True when a generated patch name matches the source id."""
+        return patch.get_patch_name() == source_id
+
     if len(spool) == 0:
         msg = "index of [0] is out of bounds for spool."
         raise IndexError(msg)
@@ -176,6 +181,8 @@ def _select_patch_from_spool(spool, source_patch_id: object = "") -> dc.Patch:
             index = None
         if index is not None and 0 <= index < len(spool):
             return spool[index]
+        if len(spool) == 1 and _matches_patch_name(spool[0], source_patch_id):
+            return spool[0]
         msg = "Patch could not be uniquely resolved after applying load filters."
         raise PatchAttributeError(msg)
     if len(spool) == 1:
@@ -199,8 +206,6 @@ def _load_patch_summary(summary: PatchSummary, **kwargs) -> dc.Patch:
         msg = "PatchSummary cannot load data because it has no source path."
         raise PatchAttributeError(msg)
     spool = dc.read(path, **read_kwargs)
-    if source_patch_id and len(spool) == 1:
-        return spool[0]
     try:
         return _select_patch_from_spool(spool, source_patch_id=source_patch_id)
     except IndexError as exc:

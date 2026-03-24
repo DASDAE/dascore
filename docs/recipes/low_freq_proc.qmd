@@ -93,8 +93,8 @@ delta_pa = dc.get_example_patch("delta_patch", dim="time", patch=pa_chunked_sp)
 delta_pa_low_passed = delta_pa.pass_filter(time=(None, cutoff_freq * filter_safety_factor))
 # Resample the low-passed filtered patch
 new_time_ax = np.arange(
-    delta_pa.summary.time_min,
-    delta_pa.summary.time_max,
+    delta_pa.get_coord("time").min(),
+    delta_pa.get_coord("time").max(),
     np.timedelta64(dt, "s"),
 )
 delta_pa_lfp = delta_pa_low_passed.interpolate(time=new_time_ax)
@@ -143,8 +143,8 @@ for patch in sp_chunked_overlap:
     pa_low_passed = patch.pass_filter(time=(..., cutoff_freq * filter_safety_factor))
     # Resample the low-passed filter patch
     new_time_ax = np.arange(
-        pa_low_passed.summary.time_min,
-        pa_low_passed.summary.time_max,
+        pa_low_passed.get_coord("time").min(),
+        pa_low_passed.get_coord("time").max(),
         np.timedelta64(dt, "s"),
     )
     pa_lfp = (

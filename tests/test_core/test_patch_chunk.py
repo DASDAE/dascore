@@ -23,7 +23,7 @@ from dascore.utils.time import to_timedelta64
 def spool_dt_perturbed(random_patch) -> dc.BaseSpool:
     """Create a spool with patches that have slightly different dts."""
     dts = np.array((0.999722, 0.99985, 0.99973, 0.99986))
-    current_max = random_patch.summary.time_max
+    current_max = random_patch.get_coord("time").max()
     patches = []
     for dt in dts:
         coords = random_patch.coords.update(time_min=current_max, time_step=dt)
@@ -102,8 +102,9 @@ class TestChunk:
         spool = random_spool.select(time=(time_1, time_2)).chunk(time=None)
         assert len(spool) == 1
         patch = spool[0]
-        assert np.abs(patch.summary["time_min"] - time_1) < dt
-        assert np.abs(patch.summary["time_max"] - time_2) < dt
+        time_coord = patch.get_coord("time")
+        assert np.abs(time_coord.min() - time_1) < dt
+        assert np.abs(time_coord.max() - time_2) < dt
 
     def test_uneven_chunk_iteration(self, random_spool, random_spool_df):
         """Ensure uneven start/end still yield consistent slices."""
@@ -115,7 +116,9 @@ class TestChunk:
         spool_2 = random_spool.select(time=(time_1, time_2)).chunk(time=1)
         assert len(spool_2) == 10
         patches = list(spool_2)
-        durations = [x.summary["time_max"] - x.summary["time_min"] for x in patches]
+        durations = [
+            x.get_coord("time").max() - x.get_coord("time").min() for x in patches
+        ]
         # there should be a single duration
         assert len(set(durations)) == 1
         duration = durations[0] / one_sec
@@ -245,7 +248,9 @@ class TestChunkMerge:
         """Create a spool with no overlap that isnt evenly sampled."""
         pa1 = wacky_dim_patch
         dt = dc.to_timedelta64(0.2)
-        pa2 = pa1.new(coords=pa1.coords.update(time_min=pa1.summary.time_max + dt))
+        pa2 = pa1.new(
+            coords=pa1.coords.update(time_min=pa1.get_coord("time").max() + dt)
+        )
         return dc.spool([pa1, pa2])
 
     @pytest.fixture(scope="class")
@@ -440,10 +445,11 @@ class TestChunkMerge:
         contents = spool.get_contents()
         assert len(spool) == 1
         patch_new, patch_old = spool[0], adjacent_spool_overlap[0]
-        new_at, old_at = patch_new.summary, patch_old.summary
-        assert new_at["time_max"] == contents["time_max"].max()
+        new_time_coord = patch_new.get_coord("time")
+        old_time_coord = patch_old.get_coord("time")
+        assert new_time_coord.max() == contents["time_max"].max()
         assert (
-            new_at["time_step"] == old_at["time_step"] == contents["time_step"].iloc[0]
+            new_time_coord.step == old_time_coord.step == contents["time_step"].iloc[0]
         )
 
     def test_perturbed_dt(self, spool_dt_perturbed):
@@ -539,8 +545,9 @@ class TestChunkMerge:
         result_contents = result_spool.get_contents().reset_index(drop=True)
         for i, patch in enumerate(result_spool):
             # Assert no NaN values in patch attributes
-            assert not pd.isna(patch.summary["time_min"]), f"Patch {i} has NaN time_min"
-            assert not pd.isna(patch.summary["time_max"]), f"Patch {i} has NaN time_max"
+            time_coord = patch.get_coord("time")
+            assert not pd.isna(time_coord.min()), f"Patch {i} has NaN time_min"
+            assert not pd.isna(time_coord.max()), f"Patch {i} has NaN time_max"
 
             # Verify dataframe contains reasonable time values
             df_row = result_contents.iloc[i]
@@ -579,8 +586,9 @@ class TestChunkMerge:
         result_contents = result_spool.get_contents().reset_index(drop=True)
         for i, patch in enumerate(result_spool):
             # Assert no NaN values in patch attributes
-            assert not pd.isna(patch.summary["time_min"]), f"Patch {i} has NaN time_min"
-            assert not pd.isna(patch.summary["time_max"]), f"Patch {i} has NaN time_max"
+            time_coord = patch.get_coord("time")
+            assert not pd.isna(time_coord.min()), f"Patch {i} has NaN time_min"
+            assert not pd.isna(time_coord.max()), f"Patch {i} has NaN time_max"
 
             # Verify dataframe contains reasonable time values
             df_row = result_contents.iloc[i]
