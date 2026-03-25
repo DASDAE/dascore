@@ -442,6 +442,12 @@ class TestPatchSummary:
         with pytest.raises(TypeError):
             _ = summary["time_min"]
 
+    def test_summary_get_coord_is_removed(self, random_patch):
+        """PatchSummary should only expose get_coord_summary."""
+        summary = random_patch.summary
+        with pytest.raises(AttributeError, match="get_coord"):
+            summary.get_coord("time")
+
     def test_flat_dump_prefers_coord_values_over_attrs(self, random_patch):
         """flat_dump should overlay coord summaries on top of attrs."""
         attrs = dc.PatchAttrs(**(random_patch.attrs.model_dump() | {"time_step": 10}))

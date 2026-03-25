@@ -210,7 +210,3 @@ class PatchSummary(DascoreBaseModel):
     def get_coord_summary(self, coord_name: str) -> CoordSummary:
         """Return the summary object for a single coordinate."""
         return self.coords[coord_name]
-
-    def get_coord(self, coord_name: str) -> CoordSummary:
-        """Return the coordinate summary for compatibility with scan workflows."""
-        return self.get_coord_summary(coord_name)

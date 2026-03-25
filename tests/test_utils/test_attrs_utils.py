@@ -9,6 +9,7 @@ import pytest
 import dascore as dc
 from dascore import PatchAttrs
 from dascore.utils.attrs import (
+    _raise_if_coord_attr_updates,
     combine_patch_attrs,
     separate_coord_info,
 )
@@ -246,3 +247,11 @@ class TestValidateNoCoords:
             raise_error=False,
         )
         assert out == {"tag": "x"}
+
+
+class TestRaiseIfCoordAttrUpdates:
+    """Tests for rejecting coord-summary keys in attr updates."""
+
+    def test_none_is_noop(self):
+        """None inputs should return without raising."""
+        assert _raise_if_coord_attr_updates(None) is None

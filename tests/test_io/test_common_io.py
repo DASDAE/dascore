@@ -208,9 +208,10 @@ def _assert_coords_attrs_match(patch):
     assert summary.dims == coords.dims
     for dim in summary.dims:
         coord = patch.get_coord(dim)
-        assert coord.min() == getattr(summary, f"{dim}_min")
-        assert coord.max() == getattr(summary, f"{dim}_max")
-        assert coord.step == getattr(summary, f"{dim}_step")
+        summary_coord = summary.get_coord_summary(dim)
+        assert coord.min() == summary_coord.min
+        assert coord.max() == summary_coord.max
+        assert coord.step == summary_coord.step
 
 
 def _assert_op_or_close(val1, val2, op):
@@ -225,8 +226,6 @@ def _assert_op_or_close(val1, val2, op):
 
 
 # --- Tests
-
-DIM_RELATED_ATTRS = ("{dim}_min", "{dim}_max", "{dim}_step")
 
 
 class TestGetFormat:
@@ -325,8 +324,9 @@ class TestRead:
         assert len(summaries_from_file)
         summary_init = summaries_from_file[0]
         for dim in summary_init.dim_tuple:
-            start = getattr(summary_init, f"{dim}_min")
-            stop = getattr(summary_init, f"{dim}_max")
+            summary_coord = summary_init.get_coord_summary(dim)
+            start = summary_coord.min
+            stop = summary_coord.max
             duration = stop - start
             # first test double ended query
             trim_tuple = (start + duration / 10, start + 2 * duration / 10)
@@ -346,7 +346,7 @@ class TestRead:
             _assert_coords_attrs_match(patch)
             coord = patch.get_coord(dim)
             _assert_op_or_close(coord.min(), trim_tuple[0], ge)
-            _assert_op_or_close(coord.max(), getattr(summary, f"{dim}_max"), eq)
+            _assert_op_or_close(coord.max(), summary.get_coord_summary(dim).max, eq)
             # then single-ended query on end side
             trim_tuple = (None, start + duration / 10)
             spool = io.read(path, **{dim: trim_tuple})
@@ -355,7 +355,7 @@ class TestRead:
             summary = patch.summary
             _assert_coords_attrs_match(patch)
             coord = patch.get_coord(dim)
-            _assert_op_or_close(coord.min(), getattr(summary, f"{dim}_min"), eq)
+            _assert_op_or_close(coord.min(), summary.get_coord_summary(dim).min, eq)
             _assert_op_or_close(coord.max(), trim_tuple[1], le)
 
     def test_slice_out_all_patches_time(self, io_path_tuple):
@@ -427,14 +427,14 @@ class TestScan:
         """Ensure scanned summaries have correct dtype for time."""
         for summary in scanned_summaries:
             with suppress(KeyError):
-                time = summary.get_coord("time")
+                time = summary.get_coord_summary("time")
                 assert "datetime64" in str(np.dtype(time.dtype))
 
     def test_dist_coord_is_float_or_int(self, scanned_summaries):
         """Distance can be either float or int, but must be numeric."""
         for summary in scanned_summaries:
             with suppress(KeyError, CoordError):
-                distance = summary.get_coord("distance")
+                distance = summary.get_coord_summary("distance")
                 dtype = np.dtype(distance.dtype)
                 assert np.issubdtype(dtype, np.number)
 
@@ -520,13 +520,12 @@ class TestIntegration:
             assert patch_summary.dims == scan_summary.dims
             # first compare dimensions are related attributes
             for dim in patch_summary.dim_tuple:
-                assert getattr(patch_summary, f"{dim}_min") == getattr(
-                    scan_summary, f"{dim}_min"
-                )
-                for dim_attr in DIM_RELATED_ATTRS:
-                    attr_name = dim_attr.format(dim=dim)
-                    attr1 = getattr(patch_summary, attr_name)
-                    attr2 = getattr(scan_summary, attr_name)
+                patch_coord = patch_summary.get_coord_summary(dim)
+                scan_coord = scan_summary.get_coord_summary(dim)
+                assert patch_coord.min == scan_coord.min
+                for attr_name in ("min", "max", "step"):
+                    attr1 = getattr(patch_coord, attr_name)
+                    attr2 = getattr(scan_coord, attr_name)
                     # Use close comparison for floating point values
                     if isinstance(attr1, float | np.floating) and isinstance(
                         attr2, float | np.floating
@@ -536,8 +535,8 @@ class TestIntegration:
                         assert attr1 == attr2
             # then other expected attributes.
             for attr_name in comp_attrs:
-                patch_value = getattr(patch_summary, attr_name)
-                scan_value = getattr(scan_summary, attr_name)
+                patch_value = getattr(patch_summary.attrs, attr_name)
+                scan_value = getattr(scan_summary.attrs, attr_name)
                 if scan_value in ("", None):
                     continue
                 assert scan_value == patch_value

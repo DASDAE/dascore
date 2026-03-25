@@ -91,6 +91,19 @@ class TestScan:
         "network",
     )
 
+    @staticmethod
+    def _get_summary_value(summary, attr):
+        """Return a comparable summary value from attrs or coord summaries."""
+        if attr.startswith("time_"):
+            return getattr(
+                summary.get_coord_summary("time"), attr.removeprefix("time_")
+            )
+        if attr.startswith("distance_"):
+            return getattr(
+                summary.get_coord_summary("distance"), attr.removeprefix("distance_")
+            )
+        return getattr(summary.attrs, attr)
+
     def test_scan_attrs_eq_read_attrs(self, pickle_patch_path):
         """Ensure read/scan produce the same attrs."""
         scan_list = dc.scan(pickle_patch_path)
@@ -99,6 +112,6 @@ class TestScan:
         for scan_attrs, patch_summary in zip(scan_list, patch_summaries):
             scan_attrs = scan_attrs.summary
             for attr in self.comp_attrs:
-                scan_attr = getattr(scan_attrs, attr)
-                patch_attr = getattr(patch_summary, attr)
+                scan_attr = self._get_summary_value(scan_attrs, attr)
+                patch_attr = self._get_summary_value(patch_summary, attr)
                 assert scan_attr == patch_attr
