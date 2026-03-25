@@ -39,7 +39,7 @@ path = fetch("terra15_das_1_trimmed.hdf5")
 scan_patch = dc.scan(path)[0]
 
 print(scan_patch.path)
-print(scan_patch.time_min)
+print(scan_patch.get_coord_summary("time").min)
 ```
 
 Scan results are useful for listing contents, building dataframes, and deciding which patches to load.
@@ -55,7 +55,7 @@ print(loaded_patch.data.shape)
 ```
 
 :::{.callout-note}
-`Patch.attrs` stores non-coordinate metadata only. Coordinate summaries such as `time_min`, `time_max`, and `distance_step` are accessed directly on a `PatchSummary` or via `patch.summary`.
+`Patch.attrs` stores non-coordinate metadata only. Coordinate summaries such as `time_min`, `time_max`, and `distance_step` are accessed through [`PatchSummary.get_coord_summary()`](`dascore.PatchSummary.get_coord_summary`) or via `patch.summary.get_coord_summary(...)`.
 :::
 
 ## DirectorySpool

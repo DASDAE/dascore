@@ -756,7 +756,7 @@ def read(
     >>> import dascore as dc
     >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("prodml_2.1.h5")
+    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
     >>>
     >>> patch = dc.read(file_path)
     """
@@ -814,7 +814,7 @@ def scan_to_df(
     >>> import dascore as dc
     >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("prodml_2.1.h5")
+    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
     >>>
     >>> df = dc.scan_to_df(file_path)
     """
@@ -958,13 +958,10 @@ def scan(
     >>> import dascore as dc
     >>> from dascore.utils.downloader import fetch
     >>>
-    >>> file_path = fetch("prodml_2.1.h5")
+    >>> file_path = fetch("terra15_das_1_trimmed.hdf5")
     >>>
-    >>> patch_list = dc.scan(file_path)
-    >>> summary = patch_list[0]
-    >>> from dascore.io.core import _load_patch_summary
-    >>> patch = _load_patch_summary(summary)
-    >>> assert patch.dtype == np.dtype(summary.dtype)
+    >>> summary_list = dc.scan(file_path)
+    >>> summary = summary_list[0]
 
     See also [`iter_fs_contents`](`dascore.utils.misc.iter_fs_contents`)
     """
