@@ -87,7 +87,7 @@ class JingleV1(FiberIO):
         This should return a list of
         [`PatchSummary`](`dascore.PatchSummary`) objects. DASCore will also
         normalize a loaded `Patch` to a summary if needed, but new formats
-        should return `PatchSummary` instances directly. Returning
+        should return [`PatchSummary`](`dascore.PatchSummary`) instances directly. Returning
         [`PatchAttrs`](`dascore.PatchAttrs`) from `scan()` is no longer
         supported.
 

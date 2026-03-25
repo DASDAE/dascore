@@ -55,7 +55,7 @@ print(loaded_patch.data.shape)
 ```
 
 :::{.callout-note}
-`Patch.attrs` stores non-coordinate metadata only. Coordinate summaries such as `time_min`, `time_max`, and `distance_step` are accessed through [`PatchSummary.get_coord_summary()`](`dascore.PatchSummary.get_coord_summary`) or via `patch.summary.get_coord_summary(...)`.
+`Patch.attrs` stores non-coordinate metadata only. Coordinate summaries such as `time_min`, `time_max`, and `distance_step` are accessed through [`PatchSummary.get_coord_summary(...)`](`dascore.PatchSummary.get_coord_summary`) or via `patch.summary.get_coord_summary(...)`.
 :::
 
 ## DirectorySpool

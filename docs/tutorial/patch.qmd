@@ -223,7 +223,7 @@ print(patch.get_coord("time").min())
 print(patch.get_coord("distance").step)
 ```
 
-For tabular use, [`Patch.flat_dump`](`dascore.Patch.flat_dump`) returns a flat dictionary combining attrs with coordinate summary fields.
+For tabular use, [`PatchSummary.flat_dump()`](`dascore.PatchSummary.flat_dump`) returns a flat dictionary combining attrs with coordinate summary fields.
 
 ```{python}
 row = patch.flat_dump()
