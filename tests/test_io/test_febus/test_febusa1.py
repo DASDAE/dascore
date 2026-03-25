@@ -55,3 +55,37 @@ class TestFebus:
         time = patch.get_coord("time")
         sampling_rate = np.timedelta64(1, "s") / time.step
         assert np.isclose(sampling_rate, 250)
+
+    def test_scan_summaries_include_source_patch_id(self, febus_path):
+        """Scanned Febus summaries should carry a reloadable patch id."""
+        summaries = dc.scan(febus_path)
+        assert summaries
+        assert all(summary.source_patch_id for summary in summaries)
+
+    def test_read_source_patch_id_selects_single_patch(self, febus_path):
+        """Reading by source_patch_id should return the matching Febus patch."""
+        summaries = dc.scan(febus_path)
+        target = summaries[0]
+        out = dc.read(febus_path, source_patch_id=target.source_patch_id)
+        assert len(out) == 1
+        assert "source_patch_id" not in out[0].attrs.model_dump()
+        assert (
+            out[0].summary.get_coord_summary("time").min
+            == target.get_coord_summary("time").min
+        )
+
+    def test_read_source_patch_id_sequence_input(self, febus_path):
+        """Reading Febus with a sequence source_patch_id input should work."""
+        summaries = dc.scan(febus_path)
+        targets = [summaries[0].source_patch_id]
+        out = dc.read(febus_path, source_patch_id=targets)
+        assert len(out) == 1
+        assert (
+            out[0].summary.get_coord_summary("time").min
+            == summaries[0].get_coord_summary("time").min
+        )
+
+    def test_read_source_patch_id_non_matching_returns_empty(self, febus_path):
+        """A non-matching source_patch_id should filter out Febus patches."""
+        out = dc.read(febus_path, source_patch_id="not-a-real-febus-patch")
+        assert len(out) == 0

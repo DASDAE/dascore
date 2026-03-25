@@ -6,6 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
+from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.models import UnitQuantity, UTF8Str
@@ -43,16 +44,19 @@ class DASHDF5(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
         """Get metadata from file."""
         coords = _get_cf_coords(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(self.version),
-        }
-        attrs = _get_cf_attrs(resource, coords, extras=extras)
-        return [attrs]
+        attrs = _get_cf_attrs(resource, coords)
+        return [
+            PatchSummary.model_construct(
+                attrs=attrs,
+                coords=coords.to_summary_dict(),
+                dims=coords.dims,
+                shape=coords.shape,
+                dtype=str(resource["das"].dtype),
+            )
+        ]
 
     def read(
         self,

@@ -6,6 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
+from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.models import UnitQuantity, UTF8Str
 
@@ -43,17 +44,20 @@ class ProdMLV2_0(FiberIO):  # noqa
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
         """Scan a prodml file, return summary information about the file's contents."""
-        file_version = _get_prodml_version_str(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
         out = []
-        for attr, coords in _yield_prodml_attrs_coords(resource, extras=extras):
-            out.append(attr.update(coords=coords))
+        for attr, coords, source_patch_id in _yield_prodml_attrs_coords(resource):
+            out.append(
+                PatchSummary.model_construct(
+                    attrs=attr,
+                    coords=coords.to_summary_dict(),
+                    dims=coords.dims,
+                    shape=coords.shape,
+                    dtype=attr.get("dtype", ""),
+                    source_patch_id=source_patch_id,
+                )
+            )
         return out
 
     def read(
@@ -64,7 +68,12 @@ class ProdMLV2_0(FiberIO):  # noqa
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a ProdML file."""
-        patches = _read_prodml(resource, time=time, distance=distance)
+        patches = _read_prodml(
+            resource,
+            time=time,
+            distance=distance,
+            source_patch_id=kwargs.get("source_patch_id"),
+        )
         return dc.spool(patches)
 
 

@@ -54,7 +54,7 @@ class _PatchRollerInfo(DascoreBaseModel):
         else:
             hist_str = f"{self.roll_hist}.{func_or_str}()"
         new_history.append(hist_str)
-        attrs = self.patch.attrs.update(history=new_history, coords={})
+        attrs = self.patch.attrs.update(history=new_history)
         return attrs
 
 

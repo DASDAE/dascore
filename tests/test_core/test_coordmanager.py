@@ -50,10 +50,11 @@ class TestGetCoordManager:
             get_coord_manager(coords=coords, attrs=attrs)
 
     def test_coords_from_attrs(self, random_patch):
-        """Ensure we can get coordinates from patch attrs."""
+        """Patch attrs no longer reconstruct coordinates."""
         attrs = random_patch.attrs
-        cm = get_coord_manager(attrs=attrs)
-        assert "time" in cm.coord_map
+        out = get_coord_manager(attrs=attrs)
+        assert out.dims == ()
+        assert not out.coord_map
 
     def test_non_coord_dims(self):
         """Ensure non coordinate dimensions can be created using shape."""
@@ -209,11 +210,9 @@ class TestBasicCoordManager:
             coord = getattr(cm_basic, dim)
             assert coord == cm_basic.coord_map[dim]
 
-    def test_get_item_warning(self, cm_basic):
-        """Ensure get item emits a warning."""
-        msg = "returns a numpy array"
-        with pytest.warns(UserWarning, match=msg):
-            _ = cm_basic["time"]
+    def test_get_item_returns_coord(self, cm_basic):
+        """Ensure get item returns the coordinate."""
+        assert cm_basic["time"] == cm_basic.get_coord("time")
 
     def test_has_attr(self, cm_basic):
         """Ensure hasattr returns correct result."""
@@ -237,7 +236,9 @@ class TestBasicCoordManager:
         """Ensure we can get a scaler value for the coordinate."""
         coord_array = random_patch.get_coord("time").data
         expected = (
-            np.max(coord_array) - np.min(coord_array) + random_patch.attrs["time_step"]
+            np.max(coord_array)
+            - np.min(coord_array)
+            + random_patch.get_coord("time").step
         )
         assert random_patch.coords.coord_range("time") == expected
 
@@ -963,19 +964,19 @@ class TestUpdateFromAttrs:
             assert new_coord.min() == coord.min()
 
     def test_attrs_as_dict(self, cm_basic):
-        """Ensure the attrs returned has coords attached."""
+        """Returned attrs should stay pure metadata."""
         coord = cm_basic.coord_map["time"]
         attrs = {"time_max": coord.min()}
         cm, attrs = cm_basic.update_from_attrs(attrs)
-        assert attrs.coords == cm.to_summary_dict()
-        assert attrs.dim_tuple == cm.dims
+        assert "dims" not in attrs.model_dump()
+        assert cm.dims == cm_basic.dims
 
     def test_attrs_as_patch_attr(self, cm_basic):
-        """Ensure this also works when attrs is a patch attr."""
-        attrs = dc.PatchAttrs(time_min=to_datetime64("2022-01-01"))
+        """Ensure pure PatchAttrs inputs are still accepted."""
+        attrs = dc.PatchAttrs(tag="example")
         cm, new_attrs = cm_basic.update_from_attrs(attrs)
-        assert new_attrs.coords == cm.to_summary_dict()
-        assert new_attrs.dim_tuple == cm.dims
+        assert new_attrs == attrs
+        assert cm.dims == cm_basic.dims
 
     def test_consistent_attrs_leaves_coords_unchanged(self, random_patch):
         """Attrs which are already consistent should leave coord unchanged."""
@@ -1274,7 +1275,7 @@ class TestSnap:
     ):
         """Ensure snapping creates expected dt from merged df."""
         spool = memory_spool_small_dt_differences
-        expected_dt = get_middle_value([x.attrs.time_step for x in spool])
+        expected_dt = get_middle_value([x.get_coord("time").step for x in spool])
         snapped = cm_dt_small_diff.snap()[0]
         assert snapped.coord_map["time"].step == expected_dt
 

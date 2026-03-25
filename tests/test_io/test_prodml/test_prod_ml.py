@@ -27,7 +27,7 @@ def quantx_v2_example_path():
 def quantx_v2_das_patch(quantx_v2_example_path):
     """Read the QuantXV2 data, return contained DataArray."""
     out = read(quantx_v2_example_path, "prodml")[0]
-    attr_time = out.attrs["time_max"]
+    attr_time = out.summary.get_coord_summary("time").max
     coord_time = out.coords.max("time")
     assert attr_time == coord_time
     return out

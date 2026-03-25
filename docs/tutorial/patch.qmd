@@ -182,7 +182,7 @@ Most of the other `CoordManager` features are primarily used internally by DASCo
 
 ## Attrs
 
-The metadata stored in [`Patch.attrs`](`dascore.core.attrs.PatchAttrs`) is a [pydantic model](https://docs.pydantic.dev/usage/models/) which enforces a schema and provides validation. [`PatchAttrs.get_summary_df`](`dascore.utils.models.DascoreBaseModel.get_summary_df`) generates a table of the attribute descriptions:
+The metadata stored in `Patch.attrs` is a [pydantic model](https://docs.pydantic.dev/usage/models/) which enforces a schema and provides validation. [`PatchAttrs.get_summary_df`](`dascore.utils.models.DascoreBaseModel.get_summary_df`) generates a table of the attribute descriptions:
 
 
 ```{python}
@@ -201,6 +201,35 @@ Markdown(df_str)
 
 
 Specific data formats may also add attributes (e.g. "gauge_length", "pulse_width"), but this depends on the parser.
+
+`Patch.attrs` only stores non-coordinate metadata. This includes things like network, station, data units, and format-specific fields such as `gauge_length` or `pulse_width`.
+
+## Summary
+
+`Patch.summary` provides a read-only combined view of:
+
+- `Patch.attrs` for non-coordinate metadata
+- coordinate summaries derived from `Patch.coords`
+
+Use `Patch.summary` when you need fields such as `time_min`, `time_max`, `distance_step`, or coordinate units.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+
+print(patch.attrs.tag)
+print(patch.get_coord("time").min())
+print(patch.get_coord("distance").step)
+```
+
+For tabular use, [`PatchSummary.flat_dump()`](`dascore.PatchSummary.flat_dump`) returns a flat dictionary combining attrs with coordinate summary fields.
+
+```{python}
+row = patch.flat_dump()
+print(row["time_min"])
+print(row["distance_max"])
+```
 
 ## String representation
 

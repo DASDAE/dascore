@@ -8,6 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
+from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.io import BinaryReader
 
@@ -53,18 +54,18 @@ class SintelaBinaryV3(FiberIO):
             return self.name, version
         return False
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: BinaryReader, **kwargs) -> list[PatchSummary]:
         """Scan a file, return summary information on the contents."""
-        extras = {
-            "path": resource.name,
-            "file_format": self.name,
-            "file_version": self.version,
-        }
-        attrs, _, _ = _get_attrs_coords_header(
-            resource, SintelaPatchAttrs, extras=extras
-        )
-
-        return [attrs]
+        attrs, coords, header = _get_attrs_coords_header(resource, SintelaPatchAttrs)
+        return [
+            PatchSummary.model_construct(
+                attrs=attrs,
+                coords=coords.to_summary_dict(),
+                dims=coords.dims,
+                shape=coords.shape,
+                dtype=str(np.dtype(header["dtype"])),
+            )
+        ]
 
     def read(
         self,

@@ -10,6 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
+from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import TextReader
@@ -17,6 +18,7 @@ from dascore.utils.models import UTF8Str
 
 from .a1utils import (
     _get_febus_version_str,
+    _get_source_patch_id,
     _read_febus,
     _yield_attrs_coords,
 )
@@ -74,19 +76,20 @@ class Febus2(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
         """Scan a febus file, return summary information about the file's contents."""
         out = []
-        file_version = _get_febus_version_str(resource)
-        extras = {
-            "path": resource.filename,
-            "file_format": self.name,
-            "file_version": str(file_version),
-        }
-        for attr, cm, _ in _yield_attrs_coords(resource):
-            attr["coords"] = cm.to_summary_dict()
-            attr.update(dict(extras))
-            out.append(FebusPatchAttrs(**attr))
+        for attr, cm, feb in _yield_attrs_coords(resource):
+            out.append(
+                PatchSummary.model_construct(
+                    attrs=FebusPatchAttrs.from_dict(attr),
+                    coords=cm.to_summary_dict(),
+                    dims=cm.dims,
+                    shape=cm.shape,
+                    dtype=str(feb.zone[feb.data_name].dtype),
+                    source_patch_id=_get_source_patch_id(feb),
+                )
+            )
         return out
 
     def read(
@@ -98,7 +101,11 @@ class Febus2(FiberIO):
     ) -> dc.BaseSpool:
         """Read a febus spool of patches."""
         patches = _read_febus(
-            resource, time=time, distance=distance, attr_cls=FebusPatchAttrs
+            resource,
+            time=time,
+            distance=distance,
+            source_patch_id=kwargs.get("source_patch_id"),
+            attr_cls=FebusPatchAttrs,
         )
         return dc.spool(patches)
 
@@ -127,7 +134,7 @@ class FebusG1CSV1(FiberIO):
         resource.seek(0)  # proactively set resource back to position 0.
         return (self.name, self.version) if is_g1_file else False
 
-    def scan(self, resource: TextReader, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, resource: TextReader, **kwargs) -> list[PatchSummary]:
         """Get the coords and attrs of a G1 file."""
         # Handle case of unsupported files (eg spectrum).
         try:
@@ -135,16 +142,17 @@ class FebusG1CSV1(FiberIO):
         except NotImplementedError as f:
             warnings.warn(str(f), stacklevel=2)
             return []
-        attrs.update(
-            {
-                "path": getattr(resource, "name", ""),
-                "file_format": self.name,
-                "file_version": str(self.version),
-            }
-        )
         attrs_no_private = {i: v for i, v in attrs.items() if not i.startswith("_")}
-        attrs = FebusBOTDRStrainAttrs(coords=coords, **attrs_no_private)
-        return [attrs]
+        attrs = FebusBOTDRStrainAttrs(**attrs_no_private)
+        return [
+            PatchSummary.model_construct(
+                attrs=attrs,
+                coords=coords.to_summary_dict(),
+                dims=coords.dims,
+                shape=coords.shape,
+                dtype="float64",
+            )
+        ]
 
     def read(self, resource: TextReader, **kwargs) -> dc.BaseSpool:
         """Read a G1 file, return a Patch object."""

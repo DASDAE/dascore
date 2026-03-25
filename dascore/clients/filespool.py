@@ -34,6 +34,8 @@ class FileSpool(DataFrameSpool):
     for those formats, but should work on all dascore supported formats.
     """
 
+    _drop_columns = ("source_patch_id",)
+
     def __init__(
         self,
         path: str | Path,
@@ -65,7 +67,7 @@ class FileSpool(DataFrameSpool):
 
     def _load_patch(self, kwargs) -> Self:
         """Given a row from the managed dataframe, return a patch."""
-        return dc.read(**kwargs)[0]
+        return self._read_and_resolve_patch(dict(kwargs))
 
     @compose_docstring(doc=BaseSpool.update.__doc__)
     def update(self: SpoolType, progress: PROGRESS_LEVELS = "standard") -> Self:

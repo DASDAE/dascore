@@ -27,6 +27,37 @@ if write_path.exists():
     write_path.unlink()
 ```
 
+## Scan Metadata Without Loading Data
+
+[`dascore.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects. These scan results expose metadata, coordinates, and source information without loading the data array into memory.
+
+```{python}
+import dascore as dc
+from dascore.utils.downloader import fetch
+
+path = fetch("terra15_das_1_trimmed.hdf5")
+scan_patch = dc.scan(path)[0]
+
+print(scan_patch.path)
+print(scan_patch.get_coord_summary("time").min)
+```
+
+Scan results are useful for listing contents, building dataframes, and deciding which patches to load.
+
+```{python}
+loaded_patch = dc.read(
+    scan_patch.path,
+    file_format=scan_patch.file_format,
+    file_version=scan_patch.file_version,
+    source_patch_id=scan_patch.source_patch_id or None,
+)[0]
+print(loaded_patch.data.shape)
+```
+
+:::{.callout-note}
+`Patch.attrs` stores non-coordinate metadata only. Coordinate summaries such as `time_min`, `time_max`, and `distance_step` are accessed through [`PatchSummary.get_coord_summary(...)`](`dascore.PatchSummary.get_coord_summary`) or via `patch.summary.get_coord_summary(...)`.
+:::
+
 ## DirectorySpool
 
 The [DirectorySpool](`dascore.clients.dirspool.DirectorySpool`) is used to retrieve data from a directory of dascore-readable files. It has the same interface as other spools and is created with the [`dascore.spool`](`dascore.spool`) function.

@@ -17,9 +17,14 @@ import dascore
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
-from dascore.io.core import FiberIO, PatchFileSummary
+from dascore.io.core import (
+    FiberIO,
+    PatchFileSummary,
+    _get_reloadable_source_path,
+    _scan_result_to_summary,
+)
 from dascore.io.dasdae.core import DASDAEV1
-from dascore.utils.io import BinaryReader, BinaryWriter
+from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
 from dascore.utils.time import to_datetime64
 
 tvar = TypeVar("tvar", int, float, str, Path)
@@ -110,6 +115,24 @@ class _FiberDirectory(FiberIO):
         return False
 
 
+class _ReadOnlySummaryFormatter(FiberIO):
+    """A formatter that relies on FiberIO.scan falling back to read()."""
+
+    name = "_read_only_summary_formatter"
+    version = "1"
+
+    def read(self, resource: Path, **kwargs) -> SpoolType:
+        """Return a simple spool for default scan conversion."""
+        return dc.spool([dc.get_example_patch().update_attrs(tag="fallback")])
+
+    def get_format(self, resource: Path) -> tuple[str, str] | bool:
+        """Only accept the explicit fallback-scan test resource."""
+        path = Path(resource)
+        if path.suffix == ".h5" and path.name == "fallback_scan.h5":
+            return self.name, self.version
+        return False
+
+
 class TestPatchFileSummary:
     """Tests for getting patch file information."""
 
@@ -128,6 +151,25 @@ class TestPatchFileSummary:
         # flat dump is just here for compatibility with dc.PatchAttrs
         out = PatchFileSummary(d_time=10, dims="time,distance")
         assert isinstance(out.flat_dump(), dict)
+
+
+class TestScanResultToSummary:
+    """Tests for converting scan metadata into summaries."""
+
+    def test_dict_input_raises(self):
+        """Untyped dict payloads should no longer be accepted."""
+        with pytest.raises(TypeError, match="only accepts PatchSummary"):
+            _scan_result_to_summary({"tag": "x"})
+
+    def test_patch_attrs_input_raises(self):
+        """PatchAttrs scan outputs should fail with a migration hint."""
+        patch = dc.get_example_patch()
+        msg = (
+            "DASCore no longer accepts PatchAttrs from FiberIO.scan\\(\\).*"
+            "docs/contributing/new_format.qmd"
+        )
+        with pytest.raises(ValueError, match=msg):
+            _scan_result_to_summary(patch.attrs)
 
 
 class TestFormatManager:
@@ -347,11 +389,30 @@ class TestScan:
     def test_scan_patch(self, random_patch):
         """Scan should also work on a patch."""
         out = dc.scan_to_df(random_patch)
-        attrs = random_patch.attrs
+        summary = random_patch.summary
         assert len(out) == 1
         ser = out.iloc[0]
-        assert to_datetime64(ser["time_min"]) == to_datetime64(attrs["time_min"])
-        assert to_datetime64(ser["time_max"]) == to_datetime64(attrs["time_max"])
+        time_summary = summary.get_coord_summary("time")
+        assert to_datetime64(ser["time_min"]) == to_datetime64(time_summary.min)
+        assert to_datetime64(ser["time_max"]) == to_datetime64(time_summary.max)
+
+    def test_scan_patch_returns_summary(self, random_patch):
+        """Direct patch scan should normalize to a PatchSummary."""
+        out = dc.scan(random_patch)
+        assert len(out) == 1
+        scanned = out[0]
+        assert isinstance(scanned, dc.PatchSummary)
+        assert scanned.dtype == str(random_patch.dtype)
+        assert not scanned.source_patch_id
+
+    def test_scan_multi_patch_includes_source_patch_id(self, tmp_path):
+        """Multi-patch scan rows should include a stable source patch id."""
+        path = tmp_path / "multi_patch.h5"
+        spool = dc.examples.get_example_spool("random_das", length=2)
+        dc.write(spool, path, "DASDAE", file_version="1")
+        out = dc.scan_to_df(path)
+        assert "source_patch_id" in out.columns
+        assert out["source_patch_id"].astype(bool).all()
 
     def test_scan_nested_directory(self, nested_directory_with_patches):
         """Ensure scan picks up files in nested directories."""
@@ -362,6 +423,17 @@ class TestScan:
         """Ensure scan works on a single file."""
         out = dc.scan(terra15_v6_path)
         assert len(out) == 1
+
+
+class TestReloadableSourcePath:
+    """Tests for reloading source path extraction."""
+
+    def test_io_resource_manager_source(self, tmp_path):
+        """IOResourceManager candidates should resolve to their source path."""
+        path = tmp_path / "example.txt"
+        path.write_text("x")
+        manager = IOResourceManager(path)
+        assert _get_reloadable_source_path(manager) == str(path)
 
     def test_can_raise(self):
         """
@@ -389,6 +461,76 @@ class TestScan:
         with pytest.warns(UserWarning, match=msg):
             scan = dc.scan(terra15_v6_path)
         assert not len(scan)
+
+    def test_scan_legacy_patch_attrs_raises(self, monkeypatch, terra15_v6_path):
+        """FiberIO returning PatchAttrs should now fail loudly."""
+        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
+
+        def return_patch_attrs(*args, **kwargs):
+            return [dc.PatchAttrs(tag="legacy")]
+
+        monkeypatch.setattr(fiber_io, "scan", return_patch_attrs)
+
+        with pytest.raises(ValueError, match="PatchAttrs from FiberIO.scan"):
+            dc.scan(terra15_v6_path)
+
+    def test_default_fiberio_scan_uses_reloadable_source_path(self, tmp_path):
+        """Default FiberIO.scan should return patch-only summaries."""
+        path = tmp_path / "fallback_scan.h5"
+        path.write_text("placeholder")
+        fio = _ReadOnlySummaryFormatter()
+
+        out = fio.scan(path)
+
+        assert len(out) == 1
+        assert isinstance(out[0], dc.PatchSummary)
+        assert not out[0].path
+        assert not out[0].file_format
+        assert not out[0].file_version
+        assert not out[0].source_patch_id
+
+    def test_dc_scan_adds_source_metadata_to_raw_fiberio_scan(self, tmp_path):
+        """dc.scan should add path/format/version on top of raw formatter scan."""
+        path = tmp_path / "fallback_scan.h5"
+        path.write_text("placeholder")
+
+        raw = _ReadOnlySummaryFormatter().scan(path)
+        assert len(raw) == 1
+        assert not raw[0].path
+        assert not raw[0].file_format
+        assert not raw[0].file_version
+
+        out = dc.scan(path)
+        assert len(out) == 1
+        assert isinstance(out[0], dc.PatchSummary)
+        assert str(out[0].path) == str(path)
+        assert out[0].file_format == _ReadOnlySummaryFormatter.name
+        assert out[0].file_version == _ReadOnlySummaryFormatter.version
+        assert "path" not in out[0].attrs.model_dump()
+        assert "file_format" not in out[0].attrs.model_dump()
+        assert "file_version" not in out[0].attrs.model_dump()
+
+    def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_id(
+        self, tmp_path
+    ):
+        """Default scan should not invent source ids for multi-patch readers."""
+        path = tmp_path / "fallback_scan.h5"
+        path.write_text("placeholder")
+        fio = _ReadOnlySummaryFormatter()
+
+        def read_two_patches(resource: Path, **kwargs) -> SpoolType:
+            patches = [
+                dc.get_example_patch().update_attrs(tag="first"),
+                dc.get_example_patch().update_attrs(tag="second"),
+            ]
+            return dc.spool(patches)
+
+        fio.read = read_two_patches  # type: ignore[method-assign]
+        out = fio.scan(path)
+
+        assert len(out) == 2
+        assert not any(summary.source_patch_id for summary in out)
 
     def test_keyboard_interrupt(self, monkeypatch):
         """Ensure a keyboard interrupt works when progress bar is going"""

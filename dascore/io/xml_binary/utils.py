@@ -15,7 +15,7 @@ import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.utils.misc import iterate
 from dascore.utils.models import BaseModel, DateTime64
-from dascore.utils.pd import _model_list_to_df, adjust_segments, filter_df
+from dascore.utils.pd import adjust_segments, filter_df
 from dascore.utils.time import to_float
 from dascore.utils.xml import xml_to_dict
 
@@ -147,29 +147,51 @@ def _get_path_datetime_64(paths):
 
 def _paths_to_df(paths, metadata, attr_cls):
     """Convert paths to dataframe of info."""
-    attrs = _paths_to_attrs(paths=paths, metadata=metadata, attr_cls=attr_cls)
-    return _model_list_to_df(attrs)
+    paths = list(iterate(paths))
+    if not paths:
+        return pd.DataFrame()
+    records = []
+    dims = STANDARD_DIMS[::-1] if metadata.transposed_data else STANDARD_DIMS
+    base_attrs = _make_base_attrs_dict(metadata)
+    distance_coord = _make_distance_coord(metadata)
+    dt_ser = _get_path_datetime_64(paths)
+    for path, time_coord in zip(
+        paths, _make_time_coord(dt_ser.values, metadata), strict=True
+    ):
+        cm = get_coord_manager(
+            {"time": time_coord, "distance": distance_coord},
+            dims=dims,
+        )
+        attrs = attr_cls(path=path, **base_attrs).model_dump()
+        record = dict(attrs)
+        for name, summary in cm.to_summary_dict().items():
+            for field, value in summary.model_dump().items():
+                record[f"{name}_{field}"] = value
+        records.append(record)
+    return pd.DataFrame(records)
 
 
-def _read_single_file(path, metadata, time, distance):
+def _read_single_file(path, metadata, time, distance, attr_cls):
     """Read a single file into a patch."""
     assert not metadata.transposed_data, "Cant handle data transposition yet."
-    attr = _paths_to_attrs(path, metadata, summarize=False)[0]
-    time_coord = attr.coords["time"].to_coord()
-    distance_coord = attr.coords["distance"].to_coord()
+    base_attrs = _make_base_attrs_dict(metadata)
+    start_time = dc.to_datetime64(_get_path_datetime_64([path]).iloc[0])
+    time_coord = next(_make_time_coord([start_time], metadata))
+    distance_coord = _make_distance_coord(metadata)
     cm = get_coord_manager(
         {"time": time_coord, "distance": distance_coord},
-        dims=attr.dim_tuple,
+        dims=STANDARD_DIMS,
     )
     memmap = np.memmap(path, dtype=metadata.data_type)
     size = np.prod(cm.shape)
     assert memmap.size == size, f"wrong data shape for {path}"
     data = memmap.reshape(cm.shape)
+    attrs = attr_cls(path=path, **base_attrs)
     patch = dc.Patch(
         data=data,
-        dims=attr.dim_tuple,
+        dims=STANDARD_DIMS,
         coords=cm,
-        attrs=attr.update(coord=None),
+        attrs=attrs,
     )
     return patch.select(time=time, distance=distance)
 
@@ -178,7 +200,7 @@ def _load_patches(paths, metadata, time, distance, attr_cls):
     """Load the data file or file into a patch."""
     # Fast case for single file.
     if isinstance(paths, Path) and paths.is_file():
-        return _read_single_file(paths, metadata, time, distance)
+        return _read_single_file(paths, metadata, time, distance, attr_cls)
     # Since there could be **MANY** files, we have to create a mini-index
     # here to determine which files to read. Under normal circumstances
     # this isn't required as a spool can manage it.
@@ -201,37 +223,41 @@ def _load_patches(paths, metadata, time, distance, attr_cls):
     return out
 
 
-def _paths_to_attrs(
-    paths: Path | Sequence[Path],
+def _paths_to_scan_patches(
+    paths: Sequence[Path],
     metadata,
-    summarize=True,
     attr_cls=dc.PatchAttrs,
     extra_attrs=None,
     timestamp=None,
 ):
-    """Convert a path to a Patch attribute."""
+    """Convert paths to patch summaries for scan/index workflows."""
     extra_attrs = {} if not extra_attrs else extra_attrs
-    paths = iterate(paths)
-    # filter based on timestamp
+    paths = list(iterate(paths))
     if timestamp is not None:
         ts = to_float(timestamp)
-        paths = list(x for x in paths if Path(x).stat().st_mtime >= ts)
-    # No data to index.
-    if not len(paths):
+        paths = [x for x in paths if Path(x).stat().st_mtime >= ts]
+    if not paths:
         return []
     base_attrs = _make_base_attrs_dict(metadata)
     distance_coord = _make_distance_coord(metadata)
     dt_ser = _get_path_datetime_64(paths)
     dims = STANDARD_DIMS[::-1] if metadata.transposed_data else STANDARD_DIMS
     out = []
-    for path, time_coord in zip(paths, _make_time_coord(dt_ser.values, metadata)):
-        cm = get_coord_manager(
+    for path, time_coord in zip(
+        paths, _make_time_coord(dt_ser.values, metadata), strict=True
+    ):
+        coords = get_coord_manager(
             {"time": time_coord, "distance": distance_coord},
             dims=dims,
         )
-        if summarize:
-            cm = cm.to_summary_dict()
-        attr_dict = {**base_attrs, **extra_attrs}
-        attrs = attr_cls(coords=cm, path=path, **attr_dict)
-        out.append(attrs)
+        attrs = attr_cls(**base_attrs, **extra_attrs)
+        out.append(
+            dc.PatchSummary.model_construct(
+                attrs=attrs,
+                coords=coords.to_summary_dict(),
+                dims=coords.dims,
+                shape=coords.shape,
+                dtype=metadata.data_type,
+            )
+        )
     return out

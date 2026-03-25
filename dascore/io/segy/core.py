@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dascore as dc
+from dascore.core.summary import PatchSummary
 from dascore.io.core import FiberIO
 from dascore.utils.io import BinaryReader
 from dascore.utils.misc import optional_import
@@ -43,7 +44,7 @@ class SegyV1_0(FiberIO):  # noqa
         segyio = optional_import(self._package_name)
         with segyio.open(path, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
-            attrs = _get_attrs(fi, coords, path, self)
+            attrs = _get_attrs(fi, coords, path, self, include_source=True)
             data, coords = _get_filtered_data_and_coords(
                 fi, coords, time=time, channel=channel
             )
@@ -53,20 +54,26 @@ class SegyV1_0(FiberIO):  # noqa
         patch = dc.Patch(coords=coords, data=data, attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, path, **kwargs) -> list[dc.PatchAttrs]:
+    def scan(self, path, **kwargs) -> list[PatchSummary]:
         """
         Used to get metadata about a file without reading the whole file.
 
-        This should return a list of
-        [`PatchAttrs`](`dascore.core.attrs.PatchAttrs`) objects
-        from the [dascore.core.attrs](`dascore.core.attrs`) module, or a
-        format-specific subclass.
+        Returns lightweight scan metadata without loading the data array.
         """
         segyio = optional_import(self._package_name)
         with segyio.open(path, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
             attrs = _get_attrs(fi, coords, path, self)
-        return [attrs]
+            dtype = str(fi.dtype)
+        return [
+            PatchSummary.model_construct(
+                attrs=attrs,
+                coords=coords.to_summary_dict(),
+                dims=coords.dims,
+                shape=coords.shape,
+                dtype=dtype,
+            )
+        ]
 
     def write(self, spool: dc.Patch | dc.BaseSpool, resource, **kwargs):
         """

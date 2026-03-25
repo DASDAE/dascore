@@ -13,7 +13,6 @@ import pandas as pd
 from rich.text import Text
 from typing_extensions import Self
 
-import dascore as dc
 from dascore.constants import PROGRESS_LEVELS
 from dascore.core.spool import BaseSpool, DataFrameSpool
 from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
@@ -42,7 +41,7 @@ class DirectorySpool(DataFrameSpool):
         Dict of keyword arguments to restrict output contents.
     """
 
-    _drop_columns = ("file_format", "file_version", "path")
+    _drop_columns = ("file_format", "file_version", "path", "source_patch_id")
 
     def __init__(
         self,
@@ -126,5 +125,4 @@ class DirectorySpool(DataFrameSpool):
         """Given a row from the managed dataframe, return a patch."""
         final_kwargs = dict(kwargs)
         final_kwargs.update(self._select_kwargs)
-        patch = dc.read(**final_kwargs)[0]
-        return patch
+        return self._read_and_resolve_patch(final_kwargs)

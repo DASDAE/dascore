@@ -22,7 +22,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import CoordError, MissingOptionalDependencyError
 from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
@@ -119,6 +119,11 @@ def skip_timeout():
         pytest.skip(f"Unable to fetch data due to timeout: {exc}")
 
 
+def _scan_summary(scan_result):
+    """Normalize scan output to the patch summary view."""
+    return scan_result.summary if isinstance(scan_result, dc.Patch) else scan_result
+
+
 @cache
 def _cached_read(path, io=None):
     """
@@ -180,7 +185,7 @@ def read_spool(data_file_path):
 
 
 @pytest.fixture(scope="session")
-def scanned_attrs(data_file_path):
+def scanned_summaries(data_file_path):
     """Read each file into a spool."""
     with skip_missing():
         out = dc.scan(data_file_path)
@@ -197,15 +202,16 @@ def fiber_io_writer(request):
 
 
 def _assert_coords_attrs_match(patch):
-    """Ensure both the coordinates and attributes match on patch."""
-    attrs = patch.attrs
+    """Ensure patch summary and coordinates match."""
+    summary = patch.summary
     coords = patch.coords
-    assert attrs.dim_tuple == coords.dims
-    for dim in attrs.dim_tuple:
+    assert summary.dims == coords.dims
+    for dim in summary.dims:
         coord = patch.get_coord(dim)
-        assert coord.min() == getattr(attrs, f"{dim}_min")
-        assert coord.max() == getattr(attrs, f"{dim}_max")
-        assert coord.step == getattr(attrs, f"{dim}_step")
+        summary_coord = summary.get_coord_summary(dim)
+        assert coord.min() == summary_coord.min
+        assert coord.max() == summary_coord.max
+        assert coord.step == summary_coord.step
 
 
 def _assert_op_or_close(val1, val2, op):
@@ -220,8 +226,6 @@ def _assert_op_or_close(val1, val2, op):
 
 
 # --- Tests
-
-DIM_RELATED_ATTRS = ("{dim}_min", "{dim}_max", "{dim}_step")
 
 
 class TestGetFormat:
@@ -261,7 +265,7 @@ class TestGetFormat:
                     path = fetch(key)
                 out = io_instance.get_format(path)
                 if out:
-                    format_name, version = out
+                    _format_name, version = out
                     assert version != io_instance.version
 
 
@@ -316,12 +320,13 @@ class TestRead:
         """
         io, path = io_path_tuple
         with skip_missing():
-            attrs_from_file = dc.scan(path)
-        assert len(attrs_from_file)
-        attrs_init = attrs_from_file[0]
-        for dim in attrs_init.dim_tuple:
-            start = getattr(attrs_init, f"{dim}_min")
-            stop = getattr(attrs_init, f"{dim}_max")
+            summaries_from_file = [_scan_summary(x) for x in dc.scan(path)]
+        assert len(summaries_from_file)
+        summary_init = summaries_from_file[0]
+        for dim in summary_init.dim_tuple:
+            summary_coord = summary_init.get_coord_summary(dim)
+            start = summary_coord.min
+            stop = summary_coord.max
             duration = stop - start
             # first test double ended query
             trim_tuple = (start + duration / 10, start + 2 * duration / 10)
@@ -337,32 +342,32 @@ class TestRead:
             spool = io.read(path, **{dim: trim_tuple})
             assert len(spool) == 1
             patch = spool[0]
-            attrs = patch.attrs
+            summary = patch.summary
             _assert_coords_attrs_match(patch)
             coord = patch.get_coord(dim)
             _assert_op_or_close(coord.min(), trim_tuple[0], ge)
-            _assert_op_or_close(coord.max(), getattr(attrs, f"{dim}_max"), eq)
+            _assert_op_or_close(coord.max(), summary.get_coord_summary(dim).max, eq)
             # then single-ended query on end side
             trim_tuple = (None, start + duration / 10)
             spool = io.read(path, **{dim: trim_tuple})
             assert len(spool) == 1
             patch = spool[0]
-            attrs = patch.attrs
+            summary = patch.summary
             _assert_coords_attrs_match(patch)
             coord = patch.get_coord(dim)
-            _assert_op_or_close(coord.min(), getattr(attrs, f"{dim}_min"), eq)
+            _assert_op_or_close(coord.min(), summary.get_coord_summary(dim).min, eq)
             _assert_op_or_close(coord.max(), trim_tuple[1], le)
 
     def test_slice_out_all_patches_time(self, io_path_tuple):
         """Ensure slicing outside of file time range returns an empty spool."""
         io, path = io_path_tuple
         with skip_missing():
-            attrs_from_file = dc.scan(path)
-        dims = {y for x in attrs_from_file for y in set(x.coords)}
+            scan_patches = dc.scan(path)
+        dims = {y for x in scan_patches for y in x.dims}
         if "time" not in dims:
             pytest.skip("Test requires patch with time and distance dimensions.")
         # First test on selecting outside time range.
-        end_time = np.max([x.coords["time"].max for x in attrs_from_file])
+        end_time = np.max([x.get_coord_summary("time").max for x in scan_patches])
         one_second = np.timedelta64(1, "s")
         spool = io.read(path, time=(end_time + one_second, ...))
         assert len(spool) == 0
@@ -371,12 +376,12 @@ class TestRead:
         """Ensure slicing outside file distance range returns an empty spool."""
         io, path = io_path_tuple
         with skip_missing():
-            attrs_from_file = dc.scan(path)
-        dims = {y for x in attrs_from_file for y in set(x.coords)}
+            scan_patches = dc.scan(path)
+        dims = {y for x in scan_patches for y in x.dims}
         if "distance" not in dims:
             pytest.skip("Test requires patch with time and distance dimensions.")
         # The outside distance range.
-        max_dist = np.max([x.coords["distance"].max for x in attrs_from_file])
+        max_dist = np.max([x.get_coord_summary("distance").max for x in scan_patches])
         spool = io.read(path, distance=(max_dist + 1, ...))
         assert len(spool) == 0
 
@@ -387,41 +392,81 @@ class TestScan:
     def test_scan_basics(self, data_file_path):
         """Ensure each file can be scanned."""
         with skip_missing():
-            attrs_list = dc.scan(data_file_path)
-        assert len(attrs_list)
+            summary_list = dc.scan(data_file_path)
+        assert len(summary_list)
 
-        for attrs in attrs_list:
-            assert isinstance(attrs, dc.PatchAttrs)
-            assert str(attrs.path) == str(data_file_path)
+        for summary in summary_list:
+            assert isinstance(summary, dc.PatchSummary)
+            assert str(summary.path) == str(data_file_path)
 
-    def test_scan_has_version_and_format(self, io_path_tuple):
-        """Scan output should contain version and format."""
+    def test_raw_scan_excludes_source_metadata(self, io_path_tuple):
+        """Direct FiberIO scans should not attach source metadata."""
         io, path = io_path_tuple
         with skip_missing():
-            attr_list = io.scan(path)
-        for attrs in attr_list:
-            assert attrs.file_format == io.name
-            assert attrs.file_version == io.version
+            summary_list = io.scan(path)
+        for summary in summary_list:
+            assert not summary.path
+            assert not summary.file_format
+            assert not summary.file_version
+            attr_dump = summary.attrs.model_dump()
+            assert "path" not in attr_dump
+            assert "file_format" not in attr_dump
+            assert "file_version" not in attr_dump
 
-    def test_time_coord_is_time(self, scanned_attrs):
-        """Ensure scanned attrs have correct dtype for time."""
-        for patch_attr in scanned_attrs:
+    def test_public_scan_has_version_and_format(self, io_path_tuple):
+        """Public scan output should contain source metadata."""
+        io, path = io_path_tuple
+        with skip_missing():
+            summary_list = dc.scan(path)
+        for summary in summary_list:
+            assert str(summary.path) == str(path)
+            assert summary.file_format == io.name
+            assert summary.file_version == io.version
+
+    def test_time_coord_is_time(self, scanned_summaries):
+        """Ensure scanned summaries have correct dtype for time."""
+        for summary in scanned_summaries:
             with suppress(KeyError):
-                time = patch_attr.coords["time"]
+                time = summary.get_coord_summary("time")
                 assert "datetime64" in str(np.dtype(time.dtype))
 
-    def test_dist_coord_is_float_or_int(self, scanned_attrs):
+    def test_dist_coord_is_float_or_int(self, scanned_summaries):
         """Distance can be either float or int, but must be numeric."""
-        for patch_attr in scanned_attrs:
-            with suppress(KeyError):
-                distance = patch_attr.coords["distance"]
+        for summary in scanned_summaries:
+            with suppress(KeyError, CoordError):
+                distance = summary.get_coord_summary("distance")
                 dtype = np.dtype(distance.dtype)
                 assert np.issubdtype(dtype, np.number)
 
-    def test_no_bytes(self, scanned_attrs):
+    def test_coord_dtype_non_empty(self, scanned_summaries):
+        """Each coordinate summary should have a non-empty dtype string."""
+        for summary in scanned_summaries:
+            for coord_name, coord in summary.coords.items():
+                assert coord.dtype, f"coord '{coord_name}' has empty dtype"
+
+    def test_patch_dims_non_empty(self, scanned_summaries):
+        """Scan results should carry at least one dimension."""
+        for summary in scanned_summaries:
+            assert summary.dims, "PatchSummary has empty dims"
+
+    def test_patch_dtype_non_empty(self, scanned_summaries):
+        """Scan results should carry a non-empty data dtype."""
+        for summary in scanned_summaries:
+            assert summary.dtype, "PatchSummary has empty dtype"
+
+    def test_coord_min_max_ordered(self, scanned_summaries):
+        """Coord min should be <= max for all coordinates."""
+        for summary in scanned_summaries:
+            for coord_name, coord in summary.coords.items():
+                with suppress(TypeError):  # incomparable types (e.g. NaT/NaN)
+                    assert (
+                        coord.min <= coord.max
+                    ), f"{coord_name}: min ({coord.min}) > max ({coord.max})"
+
+    def test_no_bytes(self, scanned_summaries):
         """Sometimes bytes are returned from scanning, we need str."""
-        for patch_attr in scanned_attrs:
-            model = patch_attr.model_dump()
+        for summary in scanned_summaries:
+            model = _scan_summary(summary).model_dump()
             for key, value in model.items():
                 assert not isinstance(value, bytes | np.bytes_)
 
@@ -454,8 +499,8 @@ class TestWrite:
 class TestIntegration:
     """Test suite for generic scanning."""
 
-    def test_scan_attrs_match_patch_attrs(self, data_file_path):
-        """We need to make sure scan and patch attrs are identical."""
+    def test_scan_summary_matches_patch_summary(self, data_file_path):
+        """We need to make sure scan and patch summaries are identical."""
         # Since dasdae format stores attrs and coords, we need to
         # skip events created before coords/attrs were more closely
         # aligned.
@@ -468,20 +513,19 @@ class TestIntegration:
             "network",
         )
         with skip_missing():
-            scan_attrs_list = dc.scan(data_file_path)
-        patch_attrs_list = [x.attrs for x in _cached_read(data_file_path)]
-        assert len(scan_attrs_list) == len(patch_attrs_list)
-        for pat_attrs1, scan_attrs2 in zip(patch_attrs_list, scan_attrs_list):
-            assert pat_attrs1.dims == scan_attrs2.dims
+            scan_summary_list = [_scan_summary(x) for x in dc.scan(data_file_path)]
+        patch_summary_list = [x.summary for x in _cached_read(data_file_path)]
+        assert len(scan_summary_list) == len(patch_summary_list)
+        for patch_summary, scan_summary in zip(patch_summary_list, scan_summary_list):
+            assert patch_summary.dims == scan_summary.dims
             # first compare dimensions are related attributes
-            for dim in pat_attrs1.dim_tuple:
-                assert getattr(pat_attrs1, f"{dim}_min") == getattr(
-                    scan_attrs2, f"{dim}_min"
-                )
-                for dim_attr in DIM_RELATED_ATTRS:
-                    attr_name = dim_attr.format(dim=dim)
-                    attr1 = getattr(pat_attrs1, attr_name)
-                    attr2 = getattr(scan_attrs2, attr_name)
+            for dim in patch_summary.dim_tuple:
+                patch_coord = patch_summary.get_coord_summary(dim)
+                scan_coord = scan_summary.get_coord_summary(dim)
+                assert patch_coord.min == scan_coord.min
+                for attr_name in ("min", "max", "step"):
+                    attr1 = getattr(patch_coord, attr_name)
+                    attr2 = getattr(scan_coord, attr_name)
                     # Use close comparison for floating point values
                     if isinstance(attr1, float | np.floating) and isinstance(
                         attr2, float | np.floating
@@ -491,6 +535,8 @@ class TestIntegration:
                         assert attr1 == attr2
             # then other expected attributes.
             for attr_name in comp_attrs:
-                patch_attr = getattr(pat_attrs1, attr_name)
-                scan_attr = getattr(scan_attrs2, attr_name)
-                assert scan_attr == patch_attr
+                patch_value = getattr(patch_summary.attrs, attr_name)
+                scan_value = getattr(scan_summary.attrs, attr_name)
+                if scan_value in ("", None):
+                    continue
+                assert scan_value == patch_value

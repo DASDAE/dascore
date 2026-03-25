@@ -369,8 +369,8 @@ class TestMergeCompatibleCoordsAttrs:
 
     def test_incompatible_coords(self, random_patch):
         """Ensure an incompatible error is raised for coords that don't match."""
-        new_time = random_patch.attrs.time_max
-        new = random_patch.update_attrs(time_min=new_time)
+        new_time = random_patch.get_coord("time").max()
+        new = random_patch.update_coords(time_min=new_time)
         match = "coordinates are not equal"
         with pytest.raises(IncompatiblePatchError, match=match):
             merge_compatible_coords_attrs(new, random_patch)
@@ -390,7 +390,7 @@ class TestMergeCompatibleCoordsAttrs:
         expected = set(pa1.coords.coord_map) | set(pa2.coords.coord_map)
         coords, attrs = merge_compatible_coords_attrs(pa1, pa2)
         assert set(coords.coord_map) == expected
-        assert set(attrs.coords) == expected
+        assert "coords" not in attrs.model_dump()
 
     def test_extra_attrs(self, random_patch):
         """Ensure extra attributes are added to patch."""

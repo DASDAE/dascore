@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 from scipy.fft import next_fast_len
 
-import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
@@ -17,6 +16,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError
 from dascore.utils.array import _apply_binary_ufunc
+from dascore.utils.attrs import _raise_if_coord_attr_updates
 from dascore.utils.misc import _get_nullish
 from dascore.utils.models import ArrayLike
 from dascore.utils.patch import (
@@ -95,12 +95,13 @@ def pipe(
 
 def update_attrs(self: PatchType, **attrs) -> PatchType:
     """
-    Update attrs and return a new Patch.
+    Update patch attrs and return a new Patch.
 
     Parameters
     ----------
     **attrs
-        attrs to add/update.
+        Attrs to add/update. Nested `coords` payloads are not accepted here;
+        use `patch.update_coords(...)` for coordinate changes.
 
     Examples
     --------
@@ -113,24 +114,12 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     >>> # Add new custom attributes
     >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
     """
-
-    def _fast_attr_update(self, attrs):
-        """A fast method for just squashing the attrs and returning new patch."""
-        new = self.__new__(self.__class__)
-        new._data = self.data
-        new._attrs = attrs
-        new._coords = self.coords
-        return new
-
-    # since we update history so often, we make a fast track for it.
+    _raise_if_coord_attr_updates(attrs)
     new_attrs = self.attrs.model_dump(exclude_unset=True)
     new_attrs.update(attrs)
-    # pop out coords so new coords has priority.
-    if len(attrs) == 1 and "history" in attrs:
-        return _fast_attr_update(self, PatchAttrs(**new_attrs))
-    new_coords, new_attrs = self.coords.update_from_attrs(new_attrs)
-    out = dict(coords=new_coords, attrs=new_attrs, dims=self.dims)
-    return self.__class__(self.data, **out)
+    validated = PatchAttrs.from_dict(new_attrs)
+    out = dict(coords=self.coords, attrs=validated, dims=self.dims)
+    return self.__class__(self._data, **out)
 
 
 def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -> bool:
@@ -172,12 +161,12 @@ def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -
     if not self.coords == other.coords:
         return False
     if only_required_attrs:  # only include default fields
-        attrs_to_compare = set(PatchAttrs.model_fields) - {"history", "coords"}
+        attrs_to_compare = set(PatchAttrs.model_fields) - {"history"}
         attrs1 = self.attrs.model_dump(include=attrs_to_compare)
         attrs2 = other.attrs.model_dump(include=attrs_to_compare)
-    else:  # include all fields but coords
-        attrs1 = self.attrs.model_dump(exclude=["coords"])
-        attrs2 = other.attrs.model_dump(exclude=["coords"])
+    else:
+        attrs1 = self.attrs.model_dump()
+        attrs2 = other.attrs.model_dump()
     if set(attrs1) != set(attrs2):  # attrs don't have same keys; not equal
         return False
     if attrs1 != attrs2:
@@ -191,9 +180,11 @@ def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -
         if not_equal:
             return False
     # Test data equality or proximity.
+    if self.data.shape != other.data.shape:
+        return False
     if close and not np.allclose(self.data, other.data):
         return False
-    elif not close and not np.equal(self.data, other.data).all():
+    if not close and not np.equal(self.data, other.data).all():
         return False
     return True
 
@@ -235,20 +226,16 @@ def update(
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict.
 
-    Notes
-    -----
-    - If both coords and attrs are defined, attrs will have priority.
     """
-    data = data if data is not None else self.data
+    data = data if data is not None else self._data
     coords = coords if coords is not None else self.coords
     if dims is None:
         dims = coords.dims if isinstance(coords, CoordManager) else self.dims
     coords = get_coord_manager(coords, dims)
     if attrs is not None:
-        coords, attrs = coords.update_from_attrs(attrs)
+        attrs = PatchAttrs.from_dict(attrs)
     else:
-        _attrs = dc.PatchAttrs.from_dict(attrs or self.attrs)
-        attrs = _attrs.update(coords=coords)
+        attrs = self.attrs
     return self.__class__(data=data, coords=coords, attrs=attrs)
 
 
@@ -490,7 +477,7 @@ def dropna(
     new_data = patch.data[tuple(slices)]
     coord = patch.get_coord(dim)
     cm = patch.coords.update(**{dim: coord[to_keep]})
-    attrs = patch.attrs.update(coords={})
+    attrs = patch.attrs
     return patch.new(data=new_data, coords=cm, attrs=attrs)
 
 

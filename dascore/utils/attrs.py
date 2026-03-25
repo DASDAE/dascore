@@ -4,7 +4,6 @@ Utils for working with attributes.
 
 from __future__ import annotations
 
-import warnings
 from collections import ChainMap, defaultdict
 from collections.abc import Sequence
 from functools import reduce
@@ -14,12 +13,10 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import attr_conflict_description
-from dascore.exceptions import AttributeMergeError
+from dascore.exceptions import AttributeMergeError, PatchAttributeError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     _dict_list_diffs,
-    all_diffs_close_enough,
-    get_middle_value,
     is_valid_coord_str,
     iterate,
 )
@@ -28,10 +25,8 @@ from dascore.utils.misc import (
 @compose_docstring(conflict_desc=attr_conflict_description)
 def combine_patch_attrs(
     model_list: Sequence[dc.PatchAttrs],
-    coord_name: str | None = None,
     conflicts: Literal["drop", "raise", "keep_first"] = "raise",
     drop_attrs: Sequence[str] | None = None,
-    coord: None | dc.core.coords.BaseCoord = None,
 ) -> dc.PatchAttrs:
     """
     Merge Patch Attributes along a dimension.
@@ -40,90 +35,30 @@ def combine_patch_attrs(
     ----------
     model_list
         A list of models.
-    coord_name
-        The coordinate, usually a dimension coord, along which to merge.
     conflicts
         {conflict_desc}
     drop_attrs
         If provided, attributes which should be dropped.
-    coord
-        The coordinate for the new values of dim. This is provided as a
-        shortcut if it has already been computed.
     """
-    # TODO this is a monstrosity! need to refactor.
-    model_fields = dc.core.CoordSummary.model_fields
-    eq_coord_fields = set(model_fields) - {"min", "max", "step"}
 
-    def _get_merge_coords(model_dicts):
-        """Get the coordinates to merge together."""
-        # pop out coord to merge on
-        merge_coords = []
-        for mod in model_dicts:
-            coords = mod.get("coords", {})
-            maybe_coord = coords.pop(coord_name, None)
-            if maybe_coord is not None:
-                merge_coords.append(maybe_coord)
-        # dealing with empty coords
-        if not merge_coords:
-            return {}
-        return merge_coords
-
-    def _get_merge_dict_list(merge_coords):
-        """Get a list of {attrs: []}."""
-        out = defaultdict(list)
-        for mdict in merge_coords:
-            for key, val in mdict.items():
-                out[key].append(val)
-        return out
-
-    def _get_new_coord(model_dicts):
-        """Get the merged coord to set on all models."""
-        merge_coords = _get_merge_coords(model_dicts)
-        merge_dict_list = _get_merge_dict_list(merge_coords)
-        out = {}
-        # empty dicts
-        if not merge_dict_list:
-            return dict(merge_dict_list)
-        # all these should be equal else raise.
-        for key in eq_coord_fields:
-            if not len(vals := merge_dict_list[key]):
-                continue
-            if not all(vals[0] == x for x in vals):
-                msg = f"Cant merge patch attrs, key {key} not equal."
-                raise AttributeMergeError(msg)
-            out[key] = vals[0]
-        out["min"] = min(merge_dict_list["min"])
-        out["max"] = max(merge_dict_list["max"])
-        step = None
-        if all_diffs_close_enough(steps := merge_dict_list["step"]):
-            step = get_middle_value(steps)
-        out["step"] = step
-        return out
+    def _to_patch_attrs(model):
+        """Normalize supported attr-like inputs to PatchAttrs."""
+        if isinstance(model, dc.Patch):
+            model = model._attrs
+        if isinstance(model, dc.PatchAttrs):
+            return model
+        return dc.PatchAttrs.from_dict(model)
 
     def _get_model_dict_list(mod_list):
-        """Get list of model_dict, merge along dim if specified."""
+        """Get list of model dicts with optional dropped attrs."""
         model_dicts = [
-            x.model_dump(exclude_defaults=True) if not isinstance(x, dict) else x
-            for x in mod_list
+            _to_patch_attrs(x).model_dump(exclude_defaults=True) for x in mod_list
         ]
         # drop attributes specified.
         if drop := set(iterate(drop_attrs)):
             model_dicts = [
                 {i: v for i, v in x.items() if i not in drop} for x in model_dicts
             ]
-        # no coordinate to merge on, just return dicts.
-        if not coord_name:
-            return model_dicts
-        # drop models which don't have required coords
-        model_dicts = [x for x in model_dicts if coord_name in x.get("coords", {})]
-        # coordinate can be determined from existing coords.
-        if coord is None:
-            new_coord = _get_new_coord(model_dicts)
-        else:  # or if one was passed just use its summary.
-            new_coord = coord.to_summary()
-        if new_coord:
-            for mod in model_dicts:
-                mod["coords"][coord_name] = new_coord
         return model_dicts
 
     def _replace_null_with_none(mod_dict_list):
@@ -170,12 +105,30 @@ def combine_patch_attrs(
 
     mod_dict_list = _get_model_dict_list(model_list)
     mod_dict_list = _handle_other_attrs(mod_dict_list)
-    first_class = model_list[0].__class__
-    cls = first_class if not first_class == dict else dc.PatchAttrs
-    if not len(mod_dict_list):
-        msg = "Failed to combine patch attrs"
-        raise AttributeMergeError(msg)
+    first = model_list[0]
+    first_class = (
+        _to_patch_attrs(first).__class__ if not isinstance(first, dict) else dict
+    )
+    cls = first_class if first_class is not dict else dc.PatchAttrs
     return cls(**mod_dict_list[0])
+
+
+def _raise_if_coord_attr_updates(update_map) -> None:
+    """Reject flat coord-summary keys in attr update calls."""
+    if update_map is None:
+        return
+    coord_info, _ = separate_coord_info(update_map)
+    bad_keys = []
+    for coord_name, info in coord_info.items():
+        for field in info:
+            bad_keys.append(f"{coord_name}_{field}")
+    if bad_keys:
+        names = ", ".join(sorted(bad_keys))
+        msg = (
+            "PatchAttrs.update does not accept coordinate metadata. "
+            f"Received: {names}. Use update_coords(...) instead."
+        )
+        raise PatchAttributeError(msg)
 
 
 def separate_coord_info(
@@ -185,26 +138,52 @@ def separate_coord_info(
     cant_be_alone: tuple[str, ...] = ("units", "dtype"),
 ) -> tuple[dict, dict]:
     """
-    Separate coordinate information from attr dict.
+    Separate coordinate information from mixed attr-like metadata.
 
-    These can be in the flat-form (ie {time_min, time_max, time_step, ...})
-    or a nested coord: {coords: {time: {min, max, step}}
+    This helper is still needed because DASCore still accepts a few mixed
+    metadata shapes internally and in legacy IO paths. In particular, it is
+    used to:
+
+    - normalize flat scan/index-style keys such as ``time_min`` and
+      ``distance_step`` into coordinate summary payloads
+    - split coordinate updates from pure attrs in coord-manager code
+    - unpack older nested ``{"coords": {...}}`` metadata payloads
+
+    Supported input shapes include flat coord-style fields such as
+    ``{time_min, time_max, time_step, ...}`` and nested coord dictionaries
+    such as ``{coords: {time: {min, max, step}}}``.
 
     Parameters
     ----------
     obj
-        The object or model to
+        The object or model to split.
     dims
-        The dimension to look for.
+        Optional dimension names used to recognize flat coord-style keys.
     required
         If provided, the required attributes (e.g., min, max, step).
     cant_be_alone
-        names which cannot be on their own.
+        Names which cannot be treated as coord info on their own.
 
     Returns
     -------
-    coord_dict and attrs_dict.
+    A tuple of ``(coord_dict, attrs_dict)`` where coordinate-like metadata has
+    been separated from the remaining pure attrs.
     """
+    coord_summary_fields = tuple(dc.core.CoordSummary.model_fields)
+
+    def _split_coord_key(key, prefixes=None):
+        """Split flat coord summary key into coord name and field."""
+        prefixes = tuple(iterate(prefixes)) if prefixes is not None else ()
+        if prefixes:
+            for prefix in sorted(prefixes, key=len, reverse=True):
+                prefix_str = f"{prefix}_"
+                if key.startswith(prefix_str):
+                    field = key[len(prefix_str) :]
+                    if field in coord_summary_fields:
+                        return prefix, field
+            return None
+        parts = key.rsplit("_", 1)
+        return tuple(parts)
 
     def _meets_required(coord_dict, strict=True):
         """
@@ -236,21 +215,20 @@ def separate_coord_info(
         for key in obj:
             if not is_valid_coord_str(key):
                 continue
-            potential_keys[key.split("_")[0]].add(key.split("_")[1])
+            coord_name, field = _split_coord_key(key)
+            potential_keys[coord_name].add(field)
         return tuple(i for i, v in potential_keys.items() if _meets_required(v))
 
     def _get_coords_from_top_level(obj, out, dims):
         """First get coord info from top level."""
         for dim in iterate(dims):
-            potential_coord = {
-                i.split("_")[1]: v for i, v in obj.items() if is_valid_coord_str(i, dim)
-            }
-            # nasty hack for handling d_{dim} for backward compatibility.
-            if (bad_name := f"d_{dim}") in obj:
-                msg = f"d_{dim} is deprecated, use {dim}_step"
-                warnings.warn(msg, DeprecationWarning, stacklevel=3)
-                potential_coord["step"] = obj[bad_name]
-
+            potential_coord = {}
+            for key, value in obj.items():
+                split = _split_coord_key(key, prefixes=(dim,))
+                if split is None:
+                    continue
+                _, field = split
+                potential_coord[field] = value
             if _meets_required(potential_coord, strict=False):
                 out[dim] = potential_coord
 
@@ -290,7 +268,6 @@ def separate_coord_info(
     # Check if dims need to be updated.
     new_dims = _get_dims(obj)
     if new_dims and new_dims != dims:
-        obj["dims"] = new_dims
         dims = new_dims
     # this is already a dict of coord info.
     if dims and set(dims).issubset(set(obj)):
@@ -298,6 +275,4 @@ def separate_coord_info(
     _get_coords_from_coord_level(obj, coord_dict)
     _get_coords_from_top_level(obj, coord_dict, dims)
     _pop_keys(obj, coord_dict)
-    if "dims" not in obj and dims is not None:
-        obj["dims"] = dims
     return coord_dict, obj

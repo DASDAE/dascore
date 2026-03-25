@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
+from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.core.summary import PatchSummary
 from dascore.utils.misc import maybe_get_items
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -81,14 +82,23 @@ def _get_version_data_node(root):
 
 def _scan_terra15(h5_fi, data_node, extras=None):
     """Scan a terra15 file, return metadata."""
-    out = extras
+    out = {} if extras is None else dict(extras)
     out.update(_get_default_attrs(h5_fi.attrs))
     coords = {
         "time": _get_time_coord(data_node, snap_dims=True),
         "distance": _get_distance_coord(h5_fi),
     }
-    out["coords"] = coords
-    return [dc.PatchAttrs(**out)]
+    return [
+        PatchSummary.model_construct(
+            attrs=PatchAttrs.from_dict(out),
+            coords={
+                name: coord.to_summary(dims=(name,)) for name, coord in coords.items()
+            },
+            dims=tuple(coords),
+            shape=(),
+            dtype=str(data_node["data"].dtype),
+        )
+    ]
 
 
 # --- Reading patch
@@ -140,7 +150,6 @@ def _read_terra15(
     )
     dims = ("time", "distance")
     attrs = _get_default_attrs(pyfi.attrs)
-    attrs["coords"] = coords
     return Patch(data=data, coords=coords, attrs=attrs, dims=dims)
 
 

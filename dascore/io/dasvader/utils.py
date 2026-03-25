@@ -177,4 +177,4 @@ def _read_dasvader(h5, distance=None, time=None):
     attrs = _get_attr_dict(h5[rec["atrib"]]) if "atrib" in ref_names else {}
     # attrs["coords"] = cm.to_summary_dict()
     # attrs["dims"] = cm.dims
-    return [dc.Patch(data=data, coords=cm, attrs=dc.PatchAttrs(**attrs))]
+    return [dc.Patch(data=data, coords=cm, attrs=dc.PatchAttrs.from_dict(attrs))]

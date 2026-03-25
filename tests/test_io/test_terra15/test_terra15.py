@@ -41,9 +41,9 @@ class TestTerra15:
         t1, t2 = file_t1 + new_dur, file_t1 + 2 * new_dur
         out = dc.read(terra15_v6_path, time=(t1, t2))[0]
         assert isinstance(out, dc.Patch)
-        attrs = out.attrs
-        assert attrs.time_min >= t1
-        assert attrs.time_max <= t2
+        time_summary = out.summary.get_coord_summary("time")
+        assert time_summary.min >= t1
+        assert time_summary.max <= t2
 
     def test_time_slice_no_snap(self, terra15_v6_path):
         """Ensure no snapping returns raw time."""
@@ -54,18 +54,24 @@ class TestTerra15:
         t1, t2 = file_t1 + new_dur, file_t1 + 2 * new_dur
         out = dc.read(terra15_v6_path, time=(t1, t2), snap_dims=False)[0]
         assert isinstance(out, dc.Patch)
-        attrs = out.attrs
-        assert attrs.time_min >= t1
-        assert attrs.time_max <= t2
+        time_summary = out.summary.get_coord_summary("time")
+        assert time_summary.min >= t1
+        assert time_summary.max <= t2
 
     def test_units(self, terra15_das_patch):
         """All units should be defined on terra15 patch."""
         patch = terra15_das_patch
         assert patch.attrs.data_units is not None
-        assert patch.attrs.distance_units is not None
-        assert patch.attrs.time_units is not None
-        assert patch.get_coord("time").units == patch.attrs.time_units
-        assert patch.get_coord("distance").units == patch.attrs.distance_units
+        assert patch.get_coord("distance").units is not None
+        assert patch.get_coord("time").units is not None
+        assert (
+            patch.get_coord("time").units
+            == patch.summary.get_coord_summary("time").units
+        )
+        assert (
+            patch.get_coord("distance").units
+            == patch.summary.get_coord_summary("distance").units
+        )
 
     def test_hdf5file_not_terra15(self, generic_hdf5):
         """Assert that the generic hdf5 file is not a terra15."""

@@ -15,6 +15,7 @@ import pytest
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
     _iter_filesystem,
+    all_diffs_close_enough,
     cached_method,
     deep_equality_check,
     get_buffer_size,
@@ -174,6 +175,14 @@ class TestIterate:
     def test_str(self):
         """A single string object should be returned as a tuple."""
         assert iterate("hey") == ("hey",)
+
+
+class TestAllDiffsCloseEnough:
+    """Tests for all_diffs_close_enough."""
+
+    def test_empty_sequence_false(self):
+        """An empty set of diffs should not be considered close enough."""
+        assert not all_diffs_close_enough([])
 
 
 class TestOptionalImport:

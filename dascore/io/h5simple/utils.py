@@ -31,7 +31,7 @@ def _get_attrs_coords_and_data(h5, snap, fiber_io):
     attr_dict["file_version"] = fiber_io.version
     attr_dict["file_format"] = fiber_io.name
     cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"))
-    attr_dict["dims"] = cm.dims
+    attr_dict.pop("dims", None)
     return attr_dict, cm, data
 
 

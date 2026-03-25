@@ -78,7 +78,6 @@ def _get_attrs_dict(resource):
     daq = resource["DAQ"]
     pserver = resource["ProcessingServer"]
     out = dict(
-        coords=_get_coords(resource),
         data_category="DAS",
         instrumet_id=unbyte(_maybe_unpack(daq["SerialNumber"])),
         gauge_length=_maybe_unpack(pserver["GaugeLength"]),
@@ -90,11 +89,10 @@ def _get_attrs_dict(resource):
 def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
     """Get a patch from ap_sensing file."""
     attrs = _get_attrs_dict(resource)
-    coords = attrs["coords"]
+    coords = _get_coords(resource)
     data = resource["DAS"]
     if time is not None or distance is not None:
         coords, data = coords.select(array=data, time=time, distance=distance)
-        attrs["coords"] = coords
         if not data.size:
             return []
     attrs = attr_cls.model_validate(attrs)

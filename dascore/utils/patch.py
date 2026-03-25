@@ -426,8 +426,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     conf = merge_kwargs.get("conflicts", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
     new_coord = _get_new_coord(df, merge_dim, coords, drop_conf_coords)
-    coord = new_coord.coord_map[merge_dim] if merge_dim in dims else None
-    new_attrs = combine_patch_attrs(attrs, merge_dim, coord=coord, **merge_kwargs)
+    new_attrs = combine_patch_attrs(attrs, **merge_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
@@ -546,7 +545,7 @@ def get_patch_names(
     # Handle special cases.
     if "name" in col_set:
         return df["name"].astype(str)
-    if "path" in col_set:
+    if "path" in col_set and df["path"].astype(str).str.len().gt(0).any():
         return _get_filename(df["path"], strip_extension)
     # Determine the requested fields and get the ones that are there.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
@@ -989,17 +988,13 @@ def _merge_aligned_coords(cm1, cm2):
     return cm1.update(**out)
 
 
-def _merge_models(attrs1, attrs2, coord=None, attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE):
+def _merge_models(attrs1, attrs2, attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE):
     """Ensure models are equal in the right ways, merge together."""
     no_comp_keys = set(attrs_to_ignore)
     if attrs1 == attrs2:
         return attrs1
-    dict1, dict2 = dict(attrs1), dict(attrs2)
-    if coord is not None:
-        new_coords = coord.to_summary_dict()
-        dict1["coords"], dict2["coords"] = new_coords, new_coords
-    else:
-        dict1.pop("coords"), dict2.pop("coords")
+    dict1 = dict(attrs1)
+    dict2 = dict(attrs2)
     common_keys = set(dict1) & set(dict2)
     ne_attrs = []
     for key in common_keys:
@@ -1077,7 +1072,7 @@ def merge_compatible_coords_attrs(
     coord1, coord2 = patch1.coords, patch2.coords
     attrs1, attrs2 = patch1.attrs, patch2.attrs
     coord_out = _merge_coords(coord1, coord2)
-    attrs = _merge_models(attrs1, attrs2, coord_out, attrs_to_ignore=attrs_to_ignore)
+    attrs = _merge_models(attrs1, attrs2, attrs_to_ignore=attrs_to_ignore)
     return coord_out, attrs
 
 
