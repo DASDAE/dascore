@@ -68,7 +68,7 @@ class TestFebus:
         target = summaries[0]
         out = dc.read(febus_path, source_patch_id=target.source_patch_id)
         assert len(out) == 1
-        assert "source_patch_id" not in out[0].attrs.model_dump()
+        assert out[0].attrs["_source_patch_id"] == target.source_patch_id
         assert (
             out[0].summary.get_coord_summary("time").min
             == target.get_coord_summary("time").min
@@ -80,6 +80,7 @@ class TestFebus:
         targets = [summaries[0].source_patch_id]
         out = dc.read(febus_path, source_patch_id=targets)
         assert len(out) == 1
+        assert out[0].attrs["_source_patch_id"] == targets[0]
         assert (
             out[0].summary.get_coord_summary("time").min
             == summaries[0].get_coord_summary("time").min

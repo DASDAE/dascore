@@ -373,10 +373,14 @@ def _read_febus(
         str(value) for value in iterate(source_patch_id) if value not in (None, "")
     }
     for attr, cm, febus in _yield_attrs_coords(fi):
-        if source_patch_ids and _get_source_patch_id(febus) not in source_patch_ids:
+        patch_id = _get_source_patch_id(febus)
+        if source_patch_ids and patch_id not in source_patch_ids:
             continue
         data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
         if data.size:
-            patch = dc.Patch(data=data, coords=new_cm, attrs=attr_cls.from_dict(attr))
+            attr_info = dict(attr)
+            attr_info["_source_patch_id"] = patch_id
+            attrs = attr_cls.from_dict(attr_info)
+            patch = dc.Patch(data=data, coords=new_cm, attrs=attrs)
             out.append(patch)
     return out

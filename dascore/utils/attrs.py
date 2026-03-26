@@ -49,10 +49,17 @@ def combine_patch_attrs(
             return model
         return dc.PatchAttrs.from_dict(model)
 
+    def _drop_private_keys(model_dict):
+        """Remove private attrs so they don't affect compatibility merges."""
+        return {
+            key: value for key, value in model_dict.items() if not key.startswith("_")
+        }
+
     def _get_model_dict_list(mod_list):
         """Get list of model dicts with optional dropped attrs."""
         model_dicts = [
-            _to_patch_attrs(x).model_dump(exclude_defaults=True) for x in mod_list
+            _drop_private_keys(_to_patch_attrs(x).model_dump(exclude_defaults=True))
+            for x in mod_list
         ]
         # drop attributes specified.
         if drop := set(iterate(drop_attrs)):
