@@ -293,6 +293,15 @@ class TestInit:
                 scanned, time=(np.datetime64("1900-01-01"), np.datetime64("1900-01-02"))
             )
 
+    def test_patch_summary_from_patch_copies_private_source_patch_id(
+        self, random_patch
+    ):
+        """Patch summaries built from patches should expose the private source id."""
+        patch = random_patch.update_attrs(_source_patch_id="node-3")
+        summary = PatchSummary.from_patch(patch)
+        assert summary.source_patch_id == "node-3"
+        assert summary.attrs["_source_patch_id"] == "node-3"
+
     def test_non_time_distance_dims(self):
         """Ensure dimensions other than time/distance work."""
         x = np.arange(10) * 2
@@ -581,6 +590,19 @@ class TestPatchSummary:
             {"time_min": 1.0, "time_max": 2.0, "dims": ("time",)}
         )
         assert out.dims == ("time",)
+
+    def test_flat_summary_preserves_explicit_coord_dims(self):
+        """Flat summary normalization should preserve dims on coord mappings."""
+        out = dc.PatchSummary.model_validate(
+            {
+                "dims": ("time", "distance"),
+                "time": {"min": 1.0, "max": 2.0, "step": 1.0, "dims": ("time",)},
+                "distance": {"min": 0.0, "max": 10.0, "step": 5.0},
+            }
+        )
+        assert out.coords["time"].dims == ("time",)
+        assert out.coords["distance"].dims == ("distance",)
+        assert out.dims == ("time", "distance")
 
 
 class TestDisplay:

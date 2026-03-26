@@ -123,10 +123,10 @@ If a single file can produce more than one patch, your format should usually pro
 The rule is simple:
 
 - `scan()` should emit a stable `source_patch_id` for each patch.
+- For FiberIO implementation, prefer setting `attrs["_source_patch_id"]` on both scan summaries and loaded patches; DASCore will normalize that onto `PatchSummary.source_patch_id` when summaries are built.
 - `read(..., source_patch_id=...)` should use that value to return the matching patch, or patches if given multiple ids.
-- `source_patch_id` belongs on the summary/reload path, not as a public patch attr contract.
-- If your `FiberIO` can return multiple patches from one resource, loaded patches should also carry the resolved id as a private attr on `PatchAttrs`, typically `_source_patch_id`.
-- Add that private attr before constructing the final `PatchAttrs` instance for the loaded patch.
+- `source_patch_id` remains the public summary/reload field, while `_source_patch_id` remains the private attr-level field FiberIO authors should set directly.
+- If both are provided when constructing a `PatchSummary`, `source_patch_id` wins and is copied back onto `attrs["_source_patch_id"]`.
 - Private attrs should not participate in normal patch compatibility checks.
 - `path`, `file_format`, and `file_version` are owned by the calling DASCore scan layer, not by `FiberIO.scan()`.
 

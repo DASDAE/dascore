@@ -123,7 +123,7 @@ def _scan_result_to_summary(
         "" if source_patch_id in (None, "") else str(source_patch_id)
     )
     if isinstance(attrs, PatchSummary):
-        return PatchSummary.model_construct(
+        return PatchSummary(
             attrs=attrs.attrs,
             coords=dict(attrs.coords),
             dims=tuple(attrs.dims),

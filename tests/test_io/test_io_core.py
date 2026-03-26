@@ -171,6 +171,32 @@ class TestScanResultToSummary:
         with pytest.raises(ValueError, match=msg):
             _scan_result_to_summary(patch.attrs)
 
+    def test_summary_source_patch_id_sets_private_attr(self):
+        """Summary source ids should be copied onto private attrs."""
+        summary = dc.PatchSummary(
+            attrs=dc.PatchAttrs(tag="x"),
+            source_patch_id="node-1",
+        )
+        assert summary.source_patch_id == "node-1"
+        assert summary.attrs["_source_patch_id"] == "node-1"
+
+    def test_private_attr_source_patch_id_sets_summary(self):
+        """Private attr source ids should populate the summary field."""
+        summary = dc.PatchSummary(
+            attrs=dc.PatchAttrs(tag="x", _source_patch_id="node-2"),
+        )
+        assert summary.source_patch_id == "node-2"
+        assert summary.attrs["_source_patch_id"] == "node-2"
+
+    def test_summary_source_patch_id_wins_on_conflict(self):
+        """Conflicting ids should resolve in favor of the summary field."""
+        summary = dc.PatchSummary(
+            attrs=dc.PatchAttrs(tag="x", _source_patch_id="attrs-id"),
+            source_patch_id="summary-id",
+        )
+        assert summary.source_patch_id == "summary-id"
+        assert summary.attrs["_source_patch_id"] == "summary-id"
+
 
 class TestFormatManager:
     """Tests for the format manager."""

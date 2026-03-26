@@ -80,14 +80,16 @@ class Febus2(FiberIO):
         """Scan a febus file, return summary information about the file's contents."""
         out = []
         for attr, cm, feb in _yield_attrs_coords(resource):
+            attrs = FebusPatchAttrs.from_dict(attr).update(
+                _source_patch_id=_get_source_patch_id(feb)
+            )
             out.append(
-                PatchSummary.model_construct(
-                    attrs=FebusPatchAttrs.from_dict(attr),
+                PatchSummary(
+                    attrs=attrs,
                     coords=cm.to_summary_dict(),
                     dims=cm.dims,
                     shape=cm.shape,
                     dtype=str(feb.zone[feb.data_name].dtype),
-                    source_patch_id=_get_source_patch_id(feb),
                 )
             )
         return out

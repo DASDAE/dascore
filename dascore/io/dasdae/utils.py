@@ -322,11 +322,11 @@ def _get_patch_content_from_group(group, file_version="", file_format="DASDAE"):
         coord_map[name] = _get_coord_summary_from_node(coord_node, coord_dims)
     data_nodes = [x for x in group if x.name == "data"]
     dtype = str(data_nodes[0].dtype) if data_nodes else ""
-    return PatchSummary.model_construct(
+    attr_info["_source_patch_id"] = group._v_name
+    return PatchSummary(
         attrs=PatchAttrs.from_dict(attr_info),
         coords=coord_map,
         dims=dims,
         shape=(),
         dtype=dtype,
-        source_patch_id=group._v_name,
     )

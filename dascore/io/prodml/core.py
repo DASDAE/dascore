@@ -48,14 +48,14 @@ class ProdMLV2_0(FiberIO):  # noqa
         """Scan a prodml file, return summary information about the file's contents."""
         out = []
         for attr, coords, source_patch_id in _yield_prodml_attrs_coords(resource):
+            attrs = attr.update(_source_patch_id=source_patch_id)
             out.append(
-                PatchSummary.model_construct(
-                    attrs=attr,
+                PatchSummary(
+                    attrs=attrs,
                     coords=coords.to_summary_dict(),
                     dims=coords.dims,
                     shape=coords.shape,
-                    dtype=attr.get("dtype", ""),
-                    source_patch_id=source_patch_id,
+                    dtype=attrs.get("dtype", ""),
                 )
             )
         return out

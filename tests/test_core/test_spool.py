@@ -385,7 +385,7 @@ class TestSort:
     def test_sorted_spool_iteration_matches_sorted_contents(self, diverse_spool):
         """Sorting should reorder loaded patches, not just the contents dataframe."""
         sorted_spool = diverse_spool.sort("time_min")
-        patch_time_mins = [patch.attrs.time_min for patch in sorted_spool]
+        patch_time_mins = [patch.get_coord("time").min() for patch in sorted_spool]
         assert patch_time_mins == sorted(patch_time_mins)
 
     def test_sorting_attr_time(self, diverse_spool):
