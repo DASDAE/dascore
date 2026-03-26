@@ -632,7 +632,11 @@ class DataFrameSpool(BaseSpool):
         new_current_index = inst_df["current_index"].map(mapper)
         new_instruction_df = inst_df.assign(current_index=new_current_index)
         # create new spool from new dataframes
-        return self.new_from_df(df=sorted_df, instruction_df=new_instruction_df)
+        return self.new_from_df(
+            df=sorted_df,
+            source_df=self._source_df,
+            instruction_df=new_instruction_df,
+        )
 
     @compose_docstring(doc=BaseSpool.split.__doc__)
     def split(
