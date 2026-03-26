@@ -52,6 +52,20 @@ def _normalize_dims(dims: Any) -> tuple[str, ...]:
     return tuple(dims)
 
 
+def _normalize_source_patch_id(
+    attrs: PatchAttrs, source_patch_id: Any = ""
+) -> tuple[PatchAttrs, str]:
+    """Normalize summary and private attr source ids to one value."""
+    summary_source_patch_id = (
+        "" if source_patch_id in (None, "") else str(source_patch_id)
+    )
+    attrs_source_patch_id = str(attrs.get("_source_patch_id", "") or "")
+    normalized = summary_source_patch_id or attrs_source_patch_id
+    if normalized:
+        attrs = attrs.update(_source_patch_id=normalized)
+    return attrs, normalized
+
+
 class PatchSummary(DascoreBaseModel):
     """A metadata-only summary of a patch."""
 
@@ -81,6 +95,9 @@ class PatchSummary(DascoreBaseModel):
         # summaries, so we only need to normalize nested coord values and dims.
         if "attrs" in data or "coords" in data:
             attrs = PatchAttrs.from_dict(data.get("attrs"))
+            attrs, source_patch_id = _normalize_source_patch_id(
+                attrs, data.get("source_patch_id", "")
+            )
             dims = _normalize_dims(data.get("dims", ()))
             coord_map = {
                 name: _to_coord_summary(
@@ -101,7 +118,7 @@ class PatchSummary(DascoreBaseModel):
                 "path": data.get("path", ""),
                 "file_format": data.get("file_format", ""),
                 "file_version": data.get("file_version", ""),
-                "source_patch_id": data.get("source_patch_id", ""),
+                "source_patch_id": source_patch_id,
             }
         # Flat inputs still use scan/index-style keys such as time_min/time_max.
         # Split those into coordinate summaries plus pure attrs before building
@@ -112,6 +129,9 @@ class PatchSummary(DascoreBaseModel):
             dims=dims or None,
         )
         attrs = PatchAttrs.from_dict(attr_info)
+        attrs, source_patch_id = _normalize_source_patch_id(
+            attrs, data.get("source_patch_id", "")
+        )
         coord_map = {
             name: _to_coord_summary(
                 summary,
@@ -131,18 +151,19 @@ class PatchSummary(DascoreBaseModel):
             "path": data.get("path", ""),
             "file_format": data.get("file_format", ""),
             "file_version": data.get("file_version", ""),
-            "source_patch_id": data.get("source_patch_id", ""),
+            "source_patch_id": source_patch_id,
         }
 
     @classmethod
     def from_patch(cls, patch: dc.Patch) -> PatchSummary:
         """Create a summary from a loaded patch."""
-        return cls.model_construct(
+        return cls(
             attrs=patch.attrs,
             coords=patch.coords.to_summary_dict(),
             dims=patch.dims,
             shape=patch.shape,
             dtype=str(np.dtype(patch.data.dtype)),
+            source_patch_id=patch.attrs.get("_source_patch_id", ""),
         )
 
     def dump_structured(self) -> dict[str, Any]:

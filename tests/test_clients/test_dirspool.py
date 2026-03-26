@@ -416,6 +416,21 @@ class TestIndexing:
             patch = sub[ind]
             assert isinstance(patch, dc.Patch)
 
+    def test_sorted_chunked_selected_spool_can_load_patches(
+        self, diverse_directory_spool
+    ):
+        """Sorted chunked selections should still reload patches."""
+        chunked = (
+            diverse_directory_spool.select(distance=(100, 200))
+            .chunk(time=None, conflict="keep_first")
+            .sort("time_min")
+        )
+        assert len(chunked) > 0
+        patch_time_mins = [patch.get_coord("time").min() for patch in chunked]
+        assert patch_time_mins == sorted(patch_time_mins)
+        assert isinstance(chunked[0], dc.Patch)
+        assert all(isinstance(patch, dc.Patch) for patch in chunked)
+
 
 class TestFileSpoolIntegrations:
     """Small integration tests for the file spool."""

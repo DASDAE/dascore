@@ -174,6 +174,8 @@ class TestReadDASDAE:
         target = scanned[1].source_patch_id
         out = dc.read(path, source_patch_id=target)
         assert len(out) == 1
+        assert out[0].attrs["_source_patch_id"] == target
+        assert out[0].summary.source_patch_id == out[0].attrs["_source_patch_id"]
         assert (
             out[0].summary.get_coord_summary("time").min
             == scanned[1].get_coord_summary("time").min
@@ -188,6 +190,7 @@ class TestReadDASDAE:
         targets = [scanned[0].source_patch_id, scanned[2].source_patch_id]
         out = dc.read(path, source_patch_id=targets)
         assert len(out) == 2
+        assert {patch.attrs["_source_patch_id"] for patch in out} == set(targets)
         assert {patch.summary.get_coord_summary("time").min for patch in out} == {
             scanned[0].get_coord_summary("time").min,
             scanned[2].get_coord_summary("time").min,

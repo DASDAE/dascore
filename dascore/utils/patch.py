@@ -993,8 +993,12 @@ def _merge_models(attrs1, attrs2, attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE):
     no_comp_keys = set(attrs_to_ignore)
     if attrs1 == attrs2:
         return attrs1
-    dict1 = dict(attrs1)
-    dict2 = dict(attrs2)
+    dict1 = {
+        key: value for key, value in dict(attrs1).items() if not key.startswith("_")
+    }
+    dict2 = {
+        key: value for key, value in dict(attrs2).items() if not key.startswith("_")
+    }
     common_keys = set(dict1) & set(dict2)
     ne_attrs = []
     for key in common_keys:

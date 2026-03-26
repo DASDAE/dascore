@@ -224,6 +224,7 @@ def _get_raw_node_attr_coords(node_info, d_coord, base_info):
     t_coord = _get_time_coord(node_info.node)
     info.update(_get_data_unit_and_type(node_info.node))
     info["dtype"] = str(node_info.node["RawData"].dtype)
+    info["_source_patch_id"] = node_info.name
     coords = dc.get_coord_manager(
         coords={"time": t_coord, "distance": d_coord},
         dims=_get_dims_from_attrs(node_info.node["RawData"].attrs),
@@ -238,6 +239,7 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info):
     t_coord = _get_time_coord(node_info.parent_node)
     out.update(_get_data_unit_and_type(node_info.node))
     out["dtype"] = str(node_info.node.dtype)
+    out["_source_patch_id"] = node_info.name
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
     # For some reason, the distance coords in raw and fbe data are not the

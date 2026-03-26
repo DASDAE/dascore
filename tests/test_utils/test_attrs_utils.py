@@ -131,6 +131,13 @@ class TestMergeAttrs:
         out = combine_patch_attrs([mapping, random_patch.attrs], conflicts="keep_first")
         assert isinstance(out, PatchAttrs)
 
+    def test_private_attrs_are_ignored_for_merge_conflicts(self, random_patch):
+        """Private attrs should not block attr merging."""
+        attrs1 = random_patch.attrs.update(_source_patch_id="one")
+        attrs2 = random_patch.attrs.update(_source_patch_id="two")
+        out = combine_patch_attrs([attrs1, attrs2])
+        assert "_source_patch_id" not in out.model_dump()
+
 
 class TestSeparateCoordInfo:
     """Tests for separating coord info from attr dict."""
