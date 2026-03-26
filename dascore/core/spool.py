@@ -624,10 +624,10 @@ class DataFrameSpool(BaseSpool):
                 raise IndexError(msg)
 
         # get a mapping from the old current index to the sorted ones
-        sorted_df = df.sort_values(attribute).reset_index(drop=True)
-        old_indices = df.index
-        new_indices = np.arange(len(df))
-        mapper = pd.Series(new_indices, index=old_indices)
+        sorted_df = df.sort_values(attribute)
+        sorted_original_indices = sorted_df.index
+        sorted_df = sorted_df.reset_index(drop=True)
+        mapper = pd.Series(np.arange(len(sorted_df)), index=sorted_original_indices)
         # swap out all the old values with new ones
         new_current_index = inst_df["current_index"].map(mapper)
         new_instruction_df = inst_df.assign(current_index=new_current_index)

@@ -422,6 +422,8 @@ class TestIndexing:
             .sort("time_min")
         )
         assert len(chunked) > 0
+        patch_time_mins = [patch.attrs.time_min for patch in chunked]
+        assert patch_time_mins == sorted(patch_time_mins)
         assert isinstance(chunked[0], dc.Patch)
         assert all(isinstance(patch, dc.Patch) for patch in chunked)
 
