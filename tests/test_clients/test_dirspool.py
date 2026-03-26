@@ -412,8 +412,10 @@ class TestIndexing:
             patch = sub[ind]
             assert isinstance(patch, dc.Patch)
 
-    def test_sorted_chunked_selected_spool_can_load_patches(self, diverse_directory_spool):
-        """Sorting a chunked selected DirectorySpool should preserve file reload metadata."""
+    def test_sorted_chunked_selected_spool_can_load_patches(
+        self, diverse_directory_spool
+    ):
+        """Sorted chunked selections should still reload patches."""
         chunked = (
             diverse_directory_spool.select(distance=(100, 200))
             .chunk(time=None, conflict="keep_first")
