@@ -596,6 +596,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         info = self.model_dump(exclude_unset=True, exclude_defaults=True)
         if "data" in kwargs:
             kwargs["values"] = kwargs.pop("data")
+        if "values" in kwargs:
             info.pop("shape", None)
 
         info.update(kwargs)

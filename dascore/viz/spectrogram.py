@@ -74,7 +74,6 @@ def _spectrogram_patch(patch: PatchType, dim: str = "time", **kwargs) -> PatchTy
     new_dims = _get_new_dims(patch, dim, new_coord_name)
     cm = get_coord_manager(out_coords, dims=tuple(new_dims))
     attrs = dict(patch.attrs)
-    attrs["dims"] = cm.dims
     attrs["data_units"] = _get_data_units_from_dims(patch, dim, np.multiply)
     return patch.__class__(data=spec, attrs=PatchAttrs(**attrs), coords=cm)
 

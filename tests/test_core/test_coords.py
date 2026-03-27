@@ -1837,6 +1837,15 @@ class TestUpdate:
         new_coord = coord.update_data(values=new_data)
         assert all_close(new_coord.data, new_data)
 
+    def test_new_values_clears_shape(self, coord):
+        """new(values=...) should rebuild from new values, not stale shape."""
+        if coord.degenerate:
+            return
+        new_values = coord.values[:2]
+        new_coord = coord.new(values=new_values)
+        assert len(new_coord) == len(new_values)
+        assert all_close(new_coord.data, new_values)
+
 
 class TestAlignTo:
     """Tests for aligning two coords."""
