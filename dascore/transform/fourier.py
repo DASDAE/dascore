@@ -358,8 +358,8 @@ def _get_stft_coords(patch, dim, axis, coord, stft, window):
     new_units = invert_quantity(coord.units)
     coord_map.update(
         {
-            dim: get_coord(values=time + coord.min(), units=coord.units),
-            new_dims[axis]: get_coord(values=stft.f, units=new_units),
+            dim: get_coord(data=time + coord.min(), units=coord.units),
+            new_dims[axis]: get_coord(data=stft.f, units=new_units),
             # Add window array for inverse stft.
             "_stft_window": (None, window),
             "_stft_old_coord": (None, patch.get_coord(dim)),

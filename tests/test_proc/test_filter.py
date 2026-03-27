@@ -410,9 +410,9 @@ class TestSlopeFilter:
         )
         assert isinstance(filtered_patch, dc.Patch)
 
-    def test_notch_deprecated(self, example_patch):
-        """Ensure using notch param issues deprecation warning."""
-        with pytest.warns(DeprecationWarning):
+    def test_notch_removed(self, example_patch):
+        """Ensure the removed notch parameter is rejected."""
+        with pytest.raises(TypeError, match="notch"):
             example_patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4], notch=True)
 
     def test_different_params_not_equal(self, example_patch):

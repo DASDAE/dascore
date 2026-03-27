@@ -23,7 +23,7 @@ def _get_coord_manager(h5fi, snap=True):
         """Get the time coordinate."""
         # Unix stamps are in us for test files, not sure if always true.
         unix_stamps = dc.to_datetime64(h5fi["stamps_unix"][:] / 1_000_000)
-        time_coord = dc.get_coord(values=unix_stamps)
+        time_coord = dc.get_coord(data=unix_stamps)
         if snap:
             time_coord = time_coord.snap()
         return time_coord
@@ -31,7 +31,7 @@ def _get_coord_manager(h5fi, snap=True):
     def _get_dist_coord(h5fi):
         """Get the distance (depth) coordinate."""
         depth = h5fi["depth"][:]
-        return dc.get_coord(values=depth)
+        return dc.get_coord(data=depth)
 
     coords = {
         "time": _get_time_coord(h5fi, snap=snap),

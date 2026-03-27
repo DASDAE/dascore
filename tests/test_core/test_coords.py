@@ -1834,7 +1834,6 @@ class TestUpdate:
         new_coord = coord.update(data=new_data)
         assert isinstance(new_coord, BaseCoord)
         assert all_close(new_coord.data, new_data)
-        # using the keyword 'values' is deprecated but should also work.
         new_coord = coord.update_data(values=new_data)
         assert all_close(new_coord.data, new_data)
 

@@ -9,3 +9,12 @@ The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes f
 - `Patch.attrs` now contains non-coordinate metadata only.
 - Coordinate summaries such as `time_min`, `time_max`, `distance_step`, and coordinate units are exposed through `Patch.summary.get_coord_summary(...)`, not through `Patch.attrs`.
 - `Patch.attrs` and `PatchAttrs` no longer own coordinate summaries. Use [`PatchSummary`](`dascore.PatchSummary`) values exposed through [`PatchSummary.get_coord_summary(...)`](`dascore.PatchSummary.get_coord_summary`) for metadata views and coordinate APIs such as [`Patch.update_coords`](`dascore.Patch.update_coords`) for coordinate changes.
+- Breaking changes from deprecation removal:
+- Removed `Patch.assign_coords`; use [`Patch.update_coords`](`dascore.Patch.update_coords`).
+- Removed `Patch.iselect`; use [`Patch.select`](`dascore.Patch.select`) with `samples=True`.
+- Removed `Patch.iresample`; use [`Patch.resample`](`dascore.Patch.resample`) with `samples=True`.
+- Removed the deprecated `Patch.tran` namespace; call transform methods directly on `Patch`.
+- Removed `dascore.transform.rfft`; use [`Patch.dft`](`dascore.Patch.dft`) or [`dascore.transform.fourier.dft`](`dascore.transform.fourier.dft`) with `real=...`.
+- Removed `dascore.transform.spectrogram` and `Patch.spectrogram`; use [`Patch.stft`](`dascore.Patch.stft`) for transforms. `Patch.viz.spectrogram` remains available for plotting.
+- Removed `dascore.utils.patch.merge_patches`; use `dc.spool(...).chunk(...)`.
+- Removed deprecated compatibility parameters `gauge_multiple`, `lag`, and `notch`; use `step_multiple`, select on lag coordinates after correlation, and `invert`, respectively.

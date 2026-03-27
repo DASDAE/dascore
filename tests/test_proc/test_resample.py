@@ -279,11 +279,6 @@ class TestResample:
         out = random_patch.resample(distance=dist, samples=True)
         assert len(out.coords.get_array("distance")) == dist
 
-    def test_iresample_deprecated(self, random_patch):
-        """Ensure iresample issues deprecation warning."""
-        with pytest.warns(DeprecationWarning):
-            random_patch.iresample(distance=42)
-
     def test_resample_fft(self, random_patch):
         """Tests for resample rft axis. See #272."""
         out = random_patch.dft("time", real="time").resample(ft_time=1)

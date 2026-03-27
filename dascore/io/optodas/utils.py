@@ -47,7 +47,7 @@ def _get_coord_manager(fi):
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
             distance = fi["/header/channels"][:] * step
-            coord = get_coord(values=distance)
+            coord = get_coord(data=distance)
         coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
     return out

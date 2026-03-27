@@ -211,14 +211,12 @@ class TestHistory:
 
 
 class TestMergePatches:
-    """Tests for merging patches together."""
+    """Tests for the supported patch merge workflow."""
 
-    def test_deprecated(self, random_patch):
-        """Ensure deprecation warning is raised."""
-        from dascore.utils.patch import merge_patches
-
-        with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
-            merge_patches(random_patch)
+    def test_spool_chunk_replacement(self, random_patch):
+        """Ensure spool.chunk remains the supported merge path."""
+        out = dc.spool([random_patch]).chunk(time=None)
+        assert len(out) == 1
 
 
 class TestGetDimAxisValue:

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 
 import dascore as dc
@@ -90,7 +88,6 @@ def correlate_shift(
 def correlate(
     patch: PatchType,
     samples: bool = False,
-    lag=None,
     **kwargs,
 ) -> PatchType:
     """
@@ -116,8 +113,6 @@ def correlate(
     samples : bool, optional (default = False)
         If True, the argument specified in kwargs refers to the *sample* not
         value along that axis. See examples for details.
-    lag
-        Deprecated, just use select on the output patch instead.
     **kwargs
         Specifies correlation dimension and the master source(s), to which
         we want to cross-correlate all other channels/time samples.If the
@@ -189,13 +184,9 @@ def correlate(
       shares a name with the original coord except the string "lag_" is
       prepended. For example, "lag_time".
     """
-    if lag is not None:
-        msg = (
-            "Patch.correlate's Parameter 'lag' is deprecated and ignored. "
-            "Simply use Patch.select on the output patch.  "
-            "(e.g., select(lag_time=(...)))"
-        )
-        warnings.warn(msg, DeprecationWarning)
+    if "lag" in kwargs:
+        msg = "The 'lag' parameter was removed. Select on the lag coordinate instead."
+        raise TypeError(msg)
     assert len(patch.dims) == 2, "must be a 2D patch."
     dim, source_axis, source = get_dim_axis_value(patch, kwargs=kwargs)[0]
     # Get the axis and coord over which fft should be calculated.
@@ -216,7 +207,7 @@ def correlate(
     fft_prod = fft_patch_array * np.conj(source_fft)
     # Create frequency domain patch with results
     source = getattr(source, "magnitude", source)  # strips units
-    new_coord = dc.get_coord(values=np.atleast_1d(source))
+    new_coord = dc.get_coord(data=np.atleast_1d(source))
     dim_name = f"source_{dim}"
     cm = patch.coords.update(**{dim_name: (dim_name, new_coord)})
     out = patch.update(data=fft_prod, coords=cm)
