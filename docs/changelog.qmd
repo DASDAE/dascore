@@ -9,7 +9,9 @@ The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes f
 - `Patch.attrs` now contains non-coordinate metadata only.
 - Coordinate summaries such as `time_min`, `time_max`, `distance_step`, and coordinate units are exposed through `Patch.summary.get_coord_summary(...)`, not through `Patch.attrs`.
 - `Patch.attrs` and `PatchAttrs` no longer own coordinate summaries. Use [`PatchSummary`](`dascore.PatchSummary`) values exposed through [`PatchSummary.get_coord_summary(...)`](`dascore.PatchSummary.get_coord_summary`) for metadata views and coordinate APIs such as [`Patch.update_coords`](`dascore.Patch.update_coords`) for coordinate changes.
-- Breaking changes from deprecation removal:
+
+### Breaking Changes From Deprecation Removal
+
 - Removed `Patch.assign_coords`; use [`Patch.update_coords`](`dascore.Patch.update_coords`).
 - Removed `Patch.iselect`; use [`Patch.select`](`dascore.Patch.select`) with `samples=True`.
 - Removed `Patch.iresample`; use [`Patch.resample`](`dascore.Patch.resample`) with `samples=True`.

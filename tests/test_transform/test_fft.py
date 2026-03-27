@@ -16,7 +16,7 @@ class TestDftReal:
         start_freq = [x.startswith("ft_") for x in dims]
         assert any(start_freq)
 
-    def test_abs_rrft(self, random_patch):
+    def test_abs_real_dft(self, random_patch):
         """Ensure abs works with the real dft to get amplitude spectra."""
         dft_patch = random_patch.dft("time", real="time")
         out = dft_patch.abs()

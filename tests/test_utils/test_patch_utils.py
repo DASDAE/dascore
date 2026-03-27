@@ -210,7 +210,7 @@ class TestHistory:
         assert len(history_str) < 100
 
 
-class TestMergePatches:
+class TestPatchMergeWorkflow:
     """Tests for the supported patch merge workflow."""
 
     def test_spool_chunk_replacement(self, random_patch):
