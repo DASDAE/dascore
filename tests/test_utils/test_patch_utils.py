@@ -210,15 +210,13 @@ class TestHistory:
         assert len(history_str) < 100
 
 
-class TestMergePatches:
-    """Tests for merging patches together."""
+class TestPatchMergeWorkflow:
+    """Tests for the supported patch merge workflow."""
 
-    def test_deprecated(self, random_patch):
-        """Ensure deprecation warning is raised."""
-        from dascore.utils.patch import merge_patches
-
-        with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
-            merge_patches(random_patch)
+    def test_spool_chunk_replacement(self, random_patch):
+        """Ensure spool.chunk remains the supported merge path."""
+        out = dc.spool([random_patch]).chunk(time=None)
+        assert len(out) == 1
 
     def test_merge_compatible_coords_attrs_ignores_private_attrs(self, random_patch):
         """Private attrs should not make otherwise compatible patches fail."""

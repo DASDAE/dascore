@@ -583,7 +583,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         data
             A new array to use.
         values
-            Same as data, but deprecated. Here for compatibility reasons.
+            Alias for data.
         """
         if data is None and values is None:
             return self
@@ -594,10 +594,8 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
     def new(self, **kwargs):
         """Update coordinate."""
         info = self.model_dump(exclude_unset=True, exclude_defaults=True)
-        # Need to only pass "values" rather than data to update
         if "data" in kwargs:
             kwargs["values"] = kwargs.pop("data")
-        # Need to ensure new data is used in constructor, not old shape
         if "values" in kwargs:
             info.pop("shape", None)
 
@@ -1586,7 +1584,7 @@ def get_coord(
         An array indicating the values or an integer to specify the length
         of a partial coordinate.
     values
-        Deprecated, use data instead.
+        Alias for data.
     start
         The start value of the array, inclusive.
     min
@@ -1607,6 +1605,8 @@ def get_coord(
     -----
     The following combinations of input parameters are typical:
         (start, stop, step)
+        (data)
+        (data, step) - useful for length 1 arrays.
         (values)
         (values, step) - useful for length 1 arrays.
 
@@ -1661,7 +1661,6 @@ def get_coord(
 
     def _get_array(data, values):
         """Get the array from either data or values."""
-        # ensure data and values are not used
         if data is not None and values is not None:
             msg = "Cannot specify both data and values. Use only data."
             raise CoordError(msg)

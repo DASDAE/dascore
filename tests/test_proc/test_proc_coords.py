@@ -315,12 +315,6 @@ class TestSelect:
         pa4 = random_patch.select(distance=...)
         assert pa1 == pa2 == pa3 == pa4
 
-    def test_iselect_deprecated(self, random_patch):
-        """Ensure Patch.iselect raises deprecation error."""
-        msg = "iselect is deprecated"
-        with pytest.warns(DeprecationWarning, match=msg):
-            _ = random_patch.iselect(time=(10, -10))
-
     def test_select_history_outside_bounds(self, random_patch):
         """Selecting outside the bounds should do nothing to history."""
         patch = random_patch

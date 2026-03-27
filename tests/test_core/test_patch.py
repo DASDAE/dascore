@@ -1072,17 +1072,6 @@ class TestGetCoord:
             patch.get_coord("distance", require_sorted=True)
 
 
-class TestDeprecations:
-    """Ensure deprecations are issued."""
-
-    def test_assign_coords_deprecated(self, random_patch):
-        """assign_coords should issue dep. warning."""
-        new_coord = random_patch.coords.get_array("time")
-
-        with pytest.warns(DeprecationWarning):
-            random_patch.assign_coords(new_time=("time", new_coord))
-
-
 class TestSetDims:
     """Tests for setting dimensions."""
 

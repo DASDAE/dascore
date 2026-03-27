@@ -6,9 +6,16 @@ from collections.abc import Sequence
 from typing import Literal
 
 import matplotlib.pyplot as plt
+import numpy as np
+from scipy.signal import spectrogram as scipy_spectrogram
 
 from dascore.constants import PatchType
+from dascore.core.attrs import PatchAttrs
+from dascore.core.coordmanager import get_coord_manager
+from dascore.core.coords import get_compatible_values, get_coord
+from dascore.utils.misc import iterate
 from dascore.utils.patch import patch_function
+from dascore.utils.transformatter import FourierTransformatter
 
 
 def _get_other_dim(dim, dims):
@@ -20,6 +27,55 @@ def _get_other_dim(dim, dims):
         return None
     else:
         return dims[0] if dims[1] == dim else dims[1]
+
+
+def _get_new_original_coord(old_coord, array):
+    """Get a new coordinate for original axis (eg time)."""
+    old_min = get_compatible_values(old_coord.min(), array.dtype)
+    is_dt = np.issubdtype(old_coord.dtype, np.datetime64)
+    val_dtype = np.timedelta64 if is_dt else old_coord.dtype
+    vals = get_compatible_values(array, val_dtype)
+    return get_coord(data=old_min + vals, units=old_coord.units)
+
+
+def _get_transformed_coord(coord, freqs):
+    """Get the transformed coordinates."""
+    units = 1 / coord.units if coord.units is not None else None
+    return get_coord(data=freqs, units=units)
+
+
+def _get_new_dims(patch, dim, new_coord_name):
+    """Get the new dimension tuple."""
+    dims = list(patch.dims)
+    dims[dims.index(dim)] = new_coord_name
+    return tuple([*dims, dim])
+
+
+def _spectrogram_patch(patch: PatchType, dim: str = "time", **kwargs) -> PatchType:
+    """Create a spectrogram patch for visualization."""
+    from dascore.utils.patch import (
+        _get_data_units_from_dims,
+        _get_dx_or_spacing_and_axes,
+    )
+
+    assert len(iterate(dim)) == 1, "only one dimension allowed."
+    coord = patch.get_coord(dim)
+    dxs, axes = _get_dx_or_spacing_and_axes(patch, dim, require_evenly_spaced=True)
+    new_coord_name = FourierTransformatter().rename_dims(dim)[0]
+    out_coords = patch.coords._get_dim_array_dict()
+    freqs, original, spec = scipy_spectrogram(
+        patch.data,
+        fs=1 / dxs[0],
+        axis=axes[0],
+        **kwargs,
+    )
+    out_coords[dim] = _get_new_original_coord(coord, original)
+    out_coords[new_coord_name] = _get_transformed_coord(coord, freqs)
+    new_dims = _get_new_dims(patch, dim, new_coord_name)
+    cm = get_coord_manager(out_coords, dims=tuple(new_dims))
+    attrs = dict(patch.attrs)
+    attrs["data_units"] = _get_data_units_from_dims(patch, dim, np.multiply)
+    return patch.__class__(data=spec, attrs=PatchAttrs(**attrs), coords=cm)
 
 
 @patch_function()
@@ -87,16 +143,16 @@ def spectrogram(
     if other_dim is not None:
         if aggr_domain == "time":
             patch_aggr = patch.aggregate(other_dim, method="mean", dim_reduce="squeeze")
-            spec = patch_aggr.spectrogram(dim)
+            spec = _spectrogram_patch(patch_aggr, dim, **kwargs)
         elif aggr_domain == "frequency":
-            _spec = patch.spectrogram(dim).squeeze()
+            _spec = _spectrogram_patch(patch, dim, **kwargs).squeeze()
             spec = _spec.aggregate(other_dim, method="mean").squeeze()
         else:
             raise ValueError(
                 f"The aggr_domain '{aggr_domain}' should be 'time' or 'frequency'."
             )
     else:
-        spec = patch.spectrogram(dim, **kwargs)
+        spec = _spectrogram_patch(patch, dim, **kwargs)
     return spec.viz.waterfall(
         ax=ax, cmap=cmap, scale=scale, scale_type=scale_type, log=log, show=show
     )
