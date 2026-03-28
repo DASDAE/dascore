@@ -457,7 +457,7 @@ def _matches_prefix_suffix(input_str, suffixes, prefixes=None):
 
 def is_valid_coord_str(input_str, prefixes=None):
     """Return True if an input string is valid for representing coord info."""
-    _valid_keys = tuple(dc.core.CoordSummary.model_fields)
+    _valid_keys = dc.core.coords.COORD_SUMMARY_FIELDS
     return _matches_prefix_suffix(input_str, _valid_keys, prefixes)
 
 

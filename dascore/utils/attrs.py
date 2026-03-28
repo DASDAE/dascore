@@ -22,6 +22,11 @@ from dascore.utils.misc import (
 )
 
 
+def _coord_summary_model_fields() -> tuple[str, ...]:
+    """Return the canonical coord summary field names."""
+    return dc.core.coords.COORD_SUMMARY_FIELDS
+
+
 @compose_docstring(conflict_desc=attr_conflict_description)
 def combine_patch_attrs(
     model_list: Sequence[dc.PatchAttrs],
@@ -169,7 +174,7 @@ def separate_coord_info(
     A tuple of ``(coord_dict, attrs_dict)`` where coordinate-like metadata has
     been separated from the remaining pure attrs.
     """
-    coord_summary_fields = tuple(dc.core.CoordSummary.model_fields)
+    coord_summary_fields = _coord_summary_model_fields()
 
     def _split_coord_key(key, prefixes=None):
         """Split flat coord summary key into coord name and field."""

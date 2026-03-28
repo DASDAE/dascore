@@ -17,7 +17,7 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
-from dascore.core.summary import PatchSummary
+from dascore.core.summary import PatchSummary, coord_summary_from_data
 from dascore.exceptions import CoordError, ParameterError, PatchAttributeError
 from dascore.io.core import (
     _load_patch_summary,
@@ -461,6 +461,25 @@ class TestPatchSummary:
         out = summary.flat_dump()
         assert out["time_step"] == random_patch.get_coord("time").step
 
+    def test_summary_includes_string_coords(self, random_patch):
+        """Patch summaries should retain lossy string coord summaries."""
+        labels = np.array([f"ch_{num}" for num in range(random_patch.shape[0])])
+        patch = random_patch.update_coords(distance=labels)
+        summary = patch.summary
+        distance = summary.get_coord_summary("distance")
+        assert distance.min == "ch_0"
+        assert distance.step is None
+        assert not distance.is_range_like
+
+    def test_flat_dump_includes_string_coord_fields(self, random_patch):
+        """Flattened summaries should expose string coord metadata."""
+        labels = np.array([f"ch_{num}" for num in range(random_patch.shape[0])])
+        patch = random_patch.update_coords(distance=labels)
+        out = patch.summary.flat_dump()
+        assert out["distance_min"] == "ch_0"
+        assert out["distance_max"] == max(labels)
+        assert out["distance_step"] is None
+
     def test_from_patch_roundtrip(self, random_patch):
         """PatchSummary should normalize Patch inputs directly."""
         summary = dc.PatchSummary.model_validate(random_patch)
@@ -471,6 +490,24 @@ class TestPatchSummary:
         """Model validation should accept PatchSummary instances unchanged."""
         summary = random_patch.summary
         assert dc.PatchSummary.model_validate(summary) is summary
+
+    def test_summary_property_returns_self(self, random_patch):
+        """PatchSummary.summary should mirror Patch.summary."""
+        summary = random_patch.summary
+        assert summary.summary is summary
+
+    def test_dim_tuple_property_matches_dims(self, random_patch):
+        """PatchSummary.dim_tuple should expose the normalized dims tuple."""
+        summary = random_patch.summary
+        assert summary.dim_tuple == summary.dims
+
+    def test_coord_summary_from_coord_object(self, random_patch):
+        """coord_summary_from_data should accept live coord instances."""
+        coord = random_patch.get_coord("distance")
+        out = coord_summary_from_data(coord, dims=("distance",))
+        assert out.dims == ("distance",)
+        assert out.min == coord.min()
+        assert out.max == coord.max()
 
     def test_patch_summary_is_cached(self, random_patch):
         """Patch.summary should reuse the same summary instance."""
@@ -1186,3 +1223,27 @@ class TestNumpyFuncs:
         # Test ufunc accumulate
         out = func.accumulate("time")
         assert isinstance(out, dc.Patch)
+
+
+class TestStringCoordinatePatch:
+    """Tests for patch APIs using string dimension coordinates."""
+
+    def test_select_string_dimension(self, random_patch):
+        """Patch.select should support exact-match string dimension filters."""
+        labels = np.array([f"ch_{num}" for num in range(random_patch.shape[0])])
+        patch = random_patch.update_coords(distance=labels)
+        out = patch.select(distance="ch_2")
+        assert np.array_equal(out.get_coord("distance").values, np.array(["ch_2"]))
+        assert out.shape[0] == 1
+
+    def test_sort_string_dimension(self, random_patch):
+        """Patch.sort_coords should order string dimension coordinates."""
+        labels = np.array(["delta", "alpha", "charlie", "bravo"])
+        patch = random_patch.select(distance=slice(0, 4), samples=True).update_coords(
+            distance=labels
+        )
+        out = patch.sort_coords("distance")
+        assert np.array_equal(
+            out.get_coord("distance").values,
+            np.array(["alpha", "bravo", "charlie", "delta"]),
+        )

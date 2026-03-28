@@ -11,7 +11,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coords import CoordSummary
+from dascore.core.coords import BaseCoord, CoordSummary, get_coord
 from dascore.utils.attrs import separate_coord_info
 from dascore.utils.models import DascoreBaseModel
 
@@ -31,6 +31,72 @@ def _to_coord_summary(value: Any, dims: tuple[str, ...] = ()) -> CoordSummary:
         if dims and "dims" not in value:
             value["dims"] = dims
     return CoordSummary(**value)
+
+
+def coord_summary_from_data(
+    data: BaseCoord | np.ndarray | Any,
+    *,
+    dims: tuple[str, ...] = (),
+    units=None,
+    step=None,
+    dtype=None,
+) -> CoordSummary:
+    """Create a CoordSummary from raw data or an existing coordinate."""
+    if isinstance(data, BaseCoord):
+        coord = data
+    else:
+        coord = get_coord(data=data, units=units, step=step, dtype=dtype)
+    summary = coord.to_summary(dims=dims)
+    if len(coord) == 0:
+        summary = CoordSummary(
+            min=summary.min,
+            max=summary.max,
+            step=summary.step,
+            dtype=summary.dtype,
+            units=units if units is not None else summary.units,
+            dims=summary.dims,
+            len=0,
+        )
+    return summary
+
+
+def _coord_summary_to_dict(summary: CoordSummary) -> dict[str, Any]:
+    """Return the normalized dict form of a coord summary."""
+    return {field: getattr(summary, field) for field in type(summary).model_fields}
+
+
+def _get_null_step_value(summary: CoordSummary):
+    """Return the historical flat-dump sentinel for missing step values."""
+    start = summary.min
+    if isinstance(start, np.datetime64 | np.timedelta64):
+        return np.timedelta64("NaT")
+    if isinstance(start, float | np.floating):
+        return np.nan
+    return None
+
+
+def _flatten_coord_summary(
+    coord_name: str,
+    summary: CoordSummary,
+    *,
+    dim_tuple: bool = False,
+    exclude: set[str] | None = None,
+) -> dict[str, Any]:
+    """Flatten a single coord summary into scan/index-style fields."""
+    exclude = set() if exclude is None else exclude
+    summary_dict = _coord_summary_to_dict(summary)
+    out = {}
+    if dim_tuple and coord_name not in exclude:
+        out[coord_name] = (summary_dict["min"], summary_dict["max"])
+    for field, value in summary_dict.items():
+        if field in exclude:
+            continue
+        if field == "dims":
+            value = ",".join(value) if value else ""
+        elif field == "step" and value is None:
+            value = _get_null_step_value(summary)
+        out[f"{coord_name}_{field}"] = value
+    return out
 
 
 def _infer_dims_from_coords(coords: Mapping[str, CoordSummary]) -> tuple[str, ...]:
@@ -170,31 +236,14 @@ class PatchSummary(DascoreBaseModel):
         for coord_name, summary in self.coords.items():
             if coord_name in exclude:
                 continue
-            summary_dict = {}
-            for field in type(summary).model_fields:
-                if field == "dims":
-                    summary_dict[field] = getattr(summary, field)
-                else:
-                    summary_dict[field] = getattr(summary, field)
-            # Some callers still want {(min, max)} tuples for dimensional coords
-            # instead of the fully expanded flat summary columns.
-            if dim_tuple:
-                out[coord_name] = (summary_dict["min"], summary_dict["max"])
-            for field, value in summary_dict.items():
-                if field in exclude:
-                    continue
-                if field == "dims":
-                    value = ",".join(value) if value else ""
-                # Flat summaries historically stored a sentinel step value even
-                # when a coord is not evenly sampled. Preserve that behavior for
-                # dataframe/index consumers that expect a scalar in *_step.
-                if field == "step" and value is None:
-                    start = summary_dict["min"]
-                    if isinstance(start, np.datetime64 | np.timedelta64):
-                        value = np.timedelta64("NaT")
-                    elif isinstance(start, float | np.floating):
-                        value = np.nan
-                out[f"{coord_name}_{field}"] = value
+            out.update(
+                _flatten_coord_summary(
+                    coord_name,
+                    summary,
+                    dim_tuple=dim_tuple,
+                    exclude=exclude,
+                )
+            )
         return out
 
     @property

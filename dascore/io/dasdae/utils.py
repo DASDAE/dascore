@@ -9,8 +9,9 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import CoordSummary, get_coord
-from dascore.core.summary import PatchSummary
+from dascore.core.summary import PatchSummary, coord_summary_from_data
 from dascore.utils.attrs import separate_coord_info
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_int
 
 # Keys not counted as true kwargs for determining if patch is filtered/selected.
@@ -59,16 +60,53 @@ def _save_attrs_and_dims(patch, patch_group):
 
 
 def _save_array(data, name, group, h5):
-    """Save an array to a group, handle datetime flubbery."""
-    # handle datetime conversions
+    """Save an array to a group, handling datetime and string values."""
     is_dt = np.issubdtype(data.dtype, np.datetime64)
     is_td = np.issubdtype(data.dtype, np.timedelta64)
+    is_str = data.dtype.kind in {"U", "S", "O"}
+    original_string_dtype = str(data.dtype) if is_str else ""
     if is_dt or is_td:
         data = to_int(data)
+    elif is_str:
+        data = _convert_strings_to_bytes(data)
     array_node = _create_or_squash_array(h5, group, name, data)
     array_node._v_attrs["is_datetime64"] = is_dt
     array_node._v_attrs["is_timedelta64"] = is_td
+    array_node._v_attrs["is_string"] = is_str
+    if is_str:
+        array_node._v_attrs["original_string_dtype"] = original_string_dtype
     return array_node
+
+
+def _convert_strings_to_bytes(data):
+    """Encode string-like arrays as fixed-width UTF-8 bytes."""
+    data = np.asarray(data)
+    if not data.size:
+        return np.asarray([], dtype="S1")
+    flat = data.reshape(-1)
+    encoded = [str(value).encode("utf-8") for value in flat]
+    max_len = max(len(item) for item in encoded)
+    out = np.asarray(encoded, dtype=f"S{max_len}")
+    return out.reshape(data.shape)
+
+
+def _convert_bytes_to_strings(data, original_dtype=""):
+    """Decode UTF-8 bytes back to string arrays."""
+    data = np.asarray(data)
+    if not data.size:
+        dtype = original_dtype if isinstance(original_dtype, str) else ""
+        if dtype.startswith("<U") or dtype.startswith("U"):
+            return np.asarray([], dtype=dtype)
+        return np.asarray([], dtype="U1")
+    flat = [value.decode("utf-8") for value in data.reshape(-1)]
+    out = np.asarray(flat, dtype="U").reshape(data.shape)
+    if original_dtype in {"object", "|O"}:
+        return out.astype(object)
+    if isinstance(original_dtype, str) and (
+        original_dtype.startswith("<U") or original_dtype.startswith("U")
+    ):
+        return out.astype(original_dtype)
+    return out
 
 
 def _save_coords(patch, patch_group, h5):
@@ -116,16 +154,20 @@ def _get_attrs(patch_group):
         if isinstance(val, np.ndarray) and not val.shape:
             val = np.asarray([val])[0]
         out[key] = val
-    return out
+    with suppress_warnings(DeprecationWarning):
+        return out
 
 
 def _read_array(table_array):
     """Read an array into numpy."""
     data = table_array[:]
-    if table_array._v_attrs["is_datetime64"]:
+    if getattr(table_array._v_attrs, "is_datetime64", False):
         data = data.view("datetime64[ns]")
-    if table_array._v_attrs["is_timedelta64"]:
+    if getattr(table_array._v_attrs, "is_timedelta64", False):
         data = data.view("timedelta64[ns]")
+    if getattr(table_array._v_attrs, "is_string", False):
+        original_dtype = getattr(table_array._v_attrs, "original_string_dtype", "")
+        data = _convert_bytes_to_strings(data, original_dtype)
     return data
 
 
@@ -206,14 +248,21 @@ def _read_patch(patch_group, **kwargs):
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
     # try except.
-    if kwargs:
+    if not _kwargs_empty(kwargs):
         # We need to remove any coordinates from kwargs that are multi-dim
         # coords.
         cmap = coords.dim_map
         sub_kwargs = {
-            i: v for i, v in kwargs.items() if (i not in cmap) or (len(cmap[i]) == 1)
+            i: v
+            for i, v in kwargs.items()
+            if v is not None
+            and i not in _KWARG_NON_KEYS
+            and ((i not in cmap) or (len(cmap[i]) == 1))
         }
-        coords, data = coords.select(array=patch_group["data"], **sub_kwargs)
+        if sub_kwargs:
+            coords, data = coords.select(array=patch_group["data"], **sub_kwargs)
+        else:
+            data = patch_group["data"][:]
     else:
         data = patch_group["data"][:]
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
@@ -259,39 +308,13 @@ def _get_coord_summary_from_node(coord_node, dims):
     step = getattr(coord_node._v_attrs, "step", None)
     if getattr(coord_node._v_attrs, "step_is_timedelta64", False):
         step = np.timedelta64(step, "ns")
-    if (
-        step is None
-        and len(coord_node.shape) == 1
-        and coord_node.shape
-        and coord_node.shape[0] > 1
-    ):
-        data = _read_array(coord_node)
-        coord = get_coord(data=data, units=units)
-        return coord.to_summary(dims=dims)
-    if len(coord_node.shape) > 1:
-        data = _read_array(coord_node)
-        coord = get_coord(data=data, units=units, step=step)
-        return coord.to_summary(dims=dims)
-    coord_len = int(coord_node.shape[0]) if coord_node.shape else 0
-    if coord_len:
-        first = _read_array_sample(coord_node, 0)
-        if step is not None and coord_len > 1:
-            last = first + (step * (coord_len - 1))
-        else:
-            last = _read_array_sample(coord_node, coord_len - 1)
-        min_val, max_val = (first, last) if first <= last else (last, first)
-        dtype = str(np.asarray(first).dtype).split("[")[0]
-    else:
-        min_val = max_val = np.nan
-        dtype = str(coord_node.dtype).split("[")[0]
-    return CoordSummary.model_construct(
-        dtype=dtype,
-        min=min_val,
-        max=max_val,
-        step=step,
-        units=units,
+    data = _read_array(coord_node)
+    return coord_summary_from_data(
+        data,
         dims=dims,
-        len=coord_len,
+        units=units,
+        step=step,
+        dtype=str(coord_node.dtype).split("[")[0],
     )
 
 
@@ -318,7 +341,9 @@ def _get_patch_content_from_group(group, file_version="", file_format="DASDAE"):
     for coord_node in [x for x in group if x.name.startswith("_coord_")]:
         name = coord_node.name.replace("_coord_", "")
         coord_dims = tuple(getattr(attrs, f"_cdims_{name}", "").split(","))
-        coord_map[name] = _get_coord_summary_from_node(coord_node, coord_dims)
+        summary = _get_coord_summary_from_node(coord_node, coord_dims)
+        if summary is not None:
+            coord_map[name] = summary
     data_nodes = [x for x in group if x.name == "data"]
     dtype = str(data_nodes[0].dtype) if data_nodes else ""
     return PatchSummary.model_construct(

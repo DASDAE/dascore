@@ -104,6 +104,11 @@ class CoordSummary(DascoreBaseModel):
     dims: tuple[str, ...] = ()
     len: int | None = None
 
+    @property
+    def is_range_like(self) -> bool:
+        """Return True when the summary can reconstruct a CoordRange."""
+        return not pd.isnull(self.step)
+
     @model_serializer(when_used="json")
     def ser_model(self) -> dict[str, str]:
         """Serialize the model to json."""
@@ -124,7 +129,7 @@ class CoordSummary(DascoreBaseModel):
 
     def to_coord(self) -> CoordRange:
         """Convert to coord range, if possible."""
-        if pd.isnull(self.step):
+        if not self.is_range_like:
             msg = "Cannot convert summary which is not evenly sampled to coord."
             raise CoordError(msg)
         step = self.step
@@ -139,6 +144,9 @@ class CoordSummary(DascoreBaseModel):
             step=step,
             units=self.units,
         )
+
+
+COORD_SUMMARY_FIELDS = tuple(CoordSummary.model_fields)
 
 
 @cache
@@ -1561,6 +1569,140 @@ class CoordMonotonicArray(CoordArray):
         return self._step_meets_requirement(lt)
 
 
+def _is_string_like_array(data: ArrayLike) -> bool:
+    """Return True when the input is an array of strings/bytes."""
+    if not hasattr(data, "dtype"):
+        return False
+    if data.dtype.kind in {"U", "S"}:
+        return True
+    if data.dtype.kind != "O":
+        return False
+    array = np.asarray(data)
+    if not array.size:
+        return False
+    string_types = (str, bytes, np.str_, np.bytes_)
+    flat = array.reshape(-1)
+    return all(isinstance(value, string_types) for value in flat[:5])
+
+
+def _classify_coord_data(data: np.ndarray) -> str:
+    """Classify raw coord data for dispatch."""
+    if _is_string_like_array(data):
+        return "string"
+    if np.size(data) == 0:
+        return "empty"
+    if len(data) == 1:
+        return "single"
+    return "array"
+
+
+def _raise_string_coord_error(operation: str) -> None:
+    """Raise a consistent error for unsupported string coord operations."""
+    msg = f"String coordinates do not support {operation}."
+    raise CoordError(msg)
+
+
+class CoordString(BaseCoord):
+    """A coordinate implementation for string/categorical values."""
+
+    values: ArrayLike
+    _rich_style = dascore_styles["coord_array"]
+    _sorted = False
+    _reverse_sorted = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_values(cls, values):
+        """Normalize inputs to a string/bytes numpy array."""
+        if not isinstance(values, dict):
+            return values
+        data = np.asarray(values.get("values"))
+        if data.dtype.kind not in {"U", "S", "O"}:
+            msg = "CoordString requires string-like data."
+            raise CoordError(msg)
+        values["values"] = data
+        values["shape"] = data.shape
+        values["dtype"] = data.dtype
+        values["units"] = None
+        values["step"] = None
+        return values
+
+    def convert_units(self, unit) -> Self:
+        """String coordinates cannot be converted between units."""
+        if unit not in (None, ""):
+            _raise_string_coord_error("unit conversion")
+        return self
+
+    def set_units(self, units) -> Self:
+        """Reject setting units on string coordinates."""
+        return self.convert_units(units)
+
+    def _get_compatible_value(self, value, relative=False):
+        """Cast values to the underlying string dtype."""
+        if relative:
+            _raise_string_coord_error("relative selection")
+        if not is_array(value) and (pd.isnull(value) or value is Ellipsis):
+            return None
+        if is_array(value):
+            return np.asarray(value, dtype=self.dtype)
+        return np.asarray([value], dtype=self.dtype)[0]
+
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
+        """Select by exact string values, sample indices, or masks."""
+        if relative:
+            _raise_string_coord_error("relative selection")
+        if is_array(args):
+            return self._select_by_array(args, samples=samples)
+        if samples:
+            return self._select_by_samples(args)
+        if isinstance(args, slice | tuple):
+            _raise_string_coord_error("range selection")
+        values = np.asarray([args], dtype=self.dtype)
+        return self._select_by_value_array(values)
+
+    def sort(self, reverse=False):
+        """Sort values lexicographically."""
+        inds = np.argsort(self.values)
+        if reverse:
+            inds = inds[::-1]
+        return self[inds], inds
+
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
+        """Reject numeric limit updates on string coords."""
+        if any(value is not None for value in (min, max, step)) or kwargs:
+            _raise_string_coord_error("limit updates")
+        return self
+
+    def to_summary(self, dims=()) -> CoordSummary:
+        """Return a lossy summary for string coordinates."""
+        return CoordSummary(
+            min=self.min(),
+            max=self.max(),
+            step=None,
+            dtype=self.dtype,
+            units=None,
+            dims=dims,
+            len=len(self),
+        )
+
+    def __getitem__(self, item) -> Self:
+        """Return a subset of the coordinate."""
+        out = self.values[item]
+        if np.ndim(out) == 0:
+            return out
+        return self.new(values=np.asarray(out, dtype=self.dtype))
+
+    def _min(self):
+        """Return lexicographic minimum."""
+        return None if not len(self) else min(self.values)
+
+    def _max(self):
+        """Return lexicographic maximum."""
+        return None if not len(self) else max(self.values)
+
+
 def get_coord(
     *,
     data: ArrayLike | None | np.ndarray | BaseCoord = None,
@@ -1724,12 +1866,15 @@ def get_coord(
             return data
         if not isinstance(data, np.ndarray):
             data = np.atleast_1d(data)
-        if np.size(data) == 0:
+        kind = _classify_coord_data(data)
+        if kind == "string":
+            return CoordString(values=data)
+        if kind == "empty":
             dtype = dtype or data.dtype
             return CoordPartial(shape=data.shape, units=units, step=step, dtype=dtype)
         # special case of len 1 array either get range, if step specified
         # or sorted monotonic array if not.
-        elif len(data) == 1:
+        elif kind == "single":
             if not pd.isnull(step):
                 val = data[0]
                 return CoordRange(start=val, stop=val + step, step=step, units=units)
