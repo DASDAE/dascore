@@ -6,12 +6,16 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
 from dascore.compat import random_state
+from dascore.core.coords import CoordString
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
+    _convert_bytes_to_strings,
+    _convert_strings_to_bytes,
     _get_coord_summary_from_node,
     _read_array_sample,
     _translate_legacy_attrs,
@@ -318,6 +322,19 @@ class TestCoordSummaryHelpers:
         assert np.asarray(out).dtype == np.dtype("timedelta64[ns]")
         assert out == np.timedelta64(2, "ns")
 
+    def test_read_array_sample_restores_datetime64(self):
+        """Scalar coord samples should restore datetime64 metadata."""
+        node = self._ArrayNode(
+            [1, 2, 3],
+            dtype="int64",
+            attrs=self._Attrs(is_datetime64=True, is_timedelta64=False),
+        )
+
+        out = _read_array_sample(node, 1)
+
+        assert np.asarray(out).dtype == np.dtype("datetime64[ns]")
+        assert out == np.datetime64(2, "ns")
+
     def test_get_coord_summary_from_empty_node(self):
         """Empty coord nodes should fall back to NaN bounds and node dtype."""
         node = self._ArrayNode([], dtype="float64", attrs=self._Attrs(units="m"))
@@ -327,7 +344,7 @@ class TestCoordSummaryHelpers:
         assert np.isnan(out.min)
         assert np.isnan(out.max)
         assert out.dtype == "float64"
-        assert out.units == "m"
+        assert dc.get_quantity(out.units) == dc.get_quantity("m")
         assert out.dims == ("distance",)
         assert out.len == 0
 
@@ -447,3 +464,102 @@ class TestRoundTrips:
         new_spool = dc.spool(path, file_format="DASDAE")
         out_patch = new_spool[0]
         assert in_patch == out_patch
+
+    def test_roundtrip_string_aux_coord(self, random_patch, tmp_path_factory):
+        """Attached string coordinates should round-trip through DASDAE."""
+        path = tmp_path_factory.mktemp("roundtrip_string_coord") / "out.h5"
+        distance = random_patch.get_coord("distance")
+        labels = np.array([f"sensor_{num:03d}" for num in range(len(distance))])
+        patch = random_patch.update_coords(sensor=("distance", labels))
+        patch.io.write(path, "dasdae")
+        out = dc.read(path, file_format="DASDAE")[0]
+        coord = out.get_coord("sensor")
+        assert isinstance(coord, CoordString)
+        assert np.array_equal(coord.values, labels)
+
+    def test_roundtrip_string_dim_coord(self, random_patch, tmp_path_factory):
+        """String dimension coordinates should round-trip through DASDAE."""
+        path = tmp_path_factory.mktemp("roundtrip_string_dim") / "out.h5"
+        distance = random_patch.get_coord("distance")
+        labels = np.array([f"ch_{num:03d}" for num in range(len(distance))])
+        patch = random_patch.update_coords(distance=labels)
+        patch.io.write(path, "dasdae")
+        out = dc.read(path, file_format="DASDAE")[0]
+        coord = out.get_coord("distance")
+        assert isinstance(coord, CoordString)
+        assert np.array_equal(coord.values, labels)
+
+    def test_scan_includes_string_coords(self, random_patch, tmp_path_factory):
+        """String coordinates should appear in lossy scan summaries."""
+        path = tmp_path_factory.mktemp("scan_string_coord") / "out.h5"
+        distance = random_patch.get_coord("distance")
+        labels = np.array([f"sensor_{num:03d}" for num in range(len(distance))])
+        patch = random_patch.update_coords(sensor=("distance", labels))
+        patch.io.write(path, "dasdae")
+        summary = dc.scan(path)[0]
+        assert "sensor" in summary.coords
+        assert summary.coords["sensor"].min == "sensor_000"
+        assert summary.coords["sensor"].step is None
+
+    def test_scan_to_df_includes_string_coord_columns(
+        self, random_patch, tmp_path_factory
+    ):
+        """Flattened scan results should expose string coord summary fields."""
+        path = tmp_path_factory.mktemp("scan_string_coord_df") / "out.h5"
+        distance = random_patch.get_coord("distance")
+        labels = np.array([f"sensor_{num:03d}" for num in range(len(distance))])
+        patch = random_patch.update_coords(sensor=("distance", labels))
+        patch.io.write(path, "dasdae")
+        df = dc.scan_to_df(path)
+        row = df.iloc[0]
+        assert row["sensor_min"] == "sensor_000"
+        assert row["sensor_max"] == labels[-1]
+        assert pd.isnull(row["sensor_step"])
+
+
+class TestStringArrayHelpers:
+    """Tests for DASDAE string-array helper functions."""
+
+    def test_convert_strings_to_bytes(self):
+        """Unicode strings should convert to fixed-width bytes."""
+        out = _convert_strings_to_bytes(np.array(["alpha", "cafe", "北京"]))
+        assert out.dtype.kind == "S"
+
+    def test_convert_empty_strings_to_bytes(self):
+        """Empty string arrays should still have a concrete byte dtype."""
+        out = _convert_strings_to_bytes(np.array([], dtype="U4"))
+        assert out.dtype == np.dtype("S1")
+        assert out.size == 0
+
+    def test_convert_bytes_to_strings(self):
+        """UTF-8 bytes should convert back to unicode strings."""
+        data = np.array([b"alpha", "北京".encode()], dtype="S6")
+        out = _convert_bytes_to_strings(data, "<U8")
+        assert out.dtype.kind == "U"
+        assert np.array_equal(out, np.array(["alpha", "北京"]))
+
+    def test_convert_empty_bytes_to_strings(self):
+        """Empty byte arrays should decode to an empty unicode array."""
+        out = _convert_bytes_to_strings(np.array([], dtype="S1"), original_dtype=object)
+        assert out.dtype == np.dtype("U1")
+        assert out.size == 0
+
+    def test_convert_empty_bytes_to_unicode_strings(self):
+        """Empty byte arrays should preserve explicit unicode dtypes."""
+        out = _convert_bytes_to_strings(np.array([], dtype="S1"), original_dtype="<U4")
+        assert out.dtype == np.dtype("<U4")
+        assert out.size == 0
+
+    def test_convert_bytes_to_object_strings(self):
+        """Object-backed string arrays should restore object dtype."""
+        data = np.array([b"alpha", b"beta"], dtype="S5")
+        out = _convert_bytes_to_strings(data, "object")
+        assert out.dtype == object
+        assert np.array_equal(out, np.array(["alpha", "beta"], dtype=object))
+
+    def test_convert_bytes_to_default_unicode_strings(self):
+        """Unknown source dtypes should fall back to unicode arrays."""
+        data = np.array([b"alpha", b"beta"], dtype="S5")
+        out = _convert_bytes_to_strings(data)
+        assert out.dtype.kind == "U"
+        assert np.array_equal(out, np.array(["alpha", "beta"]))
