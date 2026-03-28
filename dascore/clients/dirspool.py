@@ -13,6 +13,7 @@ import pandas as pd
 from rich.text import Text
 from typing_extensions import Self
 
+from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS
 from dascore.core.spool import BaseSpool, DataFrameSpool
 from dascore.io.indexer import AbstractIndexer, DirectoryIndexer
@@ -60,7 +61,7 @@ class DirectorySpool(DataFrameSpool):
         # Init file spool from indexer
         elif isinstance(base_path, AbstractIndexer):
             self.indexer = base_path
-        elif isinstance(base_path, Path | str):
+        elif isinstance(base_path, Path | str | UPath):
             self.indexer = DirectoryIndexer(base_path, index_path=index_path)
         assert hasattr(self, "indexer"), "indexer not set."
         self._preferred_format = preferred_format

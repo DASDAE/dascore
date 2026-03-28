@@ -22,13 +22,14 @@ from scipy.linalg import solve
 from scipy.special import factorial
 
 import dascore as dc
-from dascore.compat import is_array
+from dascore.compat import UPath, is_array
 from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
     FilterValueError,
     MissingOptionalDependencyError,
     ParameterError,
 )
+from dascore.utils.paths import coerce_path, is_local_path
 from dascore.utils.progress import track
 
 
@@ -162,7 +163,7 @@ def _get_nullish(dtype=np.floating):
 
 
 def _iter_filesystem(
-    paths: str | Path | Iterable[str | Path],
+    paths: str | Path | UPath | Iterable[str | Path | UPath],
     ext: str | None = None,
     timestamp: float | None = None,
     skip_hidden: bool = True,
@@ -193,7 +194,53 @@ def _iter_filesystem(
     ------
     Paths, as strings, meeting requirements.
     """
+
+    def _iter_generic(path_like):
+        warned_no_remote_mtime = False
+
+        def _meets_timestamp(entry):
+            nonlocal warned_no_remote_mtime
+            if timestamp is None:
+                return True
+            try:
+                return entry.stat().st_mtime >= timestamp
+            except Exception:
+                if not warned_no_remote_mtime:
+                    warnings.warn(
+                        "Remote path backend does not expose reliable mtime; "
+                        "continuing iteration without timestamp filtering.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    warned_no_remote_mtime = True
+                return True
+
+        path_like = coerce_path(path_like)
+        if include_directories and path_like.is_dir():
+            if not (skip_hidden and path_like.name.startswith(".")):
+                signal = yield str(path_like)
+                if signal == "skip":
+                    yield None
+                    return
+        if path_like.is_dir():
+            for entry in path_like.iterdir():
+                if entry.is_file() and (ext is None or entry.name.endswith(ext)):
+                    # Remote/UPath backends may not support a cheap or reliable
+                    # mtime; apply timestamp filtering opportunistically.
+                    if _meets_timestamp(entry):
+                        if not (skip_hidden and entry.name.startswith(".")):
+                            yield str(entry)
+                elif entry.is_dir() and not (
+                    skip_hidden and entry.name.startswith(".")
+                ):
+                    yield from _iter_generic(entry)
+        elif path_like.is_file():
+            yield str(path_like)
+
     # handle returning directories if requested.
+    if isinstance(paths, str | Path | UPath) and not is_local_path(paths):
+        yield from _iter_generic(paths)
+        return
     if include_directories and os.path.isdir(paths):
         if not (skip_hidden and str(paths).startswith(".")):
             signal = yield paths

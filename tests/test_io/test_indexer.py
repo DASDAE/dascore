@@ -11,9 +11,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from packaging.version import parse as get_version
+from upath import UPath
 
 import dascore as dc
 from dascore.examples import spool_to_directory
+from dascore.exceptions import InvalidSpoolError
 from dascore.io.indexer import DirectoryIndexer
 from dascore.utils.patch import get_patch_names
 
@@ -131,6 +133,13 @@ class TestFindIndex:
         assert directory_indexer_bad_cache.index_map_path.exists()
         directory_indexer_bad_cache(path)
         assert not directory_indexer_bad_cache.index_map_path.exists()
+
+    def test_remote_directory_not_supported(self):
+        """Remote directory indexing should fail fast."""
+        path = UPath("memory://dascore/indexer")
+        (path / "file.txt").write_text("x")
+        with pytest.raises(InvalidSpoolError, match="local filesystem"):
+            DirectoryIndexer(path)
 
 
 class TestBasics:

@@ -55,6 +55,7 @@ dependencies = [
      "rich",
      "tables>=3.7",
      "typing_extensions>=4.12",
+     "universal-pathlib",
      "pint",
      "scipy>=1.15",
 ]
@@ -77,13 +78,17 @@ docs = [
 ]
 
 test = [
+    "aiohttp",
     "coverage>=7.4,<8",
     "pytest-cov>=4",
     "pre-commit",
     "pytest",
     "pytest-codeblocks",
     "pytest-cov",
+    "starlette",
     "twine",
+    "universal-pathlib",
+    "uvicorn",
 ]
 
 profile_base = [
@@ -215,6 +220,9 @@ convention = "numpy"
 filterwarnings = [
     # Ignore hdf5 warnings from pytables, See pytables #1035
     'ignore::Warning:tables:'
+]
+markers = [
+    "network: tests that require network-style filesystem access",
 ]
 
 [tool.ruff.format]

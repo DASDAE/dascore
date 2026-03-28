@@ -15,7 +15,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.compat import is_array
+from dascore.compat import UPath, is_array
 from dascore.constants import (
     PROGRESS_LEVELS,
     WARN_LEVELS,
@@ -23,6 +23,7 @@ from dascore.constants import (
     PatchType,
     attr_conflict_description,
     numeric_types,
+    path_types,
     timeable_types,
 )
 from dascore.exceptions import InvalidSpoolError, ParameterError
@@ -40,6 +41,7 @@ from dascore.utils.patch import (
     patches_to_df,
     stack_patches,
 )
+from dascore.utils.paths import requires_local_directory
 from dascore.utils.pd import (
     _column_or_value,
     _convert_min_max_in_kwargs,
@@ -713,7 +715,7 @@ class MemorySpool(DataFrameSpool):
 
 
 @singledispatch
-def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSpool:
+def spool(obj: path_types | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSpool:
     """
     Create a spool from a data source.
 
@@ -747,11 +749,13 @@ def spool(obj: Path | str | BaseSpool | Sequence[PatchType], **kwargs) -> BaseSp
 
 @spool.register(str)
 @spool.register(Path)
+@spool.register(UPath)
 def _spool_from_str(path, **kwargs):
     """Get a spool from a path."""
-    path = Path(path)
+    path = path if isinstance(path, UPath) else Path(path)
     # A directory was passed, create Directory Spool
     if path.is_dir():
+        requires_local_directory(path, label="Directory spool")
         from dascore.clients.dirspool import DirectorySpool
 
         return DirectorySpool(path, **kwargs)

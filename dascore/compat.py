@@ -16,6 +16,7 @@ from rich.progress import Progress  # NOQA
 from scipy.interpolate import interp1d  # NOQA
 from scipy.ndimage import zoom  # NOQA
 from scipy.signal import decimate, resample, resample_poly  # NOQA
+from upath import UPath  # NOQA
 
 random_state = RandomState(42)
 

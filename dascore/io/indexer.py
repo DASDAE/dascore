@@ -16,10 +16,12 @@ import pooch
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import iterate
+from dascore.utils.paths import requires_local_directory
 from dascore.utils.pd import filter_df
 from dascore.utils.time import get_max_min_times, to_timedelta64
 
@@ -122,7 +124,10 @@ class DirectoryIndexer(AbstractIndexer):
 
     def __init__(self, path: str | Path, cache_size: int = 5, index_path=None):
         self.max_size = cache_size
-        self.path = Path(path).absolute()
+        self.path = (
+            UPath(path).absolute() if isinstance(path, UPath) else Path(path).absolute()
+        )
+        requires_local_directory(self.path, label="DirectoryIndexer")
         self.index_path = Path(self._find_index_file(self.path, index_path))
         self._current_index = 0
         self._index_table = HDFPatchIndexManager(

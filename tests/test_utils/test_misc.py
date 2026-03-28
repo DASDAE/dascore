@@ -11,13 +11,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from upath import UPath
 
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
     _iter_filesystem,
+    _spool_map,
     all_diffs_close_enough,
     cached_method,
     deep_equality_check,
+    get_2d_line_intersection,
     get_buffer_size,
     get_stencil_coefs,
     iterate,
@@ -159,6 +162,85 @@ class TestIterFS:
         names = {Path(x).name.split(".")[0] for x in out}
         # Anything after B should have been skipped
         assert {"C", "D", "E", "F"}.isdisjoint(names)
+
+    def test_remote_file(self):
+        """Ensure remote file paths are yielded directly."""
+        path = UPath("memory://dascore/iterfs/file.txt")
+        path.write_text("hello")
+        assert list(_iter_filesystem(path)) == [str(path)]
+
+    def test_remote_directory(self):
+        """Ensure remote directories are traversed with the generic iterator."""
+        root = UPath("memory://dascore/iterfs/root")
+        (root / "sub").mkdir(parents=True, exist_ok=True)
+        (root / ".hidden").mkdir(parents=True, exist_ok=True)
+        (root / "a.txt").write_text("a")
+        (root / "sub" / "b.txt").write_text("b")
+        (root / ".hidden" / "skip.txt").write_text("x")
+        out = list(_iter_filesystem(root, include_directories=True))
+        assert str(root) in out
+        assert str(root / "a.txt") in out
+        assert str(root / "sub" / "b.txt") in out
+        assert str(root / ".hidden" / "skip.txt") not in out
+
+    def test_remote_directory_skip_signal(self):
+        """Ensure skip signals also work on remote directory traversal."""
+        root = UPath("memory://dascore/iterfs/skip")
+        (root / "sub").mkdir(parents=True, exist_ok=True)
+        (root / "sub" / "b.txt").write_text("b")
+        iterator = _iter_filesystem(root, include_directories=True)
+        first = next(iterator)
+        assert first == str(root)
+        assert iterator.send("skip") is None
+        with pytest.raises(StopIteration):
+            next(iterator)
+
+    def test_remote_directory_uses_timestamp_when_backend_supports_mtime(
+        self, monkeypatch
+    ):
+        """Remote iteration should respect timestamps when stat exposes mtime."""
+        root = UPath("memory://dascore/iterfs/timestamp")
+        (root / "old.txt").write_text("old")
+        (root / "new.txt").write_text("new")
+        upath_type = type(root / "old.txt")
+        original_stat = upath_type.stat
+
+        class _Stat:
+            def __init__(self, st_mtime):
+                self.st_mtime = st_mtime
+
+        def _stat(self, *args, **kwargs):
+            name = self.name
+            if name == "old.txt":
+                return _Stat(5)
+            if name == "new.txt":
+                return _Stat(20)
+            return original_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(upath_type, "stat", _stat)
+        out = list(_iter_filesystem(root, timestamp=10))
+        assert out == [str(root / "new.txt")]
+
+    def test_remote_directory_warns_when_timestamp_not_supported(self, monkeypatch):
+        """Remote iteration should warn and continue if mtime lookup fails."""
+        root = UPath("memory://dascore/iterfs/no_timestamp")
+        (root / "a.txt").write_text("a")
+        (root / "b.txt").write_text("b")
+        upath_type = type(root / "a.txt")
+        original_stat = upath_type.stat
+
+        def _stat(self, *args, **kwargs):
+            if self.name.endswith(".txt"):
+                raise OSError("no mtime")
+            return original_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(upath_type, "stat", _stat)
+        with pytest.warns(
+            UserWarning, match="does not expose reliable mtime"
+        ) as record:
+            out = list(_iter_filesystem(root, timestamp=10))
+        assert sorted(out) == sorted([str(root / "a.txt"), str(root / "b.txt")])
+        assert len(record) == 1
 
 
 class TestIterate:
@@ -347,6 +429,66 @@ class TestToObjectArray:
         patches = [random_patch] * 3
         out = to_object_array(patches)
         assert isinstance(out, np.ndarray)
+
+
+class TestSpoolMap:
+    """Tests for the private spool mapping helper."""
+
+    def test_without_client(self, random_spool):
+        """A missing client should use direct iteration over the spool."""
+        spool = random_spool[:3]
+        out = _spool_map(
+            spool,
+            lambda patch, value=1: len(patch.dims) + value,
+            progress=False,
+        )
+        assert out == [3, 3, 3]
+
+    def test_with_client(self, random_spool, monkeypatch):
+        """A client should receive split spools and flatten mapped outputs."""
+        seen = []
+
+        def fake_track(iterable, desc):
+            seen.append(desc)
+            return iterable
+
+        class DummyClient:
+            def map(self, func, spools):
+                return [func(spool) for spool in spools]
+
+        monkeypatch.setattr("dascore.utils.misc.track", fake_track)
+        monkeypatch.setattr("dascore.utils.misc.os.cpu_count", lambda: 2)
+        out = _spool_map(
+            random_spool[:4],
+            lambda patch, value=1: len(patch.dims) + value,
+            client=DummyClient(),
+            size=None,
+            progress=True,
+        )
+        assert out == [3, 3, 3]
+        assert seen == ["Applying <lambda> to spool"]
+
+
+class Test2DLineIntersection:
+    """Tests for 2D line intersection helper."""
+
+    def test_non_parallel_lines(self):
+        """Non-parallel lines should return their intersection."""
+        p1 = np.array([0.0, 0.0])
+        p2 = np.array([2.0, 2.0])
+        p3 = np.array([0.0, 2.0])
+        p4 = np.array([2.0, 0.0])
+        out = get_2d_line_intersection(p1, p2, p3, p4)
+        assert np.allclose(out, [1.0, 1.0])
+
+    def test_parallel_lines(self):
+        """Parallel lines should return NaN coordinates."""
+        p1 = np.array([0.0, 0.0])
+        p2 = np.array([1.0, 1.0])
+        p3 = np.array([0.0, 1.0])
+        p4 = np.array([1.0, 2.0])
+        out = get_2d_line_intersection(p1, p2, p3, p4)
+        assert np.isnan(out).all()
 
 
 class TestGetBufferSize:

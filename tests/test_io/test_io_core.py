@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import rich.progress as prog
+from upath import UPath
 
 import dascore
 import dascore as dc
@@ -449,6 +450,15 @@ class TestScan:
         """Ensure scan works on a single file."""
         out = dc.scan(terra15_v6_path)
         assert len(out) == 1
+
+    def test_local_upath_file_interfaces(self, terra15_v6_path):
+        """Ensure core file IO accepts local UPath inputs."""
+        path = UPath(terra15_v6_path)
+        file_format, file_version = dc.get_format(path)
+        assert file_format
+        assert file_version
+        assert len(dc.scan(path)) == 1
+        assert len(dc.read(path)) == 1
 
 
 class TestReloadableSourcePath:
