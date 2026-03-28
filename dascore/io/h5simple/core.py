@@ -6,7 +6,7 @@ import dascore as dc
 from dascore.constants import SpoolType
 from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
-from dascore.utils.hdf5 import H5Reader, PyTablesReader
+from dascore.utils.hdf5 import H5Reader, LocalPyTablesReader
 
 from .utils import _get_attrs_coords_and_data, _is_h5simple, _maybe_trim_data
 
@@ -24,7 +24,7 @@ class H5Simple(FiberIO):
             return self.name, self.version
         return False
 
-    def read(self, resource: PyTablesReader, snap=True, **kwargs) -> SpoolType:
+    def read(self, resource: LocalPyTablesReader, snap=True, **kwargs) -> SpoolType:
         """
         Read a simple h5 file.
 
@@ -44,7 +44,9 @@ class H5Simple(FiberIO):
         patch = dc.Patch(coords=new_cm, data=new_data[:], attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, resource: PyTablesReader, snap=True, **kwargs) -> list[PatchSummary]:
+    def scan(
+        self, resource: LocalPyTablesReader, snap=True, **kwargs
+    ) -> list[PatchSummary]:
         """Get the attributes of a h5simple file."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
         attrs.pop("file_format", None)

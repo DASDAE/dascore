@@ -6,7 +6,6 @@ Das Data.
 from __future__ import annotations
 
 import inspect
-import os.path
 import warnings
 from collections import defaultdict
 from collections.abc import Generator
@@ -19,7 +18,7 @@ import pandas as pd
 from pydantic import ConfigDict, Field, model_validator
 
 import dascore as dc
-from dascore.compat import Progress
+from dascore.compat import Progress, UPath
 from dascore.constants import (
     PROGRESS_LEVELS,
     VALID_DATA_CATEGORIES,
@@ -27,6 +26,7 @@ from dascore.constants import (
     PatchType,
     SpoolType,
     max_lens,
+    path_types,
     timeable_types,
 )
 from dascore.core.attrs import str_validator
@@ -48,6 +48,7 @@ from dascore.utils.models import (
     DateTime64,
     TimeDelta64,
 )
+from dascore.utils.paths import coerce_path, is_local_path
 from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
 
@@ -223,7 +224,7 @@ def _get_reloadable_source_path(resource, fallback: str | Path | None = None) ->
             continue
         if isinstance(candidate, IOResourceManager):
             candidate = candidate.source
-        if isinstance(candidate, str | Path):
+        if isinstance(candidate, str | Path | UPath):
             return str(candidate)
     return ""
 
@@ -462,10 +463,18 @@ class _FiberIOManager:
         """
         with IOResourceManager(path) as man:
             path = man.source
-            if not os.path.exists(path):
+            if isinstance(path, UPath):
+                exists = path.exists()
+                suffix = path.suffix
+            else:
+                local_path = (
+                    coerce_path(path) if not is_local_path(path) else Path(path)
+                )
+                exists = local_path.exists()
+                suffix = local_path.suffix
+            if not exists:
                 raise FileNotFoundError(f"{path} does not exist.")
             # get extension (str minus .)
-            suffix = Path(path).suffix
             ext = suffix[1:] if suffix else None
             input_type = self._get_input_type_name(path)
             iterator = self.yield_fiberio(
@@ -504,8 +513,10 @@ class _FiberIOManager:
         # This effectively acts as a dispatch to determine which type of
         # FiberIO could possibly read the obj.
         out = "file"
-        if isinstance(obj, str | Path) and (path := Path(obj)).exists():
-            out = "directory" if path.is_dir() else "file"
+        if isinstance(obj, str | Path | UPath):
+            path = obj if isinstance(obj, UPath) else Path(obj)
+            if path.exists():
+                out = "directory" if path.is_dir() else "file"
         return out
 
 
@@ -716,7 +727,7 @@ class FiberIO:
 
 
 def read(
-    path: str | Path | IOResourceManager,
+    path: path_types | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     time: tuple[timeable_types | None, timeable_types | None] | None = None,
@@ -784,7 +795,7 @@ def read(
 
 
 def scan_to_df(
-    path: Path | str | PatchType | SpoolType | IOResourceManager | pd.DataFrame,
+    path: path_types | PatchType | SpoolType | IOResourceManager | pd.DataFrame,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -842,13 +853,18 @@ def scan_to_df(
 def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):
     """Yield scan candidates."""
     for el in iterate(patch_source):
-        if isinstance(el, str | Path) and (path := Path(el)).exists():
-            generator = _iter_filesystem(
-                path, ext=ext, timestamp=mtime, include_directories=include_directories
-            )
-            yield from generator
-        else:
-            yield el
+        if isinstance(el, str | Path | UPath):
+            path = el if isinstance(el, UPath) else Path(el)
+            if path.exists():
+                generator = _iter_filesystem(
+                    path,
+                    ext=ext,
+                    timestamp=mtime,
+                    include_directories=include_directories,
+                )
+                yield from generator
+                continue
+        yield el
 
 
 def _get_fiber_io_and_req_type(
@@ -919,7 +935,7 @@ def _handle_missing_optionals(outputs, optional_dep_dict):
 
 
 def scan(
-    path: Path | str | PatchType | SpoolType | IOResourceManager,
+    path: path_types | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -977,7 +993,7 @@ def scan(
     length = _count_generator(_generator)
     generator = _iterate_scan_inputs(path, ext=ext, mtime=timestamp)
     # We want to avoid printing long object str reprs, so only print paths.
-    resource_str = path if isinstance(path, str | Path) else ""
+    resource_str = path if isinstance(path, str | Path | UPath) else ""
     tracker = track(
         generator,
         f"scan {resource_str}",
@@ -1055,7 +1071,7 @@ def scan(
 
 
 def get_format(
-    path: str | Path | IOResourceManager,
+    path: path_types | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     fiber_io_hint: dict[str, FiberIO] | None = None,
@@ -1102,7 +1118,7 @@ def get_format(
 
 def write(
     patch_or_spool,
-    path: str | Path,
+    path: path_types,
     file_format: str,
     file_version: str | None = None,
     **kwargs,

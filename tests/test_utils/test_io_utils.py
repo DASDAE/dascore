@@ -6,19 +6,27 @@ from contextlib import closing
 from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
 from pathlib import Path
 
+import h5py
 import pytest
 from tables import File
+from upath import UPath
 
 import dascore as dc
 from dascore.exceptions import PatchConversionError
-from dascore.utils.hdf5 import HDF5Reader, HDF5Writer
+from dascore.utils.hdf5 import H5Reader, HDF5Reader, HDF5Writer, LocalH5Reader
 from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
     IOResourceManager,
+    LocalBinaryReader,
+    LocalPath,
     TextReader,
+    clear_remote_file_cache,
+    ensure_local_file,
     get_handle_from_resource,
+    get_remote_cache_path,
 )
+from dascore.utils.remote_io import FallbackFileObj, is_no_range_http_error
 
 
 class _BadType:
@@ -27,6 +35,57 @@ class _BadType:
 
 def _dummy_func(arg: str, arg2: _BadType) -> int:
     """A dummy function."""
+
+
+class _FailOnSeek(BytesIO):
+    """A test handle which raises once on seek."""
+
+    def __init__(self, data: bytes, exc: Exception):
+        super().__init__(data)
+        self._exc = exc
+        self.triggered = False
+
+    def seek(self, offset, whence=0):
+        """Raise once, then defer to BytesIO."""
+        if not self.triggered:
+            self.triggered = True
+            raise self._exc
+        return super().seek(offset, whence)
+
+
+class _NoTellHandle(BytesIO):
+    """A test handle whose tell method fails."""
+
+    def tell(self):
+        """Raise to exercise fallback position tracking."""
+        raise OSError("tell failed")
+
+
+class _PlainHandle:
+    """A simple handle without writable/flush helpers."""
+
+    def __init__(self):
+        self.closed = False
+        self.extra_attr = "value"
+
+    def read(self, _size=-1):
+        return b""
+
+    def seek(self, offset, _whence=0):
+        return offset
+
+    def tell(self):
+        return 0
+
+    def close(self):
+        self.closed = True
+
+
+class _WritableHandle(_PlainHandle):
+    """A handle exposing a writable method."""
+
+    def writable(self):
+        return True
 
 
 class TestGetHandleFromResource:
@@ -92,12 +151,105 @@ class TestGetHandleFromResource:
         my_str = get_handle_from_resource(tmp_path, str)
         assert isinstance(my_str, str)
 
+    def test_get_upath(self, tmp_path):
+        """Ensure we can get a UPath."""
+        path = get_handle_from_resource(tmp_path, UPath)
+        assert isinstance(path, UPath)
+
     def test_already_file_handle(self, tmp_path):
         """Ensure an input that is already the requested type works."""
         path = tmp_path / "pass_back.txt"
         with open(path, "wb") as fi:
             out = get_handle_from_resource(fi, BinaryWriter)
             assert out is fi
+
+    def test_binary_reader_from_upath(self, tmp_path):
+        """Ensure binary readers can open UPath resources directly."""
+        path = UPath(tmp_path / "upath.bin")
+        path.write_bytes(b"abc")
+        with closing(get_handle_from_resource(path, BinaryReader)) as handle:
+            assert handle.read() == b"abc"
+
+    def test_binary_reader_resets_buffered_stream(self):
+        """Ensure BinaryReader resets offsets on binary streams."""
+        resource = BytesIO(b"abc")
+        _ = resource.read(1)
+        out = BinaryReader.get_handle(resource)
+        assert out is resource
+        assert out.tell() == 0
+        assert out.read(1) == b"a"
+
+    def test_text_reader_from_upath(self, tmp_path):
+        """Ensure text readers can open UPath resources directly."""
+        path = UPath(tmp_path / "upath.txt")
+        path.write_text("abc")
+        with closing(get_handle_from_resource(path, TextReader)) as handle:
+            assert handle.read() == "abc"
+
+    def test_local_binary_reader_passthrough_resets_offset(self):
+        """Ensure LocalBinaryReader preserves passthrough stream behavior."""
+        resource = BytesIO(b"abc")
+        _ = resource.read(1)
+        out = LocalBinaryReader.get_handle(resource)
+        assert out is resource
+        assert out.tell() == 0
+
+    def test_h5_reader_from_open_file_handle(self, tmp_path):
+        """Ensure h5py-backed readers support open file handles."""
+        path = tmp_path / "handle.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        with open(path, "rb") as raw:
+            handle = H5Reader.get_handle(raw)
+            try:
+                assert list(handle["data"][:]) == [1, 2, 3]
+            finally:
+                handle.close()
+
+    def test_h5_reader_passthrough_h5py_handle(self, tmp_path):
+        """Ensure h5py-backed readers return open handles unchanged."""
+        path = tmp_path / "passthrough.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        with h5py.File(path, "r") as raw:
+            assert H5Reader.get_handle(raw) is raw
+
+    def test_local_h5_reader_materializes_local_path(self, tmp_path):
+        """Ensure LocalH5Reader can open a local path through its adapter."""
+        path = tmp_path / "local_h5_reader.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        handle = LocalH5Reader.get_handle(path)
+        try:
+            assert list(handle["data"][:]) == [1, 2, 3]
+        finally:
+            handle.close()
+
+    def test_h5_reader_closes_upath_handle_on_constructor_error(
+        self, tmp_path, monkeypatch
+    ):
+        """Ensure constructor failures close UPath-opened file handles."""
+
+        class _DummyHandle:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        handle = _DummyHandle()
+        path = UPath(tmp_path / "error.h5")
+        path.write_bytes(b"not an hdf5")
+        monkeypatch.setattr(type(path), "open", lambda self, *args, **kwargs: handle)
+        monkeypatch.setattr(
+            H5Reader,
+            "constructor",
+            staticmethod(
+                lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
+            ),
+        )
+        with pytest.raises(RuntimeError, match="boom"):
+            H5Reader.get_handle(path)
+        assert handle.closed
 
     def test_not_implemented(self):
         """Tests for raising not implemented errors for types not supported."""
@@ -114,6 +266,13 @@ class TestGetHandleFromResource:
 
 class TestIOResourceManager:
     """Tests for the IO resource manager."""
+
+    @pytest.fixture(autouse=True)
+    def clear_remote_cache(self):
+        """Ensure remote cache state doesn't leak between tests."""
+        clear_remote_file_cache()
+        yield
+        clear_remote_file_cache()
 
     def test_basic_context_manager(self, tmp_path):
         """Ensure it works as a context manager."""
@@ -132,6 +291,19 @@ class TestIOResourceManager:
         # after the context manager exists everything should be closed.
         assert not hf.isopen
         assert fi.closed
+
+    def test_get_none_resource_returns_source(self):
+        """Requesting no specific resource should return the original source."""
+        source = object()
+        with IOResourceManager(source) as man:
+            assert man.get_resource(None) is source
+
+    def test_non_pathlike_resource_passthrough(self):
+        """Non-pathlike resources should bypass path coercion entirely."""
+        source = BytesIO(b"abc")
+        with IOResourceManager(source) as man:
+            out = man.get_resource(BinaryReader)
+            assert out is source
 
     def test_nested_context(self, tmp_path):
         """Ensure nested context works as well."""
@@ -157,6 +329,244 @@ class TestIOResourceManager:
                 raise ValueError("Waaagh!")
         except ValueError:
             assert fi.closed
+
+    def test_remote_path_is_materialized_in_cache(self):
+        """Remote resources that need local paths should be cache-backed."""
+        path = UPath("memory://dascore/io_resource_test.txt")
+        path.write_text("hello")
+        with IOResourceManager(path) as man:
+            local_path = man.get_resource(Path)
+            assert isinstance(local_path, Path)
+            assert local_path.exists()
+            assert local_path.read_text() == "hello"
+        assert local_path.exists()
+        assert get_remote_cache_path() in local_path.parents
+
+    def test_remote_path_can_return_upath(self):
+        """Remote resources should be returned unchanged for UPath consumers."""
+        path = UPath("memory://dascore/io_resource_test_upath.txt")
+        path.write_text("hello")
+        with IOResourceManager(path) as man:
+            out = man.get_resource(UPath)
+            assert isinstance(out, UPath)
+            assert out == path
+
+    def test_remote_path_as_string_is_materialized_in_cache(self):
+        """Remote resources should materialize to string cache paths when requested."""
+        path = UPath("memory://dascore/io_resource_test_str.txt")
+        path.write_text("hello")
+        with IOResourceManager(path) as man:
+            out = man.get_resource(str)
+            local_path = Path(out)
+            assert local_path.exists()
+            assert local_path.read_text() == "hello"
+        assert local_path.exists()
+
+    def test_remote_path_to_binary_reader(self):
+        """Binary readers should consume remote resources directly when possible."""
+        path = UPath("memory://dascore/io_resource_test_binary.bin")
+        path.write_bytes(b"abc")
+        with IOResourceManager(path) as man:
+            out = man.get_resource(BinaryReader)
+            assert out.read() == b"abc"
+
+    def test_remote_path_to_local_binary_reader(self):
+        """Local binary readers should materialize remote resources once."""
+        path = UPath("memory://dascore/io_resource_test_local_binary.bin")
+        path.write_bytes(b"abc")
+        with IOResourceManager(path) as man:
+            out = man.get_resource(LocalBinaryReader)
+            assert out.read() == b"abc"
+        cached_files = list(
+            get_remote_cache_path().rglob("io_resource_test_local_binary.bin")
+        )
+        assert len(cached_files) == 1
+
+    def test_remote_path_to_local_path(self):
+        """LocalPath should return a cache-backed local path."""
+        path = UPath("memory://dascore/io_resource_test_local_path.bin")
+        path.write_text("hello")
+        with IOResourceManager(path) as man:
+            out = man.get_resource(LocalPath)
+            assert isinstance(out, Path)
+            assert out.exists()
+            assert out.read_text() == "hello"
+
+    def test_remote_path_reuses_cached_local_file(self):
+        """Repeated materialization of one remote file should reuse the cache entry."""
+        path = UPath("memory://dascore/io_resource_test_reuse.txt")
+        path.write_text("hello")
+        with IOResourceManager(path) as man:
+            first = man.get_resource(Path)
+        with IOResourceManager(path) as man:
+            second = man.get_resource(Path)
+        assert first == second
+        assert first.exists()
+
+    def test_clear_remote_cache_removes_cached_files(self):
+        """Clearing the remote cache should remove cached local artifacts."""
+        path = UPath("memory://dascore/io_resource_test_clear.txt")
+        path.write_text("hello")
+        with IOResourceManager(path) as man:
+            local_path = man.get_resource(Path)
+            assert local_path.exists()
+        clear_remote_file_cache()
+        assert not local_path.exists()
+
+    def test_ensure_local_file_reuses_cached_path(self):
+        """Repeated ensure_local_file calls should return one stable local path."""
+        path = UPath("memory://dascore/io_resource_test_ensure.txt")
+        path.write_text("hello")
+        first = ensure_local_file(path)
+        second = ensure_local_file(path)
+        assert first == second
+        assert first.exists()
+        assert first.read_text() == "hello"
+
+    def test_ensure_local_file_can_unwrap_io_resource_manager(self):
+        """ensure_local_file should accept IOResourceManager instances."""
+        path = UPath("memory://dascore/io_resource_test_manager.txt")
+        path.write_text("hello")
+        with IOResourceManager(path) as man:
+            local_path = ensure_local_file(man)
+        assert local_path.exists()
+        assert local_path.read_text() == "hello"
+
+    def test_ensure_local_file_uses_local_named_resource(self, tmp_path):
+        """Local named resources should resolve to their local file path."""
+        path = tmp_path / "named_resource.txt"
+        path.write_text("hello")
+        with path.open() as handle:
+            assert ensure_local_file(handle) == path
+
+    def test_ensure_local_file_invalid_resource_raises(self):
+        """Objects without local or remote path semantics should fail."""
+        with pytest.raises(TypeError, match="Cannot ensure a local file"):
+            ensure_local_file(object())
+
+
+class TestRemoteIOFallback:
+    """Tests for remote fallback helpers."""
+
+    def test_no_range_error_predicate_matches_expected_message(self):
+        """The helper should only match the known no-range HTTP failure."""
+        exc = ValueError(
+            "The HTTP server doesn't appear to support range requests. "
+            "Only reading this file from the beginning is supported."
+        )
+        assert is_no_range_http_error(exc)
+        assert not is_no_range_http_error(ValueError("different error"))
+        assert not is_no_range_http_error(RuntimeError("range requests"))
+
+    def test_fallback_file_obj_switches_once_and_preserves_position(self):
+        """FallbackFileObj should retry on the local file and preserve cursor."""
+        remote = _FailOnSeek(
+            b"abcdef",
+            ValueError(
+                "The HTTP server doesn't appear to support range requests. "
+                "Only reading this file from the beginning is supported."
+            ),
+        )
+        local_handles = []
+
+        def _open_local():
+            handle = BytesIO(b"abcdef")
+            local_handles.append(handle)
+            return handle
+
+        handle = FallbackFileObj(
+            remote_opener=lambda: remote,
+            local_opener=_open_local,
+            error_predicate=is_no_range_http_error,
+        )
+        try:
+            assert handle.read(2) == b"ab"
+            assert handle.seek(4) == 4
+            assert handle.read(2) == b"ef"
+            assert len(local_handles) == 1
+        finally:
+            handle.close()
+
+    def test_fallback_file_obj_uses_fallback_position_when_tell_fails(self):
+        """Fallback position should be used if the wrapped handle cannot tell."""
+        handle = FallbackFileObj(
+            remote_opener=lambda: _NoTellHandle(b"abcdef"),
+            local_opener=lambda: BytesIO(b"abcdef"),
+            error_predicate=is_no_range_http_error,
+        )
+        handle._handle = _NoTellHandle(b"abcdef")
+        handle._set_pos_from_handle(fallback=3)
+        assert handle._pos == 3
+        handle.close()
+
+    def test_fallback_file_obj_switch_to_local_is_idempotent(self):
+        """A second local switch should return immediately."""
+        remote = _PlainHandle()
+        local_handles = []
+
+        def _open_local():
+            handle = _PlainHandle()
+            local_handles.append(handle)
+            return handle
+
+        handle = FallbackFileObj(
+            remote_opener=lambda: remote,
+            local_opener=_open_local,
+            error_predicate=is_no_range_http_error,
+        )
+        try:
+            handle._switch_to_local()
+            handle._switch_to_local()
+            assert len(local_handles) == 1
+        finally:
+            handle.close()
+
+    def test_fallback_file_obj_propagates_non_matching_errors(self):
+        """FallbackFileObj should not hide unrelated transport errors."""
+        handle = FallbackFileObj(
+            remote_opener=lambda: _FailOnSeek(b"abcdef", RuntimeError("boom")),
+            local_opener=lambda: BytesIO(b"abcdef"),
+            error_predicate=is_no_range_http_error,
+        )
+        try:
+            with pytest.raises(RuntimeError, match="boom"):
+                handle.seek(1)
+        finally:
+            handle.close()
+
+    def test_fallback_file_obj_exposes_basic_handle_state(self):
+        """Basic helpers should proxy or report sensible state."""
+        plain = _PlainHandle()
+        handle = FallbackFileObj(
+            remote_opener=lambda: plain,
+            local_opener=lambda: _PlainHandle(),
+            error_predicate=is_no_range_http_error,
+        )
+        try:
+            assert handle.seekable() is True
+            assert handle.readable() is True
+            assert handle.writable() is False
+            assert handle.extra_attr == "value"
+            assert handle.closed is False
+            assert handle.flush() is None
+            handle.close()
+            assert handle.closed is True
+            handle.close()
+        finally:
+            if not handle.closed:
+                handle.close()
+
+    def test_fallback_file_obj_uses_wrapped_writable_when_available(self):
+        """The writable helper should defer to the wrapped handle when present."""
+        handle = FallbackFileObj(
+            remote_opener=lambda: _WritableHandle(),
+            local_opener=lambda: _WritableHandle(),
+            error_predicate=is_no_range_http_error,
+        )
+        try:
+            assert handle.writable() is True
+        finally:
+            handle.close()
 
 
 class TestTextReader:

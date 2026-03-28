@@ -13,8 +13,8 @@ from dascore.io import FiberIO
 from dascore.utils.hdf5 import (
     H5Reader,
     HDFPatchIndexManager,
+    LocalPyTablesReader,
     NodeError,
-    PyTablesReader,
     PyTablesWriter,
 )
 from dascore.utils.misc import iterate, unbyte
@@ -111,7 +111,7 @@ class DASDAEV1(FiberIO):
         version = unbyte(attrs.get("__DASDAE_version__", ""))
         return file_format, version
 
-    def read(self, resource: PyTablesReader, **kwargs) -> SpoolType:
+    def read(self, resource: LocalPyTablesReader, **kwargs) -> SpoolType:
         """Read a dascore file."""
         patches = []
         source_patch_ids = {
@@ -132,7 +132,7 @@ class DASDAEV1(FiberIO):
             patches.append(patch)
         return dc.spool(patches)
 
-    def scan(self, resource: PyTablesReader, **kwargs):
+    def scan(self, resource: LocalPyTablesReader, **kwargs):
         """
         Get the patch info from the file.
 

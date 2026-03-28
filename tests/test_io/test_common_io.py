@@ -10,19 +10,18 @@ test_io_core.py
 
 from __future__ import annotations
 
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from functools import cache
 from io import BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
-from urllib import error as urllib_error
 
 import numpy as np
 import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import CoordError, MissingOptionalDependencyError
+from dascore.exceptions import CoordError
 from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
@@ -47,6 +46,11 @@ from dascore.io.terra15 import (
 )
 from dascore.utils.downloader import fetch, get_registry_df
 from dascore.utils.misc import all_close, iterate
+from tests.test_io._common_io_test_utils import (
+    get_flat_io_test,
+    skip_missing,
+    skip_timeout,
+)
 
 # --- Fixtures
 
@@ -99,26 +103,6 @@ COMMON_IO_WRITE_TESTS = (
 SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv"}
 
 
-@contextmanager
-def skip_missing():
-    """Skip if missing dependencies found."""
-    try:
-        yield
-    except MissingOptionalDependencyError as exc:
-        pytest.skip(f"Missing optional dependency required to read file: {exc}")
-    except TimeoutError as exc:
-        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
-
-
-@contextmanager
-def skip_timeout():
-    """Skip if downloading file times out."""
-    try:
-        yield
-    except (TimeoutError, urllib_error.URLError) as exc:
-        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
-
-
 def _scan_summary(scan_result):
     """Normalize scan output to the patch summary view."""
     return scan_result.summary if isinstance(scan_result, dc.Patch) else scan_result
@@ -139,22 +123,13 @@ def _cached_read(path, io=None):
     return out
 
 
-def _get_flat_io_test():
-    """Flatten list to [(fiberio, path)] so it can be parametrized."""
-    flat_io = []
-    for io, fetch_name_list in COMMON_IO_READ_TESTS.items():
-        for fetch_name in iterate(fetch_name_list):
-            flat_io.append([io, fetch_name])
-    return flat_io
-
-
 @pytest.fixture(scope="session", params=list(COMMON_IO_READ_TESTS))
 def io_instance(request):
     """Fixture for returning fiber io instances."""
     return request.param
 
 
-@pytest.fixture(scope="session", params=_get_flat_io_test())
+@pytest.fixture(scope="session", params=get_flat_io_test(COMMON_IO_READ_TESTS))
 def io_path_tuple(request):
     """
     A fixture which returns io instance, path_to_file.

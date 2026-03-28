@@ -12,6 +12,7 @@ from typing import Any, get_type_hints
 import numpy as np
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import PatchType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import (
@@ -19,15 +20,62 @@ from dascore.utils.misc import (
     cached_method,
     optional_import,
 )
+from dascore.utils.paths import coerce_path, is_local_path, is_pathlike
+from dascore.utils.remote_io import clear_remote_file_cache as _clear_remote_file_cache
+from dascore.utils.remote_io import ensure_local_file as _ensure_local_file
+from dascore.utils.remote_io import get_local_handle as _remote_get_local_handle
+from dascore.utils.remote_io import get_remote_cache_path as _get_remote_cache_path
 from dascore.utils.time import to_float
 
 HANDLE_FUNCTIONS = {
     str: lambda x: str(x),
     Path: lambda x: Path(x),
+    UPath: lambda x: coerce_path(x),
 }
 
 
 RequiredType = typing.TypeVar("RequiredType")
+
+
+def get_remote_cache_path() -> Path:
+    """Return the on-disk directory used for remote file caching."""
+    return _get_remote_cache_path()
+
+
+def clear_remote_file_cache():
+    """Remove all locally cached remote files."""
+    return _clear_remote_file_cache()
+
+
+def ensure_local_file(resource) -> Path:
+    """Return a stable local path for one resource for the current session."""
+    if isinstance(resource, IOResourceManager):
+        resource = resource.source
+    return _ensure_local_file(resource)
+
+
+def _get_local_handle(resource, opener):
+    """Materialize a resource locally, then pass it to an opener."""
+    return _remote_get_local_handle(resource, opener)
+
+
+def _resolve_resource(resource, required_type):
+    """Resolve resource to a form suitable for required_type."""
+    if not is_pathlike(resource):
+        return resource
+    if required_type is UPath:
+        return coerce_path(resource)
+    if is_local_path(resource):
+        if required_type is Path:
+            return Path(resource)
+        if required_type is str:
+            return str(Path(resource) if isinstance(resource, Path) else resource)
+        return resource
+    if required_type is Path:
+        return ensure_local_file(resource)
+    if required_type is str:
+        return str(ensure_local_file(resource))
+    return coerce_path(resource)
 
 
 class BinaryReader(io.BytesIO):
@@ -43,12 +91,27 @@ class BinaryReader(io.BytesIO):
             if cls.reset_offset:
                 resource.seek(0)  # reset byte offset
             return resource
+        if isinstance(resource, UPath):
+            return resource.open(cls.mode)
         try:
             _maybe_make_parent_directory(resource)
             return open(resource, mode=cls.mode)
         except TypeError:
             msg = f"Couldn't get handle from {resource} using {cls}"
             raise NotImplementedError(msg)
+
+
+class LocalBinaryReader(BinaryReader):
+    """A binary reader which first materializes remote resources locally."""
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get the binary handle, materializing remote resources if needed."""
+        if isinstance(resource, cls | io.BufferedIOBase):
+            if cls.reset_offset:
+                resource.seek(0)
+            return resource
+        return _get_local_handle(resource, super().get_handle)
 
 
 class BinaryWriter(BinaryReader):
@@ -70,6 +133,8 @@ class TextReader(BinaryReader):
             if cls.reset_offset:
                 resource.seek(0)
             return resource
+        if isinstance(resource, UPath):
+            return resource.open(cls.mode, encoding="utf-8")
         try:
             _maybe_make_parent_directory(resource)
             return open(resource, mode=cls.mode, encoding="utf-8")
@@ -82,6 +147,15 @@ class TextWriter(BinaryWriter):
     """Base class for writing text files."""
 
     mode = "a"
+
+
+class LocalPath:
+    """A local path adapter for callsites that require a concrete filename."""
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Return a local path for the supplied resource."""
+        return _get_local_handle(resource, Path)
 
 
 @cache
@@ -142,7 +216,8 @@ class IOResourceManager:
             return self._source.get_resource(required_type)
         required_type = _get_required_type(required_type)
         if required_type not in self._cache:
-            out = get_handle_from_resource(self._source, required_type)
+            source = _resolve_resource(self._source, required_type)
+            out = get_handle_from_resource(source, required_type)
             self._cache[required_type] = out
         return self._cache[required_type]
 

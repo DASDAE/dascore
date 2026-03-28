@@ -7,6 +7,7 @@ out the hdf5 backend in the future.
 
 from __future__ import annotations
 
+import io
 import time
 import warnings
 from collections.abc import Sequence
@@ -25,6 +26,7 @@ from tables import ClosedNodeError
 from tables import File as PyTablesFile
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import ONE_SECOND_IN_NS, max_lens
 from dascore.exceptions import InvalidFileHandlerError, InvalidIndexVersionError
 from dascore.io.core import PatchFileSummary
@@ -40,6 +42,12 @@ from dascore.utils.pd import (
     _remove_base_path,
     fill_defaults_from_pydantic,
     list_ser_to_str,
+)
+from dascore.utils.remote_io import (
+    FallbackFileObj,
+    ensure_local_file,
+    get_local_handle,
+    is_no_range_http_error,
 )
 from dascore.utils.time import get_max_min_times, to_datetime64, to_int, to_timedelta64
 
@@ -437,6 +445,15 @@ class PyTablesReader(PyTablesFile):
             raise NotImplementedError(msg)
 
 
+class LocalPyTablesReader(PyTablesReader):
+    """A PyTables reader which first materializes remote resources locally."""
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get a local-file-backed PyTables handle."""
+        return get_local_handle(resource, super().get_handle)
+
+
 class PyTablesWriter(PyTablesReader):
     """A thin wrapper around pytables File object for writing."""
 
@@ -444,10 +461,49 @@ class PyTablesWriter(PyTablesReader):
 
 
 class H5Reader(PyTablesReader):
-    """A thin wrapper around h5py for reading files."""
+    """A thin wrapper around h5py for reading files.
+
+    Remote UPath resources stay remote-first and transparently retry against
+    a cached local file when no-range HTTP access prevents later random reads.
+    """
 
     mode = "r"
     constructor = H5pyFile
+
+    @classmethod
+    def get_handle(cls, resource):
+        """
+        Get the HDF5 handle from local paths, remote paths, or open handles.
+
+        Unlike PyTablesReader, h5py can consume a binary file object via the
+        ``fileobj`` driver, so remote UPath inputs stay streaming-based here.
+        """
+        if isinstance(resource, cls | H5pyFile):
+            return resource
+        if isinstance(resource, io.IOBase):
+            return cls.constructor(resource, mode=cls.mode, driver="fileobj")
+        if isinstance(resource, UPath):
+            mode = "rb" if cls.mode == "r" else "r+b"
+            handle = FallbackFileObj(
+                remote_opener=lambda: resource.open(mode),
+                local_opener=lambda: ensure_local_file(resource).open(mode),
+                error_predicate=is_no_range_http_error,
+            )
+            try:
+                return cls.constructor(handle, mode=cls.mode, driver="fileobj")
+            except Exception:
+                handle.close()
+                raise
+        return super().get_handle(resource)
+
+
+class LocalH5Reader(H5Reader):
+    """An h5py reader which first materializes remote resources locally."""
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get a local-file-backed h5py handle."""
+        return get_local_handle(resource, super().get_handle)
 
 
 class H5Writer(H5Reader):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from upath import UPath
 
 import dascore as dc
 from dascore.clients.filespool import FileSpool
@@ -50,6 +51,12 @@ class TestBasic:
         """Simply ensures a bad file will raise."""
         with pytest.raises(FileNotFoundError, match="does not exist"):
             FileSpool("/not/a/directory")
+
+    def test_local_upath_file(self, terra15_v5_path):
+        """Ensure FileSpool accepts local UPath inputs."""
+        spool = FileSpool(UPath(terra15_v5_path))
+        assert isinstance(spool, FileSpool)
+        assert len(spool)
 
     def test_chunk(self, terra15_file_spool):
         """Ensure chunking along time axis works with FileSpool."""
