@@ -22,12 +22,11 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import CoordError, MissingOptionalDependencyError
+from dascore.exceptions import CoordError, DependencyError
 from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
 from dascore.io.dashdf5 import DASHDF5
-from dascore.io.dasvader import DASVaderV1
 from dascore.io.febus import Febus1, Febus2
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
@@ -61,7 +60,6 @@ COMMON_IO_READ_TESTS = {
     APSensingV10(): ("ap_sensing_1.hdf5",),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
-    DASVaderV1(): ("das_vader_1.jld2",),
     Febus1(): ("valencia_febus_example.h5",),
     Febus2(): ("febus_1.h5", "febus_2.h5"),
     GDR_V1(): ("gdr_1.h5",),
@@ -96,7 +94,9 @@ COMMON_IO_WRITE_TESTS = (
 )
 
 # Specifies data registry entries which should not be tested.
-SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv"}
+# DASVader is covered in its own test module to isolate its compatibility-path
+# testing from the shared common-IO matrix.
+SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv", "das_vader_1.jld2"}
 
 
 @contextmanager
@@ -104,8 +104,8 @@ def skip_missing():
     """Skip if missing dependencies found."""
     try:
         yield
-    except MissingOptionalDependencyError as exc:
-        pytest.skip(f"Missing optional dependency required to read file: {exc}")
+    except DependencyError as exc:
+        pytest.skip(str(exc))
     except TimeoutError as exc:
         pytest.skip(f"Unable to fetch data due to timeout: {exc}")
 

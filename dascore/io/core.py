@@ -33,6 +33,7 @@ from dascore.core.attrs import str_validator
 from dascore.core.spool import DataFrameSpool
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import (
+    DependencyError,
     InvalidFiberFileError,
     InvalidFiberIOError,
     MissingOptionalDependencyError,
@@ -1028,12 +1029,18 @@ def scan(
                 else:
                     try:
                         source = fiber_io.scan(resource, _pre_cast=True)
+                    except MissingOptionalDependencyError as ex:
+                        missing_optional_deps[ex.msg.split(" ")[0]] += 1
+                        continue
+                    # scan() is best-effort across many resources, so surface
+                    # dependency/compatibility problems as warnings and keep
+                    # scanning the remaining files.
+                    except DependencyError as exc:
+                        warnings.warn(str(exc), UserWarning)
+                        continue
                     # This happens if the file is corrupt see #346.
                     except (OSError, InvalidFiberFileError, ValueError, TypeError):
                         warnings.warn(f"Failed to scan {resource}", UserWarning)
-                        continue
-                    except MissingOptionalDependencyError as ex:
-                        missing_optional_deps[ex.msg.split(" ")[0]] += 1
                         continue
                 source_path = _get_reloadable_source_path(resource, fallback=man.source)
                 for attr in source:

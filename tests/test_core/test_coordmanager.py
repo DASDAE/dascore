@@ -1495,3 +1495,29 @@ class TestFlip:
         q0 = cm.coord_map["quality"].values
         q1 = out.coord_map["quality"].values
         assert np.array_equal(q1, q0[::-1, ::-1])
+
+
+class TestStringCoords:
+    """Tests for CoordManager interactions with string coordinates."""
+
+    def test_to_summary_dict_includes_string_coords(self, cm_basic):
+        """String coords should emit lossy summaries."""
+        labels = np.array(
+            [f"ch_{num}" for num in range(len(cm_basic.get_array("time")))]
+        )
+        cm = cm_basic.update(channel=("time", labels))
+        out = cm.to_summary_dict()
+        assert "channel" in out
+        assert out["channel"].min == "ch_0"
+        assert out["channel"].step is None
+        assert set(cm_basic.dims).issubset(out)
+
+    def test_select_string_dimension(self):
+        """Exact-match selection should work on string dimension coords."""
+        coords = {
+            "channel": np.array(["A", "B", "C", "D"]),
+            "distance": np.arange(3),
+        }
+        cm = get_coord_manager(coords=coords, dims=("channel", "distance"))
+        out, _ = cm.select(channel=np.array(["B", "D"]))
+        assert np.array_equal(out.get_array("channel"), np.array(["B", "D"]))

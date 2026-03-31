@@ -7,6 +7,10 @@ class DASCoreError(Exception):
     """Base class for dascore errors."""
 
 
+class DependencyError(DASCoreError):
+    """Raised when functionality depends on an unavailable compatibility stack."""
+
+
 class InvalidFiberIOError(ValueError, DASCoreError):
     """Raised when an invalid Fiber IO is defined or used."""
 
@@ -95,8 +99,12 @@ class InvalidIndexVersionError(ValueError, DASCoreError):
     """Raised when a version mismatch occurs in index."""
 
 
-class MissingOptionalDependencyError(ImportError, DASCoreError):
+class MissingOptionalDependencyError(ImportError, DependencyError):
     """Raised when an optional package needed for some functionality is missing."""
+
+
+class DASVaderCompatibilityError(InvalidFiberFileError, DependencyError):
+    """Raised when a legacy DASVader file needs an older HDF5 compatibility stack."""
 
 
 class InvalidSpoolError(ValueError, DASCoreError):

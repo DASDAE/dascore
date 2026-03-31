@@ -1,12 +1,18 @@
-"""Machinery for coordinates."""
+"""Machinery for coordinates.
+
+See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
+current coord-family and string-coordinate design notes.
+"""
 
 from __future__ import annotations
 
 import abc
+import fnmatch
+import re
 from collections.abc import Sized
 from functools import cache
 from operator import gt, lt
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -32,6 +38,7 @@ from dascore.units import (
     get_quantity_str,
     percent,
 )
+from dascore.utils.array import _coerce_text_array, _is_text_coercible_array
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
@@ -56,6 +63,8 @@ from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, t
 min_max_type = TypeVar("min_max_type")
 
 step_type = TypeVar("step_type")
+
+CoordKind = Literal["string", "empty", "single", "array", "range"]
 
 
 def ensure_consistent_dtype(value, name, dtype):
@@ -104,6 +113,11 @@ class CoordSummary(DascoreBaseModel):
     dims: tuple[str, ...] = ()
     len: int | None = None
 
+    @property
+    def is_range_like(self) -> bool:
+        """Return True when the summary can reconstruct a CoordRange."""
+        return not pd.isnull(self.step)
+
     @model_serializer(when_used="json")
     def ser_model(self) -> dict[str, str]:
         """Serialize the model to json."""
@@ -124,7 +138,7 @@ class CoordSummary(DascoreBaseModel):
 
     def to_coord(self) -> CoordRange:
         """Convert to coord range, if possible."""
-        if pd.isnull(self.step):
+        if not self.is_range_like:
             msg = "Cannot convert summary which is not evenly sampled to coord."
             raise CoordError(msg)
         step = self.step
@@ -1561,6 +1575,191 @@ class CoordMonotonicArray(CoordArray):
         return self._step_meets_requirement(lt)
 
 
+def _get_coord_kind(
+    data: ArrayLike | None = None,
+    *,
+    dtype=None,
+    step=None,
+    length: int | None = None,
+    is_string: bool | None = None,
+) -> CoordKind:
+    """Return the shared internal coord-kind description."""
+    if data is not None:
+        if _is_text_coercible_array(data):
+            return "string"
+        size = int(np.size(data))
+        if size == 0:
+            return "empty"
+        if size == 1:
+            return "single"
+        return "array"
+    if length == 0:
+        return "empty"
+    # Metadata-only classification cannot prove object arrays are string-like;
+    # callers must pass is_string=True explicitly for that case.
+    if is_string is None and dtype not in (None, ""):
+        is_string = np.dtype(dtype).kind in {"U", "S"}
+    if is_string:
+        return "string"
+    if step is not None:
+        return "range"
+    return "array"
+
+
+def _raise_string_coord_error(operation: str) -> None:
+    """Raise a consistent error for unsupported string coord operations."""
+    msg = f"String coordinates do not support {operation}."
+    raise CoordError(msg)
+
+
+class CoordString(BaseCoord):
+    """A coordinate implementation for string/categorical values.
+
+    See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
+    constraints that make string coords differ from numeric and time-like
+    coords. Plain string selectors use exact matching unless they contain `*`
+    or `?`, in which case they are treated as unix-style wildcard patterns.
+    Compiled regular expressions are also supported as explicit pattern
+    selectors.
+    """
+
+    values: ArrayLike
+    _rich_style = dascore_styles["coord_array"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_values(cls, values):
+        """Normalize inputs to a string/bytes numpy array."""
+        # Pydantic's "before" validators usually receive the raw model payload
+        # as a dict during normal construction, e.g. CoordString(values=...).
+        # If some other shape is passed through, leave it alone and let the
+        # standard model validation path decide whether it is acceptable.
+        if not isinstance(values, dict):
+            return values
+        try:
+            data = _coerce_text_array(values.get("values"))
+        except ValueError as exc:
+            raise CoordError(str(exc)) from exc
+        # Keep CoordString internally unicode-backed and derive the remaining
+        # model fields from the normalized array rather than trusting callers.
+        values["values"] = data
+        values["shape"] = data.shape
+        values["dtype"] = data.dtype
+        # String coordinates deliberately do not participate in unit or step-
+        # based coord behavior, so force those fields to the null form here.
+        values["units"] = None
+        values["step"] = None
+        return values
+
+    def convert_units(self, unit) -> Self:
+        """String coordinates cannot be converted between units."""
+        if unit not in (None, ""):
+            _raise_string_coord_error("unit conversion")
+        return self
+
+    def set_units(self, units) -> Self:
+        """Reject setting units on string coordinates."""
+        return self.convert_units(units)
+
+    def _get_compatible_value(self, value, relative=False):
+        """Cast values to the underlying string dtype."""
+        if relative:
+            _raise_string_coord_error("relative selection")
+        if not is_array(value) and (pd.isnull(value) or value is Ellipsis):
+            return None
+        if is_array(value):
+            return np.asarray(value, dtype=self.dtype)
+        return np.asarray([value], dtype=self.dtype)[0]
+
+    def select(
+        self, args, relative=False, samples=False
+    ) -> tuple[Self, slice | ArrayLike]:
+        """Select by exact values, wildcard patterns, regexes, samples, or masks."""
+        if relative:
+            _raise_string_coord_error("relative selection")
+        if args is None:
+            return self, slice(None)
+        if is_array(args):
+            return self._select_by_array(args, samples=samples)
+        if samples:
+            return self._select_by_samples(args)
+        if isinstance(args, slice | tuple):
+            _raise_string_coord_error("range selection")
+        if isinstance(args, re.Pattern):
+            mask = np.array([bool(args.search(value)) for value in self.values])
+            return self._select_by_value_array(self.values[mask])
+        if isinstance(args, str) and ("*" in args or "?" in args):
+            pattern = re.compile(fnmatch.translate(args))
+            mask = np.array([bool(pattern.match(value)) for value in self.values])
+            return self._select_by_value_array(self.values[mask])
+        values = np.asarray([args], dtype=self.dtype)
+        return self._select_by_value_array(values)
+
+    def coord_range(self, extend: bool = True):
+        """String coordinates do not support range calculations."""
+        _raise_string_coord_error("range operations")
+
+    def sort(self, reverse=False):
+        """Sort values lexicographically."""
+        inds = np.argsort(self.values)
+        if reverse:
+            inds = inds[::-1]
+        return self[inds], inds
+
+    @property
+    def sorted(self) -> bool:
+        """Return True when values are lexicographically nondecreasing."""
+        values = np.asarray(self.values).reshape(-1)
+        if len(values) <= 1:
+            return True
+        return bool(np.all(values[:-1] <= values[1:]))
+
+    @property
+    def reverse_sorted(self) -> bool:
+        """Return True when values are lexicographically nonincreasing."""
+        values = np.asarray(self.values).reshape(-1)
+        if len(values) <= 1:
+            return False
+        return bool(np.all(values[:-1] >= values[1:]))
+
+    def update_limits(self, min=None, max=None, step=None, **kwargs) -> Self:
+        """Reject numeric limit updates on string coords."""
+        # Deliberately match BaseCoord/CoordRange parameter names for API parity.
+        unsupported_kwargs = set(kwargs) - {"data"}
+        if any(value is not None for value in (min, max, step)) or unsupported_kwargs:
+            _raise_string_coord_error("limit updates")
+        return self
+
+    def to_summary(self, dims=()) -> CoordSummary:
+        """Return a lossy summary for string coordinates."""
+        return CoordSummary(
+            min=self.min(),
+            max=self.max(),
+            step=None,
+            dtype=self.dtype,
+            units=None,
+            dims=dims,
+            len=len(self),
+        )
+
+    def __getitem__(self, item) -> Self:
+        """Return a subset of the coordinate."""
+        out = self.values[item]
+        if np.ndim(out) == 0:
+            return out
+        return self.new(values=np.asarray(out, dtype=self.dtype))
+
+    def _min(self):
+        """Return lexicographic minimum."""
+        values = np.asarray(self.values).reshape(-1)
+        return None if not values.size else min(values)
+
+    def _max(self):
+        """Return lexicographic maximum."""
+        values = np.asarray(self.values).reshape(-1)
+        return None if not values.size else max(values)
+
+
 def get_coord(
     *,
     data: ArrayLike | None | np.ndarray | BaseCoord = None,
@@ -1605,6 +1804,9 @@ def get_coord(
 
     Notes
     -----
+    See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for
+    dispatch and coord-family design notes.
+
     The following combinations of input parameters are typical:
         (start, stop, step)
         (values)
@@ -1677,10 +1879,16 @@ def get_coord(
             return None, None, None, False
         view2 = data[1:]
         view1 = data[:-1]
-        is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)
+        try:
+            is_monotonic = np.all(view1 > view2) or np.all(view2 > view1)
+        except TypeError:
+            return None, None, None, False
         # the array cannot be evenly sampled if it isn't monotonic
         if is_monotonic:
-            diffs = view2 - view1
+            try:
+                diffs = view2 - view1
+            except TypeError:
+                return None, None, None, False
             unique_diff = np.unique(diffs)
             if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
                 _min = data[0]
@@ -1724,12 +1932,17 @@ def get_coord(
             return data
         if not isinstance(data, np.ndarray):
             data = np.atleast_1d(data)
-        if np.size(data) == 0:
+        kind = _get_coord_kind(data)
+        if kind == "string":
+            if units not in (None, ""):
+                _raise_string_coord_error("unit conversion")
+            return CoordString(values=data)
+        if kind == "empty":
             dtype = dtype or data.dtype
             return CoordPartial(shape=data.shape, units=units, step=step, dtype=dtype)
         # special case of len 1 array either get range, if step specified
         # or sorted monotonic array if not.
-        elif len(data) == 1:
+        elif kind == "single":
             if not pd.isnull(step):
                 val = data[0]
                 return CoordRange(start=val, stop=val + step, step=step, units=units)

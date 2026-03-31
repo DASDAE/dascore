@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import operator
+import re
 import weakref
 from pathlib import Path
 
@@ -17,7 +18,14 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
-from dascore.core.summary import PatchSummary
+from dascore.core.summary import (
+    PatchSummary,
+    _metadata_can_build_coord_summary,
+    _normalize_coord_summary_dtype,
+    coord_summary_from_available,
+    coord_summary_from_data,
+    coord_summary_from_metadata,
+)
 from dascore.exceptions import CoordError, ParameterError, PatchAttributeError
 from dascore.io.core import (
     _load_patch_summary,
@@ -461,6 +469,25 @@ class TestPatchSummary:
         out = summary.flat_dump()
         assert out["time_step"] == random_patch.get_coord("time").step
 
+    def test_summary_includes_string_coords(self, random_patch):
+        """Patch summaries should retain lossy string coord summaries."""
+        labels = np.array([f"ch_{num}" for num in range(random_patch.shape[0])])
+        patch = random_patch.update_coords(distance=labels)
+        summary = patch.summary
+        distance = summary.get_coord_summary("distance")
+        assert distance.min == "ch_0"
+        assert distance.step is None
+        assert not distance.is_range_like
+
+    def test_flat_dump_includes_string_coord_fields(self, random_patch):
+        """Flattened summaries should expose string coord metadata."""
+        labels = np.array([f"ch_{num}" for num in range(random_patch.shape[0])])
+        patch = random_patch.update_coords(distance=labels)
+        out = patch.summary.flat_dump()
+        assert out["distance_min"] == "ch_0"
+        assert out["distance_max"] == max(labels)
+        assert out["distance_step"] is None
+
     def test_from_patch_roundtrip(self, random_patch):
         """PatchSummary should normalize Patch inputs directly."""
         summary = dc.PatchSummary.model_validate(random_patch)
@@ -471,6 +498,110 @@ class TestPatchSummary:
         """Model validation should accept PatchSummary instances unchanged."""
         summary = random_patch.summary
         assert dc.PatchSummary.model_validate(summary) is summary
+
+    def test_summary_property_returns_self(self, random_patch):
+        """PatchSummary.summary should mirror Patch.summary."""
+        summary = random_patch.summary
+        assert summary.summary is summary
+
+    def test_dim_tuple_property_matches_dims(self, random_patch):
+        """PatchSummary.dim_tuple should expose the normalized dims tuple."""
+        summary = random_patch.summary
+        assert summary.dim_tuple == summary.dims
+
+    def test_coord_summary_from_coord_object(self, random_patch):
+        """coord_summary_from_data should accept live coord instances."""
+        coord = random_patch.get_coord("distance")
+        out = coord_summary_from_data(coord, dims=("distance",))
+        assert out.dims == ("distance",)
+        assert out.min == coord.min()
+        assert out.max == coord.max()
+
+    def test_coord_summary_from_metadata_range_metadata(self):
+        """Range-like metadata should build summaries without coord materialization."""
+        out = coord_summary_from_metadata(
+            dims=("distance",),
+            min=0,
+            max=6,
+            step=2,
+            dtype="int64",
+            units="m",
+            length=4,
+        )
+        assert out.min == 0
+        assert out.max == 6
+        assert out.step == 2
+        assert out.len == 4
+
+    def test_coord_summary_from_metadata_empty(self):
+        """Empty metadata should preserve dtype and explicit zero length."""
+        out = coord_summary_from_metadata(
+            dims=("distance",),
+            dtype="float64",
+            length=0,
+            units="m",
+        )
+        assert np.isnan(out.min)
+        assert np.isnan(out.max)
+        assert out.dtype == "float64"
+        assert out.len == 0
+
+    def test_coord_summary_from_metadata_lossy_bounds(self):
+        """Explicit min/max metadata should support lossy non-range summaries."""
+        out = coord_summary_from_metadata(
+            dims=("station",),
+            min="alpha",
+            max="gamma",
+            dtype="U8",
+            length=4,
+            is_string=True,
+        )
+        assert out.min == "alpha"
+        assert out.max == "gamma"
+        assert out.step is None
+        assert out.len == 4
+
+    def test_coord_summary_from_metadata_raises_without_sufficient_fields(self):
+        """Insufficient metadata should fail before any data fallback is attempted."""
+        with pytest.raises(ValueError, match="sufficient normalized metadata"):
+            coord_summary_from_metadata(
+                dims=("distance",),
+                dtype="float64",
+                length=4,
+            )
+
+    def test_coord_summary_from_available_falls_back_to_data(self):
+        """Fallback helper should build summaries from data when metadata is thin."""
+        out = coord_summary_from_available(
+            dims=("distance",),
+            dtype="int64",
+            length=4,
+            data=np.array([1, 4, 2, 3]),
+        )
+        assert out.min == 1
+        assert out.max == 4
+        assert out.step is None
+
+    def test_coord_summary_from_available_raises_without_data(self):
+        """Fallback helper should still fail if neither metadata nor data suffice."""
+        with pytest.raises(
+            ValueError, match="requires data when metadata is insufficient"
+        ):
+            coord_summary_from_available(
+                dims=("distance",),
+                dtype="float64",
+                length=4,
+            )
+
+    def test_metadata_can_build_coord_summary(self):
+        """Metadata sufficiency checks should mirror helper entry conditions."""
+        assert _metadata_can_build_coord_summary(dtype="float64", length=0)
+        assert _metadata_can_build_coord_summary(min=1, max=2, dtype="int64", length=4)
+        assert not _metadata_can_build_coord_summary(dtype="float64", length=4)
+
+    def test_normalize_coord_summary_dtype_empty_fallback(self):
+        """Missing dtype metadata should normalize to an empty summary dtype."""
+        assert _normalize_coord_summary_dtype() == ""
 
     def test_patch_summary_is_cached(self, random_patch):
         """Patch.summary should reuse the same summary instance."""
@@ -1186,3 +1317,52 @@ class TestNumpyFuncs:
         # Test ufunc accumulate
         out = func.accumulate("time")
         assert isinstance(out, dc.Patch)
+
+
+class TestStringCoordinatePatch:
+    """Tests for patch APIs using string dimension coordinates."""
+
+    def test_select_string_dimension(self, random_patch):
+        """Patch.select should support exact-match string dimension filters."""
+        labels = np.array([f"ch_{num}" for num in range(random_patch.shape[0])])
+        patch = random_patch.update_coords(distance=labels)
+        out = patch.select(distance="ch_2")
+        assert np.array_equal(out.get_coord("distance").values, np.array(["ch_2"]))
+        assert out.shape[0] == 1
+
+    def test_sort_string_dimension(self, random_patch):
+        """Patch.sort_coords should order string dimension coordinates."""
+        labels = np.array(["delta", "alpha", "charlie", "bravo"])
+        patch = random_patch.select(distance=slice(0, 4), samples=True).update_coords(
+            distance=labels
+        )
+        out = patch.sort_coords("distance")
+        assert np.array_equal(
+            out.get_coord("distance").values,
+            np.array(["alpha", "bravo", "charlie", "delta"]),
+        )
+
+    def test_select_string_dimension_with_wildcard(self, random_patch):
+        """Patch.select should support wildcard string dimension filters."""
+        labels = np.array(["ch_1", "ch_2", "ch_10", "xx_1"])
+        patch = random_patch.select(distance=slice(0, 4), samples=True).update_coords(
+            distance=labels
+        )
+        out = patch.select(distance="ch_?")
+        assert np.array_equal(
+            out.get_coord("distance").values, np.array(["ch_1", "ch_2"])
+        )
+        assert out.shape[0] == 2
+
+    def test_select_string_dimension_with_regex(self, random_patch):
+        """Patch.select should support compiled regex string filters."""
+        labels = np.array(["ch_1", "ch_2", "ch_10", "xx_1"])
+        patch = random_patch.select(distance=slice(0, 4), samples=True).update_coords(
+            distance=labels
+        )
+        out = patch.select(distance=re.compile(r"^ch_\d+$"))
+        assert np.array_equal(
+            out.get_coord("distance").values,
+            np.array(["ch_1", "ch_2", "ch_10"]),
+        )
+        assert out.shape[0] == 3

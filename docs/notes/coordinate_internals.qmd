@@ -1,0 +1,70 @@
+---
+title: Coordinate Internals
+---
+
+This note explains the current internal coordinate model in DASCore, especially the parts that are easy to misread when working on string coordinates, metadata-only summaries, and DASDAE scan paths.
+
+## Coord families
+
+`get_coord(...)` classifies inputs into a small set of internal coord families:
+
+- empty coords
+- singleton coords
+- string coords
+- range-like coords
+- generic array coords
+
+That classification is used for construction and for summary reconstruction. It is intentionally narrower than a full capability system; behavior that is truly coord-specific still lives on the coord classes.
+
+## String coordinates
+
+`CoordString` is the dedicated coord type for string or categorical values.
+
+String coords are intentionally different from numeric, datetime, and timedelta coords:
+
+- they do not support units
+- they do not support range operations
+- they do not support relative or slice-style range selection
+- they do support exact matching, wildcard matching, compiled regex matching, boolean-mask selection, ordering, and lossy min/max summaries
+
+Plain string selectors reserve `*` and `?` for wildcard behavior. Compiled
+`re.Pattern` instances provide explicit regex matching.
+
+This means any path that constructs string coords should reject unit-bearing inputs explicitly rather than silently dropping units.
+
+## Summary construction
+
+There are two distinct summary paths:
+
+- `coord_summary_from_data(...)` builds a summary from a live coord or full array
+- `coord_summary_from_metadata(...)` builds a summary from already-normalized metadata
+
+`coord_summary_from_available(...)` is the bridge between them. It prefers metadata when enough information is available, and only falls back to full data when metadata is insufficient.
+
+That separation matters because scan/index code has a stronger performance contract than normal coord construction.
+
+## DASDAE scan path
+
+DASDAE reading has two different goals:
+
+- full reads, where coord arrays can be materialized
+- scan/summary reads, where full coord materialization should be avoided when possible
+
+For scan/summary reads, DASDAE should:
+
+1. extract normalized metadata from stored nodes
+2. reconstruct summaries from metadata plus endpoint samples when available
+3. avoid full array reads for range-like coords
+
+String arrays are a separate storage concern from coord semantics. PyTables cannot store raw unicode arrays directly, so DASDAE uses a string-byte serialization path only for arrays that are actually string-like.
+
+## Practical guidance
+
+When changing coord internals:
+
+- keep string coord rules explicit instead of relying on generic numeric logic
+- keep metadata-only summary logic separate from full-data reconstruction
+- do not infer that `dtype=object` means “string” unless a caller explicitly says so
+- preserve the DASDAE fast path by avoiding full coord reads during summary reconstruction
+
+If a change seems to need special handling in both core coords and DASDAE, it usually belongs in shared coord classification or summary helpers rather than in format-specific code.

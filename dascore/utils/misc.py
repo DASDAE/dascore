@@ -324,10 +324,16 @@ def all_diffs_close_enough(diffs):
     if not len(diffs):
         return False
     diffs = np.asarray(diffs)
-    is_dt = np.issubdtype(diffs.dtype, np.timedelta64)
-    is_td = np.issubdtype(diffs.dtype, np.datetime64)
-    if is_td or is_dt:
+    is_td = np.issubdtype(diffs.dtype, np.timedelta64)
+    is_dt = np.issubdtype(diffs.dtype, np.datetime64)
+    if is_dt or is_td:
+        null_mask = np.isnat(diffs)
+        diffs = diffs[~null_mask]
         diffs = diffs.astype(np.int64).astype(np.float64)
+    else:
+        diffs = diffs[~np.isnan(diffs)]
+    if not len(diffs):
+        return False
     med = np.median(diffs)
     # Note: The rtol parameter here is a bit arbitrary; it was set
     # based on experience but there is probably a better way to do this.

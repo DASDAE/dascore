@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import pickle
+import re
 import warnings
 from functools import partial
 from io import BytesIO
@@ -23,11 +24,14 @@ from dascore.core.coords import (
     CoordMonotonicArray,
     CoordPartial,
     CoordRange,
+    CoordString,
     CoordSummary,
+    _get_coord_kind,
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_quantity, percent
+from dascore.utils.array import _coerce_text_array, _is_text_coercible_array
 from dascore.utils.misc import all_close, register_func
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
@@ -128,6 +132,12 @@ def random_date_coord():
     """Create coordinates which are evenly sampled."""
     ar = random_state.rand(100) * 1_000
     return get_coord(data=dc.to_datetime64(ar))
+
+
+@pytest.fixture(scope="session")
+def string_coord():
+    """Create a simple string coordinate."""
+    return get_coord(data=np.array(["alpha", "beta", "gamma", "delta"]))
 
 
 # This is a "special case" so it isnt aggregated into meta fixture.
@@ -2002,3 +2012,290 @@ class TestIssues:
         data = np.stack([dates, dates], axis=-1)
         coord = get_coord(data=data)
         assert isinstance(coord, CoordArray)
+
+
+class TestStringCoords:
+    """Tests for string-backed coordinates."""
+
+    def test_get_coord_returns_string_coord(self, string_coord):
+        """String arrays should create CoordString."""
+        assert isinstance(string_coord, CoordString)
+
+    def test_exact_value_select(self, string_coord):
+        """Exact scalar selection should return one value."""
+        out, indexer = string_coord.select("beta")
+        assert np.array_equal(out.values, np.array(["beta"]))
+        assert np.array_equal(indexer, np.array([False, True, False, False]))
+
+    def test_array_select(self, string_coord):
+        """Array selection should filter by exact label matches."""
+        out, indexer = string_coord.select(np.array(["alpha", "delta"]))
+        assert np.array_equal(out.values, np.array(["alpha", "delta"]))
+        assert np.array_equal(indexer, np.array([True, False, False, True]))
+
+    def test_boolean_mask_select(self, string_coord):
+        """Boolean masks should preserve the mask indexer for string coords."""
+        mask = np.array([True, False, True, False])
+        out, indexer = string_coord.select(mask)
+        assert np.array_equal(out.values, np.array(["alpha", "gamma"]))
+        assert np.array_equal(indexer, mask)
+
+    def test_wildcard_select_asterisk(self, string_coord):
+        """Wildcard selectors should match labels using shell semantics."""
+        out, indexer = string_coord.select("a*")
+        assert np.array_equal(out.values, np.array(["alpha"]))
+        assert np.array_equal(indexer, np.array([True, False, False, False]))
+
+    def test_wildcard_select_question_mark(self):
+        """Question-mark wildcards should only match one character."""
+        coord = get_coord(data=np.array(["ch_1", "ch_2", "ch_10", "xx_1"]))
+        out, indexer = coord.select("ch_?")
+        assert np.array_equal(out.values, np.array(["ch_1", "ch_2"]))
+        assert np.array_equal(indexer, np.array([True, True, False, False]))
+
+    def test_wildcard_select_no_match_returns_empty(self, string_coord):
+        """Wildcard selectors with no matches should return an empty coord."""
+        out, indexer = string_coord.select("z*")
+        assert isinstance(out, CoordString)
+        assert out.values.size == 0
+        assert np.array_equal(indexer, np.array([False, False, False, False]))
+
+    def test_regex_select(self):
+        """Compiled regex selectors should match string coordinates explicitly."""
+        coord = get_coord(data=np.array(["ch_1", "ch_2", "ch_10", "xx_1"]))
+        out, indexer = coord.select(re.compile(r"^ch_\d+$"))
+        assert np.array_equal(out.values, np.array(["ch_1", "ch_2", "ch_10"]))
+        assert np.array_equal(indexer, np.array([True, True, True, False]))
+
+    def test_none_select_is_noop(self, string_coord):
+        """None selection should behave like an unspecified filter."""
+        out, indexer = string_coord.select(None)
+        assert out is string_coord
+        assert indexer == slice(None)
+
+    def test_sample_select(self, string_coord):
+        """Sample-based selection should still work."""
+        out, indexer = string_coord.select(np.array([1, 3]), samples=True)
+        assert np.array_equal(out.values, np.array(["beta", "delta"]))
+        assert np.array_equal(indexer, np.array([False, True, False, True]))
+
+    def test_sort(self):
+        """String coords should sort lexicographically."""
+        coord = get_coord(data=np.array(["gamma", "alpha", "delta"]))
+        out, inds = coord.sort()
+        assert np.array_equal(out.values, np.array(["alpha", "delta", "gamma"]))
+        assert np.array_equal(inds, np.array([1, 2, 0]))
+        assert out.sorted
+        assert not out.reverse_sorted
+
+    def test_reverse_sort(self):
+        """Reverse sorting should flip the index order."""
+        coord = get_coord(data=np.array(["gamma", "alpha", "delta"]))
+        out, inds = coord.sort(reverse=True)
+        assert np.array_equal(out.values, np.array(["gamma", "delta", "alpha"]))
+        assert np.array_equal(inds, np.array([0, 2, 1]))
+        assert not out.sorted
+        assert out.reverse_sorted
+
+    def test_range_selection_raises(self, string_coord):
+        """Range semantics are intentionally unsupported."""
+        with pytest.raises(CoordError, match="range selection"):
+            string_coord.select(("alpha", "gamma"))
+
+    def test_relative_selection_raises(self, string_coord):
+        """Relative selection is numeric-only."""
+        with pytest.raises(CoordError, match="relative selection"):
+            string_coord.select("alpha", relative=True)
+
+    def test_units_raise(self, string_coord):
+        """String coords do not support units."""
+        with pytest.raises(CoordError, match="unit conversion"):
+            string_coord.set_units("m")
+
+    def test_get_coord_with_units_raises(self):
+        """Constructing string coords with units should be rejected explicitly."""
+        with pytest.raises(CoordError, match="unit conversion"):
+            get_coord(data=np.array(["alpha", "beta"]), units="m")
+
+    def test_convert_units_none_is_noop(self, string_coord):
+        """No-op unit conversions should return the same coord."""
+        assert string_coord.convert_units(None) is string_coord
+
+    def test_direct_validation_accepts_array_input(self):
+        """The validator should pass non-dict inputs through unchanged."""
+        data = np.array(["alpha", "beta"])
+        assert CoordString._validate_values(data) is data
+
+    def test_direct_validation_normalizes_bytes_to_unicode(self):
+        """Validation should decode byte arrays into unicode arrays."""
+        out = CoordString._validate_values({"values": np.array([b"alpha", b"beta"])})
+        assert out["dtype"].kind == "U"
+        assert np.array_equal(out["values"], np.array(["alpha", "beta"]))
+
+    def test_direct_validation_rejects_non_string_data(self):
+        """The validator should reject non-string arrays."""
+        with pytest.raises(CoordError, match="string-like data"):
+            CoordString._validate_values({"values": np.array([1, 2, 3])})
+
+    def test_select_slice_in_samples_mode(self, string_coord):
+        """Sample selections should still allow slice indexers."""
+        out, indexer = string_coord.select(slice(1, 3), samples=True)
+        assert np.array_equal(out.values, np.array(["beta", "gamma"]))
+        assert indexer == slice(1, 3)
+
+    def test_getitem_scalar_returns_scalar(self, string_coord):
+        """Scalar indexing should return the scalar label."""
+        assert string_coord[1] == "beta"
+
+    def test_update_limits_noop(self, string_coord):
+        """Empty limit updates should leave the coord unchanged."""
+        assert string_coord.update_limits() is string_coord
+
+    def test_update_limits_raises(self, string_coord):
+        """Numeric limit updates are unsupported."""
+        with pytest.raises(CoordError, match="limit updates"):
+            string_coord.update_limits(min="alpha")
+
+    def test_update_limits_allows_data_kwarg(self, string_coord):
+        """A sole data kwarg should remain a no-op for API compatibility."""
+        assert string_coord.update_limits(data=string_coord.values) is string_coord
+
+    def test_get_compatible_value_null_returns_none(self, string_coord):
+        """Null-like selectors should map to None."""
+        assert string_coord._get_compatible_value(np.nan) is None
+
+    def test_get_compatible_value_scalar_returns_scalar(self, string_coord):
+        """Scalar selectors should cast to the coord dtype."""
+        assert string_coord._get_compatible_value("alpha") == "alpha"
+
+    def test_get_compatible_value_relative_raises(self, string_coord):
+        """Relative coercion should fail for string coords."""
+        with pytest.raises(CoordError, match="relative selection"):
+            string_coord._get_compatible_value("alpha", relative=True)
+
+    def test_string_summary_is_lossy(self, string_coord):
+        """String coordinates should produce lossy summaries."""
+        out = string_coord.to_summary(dims=("channel",))
+        assert isinstance(out, CoordSummary)
+        assert out.min == "alpha"
+        assert out.max == "gamma"
+        assert out.step is None
+        assert not out.is_range_like
+        assert out.dims == ("channel",)
+
+    def test_empty_string_coord(self):
+        """Empty string arrays should preserve their string coord type."""
+        out = get_coord(data=np.array([], dtype="U8"))
+        assert isinstance(out, CoordString)
+        assert len(out) == 0
+
+    def test_empty_bytes_string_coord_normalizes_to_unicode(self):
+        """Empty byte-backed string arrays should still become string coords."""
+        out = get_coord(data=np.array([], dtype="S3"))
+        assert isinstance(out, CoordString)
+        assert len(out) == 0
+        assert out.dtype.kind == "U"
+
+    def test_bytes_string_coord_normalizes_to_unicode(self):
+        """Byte-backed string coords should decode to unicode internally."""
+        out = get_coord(data=np.array([b"alpha", b"beta"], dtype="S5"))
+        assert isinstance(out, CoordString)
+        assert out.dtype.kind == "U"
+        assert np.array_equal(out.values, np.array(["alpha", "beta"]))
+
+    def test_mixed_str_bytes_object_array_normalizes(self):
+        """Mixed str/bytes object arrays should normalize to unicode strings."""
+        coord = get_coord(data=np.array(["gamma", b"alpha", "delta"], dtype=object))
+        assert isinstance(coord, CoordString)
+        assert coord.dtype.kind == "U"
+        assert coord.min() == "alpha"
+        assert coord.max() == "gamma"
+        out, inds = coord.sort()
+        assert np.array_equal(out.values, np.array(["alpha", "delta", "gamma"]))
+        assert np.array_equal(inds, np.array([1, 2, 0]))
+        assert out.sorted
+
+    def test_single_value_string_coord_sorted_flags(self):
+        """Single-value string coords should report stable sort flags."""
+        out = get_coord(data=np.array(["alpha"]))
+        assert out.sorted
+        assert not out.reverse_sorted
+
+    def test_multidimensional_string_summary(self):
+        """Lexicographic min/max should flatten multi-dimensional string coords."""
+        coord = get_coord(data=np.array([["gamma", "beta"], ["delta", "alpha"]]))
+        assert coord.min() == "alpha"
+        assert coord.max() == "gamma"
+
+    def test_coord_range_raises(self, string_coord):
+        """String coords should explicitly reject range calculations."""
+        with pytest.raises(CoordError, match="range operations"):
+            string_coord.coord_range()
+
+
+class TestStringCoordUtilities:
+    """Tests for helper functions used by string coords."""
+
+    def test_get_coord_handles_monotonic_non_subtractable_objects(self):
+        """Monotonic object arrays without subtraction should fall back cleanly."""
+
+        class OrderedOnly:
+            def __init__(self, value):
+                self.value = value
+
+            def __gt__(self, other):
+                return self.value > other.value
+
+            def __lt__(self, other):
+                return self.value < other.value
+
+        data = np.array(
+            [OrderedOnly(1), OrderedOnly(2), OrderedOnly(3)],
+            dtype=object,
+        )
+        out = get_coord(data=data)
+        assert isinstance(out, CoordArray)
+
+    def test_detect_string_like_array(self):
+        """The helper should recognize string arrays only."""
+        assert _is_text_coercible_array(np.array(["a", "b"]))
+        assert _is_text_coercible_array(np.array([b"a", b"b"], dtype="S"))
+        assert _is_text_coercible_array(np.array(["a", "b"], dtype=object))
+        assert not _is_text_coercible_array(np.array([1, 2, 3]))
+
+    def test_detect_string_like_array_edge_cases(self):
+        """String detection should reject non-array and empty object cases."""
+        assert not _is_text_coercible_array(["a", "b"])
+        assert not _is_text_coercible_array(np.array([], dtype=object))
+
+    def test_detect_string_like_array_rejects_mixed_object_values(self):
+        """Mixed object arrays must not be treated as string coordinates."""
+        data = np.array([*(str(i) for i in range(20)), 21], dtype=object)
+        assert not _is_text_coercible_array(data)
+
+    def test_coerce_text_array_decodes_bytes(self):
+        """The coercion helper should decode bytes to unicode strings."""
+        out = _coerce_text_array(np.array([b"a", b"bb"], dtype="S2"))
+        assert out.dtype.kind == "U"
+        assert np.array_equal(out, np.array(["a", "bb"]))
+
+    def test_get_coord_rejects_mixed_object_string_arrays(self):
+        """Mixed object arrays should stay generic arrays, not CoordString."""
+        data = np.array([*(str(i) for i in range(20)), 21], dtype=object)
+        out = get_coord(data=data)
+        assert not isinstance(out, CoordString)
+
+    def test_get_coord_kind_from_metadata(self):
+        """Metadata-driven coord kind detection should stay centralized."""
+        assert _get_coord_kind(dtype="U8", length=4) == "string"
+        assert _get_coord_kind(dtype="int64", step=1, length=4) == "range"
+        assert _get_coord_kind(dtype="float64", length=0) == "empty"
+        assert _get_coord_kind(dtype=object, length=4) == "array"
+
+    def test_get_coord_kind_from_data(self):
+        """Data-driven classification should cover string, empty, single, array."""
+        assert _get_coord_kind(np.array(["a"])) == "string"
+        assert _get_coord_kind(np.array([], dtype=float)) == "empty"
+        assert _get_coord_kind(np.array([1])) == "single"
+        assert _get_coord_kind(np.array([1, 2])) == "array"
+        assert _get_coord_kind(np.array([[1, 2, 3]])) == "array"
