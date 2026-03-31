@@ -37,6 +37,8 @@ def _to_coord_summary(value: Any, dims: tuple[str, ...] = ()) -> CoordSummary:
         value = value.model_dump()
     if isinstance(value, Mapping):
         value = dict(value)
+        if "dims" in value:
+            value["dims"] = _normalize_dims(value["dims"])
         if dims and "dims" not in value:
             value["dims"] = dims
     return CoordSummary(**value)
@@ -259,7 +261,7 @@ def _normalize_coord_summary_map(
     return {
         name: _to_coord_summary(
             summary,
-            dims=tuple(summary.get("dims", (name,)))
+            dims=_normalize_dims(summary.get("dims", (name,)))
             if isinstance(summary, Mapping)
             else (),
         )

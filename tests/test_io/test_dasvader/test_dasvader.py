@@ -128,11 +128,6 @@ class TestDASVader:
         path = tmp_path_factory.mktemp("dasvader_modern") / "modern_named_refs.jld2"
         return _write_modern_dasvader_file(path)
 
-    @pytest.fixture(scope="session")
-    def das_vader_path(self):
-        """Return the path to the DASVader example file."""
-        return fetch("das_vader_1.jld2")
-
     @pytest.fixture(scope="class")
     def das_vader_strainrate_no_attrib_path(self, tmp_path_factory):
         """Create a DASVader file using `strainrate` data and no `atrib` ref."""
@@ -185,6 +180,9 @@ class TestDASVader:
         self, monkeypatch, dasvader_modern_path
     ):
         """Ensure DASVader works when high-level reference deref fails."""
+        # This intentionally patches h5py internals to simulate dereference
+        # failures that are otherwise hard to trigger from the public API.
+        # TODO: revisit if h5py internals change or a higher-level hook appears.
         original_getitem = h5py._hl.group.Group.__getitem__
 
         def _patched_getitem(group, key):

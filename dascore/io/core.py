@@ -1036,7 +1036,7 @@ def scan(
                     # dependency/compatibility problems as warnings and keep
                     # scanning the remaining files.
                     except DependencyError as exc:
-                        warnings.warn(str(exc), UserWarning)
+                        warnings.warn(str(exc), UserWarning, stacklevel=2)
                         continue
                     # This happens if the file is corrupt see #346.
                     except (OSError, InvalidFiberFileError, ValueError, TypeError):

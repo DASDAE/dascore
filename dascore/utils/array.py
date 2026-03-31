@@ -106,7 +106,7 @@ def convert_strings_to_bytes(data: ArrayLike) -> np.ndarray:
     """Encode string-like arrays as fixed-width UTF-8 bytes."""
     data = np.asarray(data)
     if not data.size:
-        return np.asarray([], dtype="S1")
+        return np.empty(data.shape, dtype="S1")
     # Storage backends that require one fixed-width bytes dtype need the
     # encoded values flattened first so the longest byte string can size it.
     flat = data.reshape(-1)
@@ -127,10 +127,10 @@ def convert_bytes_to_strings(data: ArrayLike, original_dtype="") -> np.ndarray:
     if not data.size:
         dtype = original_dtype if isinstance(original_dtype, str) else ""
         if dtype.startswith("|S") or dtype.startswith("S"):
-            return np.asarray([], dtype=dtype)
+            return np.empty(data.shape, dtype=dtype)
         if dtype.startswith("<U") or dtype.startswith("U"):
-            return np.asarray([], dtype=dtype)
-        return np.asarray([], dtype="U1")
+            return np.empty(data.shape, dtype=dtype)
+        return np.empty(data.shape, dtype="U1")
     # Preserve byte-backed arrays when requested. Otherwise decode back to the
     # stored string representation using the recorded original dtype.
     if isinstance(original_dtype, str) and (

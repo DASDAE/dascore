@@ -2035,11 +2035,24 @@ class TestStringCoords:
         assert np.array_equal(out.values, np.array(["beta"]))
         assert np.array_equal(indexer, np.array([False, True, False, False]))
 
+    def test_exact_value_select_does_not_truncate_probe(self, string_coord):
+        """Longer string probes should not be truncated to the coord dtype."""
+        out, indexer = string_coord.select("alphabet")
+        assert isinstance(out, CoordString)
+        assert out.values.size == 0
+        assert np.array_equal(indexer, np.array([False, False, False, False]))
+
     def test_array_select(self, string_coord):
         """Array selection should filter by exact label matches."""
         out, indexer = string_coord.select(np.array(["alpha", "delta"]))
         assert np.array_equal(out.values, np.array(["alpha", "delta"]))
         assert np.array_equal(indexer, np.array([True, False, False, True]))
+
+    def test_array_select_does_not_truncate_probe_values(self, string_coord):
+        """Array probes should preserve longer strings instead of truncating."""
+        out, indexer = string_coord.select(np.array(["alphabet", "deltaforce"]))
+        assert out.values.size == 0
+        assert np.array_equal(indexer, np.array([False, False, False, False]))
 
     def test_boolean_mask_select(self, string_coord):
         """Boolean masks should preserve the mask indexer for string coords."""
@@ -2124,6 +2137,11 @@ class TestStringCoords:
         """Constructing string coords with units should be rejected explicitly."""
         with pytest.raises(CoordError, match="unit conversion"):
             get_coord(data=np.array(["alpha", "beta"]), units="m")
+
+    def test_get_coord_with_step_raises(self):
+        """Constructing string coords with a step should be rejected explicitly."""
+        with pytest.raises(CoordError, match="range operations"):
+            get_coord(data=np.array(["alpha", "beta"]), step=1)
 
     def test_convert_units_none_is_noop(self, string_coord):
         """No-op unit conversions should return the same coord."""

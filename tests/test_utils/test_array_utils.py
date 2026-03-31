@@ -283,6 +283,13 @@ class TestStringArrayHelpers:
         assert out.dtype == np.dtype("S1")
         assert out.size == 0
 
+    def test_convert_shaped_empty_strings_to_bytes_preserves_shape(self):
+        """Shaped empty inputs should keep their original array shape."""
+        data = np.empty((0, 3), dtype="U4")
+        out = convert_strings_to_bytes(data)
+        assert out.shape == data.shape
+        assert out.dtype == np.dtype("S1")
+
     def test_convert_bytes_like_strings_to_bytes(self):
         """Existing byte-like entries should round-trip without repr mangling."""
         data = np.array(
@@ -303,6 +310,13 @@ class TestStringArrayHelpers:
         out = convert_bytes_to_strings(np.array([], dtype="S1"), original_dtype=object)
         assert out.dtype == np.dtype("U1")
         assert out.size == 0
+
+    def test_convert_shaped_empty_bytes_to_strings_preserves_shape(self):
+        """Shaped empty byte arrays should keep their original array shape."""
+        data = np.empty((0, 3), dtype="S1")
+        out = convert_bytes_to_strings(data, original_dtype="<U4")
+        assert out.shape == data.shape
+        assert out.dtype == np.dtype("<U4")
 
     def test_convert_empty_bytes_to_unicode_strings(self):
         """Empty byte arrays should preserve explicit unicode dtypes."""

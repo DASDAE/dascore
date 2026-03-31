@@ -1660,14 +1660,14 @@ class CoordString(BaseCoord):
         return self.convert_units(units)
 
     def _get_compatible_value(self, value, relative=False):
-        """Cast values to the underlying string dtype."""
+        """Normalize selectors without truncating longer string probes."""
         if relative:
             _raise_string_coord_error("relative selection")
         if not is_array(value) and (pd.isnull(value) or value is Ellipsis):
             return None
         if is_array(value):
-            return np.asarray(value, dtype=self.dtype)
-        return np.asarray([value], dtype=self.dtype)[0]
+            return np.asarray(value)
+        return value
 
     def select(
         self, args, relative=False, samples=False
@@ -1690,7 +1690,7 @@ class CoordString(BaseCoord):
             pattern = re.compile(fnmatch.translate(args))
             mask = np.array([bool(pattern.match(value)) for value in self.values])
             return self._select_by_value_array(self.values[mask])
-        values = np.asarray([args], dtype=self.dtype)
+        values = np.asarray([args])
         return self._select_by_value_array(values)
 
     def coord_range(self, extend: bool = True):
@@ -1935,6 +1935,8 @@ def get_coord(
         if kind == "string":
             if units not in (None, ""):
                 _raise_string_coord_error("unit conversion")
+            if step not in (None, "") and not pd.isnull(step):
+                _raise_string_coord_error("range operations")
             return CoordString(values=data)
         if kind == "empty":
             dtype = dtype or data.dtype
