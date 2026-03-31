@@ -8,7 +8,6 @@ import warnings
 from contextlib import suppress
 from pathlib import Path
 
-import h5py
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -250,81 +249,6 @@ def brady_hs_das_dts_coords_path():
     out = fetch("brady_hs_DAS_DTS_coords.csv")
     assert out.exists()
     return out
-
-
-def _write_dasvader_file(
-    path: Path, data_name: str = "data", include_attrib: bool = True
-) -> Path:
-    """Write a DASVader file using named datasets and references."""
-    tp_dtype = np.dtype([("hi", "<f8"), ("lo", "<f8")])
-    sr_dtype = np.dtype(
-        [("ref", tp_dtype), ("step", tp_dtype), ("len", "<i8"), ("offset", "<i8")]
-    )
-    ddas_fields = [
-        (data_name, h5py.ref_dtype),
-        ("time", sr_dtype),
-        ("htime", h5py.ref_dtype),
-        ("offset", sr_dtype),
-    ]
-    if include_attrib:
-        ddas_fields.append(("atrib", h5py.ref_dtype))
-    ddas_dtype = np.dtype(ddas_fields)
-
-    with h5py.File(path, "w") as fi:
-        ntime, ndistance = 8, 20
-        shape = (ndistance, ntime) if data_name == "data" else (ntime, ndistance)
-        data = fi.create_dataset(
-            data_name, data=np.arange(ntime * ndistance).reshape(shape)
-        )
-        htime = fi.create_dataset("htime", data=np.array([62_135_683_200_000]))
-
-        ddas = np.zeros((), dtype=ddas_dtype)
-        ddas[data_name] = data.ref
-        ddas["htime"] = htime.ref
-        ddas["time"]["ref"]["hi"] = 0.0
-        ddas["time"]["step"]["hi"] = 1.0
-        ddas["time"]["len"] = ntime
-        ddas["time"]["offset"] = 1
-        ddas["offset"]["ref"]["hi"] = 0.0
-        ddas["offset"]["step"]["hi"] = 0.5
-        ddas["offset"]["len"] = ndistance
-        ddas["offset"]["offset"] = 1
-
-        if include_attrib:
-            atrib_dtype = np.dtype(
-                [
-                    ("GaugeLength", h5py.ref_dtype),
-                    ("Hostname", h5py.ref_dtype),
-                    ("PipelineTracker", h5py.ref_dtype),
-                    ("PulseRateFreq", "<f8"),
-                ]
-            )
-            gauge = fi.create_dataset("GaugeLength", data=np.array([10.0]))
-            host = fi.create_dataset(
-                "Hostname", data="test-host", dtype=h5py.string_dtype(encoding="utf-8")
-            )
-            tracker = fi.create_dataset(
-                "PipelineTracker",
-                data="tracker-1",
-                dtype=h5py.string_dtype(encoding="utf-8"),
-            )
-            atrib = np.zeros((), dtype=atrib_dtype)
-            atrib["GaugeLength"] = gauge.ref
-            atrib["Hostname"] = host.ref
-            atrib["PipelineTracker"] = tracker.ref
-            atrib["PulseRateFreq"] = 5000.0
-            atrib_ds = fi.create_dataset("atrib", data=atrib)
-            ddas["atrib"] = atrib_ds.ref
-
-        fi.create_dataset("dDAS", data=ddas)
-    return path
-
-
-@pytest.fixture(scope="session")
-def dasvader_modern_path(tmp_path_factory):
-    """Create a readable DASVader file with named datasets."""
-    path = tmp_path_factory.mktemp("dasvader_modern") / "modern_named_refs.jld2"
-    return _write_dasvader_file(path)
 
 
 # --- Patch fixtures
