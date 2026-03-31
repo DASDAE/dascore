@@ -73,12 +73,10 @@ class TestStrainRateConversion:
         out2 = terra15_das_patch.velocity_to_strain_rate(step_multiple=4)
         assert isinstance(out2, dc.Patch)
 
-    def test_gauge_multiple_deprecated(self, terra15_das_patch):
-        """Ensure using gauge_multiple issues deprecation warning."""
-        with pytest.warns(DeprecationWarning):
-            out1 = terra15_das_patch.velocity_to_strain_rate(gauge_multiple=1)
-        out2 = terra15_das_patch.velocity_to_strain_rate(step_multiple=2)
-        assert out1.equals(out2)
+    def test_gauge_multiple_removed(self, terra15_das_patch):
+        """Ensure the removed parameter is rejected."""
+        with pytest.raises(TypeError, match="gauge_multiple"):
+            terra15_das_patch.velocity_to_strain_rate(gauge_multiple=1)
 
     def test_no_data_units(self, terra15_das_patch):
         """Ensure a patch with no data units still works."""

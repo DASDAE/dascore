@@ -251,7 +251,6 @@ def _normalize_dims(dims: Any) -> tuple[str, ...]:
         return tuple(dims.split(","))
     return tuple(dims)
 
-
 def _normalize_coord_summary_map(
     coords: Mapping[str, Any],
 ) -> dict[str, CoordSummary]:
@@ -267,6 +266,20 @@ def _normalize_coord_summary_map(
     }
 
 
+def _normalize_source_patch_id(
+    attrs: PatchAttrs, source_patch_id: Any = ""
+) -> tuple[PatchAttrs, str]:
+    """Normalize summary and private attr source ids to one value."""
+    summary_source_patch_id = (
+        "" if source_patch_id in (None, "") else str(source_patch_id)
+    )
+    attrs_source_patch_id = str(attrs.get("_source_patch_id", "") or "")
+    normalized = summary_source_patch_id or attrs_source_patch_id
+    if normalized:
+        attrs = attrs.update(_source_patch_id=normalized)
+    return attrs, normalized
+
+
 def _build_patch_summary_payload(
     *,
     attrs: PatchAttrs,
@@ -280,6 +293,7 @@ def _build_patch_summary_payload(
     source_patch_id="",
 ) -> dict[str, Any]:
     """Build the canonical structured payload used to validate PatchSummary."""
+    attrs, source_patch_id = _normalize_source_patch_id(attrs, source_patch_id)
     dims = dims or _infer_dims_from_coords(coords)
     return {
         "attrs": attrs,
@@ -356,12 +370,13 @@ class PatchSummary(DascoreBaseModel):
     @classmethod
     def from_patch(cls, patch: dc.Patch) -> PatchSummary:
         """Create a summary from a loaded patch."""
-        return cls.model_construct(
+        return cls(
             attrs=patch.attrs,
             coords=patch.coords.to_summary_dict(),
             dims=patch.dims,
             shape=patch.shape,
             dtype=str(np.dtype(patch.data.dtype)),
+            source_patch_id=patch.attrs.get("_source_patch_id", ""),
         )
 
     def dump_structured(self) -> dict[str, Any]:

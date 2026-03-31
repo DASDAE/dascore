@@ -8,7 +8,6 @@ from typing import Final
 
 import numpy as np
 from rich.text import Text
-from typing_extensions import Self
 
 import dascore as dc
 import dascore.proc.coords
@@ -21,7 +20,6 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord
 from dascore.core.summary import PatchSummary
 from dascore.utils.array import PatchUFunc, patch_array_function, patch_array_ufunc
-from dascore.utils.deprecate import deprecate
 from dascore.utils.display import array_to_text, attrs_to_text, get_dascore_text
 from dascore.utils.models import ArrayLike
 from dascore.utils.namespace import NamespaceOwner
@@ -389,13 +387,6 @@ class Patch(NamespaceOwner):
         """
         return get_patch_names(self, *args, **kwargs).iloc[0]
 
-    @deprecate(
-        "assign_coords is deprecated, use update_coords instead.", removed_in="0.2.0"
-    )
-    def assign_coords(self, *args, **kwargs):
-        """Deprecated method for update_coords."""
-        return self.update_coords(*args, **kwargs)
-
     set_units = dascore.proc.set_units
     convert_units = dascore.proc.convert_units
     simplify_units = dascore.proc.simplify_units
@@ -404,14 +395,6 @@ class Patch(NamespaceOwner):
 
     select = dascore.proc.select
     order = dascore.proc.order
-
-    @deprecate(
-        "Use patch.select(... samples=True) instead.",
-        removed_in="0.2.0",
-    )
-    def iselect(self, *args, **kwargs):
-        """Deprecated  form of select."""
-        return self.select(*args, samples=True, **kwargs)
 
     correlate = dascore.proc.correlate
     correlate_shift = dascore.proc.correlate_shift
@@ -439,14 +422,6 @@ class Patch(NamespaceOwner):
     where = dascore.proc.where
     flip = dascore.proc.flip
     align_to_coord = dascore.proc.align_to_coord
-
-    @deprecate(
-        "patch.iresample is deprecated. Please use patch.resample " "with samples=True",
-        removed_in="0.2.0",
-    )
-    def iresample(self, *args, **kwargs):
-        """Deprecated method."""
-        return self.resample(*args, samples=True, **kwargs)
 
     interpolate = dascore.proc.interpolate
     normalize = dascore.proc.normalize
@@ -488,13 +463,11 @@ class Patch(NamespaceOwner):
 
     # --- transformation functions
     differentiate = transform.differentiate
-    rfft = transform.rfft
     dft = transform.dft
     idft = transform.idft
     stft = transform.stft
     istft = transform.istft
     integrate = transform.integrate
-    spectrogram = transform.spectrogram
     velocity_to_strain_rate = transform.velocity_to_strain_rate
     velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
     dispersion_phase_shift = transform.dispersion_phase_shift
@@ -502,17 +475,3 @@ class Patch(NamespaceOwner):
     hilbert = transform.hilbert
     envelope = transform.envelope
     phase_weighted_stack = transform.phase_weighted_stack
-
-    # --- Method Namespaces
-    # Note: these can't be cached_property (from functools) or references
-    # to self stick around and keep large arrays in memory.
-
-    @property
-    @deprecate(
-        "The tran namespace is deprecated. Its methods can now be "
-        "accessed as normal patch methods (eg patch.dft)",
-        removed_in="0.2.0",
-    )
-    def tran(self) -> Self:
-        """The transformation namespace."""
-        return self

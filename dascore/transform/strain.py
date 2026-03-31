@@ -21,7 +21,6 @@ from dascore.utils.patch import patch_function
 def velocity_to_strain_rate(
     patch: PatchType,
     step_multiple: int = 2,
-    gauge_multiple: None | int = None,
     order: int = 2,
 ) -> PatchType:
     r"""
@@ -47,8 +46,6 @@ def velocity_to_strain_rate(
     step_multiple
         The multiples of spatial sampling for the central averaging stencil.
         Must be even as odd values result in a staggered grid.
-    gauge_multiple
-        Deprecated name for step_multiple. Use that instead.
     order
         The order for the finite difference 1st derivative stencil (accuracy).
         It must be a multiple of 2
@@ -94,11 +91,6 @@ def velocity_to_strain_rate(
     of this function removes potential edge effects and supports even and odd
     `step_multiple` values.
     """
-    if gauge_multiple is not None:
-        msg = "gauge_multiple will be removed in the future. Use step_multiple."
-        warnings.warn(msg, DeprecationWarning)
-        step_multiple = gauge_multiple * 2
-
     if step_multiple <= 0:
         msg = "step_multiple must be positive."
         raise ParameterError(msg)

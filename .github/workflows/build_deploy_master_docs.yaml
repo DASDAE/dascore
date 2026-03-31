@@ -1,12 +1,12 @@
 # This action renders and publishes the development docs whenever
-# new commits are added to the master bracnh.
+# new commits are added to the master or dev branch.
 
 name: BuildDeployDevDocs
 
 on:
-  # Runs on pushes targeting the default branch
+  # Runs on pushes targeting the development branches
   push:
-    branches: ["master"]
+    branches: ["master", "dev"]
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:

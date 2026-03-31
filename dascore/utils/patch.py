@@ -35,7 +35,6 @@ from dascore.exceptions import (
 from dascore.units import get_quantity
 from dascore.utils.attrs import combine_patch_attrs
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -327,41 +326,6 @@ def patches_to_df(
     if "patch" not in df.columns:
         df["patch"] = to_object_array(patches)
     return df
-
-
-@deprecate(
-    info=(
-        "merge_patches is deprecated. Use spool.chunk instead. "
-        "For example, to merge a list of patches you can use: "
-        "dascore.spool(patch_list).chunk(time=None) to merge on the time "
-        "dimension."
-    ),
-    removed_in="0.2.0",
-)
-def merge_patches(
-    patches: Sequence[PatchType] | pd.DataFrame | SpoolType,
-    dim: str = "time",
-    check_history: bool = True,
-    tolerance: float = 1.5,
-) -> Sequence[PatchType]:
-    """
-    Merge all compatible patches in spool or patch list together.
-
-    Parameters
-    ----------
-    patches
-        A sequence of patches to merge (if compatible)
-    dim
-        The dimension along which to merge
-    check_history
-        If True, only merge patches with common history. This will, for
-        example, prevent merging filtered and unfiltered data together.
-    tolerance
-        The upper limit of a gap to tolerate in terms of the sampling
-        along the desired dimension. e.g., the default value means any patches
-        with gaps <= 1.5 * dt will be merged.
-    """
-    return dc.spool(patches).chunk(**{dim: None}, tolerance=tolerance)
 
 
 def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
@@ -993,8 +957,12 @@ def _merge_models(attrs1, attrs2, attrs_to_ignore=DEFAULT_ATTRS_TO_IGNORE):
     no_comp_keys = set(attrs_to_ignore)
     if attrs1 == attrs2:
         return attrs1
-    dict1 = dict(attrs1)
-    dict2 = dict(attrs2)
+    dict1 = {
+        key: value for key, value in dict(attrs1).items() if not key.startswith("_")
+    }
+    dict2 = {
+        key: value for key, value in dict(attrs2).items() if not key.startswith("_")
+    }
     common_keys = set(dict1) & set(dict2)
     ne_attrs = []
     for key in common_keys:

@@ -182,7 +182,7 @@ class TestCorrelateInternal:
         out2 = patch.correlate(distance=np.array([1, 2]) * m)
         assert isinstance(out2, dc.Patch)
 
-    def test_lag_deprecated(self, corr_patch):
-        """Ensure the lag parameter is deprecated."""
-        with pytest.warns(DeprecationWarning):
+    def test_lag_removed(self, corr_patch):
+        """Ensure the removed lag parameter is rejected."""
+        with pytest.raises(TypeError, match="lag"):
             corr_patch.correlate(time=1, lag=10, samples=True)

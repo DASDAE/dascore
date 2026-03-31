@@ -29,7 +29,7 @@ class TestProdMLSourcePatchId:
         target = dc.scan(prodml_fbe_path)[0]
         spool = dc.read(prodml_fbe_path, source_patch_id=target.source_patch_id)
         assert len(spool) == 1
-        assert "source_patch_id" not in spool[0].attrs.model_dump()
+        assert spool[0].attrs["_source_patch_id"] == target.source_patch_id
         assert (
             spool[0].summary.get_coord_summary("time").min
             == target.get_coord_summary("time").min
@@ -41,6 +41,7 @@ class TestProdMLSourcePatchId:
         targets = [summaries[0].source_patch_id, summaries[1].source_patch_id]
         spool = dc.read(prodml_fbe_path, source_patch_id=targets)
         assert len(spool) == 2
+        assert {patch.attrs["_source_patch_id"] for patch in spool} == set(targets)
         assert {patch.summary.get_coord_summary("time").min for patch in spool} == {
             summaries[0].get_coord_summary("time").min,
             summaries[1].get_coord_summary("time").min,

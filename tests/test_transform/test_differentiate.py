@@ -48,9 +48,9 @@ def linear_patch_monotonic_coord(random_patch):
     """A patch increasing linearly along unevenly sampled distance dimension."""
     state = np.random.RandomState(13)
     x_values = np.cumsum(state.random(50))
-    dist_coord = dc.get_coord(values=x_values)
+    dist_coord = dc.get_coord(data=x_values)
     data = np.broadcast_to(x_values[..., None], (len(x_values), 10))
-    time = dc.get_coord(values=dc.to_datetime64(np.arange(10)))
+    time = dc.get_coord(data=dc.to_datetime64(np.arange(10)))
     dims = ("distance", "time")
     coords = {"distance": dist_coord, "time": time}
     patch = dc.Patch(data=data, coords=coords, dims=dims)

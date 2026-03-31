@@ -210,15 +210,29 @@ class TestHistory:
         assert len(history_str) < 100
 
 
-class TestMergePatches:
-    """Tests for merging patches together."""
+class TestPatchMergeWorkflow:
+    """Tests for the supported patch merge workflow."""
 
-    def test_deprecated(self, random_patch):
-        """Ensure deprecation warning is raised."""
-        from dascore.utils.patch import merge_patches
+    def test_spool_chunk_replacement(self, random_patch):
+        """Ensure spool.chunk remains the supported merge path."""
+        out = dc.spool([random_patch]).chunk(time=None)
+        assert len(out) == 1
 
-        with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
-            merge_patches(random_patch)
+    def test_merge_compatible_coords_attrs_ignores_private_attrs(self, random_patch):
+        """Private attrs should not make otherwise compatible patches fail."""
+        patch_1 = random_patch.update_attrs(_source_patch_id="one")
+        patch_2 = random_patch.update_attrs(_source_patch_id="two")
+        coords, attrs = merge_compatible_coords_attrs(patch_1, patch_2)
+        assert coords == random_patch.coords
+        assert attrs["_source_patch_id"] == "one"
+
+    def test_binary_ops_ignore_private_attrs(self, random_patch):
+        """Binary ops should work on patches with different private ids."""
+        patch_1 = random_patch.update_attrs(_source_patch_id="one")
+        patch_2 = random_patch.update_attrs(_source_patch_id="two")
+        out = patch_1 + patch_2
+        assert isinstance(out, dc.Patch)
+        assert out.attrs["_source_patch_id"] == "one"
 
 
 class TestGetDimAxisValue:
@@ -432,6 +446,19 @@ class TestConcatenate:
         val1, val2 = patch.get_array("time"), random_patch.get_array("time")
         assert np.all(val1[: len(val2)] == val2)
         assert np.all(val1[len(val2) :] == val2)
+
+    def test_concatenate_ignores_private_attrs(self, random_patch):
+        """Private ids should not block concatenation of compatible patches."""
+        patch_1 = random_patch.update_attrs(_source_patch_id="one")
+        shifted = (
+            random_patch.coords.get_array("time") + random_patch.get_coord("time").step
+        )
+        patch_2 = random_patch.update_coords(time=shifted).update_attrs(
+            _source_patch_id="two"
+        )
+        out = concatenate_patches([patch_1, patch_2], time=None)
+        assert len(out) == 1
+        assert out[0].attrs["_source_patch_id"] == "one"
 
     def test_different_lens(self, random_patch):
         """Ensure different lengths can be chunked on same dim."""

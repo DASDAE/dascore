@@ -8,7 +8,6 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 from __future__ import annotations
 
 import sys
-import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -462,7 +461,6 @@ def slope_filter(
     filt: Sequence[float],
     dims: tuple[str, str] = ("distance", "time"),
     directional: bool = False,
-    notch: bool | None = None,
     invert: bool = False,
 ) -> PatchType:
     """
@@ -476,7 +474,7 @@ def slope_filter(
     patch
         The patch to filter.
     filt
-        A length 4 array of the form [va, vb, vc, vd]. If notch is False,
+        A length 4 array of the form [va, vb, vc, vd]. If invert is False,
         the filter selects the apparent velocities between 'vb' and 'vc'
         with tapering boundaries from 'va' to 'vb' and from 'vc' to 'vd'.
     dims
@@ -490,8 +488,6 @@ def slope_filter(
         away) with increasing coordinate values.
         This can be used for up/down or left/right separation, assuming a
         near-linear fiber layout.
-    notch
-        Deprecated, use invert.
     invert
         If True, the filter represents a notch, meaning the slopes
         specified by the inner `filt` parameters are attenuated rather
@@ -616,12 +612,6 @@ def slope_filter(
 
     slope = _get_slope_array(dft_patch, directional, freq_dims)
     filt = _maybe_transform_units(filt, dft_patch, freq_dims)
-
-    # TODO remove in dascore 0.2.
-    if notch is not None:
-        msg = "The `notch` parameter of slope filter is deprecated. Use invert."
-        warnings.warn(msg, DeprecationWarning, stacklevel=2)
-        invert = notch
 
     mask = _get_taper_mask(filt, slope, invert)
     new_data = dft_patch.data * mask

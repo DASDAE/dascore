@@ -228,6 +228,7 @@ def _read_patch(patch_group, **kwargs):
     dims = _get_dims(patch_group)
     coords = _get_coords(patch_group, dims, attrs)
     _, attr_info = separate_coord_info(attrs, dims=dims)
+    attr_info["_source_patch_id"] = patch_group._v_name
     attrs = PatchAttrs.from_dict(attr_info)
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
@@ -371,11 +372,11 @@ def _get_patch_content_from_group(group, file_version="", file_format="DASDAE"):
         coord_map[name] = summary
     data_nodes = [x for x in group if x.name == "data"]
     dtype = str(data_nodes[0].dtype) if data_nodes else ""
-    return PatchSummary.model_construct(
+    attr_info["_source_patch_id"] = group._v_name
+    return PatchSummary(
         attrs=PatchAttrs.from_dict(attr_info),
         coords=coord_map,
         dims=dims,
         shape=(),
         dtype=dtype,
-        source_patch_id=group._v_name,
     )
