@@ -251,6 +251,7 @@ def _normalize_dims(dims: Any) -> tuple[str, ...]:
         return tuple(dims.split(","))
     return tuple(dims)
 
+
 def _normalize_coord_summary_map(
     coords: Mapping[str, Any],
 ) -> dict[str, CoordSummary]:
