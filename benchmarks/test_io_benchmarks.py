@@ -8,7 +8,7 @@ from functools import cache
 import pytest
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import DependencyError
 from dascore.utils.downloader import fetch, get_registry_df
 
 
@@ -33,33 +33,33 @@ class TestIOBenchmarks:
     def test_scan(self, test_file_paths):
         """Time for basic scanning of all datafiles."""
         for path in test_file_paths.values():
-            with suppress(MissingOptionalDependencyError):
+            with suppress(DependencyError):
                 dc.scan(path)
 
     @pytest.mark.benchmark
     def test_scan_df(self, test_file_paths):
         """Time for basic scanning of all datafiles to DataFrame."""
         for path in test_file_paths.values():
-            with suppress(MissingOptionalDependencyError):
+            with suppress(DependencyError):
                 dc.scan_to_df(path)
 
     @pytest.mark.benchmark
     def test_get_format(self, test_file_paths):
         """Time for format detection of all datafiles."""
         for path in test_file_paths.values():
-            with suppress(MissingOptionalDependencyError):
+            with suppress(DependencyError):
                 dc.get_format(path)
 
     @pytest.mark.benchmark
     def test_read(self, test_file_paths):
         """Time for basic reading of all datafiles."""
         for path in test_file_paths.values():
-            with suppress(MissingOptionalDependencyError):
+            with suppress(DependencyError):
                 dc.read(path)[0]
 
     @pytest.mark.benchmark
     def test_spool(self, test_file_paths):
         """Time for creating spools from all datafiles."""
         for path in test_file_paths.values():
-            with suppress(MissingOptionalDependencyError):
-                dc.spool(path)[0]
+            with suppress(DependencyError):
+                dc.spool(path)
