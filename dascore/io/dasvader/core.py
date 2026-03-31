@@ -17,7 +17,16 @@ from .utils import (
 
 
 class DASVaderV1(FiberIO):
-    """Support for DASVader JLD2 files."""
+    """
+    Support for DASVader JLD2 files.
+
+    Notes
+    -----
+    Legacy DASVader files may contain anonymous JLD2 object references. DASCore
+    detects those files and raises `DASVaderCompatibilityError` with compatibility
+    instructions instead of failing inside `h5py`. A known working stack for
+    such legacy files is `h5py<3.16` with `HDF5 1.14.x`.
+    """
 
     name = "DASVader"
     preferred_extensions = ("jld2",)

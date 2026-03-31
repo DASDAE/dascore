@@ -22,7 +22,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import DependencyError
 from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
@@ -104,8 +104,8 @@ def skip_missing():
     """Skip if missing dependencies found."""
     try:
         yield
-    except MissingOptionalDependencyError as exc:
-        pytest.skip(f"Missing optional dependency required to read file: {exc}")
+    except DependencyError as exc:
+        pytest.skip(str(exc))
     except TimeoutError as exc:
         pytest.skip(f"Unable to fetch data due to timeout: {exc}")
 
@@ -156,6 +156,8 @@ def io_path_tuple(request):
     This is used for common testing.
     """
     io, fetch_name = request.param
+    if isinstance(io, DASVaderV1) and fetch_name == "das_vader_1.jld2":
+        return io, request.getfixturevalue("dasvader_modern_path")
     with skip_timeout():
         return io, fetch(fetch_name)
 
@@ -164,6 +166,8 @@ def io_path_tuple(request):
 def data_file_path(request):
     """A fixture of all data files. Will download if needed."""
     param = request.param
+    if str(param) == "das_vader_1.jld2":
+        return request.getfixturevalue("dasvader_modern_path")
     # Some files should be skipped if not DAS or too big.
     if str(param) in SKIP_DATA_FILES:
         pytest.skip(f"Skipping {param}")

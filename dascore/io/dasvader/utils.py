@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import h5py
 import numpy as np
+from h5py import h5r
 from h5py.h5r import Reference
 
 import dascore as dc
 from dascore.compat import array
 from dascore.core.coords import get_coord
+from dascore.exceptions import DASVaderCompatibilityError
 from dascore.utils.misc import maybe_get_items, unbyte
 
 # Julia DateTime "instant" values (Dates.value) are milliseconds since
@@ -60,6 +63,28 @@ def _julia_ms_to_datetime64(ms_values):
     return dc.to_datetime64(unix_ms / 1_000)
 
 
+def _raise_legacy_ref_error(h5, field_name: str) -> None:
+    """Raise a clear error for legacy DASVader files with anonymous refs."""
+    filename = getattr(h5, "filename", "<unknown>")
+    version = f"h5py {h5py.__version__} / HDF5 {h5py.version.hdf5_version}"
+    msg = (
+        f"{filename} is a legacy DASVader JLD2 file with anonymous object "
+        f"references in '{field_name}'. This file class is not supported by "
+        f"the current HDF5 stack ({version}). Install a compatibility stack "
+        f"such as h5py<3.16 with HDF5 1.14.x, then retry."
+    )
+    raise DASVaderCompatibilityError(msg)
+
+
+def _dereference(h5, value, field_name: str):
+    """Resolve an HDF5 reference, rejecting legacy anonymous DASVader refs."""
+    if not isinstance(value, Reference):
+        return value
+    if h5r.get_name(value, h5.id) is None:
+        _raise_legacy_ref_error(h5, field_name)
+    return h5[value]
+
+
 # --- Metadata parsing
 
 
@@ -68,11 +93,11 @@ def _dataset_to_dict(atrib) -> dict:
     Convert the compound dataset to a python dict.
     """
 
-    def _resolve_ref(h5, value):
+    def _resolve_ref(h5, value, field_name):
         """Resolve h5py references to concrete values."""
         if not isinstance(value, Reference):
             return value
-        obj = h5[value]
+        obj = _dereference(h5, value, field_name)
         out = obj[()]
         if isinstance(out, np.ndarray) and out.size == 1:
             return out.item()
@@ -83,7 +108,7 @@ def _dataset_to_dict(atrib) -> dict:
     h5 = atrib.file
     out = {}
     for name in data.dtype.names:
-        val = _resolve_ref(h5, data[name])
+        val = _resolve_ref(h5, data[name], name)
         out[name] = unbyte(val)
     return out
 
@@ -100,7 +125,7 @@ def _get_attr_dict(atrib) -> dict:
 def _get_time_coord(h5, rec):
     """Build the time coordinate from htime or time struct."""
     time_struct = rec["time"]
-    htime_node = h5[rec["htime"]]
+    htime_node = _dereference(h5, rec["htime"], "htime")
     start_htime = _julia_ms_to_datetime64(htime_node[0])
     _start, _step, time_len = _step_range_len_to_params(time_struct)
     _end = _start + time_len * _step
@@ -168,13 +193,17 @@ def _read_dasvader(h5, distance=None, time=None):
     ref_names = set(_get_reference_names(h5))
     data_name = "data" if "data" in ref_names else next(iter(DATA_NAMES & ref_names))
     # data is a reference here; need to resolve it with h5 File.
-    data = h5[rec[data_name]]
+    data = _dereference(h5, rec[data_name], data_name)
     if distance is not None or time is not None:
         cm, data = cm.select(data, distance=distance, time=time)
     data = array(data)
     if not data.size:
         return []
-    attrs = _get_attr_dict(h5[rec["atrib"]]) if "atrib" in ref_names else {}
+    attrs = (
+        _get_attr_dict(_dereference(h5, rec["atrib"], "atrib"))
+        if "atrib" in ref_names
+        else {}
+    )
     # attrs["coords"] = cm.to_summary_dict()
     # attrs["dims"] = cm.dims
     return [dc.Patch(data=data, coords=cm, attrs=dc.PatchAttrs(**attrs))]
