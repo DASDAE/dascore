@@ -68,7 +68,7 @@ class TestDASVader:
     def test_all_attrs_resolved(self, dasvader_modern_path):
         """Ensure all attributes are resolved (no hdf5 references)"""
         das_vader_patch = dc.read(dasvader_modern_path)[0]
-        for attr, value in das_vader_patch.attrs.items():
+        for _, value in das_vader_patch.attrs.items():
             assert not isinstance(value, Reference)
 
     def test_legacy_file_raises_clear_error(self, legacy_das_vader_path):

@@ -8,6 +8,7 @@ from dascore.io import FiberIO
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
+    _dereference,
     _get_attr_dict,
     _get_coord_manager,
     _get_reference_names,
@@ -50,7 +51,11 @@ class DASVaderV1(FiberIO):
         rec = resource["dDAS"][()]
         cm = _get_coord_manager(resource, rec)
         ref_names = set(_get_reference_names(resource))
-        attrs = _get_attr_dict(resource[rec["atrib"]]) if "atrib" in ref_names else {}
+        attrs = (
+            _get_attr_dict(_dereference(resource, rec["atrib"], "atrib"))
+            if "atrib" in ref_names
+            else {}
+        )
         attrs.update(
             {
                 "path": resource.filename,
