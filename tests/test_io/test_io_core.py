@@ -16,7 +16,11 @@ import rich.progress as prog
 import dascore
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
+from dascore.exceptions import (
+    InvalidFiberIOError,
+    MissingOptionalDependencyError,
+    UnknownFiberFormatError,
+)
 from dascore.io.core import (
     FiberIO,
     PatchFileSummary,
@@ -129,6 +133,28 @@ class _ReadOnlySummaryFormatter(FiberIO):
         """Only accept the explicit fallback-scan test resource."""
         path = Path(resource)
         if path.suffix == ".h5" and path.name == "fallback_scan.h5":
+            return self.name, self.version
+        return False
+
+
+class _MissingOptionalFormatter(FiberIO):
+    """A formatter whose scan path requires an unavailable optional dependency."""
+
+    name = "_missing_optional_formatter"
+    version = "1"
+
+    def scan(self, resource: Path, **kwargs):
+        """Raise a stable missing-optional error for scan coverage tests."""
+        msg = (
+            "not_optional_pkg is not installed but is required for the requested "
+            "functionality."
+        )
+        raise MissingOptionalDependencyError(msg)
+
+    def get_format(self, resource: Path) -> tuple[str, str] | bool:
+        """Only accept the explicit missing-optional test resource."""
+        path = Path(resource)
+        if path.suffix == ".opt" and path.name == "missing_optional.opt":
             return self.name, self.version
         return False
 
@@ -449,6 +475,29 @@ class TestScan:
         """Ensure scan works on a single file."""
         out = dc.scan(terra15_v6_path)
         assert len(out) == 1
+
+    def test_scan_missing_optional_dependency_raises(self, tmp_path):
+        """Scan should raise if optional deps are missing and nothing else loads."""
+        path = tmp_path / "missing_optional.opt"
+        path.write_text("placeholder")
+
+        msg = "found files that can be read if additional packages"
+        with pytest.raises(MissingOptionalDependencyError, match=msg):
+            dc.scan(path)
+
+    def test_scan_missing_optional_dependency_warns_with_other_outputs(self, tmp_path):
+        """Scan should warn if optional deps are missing but other files load."""
+        missing_path = tmp_path / "missing_optional.opt"
+        missing_path.write_text("placeholder")
+        readable_path = tmp_path / "fallback_scan.h5"
+        readable_path.write_text("placeholder")
+
+        msg = "found files that can be read if additional packages"
+        with pytest.warns(UserWarning, match=msg):
+            out = dc.scan([missing_path, readable_path])
+
+        assert len(out) == 1
+        assert out[0].file_format == _ReadOnlySummaryFormatter.name
 
 
 class TestReloadableSourcePath:

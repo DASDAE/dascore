@@ -10,6 +10,7 @@ from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
     DATA_NAMES,
+    _dereference,
     _get_attr_dict,
     _get_coord_manager,
     _get_reference_names,
@@ -19,7 +20,16 @@ from .utils import (
 
 
 class DASVaderV1(FiberIO):
-    """Support for DASVader JLD2 files."""
+    """
+    Support for DASVader JLD2 files.
+
+    Notes
+    -----
+    Legacy DASVader files may contain anonymous JLD2 object references. DASCore
+    detects those files and raises `DASVaderCompatibilityError` with compatibility
+    instructions instead of failing inside `h5py`. A known working stack for
+    such legacy files is `h5py<3.16` with `HDF5 1.14.x`.
+    """
 
     name = "DASVader"
     preferred_extensions = ("jld2",)
@@ -43,9 +53,17 @@ class DASVaderV1(FiberIO):
         rec = resource["dDAS"][()]
         cm = _get_coord_manager(resource, rec)
         ref_names = set(_get_reference_names(resource))
-        attrs = _get_attr_dict(resource[rec["atrib"]]) if "atrib" in ref_names else {}
+        attrs = (
+            _get_attr_dict(_dereference(resource, rec["atrib"], "atrib"))
+            if "atrib" in ref_names
+            else {}
+        )
         data_ref = next(iter(DATA_NAMES & ref_names), None)
-        dtype = str(resource[rec[data_ref]].dtype) if data_ref else ""
+        dtype = (
+            str(_dereference(resource, rec[data_ref], data_ref).dtype)
+            if data_ref
+            else ""
+        )
         attrs = dc.PatchAttrs.from_dict(attrs)
         return [
             PatchSummary.model_construct(

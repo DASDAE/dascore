@@ -52,6 +52,102 @@ def _clear_units_if_bool_dtype(patch):
     return patch
 
 
+def _is_text_coercible_array(data: ArrayLike) -> bool:
+    """Return True when an array can be normalized to text values.
+
+    Arrays must expose ``dtype``; non-array inputs return ``False``. Unicode
+    and fixed-width byte dtypes are accepted directly. Object arrays are only
+    accepted if every flattened element is a string/bytes instance. Empty
+    object arrays return ``False``.
+    """
+    if not hasattr(data, "dtype"):
+        return False
+    if data.dtype.kind in {"U", "S"}:
+        return True
+    if data.dtype.kind != "O":
+        return False
+    array = np.asarray(data)
+    if not array.size:
+        return False
+    string_types = (str, bytes, np.str_, np.bytes_)
+    flat = array.reshape(-1)
+    return all(isinstance(value, string_types) for value in flat)
+
+
+def _coerce_text_array(data: ArrayLike) -> np.ndarray:
+    """Normalize text-coercible arrays to unicode numpy arrays."""
+    array = np.asarray(data)
+    if not _is_text_coercible_array(array):
+        msg = "CoordString requires string-like data."
+        raise ValueError(msg)
+    if array.dtype.kind == "U":
+        return array.astype(array.dtype, copy=False)
+    if not array.size:
+        return np.empty(array.shape, dtype=f"U{array.dtype.itemsize}")
+    flat = array.reshape(-1)
+    decoded = []
+    for value in flat:
+        if isinstance(value, bytes | bytearray | np.bytes_):
+            decoded.append(bytes(value).decode("utf-8"))
+        else:
+            decoded.append(str(value))
+    return np.asarray(decoded, dtype="U").reshape(array.shape)
+
+
+def is_string_byte_serializable_array(data: ArrayLike) -> bool:
+    """Return True when an array should use fixed-width string-byte storage."""
+    data = np.asarray(data)
+    return data.dtype.kind in {"U", "S"} or (
+        data.dtype.kind == "O" and _is_text_coercible_array(data)
+    )
+
+
+def convert_strings_to_bytes(data: ArrayLike) -> np.ndarray:
+    """Encode string-like arrays as fixed-width UTF-8 bytes."""
+    data = np.asarray(data)
+    if not data.size:
+        return np.empty(data.shape, dtype="S1")
+    # Storage backends that require one fixed-width bytes dtype need the
+    # encoded values flattened first so the longest byte string can size it.
+    flat = data.reshape(-1)
+    encoded = []
+    for value in flat:
+        if isinstance(value, bytes | bytearray | np.bytes_):
+            encoded.append(bytes(value))
+        else:
+            encoded.append(str(value).encode("utf-8"))
+    max_len = max(len(item) for item in encoded)
+    out = np.asarray(encoded, dtype=f"S{max_len}")
+    return out.reshape(data.shape)
+
+
+def convert_bytes_to_strings(data: ArrayLike, original_dtype="") -> np.ndarray:
+    """Decode fixed-width bytes arrays back to the requested string form."""
+    data = np.asarray(data)
+    if not data.size:
+        dtype = original_dtype if isinstance(original_dtype, str) else ""
+        if dtype.startswith("|S") or dtype.startswith("S"):
+            return np.empty(data.shape, dtype=dtype)
+        if dtype.startswith("<U") or dtype.startswith("U"):
+            return np.empty(data.shape, dtype=dtype)
+        return np.empty(data.shape, dtype="U1")
+    # Preserve byte-backed arrays when requested. Otherwise decode back to the
+    # stored string representation using the recorded original dtype.
+    if isinstance(original_dtype, str) and (
+        original_dtype.startswith("|S") or original_dtype.startswith("S")
+    ):
+        return data.astype(original_dtype, copy=False).reshape(data.shape)
+    flat = [value.decode("utf-8") for value in data.reshape(-1)]
+    out = np.asarray(flat, dtype="U").reshape(data.shape)
+    if original_dtype in {"object", "|O"}:
+        return out.astype(object)
+    if isinstance(original_dtype, str) and (
+        original_dtype.startswith("<U") or original_dtype.startswith("U")
+    ):
+        return out.astype(original_dtype)
+    return out
+
+
 def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     """
     Create a patch from a unary ufunc.

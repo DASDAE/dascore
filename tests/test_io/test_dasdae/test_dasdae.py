@@ -6,14 +6,21 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
+import tables
 
 import dascore as dc
 from dascore.compat import random_state
+from dascore.core.coords import CoordString
+from dascore.io import dasdae as dasdae_mod
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
+    _get_attrs,
+    _get_coord_node_metadata,
     _get_coord_summary_from_node,
     _read_array_sample,
+    _save_array,
     _translate_legacy_attrs,
 )
 from dascore.utils.misc import register_func
@@ -196,6 +203,17 @@ class TestReadDASDAE:
             scanned[2].get_coord_summary("time").min,
         }
 
+    def test_read_ignores_multi_dim_coord_filters(
+        self, tmp_path, multi_dim_coords_patch
+    ):
+        """Multi-dimensional coord kwargs should bypass coord selection safely."""
+        path = tmp_path / "multi_dim_filter.h5"
+        multi_dim_coords_patch.io.write(path, "dasdae")
+
+        out = dc.read(path, quality=(0, 1))[0]
+
+        assert out == multi_dim_coords_patch
+
 
 class TestScanDASDAE:
     """Tests for scanning the dasdae format."""
@@ -281,10 +299,11 @@ class TestCoordSummaryHelpers:
     class _ArrayNode:
         """A minimal array node stub for exercising coord summary helpers."""
 
-        def __init__(self, values, *, dtype=None, attrs=None):
+        def __init__(self, values, *, dtype=None, attrs=None, forbid_full_read=False):
             self._values = np.asarray(values, dtype=dtype)
             self.shape = self._values.shape
             self.dtype = self._values.dtype
+            self.forbid_full_read = forbid_full_read
             self._v_attrs = attrs or TestCoordSummaryHelpers._Attrs(
                 is_datetime64=False,
                 is_timedelta64=False,
@@ -303,6 +322,13 @@ class TestCoordSummaryHelpers:
             return self._values[i:j]
 
         def __getitem__(self, item):
+            if (
+                self.forbid_full_read
+                and isinstance(item, slice)
+                and item == slice(None)
+            ):
+                msg = "full reads are not allowed for this test node"
+                raise AssertionError(msg)
             return self._values[item]
 
     def test_read_array_sample_restores_timedelta64(self):
@@ -318,6 +344,27 @@ class TestCoordSummaryHelpers:
         assert np.asarray(out).dtype == np.dtype("timedelta64[ns]")
         assert out == np.timedelta64(2, "ns")
 
+    def test_read_array_sample_restores_datetime64(self):
+        """Scalar coord samples should restore datetime64 metadata."""
+        node = self._ArrayNode(
+            [1, 2, 3],
+            dtype="int64",
+            attrs=self._Attrs(is_datetime64=True, is_timedelta64=False),
+        )
+
+        out = _read_array_sample(node, 1)
+
+        assert np.asarray(out).dtype == np.dtype("datetime64[ns]")
+        assert out == np.datetime64(2, "ns")
+
+    def test_read_array_sample_missing_attrs_is_backward_compatible(self):
+        """Old files without datetime/timedelta attrs should not error."""
+        node = self._ArrayNode([1, 2, 3], dtype="int64", attrs=self._Attrs())
+
+        out = _read_array_sample(node, 1)
+
+        assert out == 2
+
     def test_get_coord_summary_from_empty_node(self):
         """Empty coord nodes should fall back to NaN bounds and node dtype."""
         node = self._ArrayNode([], dtype="float64", attrs=self._Attrs(units="m"))
@@ -327,9 +374,115 @@ class TestCoordSummaryHelpers:
         assert np.isnan(out.min)
         assert np.isnan(out.max)
         assert out.dtype == "float64"
-        assert out.units == "m"
+        assert dc.get_quantity(out.units) == dc.get_quantity("m")
         assert out.dims == ("distance",)
         assert out.len == 0
+
+    def test_get_coord_node_metadata_preserves_string_dtype(self):
+        """Stored string coord metadata should recover the original dtype."""
+        node = self._ArrayNode(
+            [b"alpha", b"beta"],
+            dtype="S5",
+            attrs=self._Attrs(
+                units=None,
+                step=None,
+                is_string=True,
+                original_string_dtype="<U8",
+                is_datetime64=False,
+                is_timedelta64=False,
+            ),
+        )
+
+        out = _get_coord_node_metadata(node)
+
+        assert out["dtype"] == "<U8"
+        assert out["is_string"] is True
+        assert out["length"] == 2
+
+    def test_get_coord_node_metadata_normalizes_datetime_dtype(self):
+        """Datetime coord metadata should expose the datetime summary dtype."""
+        node = self._ArrayNode(
+            [1, 2],
+            dtype="int64",
+            attrs=self._Attrs(
+                units="s",
+                step=1,
+                step_is_timedelta64=True,
+                is_string=False,
+                is_datetime64=True,
+                is_timedelta64=False,
+            ),
+        )
+
+        out = _get_coord_node_metadata(node)
+
+        assert out["dtype"] == "datetime64"
+        assert out["step"] == np.timedelta64(1, "ns")
+
+    def test_get_coord_node_metadata_normalizes_timedelta_dtype(self):
+        """Timedelta coord metadata should expose the timedelta summary dtype."""
+        node = self._ArrayNode(
+            [1, 2],
+            dtype="int64",
+            attrs=self._Attrs(
+                units="s",
+                step=1,
+                step_is_timedelta64=True,
+                is_string=False,
+                is_datetime64=False,
+                is_timedelta64=True,
+            ),
+        )
+
+        out = _get_coord_node_metadata(node)
+
+        assert out["dtype"] == "timedelta64"
+        assert out["step"] == np.timedelta64(1, "ns")
+
+    def test_get_coord_summary_from_range_like_node_avoids_full_read(self):
+        """Range-like coords should use metadata plus endpoint samples only."""
+        node = self._ArrayNode(
+            [10, 20, 30, 40],
+            dtype="int64",
+            attrs=self._Attrs(
+                units="m",
+                step=10,
+                step_is_timedelta64=False,
+                is_datetime64=False,
+                is_timedelta64=False,
+                is_string=False,
+            ),
+            forbid_full_read=True,
+        )
+
+        out = _get_coord_summary_from_node(node, ("distance",))
+
+        assert out.min == 10
+        assert out.max == 40
+        assert out.step == 10
+        assert out.len == 4
+
+    def test_get_coord_summary_from_string_node_reads_data(self):
+        """String coord summaries should fall back to full data reconstruction."""
+        node = self._ArrayNode(
+            [b"gamma", b"alpha", b"beta"],
+            dtype="S5",
+            attrs=self._Attrs(
+                units=None,
+                step=None,
+                is_string=True,
+                original_string_dtype="<U8",
+                is_datetime64=False,
+                is_timedelta64=False,
+            ),
+        )
+
+        out = _get_coord_summary_from_node(node, ("station",))
+
+        assert out.min == "alpha"
+        assert out.max == "gamma"
+        assert out.step is None
+        assert out.dtype == "<U8"
 
 
 class TestRoundTrips:
@@ -447,3 +600,107 @@ class TestRoundTrips:
         new_spool = dc.spool(path, file_format="DASDAE")
         out_patch = new_spool[0]
         assert in_patch == out_patch
+
+    def test_roundtrip_string_aux_coord(self, random_patch, tmp_path_factory):
+        """Attached string coordinates should round-trip through DASDAE."""
+        path = tmp_path_factory.mktemp("roundtrip_string_coord") / "out.h5"
+        distance = random_patch.get_coord("distance")
+        labels = np.array([f"sensor_{num:03d}" for num in range(len(distance))])
+        patch = random_patch.update_coords(sensor=("distance", labels))
+        patch.io.write(path, "dasdae")
+        out = dc.read(path, file_format="DASDAE")[0]
+        coord = out.get_coord("sensor")
+        assert isinstance(coord, CoordString)
+        assert np.array_equal(coord.values, labels)
+
+    def test_roundtrip_string_dim_coord(self, random_patch, tmp_path_factory):
+        """String dimension coordinates should round-trip through DASDAE."""
+        path = tmp_path_factory.mktemp("roundtrip_string_dim") / "out.h5"
+        distance = random_patch.get_coord("distance")
+        labels = np.array([f"ch_{num:03d}" for num in range(len(distance))])
+        patch = random_patch.update_coords(distance=labels)
+        patch.io.write(path, "dasdae")
+        out = dc.read(path, file_format="DASDAE")[0]
+        coord = out.get_coord("distance")
+        assert isinstance(coord, CoordString)
+        assert np.array_equal(coord.values, labels)
+
+    def test_scan_includes_string_coords(self, random_patch, tmp_path_factory):
+        """String coordinates should appear in lossy scan summaries."""
+        path = tmp_path_factory.mktemp("scan_string_coord") / "out.h5"
+        distance = random_patch.get_coord("distance")
+        labels = np.array([f"sensor_{num:03d}" for num in range(len(distance))])
+        patch = random_patch.update_coords(sensor=("distance", labels))
+        patch.io.write(path, "dasdae")
+        summary = dc.scan(path)[0]
+        assert "sensor" in summary.coords
+        assert summary.coords["sensor"].min == "sensor_000"
+        assert summary.coords["sensor"].step is None
+
+    def test_scan_to_df_includes_string_coord_columns(
+        self, random_patch, tmp_path_factory
+    ):
+        """Flattened scan results should expose string coord summary fields."""
+        path = tmp_path_factory.mktemp("scan_string_coord_df") / "out.h5"
+        distance = random_patch.get_coord("distance")
+        labels = np.array([f"sensor_{num:03d}" for num in range(len(distance))])
+        patch = random_patch.update_coords(sensor=("distance", labels))
+        patch.io.write(path, "dasdae")
+        df = dc.scan_to_df(path)
+        row = df.iloc[0]
+        assert row["sensor_min"] == "sensor_000"
+        assert row["sensor_max"] == labels[-1]
+        assert pd.isnull(row["sensor_step"])
+
+
+class TestStringArrayHelpers:
+    """Tests for DASDAE string-array integration paths."""
+
+    def test_non_string_object_array_not_converted_to_bytes(
+        self, tmp_path, monkeypatch
+    ):
+        """Object arrays with non-string content should not be stringified."""
+        path = tmp_path / "object_array.h5"
+        data = np.array([1, 2], dtype=object)
+
+        def _raise_if_called(data):
+            msg = "non-string object arrays should not be string-converted"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(
+            dasdae_mod.utils, "convert_strings_to_bytes", _raise_if_called
+        )
+        with tables.open_file(path, mode="w") as h5:
+            group = h5.create_group("/", "waveforms")
+            with pytest.raises(TypeError, match="object arrays"):
+                _save_array(data, "obj", group=group, h5=h5)
+
+
+class TestAttrReading:
+    """Tests for DASDAE attr extraction helpers."""
+
+    class _Attrs(dict):
+        """Support pytables-like attr access with warning side effects."""
+
+        def _f_list(self):
+            return list(self)
+
+        def __getitem__(self, item):
+            import warnings
+
+            warnings.warn("deprecated attr read", DeprecationWarning, stacklevel=2)
+            return super().__getitem__(item)
+
+    class _Group:
+        """Minimal patch-group stub for _get_attrs."""
+
+        def __init__(self, attrs):
+            self._v_attrs = attrs
+
+    def test_get_attrs_suppresses_deprecation_warning(self):
+        """Deprecation warnings from attr reads should be suppressed in the loop."""
+        group = self._Group(self._Attrs(_attrs_station="A01"))
+
+        out = _get_attrs(group)
+
+        assert out == {"station": "A01"}

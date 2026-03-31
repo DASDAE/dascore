@@ -180,6 +180,42 @@ print(coords)
 
 Most of the other `CoordManager` features are primarily used internally by DASCore, but you can read more about them in the [Coordinate Tutorial](coords.qmd).
 
+String dimension labels are also supported. These are useful when a dimension
+is identified by names or channel labels rather than numeric positions.
+
+```{python}
+import numpy as np
+import re
+
+import dascore as dc
+
+patch = dc.get_example_patch().select(distance=slice(0, 4), samples=True)
+patch = patch.new(dims=("channel", "time"))
+labels = np.array(["ch_a", "ch_b", "aux_1", "aux_2"])
+patch = patch.update_coords(channel=labels)
+
+# Exact-match selection works on string coordinates.
+selected = patch.select(channel="ch_b")
+print(selected.get_coord("channel").values)
+
+# Unix-style wildcards also work.
+matched = patch.select(channel="ch_*")
+print(matched.get_coord("channel").values)
+
+# Compiled regular expressions are also supported.
+regex_matched = patch.select(channel=re.compile(r"^aux_\d$"))
+print(regex_matched.get_coord("channel").values)
+
+# Sorting also works.
+sorted_patch = patch.sort_coords("channel", reverse=True)
+print(sorted_patch.get_coord("channel").values)
+```
+
+String coordinates support exact matching, wildcard matching with `*` and `?`,
+compiled regular expressions, boolean-mask selection, and sorting, but they do
+not support units or numeric range selection. Avoid using `*` or `?` in labels
+you intend to select literally.
+
 ## Attrs
 
 The metadata stored in `Patch.attrs` is a [pydantic model](https://docs.pydantic.dev/usage/models/) which enforces a schema and provides validation. [`PatchAttrs.get_summary_df`](`dascore.utils.models.DascoreBaseModel.get_summary_df`) generates a table of the attribute descriptions:

@@ -50,6 +50,18 @@ random_array = np.random.rand(10)
 random_coord = get_coord(data=random_array)
 ```
 
+String arrays create string-backed coordinates.
+
+```{python}
+import numpy as np
+
+from dascore.core import get_coord
+
+coord = get_coord(data=np.array(["sensor_001", "sensor_002", "sensor_003"]))
+print(type(coord).__name__)
+print(coord.values)
+```
+
 ### Update
 
 Update uses the existing coordinate as a template and returns a coordinate with some part modified. 
@@ -167,6 +179,51 @@ coord = get_coord(start=0, stop=21, step=1, units='m')
 new_coord, indexer = coord.select((14*ft, 50 * ft))
 print(new_coord) 
 ```
+
+## String Coordinates
+
+String coordinates support exact matching, wildcard matching with `*` and `?`,
+compiled regular expressions, boolean-mask selection, and sorting. They are
+useful for channel names, sensor identifiers, and other categorical labels that
+do not have meaningful numeric spacing.
+
+```{python}
+import numpy as np
+import re
+
+from dascore.core import get_coord
+
+coord = get_coord(data=np.array(["ch_a", "ch_b", "aux_1", "aux_2"]))
+
+selected, indexer = coord.select("ch_b")
+print(selected.values)
+print(indexer)
+
+matched, matched_indexer = coord.select("ch_*")
+print(matched.values)
+print(matched_indexer)
+
+regex_matched, regex_indexer = coord.select(re.compile(r"^aux_\d$"))
+print(regex_matched.values)
+print(regex_indexer)
+
+sorted_coord, sort_indexer = coord.sort()
+print(sorted_coord.values)
+print(sort_indexer)
+```
+
+Unlike numeric, datetime, or timedelta coordinates, string coordinates do not
+support:
+
+- units
+- range-style selection such as `(start, stop)`
+- relative selection
+- range calculations such as `coord_range()`
+
+Selection for string coordinates should use exact values, wildcard patterns,
+compiled regular expressions, or boolean masks. Strings containing `*` or `?`
+are treated as wildcard patterns, so avoid those characters in labels you
+intend to select literally.
 
 ### Units
 

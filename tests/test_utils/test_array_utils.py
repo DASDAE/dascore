@@ -18,7 +18,10 @@ from dascore.utils.array import (
     PatchUFunc,
     apply_array_func,
     apply_ufunc,
+    convert_bytes_to_strings,
+    convert_strings_to_bytes,
     hash_numpy_array,
+    is_string_byte_serializable_array,
 )
 
 
@@ -258,11 +261,95 @@ class TestPatchUFunc:
         expected_shape[dist_axis] = 1
         assert result.shape == tuple(expected_shape)
 
-        # Verify it's actually summing along the distance axis
-        expected = np.expand_dims(
-            np.sum(random_patch.data, axis=dist_axis), axis=dist_axis
+
+class TestStringArrayHelpers:
+    """Tests for generic string-array serialization helpers."""
+
+    def test_string_byte_serializable_array_policy(self):
+        """Only true string-like arrays should take the byte-serialization path."""
+        assert is_string_byte_serializable_array(np.array(["alpha"]))
+        assert is_string_byte_serializable_array(np.array([b"alpha"], dtype="S5"))
+        assert is_string_byte_serializable_array(np.array(["alpha"], dtype=object))
+        assert not is_string_byte_serializable_array(np.array([1, 2], dtype=object))
+
+    def test_convert_strings_to_bytes(self):
+        """Unicode strings should convert to fixed-width bytes."""
+        out = convert_strings_to_bytes(np.array(["alpha", "cafe", "北京"]))
+        assert out.dtype.kind == "S"
+
+    def test_convert_empty_strings_to_bytes(self):
+        """Empty string arrays should still have a concrete byte dtype."""
+        out = convert_strings_to_bytes(np.array([], dtype="U4"))
+        assert out.dtype == np.dtype("S1")
+        assert out.size == 0
+
+    def test_convert_shaped_empty_strings_to_bytes_preserves_shape(self):
+        """Shaped empty inputs should keep their original array shape."""
+        data = np.empty((0, 3), dtype="U4")
+        out = convert_strings_to_bytes(data)
+        assert out.shape == data.shape
+        assert out.dtype == np.dtype("S1")
+
+    def test_convert_bytes_like_strings_to_bytes(self):
+        """Existing byte-like entries should round-trip without repr mangling."""
+        data = np.array(
+            [b"alpha", np.bytes_(b"beta"), bytearray(b"gamma")], dtype=object
         )
-        assert np.allclose(result.data, expected)
+        out = convert_strings_to_bytes(data)
+        assert np.array_equal(out, np.array([b"alpha", b"beta", b"gamma"]))
+
+    def test_convert_bytes_to_strings(self):
+        """UTF-8 bytes should convert back to unicode strings."""
+        data = np.array([b"alpha", "北京".encode()], dtype="S6")
+        out = convert_bytes_to_strings(data, "<U8")
+        assert out.dtype.kind == "U"
+        assert np.array_equal(out, np.array(["alpha", "北京"]))
+
+    def test_convert_empty_bytes_to_strings(self):
+        """Empty byte arrays should decode to an empty unicode array."""
+        out = convert_bytes_to_strings(np.array([], dtype="S1"), original_dtype=object)
+        assert out.dtype == np.dtype("U1")
+        assert out.size == 0
+
+    def test_convert_shaped_empty_bytes_to_strings_preserves_shape(self):
+        """Shaped empty byte arrays should keep their original array shape."""
+        data = np.empty((0, 3), dtype="S1")
+        out = convert_bytes_to_strings(data, original_dtype="<U4")
+        assert out.shape == data.shape
+        assert out.dtype == np.dtype("<U4")
+
+    def test_convert_empty_bytes_to_unicode_strings(self):
+        """Empty byte arrays should preserve explicit unicode dtypes."""
+        out = convert_bytes_to_strings(np.array([], dtype="S1"), original_dtype="<U4")
+        assert out.dtype == np.dtype("<U4")
+        assert out.size == 0
+
+    def test_convert_empty_bytes_to_fixed_width_bytes(self):
+        """Empty byte arrays should preserve explicit byte dtypes."""
+        out = convert_bytes_to_strings(np.array([], dtype="S1"), original_dtype="|S4")
+        assert out.dtype == np.dtype("|S4")
+        assert out.size == 0
+
+    def test_convert_bytes_to_object_strings(self):
+        """Object-backed string arrays should restore object dtype."""
+        data = np.array([b"alpha", b"beta"], dtype="S5")
+        out = convert_bytes_to_strings(data, "object")
+        assert out.dtype == object
+        assert np.array_equal(out, np.array(["alpha", "beta"], dtype=object))
+
+    def test_convert_bytes_to_fixed_width_bytes(self):
+        """Fixed-width byte dtypes should be preserved without decoding."""
+        data = np.array([b"alpha", b"beta"], dtype="S5")
+        out = convert_bytes_to_strings(data, "|S5")
+        assert out.dtype == np.dtype("|S5")
+        assert np.array_equal(out, data)
+
+    def test_convert_bytes_to_default_unicode_strings(self):
+        """Unknown source dtypes should fall back to unicode arrays."""
+        data = np.array([b"alpha", b"beta"], dtype="S5")
+        out = convert_bytes_to_strings(data)
+        assert out.dtype.kind == "U"
+        assert np.array_equal(out, np.array(["alpha", "beta"]))
 
     def test_introspection(self):
         """Test that generated ufunc has proper introspection."""
