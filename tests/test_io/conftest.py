@@ -254,7 +254,9 @@ def http_range_das_path(http_test_data_root, ensure_http_fetch_file):
                 except (URLError, OSError):
                     time.sleep(0.1)
             else:
-                pytest.fail("Range-capable HTTP test server did not become ready in time.")
+                pytest.fail(
+                    "Range-capable HTTP test server did not become ready in time."
+                )
         yield UPath(f"http://{host}:{port}/das")
     finally:
         with fail_on_timeout(10, "http_range_das_path teardown"):

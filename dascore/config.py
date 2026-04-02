@@ -50,7 +50,7 @@ class DascoreConfig(BaseModel):
     )
     directory_index_map_path: Path = Field(
         default_factory=lambda: _get_cache_root() / "indexes" / "cache_paths.json",
-        description="Path to the JSON cache that records external index-file locations.",
+        description="Path to the cache that records external index-file locations.",
     )
     index_query_buffer: np.timedelta64 = Field(
         default=np.timedelta64(1, "s"),
