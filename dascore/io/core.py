@@ -6,7 +6,6 @@ Das Data.
 from __future__ import annotations
 
 import inspect
-import os.path
 import warnings
 from collections import defaultdict
 from collections.abc import Generator
@@ -19,7 +18,7 @@ import pandas as pd
 from pydantic import ConfigDict, Field, model_validator
 
 import dascore as dc
-from dascore.compat import Progress
+from dascore.compat import Progress, UPath
 from dascore.constants import (
     PROGRESS_LEVELS,
     VALID_DATA_CATEGORIES,
@@ -27,6 +26,7 @@ from dascore.constants import (
     PatchType,
     SpoolType,
     max_lens,
+    path_types,
     timeable_types,
 )
 from dascore.core.attrs import str_validator
@@ -38,6 +38,7 @@ from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     PatchAttributeError,
+    RemoteCacheError,
     UnknownFiberFormatError,
 )
 from dascore.utils.io import IOResourceManager, get_handle_from_resource
@@ -49,8 +50,10 @@ from dascore.utils.models import (
     DateTime64,
     TimeDelta64,
 )
+from dascore.utils.paths import coerce_to_upath, is_local_path
 from dascore.utils.plugins import get_entry_point_loaders
 from dascore.utils.progress import track
+from dascore.utils.remote_io import get_remote_cache_scope, remote_cache_scope
 
 
 class PatchFileSummary(DascoreBaseModel):
@@ -106,20 +109,20 @@ class PatchFileSummary(DascoreBaseModel):
 def _scan_result_to_summary(
     attrs: PatchSummary,
     *,
-    path: str | Path | None = None,
-    file_format: str | None = None,
-    file_version: str | None = None,
+    source_path: str | Path | UPath | None = None,
+    source_format: str | None = None,
+    source_version: str | None = None,
     source_patch_id: str | None = None,
 ) -> PatchSummary:
     """Convert scan metadata into a patch summary."""
     if isinstance(attrs, PatchSummary) and all(
         value in (None, "")
-        for value in (path, file_format, file_version, source_patch_id)
+        for value in (source_path, source_format, source_version, source_patch_id)
     ):
         return attrs
-    summary_path = "" if path in (None, "") else path
-    summary_format = "" if file_format in (None, "") else file_format
-    summary_version = "" if file_version in (None, "") else file_version
+    normalized_source_path = "" if source_path in (None, "") else source_path
+    normalized_source_format = "" if source_format in (None, "") else source_format
+    normalized_source_version = "" if source_version in (None, "") else source_version
     summary_source_patch_id = (
         "" if source_patch_id in (None, "") else str(source_patch_id)
     )
@@ -130,9 +133,9 @@ def _scan_result_to_summary(
             dims=tuple(attrs.dims),
             shape=tuple(attrs.shape),
             dtype=attrs.dtype,
-            path=summary_path or attrs.path,
-            file_format=summary_format or attrs.file_format,
-            file_version=summary_version or attrs.file_version,
+            source_path=normalized_source_path or attrs.source_path,
+            source_format=normalized_source_format or attrs.source_format,
+            source_version=normalized_source_version or attrs.source_version,
             source_patch_id=summary_source_patch_id or attrs.source_patch_id,
         )
     if isinstance(attrs, dc.PatchAttrs):
@@ -151,16 +154,16 @@ def _scan_result_to_summary(
 def _patch_to_summary(
     patch: dc.Patch,
     *,
-    path: str | Path | None = None,
-    file_format: str | None = None,
-    file_version: str | None = None,
+    source_path: str | Path | UPath | None = None,
+    source_format: str | None = None,
+    source_version: str | None = None,
 ) -> PatchSummary:
     """Convert a loaded patch into a summary tied to its source."""
     return _scan_result_to_summary(
         patch.summary,
-        path=path or "",
-        file_format=file_format,
-        file_version=file_version,
+        source_path=source_path or "",
+        source_format=source_format,
+        source_version=source_version,
     )
 
 
@@ -196,9 +199,9 @@ def _load_patch_summary(summary: PatchSummary, **kwargs) -> dc.Patch:
     """Internal helper for reloading a patch from a PatchSummary."""
     source_patch_id = summary.source_patch_id
     read_kwargs = {
-        "path": summary.path,
-        "file_format": summary.file_format or None,
-        "file_version": summary.file_version or None,
+        "path": summary.source_path,
+        "file_format": summary.source_format or None,
+        "file_version": summary.source_version or None,
         "source_patch_id": source_patch_id or None,
     }
     read_kwargs.update(kwargs)
@@ -214,18 +217,20 @@ def _load_patch_summary(summary: PatchSummary, **kwargs) -> dc.Patch:
         raise PatchAttributeError(msg) from exc
 
 
-def _get_reloadable_source_path(resource, fallback: str | Path | None = None) -> str:
-    """Return a reloadable filesystem path for resources that expose one."""
+def _get_reloadable_source_path(
+    resource, fallback: str | Path | UPath | None = None
+) -> UPath | str:
+    """Return a normalized reloadable path for resources that expose one."""
     candidates = [fallback, resource]
     for name in ("source", "filename", "name", "path"):
         candidates.append(getattr(resource, name, None))
     for candidate in candidates:
-        if candidate in (None, ""):
+        if candidate in {None, ""}:
             continue
         if isinstance(candidate, IOResourceManager):
             candidate = candidate.source
-        if isinstance(candidate, str | Path):
-            return str(candidate)
+        if isinstance(candidate, str | Path | UPath):
+            return coerce_to_upath(candidate)
     return ""
 
 
@@ -463,10 +468,18 @@ class _FiberIOManager:
         """
         with IOResourceManager(path) as man:
             path = man.source
-            if not os.path.exists(path):
+            if isinstance(path, UPath):
+                exists = path.exists()
+                suffix = path.suffix
+            else:
+                local_path = (
+                    coerce_to_upath(path) if not is_local_path(path) else Path(path)
+                )
+                exists = local_path.exists()
+                suffix = local_path.suffix
+            if not exists:
                 raise FileNotFoundError(f"{path} does not exist.")
             # get extension (str minus .)
-            suffix = Path(path).suffix
             ext = suffix[1:] if suffix else None
             input_type = self._get_input_type_name(path)
             iterator = self.yield_fiberio(
@@ -488,6 +501,8 @@ class _FiberIOManager:
                     # raise, in which case the format doesn't belong.
                     func_input = man.get_resource(required_type)
                     format_version = func(func_input, _pre_cast=True)
+                except RemoteCacheError:
+                    raise
                 # For robustness, we need to catch everything else here.
                 except Exception:
                     continue
@@ -505,8 +520,10 @@ class _FiberIOManager:
         # This effectively acts as a dispatch to determine which type of
         # FiberIO could possibly read the obj.
         out = "file"
-        if isinstance(obj, str | Path) and (path := Path(obj)).exists():
-            out = "directory" if path.is_dir() else "file"
+        if isinstance(obj, str | Path | UPath):
+            path = coerce_to_upath(obj)
+            if path.exists():
+                out = "directory" if path.is_dir() else "file"
         return out
 
 
@@ -691,7 +708,20 @@ class FiberIO:
         """Determine if the resource was updated after specified mtime."""
         if not timestamp:
             return True
-        return Path(resource).stat().st_mtime > timestamp
+        is_remote = not is_local_path(resource)
+        try:
+            path = coerce_to_upath(resource) if is_remote else Path(resource)
+            return path.stat().st_mtime > timestamp
+        except Exception:
+            if not is_remote:
+                return False
+            warnings.warn(
+                "Remote path backend does not expose reliable mtime; "
+                "continuing scan without timestamp filtering.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return True
 
     def __hash__(self):
         """FiberIO instances should be uniquely defined by (format, version)."""
@@ -717,7 +747,7 @@ class FiberIO:
 
 
 def read(
-    path: str | Path | IOResourceManager,
+    path: path_types | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     time: tuple[timeable_types | None, timeable_types | None] | None = None,
@@ -761,31 +791,34 @@ def read(
     >>>
     >>> patch = dc.read(file_path)
     """
-    with IOResourceManager(path) as man:
-        if not file_format or not file_version:
-            file_format, file_version = get_format(
-                man,
-                file_format=file_format,
-                file_version=file_version,
+    with remote_cache_scope("read"):
+        with IOResourceManager(path) as man:
+            if not file_format or not file_version:
+                file_format, file_version = get_format(
+                    man,
+                    file_format=file_format,
+                    file_version=file_version,
+                )
+            fiber_io = FiberIO.manager.get_fiberio(
+                format=file_format, version=file_version
             )
-        fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
-        required_type = fiber_io.read._required_type
-        path = man.get_resource(required_type)
-        out = fiber_io.read(
-            path,
-            file_version=file_version,
-            time=time,
-            distance=distance,
-            _pre_cast=True,
-            **kwargs,
-        )
-        # if resource has a seek go back to 0 so this stream can be re-used.
-        getattr(path, "seek", lambda x: None)(0)
-        return out
+            required_type = fiber_io.read._required_type
+            path = man.get_resource(required_type)
+            out = fiber_io.read(
+                path,
+                file_version=file_version,
+                time=time,
+                distance=distance,
+                _pre_cast=True,
+                **kwargs,
+            )
+            # if resource has a seek go back to 0 so this stream can be re-used.
+            getattr(path, "seek", lambda x: None)(0)
+            return out
 
 
 def scan_to_df(
-    path: Path | str | PatchType | SpoolType | IOResourceManager | pd.DataFrame,
+    path: path_types | PatchType | SpoolType | IOResourceManager | pd.DataFrame,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -843,13 +876,27 @@ def scan_to_df(
 def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):
     """Yield scan candidates."""
     for el in iterate(patch_source):
-        if isinstance(el, str | Path) and (path := Path(el)).exists():
-            generator = _iter_filesystem(
-                path, ext=ext, timestamp=mtime, include_directories=include_directories
-            )
-            yield from generator
-        else:
-            yield el
+        if isinstance(el, str | Path | UPath):
+            path = coerce_to_upath(el) if not is_local_path(el) else Path(el)
+            if path.exists():
+                generator = _iter_filesystem(
+                    path,
+                    ext=ext,
+                    timestamp=mtime,
+                    include_directories=include_directories,
+                )
+                try:
+                    candidate = next(generator)
+                except StopIteration:
+                    continue
+                while True:
+                    signal = yield candidate
+                    try:
+                        candidate = generator.send(signal)
+                    except StopIteration:
+                        break
+                continue
+        yield el
 
 
 def _get_fiber_io_and_req_type(
@@ -920,7 +967,7 @@ def _handle_missing_optionals(outputs, optional_dep_dict):
 
 
 def scan(
-    path: Path | str | PatchType | SpoolType | IOResourceManager,
+    path: path_types | PatchType | SpoolType | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     ext: str | None = None,
@@ -978,7 +1025,7 @@ def scan(
     length = _count_generator(_generator)
     generator = _iterate_scan_inputs(path, ext=ext, mtime=timestamp)
     # We want to avoid printing long object str reprs, so only print paths.
-    resource_str = path if isinstance(path, str | Path) else ""
+    resource_str = path if isinstance(path, str | Path | UPath) else ""
     tracker = track(
         generator,
         f"scan {resource_str}",
@@ -987,71 +1034,80 @@ def scan(
         min_length=20,
     )
     try:
-        for patch_source in tracker:
-            # Normalize direct patch inputs to summary objects.
-            if isinstance(patch_source, dc.Patch):
-                out.append(
-                    _patch_to_summary(
-                        patch_source,
-                        path=_get_reloadable_source_path(
-                            patch_source.summary.path,
-                            fallback=patch_source.summary.path,
-                        ),
-                    )
-                )
-                continue
-            with IOResourceManager(patch_source) as man:
-                try:
-                    fiber_io, resource = _get_fiber_io_and_req_type(
-                        man,
-                        file_format=file_format,
-                        file_version=file_version,
-                        fiber_io_hint=fiber_io_hint,
-                    )
-                except UnknownFiberFormatError:  # skip bad entities
-                    continue
-                # Cache this fiber io to given preferential treatment next
-                # iteration. This speeds up the common case of many files
-                # with the same format.
-                fiber_io_hint[fiber_io.input_type] = fiber_io
-                # Special handling of directory FiberIOs.
-                if fiber_io.input_type == "directory":
-                    # Directory fiber_io should send skip signal back to generator
-                    # so that no files/sub directories are scanned.
-                    generator.send("skip")
-                    if not fiber_io._updated_after(resource, timestamp):
-                        continue
-                    # Directory FiberIO may need to know the time after which
-                    # contents should be returned.
-                    source = fiber_io.scan(
-                        resource, timestamp=timestamp, _pre_cast=True
-                    )
-                else:
-                    try:
-                        source = fiber_io.scan(resource, _pre_cast=True)
-                    except MissingOptionalDependencyError as ex:
-                        missing_optional_deps[ex.msg.split(" ")[0]] += 1
-                        continue
-                    # scan() is best-effort across many resources, so surface
-                    # dependency/compatibility problems as warnings and keep
-                    # scanning the remaining files.
-                    except DependencyError as exc:
-                        warnings.warn(str(exc), UserWarning, stacklevel=2)
-                        continue
-                    # This happens if the file is corrupt see #346.
-                    except (OSError, InvalidFiberFileError, ValueError, TypeError):
-                        warnings.warn(f"Failed to scan {resource}", UserWarning)
-                        continue
-                source_path = _get_reloadable_source_path(resource, fallback=man.source)
-                for attr in source:
+        with remote_cache_scope("metadata"):
+            for patch_source in tracker:
+                # Normalize direct patch inputs to summary objects.
+                if isinstance(patch_source, dc.Patch):
                     out.append(
-                        _scan_result_to_summary(
-                            attr,
-                            path=source_path,
-                            file_format=fiber_io.name,
-                            file_version=fiber_io.version,
+                        _patch_to_summary(
+                            patch_source,
+                            source_path=_get_reloadable_source_path(
+                                patch_source.summary.source_path
+                            ),
                         )
                     )
+                    continue
+                with IOResourceManager(patch_source) as man:
+                    try:
+                        fiber_io, resource = _get_fiber_io_and_req_type(
+                            man,
+                            file_format=file_format,
+                            file_version=file_version,
+                            fiber_io_hint=fiber_io_hint,
+                        )
+                    except UnknownFiberFormatError:  # skip bad entities
+                        continue
+                    # Cache this fiber io to given preferential treatment next
+                    # iteration. This speeds up the common case of many files
+                    # with the same format.
+                    fiber_io_hint[fiber_io.input_type] = fiber_io
+                    # Special handling of directory FiberIOs.
+                    if fiber_io.input_type == "directory":
+                        # Directory fiber_io should send skip signal back to generator
+                        # so that no files/sub directories are scanned.
+                        generator.send("skip")
+                        if not fiber_io._updated_after(resource, timestamp):
+                            continue
+                        # Directory FiberIO may need to know the time after which
+                        # contents should be returned.
+                        source = fiber_io.scan(
+                            resource, timestamp=timestamp, _pre_cast=True
+                        )
+                    else:
+                        try:
+                            source = fiber_io.scan(resource, _pre_cast=True)
+                        except MissingOptionalDependencyError as ex:
+                            missing_optional_deps[ex.msg.split(" ")[0]] += 1
+                            continue
+                        # scan() is best-effort across many resources, so surface
+                        # dependency/compatibility problems as warnings and keep
+                        # scanning the remaining files.
+                        except DependencyError as exc:
+                            warnings.warn(str(exc), UserWarning, stacklevel=2)
+                            continue
+                        except RemoteCacheError:
+                            raise
+                        # This happens if the file is corrupt see #346.
+                        except (
+                            OSError,
+                            InvalidFiberFileError,
+                            ValueError,
+                            TypeError,
+                        ):
+                            warnings.warn(f"Failed to scan {resource}", UserWarning)
+                            continue
+                    source_path = _get_reloadable_source_path(
+                        resource, fallback=man.source
+                    )
+                    for attr in source:
+                        out.append(
+                            _scan_result_to_summary(
+                                attr,
+                                source_path=source_path,
+                                source_format=fiber_io.name,
+                                source_version=fiber_io.version,
+                            )
+                        )
     # Ensure ctl + c exists scan.
     except KeyboardInterrupt:
         getattr(progress, "stop", lambda: None)()
@@ -1062,7 +1118,7 @@ def scan(
 
 
 def get_format(
-    path: str | Path | IOResourceManager,
+    path: path_types | IOResourceManager,
     file_format: str | None = None,
     file_version: str | None = None,
     fiber_io_hint: dict[str, FiberIO] | None = None,
@@ -1101,15 +1157,21 @@ def get_format(
     >>>
     >>> file_format, file_version = dc.get_format(file_path)
     """
-    out = FiberIO.manager._get_format(
-        path, file_format, file_version, fiber_io_hint, **kwargs
-    )
+    scope = get_remote_cache_scope()
+    if scope == "read":
+        return FiberIO.manager._get_format(
+            path, file_format, file_version, fiber_io_hint, **kwargs
+        )
+    with remote_cache_scope("metadata"):
+        out = FiberIO.manager._get_format(
+            path, file_format, file_version, fiber_io_hint, **kwargs
+        )
     return out
 
 
 def write(
     patch_or_spool,
-    path: str | Path,
+    path: path_types,
     file_format: str,
     file_version: str | None = None,
     **kwargs,

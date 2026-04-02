@@ -99,6 +99,7 @@ class Febus2(FiberIO):
         resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
+        source_patch_id=(),
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a febus spool of patches."""
@@ -106,7 +107,7 @@ class Febus2(FiberIO):
             resource,
             time=time,
             distance=distance,
-            source_patch_id=kwargs.get("source_patch_id"),
+            source_patch_id=source_patch_id,
             attr_cls=FebusPatchAttrs,
         )
         return dc.spool(patches)

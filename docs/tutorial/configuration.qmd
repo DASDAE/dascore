@@ -1,0 +1,21 @@
+# Runtime Configuration
+
+DASCore exposes a small runtime configuration surface through `dascore.config`.
+
+```python
+from pathlib import Path
+
+from dascore.config import get_config, set_config
+
+print(get_config().remote_cache_dir)
+
+with set_config(remote_cache_dir=Path("/tmp/dascore-remote-cache")):
+    ...
+```
+
+Configuration changes affect subsequent operations only. For example, changing `remote_cache_dir` changes where future remote-file materializations are cached.
+
+For remote IO settings such as `allow_remote_cache`,
+`allow_remote_cache_for_metadata`, and `warn_on_remote_cache`, plus examples
+of metadata-only vs read-time behavior, see
+[Working with Remote Patches](remote_patches.qmd).

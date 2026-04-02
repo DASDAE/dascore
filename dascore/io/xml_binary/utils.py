@@ -12,10 +12,12 @@ from pydantic import ConfigDict
 from pydantic.alias_generators import to_pascal
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.core import get_coord, get_coord_manager
 from dascore.utils.misc import iterate
 from dascore.utils.models import BaseModel, DateTime64
 from dascore.utils.pd import adjust_segments, filter_df
+from dascore.utils.remote_io import ensure_local_file
 from dascore.utils.time import to_float
 from dascore.utils.xml import xml_to_dict
 
@@ -67,7 +69,7 @@ class XMLBinaryInfo(_XMLModel):
 @lru_cache
 def _read_xml_metadata(path):
     """A function to read metadata from the xml file."""
-    contents = xml_to_dict(path.read_bytes())
+    contents = xml_to_dict(ensure_local_file(path).read_bytes())
     return XMLBinaryInfo.model_validate(contents)
 
 
@@ -182,7 +184,8 @@ def _read_single_file(path, metadata, time, distance, attr_cls):
         {"time": time_coord, "distance": distance_coord},
         dims=STANDARD_DIMS,
     )
-    memmap = np.memmap(path, dtype=metadata.data_type)
+    local_path = ensure_local_file(path) if isinstance(path, UPath) else Path(path)
+    memmap = np.memmap(local_path, dtype=metadata.data_type)
     size = np.prod(cm.shape)
     assert memmap.size == size, f"wrong data shape for {path}"
     data = memmap.reshape(cm.shape)
@@ -199,7 +202,7 @@ def _read_single_file(path, metadata, time, distance, attr_cls):
 def _load_patches(paths, metadata, time, distance, attr_cls):
     """Load the data file or file into a patch."""
     # Fast case for single file.
-    if isinstance(paths, Path) and paths.is_file():
+    if isinstance(paths, Path | UPath) and paths.is_file():
         return _read_single_file(paths, metadata, time, distance, attr_cls)
     # Since there could be **MANY** files, we have to create a mini-index
     # here to determine which files to read. Under normal circumstances
@@ -212,7 +215,7 @@ def _load_patches(paths, metadata, time, distance, attr_cls):
     # Then we can just recurse into this function.
     out = [
         _load_patches(
-            Path(ser["path"]),
+            ser["path"],
             metadata=metadata,
             time=time,
             distance=distance,
@@ -235,7 +238,7 @@ def _paths_to_scan_patches(
     paths = list(iterate(paths))
     if timestamp is not None:
         ts = to_float(timestamp)
-        paths = [x for x in paths if Path(x).stat().st_mtime >= ts]
+        paths = [x for x in paths if x.stat().st_mtime >= ts]
     if not paths:
         return []
     base_attrs = _make_base_attrs_dict(metadata)

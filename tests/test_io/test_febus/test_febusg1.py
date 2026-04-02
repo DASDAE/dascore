@@ -89,9 +89,9 @@ class TestG1Scan:
         assert len(attrs) == 1
         attr = attrs[0]
         assert isinstance(attr, dc.PatchSummary)
-        assert not attr.path
-        assert not attr.file_format
-        assert not attr.file_version
+        assert not attr.source_path
+        assert not attr.source_format
+        assert not attr.source_version
 
     def test_public_scan_adds_source_metadata(self, g1_path):
         """Public scan should attach reload metadata for G1 files."""
@@ -100,9 +100,9 @@ class TestG1Scan:
         assert len(attrs) == 1
         attr = attrs[0]
         assert isinstance(attr, dc.PatchSummary)
-        assert str(g1_path) == str(attr.path)
-        assert attr.file_format == g1.name
-        assert attr.file_version == g1.version
+        assert str(g1_path) == str(attr.source_path)
+        assert attr.source_format == g1.name
+        assert attr.source_version == g1.version
 
 
 class TestG1Read:

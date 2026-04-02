@@ -121,3 +121,7 @@ class AttributeMergeError(ValueError, DASCoreError):
 
 class DASCorePluginError(AttributeError, DASCoreError):
     """Raised when something is wrong with plugins."""
+
+
+class RemoteCacheError(IOError, DASCoreError):
+    """Raised when DASCore cannot satisfy remote cache requirements."""

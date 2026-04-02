@@ -26,6 +26,7 @@ spool1 = dc.spool(patch_list)
 
 ```{python}
 import dascore as dc
+from upath import UPath
 # Import fetch to read DASCore example files 
 from dascore.utils.downloader import fetch
 
@@ -34,6 +35,11 @@ path_to_das_file = fetch("terra15_das_1_trimmed.hdf5")
 # path_to_das_file = "/path/to/data/directory/data.EXT"
 
 spool2 = dc.spool(path_to_das_file)
+
+# UPath-backed resources also work for file-backed spools.
+remote_file = UPath("memory://dascore/tutorial/spool_file.h5")
+dc.write(dc.get_example_patch(), remote_file, "DASDAE")
+spool2_remote = dc.spool(remote_file)
 ```
 
 ## A directory of DAS files
@@ -81,6 +87,16 @@ It is best not to delete files once added to a directory managed by DASCore.
 :::
 
 Despite some implementation differences, all spools have common behavior/methods.
+
+:::{.callout-note}
+Remote file resources work with `dc.spool(...)`, `dc.read(...)`, and `dc.scan(...)`. 
+:::
+
+:::{.callout-note}
+For remote `UPath` resources, DASCore treats metadata operations differently
+from full reads. See the [Working with Remote Patches](remote_patches.qmd)
+tutorial for the remote-cache policy, spool implications, and examples.
+:::
 
 # Accessing patches
 

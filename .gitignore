@@ -94,6 +94,7 @@ docs/index_files
 docs/index.quarto_ipynb
 
 # Agent stuff
+.codex
 .claude
 CLAUDE.md
 .agents/worktrees/

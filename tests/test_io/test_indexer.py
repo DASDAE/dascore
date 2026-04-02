@@ -8,13 +8,18 @@ import shutil
 from contextlib import suppress
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from packaging.version import parse as get_version
+from upath import UPath
 
 import dascore as dc
+from dascore.config import set_config
 from dascore.examples import spool_to_directory
+from dascore.exceptions import InvalidSpoolError
 from dascore.io.indexer import DirectoryIndexer
+from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.patch import get_patch_names
 
 
@@ -83,11 +88,7 @@ class TestFindIndex:
 
         with cache_path.open("wt") as fi:
             fi.write("{'bad': 'json'")
-
-        class SubIndexer(DirectoryIndexer):
-            index_map_path = cache_path
-
-        return SubIndexer
+        return cache_path
 
     def test_directory_cant_write(self, unwritable_directory):
         """Ensure correct path is found when a read-only directory is used."""
@@ -128,9 +129,30 @@ class TestFindIndex:
         """Ensure a corrupted cache doesnt crash indexing. See #508."""
         path = tmp_path_factory.mktemp("corrupt_cache_test")
         # Test passes if this doesn't raise should not raise.
-        assert directory_indexer_bad_cache.index_map_path.exists()
-        directory_indexer_bad_cache(path)
-        assert not directory_indexer_bad_cache.index_map_path.exists()
+        assert directory_indexer_bad_cache.exists()
+        with set_config(directory_index_map_path=directory_indexer_bad_cache):
+            DirectoryIndexer(path)
+        assert not directory_indexer_bad_cache.exists()
+
+    def test_remote_directory_not_supported(self):
+        """Remote directory indexing should fail fast."""
+        path = UPath("memory://dascore/indexer")
+        (path / "file.txt").write_text("x")
+        with pytest.raises(InvalidSpoolError, match="local filesystem"):
+            DirectoryIndexer(path)
+
+    def test_local_upath_normalized_to_path(self, tmp_path):
+        """Local UPath inputs should normalize to pathlib.Path internally."""
+        out = DirectoryIndexer(UPath(tmp_path))
+        assert isinstance(out.path, Path)
+        assert out.path == Path(tmp_path).absolute()
+
+    def test_index_map_path_comes_from_config(self, tmp_path):
+        """Index map paths should be sourced from runtime configuration."""
+        index_map_path = tmp_path / "cache_paths.json"
+        with set_config(directory_index_map_path=index_map_path):
+            out = DirectoryIndexer(tmp_path)
+            assert out.index_map_path == index_map_path
 
 
 class TestBasics:
@@ -194,6 +216,45 @@ class TestGetContents:
         """An empty index should return an empty dataframe."""
         df = empty_index()
         assert df.empty
+
+    def test_default_buffer_comes_from_config(self, basic_indexer, monkeypatch):
+        """Configured index buffer should be used when no explicit buffer is passed."""
+        seen = {}
+
+        def _fake_to_timedelta64(value):
+            seen["buffer"] = value
+            return value
+
+        monkeypatch.setattr("dascore.io.indexer.to_timedelta64", _fake_to_timedelta64)
+        with set_config(index_query_buffer=np.timedelta64(5, "s")):
+            basic_indexer.get_contents()
+        assert seen["buffer"] == np.timedelta64(5, "s")
+
+    def test_explicit_buffer_overrides_config(self, basic_indexer):
+        """Explicit get_contents buffer should override config defaults."""
+        seen = {}
+
+        def _fake_to_timedelta64(value):
+            seen["buffer"] = value
+            return value
+
+        with set_config(index_query_buffer=np.timedelta64(10, "s")):
+            with pytest.MonkeyPatch.context() as monkeypatch:
+                monkeypatch.setattr(
+                    "dascore.io.indexer.to_timedelta64", _fake_to_timedelta64
+                )
+                basic_indexer.get_contents(buffer=np.timedelta64(0, "s"))
+        assert seen["buffer"] == np.timedelta64(0, "s")
+
+
+class TestHDFPatchIndexManager:
+    """Tests for config-backed HDF index defaults."""
+
+    def test_buffer_comes_from_config(self, tmp_path):
+        """Index manager buffer property should reflect runtime config."""
+        manager = HDFPatchIndexManager(tmp_path / "index.h5")
+        with set_config(index_query_buffer=np.timedelta64(7, "s")):
+            assert manager.buffer == np.timedelta64(7, "s")
 
 
 class TestUpdate:

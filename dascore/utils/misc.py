@@ -6,6 +6,7 @@ import contextlib
 import functools
 import importlib
 import inspect
+import itertools
 import os
 import re
 import warnings
@@ -22,13 +23,14 @@ from scipy.linalg import solve
 from scipy.special import factorial
 
 import dascore as dc
-from dascore.compat import is_array
+from dascore.compat import UPath, is_array
 from dascore.constants import WARN_LEVELS
 from dascore.exceptions import (
     FilterValueError,
     MissingOptionalDependencyError,
     ParameterError,
 )
+from dascore.utils.paths import coerce_to_upath, is_local_path, is_pathlike
 from dascore.utils.progress import track
 
 
@@ -162,12 +164,13 @@ def _get_nullish(dtype=np.floating):
 
 
 def _iter_filesystem(
-    paths: str | Path | Iterable[str | Path],
+    paths: str | Path | UPath | Iterable[str | Path | UPath],
     ext: str | None = None,
     timestamp: float | None = None,
     skip_hidden: bool = True,
     include_directories: bool = False,
-) -> Generator[str, str, None]:
+    _warned_timestamp_paths: set[str] | None = None,
+) -> Generator[Path | UPath | None, str, None]:
     """
     Iterate contents of a filesystem like thing.
 
@@ -188,37 +191,216 @@ def _iter_filesystem(
         If True, also yield directories. In this case, a "skip" can be
         passed back to the generator to indicate the rest of the directory
         contents should be skipped.
+    _warned_timestamp_paths
+        Internal accumulator used to avoid repeating timestamp-filter warnings
+        while recursing through one remote traversal.
 
     Yields
     ------
-    Paths, as strings, meeting requirements.
+    Local paths as ``Path`` objects and remote paths as ``UPath`` objects.
     """
-    # handle returning directories if requested.
-    if include_directories and os.path.isdir(paths):
-        if not (skip_hidden and str(paths).startswith(".")):
-            signal = yield paths
+    warned_timestamp_paths = (
+        set() if _warned_timestamp_paths is None else _warned_timestamp_paths
+    )
+
+    if is_pathlike(paths):
+        if is_local_path(paths):
+            yield from _iter_local_filesystem(
+                Path(paths),
+                ext=ext,
+                timestamp=timestamp,
+                skip_hidden=skip_hidden,
+                include_directories=include_directories,
+                warned_timestamp_paths=warned_timestamp_paths,
+            )
+            return
+
+        yield from _iter_remote_filesystem(
+            coerce_to_upath(paths),
+            ext=ext,
+            timestamp=timestamp,
+            skip_hidden=skip_hidden,
+            include_directories=include_directories,
+            warned_timestamp_paths=warned_timestamp_paths,
+        )
+        return
+
+    for path in paths:
+        yield from _iter_filesystem(
+            path,
+            ext=ext,
+            timestamp=timestamp,
+            skip_hidden=skip_hidden,
+            include_directories=include_directories,
+            _warned_timestamp_paths=warned_timestamp_paths,
+        )
+
+
+def _name_is_hidden(path_like) -> bool:
+    """Return True if a path-like object's display name starts with a dot."""
+    name = getattr(path_like, "name", "") or Path(str(path_like)).name
+    return name.startswith(".")
+
+
+def _passes_iter_filesystem_filters(
+    path_like,
+    *,
+    ext: str | None,
+    timestamp: float | None,
+    skip_hidden: bool,
+    warned_timestamp_paths: set[str],
+    on_timestamp_failure: str,
+) -> bool:
+    """Apply extension, hidden-file, and timestamp filters for traversal."""
+    if ext is not None and not str(path_like).endswith(ext):
+        return False
+    if skip_hidden and _name_is_hidden(path_like):
+        return False
+    if timestamp is None:
+        return True
+    try:
+        return path_like.stat().st_mtime >= timestamp
+    except (AttributeError, NotImplementedError, OSError):
+        if on_timestamp_failure not in warned_timestamp_paths:
+            msg = (
+                f"Remote filesystem path {on_timestamp_failure} does not "
+                "expose reliable mtime; ignoring timestamp filter."
+            )
+            warnings.warn(msg, UserWarning)
+            warned_timestamp_paths.add(on_timestamp_failure)
+        return True
+
+
+def _iter_local_filesystem(
+    path,
+    *,
+    ext: str | None,
+    timestamp: float | None,
+    skip_hidden: bool,
+    include_directories: bool,
+    warned_timestamp_paths: set[str],
+) -> Generator[Path | None, str, None]:
+    """Traverse one local path or directory tree."""
+    # Local paths use scandir directly so we can recurse cheaply and keep the
+    # hidden/timestamp checks close to the yielded entries.
+    path = Path(path)
+    if include_directories and os.path.isdir(path):
+        if not (skip_hidden and path.name.startswith(".")):
+            signal = yield path
             if signal is not None and signal == "skip":
                 yield None
                 return
-    try:  # a single path was passed
-        for entry in os.scandir(paths):
+    try:
+        for entry in os.scandir(path):
             if entry.is_file() and (ext is None or entry.name.endswith(ext)):
                 if timestamp is None or entry.stat().st_mtime >= timestamp:
                     if entry.name[0] != "." or not skip_hidden:
-                        yield entry.path
+                        yield Path(entry.path)
             elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from _iter_filesystem(
-                    entry.path,
+                yield from _iter_local_filesystem(
+                    Path(entry.path),
                     ext=ext,
                     timestamp=timestamp,
                     skip_hidden=skip_hidden,
                     include_directories=include_directories,
+                    warned_timestamp_paths=warned_timestamp_paths,
                 )
-    except (TypeError, AttributeError):  # multiple paths were passed
-        for path in paths:
-            yield from _iter_filesystem(path, ext, timestamp, skip_hidden)
-    except NotADirectoryError:  # a file path was passed, just return it
-        yield paths
+    except NotADirectoryError:
+        if _passes_iter_filesystem_filters(
+            path,
+            ext=ext,
+            timestamp=timestamp,
+            skip_hidden=skip_hidden,
+            warned_timestamp_paths=warned_timestamp_paths,
+            on_timestamp_failure=str(path),
+        ):
+            yield path
+
+
+def _iter_remote_filesystem(
+    path: UPath,
+    *,
+    ext: str | None,
+    timestamp: float | None,
+    skip_hidden: bool,
+    include_directories: bool,
+    warned_timestamp_paths: set[str],
+) -> Generator[UPath | None, str, None]:
+    """Traverse one remote path defensively across backend quirks."""
+    # Remote traversal has to be more defensive because some backends have
+    # partial directory support and may not expose reliable stat metadata.
+    remote_is_dir = path.is_dir()
+    if include_directories and remote_is_dir:
+        if not (skip_hidden and _name_is_hidden(path)):
+            signal = yield path
+            if signal is not None and signal == "skip":
+                yield None
+                return
+    # Some remote backends can report directory URLs as both files and
+    # directories. Prefer directory traversal so recursion still works.
+    elif path.is_file():
+        if _passes_iter_filesystem_filters(
+            path,
+            ext=ext,
+            timestamp=timestamp,
+            skip_hidden=skip_hidden,
+            warned_timestamp_paths=warned_timestamp_paths,
+            on_timestamp_failure=str(path),
+        ):
+            yield path
+        return
+    # Only probe directory contents after ruling out the simple file case; some
+    # remote backends raise here instead of answering is_dir/is_file.
+    try:
+        entries = iter(path.iterdir())
+        first_entry = next(entries)
+    except StopIteration:
+        return
+    except (
+        AttributeError,
+        FileNotFoundError,
+        NotADirectoryError,
+        NotImplementedError,
+        OSError,
+    ):
+        if not path.exists():
+            return
+        raise
+    # Once we have one entry, recurse through remote directories and apply the
+    # same file filters to leaf files.
+    for entry in itertools.chain((first_entry,), entries):
+        if skip_hidden and _name_is_hidden(entry):
+            continue
+        entry_is_file = entry.is_file()
+        entry_is_dir = entry.is_dir()
+        if not entry_is_file and not entry_is_dir:
+            try:
+                next(entry.iterdir())
+            except (AttributeError, NotImplementedError, OSError, StopIteration):
+                entry_is_dir = False
+            else:
+                entry_is_dir = True
+        if entry_is_dir:
+            yield from _iter_remote_filesystem(
+                entry,
+                ext=ext,
+                timestamp=timestamp,
+                skip_hidden=skip_hidden,
+                include_directories=include_directories,
+                warned_timestamp_paths=warned_timestamp_paths,
+            )
+            continue
+        if not entry_is_file:
+            continue
+        if _passes_iter_filesystem_filters(
+            entry,
+            ext=ext,
+            timestamp=timestamp,
+            skip_hidden=skip_hidden,
+            warned_timestamp_paths=warned_timestamp_paths,
+            on_timestamp_failure=str(path),
+        ):
+            yield entry
 
 
 def iterate(obj):
@@ -746,13 +928,15 @@ def get_buffer_size(fid: IOBase):
         A buffered reader, e.g. from open(file) as fid.
     """
     path = getattr(fid, "name", None)
-    if path is None:
-        cur = fid.tell()
-        fid.seek(0, 2)  # end
-        file_size = fid.tell()
-        fid.seek(cur, 0)
-    else:
-        file_size = Path(path).stat().st_size
+    if path is not None and is_local_path(path):
+        try:
+            return Path(path).stat().st_size
+        except (OSError, TypeError, ValueError):
+            pass
+    cur = fid.tell()
+    fid.seek(0, 2)  # end
+    file_size = fid.tell()
+    fid.seek(cur, 0)
     return file_size
 
 

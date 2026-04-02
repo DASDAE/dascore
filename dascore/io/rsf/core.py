@@ -9,9 +9,15 @@ import numpy as np
 
 import dascore as dc
 from dascore.io.core import FiberIO
+from dascore.utils.paths import coerce_to_upath, is_local_path
 from dascore.utils.time import to_float
 
 RSFKEYS_WRITE = ("in", "esize", "data_format")
+
+
+def _coerce_output_path(path):
+    """Return a local Path or remote UPath-like path for writing."""
+    return Path(path) if is_local_path(path) else coerce_to_upath(path)
 
 
 class RSFV1(FiberIO):
@@ -93,24 +99,22 @@ class RSFV1(FiberIO):
 
         if data_path is not None:
             # outputs header and binary separately (.rsf and .rsf@)
-            outdatapath = Path(str(data_path) + "@")
+            outdatapath = _coerce_output_path(str(data_path) + "@")
             outdatapath.parent.mkdir(exist_ok=True, parents=True)
             hdr_info.append(f'in="{data_path}@"')
             with outdatapath.open("wb") as fi:
                 fi.write(data_bytes)
             out = "\n".join(hdr_info)
-            outpath = Path(str(path))
+            outpath = _coerce_output_path(path)
             outpath.parent.mkdir(exist_ok=True, parents=True)
             with outpath.open("w") as fi:
                 fi.write(out)
         else:
             # outputs header and binary combined (.rsf with both hdr and bin)
             hdr_info.append('in="stdin"\n\n')
-            # hdr_info.append(data)
-            out = "\n".join(hdr_info)
-            outpath = Path(str(path))
+            out = "\n".join(hdr_info).encode()
+            outpath = _coerce_output_path(path)
             outpath.parent.mkdir(exist_ok=True, parents=True)
-            with outpath.open("w") as fi:
+            with outpath.open("wb") as fi:
                 fi.write(out)
-            with outpath.open("ab") as fi:
                 fi.write(data_bytes)

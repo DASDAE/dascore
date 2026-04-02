@@ -7,8 +7,8 @@ from contextlib import suppress
 
 import rich.progress as prog
 
-import dascore as dc
 from dascore.compat import Progress
+from dascore.config import get_config
 from dascore.constants import PROGRESS_LEVELS
 
 
@@ -31,7 +31,7 @@ def get_progress_instance(progress: PROGRESS_LEVELS | Progress = "standard"):
     ]
     if progress == "basic":
         # set the refresh rate very low and eliminate the spinner
-        kwargs["refresh_per_second"] = 0.25
+        kwargs["refresh_per_second"] = get_config().progress_basic_refresh_per_second
         progress_list = progress_list[1:]
     return Progress(*progress_list, **kwargs)
 
@@ -70,7 +70,7 @@ def track(
     # This is a dirty hack to allow debugging while running tests.
     # Otherwise, pdb doesn't work in any tracking scope.
     # See: https://github.com/Textualize/rich/issues/1053
-    if dc._debug or not length or progress is None:
+    if get_config().debug or not length or progress is None:
         yield from sequence
         return
     update = 1.0 if isinstance(progress, str) and progress == "standard" else 5.0

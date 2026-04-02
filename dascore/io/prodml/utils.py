@@ -11,6 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
+from dascore.utils.io import _normalize_source_patch_ids
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
 from dascore.utils.models import UnitQuantity, UTF8Str
 
@@ -314,9 +315,7 @@ def _read_prodml(fi, distance=None, time=None, source_patch_id=None):
     acq = fi["Acquisition"]
     base_info = maybe_get_items(acq.attrs, _ROOT_ATTRS)
     d_coord = _get_distance_coord(acq)
-    source_patch_ids = {
-        str(value) for value in iterate(source_patch_id) if value not in (None, "")
-    }
+    source_patch_ids = _normalize_source_patch_ids(source_patch_id)
     for info in _yield_data_nodes(fi):
         if source_patch_ids and info.name not in source_patch_ids:
             continue

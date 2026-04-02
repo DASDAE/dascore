@@ -7,10 +7,6 @@ import dascore.utils.pd
 from dascore.io.core import FiberIO, read, scan, scan_to_df, write, PatchFileSummary
 from dascore.utils.io import BinaryReader, BinaryWriter
 from dascore.utils.hdf5 import (
-    HDF5Writer,
-    HDF5Reader,
-    PyTablesWriter,
-    PyTablesReader,
     H5Reader,
     H5Writer,
 )

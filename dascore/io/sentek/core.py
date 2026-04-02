@@ -6,8 +6,8 @@ import numpy as np
 
 import dascore as dc
 from dascore.core.summary import PatchSummary
-from dascore.io import BinaryReader
 from dascore.io.core import FiberIO
+from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .utils import _get_patch_attrs, _get_version
 
@@ -21,7 +21,7 @@ class SentekV5(FiberIO):
 
     def read(
         self,
-        resource: BinaryReader,
+        resource: LocalBinaryReader,
         time=None,
         distance=None,
         **kwargs,
@@ -32,9 +32,10 @@ class SentekV5(FiberIO):
         array = np.fromfile(resource, dtype=np.float32, count=offsets[1] * offsets[2])
         array = np.reshape(array, (offsets[1], offsets[2])).T
         patch = dc.Patch(data=array, attrs=attrs, coords=coords, dims=coords.dims)
-        # Note: we are being a bit sloppy here in that selecting on time/distance
-        # doesn't actually affect how much data is read from the binary file. This
-        # is probably ok though since Sentek files tend to be quite small.
+        # Note: we are being a bit sloppy here in that selecting on
+        # time/distance doesn't actually affect how much data is read from
+        # the binary file. This is probably ok though since Sentek files
+        # tend to be quite small.
         return dc.spool(patch).select(time=time, distance=distance)
 
     def get_format(self, resource: BinaryReader, **kwargs) -> tuple[str, str] | bool:

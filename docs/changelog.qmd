@@ -4,9 +4,11 @@ The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes f
 
 ## Unreleased API Changes
 
+- DASCore file I/O now accepts `UPath` resources across the main read, scan, spool, and write workflows. Remote file backends such as `memory://` can be used directly for supported formats, and remote directory-based formats such as `XMLBinary` now work when the backend supports listing and file reads. See the file I/O and spool tutorials for examples and current limitations.
 - `dc.scan(...)` now returns [`PatchSummary`](`dascore.PatchSummary`) objects rather than `PatchAttrs`.
 - Scan results carry metadata, coordinates, and source information without loading data. File-backed summaries contain enough source information for lazy reloads.
 - `Patch.attrs` now contains non-coordinate metadata only.
+- DASDAE now stores `history` as a flat string payload on disk. Older DASDAE files that relied on legacy pickled history attrs remain readable, but their original history strings are no longer restored exactly.
 - Coordinate summaries such as `time_min`, `time_max`, `distance_step`, and coordinate units are exposed through `Patch.summary.get_coord_summary(...)`, not through `Patch.attrs`.
 - `Patch.attrs` and `PatchAttrs` no longer own coordinate summaries. Use [`PatchSummary`](`dascore.PatchSummary`) values exposed through [`PatchSummary.get_coord_summary(...)`](`dascore.PatchSummary.get_coord_summary`) for metadata views and coordinate APIs such as [`Patch.update_coords`](`dascore.Patch.update_coords`) for coordinate changes.
 

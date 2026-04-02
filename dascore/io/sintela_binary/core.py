@@ -10,7 +10,7 @@ import dascore as dc
 from dascore.constants import opt_timeable_types
 from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
-from dascore.utils.io import BinaryReader
+from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .utils import (
     _HEADER_SIZES,
@@ -69,7 +69,7 @@ class SintelaBinaryV3(FiberIO):
 
     def read(
         self,
-        resource: BinaryReader,
+        resource: LocalBinaryReader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
         **kwargs,

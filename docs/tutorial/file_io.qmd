@@ -6,6 +6,33 @@ execute:
 
 The following highlights some DASCore features for working with IO.
 
+:::{.callout-note}
+If you are working with remote `UPath` resources, especially HTTP or object
+store backends, see the [Working with Remote Patches](remote_patches.qmd)
+tutorial for examples, cache settings, and metadata-vs-read behavior.
+:::
+
+## Using UPath Resources
+
+DASCore accepts both `pathlib.Path` and [`UPath`](https://pypi.org/project/universal-pathlib/) inputs for many file-backed workflows. This is useful when your data lives on a non-local backend supported by `fsspec`.
+
+The example below uses `memory://` so it can run without any external network access.
+
+```{python}
+from upath import UPath
+import dascore as dc
+
+source = dc.get_example_patch()
+remote_path = UPath("memory://dascore/tutorial/example_patch.h5")
+
+dc.write(source, remote_path, "DASDAE")
+
+summary = dc.scan(remote_path)[0]
+loaded = dc.read(remote_path)[0]
+
+print(summary.path)
+print(loaded.dims)
+```
 
 ## Writing Patches to Disk
 
@@ -25,6 +52,21 @@ patch.io.write(write_path, "dasdae")
 #| echo: false
 if write_path.exists():
     write_path.unlink()
+```
+
+Remote-style `UPath` destinations also work for supported formats.
+
+```{python}
+from upath import UPath
+import dascore as dc
+
+patch = dc.get_example_patch()
+remote_write_path = UPath("memory://dascore/tutorial/output_file.pkl")
+
+patch.io.write(remote_write_path, "pickle")
+
+round_trip = dc.read(remote_write_path)[0]
+print(round_trip.dims)
 ```
 
 ## Scan Metadata Without Loading Data

@@ -11,13 +11,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from upath import UPath
 
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.utils.misc import (
     _iter_filesystem,
+    _spool_map,
     all_diffs_close_enough,
     cached_method,
     deep_equality_check,
+    get_2d_line_intersection,
     get_buffer_size,
     get_stencil_coefs,
     iterate,
@@ -36,6 +39,54 @@ class TestIterFS:
 
     sub = {"D": {"C": ".mseed"}, "F": ".json", "G": {"H": ".txt"}}  # noqa
     file_paths = {"A": ".txt", "B": sub}  # noqa
+
+    class _FakeRemoteEntry:
+        """Minimal remote path stand-in for traversal edge-case tests."""
+
+        def __init__(
+            self,
+            name,
+            *,
+            scheme="memory",
+            is_file=False,
+            is_dir=False,
+            exists=True,
+            children=(),
+            stat_mtime=0,
+            iterdir_error=None,
+        ):
+            self.name = name
+            self._scheme = scheme
+            self._is_file = is_file
+            self._is_dir = is_dir
+            self._exists = exists
+            self._children = tuple(children)
+            self._stat_mtime = stat_mtime
+            self._iterdir_error = iterdir_error
+
+        def __str__(self):
+            return f"{self._scheme}://dascore/iterfs/{self.name}"
+
+        def is_file(self):
+            return self._is_file
+
+        def is_dir(self):
+            return self._is_dir
+
+        def exists(self):
+            return self._exists
+
+        def stat(self):
+            class _Stat:
+                def __init__(self, st_mtime):
+                    self.st_mtime = st_mtime
+
+            return _Stat(self._stat_mtime)
+
+        def iterdir(self):
+            if self._iterdir_error is not None:
+                raise self._iterdir_error
+            yield from self._children
 
     # --- helper functions
     def setup_test_directory(self, some_dict: dict, path: Path):
@@ -74,7 +125,7 @@ class TestIterFS:
     def test_basic(self, simple_dir):
         """Test basic usage of iterfiles."""
         files = set(self.get_file_paths(self.file_paths, simple_dir))
-        out = {Path(x) for x in _iter_filesystem(simple_dir)}
+        out = set(_iter_filesystem(simple_dir))
         assert files == out
 
     def test_one_subdir(self, simple_dir):
@@ -87,7 +138,7 @@ class TestIterFS:
         """Test with multiple sub directories."""
         path1 = simple_dir / "B" / "D"
         path2 = simple_dir / "B" / "G"
-        out = {Path(x) for x in _iter_filesystem([path1, path2])}
+        out = set(_iter_filesystem([path1, path2]))
         files = self.get_file_paths(self.file_paths, simple_dir)
         expected = {
             x
@@ -100,7 +151,7 @@ class TestIterFS:
         """Test filtering based on extension."""
         out = set(_iter_filesystem(simple_dir, ext=".txt"))
         for val in out:
-            assert val.endswith(".txt")
+            assert str(val).endswith(".txt")
 
     def test_mtime(self, simple_dir):
         """Test filtering based on modified time."""
@@ -112,16 +163,16 @@ class TestIterFS:
         # get output make sure it only returned first file
         out = list(_iter_filesystem(simple_dir, timestamp=now + 5))
         assert len(out) == 1
-        assert Path(out[0]) == first_file
+        assert out[0] == first_file
 
     def test_skips_files_in_hidden_directory(self, dir_with_hidden_dir):
         """Hidden directory files should be skipped."""
         out1 = list(_iter_filesystem(dir_with_hidden_dir))
-        has_hidden_by_parent = ["hidden_by_parent" in x for x in out1]
+        has_hidden_by_parent = ["hidden_by_parent" in str(x) for x in out1]
         assert not any(has_hidden_by_parent)
         # But if skip_hidden is False it should be there
         out2 = list(_iter_filesystem(dir_with_hidden_dir, skip_hidden=False))
-        has_hidden_by_parent = ["hidden_by_parent" in x for x in out2]
+        has_hidden_by_parent = ["hidden_by_parent" in str(x) for x in out2]
         assert sum(has_hidden_by_parent) == 1
 
     def test_pass_file(self, dummy_text_file):
@@ -130,16 +181,24 @@ class TestIterFS:
         assert len(out) == 1
         assert out[0] == dummy_text_file
 
+    def test_pass_file_respects_extension_filter(self, dummy_text_file):
+        """Direct local file inputs should still honor extension filtering."""
+        assert list(_iter_filesystem(dummy_text_file, ext=".json")) == []
+
+    def test_pass_file_respects_timestamp_filter(self, dummy_text_file):
+        """Direct local file inputs should still honor timestamp filtering."""
+        assert list(_iter_filesystem(dummy_text_file, timestamp=time.time() + 60)) == []
+
     def test_no_directories(self, simple_dir):
         """Ensure no directories are included when include_directories=False."""
         out = list(_iter_filesystem(simple_dir, include_directories=False))
-        has_dirs = [Path(x).is_dir() for x in out]
+        has_dirs = [x.is_dir() for x in out]
         assert not any(has_dirs)
 
     def test_include_directories(self, simple_dir):
         """Ensure we can get directories back."""
         out = list(_iter_filesystem(simple_dir, include_directories=True))
-        returned_dirs = [Path(x) for x in out if Path(x).is_dir()]
+        returned_dirs = [x for x in out if x.is_dir()]
         assert len(returned_dirs)
         # The top level directory should have been included
         assert simple_dir in returned_dirs
@@ -153,12 +212,154 @@ class TestIterFS:
         out = []
         iterator = _iter_filesystem(simple_dir, include_directories=True)
         for path in iterator:
-            if Path(path).name == "B":
+            if path.name == "B":
                 iterator.send("skip")
             out.append(path)
-        names = {Path(x).name.split(".")[0] for x in out}
+        names = {x.name.split(".")[0] for x in out}
         # Anything after B should have been skipped
         assert {"C", "D", "E", "F"}.isdisjoint(names)
+
+    def test_remote_file(self):
+        """Ensure remote file paths are yielded directly."""
+        path = UPath("memory://dascore/iterfs/file.txt")
+        path.write_text("hello")
+        assert list(_iter_filesystem(path)) == [path]
+
+    def test_remote_directory(self):
+        """Ensure remote directories are traversed with the generic iterator."""
+        root = UPath("memory://dascore/iterfs/root")
+        (root / "sub").mkdir(parents=True, exist_ok=True)
+        (root / ".hidden").mkdir(parents=True, exist_ok=True)
+        (root / "a.txt").write_text("a")
+        (root / "sub" / "b.txt").write_text("b")
+        (root / ".hidden" / "skip.txt").write_text("x")
+        out = list(_iter_filesystem(root, include_directories=True))
+        assert root in out
+        assert root / "a.txt" in out
+        assert root / "sub" / "b.txt" in out
+        assert root / ".hidden" / "skip.txt" not in out
+
+    def test_remote_directory_skip_signal(self):
+        """Ensure skip signals also work on remote directory traversal."""
+        root = UPath("memory://dascore/iterfs/skip")
+        (root / "sub").mkdir(parents=True, exist_ok=True)
+        (root / "sub" / "b.txt").write_text("b")
+        iterator = _iter_filesystem(root, include_directories=True)
+        first = next(iterator)
+        assert first == root
+        assert iterator.send("skip") is None
+        with pytest.raises(StopIteration):
+            next(iterator)
+
+    def test_remote_directory_uses_timestamp_when_backend_supports_mtime(
+        self, monkeypatch
+    ):
+        """Remote iteration should respect timestamps when stat exposes mtime."""
+        root = UPath("memory://dascore/iterfs/timestamp")
+        (root / "old.txt").write_text("old")
+        (root / "new.txt").write_text("new")
+        upath_type = type(root / "old.txt")
+        original_stat = upath_type.stat
+
+        class _Stat:
+            def __init__(self, st_mtime):
+                self.st_mtime = st_mtime
+
+        def _stat(self, *args, **kwargs):
+            name = self.name
+            if name == "old.txt":
+                return _Stat(5)
+            if name == "new.txt":
+                return _Stat(20)
+            return original_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(upath_type, "stat", _stat)
+        out = list(_iter_filesystem(root, timestamp=10))
+        assert out == [root / "new.txt"]
+
+    def test_remote_file_skips_hidden_name(self):
+        """Direct remote file iteration should respect hidden-name filtering."""
+        path = UPath("memory://dascore/iterfs/.hidden.txt")
+        path.write_text("x")
+        assert list(_iter_filesystem(path)) == []
+
+    def test_remote_file_skips_extension_mismatch(self):
+        """Direct remote file iteration should respect extension filters."""
+        path = UPath("memory://dascore/iterfs/file.bin")
+        path.write_text("x")
+        assert list(_iter_filesystem(path, ext=".txt")) == []
+
+    def test_remote_missing_path_returns_empty(self):
+        """Missing remote paths should simply yield no results."""
+        path = UPath("memory://dascore/iterfs/does_not_exist.txt")
+        assert list(_iter_filesystem(path)) == []
+
+    def test_remote_empty_directory_returns_empty(self):
+        """Remote empty directories should yield no results."""
+        root = UPath("memory://dascore/iterfs/empty")
+        root.mkdir(parents=True, exist_ok=True)
+        assert list(_iter_filesystem(root)) == []
+
+    def test_remote_directory_handles_unknown_entry_kinds(self, monkeypatch):
+        """Remote traversal should probe ambiguous entries before skipping them."""
+        directory_child = self._FakeRemoteEntry(
+            "maybe_dir",
+            children=(self._FakeRemoteEntry("nested.txt", is_file=True),),
+        )
+        skipped_child = self._FakeRemoteEntry("maybe_other")
+        root = self._FakeRemoteEntry(
+            "root",
+            is_dir=True,
+            children=(directory_child, skipped_child),
+        )
+
+        monkeypatch.setattr("dascore.utils.misc.is_pathlike", lambda value: True)
+        monkeypatch.setattr("dascore.utils.misc.is_local_path", lambda value: False)
+        monkeypatch.setattr("dascore.utils.misc.coerce_to_upath", lambda value: value)
+
+        out = list(_iter_filesystem(root))
+        assert directory_child._children[0] in out
+        assert all("maybe_other" not in str(item) for item in out)
+
+    def test_remote_directory_iterdir_fallback_when_exists_is_false(self, monkeypatch):
+        """Remote traversal should still descend when exists() is unreliable."""
+        nested_file = self._FakeRemoteEntry(
+            "nested.txt",
+            scheme="http",
+            exists=True,
+            is_file=True,
+        )
+        root = self._FakeRemoteEntry(
+            "root",
+            scheme="http",
+            exists=False,
+            children=(nested_file,),
+        )
+
+        monkeypatch.setattr("dascore.utils.misc.is_pathlike", lambda value: True)
+        monkeypatch.setattr("dascore.utils.misc.is_local_path", lambda value: False)
+        monkeypatch.setattr("dascore.utils.misc.coerce_to_upath", lambda value: value)
+
+        out = list(_iter_filesystem(root))
+        assert nested_file in out
+
+    def test_remote_directory_iterdir_error_raises_when_path_still_exists(
+        self, monkeypatch
+    ):
+        """Unexpected remote traversal errors should surface for existing paths."""
+        root = self._FakeRemoteEntry(
+            "root",
+            scheme="http",
+            exists=True,
+            iterdir_error=OSError("backend exploded"),
+        )
+        # TODO a lot of monkey patching here. Maybe revisit to make less cringy.
+        monkeypatch.setattr("dascore.utils.misc.is_pathlike", lambda value: True)
+        monkeypatch.setattr("dascore.utils.misc.is_local_path", lambda value: False)
+        monkeypatch.setattr("dascore.utils.misc.coerce_to_upath", lambda value: value)
+
+        with pytest.raises(OSError, match="backend exploded"):
+            list(_iter_filesystem(root))
 
 
 class TestIterate:
@@ -349,6 +550,66 @@ class TestToObjectArray:
         assert isinstance(out, np.ndarray)
 
 
+class TestSpoolMap:
+    """Tests for the private spool mapping helper."""
+
+    def test_without_client(self, random_spool):
+        """A missing client should use direct iteration over the spool."""
+        spool = random_spool[:3]
+        out = _spool_map(
+            spool,
+            lambda patch, value=1: len(patch.dims) + value,
+            progress=False,
+        )
+        assert out == [3, 3, 3]
+
+    def test_with_client(self, random_spool, monkeypatch):
+        """A client should receive split spools and flatten mapped outputs."""
+        seen = []
+
+        def fake_track(iterable, desc):
+            seen.append(desc)
+            return iterable
+
+        class DummyClient:
+            def map(self, func, spools):
+                return [func(spool) for spool in spools]
+
+        monkeypatch.setattr("dascore.utils.misc.track", fake_track)
+        monkeypatch.setattr("dascore.utils.misc.os.cpu_count", lambda: 2)
+        out = _spool_map(
+            random_spool[:4],
+            lambda patch, value=1: len(patch.dims) + value,
+            client=DummyClient(),
+            size=None,
+            progress=True,
+        )
+        assert out == [3, 3, 3]
+        assert seen == ["Applying <lambda> to spool"]
+
+
+class Test2DLineIntersection:
+    """Tests for 2D line intersection helper."""
+
+    def test_non_parallel_lines(self):
+        """Non-parallel lines should return their intersection."""
+        p1 = np.array([0.0, 0.0])
+        p2 = np.array([2.0, 2.0])
+        p3 = np.array([0.0, 2.0])
+        p4 = np.array([2.0, 0.0])
+        out = get_2d_line_intersection(p1, p2, p3, p4)
+        assert np.allclose(out, [1.0, 1.0])
+
+    def test_parallel_lines(self):
+        """Parallel lines should return NaN coordinates."""
+        p1 = np.array([0.0, 0.0])
+        p2 = np.array([1.0, 1.0])
+        p3 = np.array([0.0, 1.0])
+        p4 = np.array([1.0, 2.0])
+        out = get_2d_line_intersection(p1, p2, p3, p4)
+        assert np.isnan(out).all()
+
+
 class TestGetBufferSize:
     """Ensure we can get the size of various buffers."""
 
@@ -367,6 +628,15 @@ class TestGetBufferSize:
         bio.seek(0)
         size2 = get_buffer_size(bio)
         assert size1 == size2 == 4
+
+    def test_named_buffer_falls_back_when_stat_fails(self):
+        """Handles with unusable .name values should still use tell/seek."""
+
+        class _NamedBytesIO(BytesIO):
+            name = "not-a-real-path"
+
+        bio = _NamedBytesIO(b"1234")
+        assert get_buffer_size(bio) == 4
 
 
 class TestMaybeMemMap:

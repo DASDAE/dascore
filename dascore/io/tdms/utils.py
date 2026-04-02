@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import datetime
 import mmap
-import os
 import struct
 
 import numpy as np
 
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
+from dascore.utils.misc import get_buffer_size
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 DEFAULT_ATTRS = set(PatchAttrs.model_fields)
@@ -181,7 +181,7 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     # Make offsets relative to beginning of file:
     fileinfo["next_segment_offset"] += lead_in_length
     fileinfo["raw_data_offset"] += lead_in_length
-    fileinfo["file_size"] = os.path.getsize(tdms_file.name)
+    fileinfo["file_size"] = get_buffer_size(tdms_file)
     # Make sure next segment does not go beyond file capacity
     if fileinfo["next_segment_offset"] > fileinfo["file_size"]:
         fileinfo["next_segment_offset"] = fileinfo["file_size"]

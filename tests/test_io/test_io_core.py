@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import io
+import warnings
 from pathlib import Path
 from typing import TypeVar
 
@@ -12,13 +13,15 @@ import numpy as np
 import pandas as pd
 import pytest
 import rich.progress as prog
+from upath import UPath
 
-import dascore
 import dascore as dc
+from dascore.config import set_config
 from dascore.constants import SpoolType
 from dascore.exceptions import (
     InvalidFiberIOError,
     MissingOptionalDependencyError,
+    RemoteCacheError,
     UnknownFiberFormatError,
 )
 from dascore.io.core import (
@@ -398,10 +401,29 @@ class TestGetFormat:
         assert fiber_io.name == name
         assert fiber_io.version == version
 
-    def test_empty_hdf5_no_format(self, empty_h5_path):
-        """Ensure the empty hdf5 dorsen't have a format."""
-        with pytest.raises(UnknownFiberFormatError):
-            dc.get_format(empty_h5_path)
+    def test_manager_get_format_invokes_fiberio_get_format(self, monkeypatch, tmp_path):
+        """Manager format detection should execute FiberIO get_format loop bodies."""
+        path = tmp_path / "format_loop.h5"
+        path.write_text("placeholder")
+        fiber_io = _ReadOnlySummaryFormatter()
+        seen = {}
+
+        def _yield_fiberio(*_args, **_kwargs):
+            yield fiber_io
+
+        def _get_format(resource, **_kwargs):
+            seen["resource"] = resource
+            return (fiber_io.name, fiber_io.version)
+
+        monkeypatch.setattr(FiberIO.manager, "yield_fiberio", _yield_fiberio)
+        monkeypatch.setattr(fiber_io, "get_format", _get_format)
+        fiber_io.get_format._required_type = Path
+
+        assert FiberIO.manager._get_format(path=path) == (
+            fiber_io.name,
+            fiber_io.version,
+        )
+        assert seen["resource"] == path
 
 
 class TestScan:
@@ -497,7 +519,54 @@ class TestScan:
             out = dc.scan([missing_path, readable_path])
 
         assert len(out) == 1
-        assert out[0].file_format == _ReadOnlySummaryFormatter.name
+        assert out[0].source_format == _ReadOnlySummaryFormatter.name
+
+    def test_local_upath_file_interfaces(self, terra15_v6_path):
+        """Ensure core file IO accepts local UPath inputs."""
+        path = UPath(terra15_v6_path)
+        file_format, file_version = dc.get_format(path)
+        assert file_format
+        assert file_version
+        assert len(dc.scan(path)) == 1
+        assert len(dc.read(path)) == 1
+
+    def test_updated_after_warns_when_remote_mtime_missing(self, monkeypatch):
+        """Timestamp filtering should warn and continue on unsupported backends."""
+        fiber_io = _FiberFormatTestV1()
+        resource = UPath("memory://dascore/fiberio/mtime.txt")
+        resource.write_text("x")
+        path_type = type(resource)
+        original_stat = path_type.stat
+
+        def _stat(self, *args, **kwargs):
+            raise OSError("no mtime")
+
+        monkeypatch.setattr(path_type, "stat", _stat)
+        with pytest.warns(UserWarning, match="does not expose reliable mtime"):
+            assert fiber_io._updated_after(resource, 1) is True
+        monkeypatch.setattr(path_type, "stat", original_stat)
+
+    def test_local_stat_failure_returns_false(self, monkeypatch, tmp_path):
+        """Local stat failures should conservatively skip timestamp-matched scans.
+
+        Remote backends sometimes cannot provide mtimes at all, so DASCore warns
+        and continues scanning in that case. For local files, a failed ``stat``
+        usually means the path disappeared or became unreadable, so
+        ``_updated_after`` should return ``False`` instead of treating that as an
+        implicit update.
+        """
+        fiber_io = _FiberFormatTestV1()
+        path = tmp_path / "mtime.txt"
+        path.write_text("x")
+
+        def _stat(_self, *args, **kwargs):
+            raise OSError("no stat")
+
+        monkeypatch.setattr(Path, "stat", _stat)
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            assert fiber_io._updated_after(path, 1) is False
+        assert not record
 
 
 class TestReloadableSourcePath:
@@ -508,7 +577,9 @@ class TestReloadableSourcePath:
         path = tmp_path / "example.txt"
         path.write_text("x")
         manager = IOResourceManager(path)
-        assert _get_reloadable_source_path(manager) == str(path)
+        out = _get_reloadable_source_path(manager)
+        assert isinstance(out, UPath)
+        assert out == UPath(path)
 
     def test_can_raise(self):
         """
@@ -537,6 +608,19 @@ class TestReloadableSourcePath:
             scan = dc.scan(terra15_v6_path)
         assert not len(scan)
 
+    def test_remote_cache_error_is_not_swallowed(self, monkeypatch, terra15_v6_path):
+        """Remote cache policy errors during scan should propagate to callers."""
+        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+        fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
+
+        def raise_remote_cache_error(*args, **kwargs):
+            raise RemoteCacheError("metadata cache blocked")
+
+        monkeypatch.setattr(fiber_io, "scan", raise_remote_cache_error)
+
+        with pytest.raises(RemoteCacheError, match="metadata cache blocked"):
+            dc.scan(terra15_v6_path)
+
     def test_scan_legacy_patch_attrs_raises(self, monkeypatch, terra15_v6_path):
         """FiberIO returning PatchAttrs should now fail loudly."""
         fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
@@ -547,7 +631,7 @@ class TestReloadableSourcePath:
 
         monkeypatch.setattr(fiber_io, "scan", return_patch_attrs)
 
-        with pytest.raises(ValueError, match="PatchAttrs from FiberIO.scan"):
+        with pytest.raises(ValueError, match=r"PatchAttrs from FiberIO\.scan"):
             dc.scan(terra15_v6_path)
 
     def test_default_fiberio_scan_uses_reloadable_source_path(self, tmp_path):
@@ -560,9 +644,9 @@ class TestReloadableSourcePath:
 
         assert len(out) == 1
         assert isinstance(out[0], dc.PatchSummary)
-        assert not out[0].path
-        assert not out[0].file_format
-        assert not out[0].file_version
+        assert not out[0].source_path
+        assert not out[0].source_format
+        assert not out[0].source_version
         assert not out[0].source_patch_id
 
     def test_dc_scan_adds_source_metadata_to_raw_fiberio_scan(self, tmp_path):
@@ -572,16 +656,16 @@ class TestReloadableSourcePath:
 
         raw = _ReadOnlySummaryFormatter().scan(path)
         assert len(raw) == 1
-        assert not raw[0].path
-        assert not raw[0].file_format
-        assert not raw[0].file_version
+        assert not raw[0].source_path
+        assert not raw[0].source_format
+        assert not raw[0].source_version
 
         out = dc.scan(path)
         assert len(out) == 1
         assert isinstance(out[0], dc.PatchSummary)
-        assert str(out[0].path) == str(path)
-        assert out[0].file_format == _ReadOnlySummaryFormatter.name
-        assert out[0].file_version == _ReadOnlySummaryFormatter.version
+        assert str(out[0].source_path) == str(path)
+        assert out[0].source_format == _ReadOnlySummaryFormatter.name
+        assert out[0].source_version == _ReadOnlySummaryFormatter.version
         assert "path" not in out[0].attrs.model_dump()
         assert "file_format" not in out[0].attrs.model_dump()
         assert "file_version" not in out[0].attrs.model_dump()
@@ -618,11 +702,11 @@ class TestReloadableSourcePath:
                 raise KeyboardInterrupt("test interrupt")
 
         # Switch off debug to force progress bar, then make contents to scan.
-        monkeypatch.setattr(dascore, "_debug", False)
         contents = list(dc.examples.get_example_spool(length=22))
 
-        with pytest.raises(KeyboardInterrupt, match="test interrupt"):
-            dc.scan(contents, progress=Progress())
+        with set_config(debug=False):
+            with pytest.raises(KeyboardInterrupt, match="test interrupt"):
+                dc.scan(contents, progress=Progress())
 
 
 class TestScanToDF:

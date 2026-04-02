@@ -5,7 +5,7 @@ from __future__ import annotations
 import dascore as dc
 from dascore.core.summary import PatchSummary
 from dascore.io.core import FiberIO
-from dascore.utils.io import BinaryReader
+from dascore.utils.io import LocalBinaryReader, LocalPath
 from dascore.utils.misc import optional_import
 
 from .utils import (
@@ -29,11 +29,11 @@ class SegyV1_0(FiberIO):  # noqa
     # subclassed and this changed for debugging reasons.
     _package_name = "segyio"
 
-    def get_format(self, fp: BinaryReader, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, fp: LocalBinaryReader, **kwargs) -> tuple[str, str] | bool:
         """Make sure input is segy."""
         return _get_segy_version(fp)
 
-    def read(self, path, time=None, channel=None, **kwargs):
+    def read(self, path: LocalPath, time=None, channel=None, **kwargs):
         """
         Read should take a path and return a patch or sequence of patches.
 
@@ -42,6 +42,7 @@ class SegyV1_0(FiberIO):  # noqa
         be implemented as well.
         """
         segyio = optional_import(self._package_name)
+        path = str(path)
         with segyio.open(path, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
             attrs = _get_attrs(fi, coords, path, self, include_source=True)
@@ -54,13 +55,14 @@ class SegyV1_0(FiberIO):  # noqa
         patch = dc.Patch(coords=coords, data=data, attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, path, **kwargs) -> list[PatchSummary]:
+    def scan(self, path: LocalPath, **kwargs) -> list[PatchSummary]:
         """
         Used to get metadata about a file without reading the whole file.
 
         Returns lightweight scan metadata without loading the data array.
         """
         segyio = optional_import(self._package_name)
+        path = str(path)
         with segyio.open(path, ignore_geometry=True) as fi:
             coords = _get_coords(fi)
             attrs = _get_attrs(fi, coords, path, self)

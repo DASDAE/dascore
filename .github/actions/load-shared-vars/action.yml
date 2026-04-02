@@ -10,6 +10,9 @@ outputs:
   python-min-deps-matrix:
     description: "Python version matrix for minimum dependency tests"
     value: ${{ steps.load.outputs.python-min-deps-matrix }}
+  test-os-matrix:
+    description: "OS matrix for test workflows"
+    value: ${{ steps.load.outputs.test-os-matrix }}
 
 runs:
   using: "composite"
@@ -19,9 +22,10 @@ runs:
       shell: bash
       run: |
         python_default="3.13"
-        python_test_matrix='["3.11","3.12","3.13","3.14"]'
         python_min_deps_matrix='["3.13","3.14"]'
-
+        python_test_matrix='["3.11","3.12","3.13","3.14"]'
+        test_os_matrix='["ubuntu-latest","macos-latest","windows-latest"]'
         echo "PYTHON_DEFAULT=$python_default" >> "$GITHUB_ENV"
         echo "python-test-matrix=$python_test_matrix" >> "$GITHUB_OUTPUT"
         echo "python-min-deps-matrix=$python_min_deps_matrix" >> "$GITHUB_OUTPUT"
+        echo "test-os-matrix=$test_os_matrix" >> "$GITHUB_OUTPUT"

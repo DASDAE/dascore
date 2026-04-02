@@ -8,7 +8,8 @@ import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.summary import PatchSummary
-from dascore.io import BinaryReader, FiberIO
+from dascore.io import FiberIO
+from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .utils import _get_all_attrs, _get_data, _get_default_attrs, _get_version_str
 
@@ -56,7 +57,7 @@ class TDMSFormatterV4713(FiberIO):
 
     def read(
         self,
-        resource: BinaryReader,
+        resource: LocalBinaryReader,
         time: tuple[timeable_types, timeable_types] | None = None,
         distance: tuple[float, float] | None = None,
         **kwargs,

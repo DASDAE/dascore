@@ -11,19 +11,41 @@ from pathlib import Path
 import pandas as pd
 import pooch
 
+from dascore.config import get_config
 from dascore.constants import DATA_VERSION
 
 REGISTRY_PATH = Path(files("dascore").joinpath("data_registry.txt"))
+LARGE_REGISTRY_FILES = frozenset({"whale_1.hdf5"})
 
-# Create a pooch for fetching data files
-fetcher = pooch.create(
-    path=pooch.os_cache("dascore"),
-    base_url="https://github.com/d-chambers/dascore",
-    version=DATA_VERSION,
-    version_dev="master",
-    env="DFS_DATA_DIR",
-)
-fetcher.load_registry(REGISTRY_PATH)
+
+@cache
+def _get_fetcher(cache_dir: str) -> pooch.Pooch:
+    """Create and cache one pooch fetcher for a specific cache directory."""
+    fetcher = pooch.create(
+        path=Path(cache_dir),
+        base_url="https://github.com/d-chambers/dascore",
+        version=DATA_VERSION,
+        version_dev="master",
+        env="DFS_DATA_DIR",
+    )
+    fetcher.load_registry(REGISTRY_PATH)
+    return fetcher
+
+
+def get_fetcher() -> pooch.Pooch:
+    """Return the downloader fetcher for the active runtime configuration."""
+    return _get_fetcher(str(get_config().downloader_cache_dir))
+
+
+class _FetcherProxy:
+    """Proxy ``fetcher`` access through the active runtime configuration."""
+
+    def __getattr__(self, item):
+        """Delegate attribute access to the active fetcher."""
+        return getattr(get_fetcher(), item)
+
+
+fetcher = _FetcherProxy()
 
 
 @dataclass(frozen=True)
@@ -43,9 +65,10 @@ class TestDataCacheInfo:
 
 
 @cache
-def get_test_data_cache_info() -> TestDataCacheInfo:
+def _get_test_data_cache_info(cache_dir: str) -> TestDataCacheInfo:
     """Return the metadata needed to populate the CI test-data cache."""
     registry_path = Path(REGISTRY_PATH)
+    fetcher = _get_fetcher(cache_dir)
     return TestDataCacheInfo(
         registry_path=registry_path,
         cache_path=Path(fetcher.path).parent,
@@ -54,19 +77,31 @@ def get_test_data_cache_info() -> TestDataCacheInfo:
     )
 
 
+def get_test_data_cache_info() -> TestDataCacheInfo:
+    """Return the metadata needed to populate the CI test-data cache."""
+    return _get_test_data_cache_info(str(get_config().downloader_cache_dir))
+
+
 @cache
-def get_registry_df() -> pd.DataFrame:
-    """Returns a dataframe of all files in the data registry."""
+def get_registry_df(*, exclude_large: bool = False) -> pd.DataFrame:
+    """Return a dataframe of files in the data registry."""
     names = (
         "name",
         "hash",
         "url",
     )
     df = pd.read_csv(REGISTRY_PATH, sep=r"\s+", skiprows=1, names=names)
+    if exclude_large:
+        df = df.loc[~df["name"].isin(LARGE_REGISTRY_FILES)]
     return df
 
 
 @cache
+def _fetch_cached(name: str, cache_dir: str) -> Path:
+    """Fetch one named file for a specific downloader cache directory."""
+    return Path(_get_fetcher(cache_dir).fetch(name))
+
+
 def fetch(name: Path | str, **kwargs) -> Path:
     """
     Fetch a data file from the registry.
@@ -77,7 +112,7 @@ def fetch(name: Path | str, **kwargs) -> Path:
         The name of the file to fetch. Must be in the data registry or a
         path which exists.
     kwargs
-        Left for compatibility reasons.
+        Ignored and kept only for compatibility with older call sites.
 
     Returns
     -------
@@ -85,4 +120,6 @@ def fetch(name: Path | str, **kwargs) -> Path:
     """
     if (existing_path := Path(name)).exists():
         return existing_path
-    return Path(fetcher.fetch(name, **kwargs))
+    return _fetch_cached(
+        name=str(name), cache_dir=str(get_config().downloader_cache_dir)
+    )

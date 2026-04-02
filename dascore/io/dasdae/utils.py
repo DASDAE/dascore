@@ -6,10 +6,14 @@ coord-summary fast path and string-serialization design notes used here.
 
 from __future__ import annotations
 
+import contextlib
+import json
+import pickle
+
 import numpy as np
-from tables import NodeError
 
 import dascore as dc
+from dascore.config import get_config
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import CoordSummary, get_coord
@@ -19,48 +23,30 @@ from dascore.core.summary import (
     coord_summary_from_available,
     coord_summary_from_metadata,
 )
+from dascore.exceptions import InvalidFiberFileError
 from dascore.utils.array import (
     convert_bytes_to_strings,
     convert_strings_to_bytes,
     is_string_byte_serializable_array,
 )
 from dascore.utils.attrs import separate_coord_info
-from dascore.utils.misc import suppress_warnings
+from dascore.utils.misc import unbyte
 from dascore.utils.time import to_int
 
 # Keys not counted as true kwargs for determining if patch is filtered/selected.
 _KWARG_NON_KEYS = {"file_version", "file_format", "path", "source_patch_id"}
+_ATTR_PREFIX = "_attrs_"
+_ATTR_TYPE_PREFIX = "_attr_type_"
 
 
 # --- Functions for writing DASDAE format
 
 
-def _create_or_get_group(h5, group, name):
-    """Create a new group or get existing."""
-    try:
-        group = h5.create_group(group, name)
-    except NodeError:
-        group = getattr(group, name)
-    return group
-
-
-def _create_or_squash_array(h5, group, name, data):
-    """Create a new array, if it exists delete and re-create."""
-    try:
-        array = h5.create_array(group, name, data)
-    except NodeError:
-        old_node = getattr(group, name)
-        h5.remove_node(old_node)
-        array = h5.create_array(group, name, data)
-    return array
-
-
 def _write_meta(hfile, file_version):
     """Write metadata to hdf5 file."""
-    attrs = hfile.root._v_attrs
-    attrs["__format__"] = "DASDAE"
-    attrs["__DASDAE_version__"] = file_version
-    attrs["__dascore__version__"] = dc.__version__
+    hfile.attrs["__format__"] = "DASDAE"
+    hfile.attrs["__DASDAE_version__"] = file_version
+    hfile.attrs["__dascore__version__"] = dc.__version__
 
 
 def _save_attrs_and_dims(patch, patch_group):
@@ -69,11 +55,14 @@ def _save_attrs_and_dims(patch, patch_group):
     # TODO will need to test if objects are serializable
     attr_dict = patch.attrs.model_dump(exclude_unset=True)
     for i, v in attr_dict.items():
-        patch_group._v_attrs[f"_attrs_{i}"] = v
-    patch_group._v_attrs["_dims"] = ",".join(patch.dims)
+        encoded, attr_type = _encode_attr_value(i, v)
+        patch_group.attrs[f"{_ATTR_PREFIX}{i}"] = encoded
+        if attr_type is not None:
+            patch_group.attrs[f"{_ATTR_TYPE_PREFIX}{i}"] = attr_type
+    patch_group.attrs["_dims"] = ",".join(patch.dims)
 
 
-def _save_array(data, name, group, h5):
+def _save_array(data, name, group):
     """Save an array to a group, handling datetime and string values."""
     data = np.asarray(data)
     is_dt = np.issubdtype(data.dtype, np.datetime64)
@@ -84,16 +73,19 @@ def _save_array(data, name, group, h5):
         data = to_int(data)
     elif is_str:
         data = convert_strings_to_bytes(data)
-    array_node = _create_or_squash_array(h5, group, name, data)
-    array_node._v_attrs["is_datetime64"] = is_dt
-    array_node._v_attrs["is_timedelta64"] = is_td
-    array_node._v_attrs["is_string"] = is_str
+    if name in group:
+        # Overwrite the dataset in place when callers resave the same array node.
+        del group[name]
+    array_node = group.create_dataset(name, data=data)
+    array_node.attrs["is_datetime64"] = is_dt
+    array_node.attrs["is_timedelta64"] = is_td
+    array_node.attrs["is_string"] = is_str
     if is_str:
-        array_node._v_attrs["original_string_dtype"] = original_string_dtype
+        array_node.attrs["original_string_dtype"] = original_string_dtype
     return array_node
 
 
-def _save_coords(patch, patch_group, h5):
+def _save_coords(patch, patch_group):
     """Save coordinates."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
@@ -101,27 +93,30 @@ def _save_coords(patch, patch_group, h5):
         # First save coordinate arrays
         data = coord.values
         save_name = f"_coord_{name}"
-        array_node = _save_array(data, save_name, patch_group, h5)
+        array_node = _save_array(data, save_name, patch_group)
         step = coord.step
         if step is not None:
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
-            array_node._v_attrs["step"] = to_int(step) if is_td else step
-            array_node._v_attrs["step_is_timedelta64"] = is_td
+            array_node.attrs["step"] = to_int(step) if is_td else step
+            array_node.attrs["step_is_timedelta64"] = is_td
         if coord.units is not None:
-            array_node._v_attrs["units"] = str(coord.units)
+            array_node.attrs["units"] = str(coord.units)
         # then save dimensions of coordinates
         save_name = f"_cdims_{name}"
-        patch_group._v_attrs[save_name] = ",".join(dims)
+        patch_group.attrs[save_name] = ",".join(dims)
 
 
-def _save_patch(patch, wave_group, h5, name):
+def _save_patch(patch, wave_group, name):
     """Save the patch to disk."""
-    patch_group = _create_or_get_group(h5, wave_group, name)
+    if name in wave_group:
+        # Replace the entire patch group so stale datasets/attrs can't survive.
+        del wave_group[name]
+    patch_group = wave_group.create_group(name)
     _save_attrs_and_dims(patch, patch_group)
-    _save_coords(patch, patch_group, h5)
+    _save_coords(patch, patch_group)
     # add data
     if patch.data.shape:
-        _create_or_squash_array(h5, patch_group, "data", patch.data)
+        _save_array(patch.data, "data", group=patch_group)
 
 
 # --- Functions for reading
@@ -130,27 +125,27 @@ def _save_patch(patch, wave_group, h5, name):
 def _get_attrs(patch_group):
     """Get the saved attributes form the group attrs."""
     out = {}
-    attrs = [x for x in patch_group._v_attrs._f_list() if x.startswith("_attrs_")]
-    with suppress_warnings(DeprecationWarning):
-        for attr_name in attrs:
-            key = attr_name.replace("_attrs_", "")
-            val = patch_group._v_attrs[attr_name]
-            # need to unpack one value arrays
-            if isinstance(val, np.ndarray) and not val.shape:
-                val = np.asarray([val])[0]
-            out[key] = val
+    attrs = [x for x in patch_group.attrs if x.startswith(_ATTR_PREFIX)]
+    for attr_name in attrs:
+        key = attr_name.replace(_ATTR_PREFIX, "")
+        val = _decode_attr_value(patch_group.attrs, key, patch_group.attrs[attr_name])
+        # need to unpack one value arrays
+        if isinstance(val, np.ndarray) and not val.shape:
+            val = np.asarray([val])[0]
+        out[key] = val
     return out
 
 
 def _read_array(table_array):
     """Read an array into numpy."""
     data = table_array[:]
-    if getattr(table_array._v_attrs, "is_datetime64", False):
+    attrs = table_array.attrs
+    if attrs.get("is_datetime64"):
         data = data.view("datetime64[ns]")
-    if getattr(table_array._v_attrs, "is_timedelta64", False):
+    if attrs.get("is_timedelta64"):
         data = data.view("timedelta64[ns]")
-    if getattr(table_array._v_attrs, "is_string", False):
-        original_dtype = getattr(table_array._v_attrs, "original_string_dtype", "")
+    if attrs.get("is_string"):
+        original_dtype = unbyte(attrs.get("original_string_dtype", ""))
         data = convert_bytes_to_strings(data, original_dtype)
     return data
 
@@ -159,8 +154,36 @@ def _translate_legacy_attrs(attrs):
     """Normalize legacy DASDAE attr payloads to flat coord metadata."""
     out = dict(attrs)
     coords = out.pop("coords", {})
+    if isinstance(coords, str):
+        # Older DASDAE files stored the coord-summary payload as a pickled
+        # string attr. Decode only this legacy coord metadata so scan/read can
+        # recover units and steps without reviving general legacy attr unpickling.
+        with contextlib.suppress(
+            AttributeError,
+            EOFError,
+            KeyError,
+            pickle.PickleError,
+            TypeError,
+            UnicodeError,
+            ValueError,
+        ):
+            decoded = pickle.loads(coords.encode("latin1"))
+            if (
+                hasattr(decoded, "items")
+                and not get_config().allow_dasdae_format_unpickle
+            ):
+                msg = (
+                    "This DASDAE file contains legacy pickled coordinate metadata. "
+                    "Unpickling DASDAE format metadata is disabled by default for "
+                    "security. If you trust this file, enable legacy compatibility "
+                    "with set_config(allow_dasdae_format_unpickle=True)."
+                )
+                raise InvalidFiberFileError(msg)
+            coords = decoded
     if hasattr(coords, "to_summary_dict"):
         coords = coords.to_summary_dict()
+    if not hasattr(coords, "items"):
+        coords = {}
     for name, summary in coords.items():
         if hasattr(summary, "to_summary"):
             summary = summary.to_summary()
@@ -168,7 +191,7 @@ def _translate_legacy_attrs(attrs):
             summary = summary.model_dump()
         if not isinstance(summary, dict):
             continue
-        for field in ("units", "step"):
+        for field in ("min", "max", "step", "units", "dtype", "len"):
             key = f"{name}_{field}"
             value = summary.get(field)
             if key not in out and value not in (None, ""):
@@ -187,12 +210,16 @@ def _get_coords(patch_group, dims, attrs2):
     """Get the coordinates from a patch group."""
     coord_dict = {}  # just store coordinates here
     coord_dim_dict = {}  # stores {coord_name: ((dims, ...), coord)}
-    for coord in [x for x in patch_group if x.name.startswith("_coord_")]:
-        name = coord.name.replace("_coord_", "")
+    for coord in patch_group.values():
+        name = coord.name.rsplit("/", maxsplit=1)[-1]
+        if not name.startswith("_coord_"):
+            continue
+        name = name.replace("_coord_", "")
         array = _read_array(coord)
-        units = getattr(coord._v_attrs, "units", None)
-        step = getattr(coord._v_attrs, "step", None)
-        if getattr(coord._v_attrs, "step_is_timedelta64", False):
+        node_attrs = coord.attrs
+        units = node_attrs.get("units", None)
+        step = node_attrs.get("step", None)
+        if node_attrs.get("step_is_timedelta64", False):
             step = np.timedelta64(step, "ns")
         coord = get_coord(
             data=array,
@@ -201,10 +228,11 @@ def _get_coords(patch_group, dims, attrs2):
         )
         coord_dict[name] = coord
     # associates coordinates with dimensions
-    c_dims = [x for x in patch_group._v_attrs._f_list() if x.startswith("_cdims")]
+    group_attrs = patch_group.attrs
+    c_dims = [x for x in group_attrs if x.startswith("_cdims")]
     for coord_name in c_dims:
         name = coord_name.replace("_cdims_", "")
-        value = patch_group._v_attrs[coord_name]
+        value = unbyte(group_attrs[coord_name])
         assert name in coord_dict, "Should already have loaded coordinate array"
         coord_dim_dict[name] = (tuple(value.split(",")), coord_dict[name])
         # add dimensions to coordinates that have them.
@@ -214,7 +242,7 @@ def _get_coords(patch_group, dims, attrs2):
 
 def _get_dims(patch_group):
     """Get the dims tuple from the patch group."""
-    dims = patch_group._v_attrs["_dims"]
+    dims = unbyte(patch_group.attrs["_dims"])
     if not dims:
         out = ()
     else:
@@ -228,7 +256,7 @@ def _read_patch(patch_group, **kwargs):
     dims = _get_dims(patch_group)
     coords = _get_coords(patch_group, dims, attrs)
     _, attr_info = separate_coord_info(attrs, dims=dims)
-    attr_info["_source_patch_id"] = patch_group._v_name
+    attr_info["_source_patch_id"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
     attrs = PatchAttrs.from_dict(attr_info)
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
@@ -253,20 +281,6 @@ def _read_patch(patch_group, **kwargs):
     return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
 
-def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
-    """Get the contents from each patch group."""
-    out = []
-    for group in h5.iter_nodes("/waveforms"):
-        out.append(
-            _get_patch_content_from_group(
-                group,
-                file_version=file_version,
-                file_format=file_format,
-            )
-        )
-    return out
-
-
 def _kwargs_empty(kwargs) -> bool:
     """Determine if the keyword arguments are *effectively* empty."""
     # These keys get passed in from some spools, so don't count them.
@@ -280,27 +294,28 @@ def _kwargs_empty(kwargs) -> bool:
 def _read_array_sample(table_array, index):
     """Read one array sample and restore datetime-like dtypes when needed."""
     out = table_array[index]
-    if getattr(table_array._v_attrs, "is_datetime64", False):
+    attrs = table_array.attrs
+    if attrs.get("is_datetime64"):
         out = np.asarray([out]).view("datetime64[ns]")[0]
-    if getattr(table_array._v_attrs, "is_timedelta64", False):
+    if attrs.get("is_timedelta64"):
         out = np.asarray([out]).view("timedelta64[ns]")[0]
     return out
 
 
 def _get_coord_node_metadata(coord_node) -> dict[str, object]:
     """Extract normalized metadata from a stored coord node."""
-    attrs = coord_node._v_attrs
-    units = getattr(attrs, "units", None)
-    step = getattr(attrs, "step", None)
-    if getattr(attrs, "step_is_timedelta64", False):
+    attrs = coord_node.attrs
+    units = attrs.get("units", None)
+    step = attrs.get("step", None)
+    if attrs.get("step_is_timedelta64", False):
         step = np.timedelta64(step, "ns")
-    is_string = bool(getattr(attrs, "is_string", False))
+    is_string = bool(attrs.get("is_string", False))
     dtype = _normalize_coord_summary_dtype(
         str(coord_node.dtype).split("[")[0],
-        is_datetime=bool(getattr(attrs, "is_datetime64", False)),
-        is_timedelta=bool(getattr(attrs, "is_timedelta64", False)),
+        is_datetime=bool(attrs.get("is_datetime64", False)),
+        is_timedelta=bool(attrs.get("is_timedelta64", False)),
         is_string=is_string,
-        original_dtype=getattr(attrs, "original_string_dtype", ""),
+        original_dtype=unbyte(attrs.get("original_string_dtype", "")),
     )
     length = int(np.prod(coord_node.shape, dtype=int)) if coord_node.shape else 0
     return {
@@ -345,38 +360,131 @@ def _get_coord_summary_from_node(coord_node, dims):
     )
 
 
-def _get_patch_content_from_group(group, file_version="", file_format="DASDAE"):
-    """Get patch content from a single node."""
-    attrs = group._v_attrs
+def _get_patch_summary_from_group(group):
+    """Build a patch summary from one stored DASDAE patch group."""
+    attrs = group.attrs
     out = {}
-    for key in attrs._f_list():
-        value = getattr(attrs, key)
-        new_key = key.replace("_attrs_", "")
+    # First recover the flat attr payload saved on the patch group itself.
+    for key in attrs:
+        if not key.startswith(_ATTR_PREFIX):
+            continue
+        value = _decode_attr_value(attrs, key.replace(_ATTR_PREFIX, ""), attrs[key])
+        new_key = key.replace(_ATTR_PREFIX, "")
         # need to unpack 0 dim arrays.
         if isinstance(value, np.ndarray) and not value.shape:
             value = np.atleast_1d(value)[0]
-        out[new_key] = value
+        out[new_key] = unbyte(value)
     # rename dims
-    out["dims"] = out.pop("_dims")
+    out["dims"] = unbyte(attrs["_dims"])
     out = _translate_legacy_attrs(out)
-    dims = tuple(out["dims"].split(","))
+    dims_str = out["dims"]
+    dims = tuple(dims_str.split(",")) if dims_str else ()
+    # Split flattened coord metadata from the remaining patch attrs.
     legacy_coords, attr_info = separate_coord_info(out, dims=dims)
     coord_map = {}
     for name, summary in legacy_coords.items():
         if {"min", "max"} <= set(summary):
             coord_map[name] = CoordSummary(**summary)
-    for coord_node in [x for x in group if x.name.startswith("_coord_")]:
-        name = coord_node.name.replace("_coord_", "")
-        coord_dims = tuple(getattr(attrs, f"_cdims_{name}", "").split(","))
-        summary = _get_coord_summary_from_node(coord_node, coord_dims)
-        coord_map[name] = summary
-    data_nodes = [x for x in group if x.name == "data"]
-    dtype = str(data_nodes[0].dtype) if data_nodes else ""
-    attr_info["_source_patch_id"] = group._v_name
+    # Prefer coord summaries reconstructed from stored coord nodes when present.
+    for coord_node in group.values():
+        name = coord_node.name.rsplit("/", maxsplit=1)[-1]
+        if not name.startswith("_coord_"):
+            continue
+        name = name.replace("_coord_", "")
+        coord_dims_str = unbyte(attrs.get(f"_cdims_{name}", ""))
+        coord_dims = tuple(coord_dims_str.split(",")) if coord_dims_str else ()
+        node_summary = _get_coord_summary_from_node(coord_node, coord_dims)
+        legacy_summary = coord_map.get(name)
+        if legacy_summary is not None:
+            payload = node_summary.model_dump()
+            if payload.get("units") in (None, "") and legacy_summary.units not in (
+                None,
+                "",
+            ):
+                payload["units"] = legacy_summary.units
+            if payload.get("step") in (None, "") and legacy_summary.step not in (
+                None,
+                "",
+            ):
+                payload["step"] = legacy_summary.step
+            node_summary = CoordSummary(**payload)
+        coord_map[name] = node_summary
+    # Data shape/dtype come from the stored data node without loading the array.
+    data_node = group.get("data")
+    dtype = str(data_node.dtype) if data_node is not None else ""
+    shape = tuple(data_node.shape) if data_node is not None else ()
     return PatchSummary(
         attrs=PatchAttrs.from_dict(attr_info),
         coords=coord_map,
         dims=dims,
-        shape=(),
+        shape=shape,
         dtype=dtype,
+        source_patch_id=group.name.rsplit("/", maxsplit=1)[-1],
     )
+
+
+def _encode_history_attr(value):
+    """Serialize history as one flat JSON string for DASDAE storage."""
+    if value in (None, "", (), []):
+        return "[]", "history_json"
+    if isinstance(value, str):
+        payload = [value]
+    else:
+        payload = [str(item) for item in value]
+    return json.dumps(payload), "history_json"
+
+
+def _encode_attr_value(key, value):
+    """Encode a patch attr into an HDF5-attr-safe representation."""
+    if key == "history":
+        return _encode_history_attr(value)
+    if value is None:
+        return "", "none"
+    if isinstance(value, np.datetime64):
+        return to_int(value), "datetime64[ns]"
+    if isinstance(value, np.timedelta64):
+        return to_int(value), "timedelta64[ns]"
+    return value, None
+
+
+def _decode_attr_value(attrs, key, value):
+    """Decode one stored attr value using saved type metadata when present."""
+    attr_type = unbyte(attrs.get(f"{_ATTR_TYPE_PREFIX}{key}", None))
+    if attr_type is None:
+        return _decode_legacy_attr_value(value)
+    if attr_type == "none":
+        return None
+    if attr_type == "datetime64[ns]":
+        return np.asarray([value], dtype="int64").view("datetime64[ns]")[0]
+    if attr_type == "timedelta64[ns]":
+        return np.asarray([value], dtype="int64").view("timedelta64[ns]")[0]
+    if attr_type == "history_json":
+        return tuple(json.loads(unbyte(value) or "[]"))
+    return value
+
+
+def _decode_legacy_attr_value(value):
+    """Decode legacy DASDAE attrs still used by the shipped fixture files."""
+    if value.__class__.__name__ == "Empty":
+        return ""
+    if isinstance(value, np.ndarray) and not value.shape:
+        value = np.asarray([value])[0]
+    if isinstance(value, np.bytes_ | bytes):
+        try:
+            return unbyte(value)
+        except UnicodeDecodeError:
+            return bytes(value).decode("latin1")
+    return value
+
+
+def _get_file_version(h5):
+    """Return the DASDAE file version from a generic HDF5 handle."""
+    return unbyte(h5.attrs.get("__DASDAE_version__", ""))
+
+
+def _get_contents_from_patch_groups_generic(h5):
+    """Get DASDAE scan summaries from a generic HDF5 handle."""
+    waveforms = h5.get("waveforms")
+    if waveforms is None:
+        return []
+    return [_get_patch_summary_from_group(group) for group in waveforms.values()]

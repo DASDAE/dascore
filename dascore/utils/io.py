@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import typing
+from contextlib import suppress
 from functools import cache
 from inspect import isfunction, ismethod
 from pathlib import Path
@@ -12,22 +13,76 @@ from typing import Any, get_type_hints
 import numpy as np
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import PatchType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
     cached_method,
+    iterate,
     optional_import,
 )
+from dascore.utils.paths import coerce_to_upath, is_local_path, is_pathlike
+from dascore.utils.remote_io import ensure_local_file as _ensure_local_file
+from dascore.utils.remote_io import get_local_handle
 from dascore.utils.time import to_float
 
 HANDLE_FUNCTIONS = {
-    str: lambda x: str(x),
     Path: lambda x: Path(x),
+    UPath: lambda x: coerce_to_upath(x),
 }
 
 
 RequiredType = typing.TypeVar("RequiredType")
+
+
+def ensure_local_file(resource) -> Path:
+    """Return a stable local path for one resource for the current session."""
+    if isinstance(resource, IOResourceManager):
+        resource = resource.source
+    return _ensure_local_file(resource)
+
+
+def _normalize_resource_identity(resource):
+    """Normalize one pathlike input to a local Path or remote UPath."""
+    if is_local_path(resource):
+        return Path(resource)
+    return coerce_to_upath(resource)
+
+
+def _resolve_resource(resource, required_type):
+    """Resolve resource to a form suitable for required_type."""
+    # already have a resource thing of some kind; just pass through.
+    if not is_pathlike(resource):
+        return resource
+    # Otherwise get Upath or Path, if Path ensure it is downloaded.
+    resource = _normalize_resource_identity(resource)
+    if isinstance(resource, Path):
+        return resource
+    if required_type is Path:
+        return ensure_local_file(resource)
+    return resource
+
+
+def _annotate_handle_path(handle, resource):  # pragma: no cover
+    """Attach lightweight source-path metadata to a remote handle when absent."""
+    path_str = str(resource)
+    # This is intentionally a small compatibility hack for readers that still
+    # inspect handle.name/path metadata. Some remote text handles come back as
+    # TextIOWrapper(name=None), and that name attribute may not be writable, so
+    # we keep a private fallback for downstream format sniffers.
+    for attr_name in ("_dascore_source_path",):
+        with suppress(AttributeError, TypeError):
+            setattr(handle, attr_name, path_str)
+    if getattr(handle, "name", None) in (None, ""):
+        with suppress(AttributeError, TypeError):
+            setattr(handle, "name", path_str)
+    return handle
+
+
+def _normalize_source_patch_ids(source_patch_id) -> set[str]:
+    """Coerce source patch identifiers into a deduplicated set of strings."""
+    return {str(value) for value in iterate(source_patch_id) if value not in (None, "")}
 
 
 class BinaryReader(io.BytesIO):
@@ -43,6 +98,8 @@ class BinaryReader(io.BytesIO):
             if cls.reset_offset:
                 resource.seek(0)  # reset byte offset
             return resource
+        if isinstance(resource, UPath):
+            return _annotate_handle_path(resource.open(cls.mode), resource)
         try:
             _maybe_make_parent_directory(resource)
             return open(resource, mode=cls.mode)
@@ -51,10 +108,23 @@ class BinaryReader(io.BytesIO):
             raise NotImplementedError(msg)
 
 
+class LocalBinaryReader(BinaryReader):
+    """A binary reader which first materializes remote resources locally."""
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get the binary handle, materializing remote resources if needed."""
+        if isinstance(resource, cls | io.BufferedIOBase):
+            if cls.reset_offset:
+                resource.seek(0)
+            return resource
+        return get_local_handle(resource, super().get_handle)
+
+
 class BinaryWriter(BinaryReader):
     """Dummy class for streams which write binary."""
 
-    mode = "ab"
+    mode = "wb"
     reset_offset = False
 
 
@@ -70,6 +140,10 @@ class TextReader(BinaryReader):
             if cls.reset_offset:
                 resource.seek(0)
             return resource
+        if isinstance(resource, UPath):
+            return _annotate_handle_path(
+                resource.open(cls.mode, encoding="utf-8"), resource
+            )
         try:
             _maybe_make_parent_directory(resource)
             return open(resource, mode=cls.mode, encoding="utf-8")
@@ -81,7 +155,16 @@ class TextReader(BinaryReader):
 class TextWriter(BinaryWriter):
     """Base class for writing text files."""
 
-    mode = "a"
+    mode = "w"
+
+
+class LocalPath:
+    """A local path adapter for callsites that require a concrete filename."""
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Return a local path for the supplied resource."""
+        return get_local_handle(resource, Path)
 
 
 @cache
@@ -102,8 +185,8 @@ def get_handle_from_resource(uri, required_type):
     """
     Get a handle for a file of preferred type.
 
-    return uri if required type is not specified or supported in either
-    handle function or has a `get_handle` method.
+    Return uri unchanged if required type is not specified or supported in
+    either handle functions or has no `get_handle` method.
     """
     if hasattr(required_type, "get_handle"):
         uri = required_type.get_handle(uri)
@@ -142,7 +225,8 @@ class IOResourceManager:
             return self._source.get_resource(required_type)
         required_type = _get_required_type(required_type)
         if required_type not in self._cache:
-            out = get_handle_from_resource(self._source, required_type)
+            source = _resolve_resource(self._source, required_type)
+            out = get_handle_from_resource(source, required_type)
             self._cache[required_type] = out
         return self._cache[required_type]
 

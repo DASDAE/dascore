@@ -150,9 +150,6 @@ To make this easy, DASCore will automatically manage and serve the right input t
 
 4. [H5Writer](`dascore.io.H5Writer`) - An instance of `h5py.File` which is open in append mode.
 
-5. [PyTablesReader](`dascore.io.PyTablesReader`) - An instance of `pytables.File` which is open in read mode.
-
-6. [PyTablesWriter](`dascore.io.PyTablesWriter`) - An instance of `pytables.File` which is open in append mode.
 
 Deciding which to use depends on whether the file is an HDF5-based or binary format, and which hdf5 library you want to use.
 

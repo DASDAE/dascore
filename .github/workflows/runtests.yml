@@ -34,6 +34,7 @@ jobs:
     outputs:
       # Shared values live in .github/actions/load-shared-vars/action.yml
       python-matrix: ${{ steps.load-vars.outputs.python-test-matrix }}
+      os-matrix: ${{ steps.load-vars.outputs.test-os-matrix }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/load-shared-vars
@@ -41,11 +42,12 @@ jobs:
 
   test_code:
     needs: setup
-    timeout-minutes: 25
+    timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Defined in .github/actions/load-shared-vars/action.yml
+        os: ${{ fromJson(needs.setup.outputs.os-matrix) }}
         # Defined in .github/actions/load-shared-vars/action.yml
         python-version: ${{ fromJson(needs.setup.outputs.python-matrix) }}
 
@@ -55,6 +57,7 @@ jobs:
     env:
       # set conda environment file with dependencies
       env_file: 'environment.yml'
+      debug_enabled: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -70,13 +73,32 @@ jobs:
 
       # Runs test suite and calculates coverage
       - name: run test suite
+        id: run_test_suite
+        continue-on-error: ${{ env.debug_enabled == 'true' }}
         shell: bash -el {0}
         run: ./.github/test_code.sh
 
       # Runs examples in docstrings
       - name: test docstrings
+        id: run_docstrings
+        continue-on-error: ${{ env.debug_enabled == 'true' }}
         shell: bash -el {0}
         run: ./.github/test_code.sh doctest
+
+      - name: note SSH key requirement for debug access
+        if: env.debug_enabled == 'true' && (steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure')
+        shell: bash
+        run: |
+          message="Debug access is limited to the workflow actor's GitHub SSH keys. Connect from a machine that has the matching private key loaded."
+          echo "$message"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup tmate session
+        if: env.debug_enabled == 'true' && (steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure')
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 30
+        with:
+          limit-access-to-actor: true
 
       # Upload coverage files
       - uses: codecov/codecov-action@v4
@@ -86,10 +108,8 @@ jobs:
           flags: unittests
           name: PR_tests
           token: ${{ secrets.CODECOV_TOKEN }}
-      
-            
-# This is a very useful step for debugging, it allows you to ssh into the CI
-# machine (https://github.com/marketplace/actions/debugging-with-tmate).
-#
-#- name: Setup tmate session
-#  uses: mxschmitt/action-tmate@v3
+
+      - name: fail job after debug session if tests failed
+        if: steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure'
+        shell: bash
+        run: exit 1
