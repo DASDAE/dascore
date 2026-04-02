@@ -5,6 +5,7 @@ from __future__ import annotations
 import textwrap
 
 import pandas as pd
+import pytest
 
 from dascore.core.attrs import PatchAttrs
 from dascore.examples import EXAMPLE_PATCHES
@@ -77,6 +78,26 @@ class TestDocsting:
         white_space_counts = [self.count_white_space(x) for x in list_lines]
         # all whitespace counts should be the same for the list lines.
         assert len(set(white_space_counts)) == 1
+
+    def test_raises_when_no_placeholders_are_replaced(self):
+        """Unused substitutions should fail if nothing in the docstring matches."""
+        with pytest.raises(ValueError, match="did not replace any placeholders"):
+
+            @compose_docstring(params="value")
+            def dummy_func():
+                """A docstring with no replacement slots."""
+
+    def test_raises_when_some_placeholders_are_unused(self):
+        """Providing extra substitution keys should fail loudly."""
+        with pytest.raises(ValueError, match="unused keys.*extra"):
+
+            @compose_docstring(params="value", extra="not-used")
+            def dummy_func():
+                """
+                A docstring with one replacement slot.
+
+                {params}
+                """
 
 
 class TestGetPluginTable:

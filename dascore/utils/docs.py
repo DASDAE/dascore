@@ -75,6 +75,7 @@ def compose_docstring(**kwargs: str | Sequence[str]):
     def _wrap(func):
         docstring = func.__doc__
         assert isinstance(docstring, str)
+        used_keys = set()
         # iterate each provided value and look for it in the docstring
         for key, value in kwargs.items():
             value = value if isinstance(value, str) else "\n".join(value)
@@ -83,6 +84,8 @@ def compose_docstring(**kwargs: str | Sequence[str]):
             search_value = f"{{{key}}}"
             # find all lines that match values
             lines = [x for x in docstring.split("\n") if search_value in x]
+            if lines:
+                used_keys.add(key)
             for line in lines:
                 # determine number of spaces used before matching character
                 spaces = line.split(search_value)[0]
@@ -90,6 +93,20 @@ def compose_docstring(**kwargs: str | Sequence[str]):
                 assert set(spaces) == {" "} or not len(spaces)
                 new = textwrap.indent(textwrap.dedent(value), spaces)
                 docstring = docstring.replace(line, new)
+        if kwargs and not used_keys:
+            msg = (
+                f"compose_docstring did not replace any placeholders on "
+                f"{func.__name__}."
+            )
+            raise ValueError(msg)
+        unused_keys = sorted(set(kwargs) - used_keys)
+        if unused_keys:
+            unused_str = ", ".join(unused_keys)
+            msg = (
+                f"compose_docstring received unused keys for {func.__name__}: "
+                f"{unused_str}."
+            )
+            raise ValueError(msg)
 
         func.__doc__ = docstring
         return func

@@ -243,7 +243,7 @@ def rolling(
         If step > 10 samples, or `apply` is the desired rolling operation, numpy
         is probably better.
     samples
-        {sample_explination}
+        {sample_explanation}
     **kwargs
         Used to pass dimension and window size.
         For example `time=10` represents window size of

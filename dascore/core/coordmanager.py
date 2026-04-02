@@ -623,7 +623,6 @@ class CoordManager(DascoreBaseModel):
             array = _apply_union_indexers(indexers, array)
         return self, array
 
-    @compose_docstring(select_desc=select_values_description)
     def order(
         self, array: MaybeArray = None, relative=False, samples=False, **kwargs
     ) -> tuple[Self, MaybeArray]:

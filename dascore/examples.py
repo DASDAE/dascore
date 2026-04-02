@@ -14,8 +14,8 @@ from scipy.signal import chirp as spy_chirp
 import dascore as dc
 import dascore.core
 from dascore.compat import random_state
+from dascore.config import set_config
 from dascore.exceptions import UnknownExampleError
-from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import iterate, register_func
 from dascore.utils.patch import get_patch_names
@@ -27,7 +27,8 @@ EXAMPLE_SPOOLS = {}
 
 def _load_example_patch_from_file(path: str | Path) -> dc.Patch:
     """Load the first patch from an example file without FileSpool indirection."""
-    return dc.read(path)[0]
+    with set_config(allow_dasdae_format_unpickle=True):
+        return dc.read(path)[0]
 
 
 @register_func(EXAMPLE_PATCHES, key="random_das")
@@ -657,7 +658,6 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5")
     return path
 
 
-@compose_docstring(examples=", ".join(list(EXAMPLE_PATCHES)))
 def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     """
     Load an example Patch.
@@ -708,7 +708,6 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     return EXAMPLE_PATCHES[example_name](**kwargs)
 
 
-@compose_docstring(examples=", ".join(list(EXAMPLE_SPOOLS)))
 def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:
     """
     Load an example Spool.
