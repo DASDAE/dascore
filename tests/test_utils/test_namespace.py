@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import ClassVar
 
 import pandas as pd
@@ -10,6 +9,7 @@ import pytest
 
 import dascore.utils.namespace as ns_module
 from dascore.exceptions import DASCorePluginError
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.namespace import (
     NamespaceOwner,
     _load_plugin_registry,
@@ -163,8 +163,7 @@ class TestNamespace:
         class DistinctBase(_MethodNameSpace):
             entry_point_group = "dascore.distinct_test"
 
-        with warnings.catch_warnings(record=True) as record:
-            warnings.simplefilter("always")
+        with suppress_warnings(action="always", record=True) as record:
 
             class FirstNamespace(DistinctBase):
                 name = "first"

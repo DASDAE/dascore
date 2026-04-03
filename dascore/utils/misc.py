@@ -61,19 +61,33 @@ def register_func(list_or_dict: list | dict, key=None):
 
 
 @contextlib.contextmanager
-def suppress_warnings(category=Warning):
+def suppress_warnings(
+    category=Warning,
+    message: str | None = None,
+    action: str = "ignore",
+    record: bool = False,
+):
     """
-    Context manager for suppressing warnings.
+    Context manager for configuring warnings inside a local scope.
 
     Parameters
     ----------
     category
         The types of warnings to suppress. Must be a subclass of Warning.
+    message
+        Optional regex used to match warning messages.
+    action
+        The warning action to apply, such as ``"ignore"``, ``"error"``,
+        or ``"always"``.
+    record
+        If True, yield the recorded warning list from ``catch_warnings``.
     """
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=category)
-        yield
-    return None
+    with warnings.catch_warnings(record=record) as caught:
+        if message is None:
+            warnings.simplefilter(action, category=category)
+        else:
+            warnings.filterwarnings(action, message=message, category=category)
+        yield caught if record else None
 
 
 def warn_or_raise(

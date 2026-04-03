@@ -793,12 +793,18 @@ def read(
     """
     with remote_cache_scope("read"):
         with IOResourceManager(path) as man:
+            inferred_format = not file_format or not file_version
             if not file_format or not file_version:
                 file_format, file_version = get_format(
                     man,
                     file_format=file_format,
                     file_version=file_version,
                 )
+            # If we had to probe metadata first, reopen the resource for the
+            # actual read. Some remote HDF5/fileobj stacks do not reliably
+            # tolerate reusing the same handle across sniffing and full reads.
+            if inferred_format:
+                man.clear_cache()
             fiber_io = FiberIO.manager.get_fiberio(
                 format=file_format, version=file_version
             )

@@ -234,6 +234,9 @@ def http_range_das_path(http_test_data_root, ensure_http_fetch_file):
         port=0,
         log_level="warning",
         ws="none",
+        # Avoid indefinite teardown hangs if a client leaves a keep-alive
+        # connection open when the fixture shuts the server down.
+        timeout_graceful_shutdown=1,
     )
     server = uvicorn.Server(config)
     sock = config.bind_socket()

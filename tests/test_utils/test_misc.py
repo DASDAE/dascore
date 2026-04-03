@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import time
-import warnings
 from io import BytesIO
 from pathlib import Path
 
@@ -535,8 +534,7 @@ class TestWarnOrRaise:
         """Ensure when  None does nothing."""
         msg = "Big nothing burger"
         # Now exceptions or warnings will crash the program.
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        with suppress_warnings(action="error"):
             warn_or_raise(msg, behavior=None)
 
 

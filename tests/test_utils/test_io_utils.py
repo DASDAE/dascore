@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from contextlib import closing
 from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
 from pathlib import Path
@@ -33,6 +32,7 @@ from dascore.utils.io import (
     ensure_local_file,
     get_handle_from_resource,
 )
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (
     FallbackFileObj,
     clear_remote_file_cache,
@@ -620,8 +620,7 @@ class TestIOResourceManager:
         with set_config(warn_on_remote_cache=True):
             with pytest.warns(UserWarning, match="Downloading remote file"):
                 first = ensure_local_file(path)
-            with warnings.catch_warnings(record=True) as record:
-                warnings.simplefilter("always")
+            with suppress_warnings(action="always", record=True) as record:
                 second = ensure_local_file(path)
         assert not record
         assert first == second
@@ -631,8 +630,7 @@ class TestIOResourceManager:
         path = UPath("memory://dascore/io_resource_test_warn_off.txt")
         path.write_text("hello")
         with set_config(warn_on_remote_cache=False):
-            with warnings.catch_warnings(record=True) as record:
-                warnings.simplefilter("always")
+            with suppress_warnings(action="always", record=True) as record:
                 local_path = ensure_local_file(path)
         assert not record
         assert local_path.exists()

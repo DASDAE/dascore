@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import io
-import warnings
 from pathlib import Path
 from typing import TypeVar
 
@@ -32,6 +31,7 @@ from dascore.io.core import (
 )
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
 
 tvar = TypeVar("tvar", int, float, str, Path)
@@ -563,8 +563,7 @@ class TestScan:
             raise OSError("no stat")
 
         monkeypatch.setattr(Path, "stat", _stat)
-        with warnings.catch_warnings(record=True) as record:
-            warnings.simplefilter("always")
+        with suppress_warnings(action="always", record=True) as record:
             assert fiber_io._updated_after(path, 1) is False
         assert not record
 

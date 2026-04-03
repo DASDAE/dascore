@@ -235,6 +235,11 @@ class IOResourceManager:
         for handle in self._cache.values():
             getattr(handle, "close", lambda: None)()
 
+    def clear_cache(self):
+        """Close and forget any cached resources so they can be reopened fresh."""
+        self.close_all()
+        self._cache.clear()
+
     def __enter__(self):
         """Entering context manager."""
         return self

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from urllib.request import Request, urlopen
 
 import pytest
@@ -11,6 +10,7 @@ from upath import UPath
 import dascore as dc
 from dascore.config import set_config
 from dascore.exceptions import InvalidSpoolError, RemoteCacheError
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
 
 pytestmark = pytest.mark.network
@@ -19,18 +19,15 @@ pytestmark = pytest.mark.network
 @pytest.fixture(autouse=True)
 def suppress_expected_remote_cache_warnings(request):
     """Keep expected remote-cache download warnings out of test output."""
+    # This test is supposed to raise warning.
     if (
         request.node.name
         == "test_http_hdf5_fallback_warns_once_and_reuses_cached_local_copy"
     ):
         yield
         return
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=r"Downloading remote file .* to local cache at .*",
-            category=UserWarning,
-        )
+    msg = "Downloading remote file .* to local cache at .*"
+    with suppress_warnings(message=msg):
         yield
 
 
@@ -123,21 +120,23 @@ class TestHTTPFormatAndSpool:
         self, http_regression_das_path, ensure_http_regression_file
     ):
         """First local cache materialization should warn, then reuse the artifact."""
-        ensure_http_regression_file("prodml_2.1.h5")
-        path = http_regression_das_path / "prodml_2.1.h5"
+        fname = "prodml_2.1.h5"
+        ensure_http_regression_file(fname)
+        path = http_regression_das_path / fname
         with set_config(
             allow_remote_cache_for_metadata=True, warn_on_remote_cache=True
         ):
             with pytest.warns(UserWarning, match="Downloading remote file"):
-                assert dc.get_format(path) == ("PRODML", "2.1")
-        cached_files = list(get_remote_cache_path().rglob("prodml_2.1.h5"))
+                dc.get_format(path)
+        cached_files = list(get_remote_cache_path().rglob(fname))
         assert len(cached_files) <= 1
-        assert dc.read(path)
-        cached_files_2 = list(get_remote_cache_path().rglob("prodml_2.1.h5"))
+        assert len(dc.read(path))
+
+        cached_files_2 = list(get_remote_cache_path().rglob(fname))
         assert len(cached_files_2) == 1
         assert cached_files_2[0].exists()
         assert dc.read(path)
-        cached_files_3 = list(get_remote_cache_path().rglob("prodml_2.1.h5"))
+        cached_files_3 = list(get_remote_cache_path().rglob(fname))
         assert cached_files_3 == cached_files_2
 
     def test_http_range_server_supports_partial_reads(

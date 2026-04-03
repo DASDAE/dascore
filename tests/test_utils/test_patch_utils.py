@@ -841,10 +841,7 @@ class TestGetPatchWindowSize:
 
     def test_no_warning_under_threshold(self, simple_patch):
         """Test no warning for window sizes under threshold."""
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")  # Turn warnings into errors
+        with dc.utils.misc.suppress_warnings(action="error"):
             # This should not raise (no warning)
             size = get_patch_window_size(
                 simple_patch, {"time": 5}, samples=True, warn_above=10
