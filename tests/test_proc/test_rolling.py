@@ -8,6 +8,7 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
+from dascore.config import set_config
 from dascore.exceptions import ParameterError
 from dascore.units import m
 from dascore.utils.misc import all_close
@@ -199,6 +200,14 @@ class TestRolling:
         patch_1 = roll1.apply(np.sum)
         patch_2 = roll2.apply(np.sum)
         assert patch_2.shape == patch_1.shape
+
+    def test_history_disabled(self, random_patch):
+        """Rolling history should not append when patch history is disabled."""
+        time_step = random_patch.get_coord("time").step
+        expected = random_patch.attrs.history
+        with set_config(patch_history="disabled"):
+            out = random_patch.rolling(time=4 * time_step).mean()
+        assert out.attrs.history == expected
 
 
 class TestNumpyVsPandasRolling:

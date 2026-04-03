@@ -54,6 +54,18 @@ class TestSetConfig:
             assert config.allow_dasdae_format_unpickle is True
         assert get_config() == previous
 
+    def test_patch_history_can_be_disabled(self):
+        """Patch history policy should round-trip through set_config."""
+        previous = get_config()
+        with set_config(patch_history="disabled"):
+            assert get_config().patch_history == "disabled"
+        assert get_config() == previous
+
+    def test_invalid_patch_history_raises(self):
+        """Unsupported patch history policies should be rejected."""
+        with pytest.raises(ValueError, match="patch_history"):
+            set_config(patch_history="verbose-ish")
+
     def test_config_attr_reflects_runtime_config(self):
         """Config descriptors should resolve against the active runtime config."""
 
