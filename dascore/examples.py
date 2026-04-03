@@ -549,7 +549,7 @@ def dispersion_event():
     A synthetic shot record that exhibits dispersion.
     """
     path = fetch("dispersion_event.h5")
-    return dc.spool(path)[0]
+    return _load_example_patch_from_file(path)
 
 
 @register_func(EXAMPLE_SPOOLS, key="random_das")
@@ -699,7 +699,7 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     if example_name not in EXAMPLE_PATCHES:
         # Allow the example name to be a data registry entry.
         with suppress(ValueError):
-            return dc.spool(fetch(example_name))[0]
+            return _load_example_patch_from_file(fetch(example_name))
         msg = (
             f"No example patch registered with name {example_name} "
             f"Registered example patches are {list(EXAMPLE_PATCHES)}"

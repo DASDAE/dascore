@@ -55,6 +55,7 @@ jobs:
     env:
       # Determine if this should drop into a debugger if any tests fail.
       debug_enabled: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') }}
+      PYTEST_ADDOPTS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') && '-vv --durations=100' || '' }}
 
     steps:
       - uses: actions/checkout@v4

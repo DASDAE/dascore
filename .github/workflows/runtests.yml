@@ -58,6 +58,7 @@ jobs:
       # set conda environment file with dependencies
       env_file: 'environment.yml'
       debug_enabled: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') }}
+      PYTEST_ADDOPTS: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'debug') && '-vv --durations=100' || '' }}
 
     steps:
       - uses: actions/checkout@v4
