@@ -239,8 +239,12 @@ class PatchAttrs(DascoreBaseModel):
         new_coords = dict(out.get("coords", {}))
         if isinstance(passed_in_coords, dc.CoordManager):
             new_coords = passed_in_coords.model_dump(exclude_unset=True)
+            out["dims"] = passed_in_coords.dims
 
-        coord_info, attr_info = separate_coord_info(kwargs, dims=self.dim_tuple)
+        dims = out.get("dims", self.dim_tuple)
+        if isinstance(dims, str):
+            dims = tuple(dims.split(",")) if dims else tuple()
+        coord_info, attr_info = separate_coord_info(kwargs, dims=tuple(dims))
         out.update(attr_info)
         # Iterate the coordinate information and update.
         for name, coord_dict in coord_info.items():

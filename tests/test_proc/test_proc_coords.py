@@ -673,6 +673,14 @@ class TestSqueeze:
         if coords:
             assert set(coords) == set(patch.coords.coord_map)
 
+    def test_squeeze_all_dims_len_one(self, random_patch):
+        """Squeezing a (1, 1) patch should produce scalar patch with no dims."""
+        patch = random_patch.aggregate(dim=None, method="mean", dim_reduce="empty")
+        out = patch.squeeze()
+        assert out.data.shape == ()
+        assert out.dims == ()
+        assert out.attrs.dim_tuple == ()
+
 
 class TestGetCoord:
     """Tests for the get_coord convenience function."""
