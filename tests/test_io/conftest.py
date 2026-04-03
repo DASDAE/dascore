@@ -13,7 +13,6 @@ import shutil
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,64 +26,8 @@ from dascore.utils.downloader import fetch
 from tests.test_io._common_io_test_utils import fail_on_timeout
 
 
-def _http_debug(message: str) -> None:
-    """Emit timestamped debug output for flaky localhost HTTP tests."""
-    stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-    thread_name = threading.current_thread().name
-    print(  # noqa: T201
-        f"[http-test-debug {stamp} {thread_name}] {message}",
-        flush=True,
-    )
-
-
 class _SilentSimpleHTTPRequestHandler(SimpleHTTPRequestHandler):
     """A simple HTTP handler that suppresses request noise in tests."""
-
-    def handle_one_request(self):
-        """Log request handling boundaries for flaky HTTP regressions."""
-        _http_debug(
-            "handle_one_request:start "
-            f"client={getattr(self, 'client_address', None)}"
-        )
-        try:
-            return super().handle_one_request()
-        finally:
-            _http_debug(
-                "handle_one_request:end "
-                f"client={getattr(self, 'client_address', None)} "
-                f"close_connection={getattr(self, 'close_connection', None)}"
-            )
-
-    def parse_request(self):
-        """Log request parsing details to diagnose stalled HTTP reads."""
-        _http_debug(
-            f"parse_request:start client={getattr(self, 'client_address', None)}"
-        )
-        out = super().parse_request()
-        headers = getattr(self, "headers", {})
-        connection = headers.get("Connection") if headers else None
-        range_header = headers.get("Range") if headers else None
-        _http_debug(
-            "parse_request:end "
-            f"ok={out} command={getattr(self, 'command', None)} "
-            f"path={getattr(self, 'path', None)} connection={connection!r} "
-            f"range={range_header!r}"
-        )
-        return out
-
-    def do_GET(self):  # noqa: N802
-        """Log GET request handling."""
-        _http_debug(
-            f"do_GET:start path={getattr(self, 'path', None)} "
-            f"client={getattr(self, 'client_address', None)}"
-        )
-        try:
-            return super().do_GET()
-        finally:
-            _http_debug(
-                f"do_GET:end path={getattr(self, 'path', None)} "
-                f"client={getattr(self, 'client_address', None)}"
-            )
 
     def log_message(self, format, *args):
         """Silence request logs during localhost-backed tests."""
@@ -92,16 +35,10 @@ class _SilentSimpleHTTPRequestHandler(SimpleHTTPRequestHandler):
 
     def copyfile(self, source, outputfile):
         """Silence BrokenPipeError/ConnectionResetError from test clients."""
-        _http_debug(f"copyfile:start path={getattr(self, 'path', None)}")
         try:
             return super().copyfile(source, outputfile)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            _http_debug(
-                f"copyfile:client-disconnected path={getattr(self, 'path', None)}"
-            )
             return None
-        finally:
-            _http_debug(f"copyfile:end path={getattr(self, 'path', None)}")
 
 
 def _link_or_copy(source: Path, dest: Path) -> None:
@@ -248,32 +185,22 @@ def http_regression_das_path(http_regression_data_root, ensure_http_regression_f
     probe_path = "example_dasdae_event_1.h5"
     try:
         host, port = server.server_address
-        _http_debug(
-            f"http_regression_das_path:start root={http_regression_data_root} "
-            f"host={host} port={port}"
-        )
         probe_url = f"http://{host}:{port}/das/{probe_path}"
         with fail_on_timeout(10, "http_regression_das_path readiness probe"):
             for _ in range(50):
                 try:
-                    _http_debug(f"http_regression_das_path:probe {probe_url}")
                     with urlopen(probe_url, timeout=5):
                         break
                 except (URLError, OSError):
                     time.sleep(0.1)
             else:
                 pytest.fail("HTTP test server did not become ready in time.")
-        _http_debug(f"http_regression_das_path:ready base=http://{host}:{port}/das")
         yield UPath(f"http://{host}:{port}/das")
     finally:
-        _http_debug("http_regression_das_path:shutdown:start")
         with fail_on_timeout(10, "http_regression_das_path teardown"):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
-        _http_debug(
-            f"http_regression_das_path:shutdown:end thread_alive={thread.is_alive()}"
-        )
         if thread.is_alive():
             pytest.fail("HTTP regression server thread did not exit cleanly.")
 

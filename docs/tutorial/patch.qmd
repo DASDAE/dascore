@@ -260,7 +260,7 @@ patch = dc.get_example_patch().pass_filter(time=(1, 10))
 old_history = patch.attrs.history
 
 with set_config(patch_history="disabled"):
-    out = patch.normalize()
+    out = patch.abs()
 
 assert out.attrs.history == old_history
 ```
