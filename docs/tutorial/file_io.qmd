@@ -30,7 +30,7 @@ dc.write(source, remote_path, "DASDAE")
 summary = dc.scan(remote_path)[0]
 loaded = dc.read(remote_path)[0]
 
-print(summary.path)
+print(summary.source_path)
 print(loaded.dims)
 ```
 
@@ -80,7 +80,7 @@ from dascore.utils.downloader import fetch
 path = fetch("terra15_das_1_trimmed.hdf5")
 scan_patch = dc.scan(path)[0]
 
-print(scan_patch.path)
+print(scan_patch.source_path)
 print(scan_patch.get_coord_summary("time").min)
 ```
 
@@ -88,9 +88,9 @@ Scan results are useful for listing contents, building dataframes, and deciding 
 
 ```{python}
 loaded_patch = dc.read(
-    scan_patch.path,
-    file_format=scan_patch.file_format,
-    file_version=scan_patch.file_version,
+    scan_patch.source_path,
+    file_format=scan_patch.source_format,
+    file_version=scan_patch.source_version,
     source_patch_id=scan_patch.source_patch_id or None,
 )[0]
 print(loaded_patch.data.shape)

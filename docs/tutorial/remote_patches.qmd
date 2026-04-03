@@ -28,7 +28,7 @@ summary = dc.scan(remote_path)[0]
 loaded = dc.read(remote_path)[0]
 spool = dc.spool(remote_path)
 
-print(summary.path)
+print(summary.source_path)
 print(loaded.dims)
 print(len(spool))
 ```
@@ -71,7 +71,7 @@ When a backend can satisfy metadata access directly, `dc.scan(...)` and `dc.get_
 
 ```{python}
 print(dc.get_format(remote_path))
-print(dc.scan(remote_path)[0].file_format)
+print(dc.scan(remote_path)[0].source_format)
 ```
 
 If answering a metadata query would require downloading the file first, DASCore raises [`RemoteCacheError`](`dascore.exceptions.RemoteCacheError`) instead of silently materializing it.
@@ -105,7 +105,7 @@ with set_config(allow_remote_cache_for_metadata=True):
     summary = dc.scan(http_path)[0]
 
 print(fmt)
-print(summary.path)
+print(summary.source_path)
 ```
 
 When metadata-time caching is enabled, DASCore may warn on the first download if `warn_on_remote_cache=True`.
