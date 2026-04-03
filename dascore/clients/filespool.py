@@ -9,6 +9,7 @@ from rich.text import Text
 from typing_extensions import Self
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS, SpoolType
 from dascore.core.spool import BaseSpool, DataFrameSpool
 from dascore.io.core import FiberIO
@@ -38,7 +39,7 @@ class FileSpool(DataFrameSpool):
 
     def __init__(
         self,
-        path: str | Path,
+        path: str | Path | UPath,
         file_format: str | None = None,
         file_version: str | None = None,
     ):
@@ -47,7 +48,8 @@ class FileSpool(DataFrameSpool):
         if isinstance(path, self.__class__):
             self.__dict__.update(copy.deepcopy(path.__dict__))
             return
-        self._path = Path(path)
+        # Support UPaths, but keep standard Path support here because it is faster
+        self._path = path if isinstance(path, UPath) else Path(path)
         if not self._path.exists() or self._path.is_dir():
             msg = f"{path} does not exist or is a directory"
             raise FileNotFoundError(msg)
@@ -73,9 +75,6 @@ class FileSpool(DataFrameSpool):
     def update(self: SpoolType, progress: PROGRESS_LEVELS = "standard") -> Self:
         """
         {doc}.
-
-        Note: If the file format supports indexing (e.g. DASDAE) this will
-        trigger an indexing of the file.
         """
         formatter = FiberIO.manager.get_fiberio(
             format=self._file_format, version=self._file_version

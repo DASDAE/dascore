@@ -19,11 +19,11 @@ import dascore as dc
 import dascore.examples as ex
 from dascore.clients.dirspool import DirectorySpool
 from dascore.compat import random_state
+from dascore.config import set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
 from dascore.examples import get_example_patch
 from dascore.io.core import read
-from dascore.io.indexer import DirectoryIndexer
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
@@ -60,6 +60,11 @@ def pytest_collection_modifyitems(config, items):
     if not config.getoption("--integration"):
         msg = "needs --integration option to run"
         marks["integration"] = pytest.mark.skip(reason=msg)
+    markexpr = getattr(config.option, "markexpr", "") or ""
+    # Skip slow tests by default
+    if "slow" not in markexpr:
+        msg = "needs -m slow to run"
+        marks["slow"] = pytest.mark.skip(reason=msg)
 
     for item in items:
         marks_to_apply = set(marks)
@@ -83,15 +88,29 @@ def pytest_sessionstart(session):
     # need to set nodes to 32 to avoid crash on p3.11. See pytables#977.
     tables.parameters.NODE_CACHE_SLOTS = 32
 
-    # Ensure debug is set. This disables progress bars which disrupt debugging.
-    dc._debug = True
+    # Test-time debug defaults are applied by fixture to avoid state leakage.
+
+
+@pytest.fixture(autouse=True)
+def use_test_config():
+    """Run tests with debug mode enabled unless overridden locally."""
+    with set_config(debug=True):
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def allow_legacy_dasdae_coord_unpickle():
+    """Test fixtures may rely on trusted historical DASDAE coord payloads."""
+    with set_config(allow_dasdae_format_unpickle=True):
+        yield
 
 
 @pytest.fixture(scope="session", autouse=True)
 def swap_index_map_path(tmp_path_factory):
     """For all tests cases, use a temporary index file."""
     tmp_map_path = tmp_path_factory.mktemp("cache_paths") / "cache_paths.json"
-    setattr(DirectoryIndexer, "index_map_path", tmp_map_path)
+    with set_config(directory_index_map_path=tmp_map_path):
+        yield
 
 
 # --- Coordinate fixtures

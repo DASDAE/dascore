@@ -217,7 +217,7 @@ def median_filter(
     patch
         The patch to filter
     samples
-        {sample_explination}
+        {sample_explanation}
     mode
         The mode for handling edges.
     cval
@@ -346,8 +346,7 @@ def savgol_filter(
     polyorder
         Order of polynomial
     samples
-        If True samples are specified
-        If False coordinate of dimension
+        {sample_explanation}
     mode
         The mode for handling edges.
     cval
@@ -409,8 +408,7 @@ def gaussian_filter(
     patch
         The patch to filter
     samples
-        If True samples are specified
-        If False coordinate of dimension
+        {sample_explanation}
     mode
         The mode for handling edges.
     cval

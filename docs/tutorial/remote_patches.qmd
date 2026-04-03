@@ -1,0 +1,130 @@
+---
+title: Working with Remote Patches
+execute:
+  warning: false
+---
+
+DASCore can work directly with remote resources exposed through [`UPath`](https://pypi.org/project/universal-pathlib/), and is currently tested with backends such as `memory://`, `s3://`, and `http://`.
+
+The main distinction is simple:
+
+- metadata operations such as [`dc.scan(...)`](`dascore.scan`) and public [`dc.get_format(...)`](`dascore.get_format`) stay conservative by default
+- data-loading operations such as [`dc.read(...)`](`dascore.read`) and patch access through [`dc.spool(...)`](`dascore.spool`) are allowed to do heavier IO when needed
+
+## Basic Remote Example
+
+The example below uses `memory://` so it can run without external network access.
+
+```{python}
+from upath import UPath
+import dascore as dc
+
+patch = dc.get_example_patch()
+remote_path = UPath("memory://dascore/tutorial/remote_patch.h5")
+
+dc.write(patch, remote_path, "DASDAE")
+
+summary = dc.scan(remote_path)[0]
+loaded = dc.read(remote_path)[0]
+spool = dc.spool(remote_path)
+
+print(summary.source_path)
+print(loaded.dims)
+print(len(spool))
+```
+
+For backends that support direct remote access, DASCore can often scan and read without creating a local cached copy.
+
+## Remote Cache Settings
+
+The relevant runtime config values live in `dascore.config`.
+
+```{python}
+from pathlib import Path
+
+from dascore.config import get_config, set_config
+
+config = get_config()
+
+print(config.remote_cache_dir)
+print(config.allow_remote_cache)
+print(config.allow_remote_cache_for_metadata)
+print(config.warn_on_remote_cache)
+
+with set_config(
+    remote_cache_dir=Path("/tmp/dascore-remote-cache"),
+    allow_remote_cache=True,
+    allow_remote_cache_for_metadata=False,
+    warn_on_remote_cache=True,
+):
+    ...
+```
+
+- `remote_cache_dir` is the local directory DASCore uses when it has to materialize a remote file.
+- `allow_remote_cache=True` allows local materialization for real read operations.
+- `allow_remote_cache_for_metadata=False` keeps metadata operations predictable by default.
+- `warn_on_remote_cache=True` emits a warning the first time DASCore downloads a remote file into the local cache.
+
+## Metadata By Default
+
+When a backend can satisfy metadata access directly, `dc.scan(...)` and `dc.get_format(...)` work as usual.
+
+```{python}
+print(dc.get_format(remote_path))
+print(dc.scan(remote_path)[0].source_format)
+```
+
+If answering a metadata query would require downloading the file first, DASCore raises [`RemoteCacheError`](`dascore.exceptions.RemoteCacheError`) instead of silently materializing it.
+
+```python
+from dascore.exceptions import RemoteCacheError
+from upath import UPath
+import dascore as dc
+
+http_path = UPath("http://example.com/data/prodml_2.1.h5")
+
+try:
+    dc.get_format(http_path)
+except RemoteCacheError as exc:
+    print(exc)
+```
+
+## Opt In When Metadata Caching Is Acceptable
+
+If you know a metadata operation may need local caching, opt in explicitly.
+
+```python
+from dascore.config import set_config
+from upath import UPath
+import dascore as dc
+
+http_path = UPath("http://example.com/data/prodml_2.1.h5")
+
+with set_config(allow_remote_cache_for_metadata=True):
+    fmt = dc.get_format(http_path)
+    summary = dc.scan(http_path)[0]
+
+print(fmt)
+print(summary.source_path)
+```
+
+When metadata-time caching is enabled, DASCore may warn on the first download if `warn_on_remote_cache=True`.
+
+## Reads And Spools
+
+[`dc.read(...)`](`dascore.read`) remains the escape hatch for remote data that genuinely needs heavier IO. If a backend requires a local cached file to complete the read, DASCore may materialize it locally when `allow_remote_cache=True`.
+
+```python
+from upath import UPath
+import dascore as dc
+
+http_path = UPath("http://example.com/data/prodml_2.1.h5")
+patch = dc.read(http_path)[0]
+print(patch.data.shape)
+```
+
+The same distinction applies to spools:
+
+- `spool.get_contents()` relies on summary metadata
+- `spool[0]` or iteration loads patch data
+- if a remote backend cannot answer the metadata side without a download, use `allow_remote_cache_for_metadata=True`

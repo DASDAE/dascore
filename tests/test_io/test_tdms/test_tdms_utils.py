@@ -80,8 +80,8 @@ class TestTDMSUtils:
         )
         fake = _FakeTDMSFile(lead_in + payload)
         monkeypatch.setattr(
-            tdms_utils.os.path,
-            "getsize",
+            tdms_utils,
+            "get_buffer_size",
             lambda _: len(lead_in + payload),
         )
         monkeypatch.setattr(

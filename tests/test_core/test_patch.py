@@ -270,9 +270,9 @@ class TestInit:
             dims=patch.dims,
             shape=patch.shape,
             dtype=str(np.dtype(patch.data.dtype)),
-            path=Path("/tmp/example.h5"),
-            file_format="PRODML",
-            file_version="2.1",
+            source_path=Path("/tmp/example.h5"),
+            source_format="PRODML",
+            source_version="2.1",
             source_patch_id="node-1",
         )
         called = {}
@@ -285,7 +285,7 @@ class TestInit:
         monkeypatch.setattr(dc, "read", fake_read)
         with pytest.raises(PatchAttributeError, match="uniquely resolved"):
             _load_patch_summary(summary)
-        assert called["path"] == summary.path
+        assert called["path"] == summary.source_path
         assert called["kwargs"]["source_patch_id"] == "node-1"
 
     def test_load_patch_summary_empty_filtered_read_raises(self, tmp_path):
@@ -649,9 +649,24 @@ class TestPatchSummary:
     def test_scan_result_to_summary_override_returns_new_summary(self, random_patch):
         """Summary conversion should still apply explicit source overrides."""
         summary = random_patch.summary
-        out = _scan_result_to_summary(summary, path="some_path")
+        out = _scan_result_to_summary(summary, source_path="some_path")
         assert out is not summary
-        assert out.path == "some_path"
+        assert str(out.source_path) == "some_path"
+
+    def test_patch_summary_non_pathlike_source_metadata_is_dropped(self):
+        """Non-pathlike source metadata should normalize to a detached summary."""
+        out = dc.PatchSummary.model_validate(
+            {
+                "attrs": {"tag": "x"},
+                "coords": {},
+                "source_path": object(),
+                "source_format": "PRODML",
+                "source_version": "2.1",
+            }
+        )
+        assert not out.source_path
+        assert not out.source_format
+        assert not out.source_version
 
     def test_non_mapping_validate_passthrough_raises(self):
         """Non-mapping validation should fall through to pydantic errors."""

@@ -6,6 +6,33 @@ execute:
 
 The following highlights some DASCore features for working with IO.
 
+:::{.callout-note}
+If you are working with remote `UPath` resources, especially HTTP or object
+store backends, see the [Working with Remote Patches](remote_patches.qmd)
+tutorial for examples, cache settings, and metadata-vs-read behavior.
+:::
+
+## Using UPath Resources
+
+DASCore accepts both `pathlib.Path` and [`UPath`](https://pypi.org/project/universal-pathlib/) inputs for many file-backed workflows. This is useful when your data lives on a non-local backend supported by `fsspec`.
+
+The example below uses `memory://` so it can run without any external network access.
+
+```{python}
+from upath import UPath
+import dascore as dc
+
+source = dc.get_example_patch()
+remote_path = UPath("memory://dascore/tutorial/example_patch.h5")
+
+dc.write(source, remote_path, "DASDAE")
+
+summary = dc.scan(remote_path)[0]
+loaded = dc.read(remote_path)[0]
+
+print(summary.source_path)
+print(loaded.dims)
+```
 
 ## Writing Patches to Disk
 
@@ -27,6 +54,21 @@ if write_path.exists():
     write_path.unlink()
 ```
 
+Remote-style `UPath` destinations also work for supported formats.
+
+```{python}
+from upath import UPath
+import dascore as dc
+
+patch = dc.get_example_patch()
+remote_write_path = UPath("memory://dascore/tutorial/output_file.pkl")
+
+patch.io.write(remote_write_path, "pickle")
+
+round_trip = dc.read(remote_write_path)[0]
+print(round_trip.dims)
+```
+
 ## Scan Metadata Without Loading Data
 
 [`dascore.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects. These scan results expose metadata, coordinates, and source information without loading the data array into memory.
@@ -38,7 +80,7 @@ from dascore.utils.downloader import fetch
 path = fetch("terra15_das_1_trimmed.hdf5")
 scan_patch = dc.scan(path)[0]
 
-print(scan_patch.path)
+print(scan_patch.source_path)
 print(scan_patch.get_coord_summary("time").min)
 ```
 
@@ -46,9 +88,9 @@ Scan results are useful for listing contents, building dataframes, and deciding 
 
 ```{python}
 loaded_patch = dc.read(
-    scan_patch.path,
-    file_format=scan_patch.file_format,
-    file_version=scan_patch.file_version,
+    scan_patch.source_path,
+    file_format=scan_patch.source_format,
+    file_version=scan_patch.source_version,
     source_patch_id=scan_patch.source_patch_id or None,
 )[0]
 print(loaded_patch.data.shape)

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from upath import UPath
 
 import dascore as dc
 from dascore.clients.filespool import FileSpool
 from dascore.exceptions import PatchAttributeError
-from dascore.utils.hdf5 import HDFPatchIndexManager
 
 
 class TestBasic:
@@ -34,15 +34,12 @@ class TestBasic:
         assert "FileSpool" in out
 
     def test_update(self, tmp_path_factory, random_patch):
-        """Update should trigger indexing on formats that support it."""
+        """Update should preserve contents even when a format index hook is a no-op."""
         path = tmp_path_factory.mktemp("update_test") / "random.h5"
         dc.write(random_patch, path, "dasdae", "1")
-        # pre-update
         spool = dc.spool(path)
         contents = spool.get_contents()
-        assert not HDFPatchIndexManager(path).has_index
         new_spool = spool.update()
-        assert HDFPatchIndexManager(path).has_index
         new_contents = new_spool.get_contents()
         assert contents.equals(new_contents)
 
@@ -50,6 +47,12 @@ class TestBasic:
         """Simply ensures a bad file will raise."""
         with pytest.raises(FileNotFoundError, match="does not exist"):
             FileSpool("/not/a/directory")
+
+    def test_local_upath_file(self, terra15_v5_path):
+        """Ensure FileSpool accepts local UPath inputs."""
+        spool = FileSpool(UPath(terra15_v5_path))
+        assert isinstance(spool, FileSpool)
+        assert len(spool)
 
     def test_chunk(self, terra15_file_spool):
         """Ensure chunking along time axis works with FileSpool."""

@@ -10,6 +10,7 @@ from scipy.io.wavfile import write
 from dascore.constants import ONE_SECOND, SpoolType
 from dascore.io.core import FiberIO
 from dascore.utils.patch import check_patch_coords
+from dascore.utils.paths import coerce_to_upath, is_local_path
 
 
 class WavIO(FiberIO):
@@ -53,13 +54,16 @@ class WavIO(FiberIO):
             rate is 44100, in this case just set resample_frequency=44100 to
             see if this fixes the issue.
         """
-        resource = Path(resource)
+        resource = (
+            Path(resource) if is_local_path(resource) else coerce_to_upath(resource)
+        )
         assert len(spool) == 1, "Only single patch spools can be written to wav"
         patch = spool[0]
         # write a single wav file, maybe multi-channeled.
         data, sr = self._get_wav_data(patch, resample_frequency)
         if resource.name.endswith(".wav"):
-            write(filename=str(resource), rate=int(sr), data=data)
+            with resource.open("wb") as fi:
+                write(filename=fi, rate=int(sr), data=data)
         else:  # write data to directory, one file for each non-time
             resource.mkdir(exist_ok=True, parents=True)
             non_time_set = set(patch.dims) - {"time"}
@@ -68,7 +72,8 @@ class WavIO(FiberIO):
             for ind, val in enumerate(non_time):
                 sub_data = np.take(data, ind, axis=1)
                 sub_path = resource / f"{non_time_name}_{val}.wav"
-                write(filename=str(sub_path), rate=int(sr), data=sub_data)
+                with sub_path.open("wb") as fi:
+                    write(filename=fi, rate=int(sr), data=sub_data)
 
     @staticmethod
     def _get_wav_data(patch, resample):

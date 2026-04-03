@@ -8,6 +8,7 @@ from functools import cache
 import pytest
 
 import dascore as dc
+from dascore.config import set_config
 from dascore.exceptions import DependencyError
 from dascore.utils.downloader import fetch, get_registry_df
 
@@ -15,7 +16,9 @@ from dascore.utils.downloader import fetch, get_registry_df
 @cache
 def get_test_file_paths():
     """Get a dict of name: path for all files in data registry."""
-    df = get_registry_df().loc[lambda x: ~x["name"].str.endswith(".csv")]
+    df = get_registry_df(exclude_large=True).loc[
+        lambda x: ~x["name"].str.endswith(".csv")
+    ]
     out = {row["name"]: fetch(row["name"]) for _, row in df.iterrows()}
     return out
 
@@ -24,6 +27,13 @@ def get_test_file_paths():
 def test_file_paths():
     """Get paths of test files."""
     return get_test_file_paths()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def allow_legacy_dasdae_coord_unpickle():
+    """Benchmarks include trusted historical DASDAE fixtures from the registry."""
+    with set_config(allow_dasdae_format_unpickle=True):
+        yield
 
 
 class TestIOBenchmarks:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from xml.etree.ElementTree import ParseError
 
 import numpy as np
@@ -12,6 +11,7 @@ import dascore as dc
 from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.models import UTF8Str
+from dascore.utils.paths import coerce_to_upath
 
 from .utils import _load_patches, _paths_to_scan_patches, _read_xml_metadata
 
@@ -36,11 +36,15 @@ class XMLBinaryV1(FiberIO):
     # File extension for data files.
     _data_extension = ".raw"
 
+    @staticmethod
+    def _get_base_path(resource):
+        """Return the directory containing xml metadata and raw files."""
+        path = coerce_to_upath(resource)
+        return path if path.is_dir() else path.parent
+
     def scan(self, resource, timestamp=None, **kwargs) -> list[PatchSummary]:
         """Scan the contents of the directory."""
-        path = Path(resource)
-        if path.is_file():
-            path = path.parent
+        path = self._get_base_path(resource)
         metadata = _read_xml_metadata(path / self._metadata_name)
         data_files = list(path.glob(f"*{self._data_extension}"))
         # Need to update time
@@ -66,8 +70,8 @@ class XMLBinaryV1(FiberIO):
         **kwargs
             Extra keyword arguments are ignored.
         """
-        path = Path(resource)
-        base_path = path if path.is_dir() else path.parent
+        path = coerce_to_upath(resource)
+        base_path = self._get_base_path(path)
         meta_data = _read_xml_metadata(base_path / self._metadata_name)
         if path.is_dir():
             path = list(path.glob(f"*{self._data_extension}"))
@@ -83,9 +87,7 @@ class XMLBinaryV1(FiberIO):
 
     def get_format(self, resource, **kwargs) -> tuple[str, str] | bool:
         """Determine if directory is an XML Binary type."""
-        path = Path(resource)
-        if path.is_file():
-            path = path.parent
+        path = self._get_base_path(resource)
         index_path = path / self._metadata_name
         if not index_path.exists():
             return False

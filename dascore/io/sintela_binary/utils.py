@@ -101,7 +101,8 @@ _DATA_TYPE_MAP = {
 
 def _read_base_header(fid):
     """Return the first 3 elements of the sintela header."""
-    array = np.fromfile(fid, dtype=base_header_dtypes, count=1)
+    data = fid.read(base_header_dtypes.itemsize)
+    array = np.frombuffer(data, dtype=base_header_dtypes, count=1)
     out = {x: y for x, y in zip(array.dtype.names, array[0])}
     return out
 
@@ -127,7 +128,8 @@ def _read_remaining_header(fid, base):
     expected_size = _HEADER_SIZES.get(version, -1)
     assert header_size == expected_size
     dtype = _HEADER_DTYPES[version]
-    buf = np.fromfile(fid, dtype=dtype, count=1)
+    data = fid.read(dtype.itemsize)
+    buf = np.frombuffer(data, dtype=dtype, count=1)
     header = {x: y for x, y in zip(buf.dtype.names, buf[0])}
     assert version == "3", "only 3 support for now,"
     header["num_packets"] = _get_number_of_packets(fid, header, header_size)

@@ -65,6 +65,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
+        source_patch_id=(),
         **kwargs,
     ) -> dc.BaseSpool:
         """Read a ProdML file."""
@@ -72,7 +73,7 @@ class ProdMLV2_0(FiberIO):  # noqa
             resource,
             time=time,
             distance=distance,
-            source_patch_id=kwargs.get("source_patch_id"),
+            source_patch_id=source_patch_id,
         )
         return dc.spool(patches)
 

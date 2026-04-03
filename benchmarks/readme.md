@@ -29,6 +29,8 @@ Benchmarks are now organized as pytest tests in the `benchmarks/` directory:
 
 Each benchmark uses the `@pytest.mark.benchmark` decorator to automatically measure performance.
 
+The IO benchmark and CI test-data priming use the default registry view, which excludes entries listed in `dascore.utils.downloader.LARGE_REGISTRY_FILES`. Large assets remain fetchable explicitly, but they are not downloaded by default during benchmark setup.
+
 ## Continuous Performance Monitoring
 
 Benchmarks automatically run on:

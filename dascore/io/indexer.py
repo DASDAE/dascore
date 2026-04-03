@@ -12,14 +12,16 @@ from functools import cache
 from pathlib import Path
 
 import pandas as pd
-import pooch
 from typing_extensions import Self
 
 import dascore as dc
-from dascore.constants import ONE_SECOND_IN_NS, PROGRESS_LEVELS
+from dascore.compat import UPath
+from dascore.config import config_attr, get_config
+from dascore.constants import PROGRESS_LEVELS
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.utils.hdf5 import HDFPatchIndexManager
 from dascore.utils.misc import iterate
+from dascore.utils.paths import requires_local_directory
 from dascore.utils.pd import filter_df
 from dascore.utils.time import get_max_min_times, to_timedelta64
 
@@ -116,13 +118,13 @@ class DirectoryIndexer(AbstractIndexer):
     _namespace = ""
     _index_name = ".dascore_index.h5"  # name of index file
 
-    # A user-specific file which tracks where indices are stored if not on
-    # the same directory as the path to index.
-    index_map_path = pooch.os_cache("dascore") / "caches" / "cache_paths.json"
-
     def __init__(self, path: str | Path, cache_size: int = 5, index_path=None):
         self.max_size = cache_size
-        self.path = Path(path).absolute()
+        self.path = (
+            UPath(path).absolute() if isinstance(path, UPath) else Path(path).absolute()
+        )
+        requires_local_directory(self.path, label="DirectoryIndexer")
+        self.path = Path(self.path).absolute()
         self.index_path = Path(self._find_index_file(self.path, index_path))
         self._current_index = 0
         self._index_table = HDFPatchIndexManager(
@@ -132,6 +134,8 @@ class DirectoryIndexer(AbstractIndexer):
         self.cache = pd.DataFrame(
             index=range(cache_size), columns="t1 t2 kwargs cindex".split()
         )
+
+    index_map_path: Path = config_attr("directory_index_map_path")
 
     def _find_index_file(self, data_path, index_path=None):
         """Find the path to the index file."""
@@ -161,7 +165,7 @@ class DirectoryIndexer(AbstractIndexer):
             index_path = data_path / self._index_name
         return index_path
 
-    def get_contents(self, buffer=ONE_SECOND_IN_NS, **kwargs) -> pd.DataFrame:
+    def get_contents(self, buffer=None, **kwargs) -> pd.DataFrame:
         """
         Get contents of directory with specific query params.
 
@@ -181,6 +185,7 @@ class DirectoryIndexer(AbstractIndexer):
             return pd.DataFrame(columns=self._index_table.index_columns)
         time_min, time_max = get_max_min_times(kwargs.pop("time", None))
         hdf5_kwargs, kwargs = self._separate_hdf5_kwargs(kwargs)
+        buffer = get_config().index_query_buffer if buffer is None else buffer
         buffer = to_timedelta64(buffer)
         # find out if the query falls within one cached times
         con1 = self.cache.t1 <= time_min

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from scipy.io.wavfile import read as read_wav
+from upath import UPath
 
 import dascore as dc
 from dascore.constants import ONE_SECOND
@@ -44,6 +45,18 @@ class TestWriteWav:
         dc.write(audio_patch, path, "wav")
         assert path.exists()
 
+    def test_write_single_local_upath(self, audio_patch, tmp_path_factory):
+        """Local UPath file destinations should work for wav writes."""
+        path = UPath(tmp_path_factory.mktemp("wave_temp_upath") / "temp.wav")
+        dc.write(audio_patch, path, "wav")
+        assert path.exists()
+
+    def test_write_single_remote_upath(self, audio_patch):
+        """Remote UPath file destinations should work for wav writes."""
+        path = UPath("memory://dascore/temp.wav")
+        dc.write(audio_patch, path, "wav")
+        assert path.exists()
+
     def test_resample(self, audio_patch, tmp_path_factory):
         """Ensure resampling changes sampling rate in file."""
         path = tmp_path_factory.mktemp("wav_resample") / "resampled.wav"
@@ -68,3 +81,11 @@ class TestWriteWav:
             # Verify content of first file
             sr, data = read_wav(str(wavs[0]))
         assert sr == int(ONE_SECOND / patch.get_coord("time").step)
+
+    def test_write_remote_directory(self, audio_patch_non_distance_dim):
+        """Remote directory destinations should work for wav writes."""
+        path = UPath("memory://dascore/wav_dir")
+        patch = audio_patch_non_distance_dim
+        patch.io.write(path, "wav")
+        wavs = list(path.glob("*.wav"))
+        assert len(wavs) == len(patch.coords.get_array("microphone"))

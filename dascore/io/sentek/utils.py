@@ -10,25 +10,33 @@ import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 
 
+def _read_float32(fid, count=1):
+    """Read one or more float32 values from a binary stream."""
+    size = np.dtype(np.float32).itemsize * count
+    data = fid.read(size)
+    return np.frombuffer(data, dtype=np.float32, count=count)
+
+
 def _get_version(fid):
     """Determine if Sentek file."""
-    name = fid.name
+    name = getattr(fid, "name", None) or getattr(fid, "path", None)
+    name = name or getattr(fid, "_dascore_source_path", "")
     # Sentek files cannot change the extension, or file name.
-    sw_data = name.endswith(".das")
+    sw_data = str(name).endswith(".das")
     fid.seek(0)
     # There isn't anything in the header particularly useful for determining
     # if it is a Sentek file, so we do what we can here.
     # First check if sensor_num and measurement_count are positive and nearly
     # ints.
-    sensor_num = np.fromfile(fid, dtype=np.float32, count=1)[0]
-    measurement_count = np.fromfile(fid, dtype=np.float32, count=1)[0]
-    _ = np.fromfile(fid, dtype=np.float32, count=1)[0]  # sampling_interval
+    sensor_num = _read_float32(fid)[0]
+    measurement_count = _read_float32(fid)[0]
+    _ = _read_float32(fid)[0]  # sampling_interval
     is_positive = (sensor_num > 1) and (measurement_count > 1)
     sens_nearly_int = np.round(sensor_num, 5) == np.round(sensor_num)
     meas_nearly_int = np.round(measurement_count, 5) == np.round(measurement_count)
     nearly_ints = sens_nearly_int and meas_nearly_int
     # Then check if strain_rate value is valid.
-    strain_rate = int(np.fromfile(fid, dtype=np.float32, count=1)[0])
+    strain_rate = int(_read_float32(fid)[0])
     proper_strain_rate = strain_rate in {0, 1}
     # Note: We will need to modify this later for different versions of the
     # sentek data, but for now we only support 5.
@@ -66,23 +74,25 @@ def _get_patch_attrs(fid, extras=None):
     decimation_factor: decimation factor (integer)
     """
     fid.seek(0)
-    sensor_num = np.fromfile(fid, dtype=np.float32, count=1)[0]
-    measurement_count = np.fromfile(fid, dtype=np.float32, count=1)[0]
-    _ = np.fromfile(fid, dtype=np.float32, count=1)[0]  # sampling_interval
-    strain_rate = np.fromfile(fid, dtype=np.float32, count=1)[0]
-    _ = np.fromfile(fid, dtype=np.float32, count=1)[0]  # trigger_position
-    _ = np.fromfile(fid, dtype=np.float32, count=1)[0]  # decimation_factor
+    sensor_num = _read_float32(fid)[0]
+    measurement_count = _read_float32(fid)[0]
+    _ = _read_float32(fid)[0]  # sampling_interval
+    strain_rate = _read_float32(fid)[0]
+    _ = _read_float32(fid)[0]  # trigger_position
+    _ = _read_float32(fid)[0]  # decimation_factor
     # create distance coordinate
-    distance_start = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    distance_start = _read_float32(fid)[0]
     fid.seek(int(sensor_num - 1) * 4)
-    distance_stop = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    distance_stop = _read_float32(fid)[0]
     distance_step = (distance_stop - distance_start) / sensor_num
     dist = get_coord(start=distance_start, stop=distance_stop, step=distance_step)
     # create time coord
-    file_time = _get_time_from_file_name(Path(fid.name).name)
-    offset_start = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    name = getattr(fid, "name", None) or getattr(fid, "path", None)
+    name = name or getattr(fid, "_dascore_source_path", "")
+    file_time = _get_time_from_file_name(Path(str(name)).name)
+    offset_start = _read_float32(fid)[0]
     fid.seek(int(measurement_count - 1) * 4)
-    offset_stop = np.fromfile(fid, dtype=np.float32, count=1)[0]
+    offset_stop = _read_float32(fid)[0]
     time_start = file_time + dc.to_timedelta64(offset_start)
     time_stop = file_time + dc.to_timedelta64(offset_stop)
     time_step = (time_stop - time_start) / measurement_count

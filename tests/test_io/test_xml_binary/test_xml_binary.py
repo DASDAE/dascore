@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from upath import UPath
 
 import dascore as dc
 from dascore.exceptions import UnknownFiberFormatError
@@ -103,6 +104,16 @@ def directory_bad_xml(tmp_path_factory):
     return new
 
 
+@pytest.fixture(scope="session")
+def remote_binary_xml_directory(binary_xml_directory):
+    """Create an in-memory remote XMLBinary directory."""
+    root = UPath("memory://dascore/xml_binary_remote")
+    root.mkdir(parents=True, exist_ok=True)
+    for path in Path(binary_xml_directory).iterdir():
+        (root / path.name).write_bytes(path.read_bytes())
+    return root
+
+
 class TestReadXMLMetadata:
     """Misc tests reading xml metadata."""
 
@@ -143,6 +154,14 @@ class TestGetFormat:
         raw_path = next(binary_xml_directory.glob("*.raw"))
         assert fiber_io.get_format(raw_path) == (fiber_io.name, fiber_io.version)
 
+    def test_remote_directory_upath(self, remote_binary_xml_directory):
+        """Remote UPath directories should be format-detectable."""
+        fiber_io = XMLBinaryV1()
+        assert fiber_io.get_format(remote_binary_xml_directory) == (
+            fiber_io.name,
+            fiber_io.version,
+        )
+
 
 class TestScanContents:
     """Test scanning contents of xml binary directory."""
@@ -171,6 +190,24 @@ class TestScanContents:
         assert not len(scan2)
         scan3 = dc.scan(binary_xml_directory, timestamp=mtime - 50)
         assert len(scan3) == 2
+
+    def test_remote_directory(self, remote_binary_xml_directory):
+        """Remote XMLBinary directories should be scannable."""
+        fiber = XMLBinaryV1()
+        out = fiber.scan(remote_binary_xml_directory)
+        assert len(out) == 2
+
+    def test_remote_directory_timestamp(self, remote_binary_xml_directory):
+        """Timestamp-filtered remote directory scans should not crash."""
+        out = dc.scan(remote_binary_xml_directory, timestamp=0)
+        assert len(out) == 2
+
+    def test_remote_file_path_uses_parent_directory(self, remote_binary_xml_directory):
+        """Remote raw file scans should resolve metadata from the parent dir."""
+        fiber = XMLBinaryV1()
+        raw_path = next(remote_binary_xml_directory.glob("*.raw"))
+        out = fiber.scan(raw_path)
+        assert len(out) == 2
 
 
 class TestRead:
@@ -227,3 +264,18 @@ class TestRead:
         path = Path(xml_directory_no_data)
         out = fiberio.read(path)
         assert not len(out)
+
+    def test_read_remote_directory(self, remote_binary_xml_directory):
+        """Remote XMLBinary directories should read into patches."""
+        fiber_io = XMLBinaryV1()
+        spool = fiber_io.read(remote_binary_xml_directory)
+        assert len(spool) == 2
+        assert all(isinstance(patch, dc.Patch) for patch in spool)
+
+    def test_read_remote_single_file(self, remote_binary_xml_directory):
+        """Remote raw-file inputs should resolve and read through the parent dir."""
+        fiber_io = XMLBinaryV1()
+        path = next(remote_binary_xml_directory.glob("*.raw"))
+        out = fiber_io.read(path)
+        assert isinstance(out, dc.BaseSpool)
+        assert len(out) == 1

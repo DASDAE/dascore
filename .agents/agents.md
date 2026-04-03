@@ -64,6 +64,8 @@ For doctests:
 pytest dascore --doctest-modules
 ```
 
+Unless otherwise specified, A job is not finished until the the tests pass. 
+
 ## Test authoring conventions
 
 - Put tests under `tests/` mirroring package structure.
@@ -84,6 +86,7 @@ pytest dascore --doctest-modules
 - Use NumPy-style docstrings for public APIs.
 - Add a short explanatory comment for private helpers when intent is not obvious.
 - Keep comments meaningful; do not restate obvious code.
+- Always use dascore.utils.misc:suppress_warnings to suppress warnings. 
 
 ## Documentation changes
 

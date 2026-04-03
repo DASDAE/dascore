@@ -7,13 +7,13 @@ split between metadata-driven summaries and full-data coord reconstruction.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 from pydantic import ConfigDict, Field, model_validator
 
 import dascore as dc
+from dascore.constants import path_types
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import (
     BaseCoord,
@@ -23,6 +23,7 @@ from dascore.core.coords import (
 )
 from dascore.utils.attrs import separate_coord_info
 from dascore.utils.models import DascoreBaseModel
+from dascore.utils.paths import coerce_to_upath, is_pathlike
 
 
 def _to_coord_summary(value: Any, dims: tuple[str, ...] = ()) -> CoordSummary:
@@ -290,23 +291,40 @@ def _build_patch_summary_payload(
     dims: tuple[str, ...] = (),
     shape=(),
     dtype="",
-    path="",
-    file_format="",
-    file_version="",
+    source_path="",
+    source_format="",
+    source_version="",
     source_patch_id="",
 ) -> dict[str, Any]:
     """Build the canonical structured payload used to validate PatchSummary."""
     attrs, source_patch_id = _normalize_source_patch_id(attrs, source_patch_id)
     dims = dims or _infer_dims_from_coords(coords)
+    # Only preserve source metadata when the caller already supplied a cheap,
+    # path-like reload target. Validation should not touch the filesystem.
+    if source_path in (None, ""):
+        normalized_source_path = ""
+    elif is_pathlike(source_path):
+        normalized_source_path = coerce_to_upath(source_path)
+    else:
+        normalized_source_path = ""
+    normalized_source_format = "" if source_format in (None, "") else str(source_format)
+    normalized_source_version = (
+        "" if source_version in (None, "") else str(source_version)
+    )
+    # If the source path is not reloadable, drop the paired source metadata too
+    # so summary objects only expose coherent reload information.
+    if not normalized_source_path:
+        normalized_source_format = ""
+        normalized_source_version = ""
     return {
         "attrs": attrs,
         "coords": coords,
         "dims": dims,
         "shape": tuple(shape),
         "dtype": str(dtype),
-        "path": path,
-        "file_format": file_format,
-        "file_version": file_version,
+        "source_path": normalized_source_path,
+        "source_format": normalized_source_format,
+        "source_version": normalized_source_version,
         "source_patch_id": source_patch_id,
     }
 
@@ -321,9 +339,9 @@ class PatchSummary(DascoreBaseModel):
     dims: tuple[str, ...] = ()
     shape: tuple[int, ...] = ()
     dtype: str = ""
-    path: str | Path = ""
-    file_format: str = ""
-    file_version: str = ""
+    source_path: path_types = ""
+    source_format: str = ""
+    source_version: str = ""
     source_patch_id: str = ""
 
     @model_validator(mode="before")
@@ -345,9 +363,9 @@ class PatchSummary(DascoreBaseModel):
                 dims=_normalize_dims(data.get("dims", ())),
                 shape=data.get("shape", ()),
                 dtype=data.get("dtype", ""),
-                path=data.get("path", ""),
-                file_format=data.get("file_format", ""),
-                file_version=data.get("file_version", ""),
+                source_path=data.get("source_path", data.get("path", "")),
+                source_format=data.get("source_format", data.get("file_format", "")),
+                source_version=data.get("source_version", data.get("file_version", "")),
                 source_patch_id=data.get("source_patch_id", ""),
             )
         # Flat inputs still use scan/index-style keys such as time_min/time_max.
@@ -364,9 +382,9 @@ class PatchSummary(DascoreBaseModel):
             dims=dims,
             shape=data.get("shape", ()),
             dtype=data.get("dtype", ""),
-            path=data.get("path", ""),
-            file_format=data.get("file_format", ""),
-            file_version=data.get("file_version", ""),
+            source_path=data.get("source_path", data.get("path", "")),
+            source_format=data.get("source_format", data.get("file_format", "")),
+            source_version=data.get("source_version", data.get("file_version", "")),
             source_patch_id=data.get("source_patch_id", ""),
         )
 
@@ -395,9 +413,11 @@ class PatchSummary(DascoreBaseModel):
         summary_meta = {
             "dims": ",".join(self.dims),
             "dtype": self.dtype,
-            "path": self.path,
-            "file_format": self.file_format,
-            "file_version": self.file_version,
+            # TODO: Replace these to source_path, source_format, and source_version
+            # when redoing the indexer.
+            "path": str(self.source_path) if self.source_path else "",
+            "file_format": self.source_format,
+            "file_version": self.source_version,
             "source_patch_id": self.source_patch_id,
             "coord_names": ",".join(self.coords),
         }

@@ -12,10 +12,12 @@ import tables
 from tables.exceptions import ClosedNodeError
 
 import dascore as dc
+from dascore.config import set_config
 from dascore.exceptions import InvalidFileHandlerError
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import (
     HDFPatchIndexManager,
+    LocalPyTablesReader,
     PyTablesWriter,
     extract_h5_attrs,
     h5_matches_structure,
@@ -150,10 +152,9 @@ class TestHDFPatchIndexManager:
 
         # now insure the exception propagates
         failed_count = 0
-        monkeypatch.setattr(index_manager_with_content, "_max_retries", -1)
-
-        with pytest.raises(ClosedNodeError):
-            index_manager_with_content.get_index()
+        with set_config(hdf_index_max_retries=0):
+            with pytest.raises(ClosedNodeError):
+                index_manager_with_content.get_index()
 
     def test_metadata_created(self, tmp_path_factory):
         """Tests for getting info from a index that doesnt yet exist."""
@@ -173,6 +174,13 @@ class TestHDFPatchIndexManager:
         out = index_manager.encode_table(df.copy(), path=None)
         assert "path" in out.columns
 
+    def test_hdf_kwargs_come_from_config(self, index_manager):
+        """Compression defaults should come from runtime configuration."""
+        with set_config(hdf_index_complib="zlib", hdf_index_complevel=1):
+            out = index_manager.hdf_kwargs
+        assert out["complib"] == "zlib"
+        assert out["complevel"] == 1
+
 
 class TestHDFReaders:
     """Tests for HDF5 readers."""
@@ -184,6 +192,14 @@ class TestHDFReaders:
             assert isinstance(handle, tables.File)
             handle_2 = PyTablesWriter.get_handle(handle)
             assert isinstance(handle_2, tables.File)
+
+    def test_local_pytables_reader_get_handle(self, tmp_path):
+        """The local-materializing reader should open local files directly."""
+        path = tmp_path / "local_reader.h5"
+        with tables.open_file(path, mode="w") as h5:
+            h5.create_group("/", "waveforms")
+        with closing(LocalPyTablesReader.get_handle(path)) as handle:
+            assert isinstance(handle, tables.File)
 
 
 class TestH5MatchesStructure:

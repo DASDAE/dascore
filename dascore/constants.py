@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.compat import UPath
 
 PatchType = TypeVar("PatchType", bound="dc.Patch")
 
@@ -43,7 +44,12 @@ MININT64 = np.iinfo(np.int64).min
 MAXINT64 = np.iinfo(np.int64).max
 
 # types used to represent paths
-path_types = str | Path
+path_types = str | Path | UPath
+
+# Remote protocols that should use DASCore's smaller HDF5 readahead blocks.
+# h5py performs many small metadata reads while opening files, and some S3-like
+# backends default to large readahead chunks that overfetch remote data.
+remote_hdf5_tuned_protocols = ("s3", "s3a", "s3n")
 
 # One second in numpy timedelta speak
 ONE_SECOND = np.timedelta64(1, "s")
@@ -56,9 +62,6 @@ ONE_BILLION = 1_000_000_000
 
 # One second with a precision of nano seconds
 ONE_SECOND_IN_NS = np.timedelta64(ONE_BILLION, "ns")
-
-# Float printing precision
-FLOAT_PRECISION = 3
 
 # Valid strings for "datatype" attribute
 VALID_DATA_TYPES = (
@@ -168,8 +171,6 @@ check_behavior
 
 # Rich styles for various object displays.
 dascore_styles = dict(
-    np_array_threshold=100,  # max number of elements to show in array
-    patch_history_array_threshold=10,  # max elements of array in hist str.
     dc_blue="blue",
     dc_red="red",
     dc_yellow="yellow",

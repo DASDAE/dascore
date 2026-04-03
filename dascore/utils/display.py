@@ -11,7 +11,8 @@ from rich.style import Style
 from rich.text import Text
 
 import dascore as dc
-from dascore.constants import FLOAT_PRECISION, dascore_styles
+from dascore.config import get_config
+from dascore.constants import dascore_styles
 from dascore.units import get_quantity_str
 
 
@@ -39,7 +40,7 @@ def get_nice_text(value, style=None) -> Text:
 @get_nice_text.register(np.float64)
 def _nice_float_string(value, style=None):
     """Nice print value for floats."""
-    fmt_str = f".{FLOAT_PRECISION}"
+    fmt_str = f".{get_config().display_float_precision}f"
     return get_nice_text(Text(f"{float(value):{fmt_str}}"), style)
 
 
@@ -120,11 +121,11 @@ def array_to_text(data, units=None) -> Text:
     header = Text("➤ ") + Text("Data", style=dascore_styles["dc_red"])
     unitstr = Text("") if units is None else Text(f", units: {units}")
     header += Text(f" ({data.dtype}") + unitstr + Text(")")
-    threshold = dascore_styles["np_array_threshold"]
+    config = get_config()
     np_str = np.array2string(
         data,
-        precision=FLOAT_PRECISION,
-        threshold=threshold,
+        precision=config.display_float_precision,
+        threshold=config.display_array_threshold,
     )
     numpy_format = textwrap.indent(np_str, "   ")
     return header + Text("\n") + Text(numpy_format)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime
 import pickle
 import re
-import warnings
 from functools import partial
 from io import BytesIO
 from typing import ClassVar
@@ -32,7 +31,7 @@ from dascore.core.coords import (
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_quantity, percent
 from dascore.utils.array import _coerce_text_array, _is_text_coercible_array
-from dascore.utils.misc import all_close, register_func
+from dascore.utils.misc import all_close, register_func, suppress_warnings
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 
 COORDS = []
@@ -1140,8 +1139,9 @@ class TestCoordRange:
 
     def test_len_one_array_like_start_no_deprecation(self):
         """Array-like scalar start should not emit numpy scalar conversion warning."""
-        with warnings.catch_warnings(record=True) as records:
-            warnings.simplefilter("always", DeprecationWarning)
+        with suppress_warnings(
+            action="always", category=DeprecationWarning, record=True
+        ) as records:
             coord = get_coord(shape=601, start=np.array([0]), step=1)
         assert coord.start == 0
         assert coord.stop == 601

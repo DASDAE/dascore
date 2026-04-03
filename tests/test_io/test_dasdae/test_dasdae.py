@@ -2,27 +2,39 @@
 
 from __future__ import annotations
 
+import pickle
 import shutil
 from pathlib import Path
+from typing import ClassVar
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
-import tables
 
 import dascore as dc
 from dascore.compat import random_state
+from dascore.config import set_config
 from dascore.core.coords import CoordString
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io import dasdae as dasdae_mod
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.dasdae.utils import (
+    _decode_attr_value,
+    _decode_legacy_attr_value,
+    _encode_attr_value,
     _get_attrs,
+    _get_contents_from_patch_groups_generic,
     _get_coord_node_metadata,
     _get_coord_summary_from_node,
+    _get_file_version,
+    _get_patch_summary_from_group,
     _read_array_sample,
     _save_array,
+    _save_patch,
     _translate_legacy_attrs,
 )
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
 
@@ -41,12 +53,10 @@ def written_dascore_v1_random(random_patch, tmp_path_factory):
 
 @pytest.fixture(scope="class")
 @register_func(WRITTEN_FILES)
-def written_dascore_v1_random_indexed(written_dascore_v1_random, tmp_path_factory):
-    """Copy the previous dasdae file and create an index."""
-    new_path = tmp_path_factory.mktemp("dasdae_test_path") / "indexed_dasdae.h5"
+def written_dascore_v1_random_copy(written_dascore_v1_random, tmp_path_factory):
+    """Copy the previous DASDAE file for compatibility-oriented tests."""
+    new_path = tmp_path_factory.mktemp("dasdae_test_path") / "copied_dasdae.h5"
     shutil.copy(written_dascore_v1_random, new_path)
-    # index new path
-    DASDAEV1().index(new_path)
     return new_path
 
 
@@ -101,13 +111,13 @@ class TestWriteDASDAE:
         assert len(df) == len(df_pre) + 1
         assert (df["time_min"] == to_datetime64("1990-01-01")).any()
 
-    def test_append_with_index(
-        self, written_dascore_v1_random_indexed, tmp_path_factory, random_patch
+    def test_append_after_copy(
+        self, written_dascore_v1_random_copy, tmp_path_factory, random_patch
     ):
-        """Ensure patches can be appended to indexed dasdae file."""
+        """Ensure append still works on a copied DASDAE file."""
         # make a copy of the dasdae file.
         new_path = tmp_path_factory.mktemp("dasdae_append") / "tmp.h5"
-        shutil.copy(written_dascore_v1_random_indexed, new_path)
+        shutil.copy(written_dascore_v1_random_copy, new_path)
         # ensure the patch exists in the copied spool.
         df_pre = dc.spool(new_path).get_contents()
         assert len(df_pre) == 1
@@ -147,6 +157,14 @@ class TestReadDASDAE:
         spool = dc.read(written_dascore_v1_empty)
         assert len(spool) == 1
         spool[0].equals(dc.Patch())
+
+    def test_reads_legacy_fixture(self):
+        """Legacy DASDAE fixtures still need to remain readable."""
+        path = fetch("example_dasdae_event_1.h5")
+        with set_config(allow_dasdae_format_unpickle=True):
+            spool = dc.read(path, file_format="DASDAE")
+        assert len(spool) == 1
+        assert spool[0].dims
 
     def test_datetimes(self, tmp_path_factory, random_patch):
         """Ensure the datetimes in the attrs come back as datetimes."""
@@ -231,26 +249,31 @@ class TestScanDASDAE:
         patch = dc.scan(written_dascore_v1_random)[0]
         assert patch.source_patch_id
 
-    # TODO we need to re-think indexing before this can work.
-    @pytest.mark.xfail
-    def test_indexed_vs_unindexed(
+    def test_copied_fixture_matches_original(
         self,
         written_dascore_v1_random,
-        written_dascore_v1_random_indexed,
+        written_dascore_v1_random_copy,
     ):
-        """Whether the file is indexed or not the summary should be the same."""
+        """Copying a DASDAE file should not change scan output."""
         df1 = dc.scan_to_df(written_dascore_v1_random)
-        df2 = dc.scan_to_df(written_dascore_v1_random_indexed)
+        df2 = dc.scan_to_df(written_dascore_v1_random_copy)
         # common fields should be equal (except path)
         common = list((set(df1) & set(df2)) - {"path"})
         assert df1[common].equals(df2[common])
 
+    def test_get_patch_summary_has_file_metadata(self, random_spool):
+        """The summary helper should stamp DASDAE metadata on each row."""
+        out = DASDAEV1()._get_patch_summary(random_spool)
+        assert set(out["file_format"]) == {"DASDAE"}
+        assert set(out["file_version"]) == {"1"}
+        assert out["source_patch_id"].notnull().all()
 
-class TestLegacyAttrsTranslation:
-    """Tests for translating legacy DASDAE attr payloads."""
 
-    def test_coord_manager_like_coords(self):
-        """Legacy coords with to_summary_dict should flatten to unit/step keys."""
+class TestLegacyFixtureCompatibility:
+    """Tests for the retained legacy DASDAE fixture compatibility helpers."""
+
+    def test_translate_legacy_attrs_coord_manager_like_coords(self):
+        """Legacy coord managers should still flatten via to_summary_dict."""
 
         class CoordManagerLike:
             def to_summary_dict(self):
@@ -260,41 +283,234 @@ class TestLegacyAttrsTranslation:
         assert out["time_units"] == "s"
         assert out["time_step"] == 1
 
-    def test_summary_like_coord(self):
-        """Legacy coord summaries with to_summary should be normalized."""
+    def test_translate_legacy_attrs_summary_like_coord(self):
+        """Legacy coord summaries should normalize via to_summary/model_dump."""
 
         class SummaryLike:
             def to_summary(self):
                 return dc.core.CoordSummary(min=0, max=1, step=2, units="m")
 
-        out = _translate_legacy_attrs({"coords": {"distance": SummaryLike()}})
+        out = _translate_legacy_attrs(
+            {
+                "coords": {"distance": SummaryLike(), "time": object()},
+                "dims": "distance,time",
+                "d_time": 3,
+            }
+        )
         assert out["distance_units"] == "m"
         assert out["distance_step"] == 2
+        assert out["time_step"] == 3
 
-    def test_model_dump_coord(self):
-        """Legacy coord summaries with model_dump should be normalized."""
-        summary = dc.core.CoordSummary(min=0, max=1, step=3, units="ft")
-        out = _translate_legacy_attrs({"coords": {"distance": summary}})
-        assert out["distance_units"] == "ft"
-        assert out["distance_step"] == 3
+    def test_translate_legacy_attrs_ignores_non_mapping_coords(self):
+        """Legacy stringified coord payloads should be ignored, not crash."""
+        out = _translate_legacy_attrs({"coords": "pickled-coords-placeholder"})
+        assert "coords" not in out
 
-    def test_malformed_coord_entry_skipped(self):
-        """Malformed coord entries should be ignored safely."""
-        out = _translate_legacy_attrs({"coords": {"distance": object()}})
-        assert out == {}
+    def test_translate_legacy_attrs_decodes_pickled_coord_payload(self):
+        """Legacy pickled coord payloads should still restore coord metadata."""
+        payload = pickle.dumps({"distance": {"min": 0, "max": 1, "units": "m"}})
+        out = _translate_legacy_attrs({"coords": payload.decode("latin1")})
+        assert out["distance_units"] == "m"
+        assert out["distance_min"] == 0
+        assert out["distance_max"] == 1
+
+    def test_scan_preserves_legacy_coord_units_from_attr_payload(self):
+        """Legacy attr coord units should backfill missing coord-node units."""
+        with set_config(allow_dasdae_format_unpickle=True):
+            summary = dc.scan(fetch("UoU_lf_urban.hdf5"))[0]
+        assert str(summary.coords["distance"].units) == "1 m"
+
+    def test_read_legacy_coord_payload_requires_opt_in(self):
+        """Legacy pickled coord metadata should fail closed by default."""
+        with set_config(allow_dasdae_format_unpickle=False):
+            with pytest.raises(
+                InvalidFiberFileError, match="allow_dasdae_format_unpickle=True"
+            ):
+                dc.read(fetch("UoU_lf_urban.hdf5"))
+
+    def test_scan_backfills_legacy_coord_step_when_node_step_missing(self, tmp_path):
+        """Legacy coord summaries should backfill step when node metadata lacks it."""
+        path = tmp_path / "legacy_coord_step.h5"
+        payload = pickle.dumps(
+            {
+                "distance": {
+                    "min": 0.0,
+                    "max": 3.0,
+                    "step": 1.0,
+                    "units": "m",
+                    "dtype": "float64",
+                }
+            }
+        )
+        with h5py.File(path, "w") as h5:
+            h5.attrs["__format__"] = "DASDAE"
+            h5.attrs["__DASDAE_version__"] = "1"
+            waveforms = h5.create_group("waveforms")
+            group = waveforms.create_group("patch")
+            group.attrs["_dims"] = "distance"
+            group.attrs["_attrs_coords"] = np.bytes_(payload)
+            group.attrs["_cdims_distance"] = "distance"
+            group.create_dataset("_coord_distance", data=np.array([0.0, 1.0, 3.0]))
+            summary = _get_patch_summary_from_group(group)
+        assert summary.coords["distance"].step == 1.0
+
+    def test_decode_legacy_attr_bytes_falls_back_to_text(self):
+        """Undecodable legacy bytes should fall back to plain text."""
+        assert _decode_legacy_attr_value(b"abc") == "abc"
+
+    def test_decode_legacy_attr_pickled_bytes_fall_back_to_text(self):
+        """Legacy pickled attrs should no longer be unpickled."""
+        payload = pickle.dumps(("a", "b"))
+        assert isinstance(_decode_legacy_attr_value(payload), str)
+
+    def test_decode_legacy_attr_unboxes_scalar_arrays(self):
+        """Scalar legacy arrays should be unpacked back to scalars."""
+        assert _decode_legacy_attr_value(np.asarray(5)) == 5
+
+
+class TestDASDAEInternalHelpers:
+    """Direct tests for h5py-backed DASDAE helper branches."""
+
+    def test_save_array_overwrites_existing_dataset(self, tmp_path):
+        """Saving to an existing dataset name should replace it."""
+        path = tmp_path / "overwrite_array.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms")
+            _save_array(np.arange(2), "data", group=group)
+            _save_array(np.arange(3), "data", group=group)
+            assert np.array_equal(group["data"][:], np.arange(3))
+
+    def test_save_patch_overwrites_existing_group(self, random_patch, tmp_path):
+        """Saving a patch with the same name should replace the old group."""
+        path = tmp_path / "overwrite_patch.h5"
+        with h5py.File(path, "w") as h5:
+            waveforms = h5.create_group("waveforms")
+            _save_patch(random_patch, waveforms, "patch_0")
+            _save_patch(random_patch.update_attrs(tag="new"), waveforms, "patch_0")
+            attrs = _get_attrs(waveforms["patch_0"])
+            assert attrs["tag"] == "new"
+
+    def test_get_patch_summary_unpacks_scalar_attr_array(self, tmp_path):
+        """Scalar encoded attrs should be unpacked in patch summaries."""
+        path = tmp_path / "summary_scalar.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch_0")
+            group.attrs["_dims"] = "time"
+            group.attrs["_attrs_station"] = np.asarray("A01", dtype=h5py.string_dtype())
+            summary = _get_patch_summary_from_group(group)
+        assert summary.attrs.station == "A01"
+        assert summary.dtype == ""
+
+    def test_get_attrs_unpacks_scalar_attr_arrays(self, monkeypatch):
+        """Scalar arrays returned by attr decoding should be unpacked."""
+
+        class _Group:
+            attrs: ClassVar[dict[str, str]] = {"_attrs_station": "unused"}
+
+        monkeypatch.setattr(
+            dasdae_mod.utils,
+            "_decode_attr_value",
+            lambda *_args, **_kwargs: np.asarray("A01"),
+        )
+        assert _get_attrs(_Group()) == {"station": "A01"}
+
+    def test_get_patch_summary_unpacks_scalar_arrays_from_decoder(
+        self, tmp_path, monkeypatch
+    ):
+        """Patch summaries should unpack scalar arrays returned by decoding."""
+        path = tmp_path / "summary_scalar_decoder.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch_0")
+            group.attrs["_dims"] = "time"
+            group.attrs["_attrs_station"] = "unused"
+            monkeypatch.setattr(
+                dasdae_mod.utils,
+                "_decode_attr_value",
+                lambda *_args, **_kwargs: np.asarray("A01"),
+            )
+            summary = _get_patch_summary_from_group(group)
+        assert summary.attrs.station == "A01"
+
+    def test_get_patch_summary_preserves_empty_dims_and_shape(self, tmp_path):
+        """Empty stored dims should remain empty tuples in summaries."""
+        path = tmp_path / "summary_empty_dims.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch_0")
+            group.attrs["_dims"] = ""
+            group.create_dataset("data", data=np.arange(6).reshape(2, 3))
+            summary = _get_patch_summary_from_group(group)
+        assert summary.dims == ()
+        assert summary.shape == (2, 3)
+
+    def test_get_contents_from_patch_groups_returns_empty_without_waveforms(
+        self, tmp_path
+    ):
+        """Files without waveforms should scan as empty."""
+        path = tmp_path / "empty_scan.h5"
+        with h5py.File(path, "w") as h5:
+            out = _get_contents_from_patch_groups_generic(h5)
+            assert out == []
+
+    @pytest.mark.parametrize(
+        ("key", "value", "expected_type", "expected_value"),
+        [
+            ("history", ("a", "b"), "history_json", ("a", "b")),
+            (
+                "value",
+                np.timedelta64(5, "ns"),
+                "timedelta64[ns]",
+                np.timedelta64(5, "ns"),
+            ),
+        ],
+    )
+    def test_encode_decode_attr_value_round_trip(
+        self, key, value, expected_type, expected_value
+    ):
+        """Canonical attr encoding should round-trip supported rich types."""
+        encoded, attr_type = _encode_attr_value(key, value)
+        decoded = _decode_attr_value(
+            {f"_attr_type_{key}": attr_type},
+            key,
+            encoded,
+        )
+        assert attr_type == expected_type
+        assert decoded == expected_value
+
+    def test_encode_attr_value_empty_history(self):
+        """Empty history should still use the dedicated JSON history branch."""
+        encoded, attr_type = _encode_attr_value("history", [])
+        assert attr_type == "history_json"
+        assert encoded == "[]"
+
+    def test_encode_attr_value_string_history_uses_single_entry_json(self):
+        """String history should serialize as a one-entry JSON list."""
+        encoded, attr_type = _encode_attr_value("history", "one step")
+        assert attr_type == "history_json"
+        assert encoded == '["one step"]'
+
+    def test_encode_attr_value_generic_sequence_is_not_special_cased(self):
+        """Non-history sequences should use default passthrough handling."""
+        encoded, attr_type = _encode_attr_value("value", [1, 2])
+        assert attr_type is None
+        assert encoded == [1, 2]
+
+    def test_decode_attr_value_unknown_type_returns_value(self):
+        """Unknown attr types should pass values through unchanged."""
+        value = "abc"
+        assert (
+            _decode_attr_value({"_attr_type_value": "mystery"}, "value", value) == value
+        )
+
+    def test_get_file_version_reads_dasdae_attr(self, tmp_path):
+        """The DASDAE version helper should read the file-level version attr."""
+        path = tmp_path / "versioned.h5"
+        with h5py.File(path, "w") as h5:
+            h5.attrs["__DASDAE_version__"] = "9"
+            assert _get_file_version(h5) == "9"
 
 
 class TestCoordSummaryHelpers:
     """Tests for lightweight DASDAE coord summary reconstruction."""
-
-    class _Attrs(dict):
-        """Support both mapping and attribute-style access like pytables attrs."""
-
-        def __getattr__(self, item):
-            try:
-                return self[item]
-            except KeyError as exc:
-                raise AttributeError(item) from exc
 
     class _ArrayNode:
         """A minimal array node stub for exercising coord summary helpers."""
@@ -304,10 +520,10 @@ class TestCoordSummaryHelpers:
             self.shape = self._values.shape
             self.dtype = self._values.dtype
             self.forbid_full_read = forbid_full_read
-            self._v_attrs = attrs or TestCoordSummaryHelpers._Attrs(
-                is_datetime64=False,
-                is_timedelta64=False,
-            )
+            self.attrs = attrs or {
+                "is_datetime64": False,
+                "is_timedelta64": False,
+            }
 
         def __array__(self):
             return self._values
@@ -336,7 +552,7 @@ class TestCoordSummaryHelpers:
         node = self._ArrayNode(
             [1, 2, 3],
             dtype="int64",
-            attrs=self._Attrs(is_datetime64=False, is_timedelta64=True),
+            attrs={"is_datetime64": False, "is_timedelta64": True},
         )
 
         out = _read_array_sample(node, 1)
@@ -349,7 +565,7 @@ class TestCoordSummaryHelpers:
         node = self._ArrayNode(
             [1, 2, 3],
             dtype="int64",
-            attrs=self._Attrs(is_datetime64=True, is_timedelta64=False),
+            attrs={"is_datetime64": True, "is_timedelta64": False},
         )
 
         out = _read_array_sample(node, 1)
@@ -359,7 +575,7 @@ class TestCoordSummaryHelpers:
 
     def test_read_array_sample_missing_attrs_is_backward_compatible(self):
         """Old files without datetime/timedelta attrs should not error."""
-        node = self._ArrayNode([1, 2, 3], dtype="int64", attrs=self._Attrs())
+        node = self._ArrayNode([1, 2, 3], dtype="int64", attrs={})
 
         out = _read_array_sample(node, 1)
 
@@ -367,7 +583,7 @@ class TestCoordSummaryHelpers:
 
     def test_get_coord_summary_from_empty_node(self):
         """Empty coord nodes should fall back to NaN bounds and node dtype."""
-        node = self._ArrayNode([], dtype="float64", attrs=self._Attrs(units="m"))
+        node = self._ArrayNode([], dtype="float64", attrs={"units": "m"})
 
         out = _get_coord_summary_from_node(node, ("distance",))
 
@@ -383,14 +599,14 @@ class TestCoordSummaryHelpers:
         node = self._ArrayNode(
             [b"alpha", b"beta"],
             dtype="S5",
-            attrs=self._Attrs(
-                units=None,
-                step=None,
-                is_string=True,
-                original_string_dtype="<U8",
-                is_datetime64=False,
-                is_timedelta64=False,
-            ),
+            attrs={
+                "units": None,
+                "step": None,
+                "is_string": True,
+                "original_string_dtype": "<U8",
+                "is_datetime64": False,
+                "is_timedelta64": False,
+            },
         )
 
         out = _get_coord_node_metadata(node)
@@ -404,14 +620,14 @@ class TestCoordSummaryHelpers:
         node = self._ArrayNode(
             [1, 2],
             dtype="int64",
-            attrs=self._Attrs(
-                units="s",
-                step=1,
-                step_is_timedelta64=True,
-                is_string=False,
-                is_datetime64=True,
-                is_timedelta64=False,
-            ),
+            attrs={
+                "units": "s",
+                "step": 1,
+                "step_is_timedelta64": True,
+                "is_string": False,
+                "is_datetime64": True,
+                "is_timedelta64": False,
+            },
         )
 
         out = _get_coord_node_metadata(node)
@@ -424,14 +640,14 @@ class TestCoordSummaryHelpers:
         node = self._ArrayNode(
             [1, 2],
             dtype="int64",
-            attrs=self._Attrs(
-                units="s",
-                step=1,
-                step_is_timedelta64=True,
-                is_string=False,
-                is_datetime64=False,
-                is_timedelta64=True,
-            ),
+            attrs={
+                "units": "s",
+                "step": 1,
+                "step_is_timedelta64": True,
+                "is_string": False,
+                "is_datetime64": False,
+                "is_timedelta64": True,
+            },
         )
 
         out = _get_coord_node_metadata(node)
@@ -444,14 +660,14 @@ class TestCoordSummaryHelpers:
         node = self._ArrayNode(
             [10, 20, 30, 40],
             dtype="int64",
-            attrs=self._Attrs(
-                units="m",
-                step=10,
-                step_is_timedelta64=False,
-                is_datetime64=False,
-                is_timedelta64=False,
-                is_string=False,
-            ),
+            attrs={
+                "units": "m",
+                "step": 10,
+                "step_is_timedelta64": False,
+                "is_datetime64": False,
+                "is_timedelta64": False,
+                "is_string": False,
+            },
             forbid_full_read=True,
         )
 
@@ -467,14 +683,14 @@ class TestCoordSummaryHelpers:
         node = self._ArrayNode(
             [b"gamma", b"alpha", b"beta"],
             dtype="S5",
-            attrs=self._Attrs(
-                units=None,
-                step=None,
-                is_string=True,
-                original_string_dtype="<U8",
-                is_datetime64=False,
-                is_timedelta64=False,
-            ),
+            attrs={
+                "units": None,
+                "step": None,
+                "is_string": True,
+                "original_string_dtype": "<U8",
+                "is_datetime64": False,
+                "is_timedelta64": False,
+            },
         )
 
         out = _get_coord_summary_from_node(node, ("station",))
@@ -670,37 +886,7 @@ class TestStringArrayHelpers:
         monkeypatch.setattr(
             dasdae_mod.utils, "convert_strings_to_bytes", _raise_if_called
         )
-        with tables.open_file(path, mode="w") as h5:
-            group = h5.create_group("/", "waveforms")
-            with pytest.raises(TypeError, match="object arrays"):
-                _save_array(data, "obj", group=group, h5=h5)
-
-
-class TestAttrReading:
-    """Tests for DASDAE attr extraction helpers."""
-
-    class _Attrs(dict):
-        """Support pytables-like attr access with warning side effects."""
-
-        def _f_list(self):
-            return list(self)
-
-        def __getitem__(self, item):
-            import warnings
-
-            warnings.warn("deprecated attr read", DeprecationWarning, stacklevel=2)
-            return super().__getitem__(item)
-
-    class _Group:
-        """Minimal patch-group stub for _get_attrs."""
-
-        def __init__(self, attrs):
-            self._v_attrs = attrs
-
-    def test_get_attrs_suppresses_deprecation_warning(self):
-        """Deprecation warnings from attr reads should be suppressed in the loop."""
-        group = self._Group(self._Attrs(_attrs_station="A01"))
-
-        out = _get_attrs(group)
-
-        assert out == {"station": "A01"}
+        with h5py.File(path, mode="w") as h5:
+            group = h5.create_group("waveforms")
+            with pytest.raises(TypeError, match="Object dtype|object arrays"):
+                _save_array(data, "obj", group=group)

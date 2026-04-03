@@ -525,7 +525,6 @@ def select(
 
 
 @patch_function(history=None)
-@compose_docstring(select_params=select_values_description)
 def order(
     patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
 ) -> PatchType:

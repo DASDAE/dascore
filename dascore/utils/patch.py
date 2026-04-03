@@ -16,14 +16,13 @@ import pydantic
 from pydantic import TypeAdapter
 
 import dascore as dc
+from dascore.config import get_config
 from dascore.constants import (
     DEFAULT_ATTRS_TO_IGNORE,
-    FLOAT_PRECISION,
     WARN_LEVELS,
     PatchType,
     SpoolType,
     check_behavior_description,
-    dascore_styles,
 )
 from dascore.exceptions import (
     CoordDataError,
@@ -61,10 +60,11 @@ def _format_values(val):
         out = f"({out})" if isinstance(val, tuple) else f"[{out}]"
     elif isinstance(val, np.ndarray):
         # make sure numpy strings aren't too long!
+        config = get_config()
         out = np.array2string(
             val,
-            precision=FLOAT_PRECISION,
-            threshold=dascore_styles["patch_history_array_threshold"],
+            precision=config.display_float_precision,
+            threshold=config.display_patch_history_array_threshold,
         )
     elif isinstance(val, dc.Patch):
         # Truncate patch representations in history (issue #529)

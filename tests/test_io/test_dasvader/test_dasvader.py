@@ -13,7 +13,7 @@ import pytest
 from h5py.h5r import Reference
 
 import dascore as dc
-from dascore.exceptions import DependencyError
+from dascore.exceptions import DependencyError, UnknownFiberFormatError
 from dascore.io.dasvader.utils import _dereference, _julia_ms_to_datetime64
 from dascore.utils.downloader import fetch
 
@@ -212,12 +212,20 @@ class TestDASVader:
             out = dc.scan(legacy_das_vader_path)
         assert out == []
 
+    def test_non_dasvader_jld2_is_not_claimed(self, tmp_path):
+        """Non-DASVader JLD2/HDF5 files should not be identified as DASVader."""
+        path = tmp_path / "not_dasvader.jld2"
+        with h5py.File(path, "w") as fi:
+            fi.create_dataset("not_dDAS", data=np.arange(3))
+        with pytest.raises(UnknownFiberFormatError):
+            dc.get_format(path)
+
     def test_modern_file_scan_and_slice(self, dasvader_modern_path):
         """Named-reference DASVader files should still support scan and read."""
         scanned = dc.scan(dasvader_modern_path)
         assert len(scanned) == 1
         summary = scanned[0]
-        assert summary.file_format == "DASVader"
+        assert summary.source_format == "DASVader"
         assert summary.attrs.gauge_length == MODERN_DASVADER.gauge_length
         assert summary.attrs.host_name == MODERN_DASVADER.host_name
         assert summary.attrs.pipeline_tracker == MODERN_DASVADER.pipeline_tracker

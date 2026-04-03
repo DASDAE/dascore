@@ -10,19 +10,18 @@ test_io_core.py
 
 from __future__ import annotations
 
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from functools import cache
 from io import BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
-from urllib import error as urllib_error
 
 import numpy as np
 import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import CoordError, DependencyError
+from dascore.exceptions import CoordError
 from dascore.io import BinaryReader
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.dasdae import DASDAEV1
@@ -46,6 +45,11 @@ from dascore.io.terra15 import (
 )
 from dascore.utils.downloader import fetch, get_registry_df
 from dascore.utils.misc import all_close, iterate
+from tests.test_io._common_io_test_utils import (
+    get_flat_io_test,
+    skip_missing,
+    skip_timeout,
+)
 
 # --- Fixtures
 
@@ -99,26 +103,6 @@ COMMON_IO_WRITE_TESTS = (
 SKIP_DATA_FILES = {"whale_1.hdf5", "brady_hs_DAS_DTS_coords.csv", "das_vader_1.jld2"}
 
 
-@contextmanager
-def skip_missing():
-    """Skip if missing dependencies found."""
-    try:
-        yield
-    except DependencyError as exc:
-        pytest.skip(str(exc))
-    except TimeoutError as exc:
-        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
-
-
-@contextmanager
-def skip_timeout():
-    """Skip if downloading file times out."""
-    try:
-        yield
-    except (TimeoutError, urllib_error.URLError) as exc:
-        pytest.skip(f"Unable to fetch data due to timeout: {exc}")
-
-
 def _scan_summary(scan_result):
     """Normalize scan output to the patch summary view."""
     return scan_result.summary if isinstance(scan_result, dc.Patch) else scan_result
@@ -139,22 +123,13 @@ def _cached_read(path, io=None):
     return out
 
 
-def _get_flat_io_test():
-    """Flatten list to [(fiberio, path)] so it can be parametrized."""
-    flat_io = []
-    for io, fetch_name_list in COMMON_IO_READ_TESTS.items():
-        for fetch_name in iterate(fetch_name_list):
-            flat_io.append([io, fetch_name])
-    return flat_io
-
-
 @pytest.fixture(scope="session", params=list(COMMON_IO_READ_TESTS))
 def io_instance(request):
     """Fixture for returning fiber io instances."""
     return request.param
 
 
-@pytest.fixture(scope="session", params=_get_flat_io_test())
+@pytest.fixture(scope="session", params=get_flat_io_test(COMMON_IO_READ_TESTS))
 def io_path_tuple(request):
     """
     A fixture which returns io instance, path_to_file.
@@ -165,7 +140,7 @@ def io_path_tuple(request):
         return io, fetch(fetch_name)
 
 
-@pytest.fixture(scope="session", params=get_registry_df()["name"])
+@pytest.fixture(scope="session", params=get_registry_df(exclude_large=True)["name"])
 def data_file_path(request):
     """A fixture of all data files. Will download if needed."""
     param = request.param
@@ -397,7 +372,7 @@ class TestScan:
 
         for summary in summary_list:
             assert isinstance(summary, dc.PatchSummary)
-            assert str(summary.path) == str(data_file_path)
+            assert str(summary.source_path) == str(data_file_path)
 
     def test_raw_scan_excludes_source_metadata(self, io_path_tuple):
         """Direct FiberIO scans should not attach source metadata."""
@@ -405,9 +380,9 @@ class TestScan:
         with skip_missing():
             summary_list = io.scan(path)
         for summary in summary_list:
-            assert not summary.path
-            assert not summary.file_format
-            assert not summary.file_version
+            assert not summary.source_path
+            assert not summary.source_format
+            assert not summary.source_version
             attr_dump = summary.attrs.model_dump()
             assert "path" not in attr_dump
             assert "file_format" not in attr_dump
@@ -419,9 +394,9 @@ class TestScan:
         with skip_missing():
             summary_list = dc.scan(path)
         for summary in summary_list:
-            assert str(summary.path) == str(path)
-            assert summary.file_format == io.name
-            assert summary.file_version == io.version
+            assert str(summary.source_path) == str(path)
+            assert summary.source_format == io.name
+            assert summary.source_version == io.version
 
     def test_time_coord_is_time(self, scanned_summaries):
         """Ensure scanned summaries have correct dtype for time."""

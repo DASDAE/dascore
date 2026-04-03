@@ -10,10 +10,10 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
+from dascore.utils.io import _normalize_source_patch_ids
 from dascore.utils.misc import (
     _maybe_unpack,
     broadcast_for_index,
-    iterate,
     maybe_get_items,
     tukey_fence,
     unbyte,
@@ -369,9 +369,7 @@ def _read_febus(
 ):
     """Read the febus values into a patch."""
     out = []
-    source_patch_ids = {
-        str(value) for value in iterate(source_patch_id) if value not in (None, "")
-    }
+    source_patch_ids = _normalize_source_patch_ids(source_patch_id)
     for attr, cm, febus in _yield_attrs_coords(fi):
         patch_id = _get_source_patch_id(febus)
         if source_patch_ids and patch_id not in source_patch_ids:

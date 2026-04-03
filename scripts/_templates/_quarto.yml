@@ -115,6 +115,12 @@ website:
         - text: File IO
           href: tutorial/file_io.qmd
 
+        - text: Working with Remote Patches
+          href: tutorial/remote_patches.qmd
+
+        - text: Configuration
+          href: tutorial/configuration.qmd
+
         - text: Coordinates
           href: tutorial/coords.qmd
 
