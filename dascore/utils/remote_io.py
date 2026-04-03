@@ -6,9 +6,11 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import warnings
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
@@ -27,6 +29,16 @@ _REMOTE_RESOURCE_CACHE: dict[str, UPath] = {}
 _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
     "remote_cache_scope", default="default"
 )
+
+
+def _remote_debug(message: str) -> None:
+    """Emit timestamped debug logs for remote IO fallback diagnostics."""
+    stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    thread_name = threading.current_thread().name
+    print(  # noqa: T201
+        f"[remote-io-debug {stamp} {thread_name}] {message}",
+        flush=True,
+    )
 
 
 @contextmanager
@@ -126,6 +138,10 @@ def _download_remote_file(path, local_path: Path):
     resource = coerce_to_upath(path)
     protocol = getattr(resource, "protocol", None)
     open_kwargs = {"block_size": 0} if protocol in _HTTP_PROTOCOLS else {}
+    _remote_debug(
+        f"download:start resource={resource} protocol={protocol} "
+        f"local_path={local_path} open_kwargs={open_kwargs}"
+    )
     local_path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         dir=local_path.parent,
@@ -139,10 +155,26 @@ def _download_remote_file(path, local_path: Path):
             resource.open("rb", **open_kwargs) as remote_fi,
             tmp_path.open("wb") as local_fi,
         ):
+            _remote_debug(
+                "download:opened "
+                f"resource={resource} remote_type={type(remote_fi).__name__}"
+            )
+            total = 0
             while chunk := remote_fi.read(get_config().remote_download_block_size):
+                total += len(chunk)
+                _remote_debug(
+                    "download:chunk "
+                    f"resource={resource} size={len(chunk)} total={total}"
+                )
                 local_fi.write(chunk)
         tmp_path.replace(local_path)
+        _remote_debug(
+            "download:complete "
+            f"resource={resource} local_path={local_path} "
+            f"size={local_path.stat().st_size}"
+        )
     finally:
+        _remote_debug(f"download:cleanup resource={resource} tmp_path={tmp_path}")
         tmp_path.unlink(missing_ok=True)
 
 
@@ -188,15 +220,25 @@ def _materialize_remote_file(  # pragma: no cover
 
 def ensure_local_file(resource) -> Path:
     """Return a stable local path for one resource for the current session."""
+    _remote_debug(f"ensure_local_file:start resource={resource!r}")
     if is_pathlike(resource) and is_local_path(resource):
-        return Path(resource)
+        out = Path(resource)
+        _remote_debug(f"ensure_local_file:local-path resource={resource!r} out={out}")
+        return out
     if is_pathlike(resource):
         cache_root = _normalize_cache_root(get_remote_cache_path())
         remote_id = normalize_remote_id(resource)
-        return _materialize_remote_file(remote_id, cache_root)
+        out = _materialize_remote_file(remote_id, cache_root)
+        _remote_debug(
+            "ensure_local_file:materialized "
+            f"resource={resource!r} remote_id={remote_id} out={out}"
+        )
+        return out
     name = getattr(resource, "name", None)
     if name and is_local_path(name):
-        return Path(name)
+        out = Path(name)
+        _remote_debug(f"ensure_local_file:name-local resource={resource!r} out={out}")
+        return out
     msg = f"Cannot ensure a local file for resource {resource!r}"
     raise TypeError(msg)
 
@@ -225,6 +267,11 @@ class FallbackFileObj:
         self._using_local = False
         self._handle = self._remote_opener()
         self._pos = 0
+        _remote_debug(
+            "fallback:init "
+            f"handle_type={type(self._handle).__name__} "
+            f"using_local={self._using_local}"
+        )
 
     def _set_pos_from_handle(self, fallback=None):
         """Synchronize the tracked position with the wrapped handle."""
@@ -237,23 +284,39 @@ class FallbackFileObj:
     def _switch_to_local(self):
         """Swap the backing handle to the cached local file."""
         if self._using_local:
+            _remote_debug("fallback:switch_to_local:already-using-local")
             return
         old_handle = self._handle
+        _remote_debug(
+            "fallback:switch_to_local:start "
+            f"old_handle_type={type(old_handle).__name__} pos={self._pos}"
+        )
         self._handle = self._local_opener()
         self._handle.seek(self._pos)
         self._using_local = True
         old_handle.close()
+        _remote_debug(
+            "fallback:switch_to_local:end "
+            f"new_handle_type={type(self._handle).__name__} pos={self._pos}"
+        )
 
     def _with_fallback(self, func, fallback_pos=None):
         """Run an operation and retry against the cached local file if needed."""
         try:
             return func()
         except Exception as exc:
+            _remote_debug(
+                f"fallback:exception type={type(exc).__name__} message={exc!s} "
+                f"using_local={self._using_local} pos={self._pos}"
+            )
             if not self._error_predicate(exc):
                 raise
             self._switch_to_local()
             result = func()
             self._set_pos_from_handle(fallback=fallback_pos)
+            _remote_debug(
+                f"fallback:recovered using_local={self._using_local} pos={self._pos}"
+            )
             return result
 
     def read(self, size=-1):

@@ -16,6 +16,11 @@ from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_pa
 pytestmark = pytest.mark.network
 
 
+def _test_debug(message: str) -> None:
+    """Emit immediate debug output for flaky remote HTTP regression tests."""
+    print(f"[test-remote-http-debug] {message}", flush=True)  # noqa: T201
+
+
 @pytest.fixture(autouse=True)
 def suppress_expected_remote_cache_warnings(request):
     """Keep expected remote-cache download warnings out of test output."""
@@ -124,22 +129,33 @@ class TestHTTPFormatAndSpool:
     ):
         """First local cache materialization should warn, then reuse the artifact."""
         fname = "prodml_2.1.h5"
+        _test_debug(f"start fname={fname}")
         ensure_http_regression_file(fname)
         path = http_regression_das_path / fname
+        _test_debug(f"path={path}")
         with set_config(
             allow_remote_cache_for_metadata=True, warn_on_remote_cache=True
         ):
+            _test_debug("calling dc.get_format")
             with pytest.warns(UserWarning, match="Downloading remote file"):
                 dc.get_format(path)
+        _test_debug("dc.get_format complete")
         cached_files = list(get_remote_cache_path().rglob(fname))
+        _test_debug(f"cached_files_after_get_format={cached_files}")
         assert len(cached_files) <= 1
+        _test_debug("calling first dc.read")
         assert len(dc.read(path))
+        _test_debug("first dc.read complete")
 
         cached_files_2 = list(get_remote_cache_path().rglob(fname))
+        _test_debug(f"cached_files_after_first_read={cached_files_2}")
         assert len(cached_files_2) == 1
         assert cached_files_2[0].exists()
+        _test_debug("calling second dc.read")
         assert dc.read(path)
+        _test_debug("second dc.read complete")
         cached_files_3 = list(get_remote_cache_path().rglob(fname))
+        _test_debug(f"cached_files_after_second_read={cached_files_3}")
         assert cached_files_3 == cached_files_2
 
     def test_http_range_server_supports_partial_reads(
