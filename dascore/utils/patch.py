@@ -94,7 +94,9 @@ def _func_and_kwargs_str(func: Callable, patch, *args, **kwargs) -> str:
     return out + ")"
 
 
-def _get_history_str(patch: PatchType, func, *args, _history="full", **kwargs) -> str:
+def _get_history_str(
+    patch: PatchType, func, *args, _history="full", **kwargs
+) -> str | None:
     """
     Log history of a function being called on a Patch object.
 
