@@ -116,6 +116,7 @@ class TestHTTPFormatAndSpool:
         with pytest.raises(RemoteCacheError, match="allow_remote_cache_for_metadata"):
             dc.get_format(path)
 
+    @pytest.mark.timeout(10)
     def test_http_hdf5_fallback_warns_once_and_reuses_cached_local_copy(
         self, http_regression_das_path, ensure_http_regression_file
     ):

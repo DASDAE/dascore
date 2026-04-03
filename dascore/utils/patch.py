@@ -111,13 +111,22 @@ def _get_history_str(patch: PatchType, func, *args, _history="full", **kwargs) -
     **kwargs
         kwargs for func.
     """
-    if _history is None:
+    if _history is None or get_config().patch_history == "disabled":
         return None
     if _history == "full":
         history_str = _func_and_kwargs_str(func, patch, *args, **kwargs)
     else:
         history_str = str(func.__name__)
     return history_str
+
+
+def _maybe_add_history_str(attrs, hist_str):
+    """Append a history string unless patch history recording is disabled."""
+    if not hist_str or get_config().patch_history == "disabled":
+        return attrs
+    new_history = list(attrs.history)
+    new_history.append(hist_str)
+    return attrs.update(history=new_history)
 
 
 def check_patch_coords(
@@ -267,10 +276,9 @@ def patch_function(
                 hist_str = _get_history_str(
                     patch, func, *args, _history=history, **kwargs
                 )
-                if hist_str:
-                    hist = list(out.attrs.history)
-                    hist.append(hist_str)
-                    out = out.update_attrs(history=hist)
+                attrs = _maybe_add_history_str(out.attrs, hist_str)
+                if attrs is not out.attrs:
+                    out = out.update(attrs=attrs)
             return out
 
         # Attach original function. Although we want to encourage raw_function
@@ -1044,13 +1052,6 @@ def merge_compatible_coords_attrs(
     return coord_out, attrs
 
 
-def _add_history_str(attrs, hist_str):
-    """Add a single string to the history attribute in attrs."""
-    new_history = list(attrs.history)
-    new_history.append(hist_str)
-    return attrs.update(history=new_history)
-
-
 def _spool_up(func):
     """
     Spool the output of a function.
@@ -1178,7 +1179,7 @@ def concatenate_patches(
     out = []
     for patch_list in yield_sub_sequences(patches, val):
         ar = get_output_array(patch_list, dims.index(dim), new_dim)
-        attrs = _add_history_str(patch_list[0].attrs, "concatenate")
+        attrs = _maybe_add_history_str(patch_list[0].attrs, "concatenate")
         coords = _get_new_coords(patch_list, dim, new_dim)
         out.append(dc.Patch(data=ar, attrs=attrs, coords=coords, dims=dims))
     return out
@@ -1224,7 +1225,7 @@ def stack_patches(
             stack_arr = stack_arr + p.data
 
     # create attributes for the stack with adjusted history
-    stack_attrs = _add_history_str(init_patch.attrs, "stack")
+    stack_attrs = _maybe_add_history_str(init_patch.attrs, "stack")
 
     # create coords array for the stack
     stack_coords = init_patch.coords

@@ -238,6 +238,33 @@ Markdown(df_str)
 
 Specific data formats may also add attributes (e.g. "gauge_length", "pulse_width"), but this depends on the parser.
 
+### Patch History
+
+Patch-processing methods append entries to `Patch.attrs.history` by default so downstream steps remain traceable.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+filtered = patch.pass_filter(time=(1, 10))
+
+print(filtered.attrs.history[-1])
+```
+
+If you want to suppress new history entries for a block of operations, use `set_config(patch_history="disabled")`. Existing history is preserved, but DASCore will stop appending new entries until that config context exits.
+
+```{python}
+from dascore.config import set_config
+
+patch = dc.get_example_patch().pass_filter(time=(1, 10))
+old_history = patch.attrs.history
+
+with set_config(patch_history="disabled"):
+    out = patch.normalize()
+
+assert out.attrs.history == old_history
+```
+
 `Patch.attrs` only stores non-coordinate metadata. This includes things like network, station, data units, and format-specific fields such as `gauge_length` or `pulse_width`.
 
 ## Summary

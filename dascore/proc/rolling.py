@@ -13,7 +13,7 @@ from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.models import DascoreBaseModel
-from dascore.utils.patch import get_dim_axis_value
+from dascore.utils.patch import _maybe_add_history_str, get_dim_axis_value
 from dascore.utils.pd import rolling_df
 
 
@@ -47,15 +47,12 @@ class _PatchRollerInfo(DascoreBaseModel):
 
     def _get_attrs_with_apply_history(self, func_or_str):
         """Get new attrs that has history from apply attached."""
-        new_history = list(self.patch.attrs.history)
         if callable(func_or_str):
             func_name = getattr(func_or_str, "__name__", "")
             hist_str = f"{self.roll_hist}.apply({func_name})"
         else:
             hist_str = f"{self.roll_hist}.{func_or_str}()"
-        new_history.append(hist_str)
-        attrs = self.patch.attrs.update(history=new_history)
-        return attrs
+        return _maybe_add_history_str(self.patch.attrs, hist_str)
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):
