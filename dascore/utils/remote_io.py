@@ -12,6 +12,7 @@ from contextvars import ContextVar
 from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 from dascore.compat import UPath
 from dascore.config import get_config
@@ -125,7 +126,6 @@ def _download_remote_file(path, local_path: Path):
     """Download a remote path into its cache location."""
     resource = coerce_to_upath(path)
     protocol = getattr(resource, "protocol", None)
-    open_kwargs = {"block_size": 0} if protocol in _HTTP_PROTOCOLS else {}
     local_path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         dir=local_path.parent,
@@ -135,12 +135,24 @@ def _download_remote_file(path, local_path: Path):
     os.close(fd)
     tmp_path = Path(temp_name)
     try:
-        with (
-            resource.open("rb", **open_kwargs) as remote_fi,
-            tmp_path.open("wb") as local_fi,
-        ):
-            while chunk := remote_fi.read(get_config().remote_download_block_size):
-                local_fi.write(chunk)
+        if protocol in _HTTP_PROTOCOLS:
+            # Use a direct blocking HTTP download here rather than
+            # ``resource.open(...)``. The fallback path can be entered while an
+            # active fsspec HTTP read is already in progress, and re-entering
+            # that stack from inside the fallback can deadlock.
+            headers = dict(getattr(resource, "storage_options", {}) or {})
+            request = Request(str(resource), headers=headers)
+            timeout = get_config().remote_download_timeout
+            with (
+                urlopen(request, timeout=timeout) as remote_fi,
+                tmp_path.open("wb") as local_fi,
+            ):
+                while chunk := remote_fi.read(get_config().remote_download_block_size):
+                    local_fi.write(chunk)
+        else:
+            with resource.open("rb") as remote_fi, tmp_path.open("wb") as local_fi:
+                while chunk := remote_fi.read(get_config().remote_download_block_size):
+                    local_fi.write(chunk)
         tmp_path.replace(local_path)
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -201,6 +213,19 @@ def ensure_local_file(resource) -> Path:
     raise TypeError(msg)
 
 
+def get_cached_local_file(resource) -> Path | None:
+    """Return the cached local path for one remote resource if it exists."""
+    if not is_pathlike(resource) or is_local_path(resource):
+        return None
+    remote = coerce_to_upath(resource)
+    cache_root = _normalize_cache_root(get_remote_cache_path())
+    remote_id = normalize_remote_id(remote)
+    local_path = (
+        cache_root / sha256(remote_id.encode()).hexdigest() / _safe_remote_name(remote)
+    )
+    return local_path if local_path.exists() else None
+
+
 def get_local_handle(resource, opener):
     """Materialize a resource locally, then pass it to an opener."""
     return opener(ensure_local_file(resource))
@@ -215,7 +240,39 @@ def is_no_range_http_error(exc: Exception) -> bool:
 
 
 class FallbackFileObj:
-    """A file-like object that switches from remote to local on one error."""
+    """
+    A seekable binary file adapter that starts remote and falls back to local.
+
+    This wrapper is used when DASCore wants to give a consumer such as h5py a
+    normal file-like object for a remote resource without eagerly downloading
+    the whole file first.
+
+    Behavior
+    --------
+    - Opens the resource with ``remote_opener`` initially.
+    - Proxies standard file operations like ``read``, ``readinto``, ``seek``,
+      ``tell``, and ``close`` to the active handle.
+    - If one proxied operation raises an exception matched by
+      ``error_predicate``, the remote handle is abandoned and replaced with a
+      local handle from ``local_opener``.
+    - The current logical file position is preserved across that switch.
+    - Once fallback happens, all later operations use the local handle.
+
+    Why this exists
+    ---------------
+    Some remote backends work for simple sequential reads but fail when a
+    library such as h5py performs the random-access pattern required to read
+    HDF5 metadata. A common case is HTTP servers that do not support range
+    requests well enough for seek-heavy reads. This wrapper lets DASCore stay
+    remote-first when that works, while still recovering by materializing a
+    local file only when needed.
+
+    Notes
+    -----
+    This is not a general retry wrapper for arbitrary IO failures. It is meant
+    for one known fallback condition where switching from remote access to a
+    local cached file is safe and expected.
+    """
 
     def __init__(self, remote_opener, local_opener, error_predicate):
         self._remote_opener = remote_opener
@@ -239,6 +296,8 @@ class FallbackFileObj:
         if self._using_local:
             return
         old_handle = self._handle
+        # Reopen against the stable local artifact and continue from the same
+        # logical file position the caller was already using.
         self._handle = self._local_opener()
         self._handle.seek(self._pos)
         self._using_local = True
@@ -251,6 +310,8 @@ class FallbackFileObj:
         except Exception as exc:
             if not self._error_predicate(exc):
                 raise
+            # The first matching remote-read failure permanently moves this
+            # wrapper onto the local file; later operations stay local.
             self._switch_to_local()
             result = func()
             self._set_pos_from_handle(fallback=fallback_pos)
@@ -272,7 +333,7 @@ class FallbackFileObj:
         return out
 
     def seek(self, offset, whence=0):
-        """Move the file cursor."""
+        """Move the file cursor, triggering fallback if random access fails."""
         out = self._with_fallback(lambda: self._handle.seek(offset, whence))
         self._set_pos_from_handle(fallback=out)
         return out

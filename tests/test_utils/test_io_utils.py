@@ -36,6 +36,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (
     FallbackFileObj,
     clear_remote_file_cache,
+    get_cached_local_file,
     get_remote_cache_path,
     get_remote_cache_scope,
     is_no_range_http_error,
@@ -227,6 +228,54 @@ class TestGetHandleFromResource:
                 assert list(handle["data"][:]) == [1, 2, 3]
             finally:
                 handle.close()
+
+    def test_h5_reader_close_closes_owned_fileobj(self, tmp_path):
+        """Closing the reader should close the file object passed to h5py."""
+        path = tmp_path / "owned_handle.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        raw = open(path, "rb")
+        handle = H5Reader.get_handle(raw)
+        assert not raw.closed
+        handle.close()
+        assert raw.closed
+
+    def test_h5_reader_managed_handle_context_manager_and_closed(self, tmp_path):
+        """Managed HDF5 handles should support context-manager helpers."""
+        path = tmp_path / "managed_context.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        raw = open(path, "rb")
+        with H5Reader.get_handle(raw) as handle:
+            assert "data" in handle
+            assert list(iter(handle)) == ["data"]
+            assert not handle.closed
+        assert handle.closed
+        assert raw.closed
+
+    def test_h5_reader_prefers_existing_cached_local_file(self, monkeypatch, tmp_path):
+        """Cached remote HDF5 resources should reopen locally, not remotely."""
+        local_path = tmp_path / "cached.h5"
+        with h5py.File(local_path, "w") as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+
+        path = UPath("http://example.com/cached.h5")
+        monkeypatch.setattr(
+            "dascore.utils.hdf5.get_cached_local_file", lambda _: local_path
+        )
+        monkeypatch.setattr(
+            type(path),
+            "open",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("remote open should not be used")
+            ),
+        )
+
+        handle = H5Reader.get_handle(path)
+        try:
+            assert list(handle["data"][:]) == [1, 2, 3]
+        finally:
+            handle.close()
 
     def test_h5_reader_passthrough_h5py_handle(self, tmp_path):
         """Ensure h5py-backed readers return open handles unchanged."""
@@ -513,6 +562,13 @@ class TestIOResourceManager:
         assert first.exists()
         assert first.read_text() == "hello"
 
+    def test_get_cached_local_file_returns_existing_cached_path(self):
+        """The cache helper should find already materialized remote resources."""
+        path = UPath("memory://dascore/io_resource_test_cached_lookup.txt")
+        path.write_text("hello")
+        local_path = ensure_local_file(path)
+        assert get_cached_local_file(path) == local_path
+
     def test_ensure_local_file_respects_cache_dir_changes(self, tmp_path):
         """Changing the configured cache dir should change future materialization."""
         path = UPath("memory://dascore/io_resource_test_reconfigure.txt")
@@ -579,6 +635,97 @@ class TestIOResourceManager:
         assert local_path.exists()
         assert local_path.read_bytes() == b"a"
         assert handle.read_sizes == [321, 321]
+
+    def test_http_remote_download_uses_urlopen_not_upath_open(
+        self, monkeypatch, tmp_path
+    ):
+        """HTTP cache downloads should bypass fsspec open re-entry."""
+
+        class _HTTPResource:
+            def __init__(self):
+                self.protocol = "http"
+                self.storage_options = {"User-Agent": "dascore-test"}
+
+            def __str__(self):
+                return "http://example.com/data.bin"
+
+            def open(self, *_args, **_kwargs):
+                raise AssertionError(
+                    "HTTP fallback download should not call resource.open"
+                )
+
+        class _HTTPResponse:
+            def __init__(self):
+                self._chunks = [b"ab", b"c", b""]
+                self.read_sizes = []
+
+            def read(self, size=-1):
+                self.read_sizes.append(size)
+                return self._chunks.pop(0)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        seen = {}
+        response = _HTTPResponse()
+
+        def _fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            seen["headers"] = dict(request.header_items())
+            seen["timeout"] = timeout
+            return response
+
+        monkeypatch.setattr(remote_io, "coerce_to_upath", lambda resource: resource)
+        monkeypatch.setattr(remote_io, "urlopen", _fake_urlopen)
+        with set_config(remote_download_block_size=2):
+            local_path = tmp_path / "downloaded.bin"
+            remote_io._download_remote_file(_HTTPResource(), local_path)
+
+        assert local_path.read_bytes() == b"abc"
+        assert seen["url"] == "http://example.com/data.bin"
+        assert seen["headers"] == {"User-agent": "dascore-test"}
+        assert seen["timeout"] == 60.0
+        assert response.read_sizes == [2, 2, 2]
+
+    def test_http_remote_download_uses_configured_timeout(self, monkeypatch, tmp_path):
+        """HTTP cache downloads should pass through the configured timeout."""
+
+        class _HTTPResource:
+            def __init__(self):
+                self.protocol = "http"
+                self.storage_options = {}
+
+            def __str__(self):
+                return "http://example.com/data.bin"
+
+        class _HTTPResponse:
+            def read(self, _size=-1):
+                return b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        seen = {}
+
+        def _fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            seen["timeout"] = timeout
+            return _HTTPResponse()
+
+        monkeypatch.setattr(remote_io, "coerce_to_upath", lambda resource: resource)
+        monkeypatch.setattr(remote_io, "urlopen", _fake_urlopen)
+        with set_config(remote_download_timeout=12.5):
+            local_path = tmp_path / "downloaded.bin"
+            remote_io._download_remote_file(_HTTPResource(), local_path)
+
+        assert seen == {"url": "http://example.com/data.bin", "timeout": 12.5}
+        assert local_path.read_bytes() == b""
 
     def test_ensure_local_file_can_unwrap_io_resource_manager(self):
         """ensure_local_file should accept IOResourceManager instances."""

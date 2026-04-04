@@ -99,6 +99,10 @@ class DascoreConfig(BaseModel):
         default=1_048_576,
         description="Block size in bytes for general remote file downloads.",
     )
+    remote_download_timeout: float = Field(
+        default=60.0,
+        description="Timeout in seconds for blocking remote file downloads.",
+    )
     remote_hdf5_block_size: int = Field(
         default=5_242_880,
         description="Block size in bytes for remote HDF5 access on tuned protocols.",
