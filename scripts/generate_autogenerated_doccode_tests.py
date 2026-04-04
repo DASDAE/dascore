@@ -226,9 +226,10 @@ def get_output_path(source_path: Path, tests_path: Path = TESTS_PATH) -> Path:
 def render_test_module(source_path: Path, chunks: tuple[Chunk, ...]) -> str:
     """Render a generated pytest module."""
     chunk_payload = tuple((chunk.start_line, chunk.source) for chunk in chunks)
+    relative_source_path = source_path.relative_to(REPO_ROOT).as_posix()
     return AUTOGEN_HEADER.format(
-        source_path=source_path.relative_to(REPO_ROOT),
-        source_path_literal=repr(source_path.relative_to(REPO_ROOT).as_posix()),
+        source_path=relative_source_path,
+        source_path_literal=repr(relative_source_path),
         chunks_literal=repr(chunk_payload),
     )
 
