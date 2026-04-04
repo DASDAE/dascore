@@ -155,15 +155,29 @@ class TestRenderAndWrite:
         assert "@pytest.mark.docs_examples" in module
         assert "def test_main()" in module
         assert "source_qmd = 'docs/tutorial/example.qmd'" in module
-        assert 'namespace = {"__name__": "__qmd_test__"}' in module
         assert "with qmd_test_context(source_qmd):" in module
         assert "# docs/tutorial/example.qmd:12" in module
-        assert "compile(" in module
-        assert "namespace," in module
-        assert "'x = 1\\n'" in module
+        assert "x = 1" in module
         assert "CHUNKS =" not in module
         assert "SOURCE_QMD =" not in module
         assert "_runtime" not in module
+
+    def test_render_hoists_future_imports(self):
+        """Future imports should move to module scope."""
+        source = REPO_ROOT / "docs" / "tutorial" / "example.qmd"
+        module = render_test_module(
+            source,
+            (
+                Chunk(
+                    start_line=12,
+                    source="from __future__ import annotations\nx = 1\n",
+                ),
+            ),
+        )
+        assert "from __future__ import annotations\n\nimport pytest" in module
+        assert "# docs/tutorial/example.qmd:12" in module
+        assert "        x = 1" in module
+        assert "        from __future__ import annotations" not in module
 
     def test_write_tree_removes_stale_files(self, tmp_path):
         """Regeneration should replace the whole generated test tree."""
