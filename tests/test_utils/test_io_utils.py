@@ -21,6 +21,7 @@ from dascore.utils.hdf5 import (
     HDF5Reader,
     HDF5Writer,
     LocalH5Reader,
+    open_h5_resource,
 )
 from dascore.utils.io import (
     BinaryReader,
@@ -34,9 +35,9 @@ from dascore.utils.io import (
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (
-    FallbackFileObj,
+    _FallbackFileObj,
+    _get_cached_local_file,
     clear_remote_file_cache,
-    get_cached_local_file,
     get_remote_cache_path,
     get_remote_cache_scope,
     is_no_range_http_error,
@@ -225,6 +226,7 @@ class TestGetHandleFromResource:
         with open(path, "rb") as raw:
             handle = H5Reader.get_handle(raw)
             try:
+                assert type(handle).__name__ == "_ManagedH5pyFile"
                 assert list(handle["data"][:]) == [1, 2, 3]
             finally:
                 handle.close()
@@ -261,7 +263,7 @@ class TestGetHandleFromResource:
 
         path = UPath("http://example.com/cached.h5")
         monkeypatch.setattr(
-            "dascore.utils.hdf5.get_cached_local_file", lambda _: local_path
+            "dascore.utils.hdf5._get_cached_local_file", lambda _: local_path
         )
         monkeypatch.setattr(
             type(path),
@@ -277,13 +279,17 @@ class TestGetHandleFromResource:
         finally:
             handle.close()
 
-    def test_h5_reader_passthrough_h5py_handle(self, tmp_path):
-        """Ensure h5py-backed readers return open handles unchanged."""
+    def test_h5_reader_wraps_existing_h5py_handle(self, tmp_path):
+        """Ensure h5py-backed readers wrap existing open handles consistently."""
         path = tmp_path / "passthrough.h5"
         with h5py.File(path, "w") as handle:
             handle.create_dataset("data", data=[1, 2, 3])
         with h5py.File(path, "r") as raw:
-            assert H5Reader.get_handle(raw) is raw
+            handle = H5Reader.get_handle(raw)
+            assert type(handle).__name__ == "_ManagedH5pyFile"
+            assert list(handle["data"][:]) == [1, 2, 3]
+            handle.close()
+            assert raw.id.valid == 0
 
     def test_local_h5_reader_materializes_local_path(self, tmp_path):
         """Ensure LocalH5Reader can open a local path through its adapter."""
@@ -292,9 +298,60 @@ class TestGetHandleFromResource:
             handle.create_dataset("data", data=[1, 2, 3])
         handle = LocalH5Reader.get_handle(path)
         try:
+            assert type(handle).__name__ == "_ManagedH5pyFile"
             assert list(handle["data"][:]) == [1, 2, 3]
         finally:
             handle.close()
+
+    def test_h5_reader_wraps_local_path(self, tmp_path):
+        """Local path opens should use the same managed HDF5 handle type."""
+        path = tmp_path / "managed_local.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        handle = H5Reader.get_handle(path)
+        try:
+            assert type(handle).__name__ == "_ManagedH5pyFile"
+            assert list(handle["data"][:]) == [1, 2, 3]
+        finally:
+            handle.close()
+
+    def test_open_h5_resource_passthrough_managed_handle(self, tmp_path):
+        """The low-level helper should return managed handles unchanged."""
+        path = tmp_path / "managed_passthrough.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        handle = H5Reader.get_handle(path)
+        try:
+            out = open_h5_resource(
+                handle,
+                mode=H5Reader.mode,
+                constructor=H5Reader.constructor,
+                open_kwargs_getter=H5Reader._get_open_kwargs,
+            )
+            assert out is handle
+        finally:
+            handle.close()
+
+    def test_h5_reader_passthrough_managed_handle(self, tmp_path):
+        """Reader-level get_handle should return managed handles unchanged."""
+        path = tmp_path / "managed_reader_passthrough.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=[1, 2, 3])
+        handle = H5Reader.get_handle(path)
+        try:
+            assert H5Reader.get_handle(handle) is handle
+        finally:
+            handle.close()
+
+    def test_open_h5_resource_raises_on_unsupported_resource(self):
+        """Unsupported HDF5 resources should raise a clear error."""
+        with pytest.raises(NotImplementedError, match="Couldn't get handle"):
+            open_h5_resource(
+                _BadType(),
+                mode=H5Reader.mode,
+                constructor=H5Reader.constructor,
+                open_kwargs_getter=H5Reader._get_open_kwargs,
+            )
 
     def test_h5_reader_closes_upath_handle_on_constructor_error(
         self, tmp_path, monkeypatch
@@ -567,7 +624,7 @@ class TestIOResourceManager:
         path = UPath("memory://dascore/io_resource_test_cached_lookup.txt")
         path.write_text("hello")
         local_path = ensure_local_file(path)
-        assert get_cached_local_file(path) == local_path
+        assert _get_cached_local_file(path) == local_path
 
     def test_ensure_local_file_respects_cache_dir_changes(self, tmp_path):
         """Changing the configured cache dir should change future materialization."""
@@ -849,7 +906,7 @@ class TestRemoteIOFallback:
         assert not is_no_range_http_error(RuntimeError("range requests"))
 
     def test_fallback_file_obj_switches_once_and_preserves_position(self):
-        """FallbackFileObj should retry on the local file and preserve cursor."""
+        """_FallbackFileObj should retry on the local file and preserve cursor."""
         remote = _FailOnSeek(
             b"abcdef",
             ValueError(
@@ -864,7 +921,7 @@ class TestRemoteIOFallback:
             local_handles.append(handle)
             return handle
 
-        handle = FallbackFileObj(
+        handle = _FallbackFileObj(
             remote_opener=lambda: remote,
             local_opener=_open_local,
             error_predicate=is_no_range_http_error,
@@ -879,7 +936,7 @@ class TestRemoteIOFallback:
 
     def test_fallback_file_obj_uses_fallback_position_when_tell_fails(self):
         """Fallback position should be used if the wrapped handle cannot tell."""
-        handle = FallbackFileObj(
+        handle = _FallbackFileObj(
             remote_opener=lambda: _NoTellHandle(b"abcdef"),
             local_opener=lambda: BytesIO(b"abcdef"),
             error_predicate=is_no_range_http_error,
@@ -899,7 +956,7 @@ class TestRemoteIOFallback:
             local_handles.append(handle)
             return handle
 
-        handle = FallbackFileObj(
+        handle = _FallbackFileObj(
             remote_opener=lambda: remote,
             local_opener=_open_local,
             error_predicate=is_no_range_http_error,
@@ -912,8 +969,8 @@ class TestRemoteIOFallback:
             handle.close()
 
     def test_fallback_file_obj_propagates_non_matching_errors(self):
-        """FallbackFileObj should not hide unrelated transport errors."""
-        handle = FallbackFileObj(
+        """_FallbackFileObj should not hide unrelated transport errors."""
+        handle = _FallbackFileObj(
             remote_opener=lambda: _FailOnSeek(b"abcdef", RuntimeError("boom")),
             local_opener=lambda: BytesIO(b"abcdef"),
             error_predicate=is_no_range_http_error,
@@ -927,7 +984,7 @@ class TestRemoteIOFallback:
     def test_fallback_file_obj_exposes_basic_handle_state(self):
         """Basic helpers should proxy or report sensible state."""
         plain = _PlainHandle()
-        handle = FallbackFileObj(
+        handle = _FallbackFileObj(
             remote_opener=lambda: plain,
             local_opener=lambda: _PlainHandle(),
             error_predicate=is_no_range_http_error,
@@ -948,7 +1005,7 @@ class TestRemoteIOFallback:
 
     def test_fallback_file_obj_uses_wrapped_writable_when_available(self):
         """The writable helper should defer to the wrapped handle when present."""
-        handle = FallbackFileObj(
+        handle = _FallbackFileObj(
             remote_opener=lambda: _WritableHandle(),
             local_opener=lambda: _WritableHandle(),
             error_predicate=is_no_range_http_error,
@@ -960,6 +1017,7 @@ class TestRemoteIOFallback:
 
     def test_h5_reader_warns_when_no_range_fallback_downloads(self, monkeypatch):
         """HDF5 remote fallback should warn when it materializes a local cache file."""
+        clear_remote_file_cache()
         path = UPath("memory://dascore/io_resource_test_fallback_warn.h5")
         path.write_bytes(b"abcdef")
         monkeypatch.setattr(

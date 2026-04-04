@@ -213,8 +213,8 @@ def ensure_local_file(resource) -> Path:
     raise TypeError(msg)
 
 
-def get_cached_local_file(resource) -> Path | None:
-    """Return the cached local path for one remote resource if it exists."""
+def _get_cached_local_file(resource) -> Path | None:
+    """Return a cached local path without materializing a missing resource."""
     if not is_pathlike(resource) or is_local_path(resource):
         return None
     remote = coerce_to_upath(resource)
@@ -239,11 +239,11 @@ def is_no_range_http_error(exc: Exception) -> bool:
     )
 
 
-class FallbackFileObj:
+class _FallbackFileObj:
     """
     A seekable binary file adapter that starts remote and falls back to local.
 
-    This wrapper is used when DASCore wants to give a consumer such as h5py a
+    This private wrapper is used when DASCore wants to give a consumer such as h5py a
     normal file-like object for a remote resource without eagerly downloading
     the whole file first.
 
