@@ -78,6 +78,38 @@ print("run")
         out = extract_qmd_file(path)
         assert out.chunks == (Chunk(start_line=2, source='print("run")\n'),)
 
+    def test_skips_python_fence_with_inline_eval_false(self, tmp_path):
+        """Inline fence options should be able to disable execution."""
+        path = _write(
+            tmp_path / "example.qmd",
+            """```{python, eval=false}
+print("skip")
+```
+
+```{python}
+print("run")
+```
+""",
+        )
+        out = extract_qmd_file(path)
+        assert out.chunks == (Chunk(start_line=6, source='print("run")\n'),)
+
+    def test_skips_python_fence_with_inline_execute_zero(self, tmp_path):
+        """Space-delimited inline execute flags should also be respected."""
+        path = _write(
+            tmp_path / "example.qmd",
+            """```{python execute=0}
+print("skip")
+```
+
+```{python}
+print("run")
+```
+""",
+        )
+        out = extract_qmd_file(path)
+        assert out.chunks == (Chunk(start_line=6, source='print("run")\n'),)
+
     def test_reads_qmd_with_utf8_encoding(self, tmp_path, monkeypatch):
         """Extraction should force UTF-8 instead of platform default encodings."""
         path = _write(tmp_path / "example.qmd", "placeholder")
@@ -99,6 +131,21 @@ print("run")
 
         assert called["encoding"] == TEXT_ENCODING
         assert out.chunks == (Chunk(start_line=2, source='print("run")\n'),)
+
+    def test_dedents_indented_python_fence(self, tmp_path):
+        """Indented fenced code should be normalized before storage."""
+        path = _write(
+            tmp_path / "example.qmd",
+            """```{python}
+    if True:
+        print("run")
+```
+""",
+        )
+        out = extract_qmd_file(path)
+        assert out.chunks == (
+            Chunk(start_line=2, source='if True:\n    print("run")\n'),
+        )
 
     def test_skips_chunk_with_eval_or_execute_false(self, tmp_path):
         """Chunk-level execution flags should be honored."""

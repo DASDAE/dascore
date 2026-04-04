@@ -29,7 +29,9 @@ stale files disappear automatically.
 from __future__ import annotations
 
 import argparse
+import shlex
 import shutil
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import indent
@@ -76,16 +78,6 @@ import sys
 
 import matplotlib
 
-# Use a non-interactive backend because generated examples may plot figures.
-matplotlib.use("Agg", force=True)
-import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
-
-# Prevent example code from trying to open GUI windows during tests.
-plt.ioff()
-plt.show = lambda *args, **kwargs: None
-Figure.show = lambda self, *args, **kwargs: None
-
 
 @contextmanager
 def qmd_test_context(source_qmd: str):
@@ -95,6 +87,16 @@ def qmd_test_context(source_qmd: str):
     old = Path.cwd()
     stdout = sys.stdout
     stderr = sys.stderr
+    original_backend = matplotlib.get_backend()
+    # Configure plotting lazily so importing the generated conftest does not
+    # affect unrelated tests in the same process.
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    original_show = plt.show
+    original_figure_show = Figure.show
+    was_interactive = plt.isinteractive()
     try:
         # Windows CI often defaults to cp1252, which cannot print some of the
         # unicode characters used in DASCore's rich/text output.
@@ -102,14 +104,25 @@ def qmd_test_context(source_qmd: str):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        plt.ioff()
+        plt.show = lambda *args, **kwargs: None
+        Figure.show = lambda self, *args, **kwargs: None
         os.chdir(source_path.parent)
         yield
     finally:
         os.chdir(old)
         sys.stdout = stdout
         sys.stderr = stderr
+        plt.show = original_show
+        Figure.show = original_figure_show
+        if was_interactive:
+            plt.ion()
+        else:
+            plt.ioff()
         # Always close figures so one doc example cannot leak state to another.
         plt.close("all")
+        if matplotlib.get_backend() != original_backend:
+            matplotlib.use(original_backend, force=True)
 '''
 
 
@@ -137,9 +150,9 @@ def _parse_bool(value: str) -> bool | None:
     """Parse a yaml-like bool."""
     # Front matter and chunk options use yaml-like booleans.
     cleaned = value.strip().strip("'\"").lower()
-    if cleaned == "true":
+    if cleaned in {"true", "yes", "1"}:
         return True
-    if cleaned == "false":
+    if cleaned in {"false", "no", "0"}:
         return False
     return None
 
@@ -189,19 +202,41 @@ def _parse_doc_eval(front_matter: list[str]) -> bool:
     return True
 
 
-def _is_python_fence(spec: str) -> bool:
-    """Return True if the fence should execute as python."""
+def _parse_fence_header(spec: str) -> tuple[str | None, dict[str, str]]:
+    """Parse a Quarto fence header into language and key/value options."""
     # The raw fence spec arrives like "{python}" or
     # "{python filename="example.py"}".
     cleaned = spec.strip()
-    # Plain markdown-style {.python} fences are not Quarto executable cells.
-    if not cleaned.startswith("{") or cleaned.startswith("{.python"):
-        return False
+    if not cleaned.startswith("{") or not cleaned.endswith("}"):
+        return None, {}
     inner = cleaned[1:-1].strip()
     if not inner:
+        return None, {}
+    # Accept either comma-delimited or space-delimited Quarto options while
+    # preserving quoted values like filename="example file.py".
+    tokens = shlex.split(inner.replace(",", " "))
+    if not tokens:
+        return None, {}
+    language = tokens[0].strip()
+    options: dict[str, str] = {}
+    for token in tokens[1:]:
+        if "=" not in token:
+            continue
+        key, _, value = token.partition("=")
+        options[key.strip()] = value.strip()
+    return language, options
+
+
+def _is_python_fence(spec: str) -> bool:
+    """Return True if the fence should execute as python."""
+    language, options = _parse_fence_header(spec)
+    # Plain markdown-style {.python} fences are not Quarto executable cells.
+    if language is None or language.startswith("."):
         return False
-    # Accept either comma-delimited or space-delimited Quarto options.
-    language = inner.split(",", 1)[0].split(None, 1)[0].strip()
+    for key in ("eval", "execute"):
+        parsed = _parse_bool(options.get(key, ""))
+        if parsed is False:
+            return False
     return language == "python"
 
 
@@ -257,7 +292,7 @@ def extract_qmd_file(path: Path) -> QmdFile:
             if should_capture and _chunk_is_executable(chunk_lines):
                 # Preserve the chunk as a single executable unit so variables
                 # defined earlier in the block remain available later.
-                source = "\n".join(chunk_lines).strip()
+                source = textwrap.dedent("\n".join(chunk_lines)).strip()
                 if source:
                     chunks.append(Chunk(start_line=chunk_start, source=source + "\n"))
             in_chunk = False
