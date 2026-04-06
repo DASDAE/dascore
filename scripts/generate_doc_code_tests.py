@@ -87,8 +87,6 @@ def qmd_test_context(source_qmd: str):
     root = Path(__file__).resolve().parents[2]
     source_path = root / source_qmd
     old = Path.cwd()
-    stdout = sys.stdout
-    stderr = sys.stderr
     original_backend = matplotlib.get_backend()
     # Configure plotting lazily so importing the generated conftest does not
     # affect unrelated tests in the same process.
@@ -101,7 +99,9 @@ def qmd_test_context(source_qmd: str):
     was_interactive = plt.isinteractive()
     try:
         # Windows CI often defaults to cp1252, which cannot print some of the
-        # unicode characters used in DASCore's rich/text output.
+        # unicode characters used in DASCore's rich/text output. `reconfigure`
+        # mutates the existing stream in place, so we intentionally do not try
+        # to restore the previous encoding on exit.
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):
@@ -113,8 +113,6 @@ def qmd_test_context(source_qmd: str):
         yield
     finally:
         os.chdir(old)
-        sys.stdout = stdout
-        sys.stderr = stderr
         plt.show = original_show
         Figure.show = original_figure_show
         if was_interactive:
@@ -176,7 +174,7 @@ def _parse_doc_eval(front_matter: list[str]) -> bool:
     # execute:
     #   eval: false
     in_execute = False
-    execute_indent = 0
+    execute_indent: int | None = None
     for line in front_matter:
         stripped = line.strip()
         # Ignore blank lines and front-matter comments.
@@ -193,7 +191,7 @@ def _parse_doc_eval(front_matter: list[str]) -> bool:
                 if parsed is not None:
                     return parsed
             continue
-        if in_execute and indent_size <= execute_indent:
+        if in_execute and execute_indent is not None and indent_size <= execute_indent:
             in_execute = False
         if in_execute and ":" in stripped:
             key, _, value = stripped.partition(":")
@@ -317,11 +315,15 @@ def iter_source_qmd_files(base_path: Path = DOCS_PATH) -> list[Path]:
     ]
 
 
-def get_output_path(source_path: Path, tests_path: Path = TESTS_PATH) -> Path:
+def get_output_path(
+    source_path: Path,
+    tests_path: Path = TESTS_PATH,
+    docs_path: Path = DOCS_PATH,
+) -> Path:
     """Map a qmd file to its generated pytest module."""
     # Keep the generated tree shaped like docs/, but swap the filename to
     # `test_<stem>.py` so pytest discovers it naturally.
-    relative = source_path.relative_to(DOCS_PATH)
+    relative = source_path.relative_to(docs_path)
     filename = f"test_{source_path.stem}.py"
     if len(relative.parts) == 1:
         return tests_path / filename
