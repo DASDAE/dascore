@@ -23,6 +23,7 @@ import pytest
 
 from dascore.compat import UPath
 from dascore.utils.downloader import fetch
+from tests.test_io._common_io_test_utils import fail_on_timeout
 
 
 class _SilentSimpleHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -139,19 +140,21 @@ def http_das_path(http_test_data_root, ensure_http_fetch_file):
     try:
         host, port = server.server_address
         probe_url = f"http://{host}:{port}/das/{probe_path}"
-        for _ in range(50):
-            try:
-                with urlopen(probe_url, timeout=5):
-                    break
-            except (URLError, OSError):
-                time.sleep(0.1)
-        else:
-            pytest.fail("HTTP test server did not become ready in time.")
+        with fail_on_timeout(10, "http_das_path readiness probe"):
+            for _ in range(50):
+                try:
+                    with urlopen(probe_url, timeout=5):
+                        break
+                except (URLError, OSError):
+                    time.sleep(0.1)
+            else:
+                pytest.fail("HTTP test server did not become ready in time.")
         yield UPath(f"http://{host}:{port}/das")
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        with fail_on_timeout(10, "http_das_path teardown"):
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
         if thread.is_alive():
             pytest.fail("HTTP test server thread did not exit cleanly.")
 
@@ -193,19 +196,21 @@ def http_regression_das_path(http_regression_data_root, ensure_http_regression_f
     try:
         host, port = server.server_address
         probe_url = f"http://{host}:{port}/das/{probe_path}"
-        for _ in range(50):
-            try:
-                with urlopen(probe_url, timeout=5):
-                    break
-            except (URLError, OSError):
-                time.sleep(0.1)
-        else:
-            pytest.fail("HTTP test server did not become ready in time.")
+        with fail_on_timeout(10, "http_regression_das_path readiness probe"):
+            for _ in range(50):
+                try:
+                    with urlopen(probe_url, timeout=5):
+                        break
+                except (URLError, OSError):
+                    time.sleep(0.1)
+            else:
+                pytest.fail("HTTP test server did not become ready in time.")
         yield UPath(f"http://{host}:{port}/das")
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        with fail_on_timeout(10, "http_regression_das_path teardown"):
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
         if thread.is_alive():
             pytest.fail("HTTP regression server thread did not exit cleanly.")
 
@@ -254,18 +259,22 @@ def http_range_das_path(http_test_data_root, ensure_http_fetch_file):
     thread.start()
     try:
         probe_url = f"http://{host}:{port}/das/example_dasdae_event_1.h5"
-        for _ in range(50):
-            try:
-                with urlopen(probe_url, timeout=5):
-                    break
-            except (URLError, OSError):
-                time.sleep(0.1)
-        else:
-            pytest.fail("Range-capable HTTP test server did not become ready in time.")
+        with fail_on_timeout(10, "http_range_das_path readiness probe"):
+            for _ in range(50):
+                try:
+                    with urlopen(probe_url, timeout=5):
+                        break
+                except (URLError, OSError):
+                    time.sleep(0.1)
+            else:
+                pytest.fail(
+                    "Range-capable HTTP test server did not become ready in time."
+                )
         yield UPath(f"http://{host}:{port}/das")
     finally:
-        server.should_exit = True
-        thread.join(timeout=5)
+        with fail_on_timeout(10, "http_range_das_path teardown"):
+            server.should_exit = True
+            thread.join(timeout=5)
         if thread.is_alive():
             sock.close()
             thread.join(timeout=1)
