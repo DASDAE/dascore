@@ -14,7 +14,7 @@ import threading
 import time
 from collections.abc import Callable
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -39,6 +39,17 @@ class _SilentSimpleHTTPRequestHandler(SimpleHTTPRequestHandler):
             return super().copyfile(source, outputfile)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             return None
+
+
+class _RegressionHTTPRequestHandler(_SilentSimpleHTTPRequestHandler):
+    """A stricter localhost handler for flaky plain-HTTP regression tests."""
+
+    protocol_version = "HTTP/1.0"
+
+    def end_headers(self):
+        """Disable keep-alive so one test request cannot leak into the next."""
+        self.send_header("Connection", "close")
+        super().end_headers()
 
 
 def _link_or_copy(source: Path, dest: Path) -> None:
@@ -175,11 +186,10 @@ def ensure_http_regression_file(http_regression_data_root):
 def http_regression_das_path(http_regression_data_root, ensure_http_regression_file):
     """Return an isolated HTTP tree containing only the regression fixtures."""
     handler = partial(
-        _SilentSimpleHTTPRequestHandler,
+        _RegressionHTTPRequestHandler,
         directory=str(http_regression_data_root),
     )
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    server.daemon_threads = True
+    server = HTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     probe_path = "example_dasdae_event_1.h5"
