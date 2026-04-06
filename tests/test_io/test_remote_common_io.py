@@ -8,7 +8,6 @@ import dascore as dc
 from dascore.config import set_config
 from dascore.utils.misc import suppress_warnings
 from tests.test_io._common_io_test_utils import (
-    fail_on_timeout,
     get_flat_io_test,
     get_representative_io_test,
     skip_missing,
@@ -16,7 +15,7 @@ from tests.test_io._common_io_test_utils import (
 )
 from tests.test_io.test_common_io import COMMON_IO_READ_TESTS
 
-pytestmark = pytest.mark.network
+pytestmark = [pytest.mark.network, pytest.mark.timeout(30)]
 
 REMOTE_GET_FORMAT_CASES = get_flat_io_test(COMMON_IO_READ_TESTS)
 REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(COMMON_IO_READ_TESTS)
@@ -78,8 +77,7 @@ class TestRemoteGetFormat:
         """Each IO should identify its own remote test fixture."""
         io, path = remote_get_format_case
         with skip_missing():
-            with fail_on_timeout(30, f"dc.get_format({path})"):
-                out = dc.get_format(path)
+            out = dc.get_format(path)
         assert out == (io.name, io.version)
 
 
@@ -90,8 +88,7 @@ class TestRemoteRead:
         """Each remotely supported file should read into a spool."""
         _io, path = remote_read_case
         with skip_missing():
-            with fail_on_timeout(30, f"dc.read({path})"):
-                out = dc.read(path)
+            out = dc.read(path)
         assert isinstance(out, dc.BaseSpool)
         assert len(out) > 0
         assert all(isinstance(x, dc.Patch) for x in out)
@@ -104,8 +101,7 @@ class TestRemoteScan:
         """Public scans of remote files should retain source metadata."""
         io, path = remote_scan_case
         with skip_missing():
-            with fail_on_timeout(30, f"dc.scan({path})"):
-                summary_list = dc.scan(path)
+            summary_list = dc.scan(path)
         assert len(summary_list) > 0
         for summary in summary_list:
             assert str(summary.source_path) == str(path)

@@ -11,6 +11,7 @@ on:
     - dev
     paths:
       - 'pyproject.toml'
+      - 'docs/**/*.qmd'
       - '**.py'
       - '.github/workflows/*.yml'
       - '.github/actions/**/*.yml'
@@ -72,6 +73,11 @@ jobs:
           cache-number: ${{ env.CACHE_NUMBER }}
           prepare-test-data: "true"
 
+      - name: generate qmd docs tests
+        id: generate_qmd_tests
+        shell: bash -el {0}
+        run: python scripts/generate_doc_code_tests.py
+
       # Runs test suite and calculates coverage
       - name: run test suite
         id: run_test_suite
@@ -111,6 +117,6 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: fail job after debug session if tests failed
-        if: steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure'
+        if: steps.generate_qmd_tests.outcome == 'failure' || steps.run_test_suite.outcome == 'failure' || steps.run_docstrings.outcome == 'failure'
         shell: bash
         run: exit 1

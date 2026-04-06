@@ -3,6 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - pytest
+  - pytest-timeout
   - numpy>=1.24
   - pydantic>=2.1
   - pip

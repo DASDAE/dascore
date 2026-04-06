@@ -1,8 +1,4 @@
-"""Shared helpers for common IO test matrices.
-
-This module includes timeout guards used by localhost-backed remote tests so
-fixture or IO hangs fail quickly instead of stalling the suite.
-"""
+"""Shared helpers for common IO test matrices."""
 
 from __future__ import annotations
 
@@ -72,7 +68,7 @@ def get_representative_io_test(
 
 @contextmanager
 def fail_on_timeout(seconds: float, label: str):
-    """Fail the current test if the enclosed block exceeds the timeout."""
+    """Fail fast around fixture lifecycle work when it exceeds a time budget."""
     if (
         threading.current_thread() is not threading.main_thread()
         or not hasattr(signal_mod, "SIGALRM")
@@ -84,7 +80,7 @@ def fail_on_timeout(seconds: float, label: str):
 
     previous_handler = signal_mod.getsignal(signal_mod.SIGALRM)
 
-    def _handle_timeout(signum, frame):
+    def _handle_timeout(_signum, _frame):
         raise TimeoutError(f"{label} exceeded {seconds} seconds")
 
     try:

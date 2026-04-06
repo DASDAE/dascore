@@ -14,7 +14,7 @@ from dascore.exceptions import InvalidSpoolError, RemoteCacheError
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
 
-pytestmark = pytest.mark.network
+pytestmark = [pytest.mark.network, pytest.mark.timeout(30)]
 
 
 @pytest.fixture(autouse=True)
@@ -124,7 +124,6 @@ class TestHTTPFormatAndSpool:
         sys.platform == "win32",
         reason="Flaky plain-HTTP fallback on Windows.",
     )
-    @pytest.mark.timeout(30)
     def test_http_hdf5_fallback_warns_once_and_reuses_cached_local_copy(
         self, http_regression_das_path, ensure_http_regression_file
     ):
@@ -138,13 +137,19 @@ class TestHTTPFormatAndSpool:
             with pytest.warns(UserWarning, match="Downloading remote file"):
                 dc.get_format(path)
         cached_files = list(get_remote_cache_path().rglob(fname))
-        assert len(cached_files) <= 1
-        assert len(dc.read(path))
+        assert len(cached_files) == 1
+        assert cached_files[0].exists()
+
+        spool = dc.read(path)
+        assert spool
 
         cached_files_2 = list(get_remote_cache_path().rglob(fname))
         assert len(cached_files_2) == 1
         assert cached_files_2[0].exists()
-        assert dc.read(path)
+        assert cached_files_2 == cached_files
+
+        spool_2 = dc.read(path)
+        assert spool_2
         cached_files_3 = list(get_remote_cache_path().rglob(fname))
         assert cached_files_3 == cached_files_2
 
