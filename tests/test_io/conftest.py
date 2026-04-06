@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Callable
 from functools import partial
+from http import HTTPStatus
 from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
@@ -50,6 +51,116 @@ class _RegressionHTTPRequestHandler(_SilentSimpleHTTPRequestHandler):
         """Disable keep-alive so one test request cannot leak into the next."""
         self.send_header("Connection", "close")
         super().end_headers()
+
+
+class _RangeHTTPRequestHandler(_SilentSimpleHTTPRequestHandler):
+    """A simple localhost handler with explicit single-range support."""
+
+    protocol_version = "HTTP/1.0"
+
+    def handle(self):
+        """Serve exactly one request per connection, then close cleanly."""
+        self.close_connection = True
+        self.handle_one_request()
+
+    def end_headers(self):
+        """Disable keep-alive so each ranged request stands alone."""
+        self.send_header("Connection", "close")
+        super().end_headers()
+
+    def send_head(self):
+        """Serve files and honor one RFC 7233 byte range when requested."""
+        path = self.translate_path(self.path)
+        if os.path.isdir(path):
+            return super().send_head()
+        if path.endswith("/") or not os.path.isfile(path):
+            self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+            return None
+
+        try:
+            file_handle = open(path, "rb")
+        except OSError:
+            self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+            return None
+
+        try:
+            stat_result = os.fstat(file_handle.fileno())
+            size = stat_result.st_size
+            range_header = self.headers.get("Range")
+            start = 0
+            end = size - 1
+            status = HTTPStatus.OK
+
+            if range_header:
+                start, end = self._parse_range_header(range_header, size)
+                if start is None:
+                    self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    file_handle.close()
+                    return None
+                status = HTTPStatus.PARTIAL_CONTENT
+
+            self.send_response(status)
+            self.send_header("Content-type", self.guess_type(path))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header(
+                "Last-Modified", self.date_time_string(stat_result.st_mtime)
+            )
+            if status == HTTPStatus.PARTIAL_CONTENT:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            self._range = (start, end)
+            file_handle.seek(start)
+            return file_handle
+        except Exception:
+            file_handle.close()
+            raise
+
+    def copyfile(self, source, outputfile):
+        """Copy only the selected range when one was requested."""
+        byte_range = getattr(self, "_range", None)
+        if byte_range is None:
+            return super().copyfile(source, outputfile)
+        start, end = byte_range
+        remaining = end - start + 1
+        try:
+            while remaining > 0:
+                chunk = source.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                outputfile.write(chunk)
+                remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return None
+        finally:
+            self._range = None
+
+    @staticmethod
+    def _parse_range_header(header: str, size: int) -> tuple[int | None, int | None]:
+        """Parse a single bytes range, returning `(None, None)` when invalid."""
+        if not header.startswith("bytes="):
+            return (None, None)
+        spec = header[len("bytes=") :].strip()
+        if "," in spec or "-" not in spec:
+            return (None, None)
+        start_str, end_str = spec.split("-", maxsplit=1)
+        if not start_str:
+            if not end_str:
+                return (None, None)
+            length = int(end_str)
+            if length <= 0:
+                return (None, None)
+            start = max(size - length, 0)
+            return (start, size - 1)
+        start = int(start_str)
+        end = size - 1 if not end_str else int(end_str)
+        if start < 0 or end < start or start >= size:
+            return (None, None)
+        return (start, min(end, size - 1))
 
 
 def _link_or_copy(source: Path, dest: Path) -> None:
@@ -218,46 +329,12 @@ def http_regression_das_path(http_regression_data_root, ensure_http_regression_f
 @pytest.fixture(scope="session")
 def http_range_das_path(http_test_data_root, ensure_http_fetch_file):
     """Return a UPath pointing at a localhost HTTP server with range support."""
-    uvicorn = pytest.importorskip("uvicorn")
-    starlette_cls = pytest.importorskip("starlette.applications").Starlette
-    responses = pytest.importorskip("starlette.responses")
-    file_response_cls = responses.FileResponse
-    response_cls = responses.Response
-    route_cls = pytest.importorskip("starlette.routing").Route
-    served_root = Path(http_test_data_root)
-
-    async def _serve_file(request):
-        rel_path = Path(request.path_params["path"])
-        file_path = served_root / rel_path
-        root_path = os.path.abspath(served_root)
-        candidate_path = os.path.abspath(file_path)
-        if os.path.commonpath([root_path, candidate_path]) != root_path:
-            return response_cls(status_code=404)
-        if not file_path.exists() or not file_path.is_file():
-            return response_cls(status_code=404)
-        return file_response_cls(file_path)
-
-    app = starlette_cls(routes=[route_cls("/{path:path}", _serve_file)])
-    config = uvicorn.Config(
-        app,
-        host="127.0.0.1",
-        port=0,
-        log_level="warning",
-        ws="none",
-        # Avoid indefinite teardown hangs if a client leaves a keep-alive
-        # connection open when the fixture shuts the server down.
-        timeout_graceful_shutdown=1,
-    )
-    server = uvicorn.Server(config)
-    sock = config.bind_socket()
-    host, port = sock.getsockname()[:2]
-
-    def _run():
-        server.run(sockets=[sock])
-
-    thread = threading.Thread(target=_run, daemon=True)
+    handler = partial(_RangeHTTPRequestHandler, directory=str(http_test_data_root))
+    server = HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        host, port = server.server_address
         probe_url = f"http://{host}:{port}/das/example_dasdae_event_1.h5"
         with fail_on_timeout(10, "http_range_das_path readiness probe"):
             for _ in range(50):
@@ -273,11 +350,10 @@ def http_range_das_path(http_test_data_root, ensure_http_fetch_file):
         yield UPath(f"http://{host}:{port}/das")
     finally:
         with fail_on_timeout(10, "http_range_das_path teardown"):
-            server.should_exit = True
+            server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
         if thread.is_alive():
-            sock.close()
-            thread.join(timeout=1)
             pytest.fail("Range-capable HTTP server thread did not exit cleanly.")
 
 
