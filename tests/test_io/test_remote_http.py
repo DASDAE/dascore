@@ -168,9 +168,12 @@ class TestHTTPFormatAndSpool:
         """Range-capable HTTP servers should support DASCore HDF5 reads."""
         ensure_http_fetch_file("prodml_2.1.h5")
         path = http_range_das_path / "prodml_2.1.h5"
-        assert dc.get_format(path) == ("PRODML", "2.1")
-        assert dc.read(path)
-        assert not list(get_remote_cache_path().rglob("prodml_2.1.h5"))
+        fmt = dc.get_format(path)
+        assert fmt == ("PRODML", "2.1")
+        spool = dc.read(path)
+        assert spool
+        cached = list(get_remote_cache_path().rglob("prodml_2.1.h5"))
+        assert not cached
 
     def test_spool_file_path(self, http_regression_das_path):
         """A remote HTTP file should still produce a file-backed spool."""
