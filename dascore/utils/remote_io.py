@@ -12,6 +12,7 @@ from contextvars import ContextVar
 from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from dascore.compat import UPath
@@ -141,7 +142,16 @@ def _download_remote_file(path, local_path: Path):
             # active fsspec HTTP read is already in progress, and re-entering
             # that stack from inside the fallback can deadlock.
             headers = dict(getattr(resource, "storage_options", {}) or {})
-            request = Request(str(resource), headers=headers)
+            # Re-validate the actual URL string to ensure its scheme is safe
+            url_string = str(resource)
+            parsed_url = urlparse(url_string)
+            if parsed_url.scheme not in _HTTP_PROTOCOLS:
+                msg = (
+                    f"URL scheme '{parsed_url.scheme}' is not allowed. "
+                    f"Only {_HTTP_PROTOCOLS} are permitted."
+                )
+                raise ValueError(msg)
+            request = Request(url_string, headers=headers)
             timeout = get_config().remote_download_timeout
             with (
                 urlopen(request, timeout=timeout) as remote_fi,
