@@ -83,6 +83,7 @@ test = [
     "pytest-cov>=4",
     "pre-commit",
     "pytest",
+    "pytest-timeout",
     "pytest-codeblocks",
     "pytest-cov",
     "s3fs",

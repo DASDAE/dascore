@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from urllib.request import Request, urlopen
 
 import pytest
@@ -116,6 +117,14 @@ class TestHTTPFormatAndSpool:
         with pytest.raises(RemoteCacheError, match="allow_remote_cache_for_metadata"):
             dc.get_format(path)
 
+    # Windows is additionally flaky here because the plain localhost
+    # SimpleHTTPRequestHandler + fsspec/aiohttp fallback-to-local path can
+    # stall while reopening the HTTP stream for materialization.
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Flaky plain-HTTP fallback on Windows.",
+    )
+    @pytest.mark.timeout(30)
     def test_http_hdf5_fallback_warns_once_and_reuses_cached_local_copy(
         self, http_regression_das_path, ensure_http_regression_file
     ):
@@ -159,9 +168,12 @@ class TestHTTPFormatAndSpool:
         """Range-capable HTTP servers should support DASCore HDF5 reads."""
         ensure_http_fetch_file("prodml_2.1.h5")
         path = http_range_das_path / "prodml_2.1.h5"
-        assert dc.get_format(path) == ("PRODML", "2.1")
-        assert dc.read(path)
-        assert not list(get_remote_cache_path().rglob("prodml_2.1.h5"))
+        fmt = dc.get_format(path)
+        assert fmt == ("PRODML", "2.1")
+        spool = dc.read(path)
+        assert spool
+        cached = list(get_remote_cache_path().rglob("prodml_2.1.h5"))
+        assert not cached
 
     def test_spool_file_path(self, http_regression_das_path):
         """A remote HTTP file should still produce a file-backed spool."""

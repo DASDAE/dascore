@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import gettempdir
+from typing import Literal
 
 import numpy as np
 import pooch
@@ -31,7 +32,10 @@ class DascoreConfig(BaseModel):
         arbitrary_types_allowed=True,
     )
 
+    # General behavior.
     debug: bool = Field(default=False, description="Enable DASCore debug behavior.")
+
+    # Display and history rendering.
     display_float_precision: int = Field(
         default=3,
         description="Number of decimal places to show in numeric displays.",
@@ -44,6 +48,12 @@ class DascoreConfig(BaseModel):
         default=10,
         description="Maximum history length to display before summarizing entries.",
     )
+    patch_history: Literal["standard", "disabled"] = Field(
+        default="standard",
+        description="Controls whether DASCore appends processing history to patches.",
+    )
+
+    # Local cache and index locations.
     downloader_cache_dir: Path = Field(
         default_factory=lambda: _get_cache_root() / "data",
         description="Persistent directory used to cache downloaded example data.",
@@ -56,6 +66,8 @@ class DascoreConfig(BaseModel):
         default=np.timedelta64(1, "s"),
         description="Time buffer applied when querying cached directory indexes.",
     )
+
+    # HDF index writing.
     hdf_index_complib: str = Field(
         default="blosc:lz4",
         description="Compression library used when writing DASCore HDF index files.",
@@ -68,10 +80,14 @@ class DascoreConfig(BaseModel):
         default=3,
         description="Maximum number of retries for concurrent HDF index access.",
     )
+
+    # Progress display.
     progress_basic_refresh_per_second: float = Field(
         default=0.25,
         description="Refresh rate for basic progress display updates.",
     )
+
+    # Remote IO and local materialization policy.
     remote_cache_dir: Path = Field(
         default_factory=_get_remote_cache_root,
         description="Temporary directory used to materialize remote files locally.",
@@ -98,6 +114,10 @@ class DascoreConfig(BaseModel):
     remote_download_block_size: int = Field(
         default=1_048_576,
         description="Block size in bytes for general remote file downloads.",
+    )
+    remote_download_timeout: float = Field(
+        default=60.0,
+        description="Timeout in seconds for blocking remote file downloads.",
     )
     remote_hdf5_block_size: int = Field(
         default=5_242_880,

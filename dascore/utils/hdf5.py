@@ -48,7 +48,8 @@ from dascore.utils.pd import (
     list_ser_to_str,
 )
 from dascore.utils.remote_io import (
-    FallbackFileObj,
+    _FallbackFileObj,
+    _get_cached_local_file,
     ensure_local_file,
     get_local_handle,
     is_no_range_http_error,
@@ -61,6 +62,130 @@ NodeError = tables.NodeError
 
 ns_to_datetime = partial(pd.to_datetime, unit="ns")
 ns_to_timedelta = partial(pd.to_timedelta, unit="ns")
+
+
+class _ManagedH5pyFile:
+    """
+    DASCore's internal h5py handle wrapper with deterministic close behavior.
+
+    All h5py-backed DASCore reads return this wrapper so callers see one handle
+    type regardless of whether the underlying resource came from:
+    - a local path
+    - an existing h5py handle
+    - a Python file object
+    - a remote ``UPath`` opened through the fallback fileobj path
+
+    For path-backed opens, this wrapper owns only the h5py handle. For
+    ``h5py.File(..., driver="fileobj")`` paths, it also owns the Python
+    file-like object DASCore created on behalf of the caller. ``close()`` is
+    therefore the point where DASCore tears down the entire HDF5 access stack.
+    """
+
+    def __init__(self, handle: H5pyFile, owned_fileobj=None):
+        self._handle = handle
+        self._owned_fileobj = owned_fileobj
+        self._closed = False
+
+    def close(self):
+        """Close the h5py file and, when present, the owned file object."""
+        if self._closed:
+            return
+        try:
+            self._handle.close()
+        finally:
+            if self._owned_fileobj is not None:
+                with suppress(Exception):
+                    self._owned_fileobj.close()
+            self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __getitem__(self, item):
+        return self._handle[item]
+
+    def __contains__(self, item):
+        return item in self._handle
+
+    def __iter__(self):
+        return iter(self._handle)
+
+    @property
+    def closed(self):
+        """Return True when close has been called on the proxy."""
+        return self._closed
+
+    def __getattr__(self, item):
+        return getattr(self._handle, item)
+
+
+def open_h5_resource(
+    resource,
+    *,
+    mode: str,
+    constructor,
+    open_kwargs_getter,
+) -> _ManagedH5pyFile:
+    """
+    Open an HDF5 resource and return DASCore's managed h5py handle wrapper.
+
+    This is the central constructor for h5py-backed reads in DASCore. It keeps
+    the branching needed for local paths, already-open handles, remote
+    fileobj-backed reads, cached-local reuse, and no-range HTTP fallback in one
+    place so ``H5Reader.get_handle()`` stays thin.
+
+    Parameters
+    ----------
+    resource
+        A local path, remote ``UPath``, open file object, or existing h5py
+        handle.
+    mode
+        The mode to pass to the h5py constructor.
+    constructor
+        The callable used to construct an h5py handle.
+    open_kwargs_getter
+        Callback which returns backend-specific kwargs for remote file opens.
+    """
+    if isinstance(resource, _ManagedH5pyFile):
+        return resource
+    if isinstance(resource, H5pyFile):
+        return _ManagedH5pyFile(resource)
+    if isinstance(resource, io.IOBase):
+        handle = constructor(resource, mode=mode, driver="fileobj")
+        return _ManagedH5pyFile(handle, resource)
+    if isinstance(resource, UPath):
+        # Reuse an already-materialized local artifact when present so later
+        # HDF5 reads do not re-enter the remote fallback path unnecessarily.
+        if cached_path := _get_cached_local_file(resource):
+            return open_h5_resource(
+                cached_path,
+                mode=mode,
+                constructor=constructor,
+                open_kwargs_getter=open_kwargs_getter,
+            )
+        file_mode = "rb" if mode == "r" else "r+b"
+        open_kwargs = open_kwargs_getter(resource)
+        handle = _FallbackFileObj(
+            remote_opener=lambda: resource.open(file_mode, **open_kwargs),
+            local_opener=lambda: ensure_local_file(resource).open(file_mode),
+            error_predicate=is_no_range_http_error,
+        )
+        try:
+            h5_handle = constructor(handle, mode=mode, driver="fileobj")
+            return _ManagedH5pyFile(h5_handle, handle)
+        except Exception:
+            handle.close()
+            raise
+    try:
+        _maybe_make_parent_directory(resource)
+        return _ManagedH5pyFile(constructor(resource, mode=mode))
+    except TypeError:
+        msg = f"Couldn't get handle from {resource} using h5py"
+        raise NotImplementedError(msg)
 
 
 class _HDF5Store(pd.HDFStore):
@@ -182,7 +307,7 @@ class HDFPatchIndexManager:
         }
     )
     # functions to apply to decode dataframe after loading from hdf file
-    _column_decorders = FrozenDict(
+    _column_decoders = FrozenDict(
         {
             "time_min": ns_to_datetime,
             "time_max": ns_to_datetime,
@@ -250,7 +375,7 @@ class HDFPatchIndexManager:
     def decode_table(self, df):
         """Decode the table from hdf5."""
         # ensure the base path is not in the path column
-        for col, func in self._column_decorders.items():
+        for col, func in self._column_decoders.items():
             df[col] = func(df[col])
         # populate index store and update metadata
         # assert not df.isnull().any().any(), "null values found in index"
@@ -495,24 +620,14 @@ class H5Reader(PyTablesReader):
         Unlike PyTablesReader, h5py can consume a binary file object via the
         ``fileobj`` driver, so remote UPath inputs stay streaming-based here.
         """
-        if isinstance(resource, cls | H5pyFile):
+        if isinstance(resource, cls | _ManagedH5pyFile):
             return resource
-        if isinstance(resource, io.IOBase):
-            return cls.constructor(resource, mode=cls.mode, driver="fileobj")
-        if isinstance(resource, UPath):
-            mode = "rb" if cls.mode == "r" else "r+b"
-            open_kwargs = cls._get_open_kwargs(resource)
-            handle = FallbackFileObj(
-                remote_opener=lambda: resource.open(mode, **open_kwargs),
-                local_opener=lambda: ensure_local_file(resource).open(mode),
-                error_predicate=is_no_range_http_error,
-            )
-            try:
-                return cls.constructor(handle, mode=cls.mode, driver="fileobj")
-            except Exception:
-                handle.close()
-                raise
-        return super().get_handle(resource)
+        return open_h5_resource(
+            resource,
+            mode=cls.mode,
+            constructor=cls.constructor,
+            open_kwargs_getter=cls._get_open_kwargs,
+        )
 
 
 class LocalH5Reader(H5Reader):

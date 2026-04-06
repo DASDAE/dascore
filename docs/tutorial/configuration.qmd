@@ -15,6 +15,18 @@ with set_config(remote_cache_dir=Path("/tmp/dascore-remote-cache")):
 
 Configuration changes affect subsequent operations only. For example, changing `remote_cache_dir` changes where future remote-file materializations are cached.
 
+History recording is also configurable:
+
+- `patch_history="standard"` preserves the default behavior and appends new entries to `Patch.attrs.history`.
+- `patch_history="disabled"` preserves any existing history but stops DASCore from appending new entries inside that config context.
+
+```python
+from dascore.config import set_config
+
+with set_config(patch_history="disabled"):
+    ...
+```
+
 For remote IO settings such as `allow_remote_cache`,
 `allow_remote_cache_for_metadata`, and `warn_on_remote_cache`, plus examples
 of metadata-only vs read-time behavior, see
