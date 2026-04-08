@@ -75,7 +75,10 @@ def skip_on_timeout(seconds: float, label: str):
         or not hasattr(signal_mod, "ITIMER_REAL")
         or not hasattr(signal_mod, "setitimer")
     ):
-        yield
+        try:
+            yield
+        except TimeoutError as exc:
+            pytest.skip(str(exc))
         return
 
     previous_handler = signal_mod.getsignal(signal_mod.SIGALRM)

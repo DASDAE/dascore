@@ -9,6 +9,7 @@ from urllib.error import URLError
 import pytest
 from upath import UPath
 
+from tests.test_io import _common_io_test_utils as io_test_utils
 from tests.test_io import conftest as io_conftest
 from tests.test_io._common_io_test_utils import skip_on_timeout
 
@@ -25,9 +26,17 @@ class TestTimeoutSkipHelpers:
             with skip_on_timeout(1, "fixture setup"):
                 raise TimeoutError("fixture setup timed out")
 
+    def test_skip_on_timeout_skips_without_signal_support(self, monkeypatch):
+        """Platforms without SIGALRM support should still skip on timeout."""
+        monkeypatch.setattr(io_test_utils.threading, "main_thread", lambda: object())
+
+        with pytest.raises(pytest.skip.Exception, match="fixture setup timed out"):
+            with skip_on_timeout(1, "fixture setup"):
+                raise TimeoutError("fixture setup timed out")
+
     def test_wait_for_http_path_raises_timeout(self, monkeypatch):
         """The low-level probe helper should only report a timeout condition."""
-        values = chain([0.0, 6.0], repeat(6.0))
+        values = chain([0.0, 0.1, 6.0], repeat(6.0))
 
         def _fake_monotonic():
             return next(values)

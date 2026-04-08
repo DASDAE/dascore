@@ -352,7 +352,8 @@ def to_http_path(
         relative_path = _coerce_http_relative_path(path_or_name)
         ensure_http_fetch_file(path.name, relative_path)
         out = http_das_path / relative_path
-        _wait_for_http_path(out)
+        with skip_on_timeout(5, f"HTTP fixture path readiness probe: {out}"):
+            _wait_for_http_path(out)
         return out
 
     return _convert
@@ -368,7 +369,8 @@ def to_http_range_path(
         relative_path = _coerce_http_relative_path(path_or_name)
         ensure_http_fetch_file(Path(path_or_name).name, relative_path)
         out = http_range_das_path / relative_path
-        _wait_for_http_path(out)
+        with skip_on_timeout(5, f"HTTP fixture path readiness probe: {out}"):
+            _wait_for_http_path(out)
         return out
 
     return _convert
