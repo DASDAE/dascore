@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import abc
 import fnmatch
+import hashlib
+import json
 import re
 from collections.abc import Sized
 from functools import cache
@@ -19,7 +21,6 @@ import pandas as pd
 from pydantic import (
     ValidationError,
     field_validator,
-    model_serializer,
     model_validator,
 )
 from rich.text import Text
@@ -38,7 +39,11 @@ from dascore.units import (
     get_quantity_str,
     percent,
 )
-from dascore.utils.array import _coerce_text_array, _is_text_coercible_array
+from dascore.utils.array import (
+    _coerce_text_array,
+    _is_text_coercible_array,
+    hash_array,
+)
 from dascore.utils.display import get_nice_text
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
@@ -112,16 +117,12 @@ class CoordSummary(DascoreBaseModel):
     units: UnitQuantity | None = None
     dims: tuple[str, ...] = ()
     len: int | None = None
+    fingerprint: str | None = None
 
     @property
     def is_range_like(self) -> bool:
         """Return True when the summary can reconstruct a CoordRange."""
         return not pd.isnull(self.step)
-
-    @model_serializer(when_used="json")
-    def ser_model(self) -> dict[str, str]:
-        """Serialize the model to json."""
-        return {i: str(v) for i, v in self.model_dump().items()}
 
     @model_validator(mode="before")
     @classmethod
@@ -450,6 +451,54 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """Numpy method for getting array data with `np.array(coord)`."""
         return self.data
 
+    def __hash__(self):
+        """Disable Python hash semantics in favor of explicit fingerprints."""
+        msg = "Coordinates are not hashable; use `fingerprint()` for stable IDs."
+        raise TypeError(msg)
+
+    def _get_fingerprintable_coord(self) -> Self:
+        """Return a coordinate normalized for stable fingerprinting."""
+        if self.units is None or dtype_time_like(self.dtype):
+            return self
+        return self.simplify_units()
+
+    @staticmethod
+    def _hash_scalar(value) -> tuple[str, str | None]:
+        """Return a dtype-aware scalar hash token."""
+        if value is None:
+            return ("none", None)
+        return ("scalar", hash_array(np.asarray([value])))
+
+    @staticmethod
+    def _coord_identity(coord: BaseCoord) -> str:
+        """Return a stable identifier for one coordinate class."""
+        cls = coord.__class__
+        return f"{cls.__module__}.{cls.__qualname__}"
+
+    @abc.abstractmethod
+    def _fingerprint_components(self) -> tuple[Any, ...]:
+        """Return subclass-specific fingerprint components."""
+
+    @cached_method
+    def fingerprint(self) -> str:
+        """
+        Return a stable fingerprint whose matches imply coord equality.
+
+        Notes
+        -----
+        Fingerprints are designed for stable identifiers, not tolerant
+        comparison. As a result, coordinates that are approximately equal can
+        still have different fingerprints.
+        """
+        coord = self._get_fingerprintable_coord()
+        payload = (
+            self._coord_identity(coord),
+            coord.unit_str,
+            *coord._fingerprint_components(),
+        )
+        encoded = json.dumps(payload, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
     @cached_method
     def min(self):
         """Return min value."""
@@ -753,6 +802,7 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
             units=self.units,
             dims=dims,
             len=len(self),
+            fingerprint=self.fingerprint(),
         )
 
     def update(self, **kwargs):
@@ -901,6 +951,9 @@ class BaseCoord(DascoreBaseModel, abc.ABC):
         """
         Return True if the coordinates are approximately equal.
 
+        This is a tolerant comparison helper. It is intentionally distinct
+        from `fingerprint()`, which is stricter and intended for stable IDs.
+
         Parameters
         ----------
         other
@@ -1016,7 +1069,20 @@ class CoordPartial(BaseCoord):
     # Other operations that normally modify data do not in this case.
     update_limits = update
     set_units = update
-    convert_units = update
+
+    def convert_units(self, units) -> Self:
+        """Convert scalar metadata units, or set units if none exist."""
+        if self.units is None or dtype_time_like(self.dtype):
+            return self.set_units(units=units)
+        out = {"units": units}
+        for name in ("start", "stop", "step"):
+            value = getattr(self, name)
+            out[name] = (
+                value
+                if pd.isnull(value)
+                else convert_units(value, to_units=units, from_units=self.units)
+            )
+        return self.new(**out)
 
     def sort(self, reverse=False):
         """Sort dummy array. Does nothing."""
@@ -1090,6 +1156,17 @@ class CoordPartial(BaseCoord):
             dtype=self.dtype,
             units=None,
             dims=dims,
+            fingerprint=self.fingerprint(),
+        )
+
+    def _fingerprint_components(self) -> tuple[Any, ...]:
+        """Return the scalar payload needed to fingerprint partial coords."""
+        return (
+            self.shape,
+            str(np.dtype(self.dtype)),
+            self._hash_scalar(self.start),
+            self._hash_scalar(self.stop),
+            self._hash_scalar(self.step),
         )
 
 
@@ -1176,6 +1253,15 @@ class CoordRange(BaseCoord):
         # serialization.
         values["dtype"] = np.asarray(start + step).dtype
         return values
+
+    def _fingerprint_components(self) -> tuple[Any, ...]:
+        """Return the scalar payload needed to fingerprint range coords."""
+        return (
+            self.shape,
+            self._hash_scalar(self.start),
+            self._hash_scalar(self.stop),
+            self._hash_scalar(self.step),
+        )
 
     def __getitem__(self, item):
         if isinstance(item, (int | np.integer)):
@@ -1481,6 +1567,10 @@ class CoordArray(BaseCoord):
         """Return max value in range."""
         return np.nanmax(self.values)
 
+    def _fingerprint_components(self) -> tuple[Any, ...]:
+        """Return the array payload needed to fingerprint array coords."""
+        return (("array", hash_array(self.values)),)
+
 
 class CoordMonotonicArray(CoordArray):
     """A coordinate with strictly increasing or decreasing values."""
@@ -1738,7 +1828,12 @@ class CoordString(BaseCoord):
             units=None,
             dims=dims,
             len=len(self),
+            fingerprint=self.fingerprint(),
         )
+
+    def _fingerprint_components(self) -> tuple[Any, ...]:
+        """Return the array payload needed to fingerprint string coords."""
+        return (("array", hash_array(self.values)),)
 
     def __getitem__(self, item) -> Self:
         """Return a subset of the coordinate."""

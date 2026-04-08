@@ -6,8 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.core.summary import PatchSummary
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload
 from dascore.utils.models import UnitQuantity, UTF8Str
 
 from ...utils.hdf5 import H5Reader
@@ -44,19 +43,20 @@ class ProdMLV2_0(FiberIO):  # noqa
         if version_str:
             return (self.name, version_str)
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Scan a prodml file, return summary information about the file's contents."""
         out = []
         for attr, coords, source_patch_id in _yield_prodml_attrs_coords(resource):
             attrs = attr.update(_source_patch_id=source_patch_id)
             out.append(
-                PatchSummary(
-                    attrs=attrs,
-                    coords=coords.to_summary_dict(),
-                    dims=coords.dims,
-                    shape=coords.shape,
-                    dtype=attrs.get("dtype", ""),
-                )
+                {
+                    "attrs": attrs,
+                    "coords": coords,
+                    "dims": coords.dims,
+                    "shape": coords.shape,
+                    "data_type": attrs.get("dtype", ""),
+                    "source_patch_id": source_patch_id,
+                }
             )
         return out
 

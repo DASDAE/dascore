@@ -891,6 +891,15 @@ class TestIOResourceManager:
             local_path = ensure_local_file(path)
         assert local_path.exists()
 
+    def test_remote_cache_scope_restores_previous_value_after_exception(self):
+        """Nested scope changes should unwind even when the body raises."""
+        assert get_remote_cache_scope() == "default"
+        with pytest.raises(RuntimeError, match="boom"):
+            with remote_cache_scope("metadata"):
+                assert get_remote_cache_scope() == "metadata"
+                raise RuntimeError("boom")
+        assert get_remote_cache_scope() == "default"
+
 
 class TestRemoteIOFallback:
     """Tests for remote fallback helpers."""

@@ -7,6 +7,7 @@ import platform
 import shutil
 from contextlib import suppress
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -169,6 +170,18 @@ class TestBasics:
         index_version = updated._index_table._index_version
         assert index_version == dc.__last_version__
         assert get_version(index_version) > get_version("0.0.1")
+
+    def test_update_does_not_reconstruct_patch_summary_from_flat_dicts(
+        self, two_patch_directory
+    ):
+        """Indexer update should not reconstruct PatchSummary from flat rows."""
+        indexer = DirectoryIndexer(two_patch_directory)
+        with patch(
+            "dascore.core.summary.PatchSummary.model_validate",
+            side_effect=AssertionError("unexpected PatchSummary.model_validate call"),
+        ):
+            updated = indexer.update()
+        assert updated.index_path.exists()
 
 
 class TestGetContents:

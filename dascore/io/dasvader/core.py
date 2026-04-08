@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.core.summary import PatchSummary
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
@@ -48,7 +47,7 @@ class DASVaderV1(FiberIO):
             return self.name, self.version
         return False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Scan a DASVader file, return summary information about the file."""
         rec = resource["dDAS"][()]
         cm = _get_coord_manager(resource, rec)
@@ -66,13 +65,13 @@ class DASVaderV1(FiberIO):
         )
         attrs = dc.PatchAttrs.from_dict(attrs)
         return [
-            PatchSummary.model_construct(
-                attrs=attrs,
-                coords=cm.to_summary_dict(),
-                dims=cm.dims,
-                shape=cm.shape,
-                dtype=dtype,
-            )
+            {
+                "attrs": attrs,
+                "coords": cm,
+                "dims": cm.dims,
+                "shape": cm.shape,
+                "data_type": dtype,
+            }
         ]
 
     def read(

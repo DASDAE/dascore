@@ -20,7 +20,7 @@ from dascore.utils.array import (
     apply_ufunc,
     convert_bytes_to_strings,
     convert_strings_to_bytes,
-    hash_numpy_array,
+    hash_array,
     is_string_byte_serializable_array,
 )
 
@@ -661,42 +661,42 @@ class TestApplyArrayFunc:
         assert np.allclose(result.data, np.abs(random_patch.data) + 1)
 
 
-class TestHashNumpyArray:
-    """Tests for hash_numpy_array."""
+class TestHashArray:
+    """Tests for hash_array."""
 
     def test_returns_hex_string_of_length_32(self):
         """Output is a 32-character hex string (16-byte digest)."""
-        result = hash_numpy_array(np.array([1, 2, 3]))
+        result = hash_array(np.array([1, 2, 3]))
         assert isinstance(result, str)
         assert len(result) == 32
 
     def test_copy_same_hash(self):
         """A copy of an array produces the same hash."""
         a = np.array([1.0, 2.0, 3.0])
-        assert hash_numpy_array(a) == hash_numpy_array(a.copy())
+        assert hash_array(a) == hash_array(a.copy())
 
     def test_different_values_different_hash(self):
         """Different data produces a different hash."""
         a = np.array([1, 2, 3])
         b = np.array([1, 2, 4])
-        assert hash_numpy_array(a) != hash_numpy_array(b)
+        assert hash_array(a) != hash_array(b)
 
     def test_different_dtype_different_hash(self):
         """Same raw shape but different dtype produces a different hash."""
         a = np.array([1, 2, 3], dtype=np.int32)
         b = np.array([1, 2, 3], dtype=np.int64)
-        assert hash_numpy_array(a) != hash_numpy_array(b)
+        assert hash_array(a) != hash_array(b)
 
     def test_different_shape_different_hash(self):
         """Same values but reshaped produce a different hash."""
         a = np.arange(6).reshape(2, 3)
         b = np.arange(6).reshape(3, 2)
-        assert hash_numpy_array(a) != hash_numpy_array(b)
+        assert hash_array(a) != hash_array(b)
 
     def test_object_array_raises(self):
         """Object arrays are not supported."""
         with pytest.raises(ParameterError):
-            hash_numpy_array(np.array([1, "a"], dtype=object))
+            hash_array(np.array([1, "a"], dtype=object))
 
     def test_non_contiguous_matches_contiguous(self):
         """A non-C-contiguous view hashes identically to its contiguous copy."""
@@ -704,4 +704,9 @@ class TestHashNumpyArray:
         # Fortran-order (non-C-contiguous)
         non_contig = np.asfortranarray(base)
         assert not non_contig.flags.c_contiguous
-        assert hash_numpy_array(base) == hash_numpy_array(non_contig)
+        assert hash_array(base) == hash_array(non_contig)
+
+    def test_datetime_array_hashes(self):
+        """Datetime arrays should hash without special casing at call sites."""
+        arr = np.array(["2020-01-01", "2020-01-02"], dtype="datetime64[ns]")
+        assert hash_array(arr) == hash_array(arr.copy())

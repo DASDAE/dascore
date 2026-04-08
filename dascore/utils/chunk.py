@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Collection
 from functools import reduce
+from typing import ClassVar
 
 import numpy
 import numpy as np
@@ -144,6 +145,14 @@ class ChunkManager:
     This class is used internally by `dc.BaseSpool.chunk`.
     """
 
+    # Coord fingerprints are stable IDs for exact coord contents. Chunk merges
+    # intentionally rewrite coord extents/min/max, so inherited fingerprint
+    # columns are no longer expected to remain equal across merge candidates.
+    _merge_ignored_columns: ClassVar[set[str]] = {
+        "time_fingerprint",
+        "distance_fingerprint",
+    }
+
     def __init__(
         self,
         overlap: timeable_types | numeric_types | None = None,
@@ -259,6 +268,8 @@ class ChunkManager:
         dims = set(df.iloc[0].get("dims", "").split(","))
         # We exclude private columns for considering if merge can happen.
         for col in set(x for x in merger.columns if not x.startswith("_")):
+            if col in self._merge_ignored_columns:
+                continue
             prefix = col.split("_")[0]
             # If we have specified to ignore or remove conflicting attrs
             # we don't need to check them here, but we do still check dims.

@@ -10,8 +10,8 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import opt_timeable_types
-from dascore.core.summary import PatchSummary
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload
+from dascore.io.core import _make_scan_payload
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import TextReader
 from dascore.utils.models import UTF8Str
@@ -76,7 +76,7 @@ class Febus2(FiberIO):
         if version_str:
             return self.name, version_str
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Scan a febus file, return summary information about the file's contents."""
         out = []
         for attr, cm, feb in _yield_attrs_coords(resource):
@@ -84,12 +84,13 @@ class Febus2(FiberIO):
                 _source_patch_id=_get_source_patch_id(feb)
             )
             out.append(
-                PatchSummary(
+                _make_scan_payload(
                     attrs=attrs,
-                    coords=cm.to_summary_dict(),
+                    coords=cm,
                     dims=cm.dims,
                     shape=cm.shape,
-                    dtype=str(feb.zone[feb.data_name].dtype),
+                    data_type=str(feb.zone[feb.data_name].dtype),
+                    source_patch_id=attrs["_source_patch_id"],
                 )
             )
         return out
@@ -137,7 +138,7 @@ class FebusG1CSV1(FiberIO):
         resource.seek(0)  # proactively set resource back to position 0.
         return (self.name, self.version) if is_g1_file else False
 
-    def scan(self, resource: TextReader, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: TextReader, **kwargs) -> list[ScanPayload]:
         """Get the coords and attrs of a G1 file."""
         # Handle case of unsupported files (eg spectrum).
         try:
@@ -148,12 +149,12 @@ class FebusG1CSV1(FiberIO):
         attrs_no_private = {i: v for i, v in attrs.items() if not i.startswith("_")}
         attrs = FebusBOTDRStrainAttrs(**attrs_no_private)
         return [
-            PatchSummary.model_construct(
+            _make_scan_payload(
                 attrs=attrs,
-                coords=coords.to_summary_dict(),
+                coords=coords,
                 dims=coords.dims,
                 shape=coords.shape,
-                dtype="float64",
+                data_type="float64",
             )
         ]
 

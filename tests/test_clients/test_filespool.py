@@ -62,8 +62,8 @@ class TestBasic:
         dt = duration / 3
         spool = terra15_file_spool.chunk(time=dt, keep_partial=True)
         assert len(spool) == 3
-        for patch in spool:
-            assert isinstance(patch, dc.Patch)
+        for loaded_patch in spool:
+            assert isinstance(loaded_patch, dc.Patch)
 
     def test_sorted_multi_patch_uses_source_patch_id(self, tmp_path):
         """Sorting should not change which source patch gets reloaded."""
@@ -72,8 +72,8 @@ class TestBasic:
         patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
         dc.write(dc.spool([patch_1, patch_2]), path, "dasdae", file_version="1")
         spool = FileSpool(path).sort("time")
-        patch = spool[0]
-        assert patch.get_coord("time").min() == patch_2.get_coord("time").min()
+        loaded_patch = spool[0]
+        assert loaded_patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
     def test_multi_patch_without_source_patch_id_raises(self, tmp_path):
         """Multi-patch reload should fail instead of guessing from row index."""

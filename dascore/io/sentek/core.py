@@ -5,8 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.core.summary import PatchSummary
-from dascore.io.core import FiberIO
+from dascore.io.core import FiberIO, ScanPayload
 from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .utils import _get_patch_attrs, _get_version
@@ -42,15 +41,15 @@ class SentekV5(FiberIO):
         """Auto detect sentek format."""
         return _get_version(resource)
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: BinaryReader, **kwargs) -> list[ScanPayload]:
         """Extract metadata from sentek file."""
         attrs, coords, _ = _get_patch_attrs(resource)
         return [
-            PatchSummary.model_construct(
-                attrs=attrs,
-                coords=coords.to_summary_dict(),
-                dims=coords.dims,
-                shape=coords.shape,
-                dtype=str(np.dtype(np.float32)),
-            )
+            {
+                "attrs": attrs,
+                "coords": coords,
+                "dims": coords.dims,
+                "shape": coords.shape,
+                "data_type": str(np.dtype(np.float32)),
+            }
         ]

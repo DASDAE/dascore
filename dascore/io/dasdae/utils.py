@@ -1,7 +1,7 @@
 """DASDAE format utilities.
 
 See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
-coord-summary fast path and string-serialization design notes used here.
+coord serialization and string-serialization design notes used here.
 """
 
 from __future__ import annotations
@@ -16,14 +16,9 @@ import dascore as dc
 from dascore.config import get_config
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import CoordSummary, get_coord
-from dascore.core.summary import (
-    PatchSummary,
-    _normalize_coord_summary_dtype,
-    coord_summary_from_available,
-    coord_summary_from_metadata,
-)
+from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
+from dascore.io.core import _make_scan_payload
 from dascore.utils.array import (
     convert_bytes_to_strings,
     convert_strings_to_bytes,
@@ -291,77 +286,8 @@ def _kwargs_empty(kwargs) -> bool:
     return not bool(out)
 
 
-def _read_array_sample(table_array, index):
-    """Read one array sample and restore datetime-like dtypes when needed."""
-    out = table_array[index]
-    attrs = table_array.attrs
-    if attrs.get("is_datetime64"):
-        out = np.asarray([out]).view("datetime64[ns]")[0]
-    if attrs.get("is_timedelta64"):
-        out = np.asarray([out]).view("timedelta64[ns]")[0]
-    return out
-
-
-def _get_coord_node_metadata(coord_node) -> dict[str, object]:
-    """Extract normalized metadata from a stored coord node."""
-    attrs = coord_node.attrs
-    units = attrs.get("units", None)
-    step = attrs.get("step", None)
-    if attrs.get("step_is_timedelta64", False):
-        step = np.timedelta64(step, "ns")
-    is_string = bool(attrs.get("is_string", False))
-    dtype = _normalize_coord_summary_dtype(
-        str(coord_node.dtype).split("[")[0],
-        is_datetime=bool(attrs.get("is_datetime64", False)),
-        is_timedelta=bool(attrs.get("is_timedelta64", False)),
-        is_string=is_string,
-        original_dtype=unbyte(attrs.get("original_string_dtype", "")),
-    )
-    length = int(np.prod(coord_node.shape, dtype=int)) if coord_node.shape else 0
-    return {
-        "dtype": dtype,
-        "units": units,
-        "step": step,
-        "is_string": is_string,
-        "length": length,
-    }
-
-
-def _coord_summary_can_use_metadata_fast_path(meta: dict[str, object]) -> bool:
-    """Return True when coord metadata is sufficient without reading the array."""
-    return meta["step"] is not None and not meta["is_string"]
-
-
-def _get_coord_summary_from_node(coord_node, dims):
-    """Build a coord summary from a saved coord node without reading it all."""
-    meta = _get_coord_node_metadata(coord_node)
-    if _coord_summary_can_use_metadata_fast_path(meta):
-        start = _read_array_sample(coord_node, 0)
-        stop = _read_array_sample(coord_node, -1)
-        return coord_summary_from_metadata(
-            dims=dims,
-            min=min(start, stop),
-            max=max(start, stop),
-            units=meta["units"],
-            step=meta["step"],
-            dtype=meta["dtype"],
-            length=meta["length"],
-            is_string=bool(meta["is_string"]),
-        )
-    data = _read_array(coord_node)
-    return coord_summary_from_available(
-        dims=dims,
-        units=meta["units"],
-        step=meta["step"],
-        dtype=meta["dtype"],
-        length=meta["length"],
-        data=data,
-        is_string=bool(meta["is_string"]),
-    )
-
-
-def _get_patch_summary_from_group(group):
-    """Build a patch summary from one stored DASDAE patch group."""
+def _get_scan_payload_from_group(group):
+    """Build one structured scan payload from a stored DASDAE patch group."""
     attrs = group.attrs
     out = {}
     # First recover the flat attr payload saved on the patch group itself.
@@ -380,45 +306,18 @@ def _get_patch_summary_from_group(group):
     dims_str = out["dims"]
     dims = tuple(dims_str.split(",")) if dims_str else ()
     # Split flattened coord metadata from the remaining patch attrs.
-    legacy_coords, attr_info = separate_coord_info(out, dims=dims)
-    coord_map = {}
-    for name, summary in legacy_coords.items():
-        if {"min", "max"} <= set(summary):
-            coord_map[name] = CoordSummary(**summary)
-    # Prefer coord summaries reconstructed from stored coord nodes when present.
-    for coord_node in group.values():
-        name = coord_node.name.rsplit("/", maxsplit=1)[-1]
-        if not name.startswith("_coord_"):
-            continue
-        name = name.replace("_coord_", "")
-        coord_dims_str = unbyte(attrs.get(f"_cdims_{name}", ""))
-        coord_dims = tuple(coord_dims_str.split(",")) if coord_dims_str else ()
-        node_summary = _get_coord_summary_from_node(coord_node, coord_dims)
-        legacy_summary = coord_map.get(name)
-        if legacy_summary is not None:
-            payload = node_summary.model_dump()
-            if payload.get("units") in (None, "") and legacy_summary.units not in (
-                None,
-                "",
-            ):
-                payload["units"] = legacy_summary.units
-            if payload.get("step") in (None, "") and legacy_summary.step not in (
-                None,
-                "",
-            ):
-                payload["step"] = legacy_summary.step
-            node_summary = CoordSummary(**payload)
-        coord_map[name] = node_summary
+    _, attr_info = separate_coord_info(out, dims=dims)
+    coords = _get_coords(group, dims, out)
     # Data shape/dtype come from the stored data node without loading the array.
     data_node = group.get("data")
     dtype = str(data_node.dtype) if data_node is not None else ""
     shape = tuple(data_node.shape) if data_node is not None else ()
-    return PatchSummary(
+    return _make_scan_payload(
         attrs=PatchAttrs.from_dict(attr_info),
-        coords=coord_map,
+        coords=coords,
         dims=dims,
         shape=shape,
-        dtype=dtype,
+        data_type=dtype,
         source_patch_id=group.name.rsplit("/", maxsplit=1)[-1],
     )
 
@@ -487,4 +386,4 @@ def _get_contents_from_patch_groups_generic(h5):
     waveforms = h5.get("waveforms")
     if waveforms is None:
         return []
-    return [_get_patch_summary_from_group(group) for group in waveforms.values()]
+    return [_get_scan_payload_from_group(group) for group in waveforms.values()]

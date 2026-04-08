@@ -276,7 +276,9 @@ def _get_fbe_data(node_info):
     return node_info.node
 
 
-def _yield_prodml_attrs_coords(fi, extras=None):
+def _yield_prodml_attrs_coords(
+    fi, extras=None
+) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str]]:
     """Scan a prodML file, return metadata."""
     acq = fi["Acquisition"]
     # Get the information common to all from root attributes.

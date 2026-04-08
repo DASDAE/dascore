@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import dascore as dc
-from dascore.core.summary import PatchSummary
-from dascore.io.core import FiberIO
+from dascore.io.core import FiberIO, ScanPayload
 from dascore.utils.io import LocalBinaryReader, LocalPath
 from dascore.utils.misc import optional_import
 
@@ -55,7 +54,7 @@ class SegyV1_0(FiberIO):  # noqa
         patch = dc.Patch(coords=coords, data=data, attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, path: LocalPath, **kwargs) -> list[PatchSummary]:
+    def scan(self, path: LocalPath, **kwargs) -> list[ScanPayload]:
         """
         Used to get metadata about a file without reading the whole file.
 
@@ -68,13 +67,13 @@ class SegyV1_0(FiberIO):  # noqa
             attrs = _get_attrs(fi, coords, path, self)
             dtype = str(fi.dtype)
         return [
-            PatchSummary.model_construct(
-                attrs=attrs,
-                coords=coords.to_summary_dict(),
-                dims=coords.dims,
-                shape=coords.shape,
-                dtype=dtype,
-            )
+            {
+                "attrs": attrs,
+                "coords": coords,
+                "dims": coords.dims,
+                "shape": coords.shape,
+                "data_type": dtype,
+            }
         ]
 
     def write(self, spool: dc.Patch | dc.BaseSpool, resource, **kwargs):

@@ -7,8 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import timeable_types
 from dascore.core import Patch
-from dascore.core.summary import PatchSummary
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload
 from dascore.utils.io import BinaryReader, LocalBinaryReader
 
 from .utils import _get_all_attrs, _get_data, _get_default_attrs, _get_version_str
@@ -40,19 +39,19 @@ class TDMSFormatterV4713(FiberIO):
         except Exception:
             return False
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: BinaryReader, **kwargs) -> list[ScanPayload]:
         """Scan a tdms file, return summary information about the file's contents."""
         out, fileinfo = _get_all_attrs(resource)
         coords = dc.core.get_coord_manager(coords=out.pop("coords"))
         out = dc.PatchAttrs.from_dict(out)
         return [
-            PatchSummary.model_construct(
-                attrs=out,
-                coords=coords.to_summary_dict(),
-                dims=coords.dims,
-                shape=coords.shape,
-                dtype=str(np.dtype(fileinfo["data_type"])),
-            )
+            {
+                "attrs": out,
+                "coords": coords,
+                "dims": coords.dims,
+                "shape": coords.shape,
+                "data_type": str(np.dtype(fileinfo["data_type"])),
+            }
         ]
 
     def read(

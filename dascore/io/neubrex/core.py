@@ -10,8 +10,7 @@ import dascore as dc
 import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
 from dascore.constants import SpoolType
-from dascore.core.summary import PatchSummary
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload
 from dascore.utils.hdf5 import H5Reader
 
 
@@ -78,18 +77,18 @@ class NeubrexRFSV1(FiberIO):
         patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a resource belong to this type."""
         cm = rfs_utils._get_coord_manager(resource, snap)
         attrs = NeubrexRFSPatchAttrs.from_dict(rfs_utils._get_attr_dict(resource))
         return [
-            PatchSummary.model_construct(
-                attrs=attrs,
-                coords=cm.to_summary_dict(),
-                dims=cm.dims,
-                shape=cm.shape,
-                dtype=str(resource["data"].dtype),
-            )
+            {
+                "attrs": attrs,
+                "coords": cm,
+                "dims": cm.dims,
+                "shape": cm.shape,
+                "data_type": str(resource["data"].dtype),
+            }
         ]
 
 
@@ -130,17 +129,17 @@ class NeubrexDASV1(FiberIO):
         patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
         """Get the attributes of this format from File."""
         acoustic = resource["Acoustic"]
         cm = das_utils._get_coord_manager(acoustic)
         attrs = NeubrexDASPatchAttrs.from_dict(das_utils._get_attr_dict(acoustic))
         return [
-            PatchSummary.model_construct(
-                attrs=attrs,
-                coords=cm.to_summary_dict(),
-                dims=cm.dims,
-                shape=cm.shape,
-                dtype=str(acoustic.dtype),
-            )
+            {
+                "attrs": attrs,
+                "coords": cm,
+                "dims": cm.dims,
+                "shape": cm.shape,
+                "data_type": str(acoustic.dtype),
+            }
         ]

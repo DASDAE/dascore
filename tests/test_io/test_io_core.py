@@ -185,10 +185,37 @@ class TestPatchFileSummary:
 class TestScanResultToSummary:
     """Tests for converting scan metadata into summaries."""
 
-    def test_dict_input_raises(self):
-        """Untyped dict payloads should no longer be accepted."""
-        with pytest.raises(TypeError, match="only accepts PatchSummary"):
+    def test_scan_payload_dict_input_builds_summary(self):
+        """Structured scan payloads should normalize to PatchSummary."""
+        patch = dc.get_example_patch()
+        payload = {
+            "attrs": patch.attrs,
+            "coords": patch.coords,
+            "dims": patch.dims,
+            "shape": patch.shape,
+            "data_type": str(patch.data.dtype),
+            "source_patch_id": "node-1",
+        }
+        out = _scan_result_to_summary(payload, source_path="some_path")
+        assert isinstance(out, dc.PatchSummary)
+        assert (
+            out.get_coord_summary("time").fingerprint
+            == patch.get_coord("time").fingerprint()
+        )
+        assert out.source_patch_id == "node-1"
+        assert str(out.source_path) == "some_path"
+
+    def test_invalid_dict_input_raises(self):
+        """Untyped dict payloads should still be rejected."""
+        msg = r"requires a mapping with `coords` and `attrs`"
+        with pytest.raises(TypeError, match=msg):
             _scan_result_to_summary({"tag": "x"})
+
+    def test_invalid_non_mapping_input_raises(self):
+        """Unsupported scan outputs should mention allowed input shapes."""
+        msg = "only accepts PatchSummary or structured scan payload mappings"
+        with pytest.raises(TypeError, match=msg):
+            _scan_result_to_summary("bad scan output")
 
     def test_patch_attrs_input_raises(self):
         """PatchAttrs scan outputs should fail with a migration hint."""
@@ -634,7 +661,7 @@ class TestReloadableSourcePath:
             dc.scan(terra15_v6_path)
 
     def test_default_fiberio_scan_uses_reloadable_source_path(self, tmp_path):
-        """Default FiberIO.scan should return patch-only summaries."""
+        """Default FiberIO.scan should return structured scan payloads."""
         path = tmp_path / "fallback_scan.h5"
         path.write_text("placeholder")
         fio = _ReadOnlySummaryFormatter()
@@ -642,11 +669,11 @@ class TestReloadableSourcePath:
         out = fio.scan(path)
 
         assert len(out) == 1
-        assert isinstance(out[0], dc.PatchSummary)
-        assert not out[0].source_path
-        assert not out[0].source_format
-        assert not out[0].source_version
-        assert not out[0].source_patch_id
+        assert isinstance(out[0], dict)
+        assert "source_path" not in out[0]
+        assert "source_format" not in out[0]
+        assert "source_version" not in out[0]
+        assert not out[0]["source_patch_id"]
 
     def test_dc_scan_adds_source_metadata_to_raw_fiberio_scan(self, tmp_path):
         """dc.scan should add path/format/version on top of raw formatter scan."""
@@ -655,9 +682,9 @@ class TestReloadableSourcePath:
 
         raw = _ReadOnlySummaryFormatter().scan(path)
         assert len(raw) == 1
-        assert not raw[0].source_path
-        assert not raw[0].source_format
-        assert not raw[0].source_version
+        assert "source_path" not in raw[0]
+        assert "source_format" not in raw[0]
+        assert "source_version" not in raw[0]
 
         out = dc.scan(path)
         assert len(out) == 1
@@ -688,7 +715,7 @@ class TestReloadableSourcePath:
         out = fio.scan(path)
 
         assert len(out) == 2
-        assert not any(summary.source_patch_id for summary in out)
+        assert not any(summary["source_patch_id"] for summary in out)
 
     def test_keyboard_interrupt(self, monkeypatch):
         """Ensure a keyboard interrupt works when progress bar is going"""
