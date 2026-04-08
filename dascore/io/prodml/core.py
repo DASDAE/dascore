@@ -54,7 +54,7 @@ class ProdMLV2_0(FiberIO):  # noqa
                     "coords": coords,
                     "dims": coords.dims,
                     "shape": coords.shape,
-                    "data_type": attrs.get("dtype", ""),
+                    "dtype": attrs.get("dtype", ""),
                     "source_patch_id": source_patch_id,
                 }
             )

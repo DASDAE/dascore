@@ -55,6 +55,6 @@ class H5Simple(FiberIO):
                 "coords": cm,
                 "dims": cm.dims,
                 "shape": cm.shape,
-                "data_type": str(data.dtype),
+                "dtype": str(data.dtype),
             }
         ]

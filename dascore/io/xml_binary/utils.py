@@ -262,7 +262,7 @@ def _paths_to_scan_patches(
                 coords=coords,
                 dims=coords.dims,
                 shape=coords.shape,
-                data_type=metadata.data_type,
+                dtype=metadata.data_type,
             )
         )
     return out

@@ -52,7 +52,7 @@ class SilixaH5V1(FiberIO):
                 "coords": coords,
                 "dims": coords.dims,
                 "shape": coords.shape,
-                "data_type": str(resource["Acoustic"].dtype),
+                "dtype": str(resource["Acoustic"].dtype),
             }
         ]
 

@@ -145,6 +145,20 @@ def _read_array(table_array):
     return data
 
 
+def _read_array_sample(table_array, index):
+    """Read one array sample and restore datetime-like dtypes when needed."""
+    out = table_array[index]
+    attrs = table_array.attrs
+    if attrs.get("is_datetime64"):
+        out = np.asarray([out]).view("datetime64[ns]")[0]
+    if attrs.get("is_timedelta64"):
+        out = np.asarray([out]).view("timedelta64[ns]")[0]
+    if attrs.get("is_string"):
+        original_dtype = unbyte(attrs.get("original_string_dtype", ""))
+        out = convert_bytes_to_strings(np.asarray([out]), original_dtype)[0]
+    return out
+
+
 def _translate_legacy_attrs(attrs):
     """Normalize legacy DASDAE attr payloads to flat coord metadata."""
     out = dict(attrs)
@@ -210,17 +224,27 @@ def _get_coords(patch_group, dims, attrs2):
         if not name.startswith("_coord_"):
             continue
         name = name.replace("_coord_", "")
-        array = _read_array(coord)
         node_attrs = coord.attrs
         units = node_attrs.get("units", None)
-        step = node_attrs.get("step", None)
+        node_step = node_attrs.get("step", None)
         if node_attrs.get("step_is_timedelta64", False):
-            step = np.timedelta64(step, "ns")
-        coord = get_coord(
-            data=array,
-            units=units or attrs2.get(f"{name}_units", None),
-            step=step if step is not None else attrs2.get(f"{name}_step", None),
+            node_step = np.timedelta64(node_step, "ns")
+        units = units or attrs2.get(f"{name}_units", None)
+        step = node_step if node_step is not None else attrs2.get(f"{name}_step", None)
+        shape = tuple(coord.shape)
+        can_use_range_fast_path = (
+            node_step is not None
+            and not node_attrs.get("is_string", False)
+            and len(shape) == 1
+            and shape[0] > 0
         )
+        if can_use_range_fast_path:
+            start = _read_array_sample(coord, 0)
+            stop = start + node_step * shape[0]
+            coord = get_coord(start=start, stop=stop, step=node_step, units=units)
+        else:
+            array = _read_array(coord)
+            coord = get_coord(data=array, units=units, step=step)
         coord_dict[name] = coord
     # associates coordinates with dimensions
     group_attrs = patch_group.attrs
@@ -317,7 +341,7 @@ def _get_scan_payload_from_group(group):
         coords=coords,
         dims=dims,
         shape=shape,
-        data_type=dtype,
+        dtype=dtype,
         source_patch_id=group.name.rsplit("/", maxsplit=1)[-1],
     )
 

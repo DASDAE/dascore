@@ -609,6 +609,18 @@ class TestCoordFingerprint:
         assert out.stop == coord.stop
         assert out.step == coord.step
 
+    def test_partial_convert_units_preserves_partial_type(self):
+        """Converting partial coord units should not upcast to CoordRange."""
+        coord = CoordPartial(
+            shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
+        )
+        out = coord.convert_units("km")
+        assert isinstance(out, CoordPartial)
+        assert out.units == get_quantity("km")
+        assert out.start == pytest.approx(0.001)
+        assert out.stop == pytest.approx(0.004)
+        assert out.step == pytest.approx(0.001)
+
     def test_equal_coords_share_fingerprint(self, coord):
         """Reconstructed equal coords should share a fingerprint."""
         payload = coord.model_dump()

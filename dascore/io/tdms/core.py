@@ -50,7 +50,7 @@ class TDMSFormatterV4713(FiberIO):
                 "coords": coords,
                 "dims": coords.dims,
                 "shape": coords.shape,
-                "data_type": str(np.dtype(fileinfo["data_type"])),
+                "dtype": str(np.dtype(fileinfo["data_type"])),
             }
         ]
 

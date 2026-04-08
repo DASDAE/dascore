@@ -51,7 +51,7 @@ class OptoDASV8(FiberIO):
                 "coords": coords,
                 "dims": coords.dims,
                 "shape": coords.shape,
-                "data_type": str(resource["data"].dtype),
+                "dtype": str(resource["data"].dtype),
             }
         ]
 

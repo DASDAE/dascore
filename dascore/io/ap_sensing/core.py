@@ -51,7 +51,7 @@ class APSensingV10(FiberIO):
                 "coords": coords,
                 "dims": coords.dims,
                 "shape": coords.shape,
-                "data_type": str(resource["DAS"].dtype),
+                "dtype": str(resource["DAS"].dtype),
             }
         ]
 

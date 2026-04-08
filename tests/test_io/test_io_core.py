@@ -27,6 +27,7 @@ from dascore.io.core import (
     FiberIO,
     PatchFileSummary,
     _get_reloadable_source_path,
+    _make_scan_payload,
     _scan_result_to_summary,
 )
 from dascore.io.dasdae.core import DASDAEV1
@@ -193,7 +194,7 @@ class TestScanResultToSummary:
             "coords": patch.coords,
             "dims": patch.dims,
             "shape": patch.shape,
-            "data_type": str(patch.data.dtype),
+            "dtype": str(patch.data.dtype),
             "source_patch_id": "node-1",
         }
         out = _scan_result_to_summary(payload, source_path="some_path")
@@ -205,9 +206,34 @@ class TestScanResultToSummary:
         assert out.source_patch_id == "node-1"
         assert str(out.source_path) == "some_path"
 
+    def test_scan_payload_missing_dtype_raises(self):
+        """Structured scan payloads should require dtype metadata."""
+        patch = dc.get_example_patch()
+        payload = {
+            "attrs": patch.attrs,
+            "coords": patch.coords,
+            "dims": patch.dims,
+            "shape": patch.shape,
+        }
+        msg = r"requires a mapping with `coords`, `attrs`, and `dtype`"
+        with pytest.raises(TypeError, match=msg):
+            _scan_result_to_summary(payload, source_path="some_path")
+
+    def test_make_scan_payload_uses_dtype_key(self):
+        """The helper should emit the normalized dtype field."""
+        patch = dc.get_example_patch()
+        out = _make_scan_payload(
+            attrs=patch.attrs,
+            coords=patch.coords,
+            dims=patch.dims,
+            shape=patch.shape,
+            dtype=str(patch.data.dtype),
+        )
+        assert out["dtype"] == str(patch.data.dtype)
+
     def test_invalid_dict_input_raises(self):
         """Untyped dict payloads should still be rejected."""
-        msg = r"requires a mapping with `coords` and `attrs`"
+        msg = r"requires a mapping with `coords`, `attrs`, and `dtype`"
         with pytest.raises(TypeError, match=msg):
             _scan_result_to_summary({"tag": "x"})
 

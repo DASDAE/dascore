@@ -96,7 +96,7 @@ def _scan_terra15(h5_fi, data_node, extras=None) -> list[ScanPayload]:
             coords=coord_manager,
             dims=coord_manager.dims,
             shape=coord_manager.shape,
-            data_type=str(data_node["data"].dtype),
+            dtype=str(data_node["data"].dtype),
         )
     ]
 

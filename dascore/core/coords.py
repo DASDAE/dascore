@@ -1072,9 +1072,10 @@ class CoordPartial(BaseCoord):
 
     def convert_units(self, units) -> Self:
         """Convert scalar metadata units, or set units if none exist."""
+        out = self.model_dump(exclude_unset=True, exclude_defaults=True)
+        out["units"] = units
         if self.units is None or dtype_time_like(self.dtype):
-            return self.set_units(units=units)
-        out = {"units": units}
+            return self.__class__(**out)
         for name in ("start", "stop", "step"):
             value = getattr(self, name)
             out[name] = (
@@ -1082,7 +1083,7 @@ class CoordPartial(BaseCoord):
                 if pd.isnull(value)
                 else convert_units(value, to_units=units, from_units=self.units)
             )
-        return self.new(**out)
+        return self.__class__(**out)
 
     def sort(self, reverse=False):
         """Sort dummy array. Does nothing."""

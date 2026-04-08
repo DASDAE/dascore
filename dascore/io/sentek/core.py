@@ -50,6 +50,6 @@ class SentekV5(FiberIO):
                 "coords": coords,
                 "dims": coords.dims,
                 "shape": coords.shape,
-                "data_type": str(np.dtype(np.float32)),
+                "dtype": str(np.dtype(np.float32)),
             }
         ]

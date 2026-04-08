@@ -53,7 +53,7 @@ class DASHDF5(FiberIO):
                 "coords": coords,
                 "dims": coords.dims,
                 "shape": coords.shape,
-                "data_type": str(resource["das"].dtype),
+                "dtype": str(resource["das"].dtype),
             }
         ]
 

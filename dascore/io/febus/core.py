@@ -89,7 +89,7 @@ class Febus2(FiberIO):
                     coords=cm,
                     dims=cm.dims,
                     shape=cm.shape,
-                    data_type=str(feb.zone[feb.data_name].dtype),
+                    dtype=str(feb.zone[feb.data_name].dtype),
                     source_patch_id=attrs["_source_patch_id"],
                 )
             )
@@ -154,7 +154,7 @@ class FebusG1CSV1(FiberIO):
                 coords=coords,
                 dims=coords.dims,
                 shape=coords.shape,
-                data_type="float64",
+                dtype="float64",
             )
         ]
 

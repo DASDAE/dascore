@@ -114,7 +114,7 @@ class ScanPayload(TypedDict):
     coords: CoordManager
     dims: tuple[str, ...]
     shape: tuple[int, ...]
-    data_type: str
+    dtype: str
     source_patch_id: NotRequired[str]
 
 
@@ -124,7 +124,7 @@ def _make_scan_payload(
     coords,
     dims=(),
     shape=(),
-    data_type: str = "",
+    dtype: str = "",
     source_patch_id: str = "",
 ) -> ScanPayload:
     """Build one normalized FiberIO scan payload."""
@@ -133,7 +133,7 @@ def _make_scan_payload(
         "coords": coords,
         "dims": tuple(dims),
         "shape": tuple(shape),
-        "data_type": str(data_type),
+        "dtype": str(dtype),
         "source_patch_id": ""
         if source_patch_id in (None, "")
         else str(source_patch_id),
@@ -149,8 +149,11 @@ def _scan_payload_to_summary(
     source_patch_id: str | None = None,
 ) -> PatchSummary:
     """Convert one structured FiberIO scan payload into a PatchSummary."""
-    if "coords" not in payload or "attrs" not in payload:
-        msg = "_scan_payload_to_summary requires a mapping with `coords` and `attrs`."
+    if "coords" not in payload or "attrs" not in payload or "dtype" not in payload:
+        msg = (
+            "_scan_payload_to_summary requires a mapping with `coords`, "
+            "`attrs`, and `dtype`."
+        )
         raise TypeError(msg)
     coords = payload["coords"]
     if hasattr(coords, "to_summary_dict"):
@@ -160,7 +163,7 @@ def _scan_payload_to_summary(
         coords=coords,
         dims=tuple(payload.get("dims", ())),
         shape=tuple(payload.get("shape", ())),
-        dtype=str(payload.get("data_type", "")),
+        dtype=str(payload["dtype"]),
         source_path=source_path,
         source_format=source_format,
         source_version=source_version,
@@ -246,7 +249,7 @@ def _patch_to_scan_payload(patch: dc.Patch) -> ScanPayload:
         coords=patch.coords,
         dims=patch.dims,
         shape=patch.shape,
-        data_type=str(np.dtype(patch.data.dtype)),
+        dtype=str(np.dtype(patch.data.dtype)),
         source_patch_id=patch.attrs.get("_source_patch_id", ""),
     )
 

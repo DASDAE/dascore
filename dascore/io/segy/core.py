@@ -72,7 +72,7 @@ class SegyV1_0(FiberIO):  # noqa
                 "coords": coords,
                 "dims": coords.dims,
                 "shape": coords.shape,
-                "data_type": dtype,
+                "dtype": dtype,
             }
         ]
 

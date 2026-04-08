@@ -15,7 +15,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
 from tests.test_io._common_io_test_utils import skip_on_timeout
 
-pytestmark = [pytest.mark.network, pytest.mark.timeout(15)]
+pytestmark = [pytest.mark.network, pytest.mark.timeout(30)]
 
 
 @pytest.fixture(autouse=True)

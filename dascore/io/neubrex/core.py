@@ -87,7 +87,7 @@ class NeubrexRFSV1(FiberIO):
                 "coords": cm,
                 "dims": cm.dims,
                 "shape": cm.shape,
-                "data_type": str(resource["data"].dtype),
+                "dtype": str(resource["data"].dtype),
             }
         ]
 
@@ -140,6 +140,6 @@ class NeubrexDASV1(FiberIO):
                 "coords": cm,
                 "dims": cm.dims,
                 "shape": cm.shape,
-                "data_type": str(acoustic.dtype),
+                "dtype": str(acoustic.dtype),
             }
         ]

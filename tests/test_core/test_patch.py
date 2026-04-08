@@ -521,6 +521,17 @@ class TestPatchSummary:
         assert summary.dims == ("time",)
         assert summary.get_coord_summary("time").dims == ("time",)
 
+    def test_summary_model_validate_uses_outer_dims_for_coord_fallback(self):
+        """Structured summary inputs should fall back to outer patch dims."""
+        payload = {
+            "attrs": {},
+            "coords": {"time": {"min": 1, "max": 2, "dtype": "int64"}},
+            "dims": "time",
+        }
+        summary = dc.PatchSummary.model_validate(payload)
+        assert summary.dims == ("time",)
+        assert summary.get_coord_summary("time").dims == ("time",)
+
     def test_dim_tuple_property_matches_dims(self, random_patch):
         """PatchSummary.dim_tuple should expose the normalized dims tuple."""
         summary = random_patch.summary

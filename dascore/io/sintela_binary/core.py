@@ -62,7 +62,7 @@ class SintelaBinaryV3(FiberIO):
                 "coords": coords,
                 "dims": coords.dims,
                 "shape": coords.shape,
-                "data_type": str(np.dtype(header["dtype"])),
+                "dtype": str(np.dtype(header["dtype"])),
             }
         ]
 

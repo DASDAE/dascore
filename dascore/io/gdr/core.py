@@ -71,6 +71,6 @@ class GDR_V1(FiberIO):  # noqa
                 "coords": cm,
                 "dims": cm.dims,
                 "shape": cm.shape,
-                "data_type": str(data.dtype),
+                "dtype": str(data.dtype),
             }
         ]

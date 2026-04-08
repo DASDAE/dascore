@@ -25,6 +25,7 @@ from dascore.io.dasdae.utils import (
     _encode_attr_value,
     _get_attrs,
     _get_contents_from_patch_groups_generic,
+    _get_coords,
     _get_file_version,
     _get_scan_payload_from_group,
     _save_array,
@@ -398,7 +399,7 @@ class TestDASDAEInternalHelpers:
             group.create_dataset("_coord_time", data=np.array([0, 1]))
             summary = _get_scan_payload_from_group(group)
         assert summary["attrs"].station == "A01"
-        assert summary["data_type"] == ""
+        assert summary["dtype"] == ""
 
     def test_get_attrs_unpacks_scalar_attr_arrays(self, monkeypatch):
         """Scalar arrays returned by attr decoding should be unpacked."""
@@ -451,6 +452,70 @@ class TestDASDAEInternalHelpers:
         with h5py.File(path, "w") as h5:
             out = _get_contents_from_patch_groups_generic(h5)
             assert out == []
+
+    def test_get_coords_range_like_node_skips_full_array_read(
+        self, tmp_path, monkeypatch
+    ):
+        """Range-like coord nodes should reconstruct without materializing arrays."""
+        path = tmp_path / "range_coord_fast_path.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch_0")
+            group.attrs["_dims"] = "time"
+            group.attrs["_cdims_time"] = "time"
+            node = group.create_dataset("_coord_time", data=np.array([10, 20, 30]))
+            node.attrs["step"] = 10
+            node.attrs["step_is_timedelta64"] = False
+
+            def _forbid_full_read(*_args, **_kwargs):
+                raise AssertionError("full coord reads should be skipped")
+
+            monkeypatch.setattr(dasdae_mod.utils, "_read_array", _forbid_full_read)
+            coords = _get_coords(group, ("time",), {})
+
+        coord = coords.get_coord("time")
+        assert coord.__class__.__name__ == "CoordRange"
+        assert len(coord) == 3
+        assert coord.start == 10
+        assert coord.step == 10
+
+    def test_get_coords_range_like_node_restores_timedelta_sample(
+        self, tmp_path, monkeypatch
+    ):
+        """Range fast path should restore timedelta step/sample metadata."""
+        path = tmp_path / "range_coord_timedelta_fast_path.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch_0")
+            group.attrs["_dims"] = "time"
+            group.attrs["_cdims_time"] = "time"
+            node = group.create_dataset(
+                "_coord_time", data=np.array([1, 3, 5], dtype="int64")
+            )
+            node.attrs["is_timedelta64"] = True
+            node.attrs["step"] = 2
+            node.attrs["step_is_timedelta64"] = True
+
+            def _forbid_full_read(*_args, **_kwargs):
+                raise AssertionError("full coord reads should be skipped")
+
+            monkeypatch.setattr(dasdae_mod.utils, "_read_array", _forbid_full_read)
+            coords = _get_coords(group, ("time",), {})
+
+        coord = coords.get_coord("time")
+        assert coord.start == np.timedelta64(1, "ns")
+        assert coord.step == np.timedelta64(2, "ns")
+
+    def test_read_array_sample_restores_string_scalar(self, tmp_path):
+        """Sample restoration should decode stored string scalars."""
+        path = tmp_path / "string_coord_sample_path.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch_0")
+            node = group.create_dataset(
+                "_coord_station", data=np.array([b"alpha", b"beta"], dtype="S5")
+            )
+            node.attrs["is_string"] = True
+            node.attrs["original_string_dtype"] = "<U8"
+            sample = dasdae_mod.utils._read_array_sample(node, 0)
+        assert sample == "alpha"
 
     @pytest.mark.parametrize(
         ("key", "value", "expected_type", "expected_value"),

@@ -149,14 +149,17 @@ def _normalize_dims(dims: Any) -> tuple[str, ...]:
 
 def _normalize_coord_summary_map(
     coords: Mapping[str, Any],
+    dims: tuple[str, ...] = (),
 ) -> dict[str, CoordSummary]:
     """Normalize a mapping of coord-like values to CoordSummary objects."""
     return {
         name: _to_coord_summary(
             summary,
-            dims=_normalize_dims(summary.get("dims", (name,)))
-            if isinstance(summary, Mapping)
-            else (),
+            dims=(
+                _normalize_dims(summary.get("dims", dims if name in dims else (name,)))
+                if isinstance(summary, Mapping)
+                else ()
+            ),
         )
         for name, summary in coords.items()
     }
@@ -249,10 +252,11 @@ class PatchSummary(DascoreBaseModel):
         # Structured inputs already separate non-coordinate attrs from coordinate
         # summaries, so we only need to normalize nested coord values and dims.
         if "attrs" in data or "coords" in data:
+            dims = _normalize_dims(data.get("dims", ()))
             return _build_patch_summary_payload(
                 attrs=PatchAttrs.from_dict(data.get("attrs")),
-                coords=_normalize_coord_summary_map(data.get("coords", {})),
-                dims=_normalize_dims(data.get("dims", ())),
+                coords=_normalize_coord_summary_map(data.get("coords", {}), dims=dims),
+                dims=dims,
                 shape=data.get("shape", ()),
                 dtype=data.get("dtype", ""),
                 source_path=data.get("source_path", data.get("path", "")),

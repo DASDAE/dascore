@@ -70,7 +70,7 @@ class DASVaderV1(FiberIO):
                 "coords": cm,
                 "dims": cm.dims,
                 "shape": cm.shape,
-                "data_type": dtype,
+                "dtype": dtype,
             }
         ]
 
