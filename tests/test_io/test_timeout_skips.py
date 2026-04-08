@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import signal as signal_mod
 from itertools import chain, repeat
 from urllib.error import URLError
 
@@ -17,6 +18,9 @@ class TestTimeoutSkipHelpers:
 
     def test_skip_on_timeout_skips(self):
         """Timeouts in fixture lifecycle helpers should skip the test."""
+        required_attrs = ("SIGALRM", "ITIMER_REAL", "setitimer")
+        if not all(hasattr(signal_mod, attr) for attr in required_attrs):
+            pytest.skip("skip_on_timeout skip behavior requires SIGALRM support")
         with pytest.raises(pytest.skip.Exception, match="fixture setup timed out"):
             with skip_on_timeout(1, "fixture setup"):
                 raise TimeoutError("fixture setup timed out")
