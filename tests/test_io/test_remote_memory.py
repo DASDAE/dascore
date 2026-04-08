@@ -29,6 +29,18 @@ def memory_prodml_path():
     return _copy_file_to_memory(source, dest)
 
 
+@pytest.fixture()
+def memory_fetch_copy():
+    """Copy one fetched registry file into the in-memory filesystem."""
+
+    def _copy(fetch_name: str, namespace: str) -> tuple[Path, UPath]:
+        source = Path(fetch(fetch_name))
+        dest = UPath(f"memory://dascore/{namespace}/{source.name}")
+        return source, _copy_file_to_memory(source, dest)
+
+    return _copy
+
+
 @pytest.fixture(autouse=True)
 def isolated_remote_cache(tmp_path):
     """Use one isolated remote cache per test to avoid cross-test cleanup cost."""
@@ -184,14 +196,14 @@ class TestMemoryRemoteMetadataAccess:
             ("sample_tdms_file_v4713.tdms", ("TDMS", "4713")),
             ("DASDMSShot00_20230328155653619.das", ("sentek", "5")),
             ("sintela_binary_v3_test_1.raw", ("Sintela_Binary", "3")),
+            ("sintela_protobuf_1.pb", ("Sintela_Protobuf", "1")),
         ],
     )
-    def test_get_format_avoids_local_cache(self, fetch_name, expected):
+    def test_get_format_avoids_local_cache(
+        self, fetch_name, expected, memory_fetch_copy
+    ):
         """Remote-first get_format paths should not materialize local cache files."""
-        source = Path(fetch(fetch_name))
-        path = _copy_file_to_memory(
-            source, UPath(f"memory://dascore/meta/{source.name}")
-        )
+        source, path = memory_fetch_copy(fetch_name, "meta")
         assert dc.get_format(path) == expected
         assert not list(get_remote_cache_path().rglob(source.name))
 
@@ -202,14 +214,12 @@ class TestMemoryRemoteMetadataAccess:
             ("sample_tdms_file_v4713.tdms", ("TDMS", "4713")),
             ("DASDMSShot00_20230328155653619.das", ("sentek", "5")),
             ("sintela_binary_v3_test_1.raw", ("Sintela_Binary", "3")),
+            ("sintela_protobuf_1.pb", ("Sintela_Protobuf", "1")),
         ],
     )
-    def test_scan_avoids_local_cache(self, fetch_name, expected):
+    def test_scan_avoids_local_cache(self, fetch_name, expected, memory_fetch_copy):
         """Remote-first scans should not materialize local cache files."""
-        source = Path(fetch(fetch_name))
-        path = _copy_file_to_memory(
-            source, UPath(f"memory://dascore/scan/{source.name}")
-        )
+        source, path = memory_fetch_copy(fetch_name, "scan")
         attrs = dc.scan(path)
         assert len(attrs) > 0
         assert attrs[0].source_format == expected[0]
