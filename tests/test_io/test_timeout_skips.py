@@ -35,5 +35,7 @@ class TestTimeoutSkipHelpers:
         monkeypatch.setattr(io_conftest.time, "sleep", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(io_conftest, "urlopen", _fake_urlopen)
 
-        with pytest.raises(TimeoutError, match="HTTP fixture path did not become ready"):
+        with pytest.raises(
+            TimeoutError, match="HTTP fixture path did not become ready"
+        ):
             io_conftest._wait_for_http_path(UPath("http://example.com/das/test.h5"))
