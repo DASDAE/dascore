@@ -24,7 +24,7 @@ import pytest
 
 from dascore.compat import UPath
 from dascore.utils.downloader import fetch
-from tests.test_io._common_io_test_utils import fail_on_timeout
+from tests.test_io._common_io_test_utils import skip_on_timeout
 
 
 class _SilentSimpleHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -209,7 +209,13 @@ def _wait_for_http_path(path: UPath, timeout: float = 5.0) -> None:
                 return
         except (URLError, OSError):
             time.sleep(0.1)
-    pytest.fail(f"HTTP fixture path did not become ready in time: {path}")
+    raise TimeoutError(f"HTTP fixture path did not become ready in time: {path}")
+
+
+def _wait_for_http_server(url: str, label: str, timeout: float = 10.0) -> None:
+    """Wait for one localhost HTTP fixture to accept requests."""
+    with skip_on_timeout(timeout, label):
+        _wait_for_http_path(UPath(url), timeout=timeout)
 
 
 @pytest.fixture(scope="session")
@@ -251,23 +257,15 @@ def http_das_path(http_test_data_root, ensure_http_fetch_file):
     try:
         host, port = server.server_address
         probe_url = f"http://{host}:{port}/das/{probe_path}"
-        with fail_on_timeout(10, "http_das_path readiness probe"):
-            for _ in range(50):
-                try:
-                    with urlopen(probe_url, timeout=5):
-                        break
-                except (URLError, OSError):
-                    time.sleep(0.1)
-            else:
-                pytest.fail("HTTP test server did not become ready in time.")
+        _wait_for_http_server(probe_url, "http_das_path readiness probe")
         yield UPath(f"http://{host}:{port}/das")
     finally:
-        with fail_on_timeout(10, "http_das_path teardown"):
+        with skip_on_timeout(10, "http_das_path teardown"):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
-        if thread.is_alive():
-            pytest.fail("HTTP test server thread did not exit cleanly.")
+            if thread.is_alive():
+                raise TimeoutError("HTTP test server thread did not exit cleanly.")
 
 
 @pytest.fixture(scope="session")
@@ -307,23 +305,17 @@ def http_regression_das_path(http_regression_data_root, ensure_http_regression_f
     try:
         host, port = server.server_address
         probe_url = f"http://{host}:{port}/das/{probe_path}"
-        with fail_on_timeout(10, "http_regression_das_path readiness probe"):
-            for _ in range(50):
-                try:
-                    with urlopen(probe_url, timeout=5):
-                        break
-                except (URLError, OSError):
-                    time.sleep(0.1)
-            else:
-                pytest.fail("HTTP test server did not become ready in time.")
+        _wait_for_http_server(probe_url, "http_regression_das_path readiness probe")
         yield UPath(f"http://{host}:{port}/das")
     finally:
-        with fail_on_timeout(10, "http_regression_das_path teardown"):
+        with skip_on_timeout(10, "http_regression_das_path teardown"):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
-        if thread.is_alive():
-            pytest.fail("HTTP regression server thread did not exit cleanly.")
+            if thread.is_alive():
+                raise TimeoutError(
+                    "HTTP regression server thread did not exit cleanly."
+                )
 
 
 @pytest.fixture(scope="session")
@@ -336,25 +328,17 @@ def http_range_das_path(http_test_data_root, ensure_http_fetch_file):
     try:
         host, port = server.server_address
         probe_url = f"http://{host}:{port}/das/example_dasdae_event_1.h5"
-        with fail_on_timeout(10, "http_range_das_path readiness probe"):
-            for _ in range(50):
-                try:
-                    with urlopen(probe_url, timeout=5):
-                        break
-                except (URLError, OSError):
-                    time.sleep(0.1)
-            else:
-                pytest.fail(
-                    "Range-capable HTTP test server did not become ready in time."
-                )
+        _wait_for_http_server(probe_url, "http_range_das_path readiness probe")
         yield UPath(f"http://{host}:{port}/das")
     finally:
-        with fail_on_timeout(10, "http_range_das_path teardown"):
+        with skip_on_timeout(10, "http_range_das_path teardown"):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
-        if thread.is_alive():
-            pytest.fail("Range-capable HTTP server thread did not exit cleanly.")
+            if thread.is_alive():
+                raise TimeoutError(
+                    "Range-capable HTTP server thread did not exit cleanly."
+                )
 
 
 @pytest.fixture(scope="session")
