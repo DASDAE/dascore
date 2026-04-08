@@ -83,15 +83,15 @@ class TestG1Scan:
     """Tests for determining g1 coords attributes."""
 
     def test_raw_scan_excludes_source_metadata(self, g1_path):
-        """Direct G1 scan should return patch-only metadata."""
+        """Direct G1 scan should return a structured payload without source metadata."""
         g1 = FebusG1CSV1()
         attrs = g1.scan(g1_path)
         assert len(attrs) == 1
         attr = attrs[0]
-        assert isinstance(attr, dc.PatchSummary)
-        assert not attr.source_path
-        assert not attr.source_format
-        assert not attr.source_version
+        assert isinstance(attr, dict)
+        assert "source_path" not in attr
+        assert "source_format" not in attr
+        assert "source_version" not in attr
 
     def test_public_scan_adds_source_metadata(self, g1_path):
         """Public scan should attach reload metadata for G1 files."""

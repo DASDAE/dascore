@@ -8,8 +8,7 @@ import numpy as np
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.core.summary import PatchSummary
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload
 from dascore.utils.models import UTF8Str
 from dascore.utils.paths import coerce_to_upath
 
@@ -42,7 +41,7 @@ class XMLBinaryV1(FiberIO):
         path = coerce_to_upath(resource)
         return path if path.is_dir() else path.parent
 
-    def scan(self, resource, timestamp=None, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource, timestamp=None, **kwargs) -> list[ScanPayload]:
         """Scan the contents of the directory."""
         path = self._get_base_path(resource)
         metadata = _read_xml_metadata(path / self._metadata_name)

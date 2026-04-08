@@ -8,10 +8,10 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections import defaultdict
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from functools import cache, cached_property, wraps
 from pathlib import Path
-from typing import Annotated, Literal, get_type_hints
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, get_type_hints
 
 import numpy as np
 import pandas as pd
@@ -29,7 +29,8 @@ from dascore.constants import (
     path_types,
     timeable_types,
 )
-from dascore.core.attrs import str_validator
+from dascore.core.attrs import PatchAttrs, str_validator
+from dascore.core.coordmanager import CoordManager
 from dascore.core.spool import DataFrameSpool
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import (
@@ -106,8 +107,72 @@ class PatchFileSummary(DascoreBaseModel):
         return self.model_dump()
 
 
+class ScanPayload(TypedDict):
+    """The structured payload contract returned by `FiberIO.scan()`."""
+
+    attrs: PatchAttrs
+    coords: CoordManager
+    dims: tuple[str, ...]
+    shape: tuple[int, ...]
+    dtype: str
+    source_patch_id: NotRequired[str]
+
+
+def _make_scan_payload(
+    *,
+    attrs: dc.PatchAttrs | Mapping[str, Any] | None,
+    coords,
+    dims=(),
+    shape=(),
+    dtype: str = "",
+    source_patch_id: str = "",
+) -> ScanPayload:
+    """Build one normalized FiberIO scan payload."""
+    return {
+        "attrs": PatchAttrs.from_dict(attrs),
+        "coords": coords,
+        "dims": tuple(dims),
+        "shape": tuple(shape),
+        "dtype": str(dtype),
+        "source_patch_id": ""
+        if source_patch_id in (None, "")
+        else str(source_patch_id),
+    }
+
+
+def _scan_payload_to_summary(
+    payload: ScanPayload | Mapping[str, Any],
+    *,
+    source_path: str | Path | UPath | None = None,
+    source_format: str | None = None,
+    source_version: str | None = None,
+    source_patch_id: str | None = None,
+) -> PatchSummary:
+    """Convert one structured FiberIO scan payload into a PatchSummary."""
+    if "coords" not in payload or "attrs" not in payload or "dtype" not in payload:
+        msg = (
+            "_scan_payload_to_summary requires a mapping with `coords`, "
+            "`attrs`, and `dtype`."
+        )
+        raise TypeError(msg)
+    coords = payload["coords"]
+    if hasattr(coords, "to_summary_dict"):
+        coords = coords.to_summary_dict()
+    return PatchSummary(
+        attrs=PatchAttrs.from_dict(payload["attrs"]),
+        coords=coords,
+        dims=tuple(payload.get("dims", ())),
+        shape=tuple(payload.get("shape", ())),
+        dtype=str(payload["dtype"]),
+        source_path=source_path,
+        source_format=source_format,
+        source_version=source_version,
+        source_patch_id=source_patch_id or payload.get("source_patch_id") or "",
+    )
+
+
 def _scan_result_to_summary(
-    attrs: PatchSummary,
+    patch_summary: PatchSummary | ScanPayload | Mapping[str, Any],
     *,
     source_path: str | Path | UPath | None = None,
     source_format: str | None = None,
@@ -115,38 +180,48 @@ def _scan_result_to_summary(
     source_patch_id: str | None = None,
 ) -> PatchSummary:
     """Convert scan metadata into a patch summary."""
-    if isinstance(attrs, PatchSummary) and all(
+    if isinstance(patch_summary, PatchSummary) and all(
         value in (None, "")
         for value in (source_path, source_format, source_version, source_patch_id)
     ):
-        return attrs
+        return patch_summary
     normalized_source_path = "" if source_path in (None, "") else source_path
     normalized_source_format = "" if source_format in (None, "") else source_format
     normalized_source_version = "" if source_version in (None, "") else source_version
     summary_source_patch_id = (
         "" if source_patch_id in (None, "") else str(source_patch_id)
     )
-    if isinstance(attrs, PatchSummary):
-        return PatchSummary(
-            attrs=attrs.attrs,
-            coords=dict(attrs.coords),
-            dims=tuple(attrs.dims),
-            shape=tuple(attrs.shape),
-            dtype=attrs.dtype,
-            source_path=normalized_source_path or attrs.source_path,
-            source_format=normalized_source_format or attrs.source_format,
-            source_version=normalized_source_version or attrs.source_version,
-            source_patch_id=summary_source_patch_id or attrs.source_patch_id,
+    if isinstance(patch_summary, Mapping):
+        return _scan_payload_to_summary(
+            patch_summary,
+            source_path=normalized_source_path,
+            source_format=normalized_source_format,
+            source_version=normalized_source_version,
+            source_patch_id=summary_source_patch_id,
         )
-    if isinstance(attrs, dc.PatchAttrs):
+    if isinstance(patch_summary, PatchSummary):
+        return PatchSummary(
+            attrs=patch_summary.attrs,
+            coords=dict(patch_summary.coords),
+            dims=tuple(patch_summary.dims),
+            shape=tuple(patch_summary.shape),
+            dtype=patch_summary.dtype,
+            source_path=normalized_source_path or patch_summary.source_path,
+            source_format=normalized_source_format or patch_summary.source_format,
+            source_version=normalized_source_version or patch_summary.source_version,
+            source_patch_id=summary_source_patch_id or patch_summary.source_patch_id,
+        )
+    if isinstance(patch_summary, dc.PatchAttrs):
         msg = (
             "DASCore no longer accepts PatchAttrs from FiberIO.scan(). "
-            "Return PatchSummary instead. See docs/contributing/new_format.qmd."
+            "Return a structured scan payload instead. "
+            "See docs/contributing/new_format.qmd."
         )
         raise ValueError(msg)
     msg = (
-        "_scan_result_to_summary only accepts PatchSummary. "
-        f"Got {type(attrs).__name__}."
+        "_scan_result_to_summary only accepts PatchSummary or structured "
+        "scan payload mappings. "
+        f"Got {type(patch_summary).__name__}."
     )
     raise TypeError(msg)
 
@@ -164,6 +239,18 @@ def _patch_to_summary(
         source_path=source_path or "",
         source_format=source_format,
         source_version=source_version,
+    )
+
+
+def _patch_to_scan_payload(patch: dc.Patch) -> ScanPayload:
+    """Convert a loaded patch into one structured FiberIO scan payload."""
+    return _make_scan_payload(
+        attrs=patch.attrs,
+        coords=patch.coords,
+        dims=patch.dims,
+        shape=patch.shape,
+        dtype=str(np.dtype(patch.data.dtype)),
+        source_patch_id=patch.attrs.get("_source_patch_id", ""),
     )
 
 
@@ -626,16 +713,16 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read method"
         raise NotImplementedError(msg)
 
-    def scan(self, resource, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource, **kwargs) -> list[ScanPayload]:
         """
-        Return patch metadata for the contents of a resource.
+        Return patch-local metadata and exact coords for a resource.
 
-        `scan()` should return `PatchSummary` objects and should not populate
-        source metadata such as `path`, `file_format`, or `file_version`.
-        DASCore attaches those fields in the higher-level `dc.scan(...)` and
-        `dc.scan_to_df(...)` pipeline.
+        Each item in the returned list should be a `ScanPayload` dict with
+        exact coords and attrs for one logical patch. Do not populate source
+        metadata such as `path`, `file_format`, or `file_version`; DASCore
+        attaches those in the higher-level `dc.scan(...)` pipeline.
 
-        Multi-patch formats should still set `source_patch_id` when needed so
+        Multi-patch formats should set `source_patch_id` when needed so
         DASCore can reload the same logical patch later.
         """
         # default scan method reads in the file and returns required attributes
@@ -646,7 +733,7 @@ class FiberIO:
         except NotImplementedError:
             msg = f"FiberIO: {self.name} has no scan or read method"
             raise NotImplementedError(msg)
-        return [_patch_to_summary(pa) for pa in spool]
+        return [_patch_to_scan_payload(pa) for pa in spool]
 
     def write(self, spool: SpoolType, resource, **kwargs):
         """Write the spool to a resource (eg path, stream, etc.)."""

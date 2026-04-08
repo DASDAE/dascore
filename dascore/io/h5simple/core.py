@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.core.summary import PatchSummary
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import _get_attrs_coords_and_data, _is_h5simple, _maybe_trim_data
@@ -44,18 +43,18 @@ class H5Simple(FiberIO):
         patch = dc.Patch(coords=new_cm, data=new_data[:], attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a h5simple file."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap, self)
         attrs.pop("file_format", None)
         attrs.pop("file_version", None)
         attrs = dc.PatchAttrs.from_dict(attrs)
         return [
-            PatchSummary.model_construct(
-                attrs=attrs,
-                coords=cm.to_summary_dict(),
-                dims=cm.dims,
-                shape=cm.shape,
-                dtype=str(data.dtype),
-            )
+            {
+                "attrs": attrs,
+                "coords": cm,
+                "dims": cm.dims,
+                "shape": cm.shape,
+                "dtype": str(data.dtype),
+            }
         ]

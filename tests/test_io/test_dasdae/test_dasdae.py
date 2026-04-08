@@ -25,11 +25,9 @@ from dascore.io.dasdae.utils import (
     _encode_attr_value,
     _get_attrs,
     _get_contents_from_patch_groups_generic,
-    _get_coord_node_metadata,
-    _get_coord_summary_from_node,
+    _get_coords,
     _get_file_version,
-    _get_patch_summary_from_group,
-    _read_array_sample,
+    _get_scan_payload_from_group,
     _save_array,
     _save_patch,
     _translate_legacy_attrs,
@@ -328,8 +326,8 @@ class TestLegacyFixtureCompatibility:
             ):
                 dc.read(fetch("UoU_lf_urban.hdf5"))
 
-    def test_scan_backfills_legacy_coord_step_when_node_step_missing(self, tmp_path):
-        """Legacy coord summaries should backfill step when node metadata lacks it."""
+    def test_scan_prefers_exact_coord_over_legacy_step_metadata(self, tmp_path):
+        """Exact coord scans should not invent steps from legacy summary metadata."""
         path = tmp_path / "legacy_coord_step.h5"
         payload = pickle.dumps(
             {
@@ -351,8 +349,8 @@ class TestLegacyFixtureCompatibility:
             group.attrs["_attrs_coords"] = np.bytes_(payload)
             group.attrs["_cdims_distance"] = "distance"
             group.create_dataset("_coord_distance", data=np.array([0.0, 1.0, 3.0]))
-            summary = _get_patch_summary_from_group(group)
-        assert summary.coords["distance"].step == 1.0
+            summary = _get_scan_payload_from_group(group)
+        assert summary["coords"]["distance"].step is None
 
     def test_decode_legacy_attr_bytes_falls_back_to_text(self):
         """Undecodable legacy bytes should fall back to plain text."""
@@ -397,9 +395,11 @@ class TestDASDAEInternalHelpers:
             group = h5.create_group("waveforms").create_group("patch_0")
             group.attrs["_dims"] = "time"
             group.attrs["_attrs_station"] = np.asarray("A01", dtype=h5py.string_dtype())
-            summary = _get_patch_summary_from_group(group)
-        assert summary.attrs.station == "A01"
-        assert summary.dtype == ""
+            group.attrs["_cdims_time"] = "time"
+            group.create_dataset("_coord_time", data=np.array([0, 1]))
+            summary = _get_scan_payload_from_group(group)
+        assert summary["attrs"].station == "A01"
+        assert summary["dtype"] == ""
 
     def test_get_attrs_unpacks_scalar_attr_arrays(self, monkeypatch):
         """Scalar arrays returned by attr decoding should be unpacked."""
@@ -423,13 +423,15 @@ class TestDASDAEInternalHelpers:
             group = h5.create_group("waveforms").create_group("patch_0")
             group.attrs["_dims"] = "time"
             group.attrs["_attrs_station"] = "unused"
+            group.attrs["_cdims_time"] = "time"
+            group.create_dataset("_coord_time", data=np.array([0, 1]))
             monkeypatch.setattr(
                 dasdae_mod.utils,
                 "_decode_attr_value",
                 lambda *_args, **_kwargs: np.asarray("A01"),
             )
-            summary = _get_patch_summary_from_group(group)
-        assert summary.attrs.station == "A01"
+            summary = _get_scan_payload_from_group(group)
+        assert summary["attrs"].station == "A01"
 
     def test_get_patch_summary_preserves_empty_dims_and_shape(self, tmp_path):
         """Empty stored dims should remain empty tuples in summaries."""
@@ -438,9 +440,9 @@ class TestDASDAEInternalHelpers:
             group = h5.create_group("waveforms").create_group("patch_0")
             group.attrs["_dims"] = ""
             group.create_dataset("data", data=np.arange(6).reshape(2, 3))
-            summary = _get_patch_summary_from_group(group)
-        assert summary.dims == ()
-        assert summary.shape == (2, 3)
+            summary = _get_scan_payload_from_group(group)
+        assert summary["dims"] == ()
+        assert summary["shape"] == (2, 3)
 
     def test_get_contents_from_patch_groups_returns_empty_without_waveforms(
         self, tmp_path
@@ -450,6 +452,70 @@ class TestDASDAEInternalHelpers:
         with h5py.File(path, "w") as h5:
             out = _get_contents_from_patch_groups_generic(h5)
             assert out == []
+
+    def test_get_coords_range_like_node_skips_full_array_read(
+        self, tmp_path, monkeypatch
+    ):
+        """Range-like coord nodes should reconstruct without materializing arrays."""
+        path = tmp_path / "range_coord_fast_path.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch_0")
+            group.attrs["_dims"] = "time"
+            group.attrs["_cdims_time"] = "time"
+            node = group.create_dataset("_coord_time", data=np.array([10, 20, 30]))
+            node.attrs["step"] = 10
+            node.attrs["step_is_timedelta64"] = False
+
+            def _forbid_full_read(*_args, **_kwargs):
+                raise AssertionError("full coord reads should be skipped")
+
+            monkeypatch.setattr(dasdae_mod.utils, "_read_array", _forbid_full_read)
+            coords = _get_coords(group, ("time",), {})
+
+        coord = coords.get_coord("time")
+        assert coord.__class__.__name__ == "CoordRange"
+        assert len(coord) == 3
+        assert coord.start == 10
+        assert coord.step == 10
+
+    def test_get_coords_range_like_node_restores_timedelta_sample(
+        self, tmp_path, monkeypatch
+    ):
+        """Range fast path should restore timedelta step/sample metadata."""
+        path = tmp_path / "range_coord_timedelta_fast_path.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch_0")
+            group.attrs["_dims"] = "time"
+            group.attrs["_cdims_time"] = "time"
+            node = group.create_dataset(
+                "_coord_time", data=np.array([1, 3, 5], dtype="int64")
+            )
+            node.attrs["is_timedelta64"] = True
+            node.attrs["step"] = 2
+            node.attrs["step_is_timedelta64"] = True
+
+            def _forbid_full_read(*_args, **_kwargs):
+                raise AssertionError("full coord reads should be skipped")
+
+            monkeypatch.setattr(dasdae_mod.utils, "_read_array", _forbid_full_read)
+            coords = _get_coords(group, ("time",), {})
+
+        coord = coords.get_coord("time")
+        assert coord.start == np.timedelta64(1, "ns")
+        assert coord.step == np.timedelta64(2, "ns")
+
+    def test_read_array_sample_restores_string_scalar(self, tmp_path):
+        """Sample restoration should decode stored string scalars."""
+        path = tmp_path / "string_coord_sample_path.h5"
+        with h5py.File(path, "w") as h5:
+            group = h5.create_group("waveforms").create_group("patch_0")
+            node = group.create_dataset(
+                "_coord_station", data=np.array([b"alpha", b"beta"], dtype="S5")
+            )
+            node.attrs["is_string"] = True
+            node.attrs["original_string_dtype"] = "<U8"
+            sample = dasdae_mod.utils._read_array_sample(node, 0)
+        assert sample == "alpha"
 
     @pytest.mark.parametrize(
         ("key", "value", "expected_type", "expected_value"),
@@ -507,198 +573,6 @@ class TestDASDAEInternalHelpers:
         with h5py.File(path, "w") as h5:
             h5.attrs["__DASDAE_version__"] = "9"
             assert _get_file_version(h5) == "9"
-
-
-class TestCoordSummaryHelpers:
-    """Tests for lightweight DASDAE coord summary reconstruction."""
-
-    class _ArrayNode:
-        """A minimal array node stub for exercising coord summary helpers."""
-
-        def __init__(self, values, *, dtype=None, attrs=None, forbid_full_read=False):
-            self._values = np.asarray(values, dtype=dtype)
-            self.shape = self._values.shape
-            self.dtype = self._values.dtype
-            self.forbid_full_read = forbid_full_read
-            self.attrs = attrs or {
-                "is_datetime64": False,
-                "is_timedelta64": False,
-            }
-
-        def __array__(self):
-            return self._values
-
-        def __len__(self):
-            return len(self._values)
-
-        def __iter__(self):
-            return iter(self._values)
-
-        def __getslice__(self, i, j):
-            return self._values[i:j]
-
-        def __getitem__(self, item):
-            if (
-                self.forbid_full_read
-                and isinstance(item, slice)
-                and item == slice(None)
-            ):
-                msg = "full reads are not allowed for this test node"
-                raise AssertionError(msg)
-            return self._values[item]
-
-    def test_read_array_sample_restores_timedelta64(self):
-        """Scalar coord samples should restore timedelta64 metadata."""
-        node = self._ArrayNode(
-            [1, 2, 3],
-            dtype="int64",
-            attrs={"is_datetime64": False, "is_timedelta64": True},
-        )
-
-        out = _read_array_sample(node, 1)
-
-        assert np.asarray(out).dtype == np.dtype("timedelta64[ns]")
-        assert out == np.timedelta64(2, "ns")
-
-    def test_read_array_sample_restores_datetime64(self):
-        """Scalar coord samples should restore datetime64 metadata."""
-        node = self._ArrayNode(
-            [1, 2, 3],
-            dtype="int64",
-            attrs={"is_datetime64": True, "is_timedelta64": False},
-        )
-
-        out = _read_array_sample(node, 1)
-
-        assert np.asarray(out).dtype == np.dtype("datetime64[ns]")
-        assert out == np.datetime64(2, "ns")
-
-    def test_read_array_sample_missing_attrs_is_backward_compatible(self):
-        """Old files without datetime/timedelta attrs should not error."""
-        node = self._ArrayNode([1, 2, 3], dtype="int64", attrs={})
-
-        out = _read_array_sample(node, 1)
-
-        assert out == 2
-
-    def test_get_coord_summary_from_empty_node(self):
-        """Empty coord nodes should fall back to NaN bounds and node dtype."""
-        node = self._ArrayNode([], dtype="float64", attrs={"units": "m"})
-
-        out = _get_coord_summary_from_node(node, ("distance",))
-
-        assert np.isnan(out.min)
-        assert np.isnan(out.max)
-        assert out.dtype == "float64"
-        assert dc.get_quantity(out.units) == dc.get_quantity("m")
-        assert out.dims == ("distance",)
-        assert out.len == 0
-
-    def test_get_coord_node_metadata_preserves_string_dtype(self):
-        """Stored string coord metadata should recover the original dtype."""
-        node = self._ArrayNode(
-            [b"alpha", b"beta"],
-            dtype="S5",
-            attrs={
-                "units": None,
-                "step": None,
-                "is_string": True,
-                "original_string_dtype": "<U8",
-                "is_datetime64": False,
-                "is_timedelta64": False,
-            },
-        )
-
-        out = _get_coord_node_metadata(node)
-
-        assert out["dtype"] == "<U8"
-        assert out["is_string"] is True
-        assert out["length"] == 2
-
-    def test_get_coord_node_metadata_normalizes_datetime_dtype(self):
-        """Datetime coord metadata should expose the datetime summary dtype."""
-        node = self._ArrayNode(
-            [1, 2],
-            dtype="int64",
-            attrs={
-                "units": "s",
-                "step": 1,
-                "step_is_timedelta64": True,
-                "is_string": False,
-                "is_datetime64": True,
-                "is_timedelta64": False,
-            },
-        )
-
-        out = _get_coord_node_metadata(node)
-
-        assert out["dtype"] == "datetime64"
-        assert out["step"] == np.timedelta64(1, "ns")
-
-    def test_get_coord_node_metadata_normalizes_timedelta_dtype(self):
-        """Timedelta coord metadata should expose the timedelta summary dtype."""
-        node = self._ArrayNode(
-            [1, 2],
-            dtype="int64",
-            attrs={
-                "units": "s",
-                "step": 1,
-                "step_is_timedelta64": True,
-                "is_string": False,
-                "is_datetime64": False,
-                "is_timedelta64": True,
-            },
-        )
-
-        out = _get_coord_node_metadata(node)
-
-        assert out["dtype"] == "timedelta64"
-        assert out["step"] == np.timedelta64(1, "ns")
-
-    def test_get_coord_summary_from_range_like_node_avoids_full_read(self):
-        """Range-like coords should use metadata plus endpoint samples only."""
-        node = self._ArrayNode(
-            [10, 20, 30, 40],
-            dtype="int64",
-            attrs={
-                "units": "m",
-                "step": 10,
-                "step_is_timedelta64": False,
-                "is_datetime64": False,
-                "is_timedelta64": False,
-                "is_string": False,
-            },
-            forbid_full_read=True,
-        )
-
-        out = _get_coord_summary_from_node(node, ("distance",))
-
-        assert out.min == 10
-        assert out.max == 40
-        assert out.step == 10
-        assert out.len == 4
-
-    def test_get_coord_summary_from_string_node_reads_data(self):
-        """String coord summaries should fall back to full data reconstruction."""
-        node = self._ArrayNode(
-            [b"gamma", b"alpha", b"beta"],
-            dtype="S5",
-            attrs={
-                "units": None,
-                "step": None,
-                "is_string": True,
-                "original_string_dtype": "<U8",
-                "is_datetime64": False,
-                "is_timedelta64": False,
-            },
-        )
-
-        out = _get_coord_summary_from_node(node, ("station",))
-
-        assert out.min == "alpha"
-        assert out.max == "gamma"
-        assert out.step is None
-        assert out.dtype == "<U8"
 
 
 class TestRoundTrips:

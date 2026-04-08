@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import SpoolType
-from dascore.core.summary import PatchSummary
-from dascore.io import FiberIO
+from dascore.io import FiberIO, ScanPayload
 from dascore.io.gdr.utils_das import (
     _get_attrs_coords_and_data,
     _get_version,
@@ -63,15 +62,15 @@ class GDR_V1(FiberIO):  # noqa
         patch = dc.Patch(coords=cm, data=data[:], attrs=attrs)
         return dc.spool([patch])
 
-    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: H5Reader, snap=True, **kwargs) -> list[ScanPayload]:
         """Get the attributes of a resource belong to this type."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         return [
-            PatchSummary.model_construct(
-                attrs=GDRPatchAttrs.from_dict(attrs),
-                coords=cm.to_summary_dict(),
-                dims=cm.dims,
-                shape=cm.shape,
-                dtype=str(data.dtype),
-            )
+            {
+                "attrs": GDRPatchAttrs.from_dict(attrs),
+                "coords": cm,
+                "dims": cm.dims,
+                "shape": cm.shape,
+                "dtype": str(data.dtype),
+            }
         ]

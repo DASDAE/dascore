@@ -1,7 +1,7 @@
-"""Summary models for metadata-only patch workflows.
+"""Summary models for patch workflows.
 
 See ['Coordinate Internals'](`docs/notes/coordinate_internals.qmd`) for the
-split between metadata-driven summaries and full-data coord reconstruction.
+relationship between full coords, exact coord summaries, and flattened index metadata.
 """
 
 from __future__ import annotations
@@ -15,21 +15,15 @@ from pydantic import ConfigDict, Field, model_validator
 import dascore as dc
 from dascore.constants import path_types
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coords import (
-    BaseCoord,
-    CoordSummary,
-    _get_coord_kind,
-    get_coord,
-)
-from dascore.utils.attrs import separate_coord_info
+from dascore.core.coords import BaseCoord, CoordSummary, get_coord
 from dascore.utils.models import DascoreBaseModel
 from dascore.utils.paths import coerce_to_upath, is_pathlike
 
 
 def _to_coord_summary(value: Any, dims: tuple[str, ...] = ()) -> CoordSummary:
     """Normalize a coordinate summary input."""
-    # Summary inputs can already be normalized, coord-like objects, or plain
-    # mappings produced by scan/index code.
+    # Summary inputs can already be normalized, coord-like objects, or exact
+    # structured summary mappings persisted from a full coord.
     if isinstance(value, CoordSummary):
         return value
     if hasattr(value, "to_summary"):
@@ -92,111 +86,6 @@ def _normalize_coord_summary_dtype(
     return ""
 
 
-def coord_summary_from_metadata(
-    *,
-    dims: tuple[str, ...] = (),
-    min=None,
-    max=None,
-    units=None,
-    step=None,
-    dtype=None,
-    length: int | None = None,
-    is_string: bool | None = None,
-) -> CoordSummary:
-    """Create a CoordSummary from normalized metadata only."""
-    kind = _get_coord_kind(
-        dtype=dtype,
-        step=step,
-        length=length,
-        is_string=is_string,
-    )
-    if kind == "empty":
-        empty = np.asarray([], dtype=np.dtype(dtype or np.float64))
-        return coord_summary_from_data(
-            empty,
-            dims=dims,
-            units=units,
-            step=step,
-            dtype=dtype,
-        )
-    if min is not None and max is not None:
-        return CoordSummary(
-            min=min,
-            max=max,
-            step=step,
-            dtype=dtype,
-            units=units,
-            dims=dims,
-            len=length,
-        )
-    msg = "coord_summary_from_metadata requires sufficient normalized metadata."
-    raise ValueError(msg)
-
-
-def _metadata_can_build_coord_summary(
-    *,
-    min=None,
-    max=None,
-    dtype=None,
-    length: int | None = None,
-    is_string: bool | None = None,
-) -> bool:
-    """Return True when the provided metadata is sufficient for a CoordSummary."""
-    kind = _get_coord_kind(
-        dtype=dtype,
-        length=length,
-        is_string=is_string,
-    )
-    if kind == "empty":
-        return True
-    return min is not None and max is not None
-
-
-def coord_summary_from_available(
-    *,
-    dims: tuple[str, ...] = (),
-    min=None,
-    max=None,
-    units=None,
-    step=None,
-    dtype=None,
-    length: int | None = None,
-    data: BaseCoord | np.ndarray | Any | None = None,
-    is_string: bool | None = None,
-) -> CoordSummary:
-    """Create a CoordSummary from metadata, falling back to full data if needed."""
-    if _metadata_can_build_coord_summary(
-        min=min,
-        max=max,
-        dtype=dtype,
-        length=length,
-        is_string=is_string,
-    ):
-        return coord_summary_from_metadata(
-            dims=dims,
-            min=min,
-            max=max,
-            units=units,
-            step=step,
-            dtype=dtype,
-            length=length,
-            is_string=is_string,
-        )
-    if data is None:
-        msg = (
-            "coord_summary_from_available requires data when metadata is "
-            "insufficient."
-        )
-        raise ValueError(msg)
-    return coord_summary_from_data(
-        data,
-        dims=dims,
-        units=units,
-        step=step,
-        dtype=dtype,
-    )
-
-
 def _coord_summary_to_dict(summary: CoordSummary) -> dict[str, Any]:
     """Return the normalized dict form of a coord summary."""
     return {field: getattr(summary, field) for field in type(summary).model_fields}
@@ -247,7 +136,10 @@ def _infer_dims_from_coords(coords: Mapping[str, CoordSummary]) -> tuple[str, ..
 
 
 def _normalize_dims(dims: Any) -> tuple[str, ...]:
-    """Normalize dims input from flat or structured summary payloads."""
+    """Normalize dims to a tuple.
+
+    Handle comma-separated strings from serialized data.
+    """
     if dims in (None, ""):
         return tuple()
     if isinstance(dims, str):
@@ -257,14 +149,17 @@ def _normalize_dims(dims: Any) -> tuple[str, ...]:
 
 def _normalize_coord_summary_map(
     coords: Mapping[str, Any],
+    dims: tuple[str, ...] = (),
 ) -> dict[str, CoordSummary]:
     """Normalize a mapping of coord-like values to CoordSummary objects."""
     return {
         name: _to_coord_summary(
             summary,
-            dims=_normalize_dims(summary.get("dims", (name,)))
-            if isinstance(summary, Mapping)
-            else (),
+            dims=(
+                _normalize_dims(summary.get("dims", dims if name in dims else (name,)))
+                if isinstance(summary, Mapping)
+                else ()
+            ),
         )
         for name, summary in coords.items()
     }
@@ -347,7 +242,7 @@ class PatchSummary(DascoreBaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_input(cls, data: Any) -> Any:
-        """Accept flat scan metadata or structured summary input."""
+        """Accept structured summary input."""
         if isinstance(data, dc.Patch):
             return cls.from_patch(data).dump_structured()
         # Let pydantic raise the normal validation error for unsupported inputs.
@@ -357,10 +252,11 @@ class PatchSummary(DascoreBaseModel):
         # Structured inputs already separate non-coordinate attrs from coordinate
         # summaries, so we only need to normalize nested coord values and dims.
         if "attrs" in data or "coords" in data:
+            dims = _normalize_dims(data.get("dims", ()))
             return _build_patch_summary_payload(
                 attrs=PatchAttrs.from_dict(data.get("attrs")),
-                coords=_normalize_coord_summary_map(data.get("coords", {})),
-                dims=_normalize_dims(data.get("dims", ())),
+                coords=_normalize_coord_summary_map(data.get("coords", {}), dims=dims),
+                dims=dims,
                 shape=data.get("shape", ()),
                 dtype=data.get("dtype", ""),
                 source_path=data.get("source_path", data.get("path", "")),
@@ -368,25 +264,11 @@ class PatchSummary(DascoreBaseModel):
                 source_version=data.get("source_version", data.get("file_version", "")),
                 source_patch_id=data.get("source_patch_id", ""),
             )
-        # Flat inputs still use scan/index-style keys such as time_min/time_max.
-        # Split those into coordinate summaries plus pure attrs before building
-        # the canonical structured payload.
-        dims = _normalize_dims(data.get("dims", ""))
-        coord_info, attr_info = separate_coord_info(
-            {k: v for k, v in data.items() if k != "dims"},
-            dims=dims or None,
+        msg = (
+            "PatchSummary requires structured `attrs`/`coords` input. "
+            "Flat coord summary fields are no longer supported."
         )
-        return _build_patch_summary_payload(
-            attrs=PatchAttrs.from_dict(attr_info),
-            coords=_normalize_coord_summary_map(coord_info),
-            dims=dims,
-            shape=data.get("shape", ()),
-            dtype=data.get("dtype", ""),
-            source_path=data.get("source_path", data.get("path", "")),
-            source_format=data.get("source_format", data.get("file_format", "")),
-            source_version=data.get("source_version", data.get("file_version", "")),
-            source_patch_id=data.get("source_patch_id", ""),
-        )
+        raise TypeError(msg)
 
     @classmethod
     def from_patch(cls, patch: dc.Patch) -> PatchSummary:

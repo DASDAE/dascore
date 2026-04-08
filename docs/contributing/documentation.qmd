@@ -18,9 +18,9 @@ Please make an effort to accurately annotate public functions/classes/methods.
 
 When documenting IO code, make sure the docstring reflects the actual contract
 boundary. In particular, `FiberIO.scan()` implementations should describe
-patch-only metadata and should not claim responsibility for `path`,
-`file_format`, or `file_version`; those are attached by DASCore's higher-level
-scan pipeline.
+structured payloads with patch-local attrs and exact coords, and should not claim
+responsibility for `path`, `file_format`, or `file_version`; those are
+attached by DASCore's higher-level scan pipeline.
 
 Here is an example:
 

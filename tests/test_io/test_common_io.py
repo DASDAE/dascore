@@ -380,10 +380,10 @@ class TestScan:
         with skip_missing():
             summary_list = io.scan(path)
         for summary in summary_list:
-            assert not summary.source_path
-            assert not summary.source_format
-            assert not summary.source_version
-            attr_dump = summary.attrs.model_dump()
+            assert "source_path" not in summary
+            assert "source_format" not in summary
+            assert "source_version" not in summary
+            attr_dump = summary["attrs"].model_dump()
             assert "path" not in attr_dump
             assert "file_format" not in attr_dump
             assert "file_version" not in attr_dump

@@ -46,7 +46,7 @@ Contents of `dascore/io/jingle/core.py`:
 Core module for jingle file format support.
 """
 import dascore.exceptions
-from dascore.io.core import FiberIO
+from dascore.io import FiberIO, ScanPayload
 
 
 class JingleV1(FiberIO):
@@ -80,20 +80,32 @@ class JingleV1(FiberIO):
         dascore.exceptions.UnknownFiberFormat exception.
         """
 
-    def scan(self, path, **kwargs):
+    def scan(self, path, **kwargs) -> list[ScanPayload]:
         """
         Used to get metadata about a file without reading the whole file.
 
-        This should return a list of
-        [`PatchSummary`](`dascore.PatchSummary`) objects. DASCore will also
-        normalize a loaded `Patch` to a summary if needed, but new formats
-        should return [`PatchSummary`](`dascore.PatchSummary`) instances directly. Returning
+        This should return a list of structured scan payloads. Each payload
+        should contain exact coord objects plus patch metadata, for example:
+
+        {
+            "attrs": patch_attrs,
+            "coords": coord_manager,
+            "dims": coord_manager.dims,
+            "shape": coord_manager.shape,
+            "data_type": "...",
+            "source_patch_id": "...",  # when needed
+        }
+
+        DASCore converts these payloads into
+        [`PatchSummary`](`dascore.PatchSummary`) objects in the higher-level
+        `dc.scan(...)` / `dc.scan_to_df(...)` pipeline. Returning
         [`PatchAttrs`](`dascore.PatchAttrs`) from `scan()` is no longer
         supported.
 
-        `scan()` should only return patch metadata. Do not populate source
-        metadata such as `path`, `file_format`, or `file_version` inside the
-        `FiberIO` implementation; DASCore adds those fields in the higher-level
+        `scan()` should return patch-local attrs plus exact coords for each
+        logical patch. Do not populate source metadata such as `path`,
+        `file_format`, or `file_version` inside the `FiberIO`
+        implementation; DASCore adds those fields in the higher-level
         `dc.scan(...)` / `dc.scan_to_df(...)` pipeline.
         """
 
@@ -111,19 +123,22 @@ Note that each of these methods should have `**kwargs` at the end. This allows c
 :::
 
 :::{.callout-warning}
-It is very important that the `scan` method returns *exactly* the same patch information as reading the patch would, otherwise the lazy merge planning done by spool can be wrong!
+It is very important that `scan()` returns attrs, coords, dims, shape, dtype,
+and `source_patch_id` values that match what `read()` would produce for the
+same logical patch. Otherwise the lazy planning done by `spool(...)` can be
+wrong.
 :::
 
 ## `source_patch_id`
 
-If a single file can produce more than one patch, your format should usually provide a `source_patch_id` for each patch summary returned by `scan`.
+If a single file can produce more than one patch, your format should usually provide a `source_patch_id` for each scan payload returned by `scan`.
 
 `source_patch_id` is the per-patch identifier DASCore uses to get back to the same logical patch later. This matters most for `dc.spool(...)`, where DASCore may first `scan()` a file, store patch metadata, and only call `read()` for one patch much later.
 
 The rule is simple:
 
-- `scan()` should emit a stable `source_patch_id` for each patch.
-- For FiberIO implementation, prefer setting `attrs["_source_patch_id"]` on both scan summaries and loaded patches; DASCore will normalize that onto `PatchSummary.source_patch_id` when summaries are built.
+- `scan()` should emit a stable `source_patch_id` for each patch payload.
+- For FiberIO implementation, prefer setting `attrs["_source_patch_id"]` on both scan payload attrs and loaded patches; DASCore will normalize that onto `PatchSummary.source_patch_id` when summaries are built.
 - `read(..., source_patch_id=...)` should use that value to return the matching patch, or patches if given multiple ids.
 - `source_patch_id` remains the public summary/reload field, while `_source_patch_id` remains the private attr-level field FiberIO authors should set directly.
 - If both are provided when constructing a `PatchSummary`, `source_patch_id` wins and is copied back onto `attrs["_source_patch_id"]`.
@@ -131,6 +146,19 @@ The rule is simple:
 - `path`, `file_format`, and `file_version` are owned by the calling DASCore scan layer, not by `FiberIO.scan()`.
 
 For some formats, a numeric patch index is enough if patch ordering is stable. For others, a native identifier such as a group name, node name, or source/zone tuple is better. If your format only ever produces one patch per file, you usually do not need to set `source_patch_id`.
+
+## Building Scan Payloads
+
+In implementation code, the simplest pattern is usually:
+
+1. Build normal `PatchAttrs` for one logical patch.
+2. Build the exact `CoordManager` you would use for `read()`.
+3. Return one payload with those values plus `dims`, `shape`, and `data_type`.
+
+If you already have a fully loaded `Patch`, DASCore's default `FiberIO.scan()`
+implementation will normalize it into the same structured payload shape. Format
+implementations should still provide a custom `scan()` whenever they can avoid
+loading the full data array.
 
 
 ## Support for Streams/Buffers

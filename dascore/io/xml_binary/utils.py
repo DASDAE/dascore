@@ -14,6 +14,8 @@ from pydantic.alias_generators import to_pascal
 import dascore as dc
 from dascore.compat import UPath
 from dascore.core import get_coord, get_coord_manager
+from dascore.io import ScanPayload
+from dascore.io.core import _make_scan_payload
 from dascore.utils.misc import iterate
 from dascore.utils.models import BaseModel, DateTime64
 from dascore.utils.pd import adjust_segments, filter_df
@@ -232,7 +234,7 @@ def _paths_to_scan_patches(
     attr_cls=dc.PatchAttrs,
     extra_attrs=None,
     timestamp=None,
-):
+) -> list[ScanPayload]:
     """Convert paths to patch summaries for scan/index workflows."""
     extra_attrs = {} if not extra_attrs else extra_attrs
     paths = list(iterate(paths))
@@ -255,9 +257,9 @@ def _paths_to_scan_patches(
         )
         attrs = attr_cls(**base_attrs, **extra_attrs)
         out.append(
-            dc.PatchSummary.model_construct(
+            _make_scan_payload(
                 attrs=attrs,
-                coords=coords.to_summary_dict(),
+                coords=coords,
                 dims=coords.dims,
                 shape=coords.shape,
                 dtype=metadata.data_type,

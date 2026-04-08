@@ -20,11 +20,8 @@ from dascore.core import Patch
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.core.summary import (
     PatchSummary,
-    _metadata_can_build_coord_summary,
     _normalize_coord_summary_dtype,
-    coord_summary_from_available,
     coord_summary_from_data,
-    coord_summary_from_metadata,
 )
 from dascore.exceptions import CoordError, ParameterError, PatchAttributeError
 from dascore.io.core import (
@@ -524,6 +521,17 @@ class TestPatchSummary:
         assert summary.dims == ("time",)
         assert summary.get_coord_summary("time").dims == ("time",)
 
+    def test_summary_model_validate_uses_outer_dims_for_coord_fallback(self):
+        """Structured summary inputs should fall back to outer patch dims."""
+        payload = {
+            "attrs": {},
+            "coords": {"time": {"min": 1, "max": 2, "dtype": "int64"}},
+            "dims": "time",
+        }
+        summary = dc.PatchSummary.model_validate(payload)
+        assert summary.dims == ("time",)
+        assert summary.get_coord_summary("time").dims == ("time",)
+
     def test_dim_tuple_property_matches_dims(self, random_patch):
         """PatchSummary.dim_tuple should expose the normalized dims tuple."""
         summary = random_patch.summary
@@ -536,92 +544,52 @@ class TestPatchSummary:
         assert out.dims == ("distance",)
         assert out.min == coord.min()
         assert out.max == coord.max()
+        assert out.fingerprint == coord.fingerprint()
 
-    def test_coord_summary_from_metadata_range_metadata(self):
-        """Range-like metadata should build summaries without coord materialization."""
-        out = coord_summary_from_metadata(
-            dims=("distance",),
-            min=0,
-            max=6,
-            step=2,
-            dtype="int64",
-            units="m",
-            length=4,
-        )
-        assert out.min == 0
-        assert out.max == 6
-        assert out.step == 2
-        assert out.len == 4
-
-    def test_coord_summary_from_metadata_empty(self):
-        """Empty metadata should preserve dtype and explicit zero length."""
-        out = coord_summary_from_metadata(
-            dims=("distance",),
-            dtype="float64",
-            length=0,
-            units="m",
-        )
-        assert np.isnan(out.min)
-        assert np.isnan(out.max)
-        assert out.dtype == "float64"
-        assert out.len == 0
-
-    def test_coord_summary_from_metadata_lossy_bounds(self):
-        """Explicit min/max metadata should support lossy non-range summaries."""
-        out = coord_summary_from_metadata(
-            dims=("station",),
-            min="alpha",
-            max="gamma",
-            dtype="U8",
-            length=4,
-            is_string=True,
-        )
-        assert out.min == "alpha"
-        assert out.max == "gamma"
-        assert out.step is None
-        assert out.len == 4
-
-    def test_coord_summary_from_metadata_raises_without_sufficient_fields(self):
-        """Insufficient metadata should fail before any data fallback is attempted."""
-        with pytest.raises(ValueError, match="sufficient normalized metadata"):
-            coord_summary_from_metadata(
-                dims=("distance",),
-                dtype="float64",
-                length=4,
-            )
-
-    def test_coord_summary_from_available_falls_back_to_data(self):
-        """Fallback helper should build summaries from data when metadata is thin."""
-        out = coord_summary_from_available(
+    def test_coord_summary_from_data_uses_full_data(self):
+        """coord_summary_from_data should build summaries from full coord data."""
+        out = coord_summary_from_data(
+            np.array([1, 4, 2, 3]),
             dims=("distance",),
             dtype="int64",
-            length=4,
-            data=np.array([1, 4, 2, 3]),
         )
         assert out.min == 1
         assert out.max == 4
         assert out.step is None
+        assert out.fingerprint is not None
 
-    def test_coord_summary_from_available_raises_without_data(self):
-        """Fallback helper should still fail if neither metadata nor data suffice."""
-        with pytest.raises(
-            ValueError, match="requires data when metadata is insufficient"
-        ):
-            coord_summary_from_available(
-                dims=("distance",),
-                dtype="float64",
-                length=4,
-            )
+    def test_coord_summary_from_data_empty_sets_len(self):
+        """Empty coord summaries should preserve explicit zero length."""
+        out = coord_summary_from_data(
+            np.array([], dtype="float64"),
+            dims=("distance",),
+            units="m",
+        )
+        assert out.len == 0
+        assert out.dims == ("distance",)
+        assert dc.get_quantity(out.units) == dc.get_quantity("m")
 
-    def test_metadata_can_build_coord_summary(self):
-        """Metadata sufficiency checks should mirror helper entry conditions."""
-        assert _metadata_can_build_coord_summary(dtype="float64", length=0)
-        assert _metadata_can_build_coord_summary(min=1, max=2, dtype="int64", length=4)
-        assert not _metadata_can_build_coord_summary(dtype="float64", length=4)
+    def test_flat_dump_includes_coord_fingerprint(self, random_patch):
+        """Flattened summaries should preserve coord fingerprints."""
+        out = random_patch.summary.flat_dump()
+        assert out["time_fingerprint"] == random_patch.get_coord("time").fingerprint()
 
     def test_normalize_coord_summary_dtype_empty_fallback(self):
         """Missing dtype metadata should normalize to an empty summary dtype."""
         assert _normalize_coord_summary_dtype() == ""
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            ({"is_datetime": True}, "datetime64"),
+            ({"is_timedelta": True}, "timedelta64"),
+            ({"is_string": True, "original_dtype": "<U8"}, "<U8"),
+            ({"dtype": "int64"}, "int64"),
+        ],
+    )
+    def test_normalize_coord_summary_dtype_branches(self, kwargs, expected):
+        """Coord summary dtype normalization should cover metadata branches."""
+        assert _normalize_coord_summary_dtype(**kwargs) == expected
 
     def test_patch_summary_is_cached(self, random_patch):
         """Patch.summary should reuse the same summary instance."""
@@ -734,32 +702,33 @@ class TestPatchSummary:
         assert out.attrs == dc.PatchAttrs()
         assert out.dims == ("time",)
 
-    def test_flat_summary_accepts_none_dims(self):
-        """Flat summary inputs should accept missing dims values."""
-        out = dc.PatchSummary.model_validate(
-            {"time_min": 1.0, "time_max": 2.0, "dims": None}
-        )
-        assert out.dims == ("time",)
+    def test_flat_summary_input_raises(self):
+        """Flat summary inputs should no longer reconstruct PatchSummary."""
+        msg = "structured `attrs`/`coords` input"
+        with pytest.raises(TypeError, match=msg):
+            dc.PatchSummary.model_validate(
+                {"time_min": 1.0, "time_max": 2.0, "dims": None}
+            )
 
-    def test_flat_summary_accepts_tuple_dims(self):
-        """Flat summary inputs should accept tuple dims values."""
-        out = dc.PatchSummary.model_validate(
-            {"time_min": 1.0, "time_max": 2.0, "dims": ("time",)}
-        )
-        assert out.dims == ("time",)
+    def test_flat_summary_input_with_tuple_dims_raises(self):
+        """Tuple dims should not make flat summary reconstruction valid."""
+        msg = "structured `attrs`/`coords` input"
+        with pytest.raises(TypeError, match=msg):
+            dc.PatchSummary.model_validate(
+                {"time_min": 1.0, "time_max": 2.0, "dims": ("time",)}
+            )
 
-    def test_flat_summary_preserves_explicit_coord_dims(self):
-        """Flat summary normalization should preserve dims on coord mappings."""
-        out = dc.PatchSummary.model_validate(
-            {
-                "dims": ("time", "distance"),
-                "time": {"min": 1.0, "max": 2.0, "step": 1.0, "dims": ("time",)},
-                "distance": {"min": 0.0, "max": 10.0, "step": 5.0},
-            }
-        )
-        assert out.coords["time"].dims == ("time",)
-        assert out.coords["distance"].dims == ("distance",)
-        assert out.dims == ("time", "distance")
+    def test_top_level_coord_mapping_without_coords_key_raises(self):
+        """Implicit coord summary mappings should no longer be accepted."""
+        msg = "structured `attrs`/`coords` input"
+        with pytest.raises(TypeError, match=msg):
+            dc.PatchSummary.model_validate(
+                {
+                    "dims": ("time", "distance"),
+                    "time": {"min": 1.0, "max": 2.0, "step": 1.0, "dims": ("time",)},
+                    "distance": {"min": 0.0, "max": 10.0, "step": 5.0},
+                }
+            )
 
 
 class TestDisplay:

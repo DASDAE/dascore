@@ -622,7 +622,7 @@ def patch_array_function(self, func, types, args, kwargs):
     return apply_array_func(func, *args, **kwargs)
 
 
-def hash_numpy_array(arr: np.ndarray) -> str:
+def hash_array(arr: np.ndarray) -> str:
     """
     Return a stable hash for a NumPy array.
 
@@ -644,18 +644,18 @@ def hash_numpy_array(arr: np.ndarray) -> str:
     Examples
     --------
     >>> import numpy as np
-    >>> from dascore.utils.array import hash_numpy_array
+    >>> from dascore.utils.array import hash_array
     >>> a = np.array([1.0, 2.0, 3.0])
-    >>> h = hash_numpy_array(a)
+    >>> h = hash_array(a)
     >>> assert isinstance(h, str) and len(h) == 32
     >>> # Same data always produces the same hash
-    >>> assert hash_numpy_array(a) == hash_numpy_array(a.copy())
+    >>> assert hash_array(a) == hash_array(a.copy())
     >>> # Different dtype produces a different hash
-    >>> assert hash_numpy_array(a) != hash_numpy_array(a.astype(np.float32))
+    >>> assert hash_array(a) != hash_array(a.astype(np.float32))
     """
     arr = np.asarray(arr)
     if arr.dtype == object:
-        msg = "hash_numpy_array does not support object arrays."
+        msg = "hash_array does not support object arrays."
         raise ParameterError(msg)
 
     h = hashlib.blake2b(digest_size=16)
@@ -665,11 +665,12 @@ def hash_numpy_array(arr: np.ndarray) -> str:
     h.update(arr.dtype.str.encode("ascii"))
     h.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
 
-    if arr.flags.c_contiguous:
+    if arr.flags.c_contiguous and arr.dtype.kind not in {"M", "m"}:
         # Zero-copy fast path
         h.update(memoryview(arr).cast("B"))
     else:
-        # Canonicalize layout; this copies once
+        # Canonicalize layout; this also handles datetime/timedelta dtypes,
+        # which do not expose a Python buffer directly.
         h.update(np.ascontiguousarray(arr).view(np.uint8))
 
     return h.hexdigest()
