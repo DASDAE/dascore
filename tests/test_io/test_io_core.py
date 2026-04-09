@@ -372,6 +372,44 @@ class TestFormatManager:
         format_manager._eps = pd.Series(dtype=object)
         format_manager.load_plugins()
 
+    def test_load_entry_point_warns_on_broken_plugin(self, format_manager):
+        """Broken plugin loaders should warn and return None."""
+
+        def loader():
+            raise ImportError("boom")
+
+        with pytest.warns(UserWarning, match="Failed to load FiberIO plugin 'broken'"):
+            out = format_manager._load_entry_point("broken", loader)
+
+        assert out is None
+
+    def test_load_entry_point_raises_on_runtime_plugin_error(self, format_manager):
+        """Runtime plugin construction failures should not be silently skipped."""
+
+        def loader():
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            format_manager._load_entry_point("broken", loader)
+
+    def test_prioritized_list_skips_unloaded_formats(self, format_manager):
+        """Formats with no registered versions should not break prioritization."""
+        manager = type(format_manager)("dascore.fiber_io")
+        manager.__dict__.pop("known_formats", None)
+        manager._eps = pd.Series(
+            {
+                "BROKEN__V1": lambda: (_ for _ in ()).throw(ImportError("boom")),
+                "GOOD__V1": lambda: _ReadOnlySummaryFormatter,
+            }
+        )
+
+        prioritized = manager._get_prioritized_list()
+
+        registered = manager._format_version[_ReadOnlySummaryFormatter.name.upper()]
+        assert "1" in registered
+        assert isinstance(registered["1"], _ReadOnlySummaryFormatter)
+        assert isinstance(prioritized, tuple)
+
 
 class TestFormatter:
     """Tests for adding file supports through Formatter."""
