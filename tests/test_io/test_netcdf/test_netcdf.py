@@ -17,6 +17,8 @@ from dascore.io.netcdf.utils import (
     is_netcdf4_file,
 )
 
+pytest.importorskip("xarray")
+
 
 def _get_xarray_netcdf_engine() -> str | None:
     """Return an xarray engine that can open NetCDF-4 files, if available."""
@@ -363,6 +365,22 @@ class TestNetCDFCoreHelpers:
             return None
 
         monkeypatch.setattr(netcdf_core, "optional_import", _optional_import)
+        monkeypatch.setattr(
+            netcdf_core,
+            "xarray_to_patch",
+            lambda data_array: dc.Patch(
+                data=data_array.data,
+                coords=dc.get_coord_manager(
+                    coords={
+                        name: (coord.dims, coord.values)
+                        for name, coord in data_array.coords.items()
+                    },
+                    dims=data_array.dims,
+                ),
+                dims=data_array.dims,
+                attrs=dict(data_array.attrs),
+            ),
+        )
         monkeypatch.setattr(dc.Patch, "select", lambda self, **kwargs: empty_patch)
 
         spool = formatter.read(minimal_cf_netcdf_path, time=(0, 1))
