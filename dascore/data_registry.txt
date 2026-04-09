@@ -39,3 +39,4 @@ das_vader_1.jld2 cbeace6bfcc17711796886ba072ae68bb792903c38a052d592ed968885933d8
 febus_2.h5 c118960a94e37fbff0eb5c33856d34cdfe81609902c4feaedab9949498d31c23 https://github.com/dasdae/test_data/raw/master/das/febus_2.h5
 febg1_C1_2023-05-10T12.25.03+0000.bsl e1a8ff72f3ec1805129267df916f41419bf7fa3a4993602e2b85e721cad922ae https://github.com/dasdae/test_data/raw/master/dss/febg1_C1_2023-05-10T12.25.03+0000.bsl
 febg1_C1_2023-05-10T12.27.33+0000.bsl 233df0c184796944442ae19beddcf962aba1c9fab337fd1c74971f0c4d513a36 https://github.com/dasdae/test_data/raw/master/dss/febg1_C1_2023-05-10T12.27.33+0000.bsl
+sintela_protobuf_1.pb cafa038c033cb5e4cf4aa90bab203eb1e10dc05a6052c0576dc80d6a5b3b42dc https://github.com/dasdae/test_data/raw/master/das/sintela_protobuf_1.pb

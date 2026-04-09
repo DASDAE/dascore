@@ -69,6 +69,7 @@ extras = [
     "numba",
     "segyio",
     "bottleneck",
+    "protobuf",
 ]
 
 docs = [
@@ -82,10 +83,10 @@ test = [
     "coverage>=7.4,<8",
     "pytest-cov>=4",
     "pre-commit",
+    "protobuf",
     "pytest",
     "pytest-timeout",
     "pytest-codeblocks",
-    "pytest-cov",
     "s3fs",
     "starlette",
     "twine",
@@ -144,6 +145,7 @@ SEGY__V2_0 = "dascore.io.segy.core:SegyV2_0"
 SEGY__V2_1 = "dascore.io.segy.core:SegyV2_1"
 SILIXA_H5__V1 = "dascore.io.silixah5:SilixaH5V1"
 SINTELA_BINARY__V3 = "dascore.io.sintela_binary.core:SintelaBinaryV3"
+SINTELA_PROTOBUF__V1 = "dascore.io.sintela_protobuf.core:SintelaProtobufV1"
 RSF__V1 = "dascore.io.rsf.core:RSFV1"
 WAV = "dascore.io.wav.core:WavIO"
 XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"

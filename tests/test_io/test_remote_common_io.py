@@ -17,8 +17,13 @@ from tests.test_io.test_common_io import COMMON_IO_READ_TESTS
 
 pytestmark = [pytest.mark.network, pytest.mark.timeout(30)]
 
-REMOTE_GET_FORMAT_CASES = get_flat_io_test(COMMON_IO_READ_TESTS)
-REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(COMMON_IO_READ_TESTS)
+REMOTE_COMMON_IO_READ_TESTS = {
+    io: fetch_names
+    for io, fetch_names in COMMON_IO_READ_TESTS.items()
+    if io.name != "Sintela_Protobuf"
+}
+REMOTE_GET_FORMAT_CASES = get_flat_io_test(REMOTE_COMMON_IO_READ_TESTS)
+REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(REMOTE_COMMON_IO_READ_TESTS)
 
 
 @pytest.fixture(autouse=True)
