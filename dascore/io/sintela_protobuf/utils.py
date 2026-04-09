@@ -5,6 +5,7 @@ Utilities for reading Sintela protobuf MTLV recordings.
 from __future__ import annotations
 
 import struct
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cache
 from typing import Any
@@ -141,10 +142,9 @@ def _timestamp_to_dt64(timestamp) -> np.datetime64 | None:
     return np.datetime64(seconds, "s") + np.timedelta64(nanos, "ns")
 
 
-def _iter_envelope_records(resource, *, strict: bool) -> list[EnvelopeRecord]:
+def _iter_envelope_records(resource, *, strict: bool) -> Iterator[EnvelopeRecord]:
     """Read all MTLV envelope records from a binary stream."""
     resource.seek(0)
-    out: list[EnvelopeRecord] = []
     while True:
         magic = resource.read(4)
         if not magic:
@@ -152,25 +152,24 @@ def _iter_envelope_records(resource, *, strict: bool) -> list[EnvelopeRecord]:
         if len(magic) < 4:
             if strict:
                 raise InvalidFiberFileError("Truncated Sintela protobuf magic header.")
-            return []
+            return
         if struct.unpack("<I", magic)[0] != PBUF_MAGIC:
             if strict:
                 raise InvalidFiberFileError("Invalid Sintela protobuf magic header.")
-            return []
+            return
         header = resource.read(8)
         if len(header) < 8:
             if strict:
                 raise InvalidFiberFileError("Truncated Sintela protobuf record header.")
-            return []
+            return
         tag = header[:4].rstrip(b"\x00").decode("utf-8", errors="ignore")
         size = struct.unpack("<I", header[4:8])[0]
         payload = resource.read(size)
         if len(payload) < size:
             if strict:
                 raise InvalidFiberFileError("Truncated Sintela protobuf payload.")
-            return []
-        out.append(EnvelopeRecord(tag=tag, payload=payload))
-    return out
+            return
+        yield EnvelopeRecord(tag=tag, payload=payload)
 
 
 def get_supported_family_tag(resource) -> str | None:
@@ -554,9 +553,8 @@ def _parse_meta(payload: bytes) -> ParsedMeta:
         instrument_model=str(getattr(identification, "model", "") or ""),
         serial_number=str(getattr(identification, "serial_number", "") or ""),
         fiber_id=(
-            int(getattr(acquisition, "fiber_id"))
-            if acquisition is not None
-            and getattr(acquisition, "fiber_id", None) is not None
+            int(acquisition.fiber_id)
+            if acquisition is not None and acquisition.HasField("fiber_id")
             else None
         ),
     )
@@ -605,6 +603,9 @@ def _parse_records(
 
 def _get_time_coord_from_samples(start: np.datetime64, sample_rate: float, size: int):
     """Build a regularly sampled time coordinate."""
+    if not np.isfinite(sample_rate) or sample_rate <= 0:
+        msg = f"Invalid Sintela protobuf sample_rate: {sample_rate!r}."
+        raise InvalidFiberFileError(msg)
     step = dc.to_timedelta64(1 / sample_rate)
     return get_coord(start=start, stop=start + step * size, step=step)
 
@@ -643,6 +644,14 @@ def _assert_float_equal(name: str, values: list[float], *, rtol: float = 1e-6):
                 f"Inconsistent {name} across Sintela protobuf packets."
             )
     return first
+
+
+def _assert_positive_finite_float(name: str, values: list[float]):
+    """Ensure each float value is finite and positive."""
+    for value in values:
+        if not np.isfinite(value) or value <= 0:
+            msg = f"Invalid Sintela protobuf {name}: {value!r}."
+            raise InvalidFiberFileError(msg)
 
 
 def _base_attrs(
@@ -729,9 +738,9 @@ def _get_timeseries_metadata(
     num_channels = _assert_equal(
         "num_channels", [int(ch.num_channels) for ch in common_headers]
     )
-    sample_rate = _assert_float_equal(
-        "sample_rate", [float(ch.sample_rate) for ch in common_headers]
-    )
+    sample_rates = [float(ch.sample_rate) for ch in common_headers]
+    _assert_positive_finite_float("sample_rate", sample_rates)
+    sample_rate = _assert_float_equal("sample_rate", sample_rates)
     channel_spacing = _assert_float_equal(
         "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
     )
