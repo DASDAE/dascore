@@ -41,6 +41,8 @@ def _is_timeout_error(exc: BaseException) -> bool:
     """Return True if the exception chain indicates a timeout."""
     if isinstance(exc, TimeoutError | socket.timeout):
         return True
+    if isinstance(exc, pytest.fail.Exception):
+        return "Timeout" in str(exc)
     if isinstance(exc, urllib_error.URLError):
         reason = exc.reason
         return isinstance(reason, TimeoutError | socket.timeout)
@@ -77,7 +79,9 @@ def skip_on_timeout(seconds: float, label: str):
     ):
         try:
             yield
-        except TimeoutError as exc:
+        except BaseException as exc:
+            if not _is_timeout_error(exc):
+                raise
             pytest.skip(str(exc))
         return
 
@@ -90,7 +94,9 @@ def skip_on_timeout(seconds: float, label: str):
         signal_mod.signal(signal_mod.SIGALRM, _handle_timeout)
         signal_mod.setitimer(signal_mod.ITIMER_REAL, seconds)
         yield
-    except TimeoutError as exc:
+    except BaseException as exc:
+        if not _is_timeout_error(exc):
+            raise
         pytest.skip(str(exc))
     finally:
         signal_mod.setitimer(signal_mod.ITIMER_REAL, 0)
