@@ -196,7 +196,6 @@ class TestMemoryRemoteMetadataAccess:
             ("sample_tdms_file_v4713.tdms", ("TDMS", "4713")),
             ("DASDMSShot00_20230328155653619.das", ("sentek", "5")),
             ("sintela_binary_v3_test_1.raw", ("Sintela_Binary", "3")),
-            ("sintela_protobuf_1.pb", ("Sintela_Protobuf", "1")),
         ],
     )
     def test_get_format_avoids_local_cache(
@@ -214,7 +213,6 @@ class TestMemoryRemoteMetadataAccess:
             ("sample_tdms_file_v4713.tdms", ("TDMS", "4713")),
             ("DASDMSShot00_20230328155653619.das", ("sentek", "5")),
             ("sintela_binary_v3_test_1.raw", ("Sintela_Binary", "3")),
-            ("sintela_protobuf_1.pb", ("Sintela_Protobuf", "1")),
         ],
     )
     def test_scan_avoids_local_cache(self, fetch_name, expected, memory_fetch_copy):

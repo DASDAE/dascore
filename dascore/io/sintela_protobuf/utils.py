@@ -16,9 +16,9 @@ from dascore.constants import VALID_DATA_TYPES
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.core.summary import PatchSummary
 from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
-from dascore.utils.misc import suppress_warnings
+from dascore.io.core import _make_scan_payload
+from dascore.utils.misc import optional_import, suppress_warnings
 
 PBUF_MAGIC = 0x46554250
 META_TAG = "META"
@@ -30,6 +30,7 @@ DIMS_BAND = ("time", "distance", "band")
 DIMS_FFT = ("time", "distance", "frequency")
 
 _TIMESERIES_DATA_TYPE_MAP = {
+    # Sintela currently reports both enum codes as phase-like samples.
     0: ("phase", "radians"),
     1: ("phase", "radians"),
     2: ("phase_difference", "radians"),
@@ -40,6 +41,10 @@ _TIMESERIES_DATA_TYPE_MAP = {
 _BAND_DATA_TYPE_MAP = {
     10: ("temperature", ""),
     13: ("phase", "radians"),
+}
+_FFT_ATTR_DEFAULTS = {
+    "data_type": "",
+    "data_units": "",
 }
 
 
@@ -81,6 +86,52 @@ class ParsedMeta:
     instrument_model: str = ""
     serial_number: str = ""
     fiber_id: int | None = None
+
+
+@dataclass(frozen=True)
+class TimeseriesMetadata:
+    """Normalized metadata shared by timeseries read and scan paths."""
+
+    common_header: Any
+    packet_type: str
+    num_channels: int
+    total_samples: int
+    sample_rate: float
+    channel_spacing: float
+    gauge_length: float
+    start_channel: int
+    channel_step: int
+    coords: Any
+    attrs: SintelaProtobufAttrs
+
+
+@dataclass(frozen=True)
+class BandMetadata:
+    """Normalized metadata shared by band read and scan paths."""
+
+    common_header: Any
+    packet_type: str
+    num_channels: int
+    num_bands: int
+    gauge_length: float
+    band_def: tuple[tuple[Any, ...], ...]
+    coords: Any
+    attrs: SintelaProtobufAttrs
+
+
+@dataclass(frozen=True)
+class FFTMetadata:
+    """Normalized metadata shared by FFT read and scan paths."""
+
+    common_header: Any
+    packet_type: str
+    num_channels: int
+    num_bins: int
+    gauge_length: float
+    channel_step: int
+    has_complex: bool
+    coords: Any
+    attrs: SintelaProtobufAttrs
 
 
 def _timestamp_to_dt64(timestamp) -> np.datetime64 | None:
@@ -129,7 +180,9 @@ def get_supported_family_tag(resource) -> str | None:
             continue
         if record.tag in TS_TAGS | BAND_TAGS | FFT_TAGS:
             return record.tag
-        return None
+        # Detection is intentionally tolerant of unknown non-data records so a
+        # valid family tag later in the file can still identify the format.
+        continue
     return None
 
 
@@ -142,12 +195,22 @@ def _optional_dependency_error() -> MissingOptionalDependencyError:
     return MissingOptionalDependencyError(msg)
 
 
+def _get_protobuf_decode_error():
+    """Return protobuf's decode error type, or Exception as a fallback."""
+    message_mod = optional_import("google.protobuf.message", on_missing="ignore")
+    return getattr(message_mod, "DecodeError", Exception)
+
+
 @cache
 def _get_proto_messages():
     """Build lightweight protobuf messages for supported Sintela packet types."""
     try:
-        from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
-        from google.protobuf import timestamp_pb2
+        from google.protobuf import (
+            descriptor_pb2,
+            descriptor_pool,
+            message_factory,
+            timestamp_pb2,
+        )
     except Exception as exc:  # pragma: no cover - import failure path
         raise _optional_dependency_error() from exc
 
@@ -166,8 +229,12 @@ def _get_proto_messages():
 def _get_scan_proto_messages():
     """Build scan-only protobuf messages which omit sample payload fields."""
     try:
-        from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
-        from google.protobuf import timestamp_pb2
+        from google.protobuf import (
+            descriptor_pb2,
+            descriptor_pool,
+            message_factory,
+            timestamp_pb2,
+        )
     except Exception as exc:  # pragma: no cover - import failure path
         raise _optional_dependency_error() from exc
 
@@ -193,7 +260,6 @@ def _build_proto_messages(
     file_name: str,
 ):
     """Build lightweight protobuf message classes for data packets."""
-
     file_proto = descriptor_pb2.FileDescriptorProto()
     file_proto.name = file_name
     file_proto.package = package_name
@@ -247,13 +313,22 @@ def _build_proto_messages(
         type_name=f".{package_name}.CommonHeader",
     )
     add_field(
-        timeseries_header, "sample_count", 2, descriptor_pb2.FieldDescriptorProto.TYPE_UINT32
+        timeseries_header,
+        "sample_count",
+        2,
+        descriptor_pb2.FieldDescriptorProto.TYPE_UINT32,
     )
     add_field(
-        timeseries_header, "num_samples", 3, descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+        timeseries_header,
+        "num_samples",
+        3,
+        descriptor_pb2.FieldDescriptorProto.TYPE_INT32,
     )
     add_field(
-        timeseries_header, "channel_step", 4, descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+        timeseries_header,
+        "channel_step",
+        4,
+        descriptor_pb2.FieldDescriptorProto.TYPE_INT32,
     )
 
     timeseries_packet = file_proto.message_type.add()
@@ -380,8 +455,12 @@ def _build_proto_messages(
 def _get_meta_message_class():
     """Build a lightweight RecordingMetadata parser for selected fields."""
     try:
-        from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
-        from google.protobuf import timestamp_pb2
+        from google.protobuf import (
+            descriptor_pb2,
+            descriptor_pool,
+            message_factory,
+            timestamp_pb2,
+        )
     except Exception as exc:  # pragma: no cover - import failure path
         raise _optional_dependency_error() from exc
 
@@ -455,8 +534,13 @@ def _parse_meta(payload: bytes) -> ParsedMeta:
     """Parse selected fields from a META payload."""
     message_cls = _get_meta_message_class()
     msg = message_cls()
+    decode_error = _get_protobuf_decode_error()
     with suppress_warnings():
-        msg.ParseFromString(payload)
+        try:
+            msg.ParseFromString(payload)
+        except decode_error as exc:
+            msg = f"Failed to parse Sintela protobuf META payload: {exc}"
+            raise InvalidFiberFileError(msg) from exc
     identification = msg.identification if msg.HasField("identification") else None
     acquisition = msg.acquisition_stats if msg.HasField("acquisition_stats") else None
     return ParsedMeta(
@@ -466,14 +550,13 @@ def _parse_meta(payload: bytes) -> ParsedMeta:
             if msg.HasField("metadata_recording_time")
             else None
         ),
-        instrument_manufacturer=str(
-            getattr(identification, "manufacturer", "") or ""
-        ),
+        instrument_manufacturer=str(getattr(identification, "manufacturer", "") or ""),
         instrument_model=str(getattr(identification, "model", "") or ""),
         serial_number=str(getattr(identification, "serial_number", "") or ""),
         fiber_id=(
             int(getattr(acquisition, "fiber_id"))
-            if acquisition is not None and getattr(acquisition, "fiber_id", None) is not None
+            if acquisition is not None
+            and getattr(acquisition, "fiber_id", None) is not None
             else None
         ),
     )
@@ -493,6 +576,7 @@ def _parse_records(
 ) -> tuple[list[Any], ParsedMeta]:
     """Decode protobuf payloads and return messages plus selected META."""
     messages = _get_scan_proto_messages() if scan_mode else _get_proto_messages()
+    decode_error = _get_protobuf_decode_error()
     parsed: list[Any] = []
     meta = ParsedMeta()
     for record in records:
@@ -508,7 +592,11 @@ def _parse_records(
             msg = messages["FFTPacket"]()
         else:
             raise InvalidFiberFileError(f"Unsupported Sintela protobuf tag {tag!r}.")
-        msg.ParseFromString(record.payload)
+        try:
+            msg.ParseFromString(record.payload)
+        except decode_error as exc:
+            out = f"Failed to parse Sintela protobuf {tag} payload: {exc}"
+            raise InvalidFiberFileError(out) from exc
         parsed.append((tag, msg))
     if not parsed:
         raise InvalidFiberFileError("No supported Sintela protobuf data packets found.")
@@ -518,7 +606,7 @@ def _parse_records(
 def _get_time_coord_from_samples(start: np.datetime64, sample_rate: float, size: int):
     """Build a regularly sampled time coordinate."""
     step = dc.to_timedelta64(1 / sample_rate)
-    return get_coord(start=start, stop=start + step * size, step=step, units="s")
+    return get_coord(start=start, stop=start + step * size, step=step)
 
 
 def _get_distance_coord(start_channel: int, spacing: float, count: int, step: int = 1):
@@ -534,7 +622,7 @@ def _get_distance_coord(start_channel: int, spacing: float, count: int, step: in
 
 def _get_times(times: list[np.datetime64]):
     """Build a time coordinate from packet timestamps."""
-    return get_coord(data=np.asarray(times, dtype="datetime64[ns]"), units="s")
+    return get_coord(data=np.asarray(times, dtype="datetime64[ns]"))
 
 
 def _normalize_data_type(candidate: str) -> str:
@@ -545,6 +633,9 @@ def _normalize_data_type(candidate: str) -> str:
 
 def _assert_float_equal(name: str, values: list[float], *, rtol: float = 1e-6):
     """Ensure float values match within a small tolerance."""
+    if not values:
+        msg = f"Cannot validate {name} for an empty Sintela protobuf payload."
+        raise InvalidFiberFileError(msg)
     first = values[0]
     for value in values[1:]:
         if not np.isclose(first, value, rtol=rtol, atol=0.0):
@@ -554,7 +645,9 @@ def _assert_float_equal(name: str, values: list[float], *, rtol: float = 1e-6):
     return first
 
 
-def _base_attrs(common_header, packet_type: str, meta: ParsedMeta, extra: dict | None = None):
+def _base_attrs(
+    common_header, packet_type: str, meta: ParsedMeta, extra: dict | None = None
+):
     """Construct base attrs from the packet header and META metadata."""
     data_type, data_units = _TIMESERIES_DATA_TYPE_MAP.get(
         int(getattr(common_header, "timeseries_data_type", 0)),
@@ -570,6 +663,8 @@ def _base_attrs(common_header, packet_type: str, meta: ParsedMeta, extra: dict |
         metadata_recording_time=meta.metadata_recording_time,
         instrument_manufacturer=meta.instrument_manufacturer,
         instrument_model=meta.instrument_model,
+        # Mirror the recorder serial into the canonical PatchAttrs field while
+        # preserving the raw vendor-specific name for round-tripping/debugging.
         instrument_id=meta.serial_number,
         serial_number=meta.serial_number,
         fiber_id=meta.fiber_id,
@@ -583,8 +678,16 @@ def _base_attrs(common_header, packet_type: str, meta: ParsedMeta, extra: dict |
     return SintelaProtobufAttrs(**attrs)
 
 
+def _normalize_demod_data_type(code: int) -> str:
+    """Preserve the raw demod enum until Sintela publishes stable semantics."""
+    return str(code)
+
+
 def _assert_equal(name: str, values: list[Any]):
     """Ensure all values in a list are equal."""
+    if not values:
+        msg = f"Cannot validate {name} for an empty Sintela protobuf payload."
+        raise InvalidFiberFileError(msg)
     first = values[0]
     for value in values[1:]:
         if value != first:
@@ -601,7 +704,9 @@ def _validate_single_family(parsed: list[tuple[str, Any]]) -> str:
         for tag, _ in parsed
     }
     if len(families) != 1:
-        raise InvalidFiberFileError("Mixed Sintela protobuf packet families are unsupported.")
+        raise InvalidFiberFileError(
+            "Mixed Sintela protobuf packet families are unsupported."
+        )
     return families.pop()
 
 
@@ -615,8 +720,10 @@ def _decode_family(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     return _decode_fft(parsed, meta)
 
 
-def _decode_timeseries(parsed: list[tuple[str, Any]], meta: ParsedMeta):
-    """Decode timeseries packets into data, coords, and attrs."""
+def _get_timeseries_metadata(
+    parsed: list[tuple[str, Any]], meta: ParsedMeta
+) -> TimeseriesMetadata:
+    """Validate timeseries headers and build shared attrs/coords."""
     headers = [msg.header for _tag, msg in parsed]
     common_headers = [header.common_header for header in headers]
     num_channels = _assert_equal(
@@ -651,338 +758,282 @@ def _decode_timeseries(parsed: list[tuple[str, Any]], meta: ParsedMeta):
         sample_counts, sample_counts[1:], num_samples_per_packet[:-1], strict=False
     ):
         if current + count != nxt:
-            raise InvalidFiberFileError("Non-contiguous Sintela protobuf sample counts.")
+            raise InvalidFiberFileError(
+                "Non-contiguous Sintela protobuf sample counts."
+            )
     total_samples = sum(num_samples_per_packet)
     first_time = _common_header_time(common_headers[0])
     if first_time is None:
         raise InvalidFiberFileError("Missing Sintela protobuf start time.")
-    data = np.empty((total_samples, num_channels), dtype=np.float32)
+    time = _get_time_coord_from_samples(first_time, sample_rate, total_samples)
+    distance = _get_distance_coord(
+        start_channel, channel_spacing, num_channels, channel_step
+    )
+    coords = get_coord_manager({"time": time, "distance": distance}, dims=DIMS_TS)
+    attrs = _base_attrs(
+        common_headers[0],
+        packet_type=parsed[0][0],
+        meta=meta,
+        extra=dict(
+            gauge_length=gauge_length,
+            channel_step=channel_step,
+            sample_rate=sample_rate,
+            data_type=_TIMESERIES_DATA_TYPE_MAP.get(data_type, ("phase", "radians"))[0],
+            data_units=_TIMESERIES_DATA_TYPE_MAP.get(data_type, ("phase", "radians"))[
+                1
+            ],
+            demod_data_type=_normalize_demod_data_type(demod_data_type),
+        ),
+    )
+    return TimeseriesMetadata(
+        common_header=common_headers[0],
+        packet_type=parsed[0][0],
+        num_channels=num_channels,
+        total_samples=total_samples,
+        sample_rate=sample_rate,
+        channel_spacing=channel_spacing,
+        gauge_length=gauge_length,
+        start_channel=start_channel,
+        channel_step=channel_step,
+        coords=coords,
+        attrs=attrs,
+    )
+
+
+def _get_band_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> BandMetadata:
+    """Validate band headers and build shared attrs/coords."""
+    headers = [msg.header for _tag, msg in parsed]
+    common_headers = [header.common_header for header in headers]
+    num_channels = _assert_equal(
+        "num_channels", [int(ch.num_channels) for ch in common_headers]
+    )
+    channel_spacing = _assert_float_equal(
+        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
+    )
+    gauge_length = _assert_float_equal(
+        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
+    )
+    start_channel = _assert_equal(
+        "start_channel", [int(ch.start_channel) for ch in common_headers]
+    )
+    band_defs = []
+    for header in headers:
+        band_defs.append(
+            tuple(
+                (
+                    int(info.band_data_type),
+                    float(info.start),
+                    float(info.end),
+                    str(info.description),
+                    str(info.source),
+                )
+                for info in header.band_data_info
+            )
+        )
+    band_def = _assert_equal("band_data_info", band_defs)
+    num_bands = len(band_def)
+    if not num_bands:
+        raise InvalidFiberFileError("Band packets missing band definitions.")
+    times = [_common_header_time(ch) for ch in common_headers]
+    if any(x is None for x in times):
+        raise InvalidFiberFileError("Missing time in Sintela BAND packet.")
+    distance = _get_distance_coord(start_channel, channel_spacing, num_channels)
+    band = get_coord(start=0, stop=num_bands, step=1)
+    coords = get_coord_manager(
+        {
+            "time": _get_times(times),
+            "distance": distance,
+            "band": band,
+            "band_start_frequency": ("band", np.asarray([x[1] for x in band_def])),
+            "band_end_frequency": ("band", np.asarray([x[2] for x in band_def])),
+            "band_description": (
+                "band",
+                np.asarray([x[3] for x in band_def], dtype=object),
+            ),
+            "band_source": ("band", np.asarray([x[4] for x in band_def], dtype=object)),
+        },
+        dims=DIMS_BAND,
+    )
+    first_type = int(band_def[0][0])
+    data_type, data_units = _BAND_DATA_TYPE_MAP.get(first_type, ("", ""))
+    attrs = _base_attrs(
+        common_headers[0],
+        packet_type=parsed[0][0],
+        meta=meta,
+        extra=dict(
+            gauge_length=gauge_length,
+            data_type=data_type,
+            data_units=data_units,
+            sample_rate=np.nan,
+        ),
+    )
+    return BandMetadata(
+        common_header=common_headers[0],
+        packet_type=parsed[0][0],
+        num_channels=num_channels,
+        num_bands=num_bands,
+        gauge_length=gauge_length,
+        band_def=band_def,
+        coords=coords,
+        attrs=attrs,
+    )
+
+
+def _get_fft_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> FFTMetadata:
+    """Validate FFT headers and build shared attrs/coords."""
+    headers = [msg.header for _tag, msg in parsed]
+    common_headers = [header.common_header for header in headers]
+    num_channels = _assert_equal(
+        "num_channels", [int(ch.num_channels) for ch in common_headers]
+    )
+    channel_spacing = _assert_float_equal(
+        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
+    )
+    gauge_length = _assert_float_equal(
+        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
+    )
+    start_channel = _assert_equal(
+        "start_channel", [int(ch.start_channel) for ch in common_headers]
+    )
+    num_bins = _assert_equal("num_bins", [int(h.num_bins) for h in headers])
+    bin_res = _assert_float_equal("bin_res", [float(h.bin_res) for h in headers])
+    has_complex = _assert_equal(
+        "has_complex_data", [bool(h.has_complex_data) for h in headers]
+    )
+    channel_step = _assert_equal("channel_step", [int(h.channel_step) for h in headers])
+    times = [_common_header_time(ch) for ch in common_headers]
+    if any(x is None for x in times):
+        raise InvalidFiberFileError("Missing time in Sintela FFT packet.")
+    distance = _get_distance_coord(
+        start_channel, channel_spacing, num_channels, channel_step
+    )
+    frequency = get_coord(start=0.0, stop=bin_res * num_bins, step=bin_res, units="Hz")
+    coords = get_coord_manager(
+        {"time": _get_times(times), "distance": distance, "frequency": frequency},
+        dims=DIMS_FFT,
+    )
+    attrs = _base_attrs(
+        common_headers[0],
+        packet_type=parsed[0][0],
+        meta=meta,
+        extra=dict(
+            gauge_length=gauge_length,
+            channel_step=channel_step,
+            **_FFT_ATTR_DEFAULTS,
+        ),
+    )
+    return FFTMetadata(
+        common_header=common_headers[0],
+        packet_type=parsed[0][0],
+        num_channels=num_channels,
+        num_bins=num_bins,
+        gauge_length=gauge_length,
+        channel_step=channel_step,
+        has_complex=has_complex,
+        coords=coords,
+        attrs=attrs,
+    )
+
+
+def _decode_timeseries(parsed: list[tuple[str, Any]], meta: ParsedMeta):
+    """Decode timeseries packets into data, coords, and attrs."""
+    metadata = _get_timeseries_metadata(parsed, meta)
+    data = np.empty((metadata.total_samples, metadata.num_channels), dtype=np.float32)
     index = 0
     for _tag, msg in parsed:
         packet = np.asarray(msg.samples, dtype=np.float32)
         rows = int(msg.header.num_samples)
-        expected = rows * num_channels
+        expected = rows * metadata.num_channels
         if packet.size != expected:
-            raise InvalidFiberFileError("Unexpected Sintela protobuf TS sample payload size.")
-        data[index : index + rows] = packet.reshape(rows, num_channels)
+            raise InvalidFiberFileError(
+                "Unexpected Sintela protobuf TS sample payload size."
+            )
+        data[index : index + rows] = packet.reshape(rows, metadata.num_channels)
         index += rows
-    time = _get_time_coord_from_samples(first_time, sample_rate, total_samples)
-    distance = _get_distance_coord(start_channel, channel_spacing, num_channels, channel_step)
-    coords = get_coord_manager({"time": time, "distance": distance}, dims=DIMS_TS)
-    attrs = _base_attrs(
-        common_headers[0],
-        packet_type=parsed[0][0],
-        meta=meta,
-        extra=dict(
-            gauge_length=gauge_length,
-            channel_step=channel_step,
-            sample_rate=sample_rate,
-            data_type=_TIMESERIES_DATA_TYPE_MAP.get(data_type, ("phase", "radians"))[0],
-            data_units=_TIMESERIES_DATA_TYPE_MAP.get(data_type, ("phase", "radians"))[1],
-            demod_data_type=str(demod_data_type),
-        ),
-    )
-    return data, coords, attrs
+    return data, metadata.coords, metadata.attrs
 
 
 def _decode_band(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     """Decode band packets into data, coords, and attrs."""
-    headers = [msg.header for _tag, msg in parsed]
-    common_headers = [header.common_header for header in headers]
-    num_channels = _assert_equal(
-        "num_channels", [int(ch.num_channels) for ch in common_headers]
+    metadata = _get_band_metadata(parsed, meta)
+    data = np.empty(
+        (len(parsed), metadata.num_channels, metadata.num_bands), dtype=np.float32
     )
-    channel_spacing = _assert_float_equal(
-        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
-    )
-    gauge_length = _assert_float_equal(
-        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
-    )
-    start_channel = _assert_equal(
-        "start_channel", [int(ch.start_channel) for ch in common_headers]
-    )
-    band_defs = []
-    for header in headers:
-        band_defs.append(
-            tuple(
-                (
-                    int(info.band_data_type),
-                    float(info.start),
-                    float(info.end),
-                    str(info.description),
-                    str(info.source),
-                )
-                for info in header.band_data_info
-            )
-        )
-    band_def = _assert_equal("band_data_info", band_defs)
-    num_bands = len(band_def)
-    if not num_bands:
-        raise InvalidFiberFileError("Band packets missing band definitions.")
-    times = [_common_header_time(ch) for ch in common_headers]
-    if any(x is None for x in times):
-        raise InvalidFiberFileError("Missing time in Sintela BAND packet.")
-    data = np.empty((len(parsed), num_channels, num_bands), dtype=np.float32)
     for ind, (_tag, msg) in enumerate(parsed):
         packet = np.asarray(msg.samples, dtype=np.float32)
-        expected = num_channels * num_bands
+        expected = metadata.num_channels * metadata.num_bands
         if packet.size != expected:
-            raise InvalidFiberFileError("Unexpected Sintela protobuf BAND payload size.")
-        data[ind] = packet.reshape(num_channels, num_bands)
-    # BAND packets do not expose channel_step, so distance comes from the
-    # recorded start channel and spacing only.
-    distance = _get_distance_coord(start_channel, channel_spacing, num_channels)
-    band = get_coord(start=0, stop=num_bands, step=1)
-    coords = get_coord_manager(
-        {
-            "time": _get_times(times),
-            "distance": distance,
-            "band": band,
-            "band_start_frequency": ("band", np.asarray([x[1] for x in band_def])),
-            "band_end_frequency": ("band", np.asarray([x[2] for x in band_def])),
-            "band_description": ("band", np.asarray([x[3] for x in band_def], dtype=object)),
-            "band_source": ("band", np.asarray([x[4] for x in band_def], dtype=object)),
-        },
-        dims=DIMS_BAND,
-    )
-    first_type = int(band_def[0][0])
-    data_type, data_units = _BAND_DATA_TYPE_MAP.get(first_type, ("", ""))
-    attrs = _base_attrs(
-        common_headers[0],
-        packet_type=parsed[0][0],
-        meta=meta,
-        extra=dict(
-            gauge_length=gauge_length,
-            data_type=data_type,
-            data_units=data_units,
-        ),
-    )
-    return data, coords, attrs
+            raise InvalidFiberFileError(
+                "Unexpected Sintela protobuf BAND payload size."
+            )
+        data[ind] = packet.reshape(
+            metadata.num_channels,
+            metadata.num_bands,
+        )
+    return data, metadata.coords, metadata.attrs
 
 
 def _decode_fft(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     """Decode FFT packets into data, coords, and attrs."""
-    headers = [msg.header for _tag, msg in parsed]
-    common_headers = [header.common_header for header in headers]
-    num_channels = _assert_equal(
-        "num_channels", [int(ch.num_channels) for ch in common_headers]
+    metadata = _get_fft_metadata(parsed, meta)
+    dtype = np.complex64 if metadata.has_complex else np.float32
+    data = np.empty(
+        (len(parsed), metadata.num_channels, metadata.num_bins),
+        dtype=dtype,
     )
-    channel_spacing = _assert_float_equal(
-        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
-    )
-    gauge_length = _assert_float_equal(
-        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
-    )
-    start_channel = _assert_equal(
-        "start_channel", [int(ch.start_channel) for ch in common_headers]
-    )
-    num_bins = _assert_equal("num_bins", [int(h.num_bins) for h in headers])
-    bin_res = _assert_float_equal("bin_res", [float(h.bin_res) for h in headers])
-    has_complex = _assert_equal("has_complex_data", [bool(h.has_complex_data) for h in headers])
-    channel_step = _assert_equal("channel_step", [int(h.channel_step) for h in headers])
-    times = [_common_header_time(ch) for ch in common_headers]
-    if any(x is None for x in times):
-        raise InvalidFiberFileError("Missing time in Sintela FFT packet.")
-    dtype = np.complex64 if has_complex else np.float32
-    data = np.empty((len(parsed), num_channels, num_bins), dtype=dtype)
     for ind, (_tag, msg) in enumerate(parsed):
         packet = np.asarray(msg.samples, dtype=np.float32)
-        if has_complex:
-            expected = num_channels * num_bins * 2
+        if metadata.has_complex:
+            expected = metadata.num_channels * metadata.num_bins * 2
             if packet.size != expected:
-                raise InvalidFiberFileError("Unexpected Sintela protobuf FFT payload size.")
-            packet = packet.reshape(num_channels, num_bins, 2)
+                raise InvalidFiberFileError(
+                    "Unexpected Sintela protobuf FFT payload size."
+                )
+            packet = packet.reshape(metadata.num_channels, metadata.num_bins, 2)
             packet = packet[..., 0] + 1j * packet[..., 1]
         else:
-            expected = num_channels * num_bins
+            expected = metadata.num_channels * metadata.num_bins
             if packet.size != expected:
-                raise InvalidFiberFileError("Unexpected Sintela protobuf FFT payload size.")
-            packet = packet.reshape(num_channels, num_bins)
+                raise InvalidFiberFileError(
+                    "Unexpected Sintela protobuf FFT payload size."
+                )
+            packet = packet.reshape(metadata.num_channels, metadata.num_bins)
         data[ind] = packet
-    distance = _get_distance_coord(start_channel, channel_spacing, num_channels, channel_step)
-    frequency = get_coord(start=0.0, stop=bin_res * num_bins, step=bin_res, units="Hz")
-    coords = get_coord_manager(
-        {"time": _get_times(times), "distance": distance, "frequency": frequency},
-        dims=DIMS_FFT,
-    )
-    attrs = _base_attrs(
-        common_headers[0],
-        packet_type=parsed[0][0],
-        meta=meta,
-        extra=dict(
-            gauge_length=gauge_length,
-            channel_step=channel_step,
-        ),
-    )
-    return data, coords, attrs
+    return data, metadata.coords, metadata.attrs
 
 
 def _scan_timeseries(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     """Summarize timeseries packets without allocating sample arrays."""
-    headers = [msg.header for _tag, msg in parsed]
-    common_headers = [header.common_header for header in headers]
-    num_channels = _assert_equal(
-        "num_channels", [int(ch.num_channels) for ch in common_headers]
+    metadata = _get_timeseries_metadata(parsed, meta)
+    return (
+        (metadata.total_samples, metadata.num_channels),
+        metadata.coords,
+        metadata.attrs,
+        str(np.dtype(np.float32)),
     )
-    sample_rate = _assert_float_equal(
-        "sample_rate", [float(ch.sample_rate) for ch in common_headers]
-    )
-    channel_spacing = _assert_float_equal(
-        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
-    )
-    gauge_length = _assert_float_equal(
-        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
-    )
-    start_channel = _assert_equal(
-        "start_channel", [int(ch.start_channel) for ch in common_headers]
-    )
-    channel_step = _assert_equal("channel_step", [int(h.channel_step) for h in headers])
-    data_type = _assert_equal(
-        "timeseries_data_type",
-        [int(ch.timeseries_data_type) for ch in common_headers],
-    )
-    demod_data_type = _assert_equal(
-        "demod_data_type", [int(ch.demod_data_type) for ch in common_headers]
-    )
-    for ch in common_headers:
-        if ch.has_dropped_samples:
-            raise InvalidFiberFileError("Dropped samples in Sintela protobuf stream.")
-    sample_counts = [int(h.sample_count) for h in headers]
-    num_samples_per_packet = [int(h.num_samples) for h in headers]
-    for current, nxt, count in zip(
-        sample_counts, sample_counts[1:], num_samples_per_packet[:-1], strict=False
-    ):
-        if current + count != nxt:
-            raise InvalidFiberFileError("Non-contiguous Sintela protobuf sample counts.")
-    total_samples = sum(num_samples_per_packet)
-    first_time = _common_header_time(common_headers[0])
-    if first_time is None:
-        raise InvalidFiberFileError("Missing Sintela protobuf start time.")
-    time = _get_time_coord_from_samples(first_time, sample_rate, total_samples)
-    distance = _get_distance_coord(start_channel, channel_spacing, num_channels, channel_step)
-    coords = get_coord_manager({"time": time, "distance": distance}, dims=DIMS_TS)
-    attrs = _base_attrs(
-        common_headers[0],
-        packet_type=parsed[0][0],
-        meta=meta,
-        extra=dict(
-            gauge_length=gauge_length,
-            channel_step=channel_step,
-            sample_rate=sample_rate,
-            data_type=_TIMESERIES_DATA_TYPE_MAP.get(data_type, ("phase", "radians"))[0],
-            data_units=_TIMESERIES_DATA_TYPE_MAP.get(data_type, ("phase", "radians"))[1],
-            demod_data_type=str(demod_data_type),
-        ),
-    )
-    return (total_samples, num_channels), coords, attrs, str(np.dtype(np.float32))
 
 
 def _scan_band(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     """Summarize band packets without allocating sample arrays."""
-    headers = [msg.header for _tag, msg in parsed]
-    common_headers = [header.common_header for header in headers]
-    num_channels = _assert_equal(
-        "num_channels", [int(ch.num_channels) for ch in common_headers]
+    metadata = _get_band_metadata(parsed, meta)
+    return (
+        (len(parsed), metadata.num_channels, metadata.num_bands),
+        metadata.coords,
+        metadata.attrs,
+        str(np.dtype(np.float32)),
     )
-    channel_spacing = _assert_float_equal(
-        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
-    )
-    gauge_length = _assert_float_equal(
-        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
-    )
-    start_channel = _assert_equal(
-        "start_channel", [int(ch.start_channel) for ch in common_headers]
-    )
-    band_defs = []
-    for header in headers:
-        band_defs.append(
-            tuple(
-                (
-                    int(info.band_data_type),
-                    float(info.start),
-                    float(info.end),
-                    str(info.description),
-                    str(info.source),
-                )
-                for info in header.band_data_info
-            )
-        )
-    band_def = _assert_equal("band_data_info", band_defs)
-    num_bands = len(band_def)
-    if not num_bands:
-        raise InvalidFiberFileError("Band packets missing band definitions.")
-    times = [_common_header_time(ch) for ch in common_headers]
-    if any(x is None for x in times):
-        raise InvalidFiberFileError("Missing time in Sintela BAND packet.")
-    distance = _get_distance_coord(start_channel, channel_spacing, num_channels)
-    band = get_coord(start=0, stop=num_bands, step=1)
-    coords = get_coord_manager(
-        {
-            "time": _get_times(times),
-            "distance": distance,
-            "band": band,
-            "band_start_frequency": ("band", np.asarray([x[1] for x in band_def])),
-            "band_end_frequency": ("band", np.asarray([x[2] for x in band_def])),
-            "band_description": ("band", np.asarray([x[3] for x in band_def], dtype=object)),
-            "band_source": ("band", np.asarray([x[4] for x in band_def], dtype=object)),
-        },
-        dims=DIMS_BAND,
-    )
-    first_type = int(band_def[0][0])
-    data_type, data_units = _BAND_DATA_TYPE_MAP.get(first_type, ("", ""))
-    attrs = _base_attrs(
-        common_headers[0],
-        packet_type=parsed[0][0],
-        meta=meta,
-        extra=dict(
-            gauge_length=gauge_length,
-            data_type=data_type,
-            data_units=data_units,
-        ),
-    )
-    return (len(parsed), num_channels, num_bands), coords, attrs, str(np.dtype(np.float32))
 
 
 def _scan_fft(parsed: list[tuple[str, Any]], meta: ParsedMeta):
     """Summarize FFT packets without allocating sample arrays."""
-    headers = [msg.header for _tag, msg in parsed]
-    common_headers = [header.common_header for header in headers]
-    num_channels = _assert_equal(
-        "num_channels", [int(ch.num_channels) for ch in common_headers]
+    metadata = _get_fft_metadata(parsed, meta)
+    dtype = np.complex64 if metadata.has_complex else np.float32
+    return (
+        (len(parsed), metadata.num_channels, metadata.num_bins),
+        metadata.coords,
+        metadata.attrs,
+        str(np.dtype(dtype)),
     )
-    channel_spacing = _assert_float_equal(
-        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
-    )
-    gauge_length = _assert_float_equal(
-        "gauge_length", [float(ch.gauge_length) for ch in common_headers]
-    )
-    start_channel = _assert_equal(
-        "start_channel", [int(ch.start_channel) for ch in common_headers]
-    )
-    num_bins = _assert_equal("num_bins", [int(h.num_bins) for h in headers])
-    bin_res = _assert_float_equal("bin_res", [float(h.bin_res) for h in headers])
-    has_complex = _assert_equal("has_complex_data", [bool(h.has_complex_data) for h in headers])
-    channel_step = _assert_equal("channel_step", [int(h.channel_step) for h in headers])
-    times = [_common_header_time(ch) for ch in common_headers]
-    if any(x is None for x in times):
-        raise InvalidFiberFileError("Missing time in Sintela FFT packet.")
-    distance = _get_distance_coord(start_channel, channel_spacing, num_channels, channel_step)
-    frequency = get_coord(start=0.0, stop=bin_res * num_bins, step=bin_res, units="Hz")
-    coords = get_coord_manager(
-        {"time": _get_times(times), "distance": distance, "frequency": frequency},
-        dims=DIMS_FFT,
-    )
-    attrs = _base_attrs(
-        common_headers[0],
-        packet_type=parsed[0][0],
-        meta=meta,
-        extra=dict(
-            gauge_length=gauge_length,
-            channel_step=channel_step,
-        ),
-    )
-    dtype = np.complex64 if has_complex else np.float32
-    return (len(parsed), num_channels, num_bins), coords, attrs, str(np.dtype(dtype))
 
 
 def read_payload(resource):
@@ -992,8 +1043,8 @@ def read_payload(resource):
     return _decode_family(parsed, meta)
 
 
-def scan_payload(resource) -> list[PatchSummary]:
-    """Decode a Sintela protobuf file and return PatchSummary objects."""
+def scan_payload(resource) -> list[dict[str, Any]]:
+    """Decode a Sintela protobuf file and return FiberIO scan payloads."""
     records = _iter_envelope_records(resource, strict=True)
     parsed, meta = _parse_records(records, scan_mode=True)
     family = _validate_single_family(parsed)
@@ -1004,9 +1055,9 @@ def scan_payload(resource) -> list[PatchSummary]:
     else:
         shape, coords, attrs, dtype = _scan_fft(parsed, meta)
     return [
-        PatchSummary.model_construct(
+        _make_scan_payload(
             attrs=attrs,
-            coords=coords.to_summary_dict(),
+            coords=coords,
             dims=coords.dims,
             shape=shape,
             dtype=dtype,

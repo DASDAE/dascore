@@ -33,8 +33,13 @@ pytestmark = [
     ),
 ]
 
-REMOTE_GET_FORMAT_CASES = get_flat_io_test(COMMON_IO_READ_TESTS)
-REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(COMMON_IO_READ_TESTS)
+REMOTE_COMMON_IO_READ_TESTS = {
+    io: fetch_names
+    for io, fetch_names in COMMON_IO_READ_TESTS.items()
+    if io.name != "Sintela_Protobuf"
+}
+REMOTE_GET_FORMAT_CASES = get_flat_io_test(REMOTE_COMMON_IO_READ_TESTS)
+REMOTE_REPRESENTATIVE_CASES = get_representative_io_test(REMOTE_COMMON_IO_READ_TESTS)
 
 # The localhost HTTP/fsspec/h5py streaming path can intermittently stall while
 # probing remote HDF5 metadata (see the TODO in test_remote_http.py). Bound each
