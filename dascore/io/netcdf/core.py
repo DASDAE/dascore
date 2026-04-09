@@ -1,38 +1,29 @@
-"""Core NetCDF IO implementation with CF conventions."""
+"""Core NetCDF IO implementation built on xarray."""
 
 from __future__ import annotations
 
 from pathlib import Path
-
-import h5py
 
 import dascore as dc
 from dascore.constants import SpoolType
 from dascore.io import FiberIO
 from dascore.io.core import ScanPayload, _make_scan_payload
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.io import patch_to_xarray
+from dascore.utils.io import patch_to_xarray, xarray_to_patch
 from dascore.utils.misc import optional_import
 
 from .utils import (
     XDAS_PAYLOAD_VARIABLE,
-    coord_attrs,
-    extract_patch_attrs_from_netcdf,
-    find_main_data_variable,
-    get_cf_data_attrs,
-    get_cf_global_attrs,
     get_cf_version,
+    get_coord_manager_for_coordless_data_var,
     get_xarray_data_var_name,
-    get_xarray_engine,
     is_netcdf4_file,
-    iter_written_aux_coords,
     parse_cf_version,
-    read_netcdf_coordinates,
 )
 
 
 class NetCDFCFV18(FiberIO):
-    """NetCDF-4 IO with CF-1.8 conventions, using xarray/netcdf4 for IO."""
+    """NetCDF-4 IO using xarray for read/write and CF markers for detection."""
 
     name = "NETCDF_CF"
     version = "1.8"
@@ -55,101 +46,14 @@ class NetCDFCFV18(FiberIO):
     def read(self, resource: Path, **kwargs) -> SpoolType:
         """Read a NetCDF-4 file into a Spool."""
         xr = optional_import("xarray")
-        engine = get_xarray_engine()
-        # Read structural metadata first so xarray only has to resolve the final
-        # payload variable and dense coordinate values.
-        data_var_name, attrs_dict, coords = self._read_metadata(resource)
-        data_var_name, data_array, data = self._read_data_array(
-            resource, xr, engine, data_var_name
-        )
-        patch = self._build_patch(
-            data=data,
-            data_array=data_array,
-            coords=coords,
-            attrs_dict=attrs_dict,
-            data_var_name=data_var_name,
-        )
-        patch = self._apply_coordinate_filtering(patch, kwargs)
+        with xr.open_dataset(resource) as dataset:
+            data_var_name = get_xarray_data_var_name(dataset)
+            data_array = dataset[data_var_name].load()
+            patch = self._patch_from_dataset(dataset, data_var_name, data_array)
+        patch = self._select_from_kwargs(patch, kwargs)
         if not patch.data.size:
             return dc.spool([])
         return dc.spool([patch])
-
-    def _read_metadata(self, resource: Path):
-        """Read NetCDF metadata needed before opening through xarray."""
-        with h5py.File(resource, "r") as h5file:
-            data_var_name = self._get_data_variable_name(h5file)
-            attrs_dict = self._get_patch_attrs(h5file)
-            coords = read_netcdf_coordinates(h5file, data_var_name)
-        return data_var_name, attrs_dict, coords
-
-    def _read_data_array(self, resource: Path, xr, engine: str, data_var_name: str):
-        """Load the selected xarray data variable from disk."""
-        # TODO: consider a lazy read path for large NetCDF arrays.
-        with xr.open_dataset(resource, engine=engine) as dataset:
-            data_array = dataset.get(data_var_name)
-            if data_array is None:
-                data_var_name = get_xarray_data_var_name(dataset)
-                data_array = dataset[data_var_name]
-            data = data_array.load().data
-        return data_var_name, data_array, data
-
-    def _build_patch(self, *, data, data_array, coords, attrs_dict, data_var_name: str):
-        """Merge coordinate metadata and construct the output patch."""
-        source_patch_id = (
-            XDAS_PAYLOAD_VARIABLE if data_var_name is None else data_var_name
-        )
-        # Start from the HDF-derived coordinates, then add any extra xarray-only
-        # coordinates that were materialized during decode.
-        coords_dict = {
-            name: (
-                coord.values
-                if name in coords.dims
-                else (coords.dim_map[name], coord.values)
-            )
-            for name, coord in coords.coord_map.items()
-        }
-        for name, coord in data_array.coords.items():
-            if name not in coords_dict:
-                coords_dict[name] = (coord.dims, coord.values)
-        coords = dc.get_coord_manager(coords=coords_dict, dims=coords.dims)
-        return dc.Patch(
-            data=data,
-            coords=coords,
-            dims=coords.dims,
-            attrs=attrs_dict | {"_source_patch_id": source_patch_id},
-        )
-
-    def _build_data_array(self, patch: dc.Patch):
-        """Convert a patch to an xarray DataArray with coordinate attrs."""
-        data_array = patch_to_xarray(patch).rename("data")
-        for name, coord in patch.coords.coord_map.items():
-            if coord._partial:
-                continue
-            data_array.coords[name].attrs.update(coord_attrs(name, coord))
-        return data_array
-
-    def _build_dataset(self, patch: dc.Patch, data_array):
-        """Create the xarray Dataset and attach CF metadata."""
-        global_attrs = get_cf_global_attrs(patch.attrs, self.version)
-        if patch.attrs.data_type:
-            global_attrs["source_data_type"] = patch.attrs.data_type
-        dataset = data_array.to_dataset()
-        # NetCDF attrs cannot safely preserve DASCore's null-ish metadata, so
-        # filter those out before handing the dataset to xarray.
-        dataset.attrs.update(
-            {
-                key: value
-                for key, value in global_attrs.items()
-                if value not in (None, "")
-            }
-        )
-        dataset["data"].attrs.update(
-            get_cf_data_attrs(patch.attrs.data_type or "acoustic_signal")
-        )
-        aux_coord_names = tuple(iter_written_aux_coords(patch))
-        if aux_coord_names:
-            dataset["data"].attrs["coordinates"] = " ".join(aux_coord_names)
-        return dataset
 
     def _get_write_encoding(self, **kwargs):
         """Translate explicit write options into xarray encoding hints."""
@@ -169,7 +73,7 @@ class NetCDFCFV18(FiberIO):
 
     def write(self, spool: SpoolType, resource: Path, **kwargs) -> None:
         """
-        Write a Spool to NetCDF-4 with CF-1.8 conventions.
+        Write a Spool to NetCDF-4 through xarray.
 
         Parameters
         ----------
@@ -180,50 +84,79 @@ class NetCDFCFV18(FiberIO):
                 explicit tuple of chunk sizes
         """
         patch = self._validate_and_extract_patch(spool)
-        optional_import("xarray")
-        engine = get_xarray_engine()
-        # Build the xarray object first, then attach CF metadata and optional
-        # storage hints in separate steps to keep write policy isolated.
-        data_array = self._build_data_array(patch)
-        dataset = self._build_dataset(patch, data_array)
+        optional_import("xarray")  # raises a helpful error if xarray is absent
+        dataset = patch_to_xarray(patch).rename("data").to_dataset()
+        dataset.attrs["Conventions"] = f"CF-{self.version}"
         encoding = self._get_write_encoding(**kwargs)
         dataset.to_netcdf(
             resource,
-            engine=engine,
             encoding={"data": encoding} if encoding else None,
         )
 
     def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
-        """Scan NetCDF file to extract metadata without loading data."""
-        data_var_name = self._get_data_variable_name(resource)
-        data_var = resource[data_var_name]
-        coords = read_netcdf_coordinates(resource, data_var_name)
-        attrs_dict = self._get_patch_attrs(resource)
+        """Scan NetCDF file metadata without loading the full payload array."""
+        xr = optional_import("xarray")
+        dataset_path = resource.filename
+        with xr.open_dataset(dataset_path) as dataset:
+            data_var_name = get_xarray_data_var_name(dataset)
+            # None is a valid xarray key for XDAS-style files whose primary
+            # payload is stored under a None variable name.
+            data_array = dataset[data_var_name]
+            coords = {
+                name: (coord.dims, coord.values)
+                for name, coord in data_array.coords.items()
+            }
+            attrs = dict(data_array.attrs)
+            dims = data_array.dims
+            shape = data_array.shape
+            dtype = str(data_array.dtype)
+            source_patch_id = self._get_source_patch_id(data_var_name)
+            coord_manager = self._coord_manager_from_data_array(
+                dataset, data_array, coords, dims, shape
+            )
         return [
             _make_scan_payload(
-                attrs=attrs_dict,
-                coords=coords,
-                dims=coords.dims,
-                shape=data_var.shape,
-                dtype=str(data_var.dtype),
-                source_patch_id=data_var_name,
+                attrs=attrs | {"_source_patch_id": source_patch_id},
+                coords=coord_manager,
+                dims=dims,
+                shape=shape,
+                dtype=dtype,
+                source_patch_id=source_patch_id,
             )
         ]
 
-    def _get_data_variable_name(self, resource: H5Reader) -> str:
-        """Return the main NetCDF data variable name or raise."""
-        data_var_name = find_main_data_variable(resource)
-        if data_var_name is None:
-            msg = "No suitable data variable found in NetCDF file"
-            raise ValueError(msg)
-        return data_var_name
+    def _get_source_patch_id(self, data_var_name):
+        """Normalize the selected xarray payload name to a patch id."""
+        return XDAS_PAYLOAD_VARIABLE if data_var_name is None else data_var_name
 
-    def _get_patch_attrs(self, resource: H5Reader) -> dict:
-        """Extract patch attrs from a NetCDF resource."""
-        return extract_patch_attrs_from_netcdf(resource)
+    def _coord_manager_from_data_array(self, dataset, data_array, coords, dims, shape):
+        """Return coords from xarray when present or reconstruct dim coords."""
+        if coords:
+            return dc.get_coord_manager(coords=coords, dims=dims)
+        return get_coord_manager_for_coordless_data_var(dataset, dims=dims, shape=shape)
 
-    def _apply_coordinate_filtering(self, patch: dc.Patch, kwargs: dict) -> dc.Patch:
-        """Apply coordinate selection kwargs to a loaded patch."""
+    def _patch_from_dataset(self, dataset, data_var_name, data_array):
+        """Build one patch from an xarray dataset and selected data variable."""
+        source_patch_id = self._get_source_patch_id(data_var_name)
+        attrs = dict(data_array.attrs) | {"_source_patch_id": source_patch_id}
+        if data_array.coords:
+            return xarray_to_patch(data_array).update(attrs=attrs)
+        coords = self._coord_manager_from_data_array(
+            dataset,
+            data_array,
+            coords={},
+            dims=data_array.dims,
+            shape=data_array.shape,
+        )
+        return dc.Patch(
+            data=data_array.data,
+            coords=coords,
+            dims=data_array.dims,
+            attrs=attrs,
+        )
+
+    def _select_from_kwargs(self, patch: dc.Patch, kwargs: dict) -> dc.Patch:
+        """Apply coordinate selection kwargs to one loaded patch."""
         coord_kwargs = {k: v for k, v in kwargs.items() if k in patch.coords.coord_map}
         return patch.select(**coord_kwargs) if coord_kwargs else patch
 

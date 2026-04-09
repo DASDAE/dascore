@@ -9,6 +9,7 @@ test_io_core.py
 """
 
 from __future__ import annotations
+
 from contextlib import suppress
 from functools import cache
 from io import BytesIO, UnsupportedOperation
@@ -45,8 +46,11 @@ from dascore.io.terra15 import (
 )
 from dascore.utils.downloader import fetch, get_registry_df
 from dascore.utils.misc import all_close, iterate
-from tests.test_io._common_io_test_utils import get_flat_io_test, skip_missing, skip_timeout
-
+from tests.test_io._common_io_test_utils import (
+    get_flat_io_test,
+    skip_missing,
+    skip_timeout,
+)
 
 # --- Fixtures
 

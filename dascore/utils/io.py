@@ -258,8 +258,7 @@ def patch_to_xarray(patch: PatchType):
     # Omit None-valued attrs because xarray backends may reject them during
     # NetCDF serialization, while a missing attr round-trips cleanly.
     attrs = {
-        key: value for key, value in dict(patch.attrs).items()
-        if value is not None
+        key: value for key, value in dict(patch.attrs).items() if value is not None
     }
     patch_dims = patch.dims
     coords = {}
