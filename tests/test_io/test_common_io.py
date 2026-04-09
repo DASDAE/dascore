@@ -29,6 +29,7 @@ from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus1, Febus2
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
+from dascore.io.netcdf import NetCDFCFV18
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
@@ -87,6 +88,7 @@ COMMON_IO_READ_TESTS = {
     ),
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
+    NetCDFCFV18(): ("xdas_netcdf.nc",),
 }
 
 # This tuple is for fiber io which support a write method and can write

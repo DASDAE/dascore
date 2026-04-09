@@ -376,6 +376,8 @@ class _FiberIOManager:
         second_class_fiber_ios = []
         for format_name in self.known_formats:
             unsorted = self._format_version[format_name]
+            if not unsorted:
+                continue
             keys = sorted(unsorted, reverse=True)
             fiber_ios = [unsorted[key] for key in keys]
             priority_fiber_ios.append(fiber_ios[0])
@@ -399,10 +401,20 @@ class _FiberIOManager:
         # Load one, or all, formats
         for form in formats:
             entries = [name for name in self._eps.index if name.startswith(form)]
-            for eps in self._eps.loc[entries]:
-                self.register_fiberio(eps()())
-        # The selected format(s) should now be loaded
-        assert set(formats).isdisjoint(self.unloaded_formats)
+            for name, loader in self._eps.loc[entries].items():
+                fiberio = self._load_entry_point(name, loader)
+                if fiberio is not None:
+                    self.register_fiberio(fiberio)
+        return
+
+    def _load_entry_point(self, name: str, loader) -> FiberIO | None:
+        """Load one FiberIO entry point, skipping broken registrations."""
+        try:
+            return loader()()
+        except (ImportError, MissingOptionalDependencyError) as exc:
+            msg = f"Failed to load FiberIO plugin {name!r}: {exc}"
+            warnings.warn(msg, UserWarning, stacklevel=2)
+            return None
 
     def register_fiberio(self, fiberio: FiberIO):
         """Register a new fiber IO to manage."""
