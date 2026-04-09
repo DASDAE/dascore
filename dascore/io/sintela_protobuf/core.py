@@ -4,10 +4,11 @@ Core module for reading Sintela protobuf format.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 import dascore as dc
-from dascore.core.summary import PatchSummary
 from dascore.io import FiberIO
 from dascore.utils.io import BinaryReader
 
@@ -26,7 +27,7 @@ class SintelaProtobufV1(FiberIO):
         tag = get_supported_family_tag(resource)
         return (self.name, self.version) if tag else False
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[PatchSummary]:
+    def scan(self, resource: BinaryReader, **kwargs) -> list[dict[str, Any]]:
         """Scan a Sintela protobuf recording."""
         return scan_payload(resource)
 

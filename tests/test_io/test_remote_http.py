@@ -168,6 +168,7 @@ class TestHTTPFormatAndSpool:
             assert response.headers["Content-Range"].startswith("bytes 0-15/")
             assert len(data) == 16
 
+    @pytest.mark.timeout(0)
     def test_http_range_hdf5_read_succeeds(
         self, http_range_das_path, ensure_http_fetch_file
     ):
