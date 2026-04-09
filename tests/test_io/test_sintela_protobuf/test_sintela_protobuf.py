@@ -56,6 +56,18 @@ def _build_meta_payload():
     return msg.SerializeToString()
 
 
+def _build_meta_payload_without_fiber_id():
+    """Create a META payload with the optional fiber_id field unset."""
+    cls = _get_test_meta_message_class()
+    msg = cls()
+    msg.recorder_namespace = "manualRecord/recorder"
+    _set_timestamp(msg.metadata_recording_time, 1_700_000_000, 123)
+    msg.identification.manufacturer = "Sintela"
+    msg.identification.model = "Onyx"
+    msg.identification.serial_number = "SN123"
+    return msg.SerializeToString()
+
+
 def _payload_to_summary(payload):
     """Convert a raw FiberIO scan payload using the production scan path."""
     from dascore.io.core import _scan_payload_to_summary
@@ -583,6 +595,25 @@ class TestSintelaProtobuf:
         ):
             fiber_io.scan(path)
 
+    @pytest.mark.parametrize("bad_sample_rate", [0.0, -1.0, np.nan, np.inf])
+    def test_timeseries_scan_rejects_invalid_sample_rate(
+        self, fiber_io, write_sintela_file, ts_records, bad_sample_rate
+    ):
+        """Timeseries scan should reject invalid sample rates."""
+        records = _mutate_record(
+            ts_records,
+            0,
+            "TimeseriesPacket",
+            lambda msg: setattr(
+                msg.header.common_header, "sample_rate", bad_sample_rate
+            ),
+        )
+        path = write_sintela_file(f"ts_bad_rate_{bad_sample_rate}.pb", records)
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf sample_rate"
+        ):
+            fiber_io.scan(path)
+
     def test_timeseries_read_rejects_bad_size_and_inconsistent_headers(
         self, fiber_io, write_sintela_file, ts_records
     ):
@@ -777,6 +808,12 @@ class TestSintelaProtobufUtils:
         time = sintela_utils._get_time_coord_from_samples(
             np.datetime64("2024-01-01"), 2.0, 4
         )
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf sample_rate"
+        ):
+            sintela_utils._get_time_coord_from_samples(
+                np.datetime64("2024-01-01"), 0.0, 4
+            )
         packet_times = sintela_utils._get_times(
             [
                 np.datetime64("2024-01-01T00:00:00"),
@@ -801,6 +838,11 @@ class TestSintelaProtobufUtils:
                 [sintela_utils.EnvelopeRecord("META", _build_meta_payload())],
                 scan_mode=True,
             )
+
+    def test_parse_meta_without_optional_fiber_id(self):
+        """META parsing should keep fiber_id unset when omitted."""
+        meta = sintela_utils._parse_meta(_build_meta_payload_without_fiber_id())
+        assert meta.fiber_id is None
 
     def test_decode_and_scan_helpers_cover_all_families(
         self,

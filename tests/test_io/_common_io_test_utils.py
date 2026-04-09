@@ -79,6 +79,8 @@ def skip_on_timeout(seconds: float, label: str):
     ):
         try:
             yield
+        # Broad catch is intentional so _is_timeout_error can normalize
+        # pytest-timeout/framework-specific timeout exceptions and re-raise the rest.
         except BaseException as exc:
             if not _is_timeout_error(exc):
                 raise
@@ -94,6 +96,8 @@ def skip_on_timeout(seconds: float, label: str):
         signal_mod.signal(signal_mod.SIGALRM, _handle_timeout)
         signal_mod.setitimer(signal_mod.ITIMER_REAL, seconds)
         yield
+    # Broad catch is intentional so _is_timeout_error can normalize
+    # pytest-timeout/framework-specific timeout exceptions and re-raise the rest.
     except BaseException as exc:
         if not _is_timeout_error(exc):
             raise
