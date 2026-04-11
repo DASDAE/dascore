@@ -139,11 +139,13 @@ def pass_filter(
     sr = get_dim_sampling_rate(patch, dim)
     # get nyquist and low/high in terms of nyquist
     sos = _get_sos(sr, filt_min, filt_max, corners)
+    if patch.data.dtype == np.float32:
+        sos = sos.astype(np.float32, copy=False)
     if zerophase:
         out = sosfiltfilt(sos, patch.data, axis=axis)
     else:
         out = sosfilt(sos, patch.data, axis=axis)
-    return dc.Patch(data=out, coords=patch.coords, attrs=patch.attrs, dims=patch.dims)
+    return patch.new(data=out)
 
 
 @patch_function()
