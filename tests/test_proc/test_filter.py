@@ -88,6 +88,11 @@ class TestPassFilterChecks:
 class TestPassFilter:
     """Simple tests to make sure filter logic runs."""
 
+    @staticmethod
+    def _get_float32_patch(random_patch):
+        """Return a patch with float32 data for dtype regression tests."""
+        return random_patch.new(data=random_patch.data.astype(np.float32))
+
     def test_time_bandpass_runs(self, random_patch):
         """Ensure filtering along time_axis works."""
         out = random_patch.pass_filter(time=(10, 100))
@@ -162,6 +167,24 @@ class TestPassFilter:
         """Ensure non-zero-phase filter logic runs."""
         out = random_patch.pass_filter(time=(..., 20), zerophase=False)
         assert isinstance(out, dc.Patch)
+
+    def test_float32_dtype_preserved_zero_phase(self, random_patch):
+        """Ensure zero-phase pass_filter preserves float32 payloads."""
+        patch = self._get_float32_patch(random_patch)
+        out = patch.pass_filter(time=(None, 20), zerophase=True)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == patch.shape
+        assert out.data.dtype == np.float32
+        assert not np.any(pd.isnull(out.data))
+
+    def test_float32_dtype_preserved_single_pass(self, random_patch):
+        """Ensure single-pass pass_filter preserves float32 payloads."""
+        patch = self._get_float32_patch(random_patch)
+        out = patch.pass_filter(time=(None, 20), zerophase=False)
+        assert isinstance(out, dc.Patch)
+        assert out.shape == patch.shape
+        assert out.data.dtype == np.float32
+        assert not np.any(pd.isnull(out.data))
 
 
 class TestSobelFilter:
