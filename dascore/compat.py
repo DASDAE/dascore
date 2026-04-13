@@ -33,6 +33,10 @@ MATERIALIZE_NOW = (H5Dataset,)
 
 def is_array_like(maybe_array):
     """Determine if an object looks like an array without materializing it."""
+    # NumPy scalars should still materialize to 0-D ndarrays for reduction and
+    # reassembly paths that expect an indexable array result.
+    if isinstance(maybe_array, np.generic):
+        return False
     # Some array-like types depend on external resources and must be converted
     # immediately rather than preserved by reference.
     if MATERIALIZE_NOW and isinstance(maybe_array, MATERIALIZE_NOW):

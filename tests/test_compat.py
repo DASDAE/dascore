@@ -149,3 +149,10 @@ class TestArray:
         out = array([1, 2, 3])
         assert isinstance(out, np.ndarray)
         assert not out.flags.writeable
+
+    def test_numpy_scalar_materializes_to_zero_dim_array(self):
+        """Ensure numpy scalar objects still become 0-D ndarrays."""
+        out = array(np.float64(1.5))
+        assert isinstance(out, np.ndarray)
+        assert out.shape == ()
+        assert not out.flags.writeable
