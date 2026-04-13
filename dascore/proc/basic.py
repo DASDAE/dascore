@@ -743,6 +743,8 @@ def where(
         if isinstance(cond, cls):
             patch, cond = align_patch_coords(patch, cond)
 
+    cond = cond.data if isinstance(cond, cls) else cond
+    other = other.data if isinstance(other, cls) else other
     cond_array, other_array = array(cond), array(other)
 
     # Ensure condition is boolean
