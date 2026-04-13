@@ -19,6 +19,23 @@ from dascore.proc.basic import apply_operator
 from dascore.utils.misc import suppress_warnings
 
 
+class ArrayProtocolWrapper:
+    """Minimal non-numpy array-like object for patch initialization tests."""
+
+    def __init__(self, data):
+        self._data = data
+        self.shape = data.shape
+        self.dtype = data.dtype
+
+    def __array__(self, dtype=None, copy=None):
+        out = self._data
+        if dtype is not None:
+            out = out.astype(dtype)
+        if copy:
+            out = out.copy()
+        return out
+
+
 def get_simple_patch() -> Patch:
     """
     Return a small simple array for memory testing.
@@ -113,6 +130,46 @@ class TestInit:
     def test_init_from_array(self, random_patch):
         """Ensure a trace can be created from raw components; array, coords, attrs."""
         assert isinstance(random_patch, Patch)
+
+    def test_init_from_array_protocol_object(self, random_patch):
+        """Ensure array-like objects can initialize a Patch without casting."""
+
+        wrapped = ArrayProtocolWrapper(random_patch.data.copy())
+        patch = dc.Patch(
+            data=wrapped,
+            coords=random_patch.coords,
+            dims=random_patch.dims,
+            attrs=random_patch.attrs,
+        )
+
+        assert isinstance(patch, Patch)
+        assert type(patch.data) is type(wrapped)
+        assert np.array_equal(patch.data, random_patch.data)
+
+    def test_update_from_array_protocol_object(self, random_patch):
+        """Ensure update preserves non-numpy array-like payload types."""
+
+        wrapped = ArrayProtocolWrapper(random_patch.data.copy())
+        patch = random_patch.update(data=wrapped)
+
+        assert isinstance(patch, Patch)
+        assert type(patch.data) is type(wrapped)
+        assert np.array_equal(patch.data, random_patch.data)
+
+    def test_numpy_input_remains_immutable(self, random_patch):
+        """Ensure numpy arrays are still marked read-only on patch creation."""
+        data = random_patch.data.copy()
+        assert data.flags.writeable
+
+        patch = dc.Patch(
+            data=data,
+            coords=random_patch.coords,
+            dims=random_patch.dims,
+            attrs=random_patch.attrs,
+        )
+
+        assert isinstance(patch.data, np.ndarray)
+        assert not patch.data.flags.writeable
 
     def test_max_time_populated(self, random_patch):
         """Ensure the time_max is populated when not explicitly given."""

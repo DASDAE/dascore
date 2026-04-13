@@ -726,7 +726,8 @@ def to_object_array(object_sequence):
     This is useful, eg, for storing an object array in a dataframe.
     """
     out = np.empty(len(object_sequence), dtype=object)
-    out[:] = object_sequence
+    for num, value in enumerate(object_sequence):
+        out[num] = value
     return out
 
 

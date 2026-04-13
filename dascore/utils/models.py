@@ -11,7 +11,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
 from typing_extensions import Self
 
-from dascore.compat import array, is_array
+from dascore.compat import array, is_array_like
 from dascore.units import Quantity, get_quantity, get_quantity_str
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import _all_null, all_close, to_str, unbyte
@@ -37,7 +37,7 @@ TimeDelta64 = Annotated[
 ]
 
 ArrayLike = Annotated[
-    np.ndarray,
+    object,
     PlainValidator(array),
 ]
 
@@ -76,7 +76,7 @@ def sensible_model_equals(
     for name in set(x for x in d1 if not x.startswith("_")):
         # skip any private attributes.
         val1, val2 = d1[name], d2[name]
-        if is_array(val1):
+        if is_array_like(val1):
             if not all_close(val1, val2):
                 return False
         else:

@@ -27,17 +27,54 @@ class DataArray:
 with suppress(ImportError):
     from xarray import DataArray  # NOQA
 
+H5Dataset = ()
+
+with suppress(ImportError):
+    from h5py import Dataset as H5Dataset  # type: ignore[assignment]
+
+
+def is_array_like(maybe_array):
+    """Determine if an object looks like an array without materializing it."""
+    if H5Dataset and isinstance(maybe_array, H5Dataset):
+        return False
+    attrs = ("shape", "dtype")
+    protocols = (
+        "__array__",
+        "__array_ufunc__",
+        "__array_function__",
+        "__dlpack__",
+        "__array_namespace__",
+    )
+    return all(hasattr(maybe_array, attr) for attr in attrs) and any(
+        hasattr(maybe_array, protocol) for protocol in protocols
+    )
+
+
+def _make_immutable(maybe_array):
+    """Set writable flag to false if the array exposes one."""
+    flags = getattr(maybe_array, "flags", None)
+    if flags is None or not hasattr(flags, "writeable"):
+        return maybe_array
+    with suppress(AttributeError, ValueError):
+        maybe_array.flags.writeable = False
+    return maybe_array
+
 
 def array(array):
-    """Wrapper function for creating 'immutable' arrays."""
-    out = np.asarray(array)
-    # Setting the write flag to false makes the array immutable unless
-    # the flag is switched back.
-    out.setflags(write=False)
-    return out
+    """
+    Preserve array-like inputs for patch creation and reconstruction.
+
+    NumPy arrays and array-likes with a writable flag are marked read-only when
+    possible. Other preserved array-likes are treated as logically immutable,
+    but DASCore does not guarantee physical immutability for them.
+    """
+    out = array if is_array_like(array) else np.asarray(array)
+    return _make_immutable(out)
 
 
 def is_array(maybe_array):
-    """Determine if an object is array like."""
+    """
+    Determine if an object is a numpy array.
+    """
     # This is here so that we can support other array types in the future.
     return isinstance(maybe_array, np.ndarray)
