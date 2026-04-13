@@ -67,6 +67,7 @@ class RaisingFlags:
 
     @property
     def writeable(self):
+        """Flag to indicate the array is mutable."""
         return True
 
     @writeable.setter

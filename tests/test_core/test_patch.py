@@ -133,7 +133,6 @@ class TestInit:
 
     def test_init_from_array_protocol_object(self, random_patch):
         """Ensure array-like objects can initialize a Patch without casting."""
-
         wrapped = ArrayProtocolWrapper(random_patch.data.copy())
         patch = dc.Patch(
             data=wrapped,
@@ -148,7 +147,6 @@ class TestInit:
 
     def test_update_from_array_protocol_object(self, random_patch):
         """Ensure update preserves non-numpy array-like payload types."""
-
         wrapped = ArrayProtocolWrapper(random_patch.data.copy())
         patch = random_patch.update(data=wrapped)
 

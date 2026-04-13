@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import suppress
 
 import numpy as np
+from h5py import Dataset as H5Dataset
 from numpy import floor, interp, ndarray  # NOQA
 from numpy.random import RandomState
 from rich.progress import Progress  # NOQA
@@ -27,15 +28,14 @@ class DataArray:
 with suppress(ImportError):
     from xarray import DataArray  # NOQA
 
-H5Dataset = ()
-
-with suppress(ImportError):
-    from h5py import Dataset as H5Dataset  # type: ignore[assignment]
+MATERIALIZE_NOW = (H5Dataset,)
 
 
 def is_array_like(maybe_array):
     """Determine if an object looks like an array without materializing it."""
-    if H5Dataset and isinstance(maybe_array, H5Dataset):
+    # Some array-like types depend on external resources and must be converted
+    # immediately rather than preserved by reference.
+    if MATERIALIZE_NOW and isinstance(maybe_array, MATERIALIZE_NOW):
         return False
     attrs = ("shape", "dtype")
     protocols = (
