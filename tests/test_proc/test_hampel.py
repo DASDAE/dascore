@@ -212,6 +212,25 @@ class TestHampelFilter:
                 )
                 assert reduction_ratio > 0.5, msg
 
+    def test_approximate_single_dimension_matches_exact_interior(
+        self, patch_with_spikes
+    ):
+        """A 1D approximate Hampel filter should be centered in the interior."""
+        pytest.importorskip("bottleneck")
+        result_standard = patch_with_spikes.hampel_filter(
+            time=0.6, threshold=3.5, approximate=False
+        )
+        result_approximate = patch_with_spikes.hampel_filter(
+            time=0.6, threshold=3.5, approximate=True
+        )
+        axis = patch_with_spikes.dims.index("time")
+        indexer = [slice(None)] * result_approximate.data.ndim
+        indexer[axis] = slice(2, -2)
+        np.testing.assert_array_equal(
+            result_approximate.data[tuple(indexer)],
+            result_standard.data[tuple(indexer)],
+        )
+
     def test_zero_mad_handling(self, patch_uniform_data):
         """Test handling of zero MAD values."""
         # Uniform data should have MAD = 0, test that eps is used

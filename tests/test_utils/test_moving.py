@@ -263,6 +263,38 @@ class TestMovingWindow:
         # Check interior values
         np.testing.assert_allclose(result_mean[1:4], expected_mean, rtol=1e-12)
 
+    def test_bottleneck_median_is_centered(self):
+        """Bottleneck median should match scipy away from edge regions."""
+        pytest.importorskip("bottleneck")
+        data = np.array(
+            [
+                [0.0, 3.0, 1.0, 8.0, 4.0, 2.0, 6.0],
+                [5.0, 4.0, 9.0, 1.0, 7.0, 3.0, 2.0],
+                [2.0, 8.0, 4.0, 6.0, 0.0, 5.0, 1.0],
+                [7.0, 1.0, 5.0, 2.0, 9.0, 6.0, 3.0],
+                [4.0, 6.0, 2.0, 5.0, 3.0, 1.0, 8.0],
+            ]
+        )
+
+        for axis, window in ((0, 3), (1, 5)):
+            result_scipy = move_median(data, window, axis=axis, engine="scipy")
+            result_bn = move_median(data, window, axis=axis, engine="bottleneck")
+            half_window = window // 2
+            indexer = [slice(None)] * data.ndim
+            indexer[axis] = slice(half_window, -half_window)
+            np.testing.assert_array_equal(
+                result_bn[tuple(indexer)], result_scipy[tuple(indexer)]
+            )
+
+    def test_bottleneck_median_respects_scipy_boundary_options(self):
+        """Non-default scipy boundary options should not be ignored."""
+        pytest.importorskip("bottleneck")
+        data = np.array([1.0, 5.0, 2.0, 4.0, 3.0])
+        kwargs = {"mode": "constant", "cval": -10.0}
+        result_scipy = move_median(data, 3, engine="scipy", **kwargs)
+        result_bn = move_median(data, 3, engine="bottleneck", **kwargs)
+        np.testing.assert_array_equal(result_bn, result_scipy)
+
     def test_engine_consistency(self, test_data, available_engines):
         """Test consistency between engines where applicable."""
         if "bottleneck" not in available_engines:
