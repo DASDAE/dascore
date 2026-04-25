@@ -87,6 +87,11 @@ def _apply_scipy_operation(
         return func(data, size=window, axis=axis, **scipy_kwargs)
 
 
+def _requires_scipy_boundary(mode: str, origin: int) -> bool:
+    """Return True if scipy boundary handling is explicitly requested."""
+    return mode != "reflect" or origin != 0
+
+
 def _apply_bottleneck_median(
     data: np.ndarray,
     window: int,
@@ -97,7 +102,7 @@ def _apply_bottleneck_median(
     min_count: int = 1,
 ) -> np.ndarray:
     """Apply bottleneck median with interior centered-window alignment."""
-    if mode != "reflect" or cval != 0.0 or origin != 0:
+    if window % 2 == 0 or _requires_scipy_boundary(mode, origin):
         return _apply_scipy_operation(
             data,
             window,
@@ -111,12 +116,12 @@ def _apply_bottleneck_median(
 
     func = _get_engine_function("bottleneck", "median")
     result = func(data, window=window, axis=axis, min_count=min_count)
-    half_window = window // 2
-    if half_window:
+    shift = window // 2
+    if shift:
         destination = [slice(None)] * data.ndim
         source = [slice(None)] * data.ndim
-        destination[axis] = slice(0, -half_window)
-        source[axis] = slice(half_window, None)
+        destination[axis] = slice(0, -shift)
+        source[axis] = slice(shift, None)
         result[tuple(destination)] = result[tuple(source)]
     return result
 
@@ -145,6 +150,24 @@ def _apply_bottleneck_operation(
         )
 
     func = _get_engine_function("bottleneck", operation)
+    if _requires_scipy_boundary(mode, origin):
+        if OPERATION_REGISTRY[operation]["scipy"] is None:
+            msg = (
+                f"Operation '{operation}' cannot use scipy boundary options with "
+                "the bottleneck engine."
+            )
+            raise ParameterError(msg)
+        return _apply_scipy_operation(
+            data,
+            window,
+            operation,
+            axis,
+            mode=mode,
+            cval=cval,
+            origin=origin,
+            min_count=min_count,
+            ddof=ddof,
+        )
 
     extra_kwargs = {"ddof": ddof} if operation == "std" else {}
     result = func(data, window=window, axis=axis, min_count=min_count, **extra_kwargs)
@@ -230,11 +253,13 @@ def moving_window(
     engine : {"auto", "scipy", "bottleneck"}, default "auto"
         Engine to use
     mode
-        Boundary mode for scipy operations.
+        Boundary mode. Non-default values use scipy for operations where
+        bottleneck cannot preserve scipy boundary semantics.
     cval
-        Fill value for scipy operations with ``mode="constant"``.
+        Fill value when ``mode="constant"``.
     origin
-        Filter placement for scipy operations.
+        Filter placement. Nonzero values use scipy for operations where
+        bottleneck cannot preserve scipy boundary semantics.
     min_count
         Minimum number of observations in a Bottleneck window.
     ddof

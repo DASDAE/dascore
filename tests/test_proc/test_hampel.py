@@ -212,20 +212,23 @@ class TestHampelFilter:
                 )
                 assert reduction_ratio > 0.5, msg
 
+    @pytest.mark.parametrize("dim, window", [("time", 3), ("time", 5), ("distance", 3)])
     def test_approximate_single_dimension_matches_exact_interior(
-        self, patch_with_spikes
+        self, patch_with_spikes, dim, window
     ):
         """A 1D approximate Hampel filter should be centered in the interior."""
         pytest.importorskip("bottleneck")
+        kwargs = {dim: window}
         result_standard = patch_with_spikes.hampel_filter(
-            time=0.6, threshold=3.5, approximate=False
+            samples=True, threshold=3.5, approximate=False, **kwargs
         )
         result_approximate = patch_with_spikes.hampel_filter(
-            time=0.6, threshold=3.5, approximate=True
+            samples=True, threshold=3.5, approximate=True, **kwargs
         )
-        axis = patch_with_spikes.dims.index("time")
+        axis = patch_with_spikes.dims.index(dim)
         indexer = [slice(None)] * result_approximate.data.ndim
-        indexer[axis] = slice(2, -2)
+        edge = window - 1
+        indexer[axis] = slice(edge, -edge)
         np.testing.assert_array_equal(
             result_approximate.data[tuple(indexer)],
             result_standard.data[tuple(indexer)],
