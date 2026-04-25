@@ -15,8 +15,7 @@ from dascore.utils.patch import get_patch_window_size, patch_function
 
 def _separable_median(data, size, mode, out):
     """
-    Calculate the median along each dimension sequentially using bottleneck
-    (optimized for speed).
+    Calculate centered medians along each dimension sequentially.
     """
     # Start by copying input data to output buffer
     np.copyto(out, data)
@@ -146,8 +145,8 @@ def hampel_filter(
 
     **Performance:**
     - `approximate=True` provides 3-4x speedup over exact calculations
-    - Installing `bottleneck` package can further improve performance (~50%)
-      which applies to both approximate and exact modes.
+    - Installing `bottleneck` package can further improve approximate-mode
+      performance.
 
     See Also
     --------
