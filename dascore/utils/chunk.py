@@ -208,11 +208,11 @@ class ChunkManager:
         has_gap = start_sorted > end_markers
         if has_gap.any():
             msg = (
-                f"There is a gap in the patch along dimension {self._name}. "
-                f"As a result, some patches in the chunked spool may be "
-                f"unevenly sampled. However, they are still considered "
-                f"contiguous because a tolerance of {self._tolerance} "
-                f"was used in the chunk function."
+                f"There is a gap in the patch along dimension {self._name} "
+                f"larger than the configured tolerance of {self._tolerance}. "
+                f"The chunked spool keeps the gapped patches as separate "
+                f"groups (they are not merged); raise the tolerance if you "
+                f"want them treated as contiguous."
             )
             warnings.warn(msg, UserWarning, stacklevel=3)
         group_num = has_gap.astype(np.int64).cumsum()
