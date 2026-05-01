@@ -41,10 +41,19 @@ def _is_timeout_error(exc: BaseException) -> bool:
     """Return True if the exception chain indicates a timeout."""
     if isinstance(exc, TimeoutError | socket.timeout):
         return True
+    if isinstance(exc, pytest.fail.Exception):
+        return "Timeout" in str(exc)
     if isinstance(exc, urllib_error.URLError):
         reason = exc.reason
         return isinstance(reason, TimeoutError | socket.timeout)
     return False
+
+
+def _skip_if_timeout_else_raise(exc: BaseException):
+    """Skip timeout-like exceptions, re-raise everything else."""
+    if not _is_timeout_error(exc):
+        raise exc
+    pytest.skip(str(exc))
 
 
 def get_flat_io_test(common_io_read_tests: dict) -> list[list[dc.FiberIO | str]]:
@@ -77,8 +86,10 @@ def skip_on_timeout(seconds: float, label: str):
     ):
         try:
             yield
-        except TimeoutError as exc:
-            pytest.skip(str(exc))
+        # Broad catch is intentional so _is_timeout_error can normalize
+        # pytest-timeout/framework-specific timeout exceptions and re-raise the rest.
+        except BaseException as exc:
+            _skip_if_timeout_else_raise(exc)
         return
 
     previous_handler = signal_mod.getsignal(signal_mod.SIGALRM)
@@ -90,8 +101,10 @@ def skip_on_timeout(seconds: float, label: str):
         signal_mod.signal(signal_mod.SIGALRM, _handle_timeout)
         signal_mod.setitimer(signal_mod.ITIMER_REAL, seconds)
         yield
-    except TimeoutError as exc:
-        pytest.skip(str(exc))
+    # Broad catch is intentional so _is_timeout_error can normalize
+    # pytest-timeout/framework-specific timeout exceptions and re-raise the rest.
+    except BaseException as exc:
+        _skip_if_timeout_else_raise(exc)
     finally:
         signal_mod.setitimer(signal_mod.ITIMER_REAL, 0)
         signal_mod.signal(signal_mod.SIGALRM, previous_handler)
