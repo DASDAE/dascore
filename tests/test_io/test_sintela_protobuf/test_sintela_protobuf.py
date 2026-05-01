@@ -14,6 +14,7 @@ import pytest
 from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
 from dascore.io.sintela_protobuf import SintelaProtobufV1
 from dascore.io.sintela_protobuf import utils as sintela_utils
+from dascore.units import get_quantity
 from dascore.utils.downloader import fetch
 
 
@@ -350,6 +351,29 @@ class TestSintelaProtobuf:
         assert patch.dims == ("time", "distance", "band")
         assert patch.shape == (2, 2, 2)
         assert "band_start_frequency" in patch.coords.coord_map
+        assert patch.attrs.data_type == ""
+        assert patch.attrs.data_units in (None, "")
+
+    def test_band_read_preserves_attrs_for_single_semantic_type(
+        self, fiber_io, write_sintela_file, band_records
+    ):
+        """Uniform BAND semantics should populate patch-level data attrs."""
+        records = _mutate_record(
+            band_records,
+            0,
+            "BandPacket",
+            lambda msg: setattr(msg.header.band_data_info[1], "band_data_type", 13),
+        )
+        records = _mutate_record(
+            records,
+            1,
+            "BandPacket",
+            lambda msg: setattr(msg.header.band_data_info[1], "band_data_type", 13),
+        )
+        path = write_sintela_file("band_uniform.pb", records)
+        patch = fiber_io.read(path)[0]
+        assert patch.attrs.data_type == "phase"
+        assert patch.attrs.data_units == get_quantity("rad")
 
     def test_fft_read_returns_expected_dims(
         self, fiber_io, write_sintela_file, fft_records
@@ -616,6 +640,56 @@ class TestSintelaProtobuf:
         ):
             fiber_io.scan(path)
 
+    @pytest.mark.parametrize("bad_spacing", [0.0, -1.0, np.nan, np.inf])
+    def test_scan_rejects_invalid_channel_spacing(
+        self, fiber_io, write_sintela_file, ts_records, bad_spacing
+    ):
+        """Invalid channel spacing should raise a format-specific error."""
+        records = _mutate_record(
+            ts_records,
+            0,
+            "TimeseriesPacket",
+            lambda msg: setattr(
+                msg.header.common_header, "channel_spacing", bad_spacing
+            ),
+        )
+        records = _mutate_record(
+            records,
+            1,
+            "TimeseriesPacket",
+            lambda msg: setattr(
+                msg.header.common_header, "channel_spacing", bad_spacing
+            ),
+        )
+        path = write_sintela_file(f"ts_bad_spacing_{bad_spacing}.pb", records)
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf channel_spacing"
+        ):
+            fiber_io.scan(path)
+
+    @pytest.mark.parametrize("bad_step", [0, -1])
+    def test_scan_rejects_invalid_channel_step(
+        self, fiber_io, write_sintela_file, ts_records, bad_step
+    ):
+        """Invalid channel steps should raise a format-specific error."""
+        records = _mutate_record(
+            ts_records,
+            0,
+            "TimeseriesPacket",
+            lambda msg: setattr(msg.header, "channel_step", bad_step),
+        )
+        records = _mutate_record(
+            records,
+            1,
+            "TimeseriesPacket",
+            lambda msg: setattr(msg.header, "channel_step", bad_step),
+        )
+        path = write_sintela_file(f"ts_bad_step_{bad_step}.pb", records)
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf channel_step"
+        ):
+            fiber_io.scan(path)
+
     def test_timeseries_read_rejects_bad_size_and_inconsistent_headers(
         self, fiber_io, write_sintela_file, ts_records
     ):
@@ -739,6 +813,29 @@ class TestSintelaProtobuf:
         with pytest.raises(InvalidFiberFileError, match="FFT payload size"):
             fiber_io.read(path)
 
+    @pytest.mark.parametrize("bad_bin_res", [0.0, -1.0, np.nan, np.inf])
+    def test_fft_scan_rejects_invalid_bin_res(
+        self, fiber_io, write_sintela_file, fft_records, bad_bin_res
+    ):
+        """FFT bin resolution should be finite and positive."""
+        records = _mutate_record(
+            fft_records,
+            0,
+            "FFTPacket",
+            lambda msg: setattr(msg.header, "bin_res", bad_bin_res),
+        )
+        records = _mutate_record(
+            records,
+            1,
+            "FFTPacket",
+            lambda msg: setattr(msg.header, "bin_res", bad_bin_res),
+        )
+        path = write_sintela_file(f"fft_bad_bin_res_{bad_bin_res}.pb", records)
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf bin_res"
+        ):
+            fiber_io.scan(path)
+
     def test_fft_scan_and_read_reject_missing_time(
         self, fiber_io, write_sintela_file, fft_records
     ):
@@ -765,10 +862,11 @@ class TestSintelaProtobuf:
         assert isinstance(err, MissingOptionalDependencyError)
         assert "protobuf is not installed" in str(err)
 
-    def test_missing_protobuf_only_affects_scan_and_read(self, tmp_path, monkeypatch):
+    def test_missing_protobuf_only_affects_scan_and_read(
+        self, sintela_protobuf_path, monkeypatch
+    ):
         """Detection should stay available without protobuf support."""
-        path = tmp_path / "ts.pb"
-        _write_records(path, [("META", _build_meta_payload()), *_build_ts_payloads()])
+        path = sintela_protobuf_path
 
         def _raise():
             raise MissingOptionalDependencyError("protobuf missing")
@@ -832,6 +930,14 @@ class TestSintelaProtobufUtils:
             extra={"data_type": "strain"},
         )
         assert attrs.data_type == "strain"
+        with pytest.raises(
+            InvalidFiberFileError, match="Invalid Sintela protobuf channel_spacing"
+        ):
+            sintela_utils._get_distance_coord(0, np.nan, 1)
+        assert sintela_utils._get_band_attr_data_type(((999, 0, 1, "", ""),)) == (
+            "",
+            "",
+        )
 
         with pytest.raises(
             InvalidFiberFileError, match="No supported Sintela protobuf"
