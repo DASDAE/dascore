@@ -10,7 +10,18 @@ from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io.mseed import utils as mseed_utils
 from dascore.io.mseed.core import MSeedV2
 
-pytest.importorskip("pymseed")
+
+def _mseed_v2_header():
+    """Return enough fixed header bytes to identify a MiniSEED 2 file."""
+    header = bytearray(48)
+    header[0:8] = b"000001D "
+    header[8:13] = b"STAT "
+    header[13:15] = b"  "
+    header[15:18] = b"HSF"
+    header[18:20] = b"XX"
+    header[20:32] = bytes.fromhex("07e800010000000000000001")
+    header[44:48] = bytes.fromhex("00300000")
+    return header
 
 
 def _write_mseed(
@@ -19,20 +30,23 @@ def _write_mseed(
     starts=None,
     sample_rates=None,
     source_ids=None,
+    data_samples=None,
 ):
     """Write a small MiniSEED file."""
-    import pymseed
+    pymseed = pytest.importorskip("pymseed")
 
     source_ids = source_ids or [f"FDSN:XX_{ind:05d}__H_S_F" for ind in range(3)]
     starts = starts or [pymseed.timestr2nstime("2024-01-01T00:00:00Z")] * len(
         source_ids
     )
     sample_rates = sample_rates or [10.0] * len(source_ids)
+    data_samples = data_samples or [
+        np.arange(10, dtype=np.int32) + ind * 100 for ind in range(len(source_ids))
+    ]
     traces = pymseed.MS3TraceList()
-    for ind, (source_id, start, sample_rate) in enumerate(
-        zip(source_ids, starts, sample_rates, strict=True)
+    for source_id, start, sample_rate, data in zip(
+        source_ids, starts, sample_rates, data_samples, strict=True
     ):
-        data = np.arange(10, dtype=np.int32) + ind * 100
         traces.add_data(
             sourceid=source_id,
             data_samples=data,
@@ -47,6 +61,33 @@ def _write_mseed(
         encoding=pymseed.DataEncoding.INT32,
     )
     return path
+
+
+def _write_mseed_v2_header(path):
+    """Write enough fixed header bytes to identify a MiniSEED 2 file."""
+    path.write_bytes(_mseed_v2_header())
+    return path
+
+
+def _trace_segment(**kwargs):
+    """Return a small decoded MiniSEED trace segment for helper tests."""
+    defaults = dict(
+        source_id="FDSN:XX_00000__H_S_F",
+        network="XX",
+        station="00000",
+        location="",
+        seed_channel="HSF",
+        format_version="3",
+        start_ns=0,
+        sample_rate=10.0,
+        data=np.arange(3, dtype=np.int32),
+        sample_type="i",
+        encoding="11",
+        publication_version=0,
+        record_length=256,
+    )
+    defaults.update(kwargs)
+    return mseed_utils._TraceSegment(**defaults)
 
 
 @pytest.fixture
@@ -75,6 +116,20 @@ class TestMiniSeedGetFormat:
     def test_get_format_from_dascore(self, mseed_v3_path):
         """DASCore can detect MiniSEED files through plugin discovery."""
         assert dc.get_format(mseed_v3_path) == ("MSEED", "3")
+
+    def test_get_format_without_pymseed(self, tmp_path, monkeypatch):
+        """MiniSEED headers can be detected without PyMseed installed."""
+        import dascore.io.mseed.core as mseed_core
+
+        def _optional_import(*args, **kwargs):
+            raise MissingOptionalDependencyError("missing")
+
+        monkeypatch.setattr(mseed_core, "optional_import", _optional_import)
+        v2_path = _write_mseed_v2_header(tmp_path / "test_v2.mseed")
+        v3_path = tmp_path / "test_v3.mseed"
+        v3_path.write_bytes(b"MS\x03" + bytes(45))
+        assert MSeedV2().get_format(v2_path) == ("MSEED", "2")
+        assert MSeedV2().get_format(v3_path) == ("MSEED", "3")
 
     def test_get_format_too_small(self, tmp_path):
         """Small invalid files return False."""
@@ -162,6 +217,23 @@ class TestMiniSeedRead:
         assert len(spool) == 2
         assert sorted(x.shape[0] for x in spool) == [1, 2]
 
+    def test_unequal_sample_counts_are_separate_patches(self, tmp_path):
+        """Unequal trace lengths are preserved in separate patches."""
+        data_samples = [
+            np.arange(10, dtype=np.int32),
+            np.arange(7, dtype=np.int32) + 100,
+            np.arange(10, dtype=np.int32) + 200,
+        ]
+        path = _write_mseed(tmp_path / "unequal.mseed", data_samples=data_samples)
+        spool = dc.read(path, file_format="MSEED", file_version="3")
+        assert len(spool) == 2
+        assert sorted(x.shape for x in spool) == [(1, 7), (2, 10)]
+        assert sorted(len(x.get_coord("time")) for x in spool) == [7, 10]
+        assert sorted(tuple(x.get_coord("channel").values) for x in spool) == [
+            (0, 2),
+            (1,),
+        ]
+
     def test_read_source_patch_id(self, tmp_path):
         """source_patch_id filters logical MiniSEED groups."""
         path = _write_mseed(
@@ -215,7 +287,7 @@ class TestMiniSeedRead:
 
     def test_discontinuous_source_records_are_separate_patches(self, tmp_path):
         """Discontinuous records for one source ID are not coalesced."""
-        import pymseed
+        pymseed = pytest.importorskip("pymseed")
 
         start = pymseed.timestr2nstime("2024-01-01T00:00:00Z")
         path = _write_mseed(
@@ -250,6 +322,9 @@ class TestMiniSeedScan:
         monkeypatch.setattr(mseed_core, "optional_import", _optional_import)
         with pytest.raises(MissingOptionalDependencyError):
             dc.read(mseed_v3_path, file_format="MSEED", file_version="3")
+
+        with pytest.raises(MissingOptionalDependencyError):
+            dc.scan(mseed_v3_path, file_format="MSEED", file_version="3")
 
 
 class TestMiniSeedUtils:
@@ -296,48 +371,112 @@ class TestMiniSeedUtils:
 
         assert mseed_utils._record_to_segment(Record(), None, (20, 30)) is None
 
+    def test_patch_from_segments_defaults_to_local_channel_indices(self):
+        """Patches can still be built without a global channel map."""
+        segment = _trace_segment()
+        group_key = mseed_utils._get_group_key(segment)
+        patch = mseed_utils._patch_from_segments(group_key, [segment])
+        assert tuple(patch.get_coord("channel").values) == (0,)
+
+    def test_source_patch_id_uses_group_key_fields(self):
+        """Source patch IDs are built from the typed MiniSEED group key."""
+        group_key = mseed_utils._TraceGroupKey(
+            format_version="3",
+            network="XX",
+            location="",
+            seed_channel="HSF",
+            start_ns=10,
+            sample_rate=10.0,
+            sample_count=12,
+        )
+        assert mseed_utils._source_patch_id(group_key) == "v3:XX..HSF:10:10:12"
+
     def test_detect_format_no_records(self, tmp_path):
         """Files with no records are not MiniSEED."""
-
-        class FakeMS3Record:
-            @staticmethod
-            def from_file(path, unpack_data=False):
-                return iter(())
-
-        class FakePyMseed:
-            MS3Record = FakeMS3Record
-
-        out = mseed_utils._detect_format(tmp_path / "empty.mseed", FakePyMseed)
+        path = tmp_path / "empty.mseed"
+        path.write_bytes(b"")
+        out = mseed_utils._detect_format(path)
         assert out is False
+
+    def test_detect_format_missing_file(self, tmp_path):
+        """Missing paths are not MiniSEED."""
+        assert mseed_utils._detect_format(tmp_path / "missing.mseed") is False
 
     def test_detect_format_unsupported_version(self, tmp_path):
         """Unsupported MiniSEED versions are rejected."""
+        path = tmp_path / "v4.mseed"
+        path.write_bytes(b"MS\x04" + bytes(45))
+        assert mseed_utils._detect_format(path) is False
 
-        class Record:
-            formatversion = 4
+    @pytest.mark.parametrize(
+        "field,value",
+        (
+            ("sequence", b"A00001"),
+            ("record_type", b"X"),
+            ("reserved", b"X"),
+            ("station", b"     "),
+            ("channel", b"H F"),
+            ("network", b"  "),
+            ("year", bytes.fromhex("0700")),
+            ("data_offset", bytes.fromhex("002f")),
+            ("sample_count", bytes.fromhex("0000")),
+        ),
+    )
+    def test_detect_mseed_v2_header_rejects_invalid_fields(self, field, value):
+        """Each fixed-header guard can reject invalid MiniSEED 2 headers."""
+        header = _mseed_v2_header()
+        slices = {
+            "sequence": slice(0, 6),
+            "record_type": slice(6, 7),
+            "reserved": slice(7, 8),
+            "station": slice(8, 13),
+            "channel": slice(15, 18),
+            "network": slice(18, 20),
+            "year": slice(20, 22),
+            "data_offset": slice(44, 46),
+            "sample_count": slice(30, 32),
+        }
+        header[slices[field]] = value
+        assert not mseed_utils._detect_mseed_v2_header(header)
 
-        class FakeMS3Record:
-            @staticmethod
-            def from_file(path, unpack_data=False):
-                yield Record()
+    def test_detect_mseed_v2_header_rejects_short_header(self):
+        """Truncated fixed headers are not MiniSEED 2."""
+        assert not mseed_utils._detect_mseed_v2_header(bytes(47))
 
-        class FakePyMseed:
-            MS3Record = FakeMS3Record
+    def test_detect_mseed_v2_header_handles_unpack_error(self, monkeypatch):
+        """Header unpack failures are treated as non-MiniSEED."""
 
-        assert mseed_utils._detect_format(tmp_path / "v4.mseed", FakePyMseed) is False
+        def _raise_unpack(*args, **kwargs):
+            raise ValueError("bad unpack")
+
+        monkeypatch.setattr(mseed_utils, "unpack", _raise_unpack)
+        assert not mseed_utils._detect_mseed_v2_header(_mseed_v2_header())
+
+    def test_close_sample_rates_have_distinct_source_patch_ids(self):
+        """Full precision sample rates avoid source patch ID collisions."""
+        group_a = mseed_utils._TraceGroupKey("3", "XX", "", "HSF", 0, 1.00000001, 10)
+        group_b = mseed_utils._TraceGroupKey("3", "XX", "", "HSF", 0, 1.00000002, 10)
+        assert mseed_utils._source_patch_id(group_a) != mseed_utils._source_patch_id(
+            group_b
+        )
 
 
 class TestRealMiniSeed:
     """Tests using real DAS MiniSEED data from the test-data registry."""
 
-    def test_read_merged_das_station_channels(self):
-        """Etna DAS station-coded channels read as one channel-time patch."""
+    def test_read_das_station_channels(self):
+        """Etna DAS station-coded channels preserve their full sample counts."""
+        pytest.importorskip("pymseed")
         from dascore.utils.downloader import fetch
 
         path = fetch("etna_9n_3chan_10s.mseed")
-        patch = dc.read(path)[0]
-        assert patch.dims == ("channel", "time")
-        assert patch.shape[0] == 3
-        assert tuple(patch.coords.get_array("network")) == ("9N", "9N", "9N")
-        assert tuple(patch.coords.get_array("station")) == ("00066", "00067", "00068")
-        assert tuple(patch.coords.get_array("seed_channel")) == ("HSF", "HSF", "HSF")
+        spool = dc.read(path)
+        assert len(spool) == 3
+        assert sorted(x.shape for x in spool) == [(1, 13556), (1, 13729), (1, 13735)]
+        assert {x.coords.get_array("network")[0] for x in spool} == {"9N"}
+        assert {x.coords.get_array("station")[0] for x in spool} == {
+            "00066",
+            "00067",
+            "00068",
+        }
+        assert {x.coords.get_array("seed_channel")[0] for x in spool} == {"HSF"}

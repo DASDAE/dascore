@@ -214,6 +214,19 @@ def _get_coord_trim_values(coord):
     return values[start_ind], values[stop_ind]
 
 
+def _assert_spool_dim_selection(spool, dim, trim_tuple, start_op, stop_op):
+    """Assert all patches in a selected spool respect a requested dim range."""
+    assert len(spool)
+    for patch in spool:
+        _assert_coords_attrs_match(patch)
+        coord = patch.get_coord(dim)
+        summary = patch.summary.get_coord_summary(dim)
+        start = summary.min if trim_tuple[0] in (None, ...) else trim_tuple[0]
+        stop = summary.max if trim_tuple[1] in (None, ...) else trim_tuple[1]
+        _assert_op_or_close(coord.min(), start, start_op)
+        _assert_op_or_close(coord.max(), stop, stop_op)
+
+
 # --- Tests
 
 
@@ -317,32 +330,15 @@ class TestRead:
             # first test double ended query
             trim_tuple = (trim_start, trim_stop)
             spool = io.read(path, **{dim: trim_tuple})
-            assert len(spool) == 1
-            patch = spool[0]
-            _assert_coords_attrs_match(patch)
-            coord = patch.get_coord(dim)
-            _assert_op_or_close(coord.min(), trim_tuple[0], ge)
-            _assert_op_or_close(coord.max(), trim_tuple[1], le)
+            _assert_spool_dim_selection(spool, dim, trim_tuple, ge, le)
             # then single-ended query on start side
             trim_tuple = (trim_start, ...)
             spool = io.read(path, **{dim: trim_tuple})
-            assert len(spool) == 1
-            patch = spool[0]
-            summary = patch.summary
-            _assert_coords_attrs_match(patch)
-            coord = patch.get_coord(dim)
-            _assert_op_or_close(coord.min(), trim_tuple[0], ge)
-            _assert_op_or_close(coord.max(), summary.get_coord_summary(dim).max, eq)
+            _assert_spool_dim_selection(spool, dim, trim_tuple, ge, eq)
             # then single-ended query on end side
             trim_tuple = (None, trim_start)
             spool = io.read(path, **{dim: trim_tuple})
-            assert len(spool) == 1
-            patch = spool[0]
-            summary = patch.summary
-            _assert_coords_attrs_match(patch)
-            coord = patch.get_coord(dim)
-            _assert_op_or_close(coord.min(), summary.get_coord_summary(dim).min, eq)
-            _assert_op_or_close(coord.max(), trim_tuple[1], le)
+            _assert_spool_dim_selection(spool, dim, trim_tuple, eq, le)
 
     def test_slice_out_all_patches_time(self, io_path_tuple):
         """Ensure slicing outside of file time range returns an empty spool."""

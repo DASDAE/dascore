@@ -3,6 +3,10 @@
 DASCore maps MiniSEED source IDs into 2D ``("channel", "time")`` patches.
 MiniSEED source identity is preserved as per-channel coordinates instead of
 scalar attrs because one DASCore patch can contain many MiniSEED sources.
+Compatible MiniSEED sources share one patch only when they also have the same
+sample count. Unequal-length sources are returned as separate patches with
+stable ``channel`` coordinate values so selections still refer to the same
+source across split patches.
 
 The mapping follows the FDSN source identifier convention, where a SEED NSLC
 code maps to ``FDSN:<network>_<station>_<location>_<band>_<source>_<subsource>``.
@@ -34,8 +38,7 @@ class MSeedV2(FiberIO):
 
     def get_format(self, path: LocalPath, **kwargs) -> tuple[str, str] | bool:
         """Determine if path is a MiniSEED file."""
-        pymseed = optional_import("pymseed")
-        return _detect_format(path, pymseed)
+        return _detect_format(path)
 
     def scan(self, path: LocalPath, **kwargs) -> list[ScanPayload]:
         """Scan a MiniSEED file."""

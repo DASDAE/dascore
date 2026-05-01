@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from itertools import groupby
 from math import ceil, floor
+from struct import unpack
 
 import numpy as np
 
@@ -13,7 +14,7 @@ from dascore.constants import ONE_BILLION
 from dascore.core import get_coord
 from dascore.io import ScanPayload
 from dascore.io.core import _patch_to_scan_payload
-from dascore.utils.io import LocalPath, _normalize_source_patch_ids
+from dascore.utils.io import LocalPath, _normalize_source_patch_ids, _read_file_header
 from dascore.utils.time import to_datetime64, to_int
 
 _TimeLimits = tuple[int | None, int | None]
@@ -51,6 +52,19 @@ class _TraceSegment:
     def next_start_ns(self) -> int:
         """Return the expected start time of the next contiguous segment."""
         return self.start_ns + self.sample_count * self.sample_step_ns
+
+
+@dataclass(frozen=True, order=True)
+class _TraceGroupKey:
+    """Compatibility fields that define one MiniSEED output patch."""
+
+    format_version: str
+    network: str
+    location: str
+    seed_channel: str
+    start_ns: int
+    sample_rate: float
+    sample_count: int
 
 
 def _sample_step_ns(sample_rate: float) -> int:
@@ -196,15 +210,16 @@ def _read_segments(path: LocalPath, pymseed, time=None) -> list[_TraceSegment]:
     return _coalesce_source_segments(segments)
 
 
-def _get_group_key(segment: _TraceSegment):
+def _get_group_key(segment: _TraceSegment) -> _TraceGroupKey:
     """Return the compatibility key used to merge traces into a patch."""
-    return (
-        segment.format_version,
-        segment.network,
-        segment.location,
-        segment.seed_channel,
-        segment.start_ns,
-        segment.sample_rate,
+    return _TraceGroupKey(
+        format_version=segment.format_version,
+        network=segment.network,
+        location=segment.location,
+        seed_channel=segment.seed_channel,
+        start_ns=segment.start_ns,
+        sample_rate=segment.sample_rate,
+        sample_count=segment.sample_count,
     )
 
 
@@ -215,25 +230,46 @@ def _group_segments(segments: list[_TraceSegment]):
         yield key, list(group)
 
 
-def _source_patch_id(group_key) -> str:
+def _get_channel_map(segments: list[_TraceSegment]) -> dict[str, int]:
+    """Return stable channel indices for MiniSEED sources."""
+    source_ids = {
+        x.source_id: (x.station, x.source_id)
+        for x in sorted(segments, key=lambda y: (y.station, y.source_id))
+    }
+    return {source_id: ind for ind, source_id in enumerate(source_ids)}
+
+
+def _source_patch_id(group_key: _TraceGroupKey) -> str:
     """Return a stable source patch ID for a MiniSEED group."""
-    version, network, location, seed_channel, start_ns, sample_rate = group_key
-    source_key = ".".join((network, location, seed_channel))
-    return f"v{version}:{source_key}:{start_ns}:{sample_rate:g}"
+    source_key = ".".join(
+        (group_key.network, group_key.location, group_key.seed_channel)
+    )
+    rate_key = format(group_key.sample_rate, ".17g")
+    return (
+        f"v{group_key.format_version}:{source_key}:"
+        f"{group_key.start_ns}:{rate_key}:{group_key.sample_count}"
+    )
 
 
-def _patch_from_segments(group_key, segments: list[_TraceSegment]) -> dc.Patch:
+def _patch_from_segments(
+    group_key, segments: list[_TraceSegment], channel_map: dict[str, int] | None = None
+) -> dc.Patch:
     """Create a DASCore Patch from compatible MiniSEED trace segments."""
     segments = sorted(segments, key=lambda x: (x.station, x.source_id))
     first = segments[0]
-    sample_count = min(x.sample_count for x in segments)
+    sample_count = first.sample_count
     source_ids = tuple(x.source_id for x in segments)
-    data = np.stack([x.data[:sample_count] for x in segments])
+    channel_values = (
+        tuple(channel_map[x.source_id] for x in segments)
+        if channel_map is not None
+        else tuple(range(len(segments)))
+    )
+    data = np.stack([x.data for x in segments])
     step = np.timedelta64(first.sample_step_ns, "ns")
     start = np.datetime64(first.start_ns, "ns")
     stop = start + step * sample_count
     coords = {
-        "channel": np.arange(len(segments)),
+        "channel": get_coord(data=np.asarray(channel_values)),
         "time": get_coord(start=start, stop=stop, step=step),
         "source_id": (("channel",), source_ids),
         "network": (("channel",), tuple(x.network for x in segments)),
@@ -262,7 +298,9 @@ def _get_patches(
     read_time = None if wanted_ids else time
     trim_limits = _get_time_limits(time) if wanted_ids else (None, None)
     patches = []
-    segment_groups = _group_segments(_read_segments(path, pymseed, read_time))
+    all_segments = _read_segments(path, pymseed, read_time)
+    channel_map = _get_channel_map(all_segments)
+    segment_groups = _group_segments(all_segments)
     for group_key, segments in segment_groups:
         patch_id = _source_patch_id(group_key)
         if wanted_ids and patch_id not in wanted_ids:
@@ -275,35 +313,81 @@ def _get_patches(
             ]
         if not segments:
             continue
-        patch = _patch_from_segments(group_key, segments)
+        patch = _patch_from_segments(group_key, segments, channel_map=channel_map)
         if channel is not None:
             patch = patch.select(channel=channel)
         if patch.size:
             patches.append(patch)
-    return patches
+    return sorted(patches, key=lambda x: x.get_coord("channel").min())
 
 
 def _scan_patches(path, pymseed) -> list[ScanPayload]:
     """Return scan payloads for MiniSEED patches."""
-    out = []
-    for group_key, segments in _group_segments(_read_segments(path, pymseed)):
-        patch = _patch_from_segments(group_key, segments)
-        out.append(_patch_to_scan_payload(patch))
-    return out
+    patches = []
+    all_segments = _read_segments(path, pymseed)
+    channel_map = _get_channel_map(all_segments)
+    for group_key, segments in _group_segments(all_segments):
+        patch = _patch_from_segments(group_key, segments, channel_map=channel_map)
+        patches.append(patch)
+    patches = sorted(patches, key=lambda x: x.get_coord("channel").min())
+    return [_patch_to_scan_payload(x) for x in patches]
 
 
-def _detect_format(path: LocalPath, pymseed) -> tuple[str, str] | bool:
-    """Return the MiniSEED version for a path or False."""
-    versions = set()
+def _is_ascii_digit(value: int) -> bool:
+    """Return True if an integer byte is an ASCII digit."""
+    return 48 <= value <= 57
+
+
+def _is_seed_code(value: bytes, *, allow_space: bool = True) -> bool:
+    """Return True if bytes are plausible SEED code bytes."""
+    allowed = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    if allow_space:
+        allowed += b" "
+    return bool(value.strip()) and all(char in allowed for char in value)
+
+
+def _detect_mseed_v2_header(header: bytes) -> bool:
+    """Return True if a fixed MiniSEED 2 header looks valid."""
+    if len(header) < 48:
+        return False
+    if not all(_is_ascii_digit(char) for char in header[:6]):
+        return False
+    if header[6:7] not in b"DRQM":
+        return False
+    if header[7] not in (0, 32):
+        return False
+    if not _is_seed_code(header[8:13]):
+        return False
+    if not _is_seed_code(header[15:18], allow_space=False):
+        return False
+    if not _is_seed_code(header[18:20]):
+        return False
     try:
-        for record in _iter_records(path, pymseed, unpack_data=False):
-            versions.add(str(record.formatversion))
-            break
+        year, day = unpack(">HH", header[20:24])
+        hour, minute, second = header[24:27]
+        _unused, frac_seconds, sample_count = unpack(">BHH", header[27:32])
+        data_offset, blockette_offset = unpack(">HH", header[44:48])
     except Exception:
         return False
-    if not versions:
-        return False
-    version = next(iter(versions))
-    if version in {"2", "3"}:
-        return "MSEED", version
+    valid_time = (
+        1900 <= year <= 2600
+        and 1 <= day <= 366
+        and hour <= 23
+        and minute <= 59
+        and second <= 60
+        and frac_seconds <= 9_999
+    )
+    valid_offsets = data_offset >= 48 and (
+        blockette_offset == 0 or blockette_offset >= 48
+    )
+    return valid_time and valid_offsets and sample_count > 0
+
+
+def _detect_format(path: LocalPath) -> tuple[str, str] | bool:
+    """Return the MiniSEED version for a path or False."""
+    header = _read_file_header(path, 48)
+    if header.startswith(b"MS\x03"):
+        return "MSEED", "3"
+    if _detect_mseed_v2_header(header):
+        return "MSEED", "2"
     return False

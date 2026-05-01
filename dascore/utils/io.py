@@ -85,6 +85,15 @@ def _normalize_source_patch_ids(source_patch_id) -> set[str]:
     return {str(value) for value in iterate(source_patch_id) if value not in (None, "")}
 
 
+def _read_file_header(path, length: int) -> bytes:
+    """Return the first bytes from a file-like path or empty bytes on IO errors."""
+    try:
+        with open(path, "rb") as fi:
+            return fi.read(length)
+    except OSError:
+        return b""
+
+
 class BinaryReader(io.BytesIO):
     """Base file for reading binary files."""
 
