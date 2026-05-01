@@ -618,6 +618,12 @@ def _get_time_coord_from_samples(start: np.datetime64, sample_rate: float, size:
 
 def _get_distance_coord(start_channel: int, spacing: float, count: int, step: int = 1):
     """Build the distance coordinate."""
+    if not np.isfinite(spacing) or spacing <= 0:
+        msg = f"Invalid Sintela protobuf channel_spacing: {spacing!r}."
+        raise InvalidFiberFileError(msg)
+    if isinstance(step, bool) or not isinstance(step, int | np.integer) or step <= 0:
+        msg = f"Invalid Sintela protobuf channel_step: {step!r}."
+        raise InvalidFiberFileError(msg)
     start = start_channel * spacing
     return get_coord(
         start=start,
@@ -698,6 +704,17 @@ def _normalize_demod_data_type(code: int) -> str:
     return str(code)
 
 
+def _get_band_attr_data_type(band_def: tuple[tuple[Any, ...], ...]) -> tuple[str, str]:
+    """Return patch-level BAND data type/units when all bands agree."""
+    mapped = [_BAND_DATA_TYPE_MAP.get(int(item[0])) for item in band_def]
+    if any(item is None for item in mapped):
+        return "", ""
+    first = mapped[0]
+    if all(item == first for item in mapped):
+        return first
+    return "", ""
+
+
 def _assert_equal(name: str, values: list[Any]):
     """Ensure all values in a list are equal."""
     if not values:
@@ -747,9 +764,9 @@ def _get_timeseries_metadata(
     sample_rates = [float(ch.sample_rate) for ch in common_headers]
     _assert_positive_finite_float("sample_rate", sample_rates)
     sample_rate = _assert_float_equal("sample_rate", sample_rates)
-    channel_spacing = _assert_float_equal(
-        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
-    )
+    channel_spacing_values = [float(ch.channel_spacing) for ch in common_headers]
+    _assert_positive_finite_float("channel_spacing", channel_spacing_values)
+    channel_spacing = _assert_float_equal("channel_spacing", channel_spacing_values)
     gauge_length = _assert_float_equal(
         "gauge_length", [float(ch.gauge_length) for ch in common_headers]
     )
@@ -822,9 +839,9 @@ def _get_band_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> BandM
     num_channels = _assert_equal(
         "num_channels", [int(ch.num_channels) for ch in common_headers]
     )
-    channel_spacing = _assert_float_equal(
-        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
-    )
+    channel_spacing_values = [float(ch.channel_spacing) for ch in common_headers]
+    _assert_positive_finite_float("channel_spacing", channel_spacing_values)
+    channel_spacing = _assert_float_equal("channel_spacing", channel_spacing_values)
     gauge_length = _assert_float_equal(
         "gauge_length", [float(ch.gauge_length) for ch in common_headers]
     )
@@ -869,8 +886,7 @@ def _get_band_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> BandM
         },
         dims=DIMS_BAND,
     )
-    first_type = int(band_def[0][0])
-    data_type, data_units = _BAND_DATA_TYPE_MAP.get(first_type, ("", ""))
+    data_type, data_units = _get_band_attr_data_type(band_def)
     attrs = _base_attrs(
         common_headers[0],
         packet_type=parsed[0][0],
@@ -901,9 +917,9 @@ def _get_fft_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> FFTMet
     num_channels = _assert_equal(
         "num_channels", [int(ch.num_channels) for ch in common_headers]
     )
-    channel_spacing = _assert_float_equal(
-        "channel_spacing", [float(ch.channel_spacing) for ch in common_headers]
-    )
+    channel_spacing_values = [float(ch.channel_spacing) for ch in common_headers]
+    _assert_positive_finite_float("channel_spacing", channel_spacing_values)
+    channel_spacing = _assert_float_equal("channel_spacing", channel_spacing_values)
     gauge_length = _assert_float_equal(
         "gauge_length", [float(ch.gauge_length) for ch in common_headers]
     )
@@ -911,7 +927,9 @@ def _get_fft_metadata(parsed: list[tuple[str, Any]], meta: ParsedMeta) -> FFTMet
         "start_channel", [int(ch.start_channel) for ch in common_headers]
     )
     num_bins = _assert_equal("num_bins", [int(h.num_bins) for h in headers])
-    bin_res = _assert_float_equal("bin_res", [float(h.bin_res) for h in headers])
+    bin_res_values = [float(h.bin_res) for h in headers]
+    _assert_positive_finite_float("bin_res", bin_res_values)
+    bin_res = _assert_float_equal("bin_res", bin_res_values)
     has_complex = _assert_equal(
         "has_complex_data", [bool(h.has_complex_data) for h in headers]
     )
