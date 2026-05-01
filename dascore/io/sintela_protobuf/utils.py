@@ -577,6 +577,7 @@ def _parse_records(
     decode_error = _get_protobuf_decode_error()
     parsed: list[Any] = []
     meta = ParsedMeta()
+    first_unsupported_tag = None
     for record in records:
         tag = record.tag
         if tag == META_TAG:
@@ -589,7 +590,8 @@ def _parse_records(
         elif tag in FFT_TAGS:
             msg = messages["FFTPacket"]()
         else:
-            raise InvalidFiberFileError(f"Unsupported Sintela protobuf tag {tag!r}.")
+            first_unsupported_tag = first_unsupported_tag or tag
+            continue
         try:
             msg.ParseFromString(record.payload)
         except decode_error as exc:
@@ -597,6 +599,10 @@ def _parse_records(
             raise InvalidFiberFileError(out) from exc
         parsed.append((tag, msg))
     if not parsed:
+        if first_unsupported_tag is not None:
+            raise InvalidFiberFileError(
+                f"Unsupported Sintela protobuf tag {first_unsupported_tag!r}."
+            )
         raise InvalidFiberFileError("No supported Sintela protobuf data packets found.")
     return parsed, meta
 
