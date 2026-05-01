@@ -519,6 +519,8 @@ class TestSintelaProtobuf:
             "unknown_then_ts.pb", [("ABCD", b"\x01"), *ts_records]
         )
         assert fiber_io.get_format(path) == ("Sintela_Protobuf", "1")
+        assert fiber_io.scan(path)
+        assert fiber_io.read(path)
 
     def test_truncated_payload_raises(self, fiber_io, tmp_path):
         """Truncated payloads should fail in scan."""
