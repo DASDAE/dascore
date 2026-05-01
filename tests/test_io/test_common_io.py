@@ -29,6 +29,7 @@ from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus1, Febus2
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
+from dascore.io.mseed.core import MSeedV2
 from dascore.io.netcdf import NetCDFCFV18
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.optodas import OptoDASV8
@@ -89,6 +90,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     NetCDFCFV18(): ("xdas_netcdf.nc",),
+    MSeedV2(): ("etna_9n_3chan_10s.mseed",),
 }
 
 # This tuple is for fiber io which support a write method and can write
@@ -202,6 +204,16 @@ def _assert_op_or_close(val1, val2, op):
     raise AssertionError(msg)
 
 
+def _get_coord_trim_values(coord):
+    """Return existing coordinate values to use for read selections."""
+    values = coord.values
+    if len(values) == 1:
+        return values[0], values[0]
+    start_ind = min(max(1, len(values) // 10), len(values) - 1)
+    stop_ind = min(max(start_ind, 2 * len(values) // 10), len(values) - 1)
+    return values[start_ind], values[stop_ind]
+
+
 # --- Tests
 
 
@@ -299,14 +311,11 @@ class TestRead:
         with skip_missing():
             summaries_from_file = [_scan_summary(x) for x in dc.scan(path)]
         assert len(summaries_from_file)
-        summary_init = summaries_from_file[0]
-        for dim in summary_init.dim_tuple:
-            summary_coord = summary_init.get_coord_summary(dim)
-            start = summary_coord.min
-            stop = summary_coord.max
-            duration = stop - start
+        patch_init = _cached_read(path, io=io)[0]
+        for dim in patch_init.dims:
+            trim_start, trim_stop = _get_coord_trim_values(patch_init.get_coord(dim))
             # first test double ended query
-            trim_tuple = (start + duration / 10, start + 2 * duration / 10)
+            trim_tuple = (trim_start, trim_stop)
             spool = io.read(path, **{dim: trim_tuple})
             assert len(spool) == 1
             patch = spool[0]
@@ -315,7 +324,7 @@ class TestRead:
             _assert_op_or_close(coord.min(), trim_tuple[0], ge)
             _assert_op_or_close(coord.max(), trim_tuple[1], le)
             # then single-ended query on start side
-            trim_tuple = (start + duration / 10, ...)
+            trim_tuple = (trim_start, ...)
             spool = io.read(path, **{dim: trim_tuple})
             assert len(spool) == 1
             patch = spool[0]
@@ -325,7 +334,7 @@ class TestRead:
             _assert_op_or_close(coord.min(), trim_tuple[0], ge)
             _assert_op_or_close(coord.max(), summary.get_coord_summary(dim).max, eq)
             # then single-ended query on end side
-            trim_tuple = (None, start + duration / 10)
+            trim_tuple = (None, trim_start)
             spool = io.read(path, **{dim: trim_tuple})
             assert len(spool) == 1
             patch = spool[0]
