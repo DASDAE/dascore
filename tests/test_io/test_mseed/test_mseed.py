@@ -89,17 +89,69 @@ def _trace_segment(**kwargs):
         record_length=256,
     )
     defaults.update(kwargs)
-    info = mseed_utils._TraceInfo(**defaults)
-    return mseed_utils._TraceSegment(info=info, data=data)
+    return mseed_utils._TraceSegment(**defaults, data=data)
 
 
 def _trace_summary(**kwargs):
     """Return a small MiniSEED trace summary for helper tests."""
     segment = _trace_segment(**kwargs)
+    summary_kwargs = {
+        key: getattr(segment, key) for key in mseed_utils._TraceInfo.__annotations__
+    }
     return mseed_utils._TraceSummary(
-        info=segment.info,
+        **summary_kwargs,
         dtype=str(segment.data.dtype),
     )
+
+
+class _MiniSeedRecord:
+    """Small record stub for exercising read-planning paths."""
+
+    def __init__(
+        self,
+        sourceid="FDSN:XX_00000__H_S_F",
+        data=None,
+        samprate=10.0,
+        starttime=0,
+        fail_unpack=False,
+    ):
+        self.sourceid = sourceid
+        self.formatversion = 3
+        self.starttime = starttime
+        self.samprate = samprate
+        self.np_datasamples = np.arange(3, dtype=np.int32) if data is None else data
+        self.samplecnt = len(self.np_datasamples)
+        self.endtime = starttime + int((self.samplecnt - 1) * 1_000_000_000 / samprate)
+        self.sampletype = "i"
+        self.encoding = 3
+        self.pubversion = 0
+        self.reclen = 256
+        self.fail_unpack = fail_unpack
+
+    def unpack_data(self):
+        """Raise when a test expects this record to be skipped."""
+        if self.fail_unpack:
+            raise AssertionError(f"{self.sourceid} should not unpack")
+
+
+def _pymseed_for_records(records):
+    """Return a small PyMseed-like object for record iteration tests."""
+
+    class PyMseed:
+        class MS3Record:
+            @staticmethod
+            def from_file(path, *, unpack_data):
+                assert path == "unused"
+                assert unpack_data is False
+                yield from records
+
+        @staticmethod
+        def sourceid2nslc(source_id):
+            _, rest = source_id.split(":", maxsplit=1)
+            network, station, location, band, source, subsource = rest.split("_")
+            return network, station, location, f"{band}{source}{subsource}"
+
+    return PyMseed
 
 
 @pytest.fixture
@@ -297,6 +349,56 @@ class TestMiniSeedRead:
         )
         assert len(spool) == 0
 
+    def test_source_patch_id_skips_unselected_record_unpack(self):
+        """source_patch_id reads do not decode records outside selected groups."""
+        records = [
+            _MiniSeedRecord("FDSN:XX_00000__H_S_F", samprate=10.0),
+            _MiniSeedRecord("FDSN:XX_00001__H_S_F", samprate=20.0, fail_unpack=True),
+        ]
+        target = "v3:XX..HSF:0:10:3"
+        patches = mseed_utils._get_patches(
+            "unused",
+            _pymseed_for_records(records),
+            source_patch_id=target,
+        )
+        assert len(patches) == 1
+        assert patches[0].attrs["_source_patch_id"] == target
+        assert tuple(patches[0].get_coord("channel").values) == (0,)
+
+    def test_channel_filter_skips_unselected_record_unpack(self):
+        """Channel reads do not decode records outside selected channels."""
+        records = [
+            _MiniSeedRecord("FDSN:XX_00000__H_S_F"),
+            _MiniSeedRecord("FDSN:XX_00001__H_S_F", fail_unpack=True),
+        ]
+        patches = mseed_utils._get_patches(
+            "unused",
+            _pymseed_for_records(records),
+            channel=(0, 0),
+        )
+        assert len(patches) == 1
+        assert tuple(patches[0].get_coord("channel").values) == (0,)
+
+    def test_unmatched_source_patch_id_returns_no_patches(self):
+        """Unknown source patch IDs produce no decoded patches."""
+        records = [_MiniSeedRecord("FDSN:XX_00000__H_S_F", fail_unpack=True)]
+        patches = mseed_utils._get_patches(
+            "unused",
+            _pymseed_for_records(records),
+            source_patch_id="v3:XX..HSF:1:10:3",
+        )
+        assert patches == []
+
+    def test_unmatched_channel_returns_no_patches(self):
+        """Channel selections with no sources produce no decoded patches."""
+        records = [_MiniSeedRecord("FDSN:XX_00000__H_S_F", fail_unpack=True)]
+        patches = mseed_utils._get_patches(
+            "unused",
+            _pymseed_for_records(records),
+            channel=(10, 10),
+        )
+        assert patches == []
+
     def test_discontinuous_source_records_are_separate_patches(self, tmp_path):
         """Discontinuous records for one source ID are not coalesced."""
         pymseed = pytest.importorskip("pymseed")
@@ -476,6 +578,11 @@ class TestMiniSeedUtils:
                 raise AssertionError("should not unpack")
 
         assert mseed_utils._record_to_segment(Record(), None, (20, 30)) is None
+
+    def test_trim_segment_time_returns_none_for_empty_selection(self):
+        """Time trimming can remove all samples from a decoded segment."""
+        segment = _trace_segment()
+        assert mseed_utils._trim_segment_time(segment, (25_000_000, 75_000_000)) is None
 
     def test_record_dtype_from_sample_type(self):
         """Populated sample types are preferred when inferring scan dtype."""
