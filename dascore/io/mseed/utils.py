@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import struct
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from itertools import groupby
 from math import ceil, floor
 from struct import unpack
@@ -77,7 +79,9 @@ class _TraceInfo:
     @property
     def next_start_ns(self) -> int:
         """Return the expected start time of the next contiguous segment."""
-        return self.start_ns + self.sample_count * self.sample_step_ns
+        return self.start_ns + _sample_count_duration_ns(
+            self.sample_rate, self.sample_count
+        )
 
 
 @dataclass(frozen=True)
@@ -118,6 +122,17 @@ def _sample_step_ns(sample_rate: float) -> int:
         raise ValueError(msg)
     # MiniSEED negative sample rates encode the sample period in seconds.
     seconds = 1 / sample_rate if sample_rate > 0 else abs(sample_rate)
+    return round(seconds * ONE_BILLION)
+
+
+def _sample_count_duration_ns(sample_rate: float, sample_count: int) -> int:
+    """Convert a sample count to nanoseconds without per-sample drift."""
+    if sample_rate == 0:
+        msg = "MiniSEED sample rate cannot be zero."
+        raise ValueError(msg)
+    rate = Fraction(str(sample_rate))
+    samples = Fraction(sample_count, 1)
+    seconds = samples / rate if rate > 0 else samples * abs(rate)
     return round(seconds * ONE_BILLION)
 
 
@@ -331,9 +346,11 @@ def _coalesce_source_segments(segments: list[_TraceSegment]) -> list[_TraceSegme
             can_merge = (
                 pending.sample_rate == seg.sample_rate
                 and pending.format_version == seg.format_version
-                and pending.start_ns + sample_count * pending.sample_step_ns
+                and pending.start_ns
+                + _sample_count_duration_ns(pending.sample_rate, sample_count)
                 == seg.start_ns
                 and pending.data.dtype == seg.data.dtype
+                and pending.encoding == seg.encoding
             )
             if can_merge:
                 data.append(seg.data)
@@ -641,7 +658,7 @@ def _detect_mseed_v2_header(header: bytes) -> bool:
         hour, minute, second = header[24:27]
         _unused, frac_seconds, sample_count = unpack(">BHH", header[27:32])
         data_offset, blockette_offset = unpack(">HH", header[44:48])
-    except Exception:
+    except struct.error:
         return False
     valid_time = (
         1900 <= year <= 2600

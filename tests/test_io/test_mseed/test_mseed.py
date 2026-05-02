@@ -513,10 +513,18 @@ class TestMiniSeedUtils:
         """A zero sample rate cannot be converted to a sample step."""
         with pytest.raises(ValueError, match="sample rate"):
             mseed_utils._sample_step_ns(0)
+        with pytest.raises(ValueError, match="sample rate"):
+            mseed_utils._sample_count_duration_ns(0, 1)
 
     def test_negative_sample_rate_is_sample_period(self):
         """Negative MiniSEED sample rates are interpreted as sample periods."""
         assert mseed_utils._sample_step_ns(-0.1) == 100_000_000
+
+    def test_next_start_ns_avoids_sample_step_drift(self):
+        """Record adjacency uses total duration instead of rounded sample steps."""
+        segment = _trace_segment(sample_rate=3.0, sample_count=3)
+        assert segment.sample_step_ns == 333_333_333
+        assert segment.next_start_ns == 1_000_000_000
 
     def test_open_time_limits(self):
         """None and ellipsis are open time bounds."""
@@ -631,6 +639,13 @@ class TestMiniSeedUtils:
         out = mseed_utils._coalesce_source_summaries([first, second])
         assert len(out) == 2
 
+    def test_source_segments_with_different_encodings_are_not_coalesced(self):
+        """Read and scan coalescing both preserve MiniSEED encoding changes."""
+        first = _trace_segment(encoding="3")
+        second = _trace_segment(start_ns=first.next_start_ns, encoding="11")
+        out = mseed_utils._coalesce_source_segments([first, second])
+        assert len(out) == 2
+
     def test_patch_from_segments_defaults_to_local_channel_indices(self):
         """Patches can still be built without a global channel map."""
         segment = _trace_segment()
@@ -707,7 +722,7 @@ class TestMiniSeedUtils:
         """Header unpack failures are treated as non-MiniSEED."""
 
         def _raise_unpack(*args, **kwargs):
-            raise ValueError("bad unpack")
+            raise mseed_utils.struct.error("bad unpack")
 
         monkeypatch.setattr(mseed_utils, "unpack", _raise_unpack)
         assert not mseed_utils._detect_mseed_v2_header(_mseed_v2_header())
