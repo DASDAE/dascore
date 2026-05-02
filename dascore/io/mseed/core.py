@@ -31,7 +31,7 @@ https://geofon.gfz.de/redmine/projects/redmine/wiki/DAS.
 from __future__ import annotations
 
 import dascore as dc
-from dascore.constants import SpoolType, opt_timeable_types
+from dascore.constants import opt_timeable_types
 from dascore.io import FiberIO, ScanPayload
 from dascore.utils.io import LocalPath
 from dascore.utils.misc import optional_import
@@ -46,27 +46,27 @@ class MSeedV2(FiberIO):
     preferred_extensions = ("mseed", "msd", "miniseed")
     version = "2"
 
-    def get_format(self, path: LocalPath, **kwargs) -> tuple[str, str] | bool:
+    def get_format(self, resource: LocalPath, **kwargs) -> tuple[str, str] | bool:
         """Determine if path is a MiniSEED file."""
-        return _detect_format(path)
+        return _detect_format(resource)
 
-    def scan(self, path: LocalPath, **kwargs) -> list[ScanPayload]:
+    def scan(self, resource: LocalPath, **kwargs) -> list[ScanPayload]:
         """Scan a MiniSEED file."""
         pymseed = optional_import("pymseed")
-        return _scan_patches(path, pymseed)
+        return _scan_patches(resource, pymseed)
 
     def read(
         self,
-        path: LocalPath,
+        resource: LocalPath,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         channel: tuple[int | None, int | None] | None = None,
         source_patch_id=(),
         **kwargs,
-    ) -> SpoolType:
+    ) -> dc.BaseSpool:
         """Read a MiniSEED file."""
         pymseed = optional_import("pymseed")
         patches = _get_patches(
-            path,
+            resource,
             pymseed,
             time=time,
             channel=channel,

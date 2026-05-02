@@ -373,16 +373,18 @@ class TestMiniSeedScan:
                 raise AssertionError("scan should not unpack samples")
 
         class PyMseed:
+            class MS3Record:
+                @staticmethod
+                def from_file(path, *, unpack_data):
+                    assert path == "unused"
+                    assert unpack_data is False
+                    yield Record()
+
             @staticmethod
             def sourceid2nslc(source_id):
                 assert source_id == Record.sourceid
                 return "XX", "00000", "", "HSF"
 
-        def _iter_records(*args, **kwargs):
-            assert kwargs["unpack_data"] is False
-            yield Record()
-
-        monkeypatch.setattr(mseed_utils, "_iter_records", _iter_records)
         payload = mseed_utils._scan_patches("unused", PyMseed)[0]
         assert payload["shape"] == (1, 10)
         assert payload["dtype"] == "int32"
