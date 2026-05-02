@@ -69,7 +69,7 @@ class PatchAttrs(DascoreBaseModel):
         max_length=max_lens["instrument_id"],
     )
     acquisition_id: str = Field(
-        description="A unique identifier linking this data to an experiment.",
+        description="A unique identifier linking this data to a deployment.",
         default="",
         max_length=max_lens["experiment_id"],
     )

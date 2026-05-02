@@ -1,0 +1,273 @@
+---
+title: Inventory
+execute:
+  warning: false
+---
+
+An [`Inventory`](`dascore.core.inventory.Inventory`) stores richer metadata than a [`Patch`](`dascore.core.patch.Patch`) normally carries. It can describe acquisitions, instruments, instrument configurations, optical paths, fiber geometry, coupling conditions, and annotations.
+
+Inventory metadata is not automatically applied to patches. The patch remains the primary data object, and inventory context is added explicitly when you want it.
+
+The common workflow is:
+
+1. Use an acquisition id to resolve the relevant inventory context.
+2. Add selected acquisition/instrument metadata to patch attrs.
+3. Add selected optical-path metadata to patch coordinates.
+4. For channel-indexed patches, first derive optical distance from the inventory.
+
+:::{.callout-note}
+Inventory support is append-only and time-aware. If multiple records with the same resource id exist, `Inventory.view(...)` uses the patch time to choose the effective record.
+:::
+
+# Load an example inventory
+
+DASCore includes example inventories which describe some example patches.
+
+```{python}
+import dascore as dc
+from dascore.examples import get_example_inventory
+
+patch = dc.get_example_patch("random_das")
+inventory = get_example_inventory("random_das")
+
+print(inventory)
+```
+
+An inventory usually contains many record types. An [`Acquisition`](`dascore.core.inventory.Acquisition`) is the record that links patch-like data to an instrument configuration and an optical path.
+
+```{python}
+acquisition = inventory.view("random_das_acquisition")
+
+print(acquisition.instrument_configuration)
+print(acquisition.optical_path)
+```
+
+Patch methods use `patch.attrs.acquisition_id` by default, so set it when the patch does not already have one.
+
+```{python}
+patch = patch.update_attrs(acquisition_id="random_das_acquisition")
+```
+
+# Add attrs from inventory
+
+Use [`Patch.add_inventory_attrs`](`dascore.proc.inventory.add_inventory_attrs`) to copy selected acquisition, instrument configuration, or instrument fields into patch attrs.
+
+```{python}
+patch_with_attrs = patch.add_inventory_attrs(
+    inventory,
+    attrs=("tag", "sample_rate", "gauge_length", "instrument.model"),
+)
+
+print(patch_with_attrs.attrs.tag)
+print(patch_with_attrs.attrs.sample_rate)
+print(patch_with_attrs.attrs.gauge_length)
+print(patch_with_attrs.attrs.instrument_model)
+```
+
+Simple attr names are accepted only when they are unambiguous across the acquisition graph. Qualified names use one of these prefixes:
+
+- `acquisition.`
+- `instrument_configuration.`
+- `instrument.`
+
+For example, `instrument.model` is stored on the output patch as `instrument_model`.
+
+# Add coordinates from inventory
+
+Use [`Patch.add_inventory_coords`](`dascore.proc.inventory.add_inventory_coords`) to project optical-path metadata onto the patch's `distance` coordinate.
+
+By default, only `label` is added.
+
+```{python}
+patch_with_label = patch.add_inventory_coords(inventory)
+
+print(patch_with_label.get_array("label")[:5])
+```
+
+Geometry axes are explicit. This is important because one inventory may use local `x, y, z` axes while another may use `latitude, longitude, elevation`.
+
+```{python}
+patch_with_xyz = patch.add_inventory_coords(
+    inventory,
+    coords=("label", "x", "y", "z"),
+)
+
+print(patch_with_xyz.get_array("x")[:5])
+print(patch_with_xyz.get_array("z")[:5])
+```
+
+If an axis is requested but unavailable, DASCore raises by default. Use `on_missing="nan"` when missing geometry axes should be represented by `NaN`.
+
+```{python}
+patch_with_missing_geo = patch.add_inventory_coords(
+    inventory,
+    coords=("latitude", "longitude", "elevation"),
+    on_missing="nan",
+)
+
+print(patch_with_missing_geo.get_array("latitude")[:5])
+```
+
+:::{.callout-important}
+There is intentionally no `"geometry"` wildcard shortcut in the first implementation. Requesting explicit coordinate names makes downstream code predictable: either the patch has the requested coordinates, or the method raises.
+:::
+
+# Build geometry from a table
+
+If you have surveyed locations along a cable, use [`Inventory.from_geometry_table`](`dascore.core.inventory.Inventory.from_geometry_table`) to create a geometry-only inventory from control points. The table needs a `distance` column in meters. Other columns become coordinate axes.
+
+```{python}
+import pandas as pd
+from dascore.core import inventory as inv
+
+geometry = pd.DataFrame(
+    {
+        "distance": [0.0, 100.0, 250.0],
+        "x": [0.0, 0.0, 50.0],
+        "y": [0.0, 10.0, 30.0],
+        "z": [0.0, -100.0, -180.0],
+    }
+)
+
+survey_inventory = inv.Inventory.from_geometry_table(
+    geometry,
+    id_prefix="survey_1",
+)
+
+print(survey_inventory.view("survey_1:optical_path"))
+```
+
+This builder only creates CRS, geometry, and optical-path records. Add an acquisition record to link the path to patch data.
+
+```{python}
+survey_inventory = survey_inventory.add(
+    inv.Acquisition(
+        resource_id="survey_1_acquisition",
+        optical_path_id="survey_1:optical_path",
+    )
+)
+
+survey_patch = patch.update_attrs(acquisition_id="survey_1_acquisition")
+survey_patch = survey_patch.select(distance=(0, 250))
+survey_patch = survey_patch.add_inventory_coords(
+    survey_inventory,
+    coords=("x", "y", "z"),
+)
+
+print(survey_patch.get_array("x")[:5])
+```
+
+# Project interval metadata
+
+Inventory coordinate projection can also attach metadata from optical path interval records. Simple field names work when they are unambiguous.
+
+```{python}
+patch_with_fiber = patch.add_inventory_coords(
+    inventory,
+    coords=("label", "fiber_type", "coupling_type"),
+)
+
+print(patch_with_fiber.get_array("fiber_type")[:5])
+print(patch_with_fiber.get_array("coupling_type")[:5])
+```
+
+Qualified interval metadata can be requested with one of these prefixes:
+
+- `optical_component.`
+- `geometry.`
+- `coupling_condition.`
+
+Qualified names are stored on the patch using the requested coordinate name.
+
+```{python}
+patch_with_meta = patch.add_inventory_coords(
+    inventory,
+    coords=("geometry.geometry_type", "coupling_condition.quality"),
+)
+
+print(patch_with_meta.get_array("geometry.geometry_type")[:5])
+print(patch_with_meta.get_array("coupling_condition.quality")[:5])
+```
+
+# Channel-indexed data
+
+Some formats store an integer channel or index dimension rather than optical distance. In that case, first derive `distance` from the acquisition's instrument configuration with [`Patch.distance_from_inventory`](`dascore.proc.inventory.distance_from_inventory`).
+
+```{python}
+import numpy as np
+
+channel_patch = dc.get_example_patch("random_das")
+n_channels = channel_patch.channel_count
+channel_patch = channel_patch.rename_coords(distance="channel")
+channel_patch = channel_patch.update_coords(
+    channel=np.arange(n_channels),
+)
+channel_patch = channel_patch.update_attrs(acquisition_id="random_das_acquisition")
+
+distance_patch = channel_patch.distance_from_inventory(inventory, dim="channel")
+
+print(distance_patch.get_array("distance")[:5])
+```
+
+Once `distance` exists, use the same coordinate projection methods as before.
+
+```{python}
+enriched = distance_patch.add_inventory_coords(
+    inventory,
+    coords=("label", "x", "fiber_type"),
+)
+
+print(enriched.get_array("label")[:5])
+print(enriched.get_array("x")[:5])
+print(enriched.get_array("fiber_type")[:5])
+```
+
+# Using a different example inventory
+
+The `example_event_2` inventory describes a borehole-style optical path. It uses the same inventory methods, but the geometry and annotations come from a different acquisition context.
+
+```{python}
+event_patch = dc.get_example_patch("example_event_2")
+event_inventory = get_example_inventory("example_event_2")
+event_patch = event_patch.update_attrs(acquisition_id="example_event_2_acquisition")
+
+event_patch = event_patch.add_inventory_attrs(
+    event_inventory,
+    attrs=("tag", "data_units", "sample_rate"),
+)
+event_patch = event_patch.add_inventory_coords(
+    event_inventory,
+    coords=("label", "z", "coupling_type"),
+)
+
+print(event_patch.attrs.tag)
+print(event_patch.get_array("label")[:5])
+print(event_patch.get_array("z")[:5])
+print(event_patch.get_array("coupling_type")[:5])
+```
+
+# Missing values
+
+For attrs, missing fields or missing linked records raise by default. Use `on_missing="ignore"` to skip unavailable attrs.
+
+```{python}
+patch_ignore = patch.add_inventory_attrs(
+    inventory,
+    attrs=("tag", "instrument.serial_number"),
+    on_missing="ignore",
+)
+
+print(patch_ignore.attrs.tag)
+```
+
+For geometry coordinates, use `on_missing="nan"` to add requested axes even when the inventory cannot provide them.
+
+```{python}
+patch_nan = patch.add_inventory_coords(
+    inventory,
+    coords=("latitude",),
+    on_missing="nan",
+)
+
+print(patch_nan.get_array("latitude")[:5])
+```

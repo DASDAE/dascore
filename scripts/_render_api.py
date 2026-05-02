@@ -577,7 +577,9 @@ def _clear_empty_directories(parent_path):
             return False
         return True
 
-    for path in parent_path.rglob("*"):
+    for path in sorted(
+        parent_path.rglob("*"), key=lambda x: len(x.parts), reverse=True
+    ):
         if not path.is_dir():
             continue
         if _dir_empty(path):

@@ -13,6 +13,7 @@ from scipy.signal import chirp as spy_chirp
 
 import dascore as dc
 import dascore.core
+import dascore.core.inventory as inv
 from dascore.compat import random_state
 from dascore.config import set_config
 from dascore.exceptions import UnknownExampleError
@@ -23,6 +24,7 @@ from dascore.utils.time import to_timedelta64
 
 EXAMPLE_PATCHES = {}
 EXAMPLE_SPOOLS = {}
+EXAMPLE_INVENTORIES = {}
 
 
 def _load_example_patch_from_file(path: str | Path) -> dc.Patch:
@@ -552,6 +554,217 @@ def dispersion_event():
     return _load_example_patch_from_file(path)
 
 
+@register_func(EXAMPLE_INVENTORIES, key="random_das")
+def random_das_inventory() -> inv.Inventory:
+    """
+    An inventory describing the default random DAS patch.
+    """
+    instrument = inv.Instrument(
+        resource_id="random_das_instrument",
+        instrument_id="random_das_interrogator",
+        manufacturer="DASCore",
+        model="SyntheticInterrogator",
+        instrument_type="DAS interrogator",
+    )
+    configuration = inv.InstrumentConfiguration(
+        resource_id="random_das_configuration",
+        instrument_id=instrument.resource_id,
+        gauge_length=10.0,
+        sample_rate=250.0,
+        spatial_sampling_interval=1.0,
+    )
+    cable = inv.Cable(
+        resource_id="random_das_cable",
+        cable_id="random_das_cable",
+        name="Synthetic straight fiber",
+        cable_type="synthetic",
+        cable_construction="single_fiber",
+        fiber_count=1,
+    )
+    fiber = inv.FiberSegment(
+        resource_id="random_das_fiber",
+        length=300.0,
+        name="Synthetic sensing fiber",
+        fiber_type="single_mode",
+        container_id=cable.resource_id,
+    )
+    crs = inv.CoordinateReferenceSystem(
+        resource_id="random_das_local_crs",
+        crs_type="local",
+        name="Synthetic local Cartesian",
+        origin=(0.0, 0.0, 0.0),
+        axis_order=("x", "y", "z"),
+        units="m",
+    )
+    geometry = inv.Geometry(
+        resource_id="random_das_geometry",
+        length=fiber.length,
+        geometry_type="linear",
+        coordinate_reference_system_id=crs.resource_id,
+        coordinates=((0.0, 0.0, 0.0), (300.0, 0.0, 0.0)),
+    )
+    coupling = inv.CouplingCondition(
+        resource_id="random_das_coupling",
+        length=fiber.length,
+        coupling_type="synthetic",
+        deployment_type="synthetic",
+        installation_method="not_applicable",
+        contact_medium="not_applicable",
+        quality="ideal",
+    )
+    annotation = inv.OpticalPathAnnotation(
+        resource_id="random_das_annotation",
+        start_distance=0.0,
+        end_distance=fiber.length,
+        label="random patch aperture",
+    )
+    optical_path = inv.OpticalPath(
+        resource_id="random_das_optical_path",
+        length=fiber.length,
+        optical_component_ids=(fiber.resource_id,),
+        geometry_ids=(geometry.resource_id,),
+        coupling_condition_ids=(coupling.resource_id,),
+        annotation_ids=(annotation.resource_id,),
+    )
+    acquisition = inv.Acquisition(
+        resource_id="random_das_acquisition",
+        instrument_configuration_id=configuration.resource_id,
+        optical_path_id=optical_path.resource_id,
+        data_units="",
+        start_time="2017-09-18",
+        network="",
+        station="",
+        dims="distance,time",
+        tag="random",
+    )
+    return inv.Inventory(
+        inventory_id="random_das_inventory",
+        objects=(
+            acquisition,
+            configuration,
+            instrument,
+            optical_path,
+            cable,
+            fiber,
+            crs,
+            geometry,
+            coupling,
+            annotation,
+        ),
+    )
+
+
+@register_func(EXAMPLE_INVENTORIES, key="example_event_2")
+def example_event_2_inventory() -> inv.Inventory:
+    """
+    An inventory describing the processed example event acquisition context.
+    """
+    instrument = inv.Instrument(
+        resource_id="example_event_2_instrument",
+        instrument_id="stanek_2017_interrogator",
+        manufacturer="unknown",
+        model="unknown",
+        instrument_type="DAS interrogator",
+        notes="Public example from Stanek et al. induced seismicity data.",
+    )
+    configuration = inv.InstrumentConfiguration(
+        resource_id="example_event_2_configuration",
+        instrument_id=instrument.resource_id,
+        gauge_length=10.0,
+        sample_rate=1000.0,
+        spatial_sampling_interval=1.0,
+    )
+    cable = inv.Cable(
+        resource_id="example_event_2_cable",
+        cable_id="stanek_borehole_cable",
+        name="Borehole monitoring cable",
+        cable_type="fiber_optic",
+        cable_construction="borehole",
+        fiber_count=1,
+    )
+    fiber = inv.FiberSegment(
+        resource_id="example_event_2_fiber",
+        length=1000.0,
+        name="Borehole sensing fiber",
+        fiber_type="single_mode",
+        container_id=cable.resource_id,
+    )
+    crs = inv.CoordinateReferenceSystem(
+        resource_id="example_event_2_local_crs",
+        crs_type="local",
+        name="Borehole local depth coordinates",
+        origin=(0.0, 0.0, 0.0),
+        axis_order=("x", "y", "z"),
+        units="m",
+        vertical_datum="local ground surface",
+    )
+    geometry = inv.Geometry(
+        resource_id="example_event_2_geometry",
+        length=fiber.length,
+        geometry_type="linear",
+        coordinate_reference_system_id=crs.resource_id,
+        coordinates=((0.0, 0.0, 0.0), (0.0, 0.0, -1000.0)),
+    )
+    coupling = inv.CouplingCondition(
+        resource_id="example_event_2_coupling",
+        length=fiber.length,
+        coupling_type="clamped",
+        deployment_type="borehole",
+        installation_method="clamped",
+        contact_medium="casing",
+        quality="field_example",
+        clamp_spacing=100.0,
+        clamp_points=(
+            inv.ClampPoint(distance=0.0, clamp_type="borehole clamp"),
+            inv.ClampPoint(distance=500.0, clamp_type="borehole clamp"),
+            inv.ClampPoint(distance=900.0, clamp_type="borehole clamp"),
+        ),
+    )
+    annotation = inv.OpticalPathAnnotation(
+        resource_id="example_event_2_annotation",
+        start_distance=0.0,
+        end_distance=fiber.length,
+        label="borehole monitoring interval",
+    )
+    optical_path = inv.OpticalPath(
+        resource_id="example_event_2_optical_path",
+        length=fiber.length,
+        optical_component_ids=(fiber.resource_id,),
+        geometry_ids=(geometry.resource_id,),
+        coupling_condition_ids=(coupling.resource_id,),
+        annotation_ids=(annotation.resource_id,),
+    )
+    acquisition = inv.Acquisition(
+        resource_id="example_event_2_acquisition",
+        instrument_configuration_id=configuration.resource_id,
+        optical_path_id=optical_path.resource_id,
+        data_units="strain/s",
+        network="",
+        station="",
+        dims="distance,time",
+        tag="example_event_2",
+        notes=(
+            "The example_event_2 patch uses relative time in seconds after "
+            "preprocessing; inventory time fields are therefore left open."
+        ),
+    )
+    return inv.Inventory(
+        inventory_id="example_event_2_inventory",
+        objects=(
+            acquisition,
+            configuration,
+            instrument,
+            optical_path,
+            cable,
+            fiber,
+            crs,
+            geometry,
+            coupling,
+            annotation,
+        ),
+    )
+
+
 @register_func(EXAMPLE_SPOOLS, key="random_das")
 def random_spool(time_gap=0, length=3, time_min=np.datetime64("2020-01-03"), **kwargs):
     """
@@ -706,6 +919,43 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
         )
         raise UnknownExampleError(msg)
     return EXAMPLE_PATCHES[example_name](**kwargs)
+
+
+def get_example_inventory(example_name="random_das", **kwargs) -> inv.Inventory:
+    """
+    Load an example Inventory.
+
+    Supported example inventories are:
+    ```{python}
+    #| echo: false
+    #| output: asis
+    from dascore.examples import EXAMPLE_INVENTORIES
+
+    from dascore.utils.docs import objs_to_doc_df
+
+    df = objs_to_doc_df(EXAMPLE_INVENTORIES)
+    print(df.to_markdown(index=False, stralign="center"))
+    ```
+
+    Parameters
+    ----------
+    example_name
+        The name of the example inventory to load.
+    **kwargs
+        Passed to the corresponding function to generate the inventory.
+
+    Raises
+    ------
+    (`UnknownExampleError`)['dascore.examples.UnknownExampleError`] if an
+        unregistered inventory is requested.
+    """
+    if example_name not in EXAMPLE_INVENTORIES:
+        msg = (
+            f"No example inventory registered with name {example_name} "
+            f"Registered example inventories are {list(EXAMPLE_INVENTORIES)}"
+        )
+        raise UnknownExampleError(msg)
+    return EXAMPLE_INVENTORIES[example_name](**kwargs)
 
 
 def get_example_spool(example_name="random_das", **kwargs) -> dc.BaseSpool:

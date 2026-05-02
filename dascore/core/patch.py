@@ -364,6 +364,9 @@ class Patch(NamespaceOwner):
     append_dims = dascore.proc.coords.append_dims
     transpose = dascore.proc.coords.transpose
     add_distance_to = dascore.proc.coords.add_distance_to
+    distance_from_inventory = dascore.proc.distance_from_inventory
+    add_inventory_coords = dascore.proc.add_inventory_coords
+    add_inventory_attrs = dascore.proc.add_inventory_attrs
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_coords
     radians_to_strain = dascore.transform.radians_to_strain

@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import sys
 from contextlib import suppress
+from pathlib import Path
 
-from _index_api import get_alias_mapping, parse_project
-from _qmd_builder import create_quarto_qmd
-from _render_api import render_project
-from _validate_links import validate_all_links
-
-import dascore as dc
+repo_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(repo_root))
 
 with suppress(AttributeError):
     sys.stdout.encoding = "utf-8"
 
 
 if __name__ == "__main__":
+    from _index_api import get_alias_mapping, parse_project
+    from _qmd_builder import create_quarto_qmd
+    from _render_api import render_project
+    from _validate_links import validate_all_links
+
+    import dascore as dc
+
     print("Building documentation")  # noqa
     print(f"Parsing project {dc.__name__}")  # noqa
     data_dict = parse_project(dc)

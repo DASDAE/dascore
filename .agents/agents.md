@@ -84,6 +84,7 @@ Unless otherwise specified, A job is not finished until the the tests pass.
 - Prefer non-inplace dataframe operations unless inplace is explicitly required.
 - Add type hints for public functions/methods.
 - Use NumPy-style docstrings for public APIs.
+- Do not add module-level `__all__` declarations unless the surrounding module already uses them; follow DASCore's existing explicit import and wildcard re-export patterns instead.
 - Add a short explanatory comment for private helpers when intent is not obvious.
 - Keep comments meaningful; do not restate obvious code.
 - Always use dascore.utils.misc:suppress_warnings to suppress warnings. 

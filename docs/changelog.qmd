@@ -11,6 +11,8 @@ The [releases page](https://github.com/DASDAE/dascore/releases) tracks changes f
 - DASDAE now stores `history` as a flat string payload on disk. Older DASDAE files that relied on legacy pickled history attrs remain readable, but their original history strings are no longer restored exactly.
 - Coordinate summaries such as `time_min`, `time_max`, `distance_step`, and coordinate units are exposed through `Patch.summary.get_coord_summary(...)`, not through `Patch.attrs`.
 - `Patch.attrs` and `PatchAttrs` no longer own coordinate summaries. Use [`PatchSummary`](`dascore.PatchSummary`) values exposed through [`PatchSummary.get_coord_summary(...)`](`dascore.PatchSummary.get_coord_summary`) for metadata views and coordinate APIs such as [`Patch.update_coords`](`dascore.Patch.update_coords`) for coordinate changes.
+- Removed coordinate-management helpers and fields from `PatchAttrs`, including `coords`, `dim_tuple`, `rename_dimension()`, `coords_from_dims()`, `__setitem__`, and dynamic coordinate attributes such as `attrs.time_min`. Use `Patch.coords` and `Patch.update_coords(...)` for coordinate data and coordinate changes.
+- `PatchAttrs.flat_dump()` is now attrs-only and aliases `PatchAttrs.model_dump(...)`. Use `Patch.summary.flat_dump(dim_tuple=...)` when flattened coordinate summary fields such as `time_min` or `distance_step` are needed.
 
 ### Breaking Changes From Deprecation Removal
 

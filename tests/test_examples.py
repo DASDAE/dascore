@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 import dascore.examples as dc_examples
-from dascore.examples import EXAMPLE_PATCHES
+from dascore.examples import EXAMPLE_INVENTORIES, EXAMPLE_PATCHES
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.time import to_float
 
@@ -99,6 +99,46 @@ class TestGetExampleSpool:
         """Ensure get_example_spool works on a datafile."""
         spool = dc.get_example_spool("dispersion_event.h5")
         assert isinstance(spool, dc.BaseSpool)
+
+
+class TestGetExampleInventory:
+    """Test suite for `get_example_inventory`."""
+
+    def test_default(self):
+        """Ensure calling get_example_inventory with no args returns inventory."""
+        inventory = dc.get_example_inventory()
+        assert isinstance(inventory, dc.Inventory)
+
+    def test_raises_on_bad_key(self):
+        """Ensure a bad inventory key raises expected error."""
+        with pytest.raises(UnknownExampleError, match="No example inventory"):
+            dc.get_example_inventory("NotAnExampleRight????")
+
+    @pytest.mark.parametrize("name", EXAMPLE_INVENTORIES)
+    def test_load_example_inventory(self, name):
+        """Ensure all registered example inventories can be loaded."""
+        inventory = dc.get_example_inventory(name)
+        assert isinstance(inventory, dc.Inventory)
+        assert inventory.validate_references() is inventory
+
+    def test_random_inventory_describes_random_patch(self):
+        """The random inventory should resolve context for the random patch."""
+        patch = dc.get_example_patch("random_das")
+        inventory = dc.get_example_inventory("random_das")
+        acquisition = inventory.view("random_das_acquisition")
+        distance_max = patch.coords.coord_map["distance"].max()
+        assert acquisition.tag == patch.attrs.tag
+        assert acquisition.optical_path.length == distance_max + 1
+        assert acquisition.instrument_configuration.sample_rate == 250.0
+
+    def test_event_inventory_describes_processed_event(self):
+        """The event inventory should resolve context for example_event_2."""
+        inventory = dc.get_example_inventory("example_event_2")
+        acquisition = inventory.view("example_event_2_acquisition")
+        assert acquisition.data_units == "strain/s"
+        label = acquisition.optical_path.annotations[0].label
+        assert label == "borehole monitoring interval"
+        assert acquisition.optical_path.coupling_conditions[0].clamp_points
 
 
 class TestRickerMoveout:

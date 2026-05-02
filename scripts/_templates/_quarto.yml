@@ -124,6 +124,9 @@ website:
         - text: Coordinates
           href: tutorial/coords.qmd
 
+        - text: Inventory
+          href: tutorial/inventory.qmd
+
     - id: Recipes
       title: 'Recipes'
       collapse-level: 1
@@ -216,6 +219,9 @@ website:
 
         - text: Velocity to Strain Rate
           href: notes/velocity_to_strain_rate.qmd
+
+        - text: Inventory Design
+          href: notes/inventory_design.qmd
 
     - id: API
       title: "API"

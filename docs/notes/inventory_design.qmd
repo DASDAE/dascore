@@ -1,0 +1,111 @@
+---
+title: Inventory Design
+---
+
+This note explains the design direction for DASCore's [`Inventory`](`dascore.core.inventory.Inventory`) model and why it intentionally does not mirror any external metadata standard exactly.
+
+DASCore inventories are intended to be practical metadata catalogs for working data archives. They should be easy to write near raw files, easy to resolve into patch context, and general enough to describe DAS and related fiber-optic or point-sensor acquisitions. External standards are still important: the model borrows terminology and structure from both the FDSN/DAS-RCN DAS metadata work and PRODML, but is slightly different.
+
+# Standards Used As Reference
+
+The main DAS-specific reference is the FDSN DAS Metadata draft, which describes a metadata format for DAS data sets and identifies five key components of a DAS experiment: interrogator, data acquisition, channels, cable, and fiber. See the [FDSN DAS Metadata overview](https://docs.fdsn.org/projects/das-metadata/en/draft/) and [schema documentation](https://docs.fdsn.org/projects/das-metadata/en/draft/schema.html). That work grew out of the DAS-RCN metadata effort; the archived [DAS-RCN/DAS_metadata repository](https://github.com/DAS-RCN/DAS_metadata) notes the transition to FDSN stewardship and cites the associated SRL paper @lai2024metadata.
+
+The main fiber-installation reference is PRODML. PRODML's optical path material represents a fiber installation through an optical path object, including component inventory, connectivity/network, and OTDR information. See the PRODML [Optical Path](https://docs.energistics.org/PRODML/PRODML_TOPICS/PRO-DAS-000-056-0-C-sv2000.html) page.
+
+# Design Goals
+
+DASCore's inventory model is optimized for these use cases:
+
+- Add a small YAML inventory beside field data without rewriting raw files.
+- Resolve patch context by `acquisition_id` and time.
+- Keep patch data and inventory metadata separate until the user explicitly enriches a patch.
+- Preserve append-only history by appending new records with the same `resource_id`.
+- Support partial metadata because many field archives lack a complete standards-grade description.
+- Keep geometry, coupling, and optical-component descriptions reusable across acquisitions.
+
+This means DASCore's model is not a submission format for a data center. It is a working model for local and programmatic metadata enrichment.
+
+# Key Objects
+
+The inventory structure is centered on a small set of records that can be resolved by id and effective time.
+
+| Object | Role in the inventory |
+|---|---|
+| [`Inventory`](`dascore.core.inventory.Inventory`) | The top-level append-only catalog that stores records, validates references, reads/writes YAML, and creates resolved views. |
+| [`Acquisition`](`dascore.core.inventory.Acquisition`) | The join record that links patch-like data to an instrument configuration and optical path. |
+| [`Instrument`](`dascore.core.inventory.Instrument`) | The physical instrument or recorder, including DAS interrogators and future point-sensor systems. |
+| [`InstrumentConfiguration`](`dascore.core.inventory.InstrumentConfiguration`) | The time-aware recording setup, including channel-to-distance information such as spacing and first-channel distance. |
+| [`OpticalPath`](`dascore.core.inventory.OpticalPath`) | The ordered optical-distance path observed by an acquisition, with independent component, geometry, coupling, and annotation tracks. |
+| [`Cable`](`dascore.core.inventory.Cable`) | Cable-level manufacturing and identity metadata that can be shared by many optical components. |
+| [`OpticalComponent`](`dascore.core.inventory.OpticalComponent`) | The base interval component for fiber, connectors, splices, couplers, turnarounds, and terminators. |
+| [`FiberSegment`](`dascore.core.inventory.FiberSegment`) | A reusable length of fiber in the optical path, with fiber-specific properties such as fiber type and buffer type. |
+| [`Connector`](`dascore.core.inventory.Connector`), [`Splice`](`dascore.core.inventory.Splice`), [`Coupler`](`dascore.core.inventory.Coupler`), [`Turnaround`](`dascore.core.inventory.Turnaround`), [`Terminator`](`dascore.core.inventory.Terminator`) | Explicit optical component subclasses for common installation features. |
+| [`Geometry`](`dascore.core.inventory.Geometry`) | A reusable optical-distance interval that describes physical coordinates or an unknown geometry section. |
+| [`CoordinateReferenceSystem`](`dascore.core.inventory.CoordinateReferenceSystem`) | CRS metadata referenced by geometry records; CRS transformations are informational in the first implementation. |
+| [`CouplingCondition`](`dascore.core.inventory.CouplingCondition`) | A reusable optical-distance interval describing acoustic coupling, deployment type, quality, and clamp points. |
+| [`ClampPoint`](`dascore.core.inventory.ClampPoint`) | A point or short interval within a coupling condition where the cable is clamped or otherwise locally coupled. |
+| [`OpticalPathAnnotation`](`dascore.core.inventory.OpticalPathAnnotation`) | A named or categorized optical-distance interval used to attach labels such as borehole, trench, lead-in, or quality notes. |
+
+# Relationship To FDSN DAS Metadata
+
+FDSN DAS Metadata separates DAS descriptions into major components such as interrogator, data acquisition, channels, cable, and fiber. DASCore keeps those concepts, but collapses and relocates some details:
+
+- FDSN's interrogator concept maps to DASCore `Instrument`.
+- FDSN's data acquisition context maps to DASCore `Acquisition`.
+- Interrogator settings map to DASCore `InstrumentConfiguration`.
+- Cable and fiber concepts map to `Cable` and `FiberSegment`.
+- Per-channel metadata is not a first-class inventory record in the first DASCore model.
+
+The main deviation is channel modeling. DASCore instead treats channel-to-distance conversion as an instrument configuration operation. A patch may have `channel`, `index`, or `distance`; the inventory can derive `distance` from `InstrumentConfiguration`, and all downstream geometry/coupling lookup happens in optical distance.
+
+This avoids storing large or redundant channel tables in a lightweight inventory file. It allows modeling the physical system (fiber path, geometry, coupling conditions) without mixing interrogator configurations (eg channel spacing).
+
+# Relationship To PRODML
+
+PRODML is useful because it models fiber optical paths as ordered physical components such as fiber segments, connectors, splices, couplers, turnarounds, and terminators. DASCore follows that vocabulary with `OpticalComponent` subclasses and an `OpticalPath`.
+
+DASCore deviates from PRODML in a few deliberate ways:
+
+- DASCore uses ordered interval sequences instead of a general connectivity network.
+- DASCore stores only the path components that matter for patch enrichment, not a full installation network.
+- DASCore does not model OTDR records in the first implementation.
+- DASCore separates acoustic coupling and geometry into independent interval tracks rather than nesting them under fiber segments.
+- DASCore keeps all optical path interval lengths in SI meters and avoids per-field unit fields.
+
+The ordered interval model is much simpler than PRODML's inventory plus network pattern, but it is enough for the first DASCore workflows: add annotations, interpolate geometry, project fiber metadata, project coupling metadata, split paths, reverse paths, and append new path versions through inventory history.
+
+# Why Coupling And Geometry Are Independent Tracks
+
+A tempting model is to nest geometry and coupling under fiber segments. DASCore does not do that because the intervals do not always align.
+
+A single fiber segment may have several coupling conditions, such as a trenched section, a clamped borehole section, and a loose lead-in. Geometry may also change on different boundaries than coupling or component boundaries. If these are nested, users must split otherwise reusable fiber objects just to describe a change in coupling or geometry.
+
+DASCore instead models an `OpticalPath` as parallel interval tracks:
+
+- optical components
+- geometry
+- coupling conditions
+- annotations
+
+Each track has lengths in optical distance. The tracks must cover the same path length when populated, but their internal boundaries can differ. This is more convenient for concatenation, selection, field updates, and patch coordinate projection.
+
+# Acquisition As The Join Record
+
+An `Acquisition` links a patch-like data product to an `InstrumentConfiguration` and an `OpticalPath`.
+
+```text
+Patch channel/index -> InstrumentConfiguration -> optical distance
+optical distance    -> OpticalPath             -> geometry, annotations, coupling, components
+Acquisition         -> context                 -> configuration + path
+```
+
+This is why `InstrumentConfiguration` can contain fields like `spatial_sampling_interval`, `first_channel_index`, and `first_channel_distance` without directly referencing an optical path. Those values are interpreted in the context supplied by the acquisition. The same optical path can be observed under different configurations, and the same configuration pattern can be reused when appropriate.
+
+
+# Known Tradeoffs
+
+The current model favors a small, useful subset over complete standards coverage. That means:
+
+- Conversion from DASCore inventory to FDSN DAS Metadata or PRODML may require enrichment fields not present in the first DASCore schema.
+- Full channel tables, arbitrary optical networks, OTDR tests, and data-center validation rules are out of scope for the first model.
+- Some names are intentionally DASCore-specific because they describe processing behavior, not exchange-schema structure.

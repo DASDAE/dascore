@@ -2,7 +2,30 @@
 Core routines and functionality for processing distributed fiber data.
 """
 from __future__ import annotations
-from .patch import Patch  # noqa
-from .summary import PatchSummary  # noqa
-from .coords import CoordSummary, get_coord
-from .coordmanager import get_coord_manager, CoordManager
+
+from .coordmanager import CoordManager as CoordManager
+from .coordmanager import get_coord_manager as get_coord_manager
+from .coords import CoordSummary as CoordSummary
+from .coords import get_coord as get_coord
+from .inventory import (  # noqa
+    Acquisition,
+    Cable,
+    ClampPoint,
+    Connector,
+    CoordinateReferenceSystem,
+    Coupler,
+    CouplingCondition,
+    FiberSegment,
+    Geometry,
+    Instrument,
+    InstrumentConfiguration,
+    Inventory,
+    InventoryRecord,
+    OpticalPath,
+    OpticalPathAnnotation,
+    Splice,
+    Terminator,
+    Turnaround,
+)
+from .patch import Patch as Patch
+from .summary import PatchSummary as PatchSummary
