@@ -9,6 +9,7 @@ import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io.mseed import utils as mseed_utils
 from dascore.io.mseed.core import MSeedV2
+from tests.test_io._common_io_test_utils import skip_timeout
 
 
 def _mseed_v2_header():
@@ -71,6 +72,7 @@ def _write_mseed_v2_header(path):
 
 def _trace_segment(**kwargs):
     """Return a small decoded MiniSEED trace segment for helper tests."""
+    data = kwargs.pop("data", np.arange(3, dtype=np.int32))
     defaults = dict(
         source_id="FDSN:XX_00000__H_S_F",
         network="XX",
@@ -80,14 +82,24 @@ def _trace_segment(**kwargs):
         format_version="3",
         start_ns=0,
         sample_rate=10.0,
-        data=np.arange(3, dtype=np.int32),
+        sample_count=len(data),
         sample_type="i",
         encoding="11",
         publication_version=0,
         record_length=256,
     )
     defaults.update(kwargs)
-    return mseed_utils._TraceSegment(**defaults)
+    info = mseed_utils._TraceInfo(**defaults)
+    return mseed_utils._TraceSegment(info=info, data=data)
+
+
+def _trace_summary(**kwargs):
+    """Return a small MiniSEED trace summary for helper tests."""
+    segment = _trace_segment(**kwargs)
+    return mseed_utils._TraceSummary(
+        info=segment.info,
+        dtype=str(segment.data.dtype),
+    )
 
 
 @pytest.fixture
@@ -312,6 +324,69 @@ class TestMiniSeedScan:
         assert summary.source_version == "3"
         assert summary.source_patch_id
 
+    @pytest.mark.parametrize(
+        ("fixture_name", "file_version"),
+        (("mseed_v2_path", "2"), ("mseed_v3_path", "3")),
+    )
+    def test_scan_matches_read_summary(self, request, fixture_name, file_version):
+        """Light scan metadata matches the corresponding read summary."""
+        path = request.getfixturevalue(fixture_name)
+        summary = dc.scan(path, file_format="MSEED", file_version=file_version)[0]
+        patch_summary = dc.read(path, file_format="MSEED", file_version=file_version)[
+            0
+        ].summary
+        assert summary.dims == patch_summary.dims
+        assert summary.shape == patch_summary.shape
+        assert summary.dtype == patch_summary.dtype
+        assert summary.source_patch_id == patch_summary.source_patch_id
+        for dim in summary.dims:
+            scan_coord = summary.get_coord_summary(dim)
+            read_coord = patch_summary.get_coord_summary(dim)
+            assert scan_coord.min == read_coord.min
+            assert scan_coord.max == read_coord.max
+            assert scan_coord.step == read_coord.step
+
+    def test_scan_v2_metadata(self, mseed_v2_path):
+        """MiniSEED v2 scan reports expected metadata from headers."""
+        summary = dc.scan(mseed_v2_path, file_format="MSEED", file_version="2")[0]
+        assert summary.shape == (3, 10)
+        assert summary.dtype == "int32"
+        assert summary.source_format == "MSEED"
+        assert summary.source_version == "2"
+        assert summary.source_patch_id.startswith("v2:")
+
+    def test_scan_does_not_unpack_records(self, monkeypatch):
+        """Scan uses record headers without decoding sample payloads."""
+
+        class Record:
+            sourceid = "FDSN:XX_00000__H_S_F"
+            formatversion = 3
+            starttime = 0
+            samprate = 10.0
+            samplecnt = 10
+            sampletype = None
+            encoding = 3
+            pubversion = 0
+            reclen = 256
+
+            def unpack_data(self):
+                raise AssertionError("scan should not unpack samples")
+
+        class PyMseed:
+            @staticmethod
+            def sourceid2nslc(source_id):
+                assert source_id == Record.sourceid
+                return "XX", "00000", "", "HSF"
+
+        def _iter_records(*args, **kwargs):
+            assert kwargs["unpack_data"] is False
+            yield Record()
+
+        monkeypatch.setattr(mseed_utils, "_iter_records", _iter_records)
+        payload = mseed_utils._scan_patches("unused", PyMseed)[0]
+        assert payload["shape"] == (1, 10)
+        assert payload["dtype"] == "int32"
+
     def test_missing_pymseed_raises(self, mseed_v3_path, monkeypatch):
         """Explicit MiniSEED reads require PyMseed."""
         import dascore.io.mseed.core as mseed_core
@@ -359,6 +434,35 @@ class TestMiniSeedUtils:
             "",
         )
 
+    def test_source_id_error_falls_back_to_station(self):
+        """PyMseed source ID parser errors are treated as unparseable IDs."""
+
+        class BadPyMseed:
+            class SourceIDError(Exception):
+                pass
+
+            @staticmethod
+            def sourceid2nslc(source_id):
+                raise BadPyMseed.SourceIDError("bad source id")
+
+        assert mseed_utils._source_id_to_nslc(BadPyMseed, "not-fdsn") == (
+            "",
+            "not-fdsn",
+            "",
+            "",
+        )
+
+    def test_unexpected_source_id_errors_propagate(self):
+        """Only expected source ID parser errors are swallowed."""
+
+        class BadPyMseed:
+            @staticmethod
+            def sourceid2nslc(source_id):
+                raise RuntimeError("unexpected bug")
+
+        with pytest.raises(RuntimeError, match="unexpected bug"):
+            mseed_utils._source_id_to_nslc(BadPyMseed, "not-fdsn")
+
     def test_record_to_segment_skips_non_overlapping_records(self):
         """Record metadata can be rejected before sample unpacking."""
 
@@ -370,6 +474,53 @@ class TestMiniSeedUtils:
                 raise AssertionError("should not unpack")
 
         assert mseed_utils._record_to_segment(Record(), None, (20, 30)) is None
+
+    def test_record_dtype_from_sample_type(self):
+        """Populated sample types are preferred when inferring scan dtype."""
+
+        class Record:
+            sampletype = "d"
+            encoding = 3
+
+        assert mseed_utils._record_dtype(Record()) == "float64"
+
+    @pytest.mark.parametrize(
+        ("encoding", "dtype"),
+        (
+            (0, "S1"),
+            (1, "int16"),
+            (3, "int32"),
+            (4, "float32"),
+            (5, "float64"),
+            (10, "int32"),
+            (11, "int32"),
+            (999, ""),
+        ),
+    )
+    def test_record_dtype_from_encoding(self, encoding, dtype):
+        """MiniSEED scan dtype can be inferred from known encodings."""
+
+        class Record:
+            sampletype = None
+
+        Record.encoding = encoding
+        assert mseed_utils._record_dtype(Record()) == dtype
+
+    def test_contiguous_source_summaries_are_coalesced(self):
+        """Contiguous scan summaries from one source are merged."""
+        first = _trace_summary()
+        second = _trace_summary(start_ns=first.next_start_ns, record_length=512)
+        out = mseed_utils._coalesce_source_summaries([second, first])
+        assert len(out) == 1
+        assert out[0].sample_count == first.sample_count + second.sample_count
+        assert out[0].record_length == 512
+
+    def test_discontinuous_source_summaries_are_not_coalesced(self):
+        """Discontinuous scan summaries from one source stay separate."""
+        first = _trace_summary()
+        second = _trace_summary(start_ns=first.next_start_ns + first.sample_step_ns)
+        out = mseed_utils._coalesce_source_summaries([first, second])
+        assert len(out) == 2
 
     def test_patch_from_segments_defaults_to_local_channel_indices(self):
         """Patches can still be built without a global channel map."""
@@ -469,7 +620,8 @@ class TestRealMiniSeed:
         pytest.importorskip("pymseed")
         from dascore.utils.downloader import fetch
 
-        path = fetch("etna_9n_3chan_10s.mseed")
+        with skip_timeout():
+            path = fetch("etna_9n_3chan_10s.mseed")
         spool = dc.read(path)
         assert len(spool) == 3
         assert sorted(x.shape for x in spool) == [(1, 13556), (1, 13729), (1, 13735)]

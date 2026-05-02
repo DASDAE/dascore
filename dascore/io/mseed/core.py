@@ -3,10 +3,20 @@
 DASCore maps MiniSEED source IDs into 2D ``("channel", "time")`` patches.
 MiniSEED source identity is preserved as per-channel coordinates instead of
 scalar attrs because one DASCore patch can contain many MiniSEED sources.
-Compatible MiniSEED sources share one patch only when they also have the same
-sample count. Unequal-length sources are returned as separate patches with
-stable ``channel`` coordinate values so selections still refer to the same
-source across split patches.
+The preserved source coordinates are ``source_id``, ``network``, ``station``,
+``location``, and ``seed_channel``.
+
+Compatible MiniSEED sources are merged into one patch when they share the same
+format version, network, location, SEED channel, start time, sample rate, and
+sample count. Sources with different sample rates, start times, or sample
+counts are returned as separate patches. When sources split across multiple
+patches, DASCore keeps stable integer ``channel`` coordinate values so
+selections still refer to the same source.
+
+The MiniSEED ``channel`` coordinate is an integer source index, not optical
+distance. Optical distance is usually stored in companion DAS metadata rather
+than MiniSEED record headers and should be attached from that metadata when
+available.
 
 The mapping follows the FDSN source identifier convention, where a SEED NSLC
 code maps to ``FDSN:<network>_<station>_<location>_<band>_<source>_<subsource>``.

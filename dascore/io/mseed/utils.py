@@ -11,18 +11,42 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import ONE_BILLION
-from dascore.core import get_coord
+from dascore.core import get_coord, get_coord_manager
 from dascore.io import ScanPayload
-from dascore.io.core import _patch_to_scan_payload
+from dascore.io.core import _make_scan_payload
 from dascore.utils.io import LocalPath, _normalize_source_patch_ids, _read_file_header
 from dascore.utils.time import to_datetime64, to_int
 
 _TimeLimits = tuple[int | None, int | None]
 
+_TEXT_ENCODING = 0
+_INT16_ENCODING = 1
+_INT32_ENCODING = 3
+_FLOAT32_ENCODING = 4
+_FLOAT64_ENCODING = 5
+_STEIM1_ENCODING = 10
+_STEIM2_ENCODING = 11
+
+_ENCODING_DTYPE_MAP = {
+    _TEXT_ENCODING: "S1",
+    _INT16_ENCODING: "int16",
+    _INT32_ENCODING: "int32",
+    _FLOAT32_ENCODING: "float32",
+    _FLOAT64_ENCODING: "float64",
+    _STEIM1_ENCODING: "int32",
+    _STEIM2_ENCODING: "int32",
+}
+_SAMPLE_TYPE_DTYPE_MAP = {
+    "i": "int32",
+    "f": "float32",
+    "d": "float64",
+    "t": "S1",
+}
+
 
 @dataclass(frozen=True)
-class _TraceSegment:
-    """A decoded contiguous MiniSEED segment from one source ID."""
+class _TraceInfo:
+    """MiniSEED trace identity and timing metadata."""
 
     source_id: str
     network: str
@@ -32,16 +56,11 @@ class _TraceSegment:
     format_version: str
     start_ns: int
     sample_rate: float
-    data: np.ndarray
+    sample_count: int
     sample_type: str
     encoding: str
     publication_version: int
     record_length: int
-
-    @property
-    def sample_count(self) -> int:
-        """Return the number of samples in the segment."""
-        return len(self.data)
 
     @property
     def sample_step_ns(self) -> int:
@@ -52,6 +71,35 @@ class _TraceSegment:
     def next_start_ns(self) -> int:
         """Return the expected start time of the next contiguous segment."""
         return self.start_ns + self.sample_count * self.sample_step_ns
+
+
+@dataclass(frozen=True)
+class _TraceSegment:
+    """A decoded contiguous MiniSEED segment from one source ID."""
+
+    info: _TraceInfo
+    data: np.ndarray
+
+    @property
+    def sample_count(self) -> int:
+        """Return the number of samples in the segment."""
+        return len(self.data)
+
+    def __getattr__(self, item):
+        """Delegate metadata lookups to the wrapped trace info."""
+        return getattr(self.info, item)
+
+
+@dataclass(frozen=True)
+class _TraceSummary:
+    """Metadata for a contiguous MiniSEED segment from one source ID."""
+
+    info: _TraceInfo
+    dtype: str
+
+    def __getattr__(self, item):
+        """Delegate metadata lookups to the wrapped trace info."""
+        return getattr(self.info, item)
 
 
 @dataclass(frozen=True, order=True)
@@ -92,11 +140,44 @@ def _get_time_limits(time=None) -> _TimeLimits:
 
 def _source_id_to_nslc(pymseed, source_id: str) -> tuple[str, str, str, str]:
     """Return NSLC codes from a MiniSEED source ID."""
+    parse_errors = (ValueError, TypeError)
+    if source_id_error := getattr(pymseed, "SourceIDError", None):
+        parse_errors = (*parse_errors, source_id_error)
     try:
         nslc = pymseed.sourceid2nslc(source_id)
-    except Exception:
+    except parse_errors:
         return "", source_id, "", ""
     return tuple("" if x is None else str(x) for x in nslc)
+
+
+def _record_dtype(record) -> str:
+    """Return the decoded NumPy dtype name from a MiniSEED record header."""
+    if sample_type := getattr(record, "sampletype", None):
+        return _SAMPLE_TYPE_DTYPE_MAP.get(str(sample_type), "")
+    encoding = int(getattr(record, "encoding", -1))
+    return _ENCODING_DTYPE_MAP.get(encoding, "")
+
+
+def _record_to_trace_info(record, pymseed, sample_count: int) -> _TraceInfo:
+    """Convert common PyMseed record fields to trace metadata."""
+    network, station, location, seed_channel = _source_id_to_nslc(
+        pymseed, str(record.sourceid)
+    )
+    return _TraceInfo(
+        source_id=str(record.sourceid),
+        network=network,
+        station=station,
+        location=location,
+        seed_channel=seed_channel,
+        format_version=str(record.formatversion),
+        start_ns=int(record.starttime),
+        sample_rate=float(record.samprate),
+        sample_count=sample_count,
+        sample_type=str(record.sampletype or ""),
+        encoding=str(record.encoding),
+        publication_version=int(getattr(record, "pubversion", 0) or 0),
+        record_length=int(getattr(record, "reclen", 0) or 0),
+    )
 
 
 def _iter_records(path: LocalPath, pymseed, unpack_data: bool = True):
@@ -122,25 +203,19 @@ def _record_to_segment(
         return None
     record.unpack_data()
     data = np.asarray(record.np_datasamples)
-    network, station, location, seed_channel = _source_id_to_nslc(
-        pymseed, str(record.sourceid)
-    )
     segment = _TraceSegment(
-        source_id=str(record.sourceid),
-        network=network,
-        station=station,
-        location=location,
-        seed_channel=seed_channel,
-        format_version=str(record.formatversion),
-        start_ns=int(record.starttime),
-        sample_rate=float(record.samprate),
+        info=_record_to_trace_info(record, pymseed, sample_count=len(data)),
         data=data.copy(),
-        sample_type=str(record.sampletype or ""),
-        encoding=str(record.encoding),
-        publication_version=int(getattr(record, "pubversion", 0) or 0),
-        record_length=int(getattr(record, "reclen", 0) or 0),
     )
     return _trim_segment_time(segment, time_limits)
+
+
+def _record_to_summary(record, pymseed) -> _TraceSummary:
+    """Convert a PyMseed record header to a trace summary."""
+    return _TraceSummary(
+        info=_record_to_trace_info(record, pymseed, sample_count=int(record.samplecnt)),
+        dtype=_record_dtype(record),
+    )
 
 
 def _trim_segment_time(
@@ -161,9 +236,14 @@ def _trim_segment_time(
     )
     if stop_index <= start_index:
         return None
+    info = replace(
+        segment.info,
+        start_ns=segment.start_ns + start_index * step,
+        sample_count=stop_index - start_index,
+    )
     return replace(
         segment,
-        start_ns=segment.start_ns + start_index * step,
+        info=info,
         data=segment.data[start_index:stop_index].copy(),
     )
 
@@ -188,12 +268,53 @@ def _coalesce_source_segments(segments: list[_TraceSegment]) -> list[_TraceSegme
             if can_merge:
                 pending = replace(
                     pending,
+                    info=replace(
+                        pending.info,
+                        sample_count=pending.sample_count + seg.sample_count,
+                        record_length=max(pending.record_length, seg.record_length),
+                    ),
                     data=np.concatenate([pending.data, seg.data]),
-                    record_length=max(pending.record_length, seg.record_length),
                 )
             else:
                 out.append(pending)
                 pending = seg
+        if pending is not None:
+            out.append(pending)
+    return out
+
+
+def _coalesce_source_summaries(summaries: list[_TraceSummary]) -> list[_TraceSummary]:
+    """Merge contiguous record summaries for the same source ID."""
+    summaries = sorted(summaries, key=lambda x: (x.source_id, x.start_ns))
+    out = []
+    for source_id, source_group in groupby(summaries, key=lambda x: x.source_id):
+        pending = None
+        for summary in source_group:
+            if pending is None:
+                pending = summary
+                continue
+            can_merge = (
+                pending.source_id == source_id
+                and pending.sample_rate == summary.sample_rate
+                and pending.format_version == summary.format_version
+                and pending.next_start_ns == summary.start_ns
+                and pending.dtype == summary.dtype
+                and pending.encoding == summary.encoding
+            )
+            if can_merge:
+                pending = replace(
+                    pending,
+                    info=replace(
+                        pending.info,
+                        sample_count=pending.sample_count + summary.sample_count,
+                        record_length=max(
+                            pending.record_length, summary.record_length
+                        ),
+                    ),
+                )
+            else:
+                out.append(pending)
+                pending = summary
         if pending is not None:
             out.append(pending)
     return out
@@ -208,6 +329,16 @@ def _read_segments(path: LocalPath, pymseed, time=None) -> list[_TraceSegment]:
         if segment is not None and segment.sample_count:
             segments.append(segment)
     return _coalesce_source_segments(segments)
+
+
+def _scan_segments(path: LocalPath, pymseed) -> list[_TraceSummary]:
+    """Read and coalesce MiniSEED record metadata without unpacking samples."""
+    summaries = []
+    for record in _iter_records(path, pymseed, unpack_data=False):
+        summary = _record_to_summary(record, pymseed)
+        if summary.sample_count:
+            summaries.append(summary)
+    return _coalesce_source_summaries(summaries)
 
 
 def _get_group_key(segment: _TraceSegment) -> _TraceGroupKey:
@@ -251,10 +382,8 @@ def _source_patch_id(group_key: _TraceGroupKey) -> str:
     )
 
 
-def _patch_from_segments(
-    group_key, segments: list[_TraceSegment], channel_map: dict[str, int] | None = None
-) -> dc.Patch:
-    """Create a DASCore Patch from compatible MiniSEED trace segments."""
+def _get_coords(group_key, segments, channel_map: dict[str, int] | None = None):
+    """Return DASCore coordinates from compatible MiniSEED segments."""
     segments = sorted(segments, key=lambda x: (x.station, x.source_id))
     first = segments[0]
     sample_count = first.sample_count
@@ -264,11 +393,10 @@ def _patch_from_segments(
         if channel_map is not None
         else tuple(range(len(segments)))
     )
-    data = np.stack([x.data for x in segments])
     step = np.timedelta64(first.sample_step_ns, "ns")
     start = np.datetime64(first.start_ns, "ns")
     stop = start + step * sample_count
-    coords = {
+    return {
         "channel": get_coord(data=np.asarray(channel_values)),
         "time": get_coord(start=start, stop=stop, step=step),
         "source_id": (("channel",), source_ids),
@@ -277,7 +405,11 @@ def _patch_from_segments(
         "location": (("channel",), tuple(x.location for x in segments)),
         "seed_channel": (("channel",), tuple(x.seed_channel for x in segments)),
     }
-    attrs = {
+
+
+def _get_attrs(group_key, first) -> dict:
+    """Return DASCore attrs from a MiniSEED segment group."""
+    return {
         "data_type": "",
         "tag": ".".join((first.network, first.location, first.seed_channel)),
         "sample_rate": first.sample_rate,
@@ -287,7 +419,41 @@ def _patch_from_segments(
         "mseed_record_length": first.record_length,
         "_source_patch_id": _source_patch_id(group_key),
     }
+
+
+def _patch_from_segments(
+    group_key, segments: list[_TraceSegment], channel_map: dict[str, int] | None = None
+) -> dc.Patch:
+    """Create a DASCore Patch from compatible MiniSEED trace segments."""
+    segments = sorted(segments, key=lambda x: (x.station, x.source_id))
+    first = segments[0]
+    data = np.stack([x.data for x in segments])
+    coords = _get_coords(group_key, segments, channel_map=channel_map)
+    attrs = _get_attrs(group_key, first)
     return dc.Patch(data=data, dims=("channel", "time"), coords=coords, attrs=attrs)
+
+
+def _scan_payload_from_segments(
+    group_key,
+    segments: list[_TraceSummary],
+    channel_map: dict[str, int] | None = None,
+) -> ScanPayload:
+    """Create a DASCore scan payload from MiniSEED trace summaries."""
+    segments = sorted(segments, key=lambda x: (x.station, x.source_id))
+    first = segments[0]
+    coords = get_coord_manager(
+        _get_coords(group_key, segments, channel_map=channel_map),
+        dims=("channel", "time"),
+    )
+    attrs = _get_attrs(group_key, first)
+    return _make_scan_payload(
+        attrs=attrs,
+        coords=coords,
+        dims=coords.dims,
+        shape=coords.shape,
+        dtype=first.dtype,
+        source_patch_id=attrs["_source_patch_id"],
+    )
 
 
 def _get_patches(
@@ -323,14 +489,15 @@ def _get_patches(
 
 def _scan_patches(path, pymseed) -> list[ScanPayload]:
     """Return scan payloads for MiniSEED patches."""
-    patches = []
-    all_segments = _read_segments(path, pymseed)
+    payloads = []
+    all_segments = _scan_segments(path, pymseed)
     channel_map = _get_channel_map(all_segments)
     for group_key, segments in _group_segments(all_segments):
-        patch = _patch_from_segments(group_key, segments, channel_map=channel_map)
-        patches.append(patch)
-    patches = sorted(patches, key=lambda x: x.get_coord("channel").min())
-    return [_patch_to_scan_payload(x) for x in patches]
+        payload = _scan_payload_from_segments(
+            group_key, segments, channel_map=channel_map
+        )
+        payloads.append(payload)
+    return sorted(payloads, key=lambda x: x["coords"].get_coord("channel").min())
 
 
 def _is_ascii_digit(value: int) -> bool:
