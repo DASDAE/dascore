@@ -512,13 +512,11 @@ class TestMiniSeedUtils:
     def test_zero_sample_rate_raises(self):
         """A zero sample rate cannot be converted to a sample step."""
         with pytest.raises(ValueError, match="sample rate"):
-            mseed_utils._sample_step_ns(0)
-        with pytest.raises(ValueError, match="sample rate"):
-            mseed_utils._sample_count_duration_ns(0, 1)
+            mseed_utils._duration_ns(0)
 
     def test_negative_sample_rate_is_sample_period(self):
         """Negative MiniSEED sample rates are interpreted as sample periods."""
-        assert mseed_utils._sample_step_ns(-0.1) == 100_000_000
+        assert mseed_utils._duration_ns(-0.1) == 100_000_000
 
     def test_next_start_ns_avoids_sample_step_drift(self):
         """Record adjacency uses total duration instead of rounded sample steps."""

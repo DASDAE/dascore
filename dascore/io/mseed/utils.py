@@ -9,7 +9,7 @@ from fractions import Fraction
 from itertools import groupby
 from math import ceil, floor
 from struct import unpack
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 import numpy as np
 
@@ -74,14 +74,12 @@ class _TraceInfo:
     @property
     def sample_step_ns(self) -> int:
         """Return the sample spacing in nanoseconds."""
-        return _sample_step_ns(self.sample_rate)
+        return _duration_ns(self.sample_rate)
 
     @property
     def next_start_ns(self) -> int:
         """Return the expected start time of the next contiguous segment."""
-        return self.start_ns + _sample_count_duration_ns(
-            self.sample_rate, self.sample_count
-        )
+        return self.start_ns + _duration_ns(self.sample_rate, self.sample_count)
 
 
 @dataclass(frozen=True)
@@ -115,49 +113,45 @@ class _TraceGroupKey:
     sample_count: int
 
 
-def _sample_step_ns(sample_rate: float) -> int:
-    """Convert a MiniSEED sample rate to nanosecond spacing."""
+@dataclass(frozen=True)
+class _PreparedGroup(Generic[_T]):
+    """Sorted group data shared by patch and scan payload creation."""
+
+    segments: Sequence[_T]
+    first: _T
+    coords: dict
+    attrs: dict
+
+
+def _duration_ns(sample_rate: float, sample_count: int = 1) -> int:
+    """Convert a sample count and MiniSEED sample rate to nanoseconds."""
     if sample_rate == 0:
         msg = "MiniSEED sample rate cannot be zero."
         raise ValueError(msg)
     # MiniSEED negative sample rates encode the sample period in seconds.
-    seconds = 1 / sample_rate if sample_rate > 0 else abs(sample_rate)
-    return round(seconds * ONE_BILLION)
-
-
-def _sample_count_duration_ns(sample_rate: float, sample_count: int) -> int:
-    """Convert a sample count to nanoseconds without per-sample drift."""
-    if sample_rate == 0:
-        msg = "MiniSEED sample rate cannot be zero."
-        raise ValueError(msg)
     rate = Fraction(str(sample_rate))
     samples = Fraction(sample_count, 1)
     seconds = samples / rate if rate > 0 else samples * abs(rate)
     return round(seconds * ONE_BILLION)
 
 
-def _time_to_ns(value) -> int | None:
-    """Convert a time-like value to epoch nanoseconds."""
-    if value is None or value is ...:
-        return None
-    return int(to_int(to_datetime64(value)))
-
-
 def _get_time_limits(time=None) -> _TimeLimits:
     """Return optional time limits as epoch nanoseconds."""
+
+    def to_ns(value):
+        if value is None or value is ...:
+            return None
+        return int(to_int(to_datetime64(value)))
+
     if time is None or time is ...:
         return None, None
-    return _time_to_ns(time[0]), _time_to_ns(time[1])
-
-
-def _trace_end_ns(trace: _TraceInfo) -> int:
-    """Return the time of the final sample in a trace."""
-    return trace.start_ns + max(trace.sample_count - 1, 0) * trace.sample_step_ns
+    return to_ns(time[0]), to_ns(time[1])
 
 
 def _trace_time_window(trace: _TraceInfo) -> _TraceWindow:
     """Return the inclusive time window covered by a trace."""
-    return trace.start_ns, _trace_end_ns(trace)
+    stop = trace.start_ns + max(trace.sample_count - 1, 0) * trace.sample_step_ns
+    return trace.start_ns, stop
 
 
 def _time_windows_overlap(start: int, stop: int, limits: _TimeLimits) -> bool:
@@ -216,13 +210,6 @@ def _record_to_trace_info(record, pymseed, sample_count: int) -> _TraceInfo:
     )
 
 
-def _record_overlaps_time(record, time_limits: _TimeLimits) -> bool:
-    """Return True if a record overlaps a requested time range."""
-    return _time_windows_overlap(
-        int(record.starttime), int(record.endtime), time_limits
-    )
-
-
 def _record_overlaps_source_windows(record, source_windows: _SourceWindows) -> bool:
     """Return True if a record overlaps one selected source time window."""
     record_start = int(record.starttime)
@@ -237,7 +224,9 @@ def _record_to_segment(
     record, pymseed, time_limits: _TimeLimits
 ) -> _TraceSegment | None:
     """Convert a PyMseed record to a trace segment."""
-    if not _record_overlaps_time(record, time_limits):
+    if not _time_windows_overlap(
+        int(record.starttime), int(record.endtime), time_limits
+    ):
         return None
     record.unpack_data()
     data = np.asarray(record.np_datasamples)
@@ -346,8 +335,7 @@ def _coalesce_source_segments(segments: list[_TraceSegment]) -> list[_TraceSegme
             can_merge = (
                 pending.sample_rate == seg.sample_rate
                 and pending.format_version == seg.format_version
-                and pending.start_ns
-                + _sample_count_duration_ns(pending.sample_rate, sample_count)
+                and pending.start_ns + _duration_ns(pending.sample_rate, sample_count)
                 == seg.start_ns
                 and pending.data.dtype == seg.data.dtype
                 and pending.encoding == seg.encoding
@@ -519,9 +507,14 @@ def _get_coords(
     }
 
 
-def _get_attrs(group_key, first) -> dict:
-    """Return DASCore attrs from a MiniSEED segment group."""
-    return {
+def _prepare_group(
+    group_key, segments: Sequence[_T], channel_map=None
+) -> _PreparedGroup[_T]:
+    """Return shared sorted segments, coordinates, and attrs for one group."""
+    segments = tuple(sorted(segments, key=lambda x: (x.station, x.source_id)))
+    first = segments[0]
+    coords = _get_coords(segments, channel_map=channel_map)
+    attrs = {
         "data_type": "",
         "tag": ".".join((first.network, first.location, first.seed_channel)),
         "sample_rate": first.sample_rate,
@@ -531,18 +524,21 @@ def _get_attrs(group_key, first) -> dict:
         "mseed_record_length": first.record_length,
         "_source_patch_id": _source_patch_id(group_key),
     }
+    return _PreparedGroup(segments, first, coords, attrs)
 
 
 def _patch_from_segments(
     group_key, segments: list[_TraceSegment], channel_map: dict[str, int] | None = None
 ) -> dc.Patch:
     """Create a DASCore Patch from compatible MiniSEED trace segments."""
-    segments = sorted(segments, key=lambda x: (x.station, x.source_id))
-    first = segments[0]
-    data = np.stack([x.data for x in segments])
-    coords = _get_coords(segments, channel_map=channel_map)
-    attrs = _get_attrs(group_key, first)
-    return dc.Patch(data=data, dims=("channel", "time"), coords=coords, attrs=attrs)
+    prepared = _prepare_group(group_key, segments, channel_map)
+    data = np.stack([x.data for x in prepared.segments])
+    return dc.Patch(
+        data=data,
+        dims=("channel", "time"),
+        coords=prepared.coords,
+        attrs=prepared.attrs,
+    )
 
 
 def _segments_from_summaries(
@@ -570,20 +566,18 @@ def _scan_payload_from_segments(
     channel_map: dict[str, int] | None = None,
 ) -> ScanPayload:
     """Create a DASCore scan payload from MiniSEED trace summaries."""
-    segments = sorted(segments, key=lambda x: (x.station, x.source_id))
-    first = segments[0]
+    prepared = _prepare_group(group_key, segments, channel_map)
     coords = get_coord_manager(
-        _get_coords(segments, channel_map=channel_map),
+        prepared.coords,
         dims=("channel", "time"),
     )
-    attrs = _get_attrs(group_key, first)
     return _make_scan_payload(
-        attrs=attrs,
+        attrs=prepared.attrs,
         coords=coords,
         dims=coords.dims,
         shape=coords.shape,
-        dtype=first.dtype,
-        source_patch_id=attrs["_source_patch_id"],
+        dtype=prepared.first.dtype,
+        source_patch_id=prepared.attrs["_source_patch_id"],
     )
 
 
