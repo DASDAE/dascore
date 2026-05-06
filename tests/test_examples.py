@@ -119,26 +119,29 @@ class TestGetExampleInventory:
         """Ensure all registered example inventories can be loaded."""
         inventory = dc.get_example_inventory(name)
         assert isinstance(inventory, dc.Inventory)
-        assert inventory.validate_references() is inventory
 
     def test_random_inventory_describes_random_patch(self):
         """The random inventory should resolve context for the random patch."""
         patch = dc.get_example_patch("random_das")
         inventory = dc.get_example_inventory("random_das")
-        acquisition = inventory.view("random_das_acquisition")
+        network = inventory.get_records(record_ids="random_das_network")[0]
+        fiber_array = inventory.get_records(record_ids="random_das_fiber_array")[0]
         distance_max = patch.coords.coord_map["distance"].max()
-        assert acquisition.tag == patch.attrs.tag
-        assert acquisition.optical_path.length == distance_max + 1
-        assert acquisition.instrument_configuration.sample_rate == 250.0
+        assert network.fiber_arrays[0].resource_id == "random_das_fiber_array"
+        assert fiber_array.tag == patch.attrs.tag
+        assert fiber_array.optical_path.length == distance_max + 1
+        assert fiber_array.acquisition_configuration.sample_rate == 250.0
 
     def test_event_inventory_describes_processed_event(self):
         """The event inventory should resolve context for example_event_2."""
         inventory = dc.get_example_inventory("example_event_2")
-        acquisition = inventory.view("example_event_2_acquisition")
-        assert acquisition.data_units == "strain/s"
-        label = acquisition.optical_path.annotations[0].label
+        network = inventory.get_records(record_ids="example_event_2_network")[0]
+        fiber_array = inventory.get_records(record_ids="example_event_2_fiber_array")[0]
+        assert network.fiber_arrays[0].resource_id == "example_event_2_fiber_array"
+        assert fiber_array.data_units == "strain/s"
+        label = fiber_array.optical_path.annotations[0].label
         assert label == "borehole monitoring interval"
-        assert acquisition.optical_path.coupling_conditions[0].clamp_points
+        assert fiber_array.optical_path.coupling_conditions[0].clamp_points
 
 
 class TestRickerMoveout:

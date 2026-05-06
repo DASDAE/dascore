@@ -559,16 +559,16 @@ def random_das_inventory() -> inv.Inventory:
     """
     An inventory describing the default random DAS patch.
     """
-    instrument = inv.Instrument(
-        resource_id="random_das_instrument",
-        instrument_id="random_das_interrogator",
+    interrogator = inv.Interrogator(
+        resource_id="random_das_interrogator",
+        interrogator_id="IU001",
         manufacturer="DASCore",
         model="SyntheticInterrogator",
         instrument_type="DAS interrogator",
     )
-    configuration = inv.InstrumentConfiguration(
+    configuration = inv.AcquisitionConfiguration(
         resource_id="random_das_configuration",
-        instrument_id=instrument.resource_id,
+        interrogator=interrogator,
         gauge_length=10.0,
         sample_rate=250.0,
         spatial_sampling_interval=1.0,
@@ -586,7 +586,7 @@ def random_das_inventory() -> inv.Inventory:
         length=300.0,
         name="Synthetic sensing fiber",
         fiber_type="single_mode",
-        container_id=cable.resource_id,
+        container=cable,
     )
     crs = inv.CoordinateReferenceSystem(
         resource_id="random_das_local_crs",
@@ -600,7 +600,7 @@ def random_das_inventory() -> inv.Inventory:
         resource_id="random_das_geometry",
         length=fiber.length,
         geometry_type="linear",
-        coordinate_reference_system_id=crs.resource_id,
+        coordinate_reference_system=crs,
         coordinates=((0.0, 0.0, 0.0), (300.0, 0.0, 0.0)),
     )
     coupling = inv.CouplingCondition(
@@ -621,55 +621,47 @@ def random_das_inventory() -> inv.Inventory:
     optical_path = inv.OpticalPath(
         resource_id="random_das_optical_path",
         length=fiber.length,
-        optical_component_ids=(fiber.resource_id,),
-        geometry_ids=(geometry.resource_id,),
-        coupling_condition_ids=(coupling.resource_id,),
-        annotation_ids=(annotation.resource_id,),
+        optical_components=(fiber,),
+        geometries=(geometry,),
+        coupling_conditions=(coupling,),
+        annotations=(annotation,),
     )
-    acquisition = inv.Acquisition(
-        resource_id="random_das_acquisition",
-        instrument_configuration_id=configuration.resource_id,
-        optical_path_id=optical_path.resource_id,
+    fiber_array = inv.FiberArray(
+        resource_id="random_das_fiber_array",
+        acquisition_configuration=configuration,
+        optical_path=optical_path,
         data_units="",
-        start_time="2017-09-18",
-        network="",
-        station="",
         dims="distance,time",
         tag="random",
     )
+    network = inv.Network(
+        resource_id="random_das_network",
+        code="",
+        description="Default random DAS example network.",
+        fiber_arrays=(fiber_array,),
+    )
     return inv.Inventory(
-        inventory_id="random_das_inventory",
-        objects=(
-            acquisition,
-            configuration,
-            instrument,
-            optical_path,
-            cable,
-            fiber,
-            crs,
-            geometry,
-            coupling,
-            annotation,
-        ),
+        resource_id="random_das_inventory",
+        records=(network,),
     )
 
 
 @register_func(EXAMPLE_INVENTORIES, key="example_event_2")
 def example_event_2_inventory() -> inv.Inventory:
     """
-    An inventory describing the processed example event acquisition context.
+    An inventory describing the processed example event fiber array context.
     """
-    instrument = inv.Instrument(
-        resource_id="example_event_2_instrument",
-        instrument_id="stanek_2017_interrogator",
+    interrogator = inv.Interrogator(
+        resource_id="example_event_2_interrogator",
+        interrogator_id="IU001",
         manufacturer="unknown",
         model="unknown",
         instrument_type="DAS interrogator",
         notes="Public example from Stanek et al. induced seismicity data.",
     )
-    configuration = inv.InstrumentConfiguration(
+    configuration = inv.AcquisitionConfiguration(
         resource_id="example_event_2_configuration",
-        instrument_id=instrument.resource_id,
+        interrogator=interrogator,
         gauge_length=10.0,
         sample_rate=1000.0,
         spatial_sampling_interval=1.0,
@@ -687,7 +679,7 @@ def example_event_2_inventory() -> inv.Inventory:
         length=1000.0,
         name="Borehole sensing fiber",
         fiber_type="single_mode",
-        container_id=cable.resource_id,
+        container=cable,
     )
     crs = inv.CoordinateReferenceSystem(
         resource_id="example_event_2_local_crs",
@@ -702,7 +694,7 @@ def example_event_2_inventory() -> inv.Inventory:
         resource_id="example_event_2_geometry",
         length=fiber.length,
         geometry_type="linear",
-        coordinate_reference_system_id=crs.resource_id,
+        coordinate_reference_system=crs,
         coordinates=((0.0, 0.0, 0.0), (0.0, 0.0, -1000.0)),
     )
     coupling = inv.CouplingCondition(
@@ -729,18 +721,16 @@ def example_event_2_inventory() -> inv.Inventory:
     optical_path = inv.OpticalPath(
         resource_id="example_event_2_optical_path",
         length=fiber.length,
-        optical_component_ids=(fiber.resource_id,),
-        geometry_ids=(geometry.resource_id,),
-        coupling_condition_ids=(coupling.resource_id,),
-        annotation_ids=(annotation.resource_id,),
+        optical_components=(fiber,),
+        geometries=(geometry,),
+        coupling_conditions=(coupling,),
+        annotations=(annotation,),
     )
-    acquisition = inv.Acquisition(
-        resource_id="example_event_2_acquisition",
-        instrument_configuration_id=configuration.resource_id,
-        optical_path_id=optical_path.resource_id,
+    fiber_array = inv.FiberArray(
+        resource_id="example_event_2_fiber_array",
+        acquisition_configuration=configuration,
+        optical_path=optical_path,
         data_units="strain/s",
-        network="",
-        station="",
         dims="distance,time",
         tag="example_event_2",
         notes=(
@@ -748,20 +738,15 @@ def example_event_2_inventory() -> inv.Inventory:
             "preprocessing; inventory time fields are therefore left open."
         ),
     )
+    network = inv.Network(
+        resource_id="example_event_2_network",
+        code="",
+        description="Example event fiber array network.",
+        fiber_arrays=(fiber_array,),
+    )
     return inv.Inventory(
-        inventory_id="example_event_2_inventory",
-        objects=(
-            acquisition,
-            configuration,
-            instrument,
-            optical_path,
-            cable,
-            fiber,
-            crs,
-            geometry,
-            coupling,
-            annotation,
-        ),
+        resource_id="example_event_2_inventory",
+        records=(network,),
     )
 
 

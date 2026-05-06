@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
 from dataclasses import dataclass
-from itertools import pairwise
-from typing import Any, Literal
+from typing import Literal
 from uuid import uuid4
 
 import numpy as np
@@ -68,9 +66,13 @@ class _InventoryRecord(DascoreBaseModel):
     notes: str = Field(
         default="", description="Free-form notes describing this metadata record."
     )
-    effective_time: DateTime64 = Field(
+    start_time: DateTime64 = Field(
         default=np.datetime64("NaT"),
-        description="Time when this metadata state becomes effective.",
+        description="Start time for which this metadata record is valid.",
+    )
+    end_time: DateTime64 = Field(
+        default=np.datetime64("NaT"),
+        description="End time for which this metadata record is valid.",
     )
 
     @computed_field
@@ -80,46 +82,15 @@ class _InventoryRecord(DascoreBaseModel):
         return self.__class__.__name__.lstrip("_")
 
     def is_effective_at(self, time) -> bool:
-        """Return True if the record is effective at the supplied time."""
+        """Return True if this record is valid at the supplied time."""
         time = to_datetime64(time)
         if pd.isnull(time):
             return True
-        return pd.isnull(self.effective_time) or self.effective_time <= time
-
-
-def _record_from_mapping(
-    data: Mapping[str, Any],
-    record_types: Mapping[str, type[_InventoryRecord]],
-) -> _InventoryRecord:
-    """
-    Validate one inventory manifest object against registered models.
-
-    This is the dispatch path for plain mappings loaded from YAML or passed to
-    ``Inventory(objects=[...])``. Manifest objects must explicitly include a
-    non-empty ``type`` field and ``resource_id`` field. The type value is used
-    to choose the matching Pydantic record class from ``record_types``; the
-    manifest-only ``type`` key is then removed before validating the remaining
-    fields into that class.
-
-    Direct Python construction of inventory record classes does not use this
-    helper, so constructors can still auto-generate ``resource_id`` values.
-    """
-    data = dict(data)
-    if not data.get("resource_id"):
-        msg = "Inventory manifest objects must include a non-empty resource_id."
-        raise ValueError(msg)
-    record_type = str(data.get("type", ""))
-    if not record_type:
-        msg = "Inventory manifest objects must include a type."
-        raise ValueError(msg)
-    try:
-        cls = record_types[record_type]
-    except KeyError:
-        valid = sorted(record_types)
-        msg = f"Unknown inventory object type {record_type!r}. Valid types are {valid}."
-        raise ValueError(msg) from None
-    data.pop("type", None)
-    return cls.model_validate(data)
+        start = to_datetime64(self.start_time)
+        end = to_datetime64(self.end_time)
+        after_start = pd.isnull(start) or start <= time
+        before_end = pd.isnull(end) or time < end
+        return after_start and before_end
 
 
 def _get_resource_id(record_or_id) -> str:
@@ -127,106 +98,6 @@ def _get_resource_id(record_or_id) -> str:
     if isinstance(record_or_id, str):
         return record_or_id
     return record_or_id.resource_id
-
-
-def _coerce_geometry_table(table) -> tuple[np.ndarray, tuple[str, ...], np.ndarray]:
-    """Return sorted geometry control points from a dataframe-like table."""
-    if not isinstance(table, pd.DataFrame):
-        msg = "geometry must be a pandas DataFrame."
-        raise ParameterError(msg)
-    if "distance" not in table.columns:
-        msg = "geometry table must include a 'distance' column."
-        raise ParameterError(msg)
-    axis_columns = tuple(column for column in table.columns if column != "distance")
-    if not axis_columns:
-        msg = "geometry table must include at least one coordinate column."
-        raise ParameterError(msg)
-    non_numeric = tuple(
-        column
-        for column in ("distance", *axis_columns)
-        if not pd.api.types.is_numeric_dtype(table[column])
-    )
-    if non_numeric:
-        msg = "geometry table columns must be numeric: " + ", ".join(non_numeric)
-        raise ParameterError(msg)
-    data = table.loc[:, ("distance", *axis_columns)].sort_values("distance")
-    distances = data["distance"].to_numpy(dtype=float)
-    coordinates = data.loc[:, axis_columns].to_numpy(dtype=float)
-    if len(distances) < 2:
-        msg = "geometry table must include at least two control points."
-        raise ParameterError(msg)
-    if np.any(~np.isfinite(distances)) or np.any(~np.isfinite(coordinates)):
-        msg = "geometry table distances and coordinates must be finite."
-        raise ParameterError(msg)
-    if np.any(distances < 0):
-        msg = "geometry table distances must be non-negative."
-        raise ParameterError(msg)
-    if np.any(np.diff(distances) <= 0):
-        msg = "geometry table distances must be unique and increasing."
-        raise ParameterError(msg)
-    return distances, axis_columns, coordinates
-
-
-def _coerce_inventory_record(record, record_type, resource_id: str):
-    """Return an inventory record from None, a mapping, or an existing record."""
-    if record is None:
-        return record_type(resource_id=resource_id)
-    if isinstance(record, record_type):
-        return record
-    if isinstance(record, Mapping):
-        data = dict(record)
-        data.setdefault("resource_id", resource_id)
-        return record_type.model_validate(data)
-    msg = f"Expected {record_type.__name__}, mapping, or None."
-    raise ParameterError(msg)
-
-
-def _records_from_geometry_table(
-    table,
-    *,
-    crs,
-    optical_path,
-    id_prefix: str,
-    coordinate_reference_system_type,
-    geometry_type,
-    optical_path_type,
-) -> tuple[_InventoryRecord, ...]:
-    """Build CRS, Geometry records, and one OpticalPath from a geometry table."""
-    distances, axis_columns, coordinates = _coerce_geometry_table(table)
-    local_distances = distances - distances[0]
-    crs_record = _coerce_inventory_record(
-        crs,
-        coordinate_reference_system_type,
-        f"{id_prefix}:crs",
-    )
-    if not crs_record.axis_order:
-        crs_record = crs_record.model_copy(update={"axis_order": axis_columns})
-    geometry_records = []
-    for index, (start, stop) in enumerate(pairwise(local_distances)):
-        geometry_records.append(
-            geometry_type(
-                resource_id=f"{id_prefix}:geometry:{index:04d}",
-                length=float(stop - start),
-                geometry_type="linear",
-                coordinate_reference_system_id=crs_record.resource_id,
-                coordinates=(
-                    tuple(float(value) for value in coordinates[index]),
-                    tuple(float(value) for value in coordinates[index + 1]),
-                ),
-            )
-        )
-    path_record = _coerce_inventory_record(
-        optical_path,
-        optical_path_type,
-        f"{id_prefix}:optical_path",
-    )
-    path_record = path_record.model_copy(
-        update={
-            "length": float(local_distances[-1]),
-            "geometry_ids": tuple(record.resource_id for record in geometry_records),
-        }
-    )
-    return (crs_record, *geometry_records, path_record)
 
 
 @dataclass(frozen=True)

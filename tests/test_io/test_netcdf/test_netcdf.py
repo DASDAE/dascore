@@ -77,7 +77,7 @@ def patch_with_attrs(example_patch):
             "station": "TEST_STATION",
             "network": "TEST_NET",
             "instrument_id": "TEST_INST",
-            "acquisition_id": "ACQ_01",
+            "fiber_array_id": "FIBER_ARRAY_01",
             "tag": "netcdf_roundtrip",
             "data_type": "strain_rate",
             "data_category": "DAS",

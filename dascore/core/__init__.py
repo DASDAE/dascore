@@ -8,19 +8,19 @@ from .coordmanager import get_coord_manager as get_coord_manager
 from .coords import CoordSummary as CoordSummary
 from .coords import get_coord as get_coord
 from .inventory import (  # noqa
-    Acquisition,
+    AcquisitionConfiguration,
     Cable,
     ClampPoint,
     Connector,
     CoordinateReferenceSystem,
     Coupler,
     CouplingCondition,
+    FiberArray,
     FiberSegment,
     Geometry,
-    Instrument,
-    InstrumentConfiguration,
+    Interrogator,
     Inventory,
-    InventoryRecord,
+    Network,
     OpticalPath,
     OpticalPathAnnotation,
     Splice,
